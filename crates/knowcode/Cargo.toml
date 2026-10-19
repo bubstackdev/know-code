@@ -1,0 +1,25 @@
+[package]
+name = "knowcode"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+description = "A lightweight, local code graph for coding agents."
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dirs.workspace = true
+kc-extract.workspace = true
+kc-index.workspace = true
+kc-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rmcp.workspace = true
+rusqlite.workspace = true
+schemars.workspace = true
+semver.workspace = true
+tokio.workspace = true
+toml_edit.workspace = true

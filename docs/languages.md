@@ -1,0 +1,301 @@
+# Languages and frameworks
+
+What KnowCode extracts, what it resolves, and what it does not. All extraction is syntactic (tree-sitter, or a
+scanner for SQL); names are resolved at query time against the whole index. Nothing is compiled or run. Where a
+compiler-written SCIP index is present, it takes precedence (see [usage](usage.md#precise-references-from-scip)).
+
+A construct KnowCode doesn't model usually means a reference it can't resolve, not an error. When it knows the
+construct is there, the answer says `unsupported`. When it doesn't, the answer can be `complete` and still miss
+edges: the gaps below are the places to check by hand.
+
+## Summary
+
+| Language or format | Files | Symbols and references | Resolution |
+| --- | --- | --- | --- |
+| C# | `.cs`, `.csproj` | types, members, calls, instantiations, type and member uses | namespaces, `using`s, project references, receiver types, DI |
+| TypeScript, TSX, JavaScript | `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.jsx`, `tsconfig*.json`, `jsconfig.json`, `package.json` | the same, plus Angular templates (`.html`) | imports, tsconfig `paths`/`baseUrl`, receiver types, Angular DI |
+| Swift | `.swift`, `Package.swift`, XcodeGen `project.yml` | types, extensions, conformances, members, calls, attributes | receiver and caller types, supertypes, protocols |
+| Python | `.py` | definitions, calls, imports | imports (relative and absolute) |
+| Rust | `.rs`, `Cargo.toml` | definitions, calls, uses | by name and receiver within the repo |
+| ColdFusion (CFML) | `.cfm`, `.cfc`, `.cfs` | templates, components, functions, includes, queries | by path, as the engine resolves them |
+| SQL | `.sql` | tables, views, procedures, functions, triggers, events | by name, without case or quotes |
+| Terraform | `.tf` | resources, data sources, modules, variables, locals, outputs, providers | by address within a configuration directory |
+| Ansible | playbooks, roles, task and variable files, Jinja templates | roles, plays, tasks, handlers, variables, templates | as Ansible looks things up |
+| GitLab CI | `.gitlab-ci.yml` and included files | jobs, includes, variables, deploy steps | includes across repos, `extends`, variable precedence |
+| Host configuration | `appsettings*.json`, `launchSettings.json`, `web.config`/`app.config`, Docker Compose files, `*ingress*.yaml`, HAProxy `.cfg`, nginx `.conf` | hosts only: which a repo serves, which its clients send to | links HTTP clients to backends (see [C#](#c), Hosts) |
+
+Not supported: Go, Java, Kotlin, Ruby, PHP, C, C++, Objective-C, Vue and Svelte single-file components, and any other
+language not listed. Their files are still covered by `search` and by history (`coupled`, `hotspots`), but have no
+symbols. `unused` and `rename` cover C# and TypeScript only. `grep-ast` covers C#, TypeScript, JavaScript, Python,
+Rust and Swift.
+
+A name resolves only to definitions in its own language (TypeScript, TSX and JavaScript count as one). Edges between
+languages come only from HTTP routes, the message bus, SQL, dependency injection and templates.
+
+## C#
+
+Extracted: classes, structs, records, interfaces, enums, methods, constructors, properties, fields; calls,
+instantiations, type and member uses; attributes; `.csproj` project and package references.
+
+Resolved:
+
+- **Scope.** Names resolve by namespace as the compiler scopes them: the file's namespace and its parents, then
+  `using` aliases, then imported namespaces. A type no namespace in view declares is a library's. A file imports
+  what its project imports into every file too: the `global using` directives of the project's files (a
+  GlobalUsings.cs), the project file's `<Using Include/Remove/Alias/Static>` items, and the SDK's implicit usings
+  (Microsoft.NET.Sdk, .Web, .Worker, .Razor, MSTest.Sdk with its `EnableAspireTesting` and `EnablePlaywright`
+  features, Aspire.AppHost.Sdk) when `ImplicitUsings` is enabled. A project whose imports can't be read
+  (a property setting `ImplicitUsings`, another SDK) rules nothing out for its files, never one confident pick, and
+  answers drawing on it say `unsupported` (area `imports`). `Directory.Build.props` is not read.
+- **Projects.** A name resolves only to definitions compiled by the caller's project (the deepest `.csproj` above
+  the file, or one linking it in with `<Compile Include>` or a shared project's `.projitems`) or by a project it
+  references, transitively. Where no project file decides it, a binding is never `exact`.
+- **Receivers.** Typed fields, locals and parameters, generic bases, tuples, `base.`, delegates and factories
+  (`Func<T>`, `Owned<T>`, `GetInstance<T>()`, Autofac delegate factories), mapper calls, FluentValidation child
+  rules, and extension methods in scope.
+- **Dependency injection.** Autofac-style and Microsoft DI registrations (`RegisterType<Foo>().As<IFoo>()`,
+  `AddScoped<IFoo, Foo>()`, `TryAdd*`, `typeof` pairs, factories, assembly scans, open generics). A call through a
+  service bound to one implementation carries it as `via_di`; generic services are one per type arguments. Test
+  doubles beside one real implementation don't count as another implementation. `context` lists registrations and
+  flags interfaces injected but never registered.
+- **Interfaces and overrides.** Calls through an interface member or base member are callers of the implementation,
+  marked `through`, `ambiguous` when another implementation may be reached. Implementations in other indexed repos
+  depending on the interface's repo are listed. `impact` and `trace` reach an implementation through its own
+  interfaces, their base interfaces (`Impl : IDerived`, `IDerived : IBase`, the member on `IBase`), and the abstract
+  or virtual member an override overrides, through a receiver the implementation is one of: `IOrders.Find` reaches
+  `OrderRepo.Find` through `IRepo<Order>`, `IPlans.Find` doesn't.
+- **Type uses.** A type named as a generic argument (`AddBus<IOrders>()`, `Get<IOrders>()`,
+  `AddScoped<IFoo, Foo>()`), in `typeof`, `nameof` or a constraint (`where T : IFoo`) is a reference, its `usage`
+  saying which (`type_argument`, `typeof`, `nameof`, `constraint`).
+- **Constructors.** A creation (`new T(…)`, `new T { … }`, a target-typed `new(…)` whose type the declaration,
+  return type or assigned local gives) reaches the constructor its arguments pick: by count, named and optional
+  arguments, `params`, and the argument types the site shows; a primary constructor counts as one, and a struct's
+  `new S()` is its implicit one. `: base(…)`, `: this(…)` and a primary constructor's base call reach the constructor
+  they chain to. A creation more than one constructor fits is `ambiguous` to each, never a confident pick.
+- **HTTP.** ASP.NET controller actions (`[Route]` and `[Http*]` attributes, `nameof` and constants resolved) and
+  minimal API endpoints are linked to the requests that reach them: C# `HttpClient` calls with a URL (base addresses
+  dropped, constants resolved, interpolated values as route parameters; a base path in a `readonly string` field
+  and a URL built in a local are read), request classes declaring a path and a verb in an attribute, Angular
+  `HttpClient` calls, ColdFusion `<cfhttp>`, and a code base's own request-contract and gateway conventions (see
+  [configurable conventions](#configurable-conventions)). Links match verb and path and assume `same_deployment`
+  unless the code names the service, or a host decides (below).
+- **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
+  are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
+  methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may
+  be literals, constants, `nameof` interpolations or concatenations of them; route constraints (`{id:int}`) are
+  normalised as for controllers. The route belongs to its handler when that is a method group in the file, else to
+  the method registering it (a lambda). A method group passed as a delegate (`MapGet("/x", GetItem)`,
+  `Subscribe(Handle)`, `Task.Run(Work)`) is a reference to the method in `refs` and `context` callers.
+- **Attribute request contracts.** Any class attribute with exactly two arguments, a path (a literal with a `/`, or a constant) and an
+  HTTP verb (`X.Post`, `"POST"`) makes the class a client route, whatever the attribute is called
+  (`[Endpoint("/orders", HttpMethod.Get)]`). Properties marked by an attribute naming a path, segment, route, URL or
+  query with a positive ordinal (`[PathSegment(1)]`) append their values as path parameters, in order. Code creating
+  the class requests the route.
+- **Hosts.** A client route's URL or its typed client's base address (`AddHttpClient<T>(c => c.BaseAddress = …)`),
+  or a URL in its repo's settings (`appsettings*.json`, `web.config`/`app.config`, a compose service's
+  environment), names a host. Launch profiles and Kestrel URLs, compose services built from a repo, Aspire project
+  resources, Kubernetes ingress rules, and HAProxy or nginx host rules (sending to a backend service a repo hosts,
+  serves as a host or is named for) say which repo serves it. A host exactly one other repo serves links a route
+  naming it to that repo only (`exact`); among several repos serving a route, the one serving a host the client's
+  settings name is `dominant`. Such a link carries `host` (the host, where the client names it, where it is mapped)
+  and assumes `configured_host`. Only hosts are read from these files, never other values.
+- **Entity Framework.** EF Core and EF6 tables per `DbContext` (`DbSet<T>`, `[Table]`, `ToTable`, entity type
+  configurations), and the methods reading and writing each: set access, `Add`/`Update`/`Remove`, `SaveChanges`,
+  entity property assignments where the change is saved, navigations (`Include`, `AutoInclude`, lazy loading), bulk
+  extensions, and writes through one call deep (`via`). The database a table is in comes from the mapping, the SQL
+  text, or the context's connection setting, and says `by` which.
+- **SQL in strings.** SQL text in C# strings passed to a call running SQL, or held in a name saying so, is parsed by
+  the SQL scanner. Names built from a value (`FROM {table}`) are left out.
+- **Stored procedures.** `EXEC` text, `CommandType.StoredProcedure`, and names passed to a wrapper when a procedure
+  of that name is defined, linked to their SQL definitions.
+- **Message bus.** MassTransit and NServiceBus publishes, sends and consumers (`IConsumer<X>`, `IConsumer<Batch<X>>`,
+  `IHandleMessages<X>`, state machine events and schedules, registrations closing a generic consumer), linked across
+  repos by the message type's full name. A message type is known when a configured attribute marks it (see
+  [configurable conventions](#configurable-conventions)). Without one, as in plain MassTransit code, publishers and
+  consumers link by the type's bare name only and every such link is `ambiguous`. A publish whose message type isn't
+  known (a lambda's or loop's variable, a helper's result) is reported as `unsupported` on the message types it may
+  publish.
+
+Known gaps:
+
+- A minimal API handler that is a method group declared in another file keeps its route on the registering method,
+  and helper methods are matched by name and parameter position, not by type. `MapHub`, `MapHealthChecks`,
+  `MapForwarder` and the like are not routes.
+- Overloads are narrowed by argument count and by argument types where the call site shows them (literals, typed
+  locals, fields, `new X()`); generic parameters, `object`, `params`, named arguments and library types stay unsure,
+  and every remaining overload is listed. Overloads are separate symbols: pick one by `file:line`.
+- Bare property reads through `this` inside a type are not recorded as references.
+- Reflection, source generators, and code built at run time are not seen. `unused` treats names in strings,
+  attributes and config as reasons for doubt rather than proof of use.
+
+## TypeScript and JavaScript
+
+Extracted: classes, interfaces, functions, methods, properties, type aliases, enums, imports and exports; calls,
+instantiations and member uses. Plain JavaScript goes through the TypeScript extractor with the TSX grammar.
+Minified and built files are left out.
+
+Resolved:
+
+- **Imports.** A module that isn't a relative path is placed as `tsc` places it: by the nearest `tsconfig.json` or
+  `jsconfig.json` above the file and the configs it `extends`, through `paths` and then `baseUrl`, then the declared
+  packages. A module no config maps (a bundler alias) is placed by its file name, at most `unique_name`, with evidence
+  `filename_guess`. A name imported from a package never resolves to a same-named helper in the repo. Into
+  dependency repos, an imported name resolves only in the repo providing that package.
+- **Receivers.** Typed fields and parameters, Angular constructor injection and `inject()`, `TestBed.inject(T)`,
+  `Mocked<T>` and injection tokens.
+- **Angular.** Component selectors (elements, attribute directives, compound selectors, selectors in constants),
+  templates, routes (lazy prefixes resolved), dialogs, and providers (`useClass`, `useExisting`, `useFactory`,
+  `useValue`, `providedIn: 'root'`) scoped as injectors scope them. Several providers in scope are all listed as
+  `ambiguous`, none picked.
+- **NgRx.** Action creators and action groups linked to the effects whose `ofType` names them, by name (evidence
+  `convention`).
+
+Re-exports (`export { x } from`, `export * from`) are followed a few levels deep.
+
+Known gaps: dynamic `import()` with a computed path, and JavaScript without imports (globals, script tags), are
+resolved by name only, if at all. Decorators other than Angular's carry no meaning. Frameworks other than Angular
+(React, Vue, Svelte) get plain TypeScript resolution, with no component or DI model.
+
+## Swift
+
+Extracted: classes, structs, enums, actors, protocols, extensions merged onto their types, functions, methods,
+initializers, properties, conformances and inheritance, calls and instantiations, member uses (`x.count`,
+`.secondary`, `\.theme`), imports and attributes. Apple-domain tags: `@main` entry points, SwiftUI views, SwiftData
+models, `@Observable`, App Intents and tests.
+
+Resolved: through the receiver's type, the caller's own type and its supertypes, and protocols (witnesses and calls
+through a protocol requirement). SwiftPM `Package.swift` and XcodeGen `project.yml` give packages, targets and
+repo-to-repo edges; an `import` of a module another indexed repo provides resolves into it.
+
+Known gaps: no type inference beyond declared types, so a receiver whose type comes from an expression is resolved by
+name; a common standard-library member on an unknown receiver is `external_likely`. No compiler index store is read.
+
+## Python
+
+Extracted: classes, functions, methods, imports, calls and member uses. Names imported with `from m import`, and
+members of an imported module (`m.save()`), resolve in that module: relative imports from the file's package,
+absolute ones by module path (certain only from a plausible source root), and never into the repo when the module is
+from outside it.
+
+Known gaps: no type inference for receivers; dynamic attributes, `getattr`, and monkey-patching are not seen. No
+manifest (`pyproject.toml`, `requirements.txt`) is read for repo-to-repo edges.
+
+## Rust
+
+Extracted: structs, enums, traits, functions, methods, `impl` blocks, `use` declarations, calls and member uses.
+`Cargo.toml` gives packages and path and registry dependencies between indexed repos.
+
+Known gaps: no trait resolution or macro expansion; a method call on a receiver of unknown type resolves by name.
+For precise references, use a SCIP index from `rust-analyzer scip`.
+
+## ColdFusion (CFML)
+
+`.cfm` templates, `.cfc` components (tag-based and script) and `.cfs` files, with `<cfscript>` parsed as CFScript.
+Includes, user-defined function calls, and components from `createObject`, `new`, `<cfobject>` and `<cfinvoke>`
+resolve by path the way the engine resolves them: relative to the file, from the web root, through `this.mappings`,
+then through `extends`. Custom tags resolve too. Lookups ignore case. Tables named in `<cfquery>` and `queryExecute`
+are read or written by the function or template running them. `<cfhttp>` requests link to ASP.NET actions. Files
+under a CF engine's own `WEB-INF` are not indexed.
+
+## SQL
+
+`.sql` files (MySQL and MariaDB dumps, migrations and routines; T-SQL scripts; UTF-8 or UTF-16), read by a
+statement-level scanner. `CREATE TABLE`, `VIEW`, `PROCEDURE`, `FUNCTION`, `TRIGGER` and `EVENT` become symbols in
+their schema, and each body gives the tables it reads and writes and the routines it calls. `ALTER TABLE`, indexes
+and foreign keys are references. Names match without case, quotes or a schema prefix where none is written.
+
+Entity Framework tables and stored procedure calls in C# and CFML link to these definitions in any indexed repo,
+with a confidence and evidence `sql_name`, assuming `same_database` unless the schema is named.
+
+Known gaps: SQL references record a line but no column. Dynamic SQL built from values is not parsed. Dialects other
+than MySQL/MariaDB and T-SQL are read on a best-effort basis.
+
+## Terraform
+
+`.tf` files: resources, data sources, module calls, variables, locals, outputs and provider configurations, each named
+by its address (`aws_s3_bucket.logs`, `module.net`, `var.region`). What a block depends on comes from its
+expressions, `depends_on` and `provider =`. Every address resolves within its own directory, so per-environment
+copies with the same names stay apart. Module calls with a local source link to the directory; a git source links to
+the indexed repo whose origin it is; a registry address links by namespace and name.
+
+Not read: `.tf.json`, `.tfvars`, `terraform_remote_state` outputs, and the default provider a block uses without
+`provider =`.
+
+## Ansible
+
+Playbooks, roles (in `roles/<name>/`, or a repo that is one role), task and handler files, variable files
+(`defaults`, `vars`, `group_vars`, `host_vars`), `requirements.yml`, and Jinja templates (`.j2`, `.jn2`). A YAML
+file elsewhere is read only when its top level is a list of plays. References resolve as Ansible finds things:
+roles beside the playbook or up the tree, included files and templates by path, handlers by name or `listen`, and
+variables to their definitions in scope, highest precedence first. A role another repo provides links through the
+`requirements.yml` naming its `src`. What tasks deploy (services, images, source repos, databases, URLs) shows in
+`context`, with the task's action (`deploys`, `undeploys`, `restarts`, `stops`).
+
+Not modelled: inventory and extra vars, and anything computed at run time.
+
+## GitLab CI
+
+`.gitlab-ci.yml` and the files pipelines include: includes, jobs (hidden ones tagged), `extends`, variables, rules,
+child pipelines, and the script steps that matter for a deploy. At query time a repo's pipeline is resolved as GitLab
+would for a push to the default branch: includes across indexed repos by project path, `extends` chains, variable
+precedence, `parallel: matrix:`, CI components with their inputs, and GitLab's built-in Terraform templates (known
+without being fetched).
+
+`knowcode context <repo name>` answers how a repo is deployed: each deploy chain from the application's job through
+shared templates and child pipelines to what runs, with the values passed and where each is set. Chains cover
+`ansible-playbook` runs, `wrangler`, the AWS CLI (S3, CloudFront, ECS, Lambda, EC2 launch templates, auto scaling,
+SSM, CloudFormation, Elastic Beanstalk), `sam`, `cdk`, `terraform`/`tofu`, `docker`, `kubectl`, `helm`, and releases
+(`npm publish`, `upack push`, `release-cli create`).
+
+Every `include:` is accounted for in `ci_includes`: `followed` (with the repo it came from, the files read, the jobs
+they define and the deploys run from them), or `missing`, `unread`, `unsupported` (a GitLab template this doesn't
+know, a job's artifact, or a form not read: kind `unknown`) or `cut`, with why. Includes whose rules leave them out
+of a default-branch push are listed apart, one line each, in `ci_skipped` (`file:line: kind target`), so nothing in
+the chains is taken to come from them. Each list of the deploy answer (`deploy_chains`, `deployed_by`, `own`,
+`ci_templates`, `ci_includes`, `ci_skipped`) continues by cursor when cut; `knowcode context <repo name> --limit N`
+(MCP `limit`) cuts each to N rows and says `<list>_total`. `ci_unread` and `ci_cut` are never cut.
+
+Not supported: other CI systems (GitHub Actions, Jenkins, Azure Pipelines). Variables set only in project settings or
+at run time are reported as `unresolved`.
+
+## Manifests
+
+SwiftPM, XcodeGen, Cargo, MSBuild (`.csproj`) and npm (`package.json`) manifests give packages and repo-to-repo
+edges. A path dependency links to the repo it lands in; a registry dependency (NuGet, npm, crates) links to the
+indexed repo declaring that package, with `revision_unverified` when the version can't be checked. Checkouts of one
+origin (a clone, a worktree, a second clone) count as one repo.
+
+## Configurable conventions
+
+Some HTTP and message-bus linking recognises a code base's own conventions by name, as configured under
+`[conventions.*]` in `config.toml` (see [configuration](configuration.md#conventions)): a TypeScript request-contract
+decorator, a gateway DTO attribute and gateway calls naming a service and path, a service host's base class, a
+message-type attribute, consumer base classes, registration helpers and publish helpers naming a destination, DI scope
+values, the CI variables naming a deployed application, and the names Ansible linking leaves out or compares without.
+The defaults are the public libraries' names, so repos without conventions of their own get the framework-level
+linking described above. KnowCode was also validated on a private multi-repo codebase, through these settings.
+
+## Constructs recognised but not read
+
+Some constructs are recognised by an extractor but not read. They are stored where they are, and an answer that draws
+on them is incomplete with reason `unsupported`, naming the first few with `file:line`, instead of saying `complete`:
+
+| Area | Constructs | What the answer may lack |
+| --- | --- | --- |
+| C# DI | assembly-scan registrations (`RegisterAssemblyTypes`, for the types its name filter lets through), typed HTTP clients (`AddHttpClient<T>`), keyed services (`AddKeyedScoped<…>`) | registrations made through them; a service may be said unregistered |
+| SQL | SQL text naming its table at run time; dynamic SQL in a procedure (`EXEC (@sql)`, `EXEC @sql`, `sp_executesql`, `PREPARE … FROM`) | the tables they name |
+| Message bus | a publish of a message whose type isn't known | links from it to consumers |
+| Ansible | includes, templates and handlers named by Jinja | the files they include or render |
+| Terraform | `moved`, `import`, `removed` and `check` blocks | the addresses they name, as uses |
+| GitLab CI | an include or trigger in a form not read (kind `unknown` in `ci_includes`) | the jobs and includes it brings |
+| Angular | a lazy route in a form not read (a default export, a module string) | the routes it loads |
+| HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes (`MapControllerRoute`, `MapDefaultControllerRoute`, `MapRoute`, `MapHttpRoute`), an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
+
+Constructs not in this table and not listed as gaps above are simply not seen, and an answer can be `complete`
+without them.
+
+## Code health and history
+
+`hotspots` biomarkers (Bumpy Road, Deep Nesting, Complex Conditional, Brain Method, Large File) are computed for every
+extracted language; Low Cohesion (LCOM4) for C# and TypeScript classes only. History answers work for any file git
+tracks, extracted or not.

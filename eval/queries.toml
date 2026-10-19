@@ -1,0 +1,173 @@
+# Answer snapshot query set over the public corpus (eval/corpus.toml), the committed example for
+# `scripts/eval/run.py snapshot`. Fetch the repos first with `scripts/corpus.py fetch`. The private query set has the
+# same format and lives in the eval directory outside the repo (see docs/evaluation.md).
+#
+# Fields: root (the directory holding the repos), index ("repos": index the repos named; "workspace": every repo
+# under root), and per query: id, repo (or repos = [...]), cmd, args (`{root}` and `{repo}` expand to absolute paths),
+# and optionally exit (an exit code that still answers), scope = "workspace" (no --repo), text = true (no JSON form),
+# drop (fields to leave out), ordered / unordered (exceptions to "every list keeps its order"; see snapshot.py).
+# The format is documented in scripts/eval/snapshot.py and docs/evaluation.md.
+root = "~/Library/Caches/dev.bubstack.knowcode/corpus/public"
+index = "workspace"
+
+[[query]]
+id = "flask-overview"
+repo = "flask"
+cmd = "overview"
+
+[[query]]
+id = "flask-context-Flask"
+repo = "flask"
+cmd = "context"
+args = ["Flask"]
+
+[[query]]
+id = "flask-refs-url_for"
+repo = "flask"
+cmd = "refs"
+args = ["url_for", "-n", "500"]
+
+[[query]]
+id = "flask-trace-wsgi_app"
+repo = "flask"
+cmd = "trace"
+args = ["Flask.wsgi_app", "-d", "out", "--depth", "2"]
+
+[[query]]
+id = "flask-impact-app-py"
+repo = "flask"
+cmd = "impact"
+args = ["--file", "src/flask/app.py"]
+
+[[query]]
+id = "flask-find-Blueprint"
+repo = "flask"
+cmd = "find"
+args = ["Blueprint"]
+
+[[query]]
+id = "requests-context-Session"
+repo = "requests"
+cmd = "context"
+args = ["Session"]
+
+[[query]]
+id = "requests-refs-Session-request"
+repo = "requests"
+cmd = "refs"
+args = ["Session.request", "-n", "500"]
+
+[[query]]
+id = "requests-impact-sessions-py"
+repo = "requests"
+cmd = "impact"
+args = ["--file", "src/requests/sessions.py"]
+
+[[query]]
+id = "requests-search-def-request"
+repo = "requests"
+cmd = "search"
+args = ["def request", "-n", "50"]
+
+[[query]]
+id = "serde-deps"
+repo = "serde"
+cmd = "deps"
+
+[[query]]
+id = "serde-context-Serialize"
+repo = "serde"
+cmd = "context"
+args = ["Serialize"]
+
+[[query]]
+id = "serde-trace-Serializer-in"
+repo = "serde"
+cmd = "trace"
+args = ["Serializer", "-d", "in", "--depth", "1"]
+
+[[query]]
+id = "axum-overview"
+repo = "axum"
+cmd = "overview"
+
+[[query]]
+id = "axum-context-Router"
+repo = "axum"
+cmd = "context"
+args = ["Router"]
+
+[[query]]
+id = "axum-impact-Router-route"
+repo = "axum"
+cmd = "impact"
+args = ["Router.route"]
+
+[[query]]
+id = "axum-search-regex-fn-route"
+repo = "axum"
+cmd = "search"
+args = ["fn (route|nest)[a-z_]*", "-e", "-n", "50"]
+
+[[query]]
+id = "alamofire-context-Session"
+repo = "Alamofire"
+cmd = "context"
+args = ["Session"]
+
+[[query]]
+id = "alamofire-impact-Session-swift"
+repo = "Alamofire"
+cmd = "impact"
+args = ["--file", "Source/Core/Session.swift"]
+
+[[query]]
+id = "alamofire-refs-validate"
+repo = "Alamofire"
+cmd = "refs"
+args = ["validate", "-n", "500"]
+
+[[query]]
+id = "argparser-context-ParsableCommand"
+repo = "swift-argument-parser"
+cmd = "context"
+args = ["ParsableCommand"]
+
+[[query]]
+id = "argparser-trace-ParsableCommand-in"
+repo = "swift-argument-parser"
+cmd = "trace"
+args = ["ParsableCommand", "-d", "in", "--depth", "2"]
+
+[[query]]
+id = "workspace-find-Session"
+repos = ["requests", "Alamofire"]
+cmd = "find"
+args = ["Session"]
+
+# The optional fields, one example each.
+[[query]]
+id = "flask-rename-wsgi_app"
+repo = "flask"
+cmd = "rename"
+args = ["Flask.wsgi_app", "wsgi_entry"]
+exit = 2                       # a refused preview (an ambiguous site or a collision) still answers
+
+[[query]]
+id = "workspace-refs-Session"
+repos = []
+scope = "workspace"            # no --repo: every indexed repo
+cmd = "refs"
+args = ["Session", "-n", "200"]
+
+[[query]]
+id = "flask-docs"
+repo = "flask"
+cmd = "docs"
+text = true                    # Markdown only
+
+[[query]]
+id = "flask-status"
+repo = "flask"
+cmd = "status"
+drop = ["/index/bytes"]        # the index's own size isn't an answer

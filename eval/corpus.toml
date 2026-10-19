@@ -1,0 +1,38 @@
+# Public repos used to test search (M5). Cloned shallow at the pinned commit into
+# ~/Library/Caches/dev.bubstack.knowcode/corpus/public/<name> by `scripts/corpus.py fetch`. Never vendored here.
+
+[[repo]]
+name = "swift-argument-parser"
+lang = "swift"
+url = "https://github.com/apple/swift-argument-parser"
+sha = "efd239f0055b3d6b6cc122a786c46a0ea8d0235b"
+
+[[repo]]
+name = "Alamofire"
+lang = "swift"
+url = "https://github.com/Alamofire/Alamofire"
+sha = "bda9ed57d72988a3a2ada33d824583541f86eac6"
+
+[[repo]]
+name = "requests"
+lang = "python"
+url = "https://github.com/psf/requests"
+sha = "611c6162cbc4ac2020a2f91c7cfa4f3abf9bbb60"
+
+[[repo]]
+name = "flask"
+lang = "python"
+url = "https://github.com/pallets/flask"
+sha = "d086db856be187255b8ec61ef409357393020f32"
+
+[[repo]]
+name = "serde"
+lang = "rust"
+url = "https://github.com/serde-rs/serde"
+sha = "6693a89cca77e0151437da1c7f890090b9ebf04c"
+
+[[repo]]
+name = "axum"
+lang = "rust"
+url = "https://github.com/tokio-rs/axum"
+sha = "e57b547eb95de74b73b34719dd5926254a085634"

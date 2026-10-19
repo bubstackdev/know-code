@@ -1,0 +1,127 @@
+# The merge gates from docs/evaluation.md "Gates per change": tests (the invariant suite as a step of its own), clippy with no
+# warnings, the eval harness's own tests, docs naming only files that exist, and the dist binary against
+# size-budget.txt (measured on aarch64-apple-darwin, so that job runs on macOS).
+# Actions are GitHub-owned and pinned to commit SHAs, as the repository's Actions policy requires.
+name: ci
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only: no job here publishes. The release workflow grants write access only to the job creating a release.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  KNOWCODE_UPDATE_CHECK: "0"
+
+jobs:
+  release-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify Homebrew publishing prerequisites before a tagged release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN" || { echo "HOMEBREW_TAP_TOKEN is required for a release" >&2; exit 1; }
+          gh api repos/bubstackdev/homebrew-tap --jq 'if .private then error("Homebrew tap must be public") elif .permissions.push != true then error("Homebrew tap token needs write access") else .full_name end'
+      - name: Install the pinned release generator
+        run: bash scripts/install-dist.sh
+      - name: Verify compiled source-path privacy
+        run: python3 -B scripts/test_dist_build.py
+      - name: Verify release workflow and publishing gate
+        run: python3 scripts/generate-release.py --check
+      - name: Plan all release targets without publishing
+        run: dist plan --output-format=json --no-local-paths
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: test-${{ runner.os }}-
+      # Tests commit to throwaway repos. A global identity, not GIT_AUTHOR_* variables, so a test's own
+      # `-c user.name=…` still wins (an author named like a bot is left out of history answers).
+      - run: git config --global user.name "Test Author" && git config --global user.email test@example.test
+      # The invariant suite (every test named `invariant_…`, see docs/evaluation.md) first, so a broken invariant is
+      # reported as one; the full run below includes them again.
+      - name: invariants
+        run: cargo test --workspace --locked -- invariant
+      - run: cargo test --workspace --locked
+      - name: docs match the binary's commands, flags, config keys and MCP tools
+        run: python3 scripts/check-docs.py target/debug/knowcode
+      - name: cold MCP first run and background indexing
+        run: python3 scripts/check-first-run.py target/debug/knowcode
+      - name: registered roots and lazy cross-repo first run
+        run: python3 scripts/check-workspace-first-run.py target/debug/knowcode
+      - name: isolated update checks and self-update rollback
+        run: python3 scripts/check-updates.py target/debug/knowcode
+      - name: native macOS evaluation isolation boundary
+        if: runner.os == 'macOS'
+        env:
+          KNOWCODE_TEST_MACOS_SANDBOX: "1"
+        run: python3 -B -m unittest discover -s scripts/eval -p 'test_public_sandbox.py'
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: matrix.os == 'ubuntu-24.04'
+
+  harness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s scripts/eval -p 'test_*.py'
+      - run: python -m unittest discover -s scripts/eval/neutral -p 'test_*.py'
+
+  # README.md and docs/ naming a crate or script file that no longer exists.
+  doc-paths:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python scripts/check-doc-paths.py
+
+  size:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: dist-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: dist-${{ runner.os }}-
+      - run: scripts/check-size.sh
+      - name: Install the pinned release generator
+        run: bash scripts/install-dist.sh
+      - name: Package the native macOS binary and installer preview
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: bash scripts/package-native.sh
+      - name: Test the isolated shell installer and installed MCP binary
+        run: python3 scripts/check-installer.py target/distrib

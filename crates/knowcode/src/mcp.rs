@@ -1,0 +1,2383 @@
+//! The MCP server: the query operations as tools over stdio.
+//!
+//! Every tool returns the spec's JSON envelope (repo, commit, dirty, items, truncated) in its compact form (see
+//! [`crate::compact`]), capped at about 2k tokens by default; traversals (`kc_trace`, `kc_impact`, `kc_path`, `kc_flow`) answer as an indented
+//! tree of text by default. Output rules, for every tool:
+//!
+//! - a list cut short says so: `complete: false` with an `incomplete` entry (see docs/answers.md), and the
+//!   older `truncated`, and a `hint` naming the parameter that gets the rest; a list that continues has a `cursor` (`<list>_cursor` when nested), which `kc_more` pages through, and
+//!   the size cap renews the cursor of a list it cuts (a rename preview it cuts is refused);
+//! - an empty answer says what was searched (`note`), so "nothing" is never mistaken for "not looked";
+//! - `kc_context`, `kc_refs` and `kc_locate` take several inputs in one call (`symbols`, `names`, `queries`) and
+//!   answer one result per input.
+//!
+//! What tools are advertised costs every agent context, so each is described in a sentence or two, with a line per
+//! parameter (held to a budget by a test); the details are in `kc_help` topics (see [`crate::help`]). A profile
+//! (`KNOWCODE_TOOLS`, see [`profile`]) advertises fewer tools.
+
+use std::path::{Path, PathBuf};
+
+use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
+use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
+use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::ops::{self, Scope};
+
+/// Responses longer than this many characters lose list items until they fit (about 4 characters per token).
+const DEFAULT_CHARS: usize = 8_000;
+const MAX_CHARS: usize = 40_000;
+
+/// SQLite's memory budget in the server, across all connections.
+const SQLITE_MEMORY: i64 = 4 << 20;
+
+
+// Parameter docs are the schema's descriptions, advertised with every tool: one short line each. The details are in
+// each tool's help topic (`help.rs`), which lists these too.
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SymbolAtParams {
+    /// The file: repo-relative, or absolute (which picks its repo).
+    pub file: String,
+    /// 1-based line.
+    pub line: u32,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FindParams {
+    /// A name, prefix, camelCase words or `Type.member`.
+    pub query: String,
+    /// Kind filter: type, func, class, method, property, ...
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Results (default 10).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LocateParams {
+    /// What the code does, in plain words.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Several queries instead of `query` (at most 20).
+    #[serde(default)]
+    pub queries: Vec<String>,
+    /// Files (default 10).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Rank files across every indexed repo.
+    #[serde(default)]
+    pub workspace: bool,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RefsParams {
+    /// A name, or `Type.member` for that member's references.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Several names instead of `name` (at most 20).
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// Reference kinds: call, instantiate, type_ref, member, read, write.
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    /// `kinds` by edge name: calls, instantiates, uses, member, reads, writes.
+    #[serde(default)]
+    pub edges: Vec<String>,
+    /// References (default 25).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ContextParams {
+    /// A name, or `Type.member`.
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// Several symbols instead of `symbol` (at most 20), sharing the budget.
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// Token budget for the bundle (default 2000).
+    #[serde(default)]
+    pub budget: Option<usize>,
+    /// `auto` (default), `full`, `skeleton` or `none`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// A repo's deploy answer: rows per list (default all that fit).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TraceParams {
+    /// A name, or `Type.member`.
+    pub symbol: String,
+    /// `in`, `out` or `both` (default).
+    #[serde(default)]
+    pub direction: Option<String>,
+    /// Hops, 1 (default) to 3.
+    #[serde(default)]
+    pub depth: Option<u8>,
+    /// Node cap (default 40).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub walk: WalkParams,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+/// Filters for a walk, and its answer format.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct WalkParams {
+    /// Edge kinds to follow (default all).
+    #[serde(default)]
+    pub edges: Vec<String>,
+    /// Symbol kinds to list; the walk passes through others.
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    /// Evidence policy (kc_help evidence).
+    #[serde(default)]
+    pub evidence: Option<String>,
+    /// `tree` (default) or `json`.
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
+impl WalkParams {
+    fn filter(&self) -> ops::WalkFilter {
+        ops::WalkFilter { edges: self.edges.clone(), kinds: self.kinds.clone(), evidence: self.evidence.clone().unwrap_or_default() }
+    }
+
+    fn tree(&self) -> Result<bool, String> {
+        match self.format.as_deref() {
+            None | Some("tree") => Ok(true),
+            Some("json") => Ok(false),
+            Some(other) => Err(format!("format must be tree or json, not {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PathParams {
+    /// Where the path starts: a name or `Type.member`, in `repo`.
+    pub from: String,
+    /// Where it ends: a name or `Type.member`, in `to_repo`.
+    pub to: String,
+    /// The repo `to` is in (default: `repo`, else the repos defining it).
+    #[serde(default)]
+    pub to_repo: Option<String>,
+    /// Hops a path may have, 1 to 12 (default 8).
+    #[serde(default)]
+    pub max_hops: Option<u8>,
+    /// Paths to return, 1 to 5 (default 3).
+    #[serde(default)]
+    pub paths: Option<usize>,
+    /// Follow ambiguous edges too.
+    #[serde(default)]
+    pub allow_ambiguous: bool,
+    /// Symbols to explore at most (default 2000).
+    #[serde(default)]
+    pub max_nodes: Option<usize>,
+    /// Repos to open at most (default 16).
+    #[serde(default)]
+    pub max_repos: Option<usize>,
+    /// Edge kinds a path may use (default all).
+    #[serde(default)]
+    pub edges: Vec<String>,
+    /// Evidence policy (kc_help evidence).
+    #[serde(default)]
+    pub evidence: Option<String>,
+    /// `tree` (default) or `json`.
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FlowParams {
+    /// An Angular route, a component, a controller action, `Type.member` or `file:line`.
+    pub entry: String,
+    /// Steps deep, 1 to 16 (default 10).
+    #[serde(default)]
+    pub depth: Option<u8>,
+    /// Steps to list (default 60).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Repos to open at most (default 16).
+    #[serde(default)]
+    pub max_repos: Option<usize>,
+    /// Edge kinds to follow (default all).
+    #[serde(default)]
+    pub edges: Vec<String>,
+    /// Evidence policy (kc_help evidence).
+    #[serde(default)]
+    pub evidence: Option<String>,
+    /// Levels of template children to follow (default 2).
+    #[serde(default)]
+    pub children: Option<u8>,
+    /// `tree` (default) or `json`.
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImpactParams {
+    /// A symbol (name or `Type.member`).
+    #[serde(default)]
+    pub symbol: Option<String>,
+    /// A file instead of a symbol.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// A diff instead: `working`, or a git revision.
+    #[serde(default)]
+    pub diff: Option<String>,
+    /// Hops, 1 (default) to 5.
+    #[serde(default)]
+    pub depth: Option<u8>,
+    /// Affected symbols to list (default 60).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Order within a hop: `rank` (default) or `hop`.
+    #[serde(default)]
+    pub order: Option<String>,
+    /// Coupled files: history up to this commit or date.
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// Coupled files: history since `<n>d`, a date or `all` (default 365d).
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(flatten)]
+    pub walk: WalkParams,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UnusedParams {
+    /// Kinds to check (default all).
+    #[serde(default)]
+    pub kinds: Vec<String>,
+    /// `unused` (confident only), `possibly`, or `all` (default).
+    #[serde(default)]
+    pub tier: Option<String>,
+    /// Findings (default 50).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RenamePreviewParams {
+    /// `Type.member`, a name, or `file:line` (for an overload).
+    pub symbol: String,
+    /// The new name.
+    pub new_name: String,
+    /// Preview even when a site is ambiguous or the name collides.
+    #[serde(default)]
+    pub allow_ambiguous: bool,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CoupledParams {
+    /// The file (repo-relative or absolute).
+    pub file: String,
+    /// Partners (default 10).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// History up to this commit or date.
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// History since `<n>d`, a date or `all` (default 365d).
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestsParams {
+    /// Changed files or symbols.
+    #[serde(default)]
+    pub targets: Vec<String>,
+    /// A diff instead: `working`, or a git revision.
+    #[serde(default)]
+    pub diff: Option<String>,
+    /// Tests in the tight list (default 10); left_out shows at least 20.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Evidence policy (kc_help evidence); here `all` by default, so ambiguous edges count too, ranked low.
+    #[serde(default)]
+    pub evidence: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HotspotsParams {
+    /// One file's vitals instead of the ranking.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Files (default 10).
+    #[serde(default)]
+    pub top: Option<usize>,
+    /// Rank every indexed repo instead.
+    #[serde(default)]
+    pub workspace: bool,
+    /// End the windows here: unix seconds, YYYY-MM-DD or `head`.
+    #[serde(default)]
+    pub as_of: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OwnershipParams {
+    /// A file or directory (default: the repo).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Authors (names or emails) to treat as gone.
+    #[serde(default)]
+    pub without: Vec<String>,
+    /// Directory depth of the areas listed (default 2).
+    #[serde(default)]
+    pub depth: Option<usize>,
+    /// Areas or files to list (default 10).
+    #[serde(default)]
+    pub top: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReviewersParams {
+    /// Changed files.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// A diff instead: `working`, or a git revision.
+    #[serde(default)]
+    pub diff: Option<String>,
+    /// Reviewers (default 5).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OverviewParams {
+    /// Every indexed repo instead of one.
+    #[serde(default)]
+    pub workspace: bool,
+    /// Bias the map toward a name or path fragment.
+    #[serde(default)]
+    pub focus: Option<String>,
+    /// Token budget for the map (default 800; 0: none).
+    #[serde(default)]
+    pub map_budget: Option<usize>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SearchParams {
+    /// Text to find (literal unless `regex`).
+    pub pattern: String,
+    /// `pattern` is a regular expression.
+    #[serde(default)]
+    pub regex: bool,
+    /// `sensitive` (default), `insensitive` or `smart`.
+    #[serde(default)]
+    pub case: Option<String>,
+    /// Whole words only.
+    #[serde(default)]
+    pub word: bool,
+    /// Languages to keep.
+    #[serde(default)]
+    pub lang: Vec<String>,
+    /// Path globs; a leading `!` excludes.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Lines of context around each hit (max 10).
+    #[serde(default)]
+    pub context: Option<usize>,
+    /// Results per page (default 20).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Results to skip: the previous `next_offset`.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// One item per matching file.
+    #[serde(default)]
+    pub files_only: bool,
+    /// Stop after this many matching lines (default 50000).
+    #[serde(default)]
+    pub max_lines: Option<usize>,
+    /// Search every indexed repo.
+    #[serde(default)]
+    pub workspace: bool,
+    /// Search these repos instead of one.
+    #[serde(default)]
+    pub repos: Vec<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GrepAstParams {
+    /// An ast-grep pattern, or `kind:<node kind>[~regex]` (kc_help kc_grep_ast).
+    pub pattern: String,
+    /// csharp, typescript, javascript, python, rust or swift.
+    pub lang: String,
+    /// Node kind to match within the pattern parsed as context.
+    #[serde(default)]
+    pub selector: Option<String>,
+    /// Keep matches inside a node matching this.
+    #[serde(default)]
+    pub inside: Option<String>,
+    /// Keep matches containing a node matching this.
+    #[serde(default)]
+    pub has: Option<String>,
+    /// Drop matches inside a node matching this.
+    #[serde(default)]
+    pub not_inside: Option<String>,
+    /// Drop matches containing a node matching this.
+    #[serde(default)]
+    pub not_has: Option<String>,
+    /// Keep matches whose text matches this regex.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Path globs; a leading `!` excludes.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Results per page (default 20).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Results to skip: the previous `next_offset`.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// Stop after this many matches (default 50000).
+    #[serde(default)]
+    pub max_matches: Option<usize>,
+    /// Search every indexed repo.
+    #[serde(default)]
+    pub workspace: bool,
+    /// Search these repos instead of one.
+    #[serde(default)]
+    pub repos: Vec<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RepoOnlyParams {
+    /// Every indexed repo instead of one.
+    #[serde(default)]
+    pub workspace: bool,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AreasParams {
+    /// One area (id, name or directory): it and its files.
+    #[serde(default)]
+    pub area: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NotesParams {
+    /// A name or `Type.member` (default: every note in the repo).
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NoteAddParams {
+    /// A name or `Type.member`.
+    pub symbol: String,
+    /// The note: a short decision, gotcha or todo.
+    pub text: String,
+    /// decision, gotcha or todo.
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct MoreParams {
+    /// A `cursor` or `<list>_cursor`, as it is.
+    pub cursor: String,
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct HelpParams {
+    /// A tool (`kc_context`), a section (`kc_context.http`) or a concept (`contract`); none: the index.
+    #[serde(default)]
+    pub topic: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct Common {
+    // Every tool has these two, so their descriptions are said once, in the server's instructions and in each tool's
+    // help topic (see `help::COMMON`), not in every tool's schema.
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub max_chars: Option<usize>,
+}
+
+#[derive(Clone)]
+pub struct KnowcodeServer {
+    default: Scope,
+    tool_router: ToolRouter<Self>,
+    /// Every tool's input schema as advertised, advertised or not (for `kc_help`).
+    schemas: std::sync::Arc<std::collections::BTreeMap<String, rmcp::model::JsonObject>>,
+    /// Tools the profile leaves out (see [`profile`]).
+    hidden: std::sync::Arc<Vec<String>>,
+}
+
+/// The tools of the `core` profile: finding, reading and following code, and the help that names the rest.
+pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_trace", "kc_impact", "kc_search", "kc_more", "kc_help"];
+
+/// The tools a profile spec names, out of `all`: `all`, `core`, and tool names (with or without `kc_`), comma
+/// separated. `kc_help` is always in.
+pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = vec!["kc_help".into()];
+    for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let names: Vec<String> = match part {
+            "all" => all.to_vec(),
+            "core" => CORE.iter().map(|s| s.to_string()).collect(),
+            name => {
+                let n = if name.starts_with("kc_") { name.to_string() } else { format!("kc_{name}") };
+                if !all.contains(&n) {
+                    return Err(format!("KNOWCODE_TOOLS: no tool or profile {name:?}; profiles are all and core, tools {}", all.join(", ")));
+                }
+                vec![n]
+            }
+        };
+        for n in names {
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A tool's input schema as advertised: without what tells an agent nothing (`$schema`, `default: null`, integer
+/// formats and bounds) and with optional values typed plainly (`"integer"`, not `["integer", "null"]`: a parameter
+/// left out is the null).
+fn slim(schema: &rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    fn go(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                m.remove("$schema");
+                if m.get("default").is_some_and(|d| d.is_null() || d.as_array().is_some_and(Vec::is_empty) || *d == Value::Bool(false)) {
+                    m.remove("default");
+                }
+                if m.contains_key("format") && matches!(m.get("type"), Some(t) if t.to_string().contains("integer")) {
+                    m.remove("format");
+                    m.remove("minimum");
+                    m.remove("maximum");
+                }
+                if let Some(Value::Array(types)) = m.get("type")
+                    && types.len() == 2
+                    && types.contains(&Value::from("null"))
+                    && let Some(t) = types.iter().find(|t| **t != "null").cloned()
+                {
+                    m.insert("type".into(), t);
+                }
+                m.values_mut().for_each(go);
+            }
+            Value::Array(a) => a.iter_mut().for_each(go),
+            _ => {}
+        }
+    }
+    let mut v = Value::Object(schema.clone());
+    go(&mut v);
+    match v {
+        Value::Object(m) => m,
+        _ => schema.clone(),
+    }
+}
+
+impl KnowcodeServer {
+    /// Refuses a call whose arguments name a path an AI privacy file blocks in the repos it asks about (see
+    /// [`ops::guard_inputs`]), before any work starts.
+    fn guard_privacy(&self, args: Option<&serde_json::Map<String, Value>>) -> anyhow::Result<()> {
+        let Some(args) = args else { return Ok(()) };
+        fn strings(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::String(s) => out.push(s.clone()),
+                Value::Array(a) => a.iter().for_each(|x| strings(x, out)),
+                Value::Object(m) => m.values().for_each(|x| strings(x, out)),
+                _ => {}
+            }
+        }
+        let mut inputs = Vec::new();
+        for (k, v) in args {
+            if k != "repo" {
+                strings(v, &mut inputs);
+            }
+        }
+        let repos = match args.get("repo").and_then(Value::as_str) {
+            Some(r) => self.scope(&Common { repo: Some(r.to_string()), max_chars: None }, false).map(|s| s.repos).unwrap_or_default(),
+            None => self.default.repos.clone(),
+        };
+        ops::guard_inputs(&repos, &inputs)
+    }
+
+    /// A help topic as text (with a tool's parameters from its schema), or the index without one.
+    fn help(&self, topic: Option<&str>) -> Result<String, String> {
+        let Some(name) = topic.map(str::trim).filter(|t| !t.is_empty()) else { return Ok(crate::help::index(&self.hidden)) };
+        let t = crate::help::topic(name).ok_or_else(|| format!("no help topic {name:?}; kc_help without a topic lists them"))?;
+        let mut text = crate::help::render(t, self.schemas.get(t.name));
+        if self.hidden.iter().any(|h| h == t.name) {
+            text.push_str("\nThis server doesn't advertise this tool (see `profiles`).\n");
+        }
+        Ok(text)
+    }
+
+    /// Several repos by name or path.
+    fn scope_many(&self, repos: &[String]) -> Result<Scope, String> {
+        let mut out = Vec::new();
+        for r in repos {
+            let one = Common { repo: Some(r.clone()), max_chars: None };
+            out.extend(self.scope(&one, false)?.repos);
+        }
+        Ok(Scope { repos: out, no_sync: false })
+    }
+
+    fn scope(&self, common: &Common, workspace: bool) -> Result<Scope, String> {
+        if workspace {
+            let roots = kc_index::indexed_roots().map_err(|e| format!("{e:#}"))?;
+            return Ok(Scope { repos: roots, no_sync: false });
+        }
+        let Some(repo) = &common.repo else { return Ok(self.default.clone()) };
+        let path = PathBuf::from(repo);
+        if path.exists() {
+            return Ok(Scope { repos: vec![path], no_sync: false });
+        }
+        // By name, any indexed repo: one outside the workspace roots still answers for itself.
+        let roots = kc_index::all_indexed_roots().map_err(|e| format!("{e:#}"))?;
+        roots
+            .into_iter()
+            .find(|r| ops::repo_name(r) == *repo)
+            .map(|r| Scope { repos: vec![r], no_sync: false })
+            .ok_or_else(|| format!("no repo at {repo} and no indexed repo named {repo}"))
+    }
+}
+
+/// The work lanes. In-process operations take the main lane, one at a time: concurrent calls each open every repo's
+/// index and hold their own allocations, which is what made memory grow under pipelined requests. But one slow call
+/// (a cold workspace query, a long history walk) must not hold up every cheap one behind it: once the main lane's
+/// call has run [`SLOW`], a second call may take the overflow lane, so at most two run in the process. Searches run in
+/// a child process (see [`search_in_child`]), whose memory is the child's: they take their own lane and never wait
+/// for in-process work, nor it for them.
+static WORK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+static OVERFLOW: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+static CHILDREN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// When the call holding the main lane started.
+static MAIN_SINCE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// How long the main lane's call runs before a waiting call may take the overflow lane.
+const SLOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A lane held for the length of one call's blocking work (see [`WORK`]).
+struct Lane {
+    main: bool,
+    _permit: tokio::sync::SemaphorePermit<'static>,
+}
+
+impl Drop for Lane {
+    fn drop(&mut self) {
+        if self.main {
+            *MAIN_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+}
+
+/// Waits for a lane: the children's for a child-process call, else the main one, or the overflow one while the
+/// main one's call has run [`SLOW`].
+async fn lane(child: bool) -> Result<Lane, String> {
+    if child {
+        return Ok(Lane { main: false, _permit: CHILDREN.acquire().await.map_err(|e| e.to_string())? });
+    }
+    let main = |p| {
+        *MAIN_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+        Lane { main: true, _permit: p }
+    };
+    loop {
+        if let Ok(p) = WORK.try_acquire() {
+            return Ok(main(p));
+        }
+        let since = *MAIN_SINCE.lock().unwrap_or_else(|e| e.into_inner());
+        if since.is_some_and(|t| t.elapsed() >= SLOW)
+            && let Ok(p) = OVERFLOW.try_acquire()
+        {
+            return Ok(Lane { main: false, _permit: p });
+        }
+        tokio::select! {
+            p = WORK.acquire() => return Ok(main(p.map_err(|e| e.to_string())?)),
+            _ = tokio::time::sleep(SLOW / 8) => {}
+        }
+    }
+}
+
+tokio::task_local! {
+    /// The operation a tool call runs as: cancelled when the client cancels the request (see `call_tool`).
+    static OPERATION: std::sync::Arc<kc_store::limits::Operation>;
+}
+
+/// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
+async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
+    let env = blocking(false, with_cuts(f)).await?;
+    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
+}
+
+/// [`run`] for an operation that runs a child process (a search): in the children's lane.
+async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
+    let env = blocking(true, with_cuts(f)).await?;
+    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
+}
+
+/// `f`, with the child processes cut while it ran said in its envelope (see [`ops::add_cuts`]). Runs on the blocking
+/// thread, where the cuts are recorded.
+fn with_cuts(f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> impl FnOnce() -> anyhow::Result<Value> + Send + 'static {
+    move || {
+        let mut env = f()?;
+        ops::add_cuts(&mut env);
+        Ok(env)
+    }
+}
+
+/// Runs a blocking operation in a lane (see [`WORK`]) as the call's operation: a client's cancellation stops its
+/// child processes and the work at its next check. The lane is held until the work ends, even when the call's
+/// future is dropped first, so a cancelled call never lets more work run than the lanes allow.
+async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
+    let lane = lane(child).await?;
+    let op = OPERATION.try_with(|o| o.clone()).unwrap_or_else(|_| kc_store::limits::Operation::new());
+    // Dropping the awaiting future (the client went away) cancels the work too.
+    let mut cancel_on_drop = CancelOnDrop(Some(op.clone()));
+    let result = tokio::task::spawn_blocking(move || {
+        let _lane = lane;
+        let _entered = kc_store::limits::enter(op);
+        let _freshness = crate::refresh::Budget::enter(std::time::Duration::from_secs(2));
+        // A pooled thread: what an earlier call that failed noted as missing is not this call's.
+        drop(kc_index::workspace::take_missing());
+        kc_index::workspace::clear_cached_reads();
+        let result = f();
+        drop(kc_index::cache::take_touched());
+        kc_index::workspace::clear_cached_reads();
+        result
+    })
+    .await
+    .map_err(|e| e.to_string());
+    cancel_on_drop.0 = None;
+    release_memory();
+    result?.map_err(|e| format!("{e:#}"))
+}
+
+/// Cancels an operation when dropped.
+struct CancelOnDrop(Option<std::sync::Arc<kc_store::limits::Operation>>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if let Some(op) = &self.0 {
+            op.cancel();
+        }
+    }
+}
+
+/// Runs a traversal and answers as text: a header naming the repo and commit, then the tree, cut at the size cap
+/// on a line boundary with a hint saying how much was cut.
+async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(Value, String)> + Send + 'static) -> Result<String, String> {
+    let (env, text) = blocking(false, move || {
+        let (mut env, text) = f()?;
+        ops::add_cuts(&mut env);
+        crate::contract::finish(&mut env);
+        // The text shows no cursor fields: its hints name the cursors themselves.
+        crate::compact::text_hints(&mut env);
+        Ok((env, text))
+    })
+    .await?;
+    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS);
+    Ok(cap_text(&format!("{}{}", header(&env), notes_first(&mcp_names(&text))), max))
+}
+
+/// The text with its notes (`… truncated`, depth and hidden-kind notes) moved to the top, so a size cap never cuts them.
+fn notes_first(text: &str) -> String {
+    let note = |l: &str| {
+        let t = l.trim_start();
+        t.starts_with("… truncated") || t.starts_with("(depth ") || t.starts_with("(one hop") || t.ends_with("hidden by kinds)")
+    };
+    let (notes, rest): (Vec<&str>, Vec<&str>) = text.lines().partition(|l| note(l));
+    let mut out = String::new();
+    for l in notes.iter().map(|l| l.trim_start()).chain(rest.iter().copied()) {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// CLI flags in a text answer, named as this server's parameters.
+fn mcp_names(text: &str) -> String {
+    [
+        ("--max-nodes", "max_nodes"),
+        ("--max-repos", "max_repos"),
+        ("--allow-ambiguous", "allow_ambiguous"),
+        ("--edges/--kinds", "edges/kinds"),
+        ("--limit", "limit"),
+        ("--depth", "depth"),
+        ("raise -n for all", "raise limit for all"),
+    ]
+    .iter()
+    .fold(text.to_string(), |t, (cli, mcp)| t.replace(cli, mcp))
+}
+
+/// A note when a walk stopped at `depth` while symbols at that depth lead further: how to see more.
+fn depth_note(depth: u8, max: u8, deeper: bool) -> Option<String> {
+    (deeper && depth < max).then(|| format!("(depth {depth} shown; pass depth {} (up to {max}) for more)", depth + 1))
+}
+
+/// `repo orders-api @ 1a2b3c4 (dirty)`: what the text answers for.
+fn header(env: &Value) -> String {
+    let repo = |v: &Value| {
+        let path = v["repo"].as_str().unwrap_or("");
+        let name = Path::new(path).file_name().map_or(path.into(), |n| n.to_string_lossy().into_owned());
+        let commit = v["commit"].as_str().map(|c| format!(" @ {}", &c[..c.len().min(7)])).unwrap_or_default();
+        let dirty = if v["dirty"].as_bool() == Some(true) { " (dirty)" } else { "" };
+        format!("{name}{commit}{dirty}")
+    };
+    let head = match env["repos"].as_array() {
+        Some(list) => format!("repos {}\n", list.iter().map(repo).collect::<Vec<_>>().join(", ")),
+        None => format!("repo {}\n", repo(env)),
+    };
+    // Why the answer is incomplete (files that could not be read, lists cut), and the other repos it consulted.
+    crate::ops::freshness_notes(env).into_iter().fold(head, |h, n| format!("{h}{n}\n"))
+}
+
+/// `text` within `max` characters, cut on a line boundary, ending with what was cut and how to get it.
+fn cap_text(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut cut = max.saturating_sub(160);
+    while !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut cut = text[..cut].rfind('\n').map_or(cut, |i| i + 1);
+    // Never inside a path: a path cut short would read as one that ends there. Cut before its `path N of M` line.
+    if text[cut..].starts_with("  ")
+        && let Some(start) = text[..cut].rfind("\npath ").map(|i| i + 1)
+        && text[start..cut].lines().skip(1).all(|l| l.starts_with("  "))
+    {
+        cut = start;
+    }
+    let left = text[cut..].lines().count();
+    format!(
+        "{}… {left} more lines cut at max_chars={max}; pass max_chars (up to {MAX_CHARS}), a lower depth, or edges/kinds filters\n",
+        &text[..cut]
+    )
+}
+
+/// Inputs one batch call takes at most.
+const MAX_BATCH: usize = 20;
+
+/// The least room an input's result is given: below it, an answer is too cut to use.
+const MIN_SHARE: usize = 1_000;
+
+/// Runs one operation per input and answers `{"results": [...]}`, each result the operation's envelope with the
+/// input as `input`, the whole answer within the size cap: each result gets an even share of the room left (at least
+/// [`MIN_SHARE`]), and inputs that don't fit are not run, listed in `left_out` with a `hint` saying how to get them.
+/// More than [`MAX_BATCH`] inputs is an error.
+async fn run_batch(
+    max_chars: Option<usize>,
+    inputs: Vec<String>,
+    f: impl Fn(&str) -> anyhow::Result<Value> + Send + 'static,
+) -> Result<String, String> {
+    if inputs.len() > MAX_BATCH {
+        return Err(format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len()));
+    }
+    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS * 2);
+    blocking(false, move || {
+        let n = inputs.len();
+        let mut results: Vec<String> = Vec::new();
+        // `{"results":[` and `]}`, and the commas between results.
+        let mut used = 14;
+        for (k, i) in inputs.iter().enumerate() {
+            let room = max.saturating_sub(used + usize::from(k > 0));
+            let share = (room / (n - k)).max(MIN_SHARE).min(room);
+            if share < MIN_SHARE / 2 {
+                break;
+            }
+            let text = match f(i) {
+                Ok(mut env) => {
+                    ops::add_cuts(&mut env);
+                    env["input"] = Value::from(i.as_str());
+                    cap(env, share)
+                }
+                Err(e) => serde_json::json!({ "input": i, "error": format!("{e:#}") }).to_string(),
+            };
+            if text.len() > room {
+                break;
+            }
+            used += text.len() + usize::from(k > 0);
+            results.push(text);
+        }
+        // What is left out, said within the cap too: fewer results until the answer fits.
+        loop {
+            let answer = batch_answer(&results, &inputs[results.len()..], max);
+            if answer.len() <= max || results.is_empty() {
+                return Ok(answer);
+            }
+            results.pop();
+        }
+    })
+    .await
+}
+
+/// `{"results": [...]}` from results already serialized, and with inputs `left` not answered, `left_out` (as many
+/// as fit `max`, the rest counted) and a `hint`.
+fn batch_answer(results: &[String], left: &[String], max: usize) -> String {
+    let mut out = format!("{{\"results\":[{}]", results.join(","));
+    // Complete when every input was answered and every answer is complete; each partial answer is named here, its
+    // own `incomplete` says why.
+    let mut incomplete: Vec<kc_store::answer::Incomplete> = Vec::new();
+    for (k, r) in results.iter().enumerate() {
+        let v: Value = serde_json::from_str(r).unwrap_or(Value::Null);
+        if v["complete"].as_bool() == Some(false) || v.get("error").is_some() {
+            let reason = crate::contract::incomplete_of(&v).first().map_or(kc_store::answer::Reason::Failed, |i| i.reason);
+            let input = v["input"].as_str().unwrap_or("");
+            let what = if v.get("error").is_some() { "failed" } else { "incomplete: see its `incomplete`" };
+            incomplete.push(kc_store::answer::Incomplete::new(reason, format!("results[{k}] ({input}): {what}")));
+        }
+    }
+    if !left.is_empty() {
+        incomplete.push(
+            kc_store::answer::Incomplete::new(kc_store::answer::Reason::Budget, format!("inputs: {} not run to fit max_chars={max}", left.len()))
+                .with_hint("call again with the inputs in left_out, or pass a larger max_chars"),
+        );
+    }
+    out.push_str(&format!(",\"complete\":{}", incomplete.is_empty()));
+    if !incomplete.is_empty() {
+        out.push_str(&format!(",\"incomplete\":{}", serde_json::to_string(&incomplete).unwrap_or_default()));
+    }
+    if !left.is_empty() {
+        let hint = format!(
+            "{} of {} inputs left out to fit max_chars={max}: call again with them (left_out), or pass max_chars (up to {})",
+            left.len(),
+            results.len() + left.len(),
+            MAX_CHARS * 2
+        );
+        let mut listed = left.len();
+        loop {
+            let named = serde_json::to_string(&left[..listed]).unwrap_or_default();
+            let more = if listed < left.len() { format!(",\"left_out_more\":{}", left.len() - listed) } else { String::new() };
+            let tail = format!(",\"truncated\":true,\"left_out\":{named}{more},\"hint\":{}}}", Value::from(hint.as_str()));
+            if out.len() + tail.len() <= max || listed == 0 {
+                out.push_str(&tail);
+                return out;
+            }
+            listed -= 1;
+        }
+    }
+    out.push('}');
+    out
+}
+
+/// The inputs of a tool taking one (`one`) or several (`many`).
+fn inputs(one: Option<String>, many: Vec<String>, what: &str) -> Result<Vec<String>, String> {
+    let all: Vec<String> = one.into_iter().chain(many).filter(|s| !s.trim().is_empty()).collect();
+    if all.is_empty() {
+        return Err(format!("give {what}"));
+    }
+    Ok(all)
+}
+
+/// Says what an empty answer searched, and how to get the rest of a list cut short by `limit`: `note` and `hint`.
+fn explain(mut env: Value, searched: &str, limit_param: &str) -> Value {
+    let repos: Vec<String> = match env["repos"].as_array() {
+        Some(list) => list.iter().filter_map(|r| r["repo"].as_str()).map(repo_label).collect(),
+        None => env["repo"].as_str().map(repo_label).into_iter().collect(),
+    };
+    let items = env["items"].as_array().map_or(0, Vec::len);
+    let empty = items == 0 || env["items"].as_array().is_some_and(|list| list.iter().all(|i| i["nodes"].as_array().is_some_and(Vec::is_empty)));
+    if empty && env.get("note").is_none() {
+        env["note"] = Value::from(format!("{searched} in {}", if repos.is_empty() { "the repos searched".into() } else { repos.join(", ") }));
+    }
+    if let (Some(total), true) = (env["total"].as_u64(), env["truncated"].as_bool() == Some(true))
+        && total > items as u64
+        && !limit_param.is_empty()
+    {
+        let shown = format!("showing {items} of {total}; raise {limit_param} for more");
+        // A capped count says so itself: keep it.
+        env["hint"] = match env["hint"].as_str() {
+            Some(h) if env["capped"].as_bool() == Some(true) => Value::from(format!("{shown}; {h}")),
+            _ => Value::from(shown),
+        };
+    }
+    // Lists inside the items that carry their own totals (`partners_total`, `reviewers_total`, `areas_total`).
+    let mut hints = Vec::new();
+    let mut inner_empty = items > 0;
+    for item in env["items"].as_array().cloned().unwrap_or_default() {
+        for (list, total) in [("partners", "partners_total"), ("reviewers", "reviewers_total"), ("areas", "areas_total")] {
+            let shown = item[list].as_array().map_or(0, Vec::len) as u64;
+            if let Some(t) = item[total].as_u64() {
+                if t > shown {
+                    hints.push(format!("{list}: showing {shown} of {t}; raise {limit_param} for more"));
+                }
+                inner_empty &= t == 0;
+            } else {
+                inner_empty &= !item[list].is_array() || shown == 0;
+            }
+        }
+    }
+    if !hints.is_empty() {
+        env["truncated"] = Value::Bool(true);
+        env["hint"] = Value::from(hints.join("; "));
+    }
+    if inner_empty && env.get("note").is_none() && ["partners", "reviewers"].iter().any(|l| env["items"][0][*l].is_array()) {
+        env["note"] = Value::from(format!("{searched} in {}", if repos.is_empty() { "the repos searched".into() } else { repos.join(", ") }));
+    }
+    env
+}
+
+fn repo_label(path: &str) -> String {
+    Path::new(path).file_name().map_or(path.into(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Runs `knowcode search --json` in a child process and returns its envelope. A search over every repo churns
+/// through file buffers and SQLite pages, and the allocator keeps the pages it touched resident in whichever
+/// process did the work; a child returns them all when it exits, so the server stays small however big the search.
+///
+/// The child has the search deadline (see [`kc_store::limits`]) and is killed when the call is cancelled. Killed at
+/// its deadline, it answers no items, `complete: false` and an `incomplete` entry with reason `deadline`.
+fn search_in_child(args: &[String]) -> anyhow::Result<Value> {
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args);
+    // Its envelope keeps what cursors are made from, for the size cap here to renew them.
+    cmd.env(crate::KEEP_RESUME, "1");
+    let out = match kc_store::limits::output(cmd, kc_store::limits::Kind::Search, &format!("knowcode {}", args[0]), None) {
+        Ok(out) => out,
+        Err(e) => match e.downcast_ref::<kc_store::limits::Cut>() {
+            // Said by `with_cuts`, from the recorded cut.
+            Some(cut) if cut.reason == "deadline" => {
+                return Ok(serde_json::json!({ "items": [], "total": 0, "truncated": false, "complete": false }));
+            }
+            _ => return Err(e),
+        },
+    };
+    if !out.status.success() {
+        let msg = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("{}", msg.trim().trim_start_matches("knowcode: "));
+    }
+    Ok(serde_json::from_slice(&out.stdout)?)
+}
+
+/// Hands freed pages back to the OS after each call, so resident memory tracks what is in use rather than the
+/// high-water mark of the biggest call.
+fn release_memory() {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        // SAFETY: a null zone means all zones; goal 0 means release as much as possible. No pointers are kept.
+        unsafe {
+            malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+        }
+    }
+}
+
+/// The answer as the server outputs it: [`cap_full`], said in its compact form (see [`crate::compact`]).
+pub(crate) fn cap(env: Value, max: usize) -> String {
+    let names = crate::compact::Names::load();
+    crate::compact::output(&cap_full_named(env, max, &names), &names)
+}
+
+/// Drops trailing list items (from `items`, or from the largest list inside each item) until the JSON fits, as
+/// measured in its compact form. Each list cut says how many items it lost, by its path (`omitted`), and `hint` says
+/// how to get them. The full envelope: cursors as they are.
+#[cfg(test)]
+pub(crate) fn cap_full(env: Value, max: usize) -> Value {
+    cap_full_named(env, max, &crate::compact::Names::load())
+}
+
+fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> Value {
+    // What cursors are made from is never output: measured without it, kept aside to renew the cursors of lists cut.
+    let mut resume = crate::cursor::take(&mut env);
+    // Said once: the compact form has no copy of the first item (see `compact::once`), so the cap cuts none.
+    crate::compact::once(&mut env);
+    crate::contract::finish(&mut env);
+    // The compact form is measured exactly when the full form, less what compacting saved at the last exact
+    // measure, says it may fit: compacting a clone at every item cut would cost more than the cut.
+    let mut len = crate::compact::measure(&env, names).len();
+    let mut saved = env.to_string().len().saturating_sub(len);
+    let mut guard = 0;
+    let mut lost: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    while len > max && guard < 10_000 {
+        guard += 1;
+        match shrink(&mut env) {
+            Some(path) => {
+                if let Some(r) = resume.as_mut() {
+                    crate::cursor::cut(&mut env, r, &path);
+                }
+                refuse_partial_rename(&mut env, &path);
+                *lost.entry(path).or_default() += 1;
+            }
+            None => break,
+        }
+        // A workspace `kc_status` answers with an array of per-repo objects.
+        if let Some(obj) = env.as_object_mut() {
+            obj.insert("truncated".into(), Value::Bool(true));
+        }
+        // Paged answers: the next page starts after the last item that survived.
+        if let (Some(offset), Some(items)) = (env["offset"].as_u64(), env["items"].as_array()) {
+            env["next_offset"] = Value::from(offset + items.len() as u64);
+        }
+        if let Some(obj) = env.as_object_mut() {
+            let total: u64 = lost.values().sum();
+            obj.insert("omitted".into(), serde_json::json!(lost));
+            let paged = if obj.contains_key("next_offset") { ", or page with offset=next_offset" } else { "" };
+            obj.insert(
+                "hint".into(),
+                Value::from(format!("{total} list items cut to fit max_chars={max}; pass max_chars (up to {MAX_CHARS}) or a smaller limit{paged}")),
+            );
+        }
+        crate::contract::finish(&mut env);
+        let full = env.to_string().len();
+        len = full.saturating_sub(saved);
+        if len <= max {
+            len = crate::compact::measure(&env, names).len();
+            saved = full.saturating_sub(len);
+        }
+    }
+    // A context bundle's own lists, counted as they are after the cap.
+    if env["items"].as_array().is_some_and(|items| items.iter().any(|i| i.get("callers_summary").is_some())) {
+        env = context_hints(env);
+        crate::contract::finish(&mut env);
+    }
+    env
+}
+
+/// A rename preview whose sites the size cap cut can't be applied as it is: refused, saying why. Mentions (not
+/// edited) and other lists don't refuse it.
+fn refuse_partial_rename(env: &mut Value, path: &str) {
+    if env.get("new_name").is_none() || !matches!(path, "/items" | "/cross_repo") {
+        return;
+    }
+    env["refused"] = Value::Bool(true);
+    let why = "partial preview: sites were cut to fit max_chars, so it can't be applied as it is; get the rest with the cursor, or pass max_chars";
+    if let Some(reasons) = env["reasons"].as_array_mut()
+        && !reasons.iter().any(|r| r == why)
+    {
+        reasons.push(Value::from(why));
+    }
+}
+
+/// What the size cap never cuts: a rename's `group` and a path's `steps` (cut short, they would mislead), cursors
+/// (a cut cursor continues nothing), and what the answer says about itself (`incomplete`, `provenance`, and a deploy
+/// answer's `ci_unread` and `ci_cut`, which its `incomplete` entries are made from).
+fn untouchable(key: &str) -> bool {
+    matches!(key, "group" | "steps" | "cursor" | "incomplete" | "provenance" | "omitted" | "ci_unread" | "ci_cut") || key.ends_with("_cursor")
+}
+
+/// Lists whose rows the size cap cuts whole, never inside: a deploy chain or a CI include cut short would mislead,
+/// and only the list itself continues by cursor.
+fn atomic(key: &str) -> bool {
+    matches!(key, "deploy_chains" | "ci_includes" | "deployed_by")
+}
+
+/// A deploy answer's long tails (`items[0].ansible.ci_includes`, …), cut before its deploy steps (see
+/// `ops::DEPLOY_LISTS`): the rank of the list at `path` in what the cap cuts first.
+fn tier(path: &str) -> u8 {
+    let Some((parent, key)) = path.rsplit_once('/') else { return 0 };
+    let tail = matches!(key, "ci_includes" | "ci_skipped" | "ci_templates" | "own");
+    u8::from(tail && parent.ends_with("/ansible"))
+}
+
+/// Trims one item from the longest list, returning its path (`/items`, `/items/0/callers`); or shortens a long
+/// string, returning `/…`; `None` when nothing is left to trim. A rename's `group` (the members renamed together) and
+/// a path's `steps` are never cut: a path or a group cut short would mislead; the list holding them is cut instead.
+/// A deploy answer's tails go before the rest, and its chains and includes are cut whole (see [`atomic`]), in the
+/// answer and in a page of one of those lists.
+fn shrink(v: &mut Value) -> Option<String> {
+    type Found<'a> = (&'a mut Vec<Value>, String, (u8, usize));
+    // Prefer trimming the longest array anywhere in the response.
+    fn longest(v: &mut Value, path: String, whole: bool) -> Option<Found<'_>> {
+        let mut best: Option<Found<'_>> = None;
+        match v {
+            Value::Array(a) => {
+                if a.len() > 1 {
+                    let rank = (tier(&path), a.len());
+                    return Some((a, path, rank));
+                }
+                if whole {
+                    return None;
+                }
+                for (i, x) in a.iter_mut().enumerate() {
+                    if let Some(inner) = longest(x, format!("{path}/{i}"), false)
+                        && inner.2 > best.as_ref().map_or((0, 1), |b| b.2)
+                    {
+                        best = Some(inner);
+                    }
+                }
+            }
+            Value::Object(m) => {
+                // A page of a list cut whole (`kc_more`): its items are that list's rows.
+                let page_whole = path.is_empty() && m.get("list").and_then(Value::as_str).is_some_and(|l| atomic(l.rsplit('.').next().unwrap_or("")));
+                for (k, x) in m.iter_mut().filter(|(k, _)| !untouchable(k)) {
+                    let whole = atomic(k) || (page_whole && k == "items");
+                    if let Some(inner) = longest(x, format!("{path}/{k}"), whole)
+                        && inner.2 > best.as_ref().map_or((0, 1), |b| b.2)
+                    {
+                        best = Some(inner);
+                    }
+                }
+            }
+            _ => {}
+        }
+        best
+    }
+    match longest(v, String::new(), false) {
+        Some((a, path, _)) => {
+            a.pop();
+            Some(path)
+        }
+        None => {
+            // Last resort: shorten long strings (source spans).
+            fn trim_strings(v: &mut Value) -> bool {
+                match v {
+                    Value::String(s) if s.len() > 400 => {
+                        let mut cut = s.len() / 2;
+                        while !s.is_char_boundary(cut) {
+                            cut -= 1;
+                        }
+                        s.truncate(cut);
+                        s.push('…');
+                        true
+                    }
+                    Value::Array(a) => a.iter_mut().any(trim_strings),
+                    Value::Object(m) => m.iter_mut().filter(|(k, _)| !untouchable(k)).any(|(_, x)| trim_strings(x)),
+                    _ => false,
+                }
+            }
+            trim_strings(v).then(|| "/…".to_string())
+        }
+    }
+}
+
+
+/// Reference kinds from `kinds` and `edges` (edge names map to reference kinds: calls → call, uses → type_ref).
+fn ref_kinds(kinds: &[String], edges: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = kinds.iter().flat_map(|k| k.split(',')).map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
+    for e in edges.iter().flat_map(|e| e.split(',')).map(str::trim).filter(|e| !e.is_empty()) {
+        let k = match e {
+            "calls" | "call" => "call",
+            "instantiates" | "instantiate" => "instantiate",
+            "uses" | "type_ref" => "type_ref",
+            "member" => "member",
+            "reads" | "read" => "read",
+            "writes" | "write" => "write",
+            other => return Err(format!("edges for references are calls, instantiates, uses, member, reads, writes; not {other}")),
+        };
+        out.push(k.to_string());
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// A context bundle's own cut lists, said out loud: callers, callees and members shown of how many, and a source cut
+/// at the budget.
+fn context_hints(mut env: Value) -> Value {
+    if let Some(items) = env["items"].as_array_mut() {
+        for item in items {
+            let mut hints = Vec::new();
+            let name = item["symbol"]["name"].as_str().unwrap_or("").to_string();
+            let shown = |k: &str| item[k].as_array().map_or(0, Vec::len) as u64;
+            if let Some(total) = item["callers_summary"]["total"].as_u64()
+                && total > shown("callers")
+            {
+                hints.push(format!("callers: {} of {total} shown; kc_refs {name} lists them all", shown("callers")));
+            }
+            if let Some(total) = item["callees_total"].as_u64()
+                && total > shown("callees")
+            {
+                hints.push(format!("callees: {} of {total} shown; raise budget (and max_chars) for more", shown("callees")));
+            }
+            if let Some(total) = item["members_total"].as_u64()
+                && total > shown("members")
+            {
+                hints.push(format!("members: {} of {total} shown; raise budget (and max_chars) for more", shown("members")));
+            }
+            if item["source_truncated"].as_bool() == Some(true) {
+                let alt = if item["source_mode"] == "skeleton" { "" } else { " or pass source=skeleton" };
+                hints.push(format!("source cut at the budget; raise budget{alt}"));
+            }
+            if !hints.is_empty() {
+                item["hints"] = serde_json::json!(hints);
+            }
+        }
+    }
+    env
+}
+
+#[tool_router]
+impl KnowcodeServer {
+    /// The server for `default`, advertising the tools the profile `tools` names (see [`profile`]).
+    pub fn new(default: Scope, tools: &str) -> Result<Self, String> {
+        let mut router = ToolRouter::new();
+        let mut schemas = std::collections::BTreeMap::new();
+        for mut route in Self::tool_router() {
+            route.attr.input_schema = std::sync::Arc::new(slim(&route.attr.input_schema));
+            schemas.insert(route.attr.name.to_string(), (*route.attr.input_schema).clone());
+            router.add_route(route);
+        }
+        let all: Vec<String> = schemas.keys().cloned().collect();
+        let on = profile(tools, &all)?;
+        let hidden: Vec<String> = all.into_iter().filter(|t| !on.contains(t)).collect();
+        for t in &hidden {
+            router.disable_route(t.clone());
+        }
+        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden) })
+    }
+
+    #[tool(description = "KnowCode's documentation by topic: a tool's details and every parameter (`kc_context`, `kc_impact`), sections (`kc_context.http`) and concepts (`contract`, `evidence`, `cursors`, `privacy`). No topic: the index.")]
+    async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, String> {
+        self.help(p.topic.as_deref())
+    }
+
+    #[tool(description = "The symbols enclosing a file:line, innermost first, each with the qualified name kc_context takes. For mapping a stack frame to code.")]
+    async fn kc_symbol_at(&self, Parameters(p): Parameters<SymbolAtParams>) -> Result<String, String> {
+        let scope = if Path::new(&p.file).is_absolute() && p.common.repo.is_none() {
+            Scope { repos: Vec::new(), ..self.default.clone() }
+        } else {
+            self.scope(&p.common, false)?
+        };
+        run(p.common.max_chars, move || {
+            let what = format!("no symbol encloses {}:{}", p.file, p.line);
+            Ok(explain(ops::at(&p.file, p.line, &scope)?.env, &what, ""))
+        })
+        .await
+    }
+
+    #[tool(description = "Find definitions by name, prefix, camelCase words or `Type.member`, each with file:line and signature. Don't know the name? kc_locate.")]
+    async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let env = ops::find(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
+            let what = format!("no definition matches {:?}{}", p.query, p.kind.as_deref().map(|k| format!(" of kind {k}")).unwrap_or_default());
+            Ok(explain(env, &what, "limit"))
+        })
+        .await
+    }
+
+    #[tool(description = "Find the files for a concept, bug report or ticket in plain words (\"refund approval\"), ranked by paths, symbols, docs and commit subjects. Use it first when you don't know the names.")]
+    async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, p.workspace)?;
+        let limit = p.limit.unwrap_or(10);
+        let locate = move |q: &str| -> anyhow::Result<Value> {
+            let what = format!("no file's path, symbols, docs, referenced names, text or commit subjects contain a word of {q:?} (filler words dropped)");
+            Ok(explain(ops::locate(q, limit, &scope)?.env, &what, "limit"))
+        };
+        match (p.query, p.queries) {
+            (Some(q), many) if many.is_empty() => run(p.common.max_chars, move || locate(&q)).await,
+            (one, many) => run_batch(p.common.max_chars, inputs(one, many, "query or queries")?, locate).await,
+        }
+    }
+
+    #[tool(description = "Every reference to a name, resolved to its definition with a confidence and evidence, including from dependent repos (also SQL, Ansible, Terraform). Details: kc_help kc_refs.")]
+    async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        let limit = p.limit.unwrap_or(25);
+        let kinds = ref_kinds(&p.kinds, &p.edges)?;
+        let refs = move |name: &str| -> anyhow::Result<Value> {
+            let what = format!("no reference to {name}{}", if kinds.is_empty() { String::new() } else { format!(" of kind {}", kinds.join(", ")) });
+            Ok(explain(ops::refs(name, &kinds, limit, &scope)?.env, &what, "limit"))
+        };
+        match (p.name, p.names) {
+            (Some(n), many) if many.is_empty() => run(p.common.max_chars, move || refs(&n)).await,
+            (one, many) => run_batch(p.common.max_chars, inputs(one, many, "name or names")?, refs).await,
+        }
+    }
+
+    #[tool(description = "One bundle about a symbol: source (skeleton when long), members, callers and callees with file:line, and cross-repo links (HTTP, DI, EF tables, bus, SQL, Angular, Ansible, Terraform). A repo's own name: how it deploys. Details: kc_help kc_context.")]
+    async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        let source: kc_store::skeleton::SourceMode = p.source.as_deref().unwrap_or("auto").parse().map_err(|e| format!("{e:#}"))?;
+        let symbols = inputs(p.symbol, p.symbols, "symbol or symbols")?;
+        let n = symbols.len();
+        // Several symbols share the budget; each still gets enough for a useful bundle.
+        let budget = (p.budget.unwrap_or(2000) / n).max(600);
+        let limit = p.limit;
+        let context = move |sym: &str| -> anyhow::Result<Value> {
+            let what = format!("no definition or table named {sym}");
+            Ok(explain(ops::context_limited(sym, budget, source, limit, &scope)?.env, &what, ""))
+        };
+        let max = p.common.max_chars.or(Some((budget * n * 5).max(DEFAULT_CHARS)));
+        if n == 1 {
+            let sym = symbols.into_iter().next().unwrap_or_default();
+            run(max, move || context(&sym)).await
+        } else {
+            run_batch(max, symbols, context).await
+        }
+    }
+
+    #[tool(description = "Call tree around a symbol: callers (in), callees (out) or both, one hop by default (up to 3), through DI, HTTP routes, the bus and SQL. Text tree; `format: json` for the envelope.")]
+    async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        let dir = p.direction.clone().unwrap_or_else(|| "both".into());
+        let tree = p.walk.tree()?;
+        let filter = p.walk.filter();
+        let what = format!("no definition named {}", p.symbol);
+        // Asked deeper than a trace goes, the answer says so (`ops::trace`); the notes go by the depth walked.
+        let asked = p.depth.unwrap_or(1).max(1);
+        let depth = asked.min(kc_store::trace::MAX_TRACE_DEPTH);
+        let limit = p.limit.unwrap_or(40);
+        let trace = move || ops::trace(&p.symbol, &dir, asked, limit, &filter, &scope);
+        // Whether a node at the last depth leads further (a confident edge the walk would expand).
+        let deeper = move |t: &kc_store::trace::Trace| t.nodes.iter().any(|n| n.depth == depth && matches!(n.confidence, "exact" | "unique_name"));
+        if tree {
+            run_text(p.common.max_chars, move || {
+                let out = trace()?;
+                let mut text = String::new();
+                for (root, t) in &out.data.found {
+                    text.push_str(&crate::render::trace_text(root, t, out.data.multi));
+                }
+                if let Some(n) = depth_note(depth, kc_store::trace::MAX_TRACE_DEPTH, out.data.found.iter().any(|(_, t)| deeper(t))) {
+                    text.push_str(&format!("{n}\n"));
+                }
+                for (_, n) in out.data.found.iter().zip(&out.data.hidden).filter(|(_, n)| **n > 0) {
+                    text.push_str(&format!("({n} symbols of other kinds hidden by kinds)\n"));
+                }
+                if out.data.found.is_empty() {
+                    text = format!("{what}\n");
+                }
+                Ok((out.env, text))
+            })
+            .await
+        } else {
+            run(p.common.max_chars, move || {
+                let out = trace()?;
+                let mut env = explain(out.env, &what, "");
+                let mut hints = Vec::new();
+                let omitted: usize = out.data.found.iter().map(|(_, t)| t.omitted).sum();
+                if out.data.found.iter().any(|(_, t)| t.truncated) {
+                    hints.push(format!("node limit {limit} reached: at least {omitted} more neighbours left out; raise limit, lower depth, or filter with edges/kinds"));
+                }
+                if let Some(n) = depth_note(depth, kc_store::trace::MAX_TRACE_DEPTH, out.data.found.iter().any(|(_, t)| deeper(t))) {
+                    hints.push(n.trim_matches(['(', ')']).to_string());
+                }
+                if !hints.is_empty() {
+                    env["hint"] = Value::from(hints.join("; "));
+                }
+                Ok(env)
+            })
+            .await
+        }
+    }
+
+    #[tool(description = "How symbol `from` reaches symbol `to`, possibly across repos: the best paths, each step with its edge, confidence and site. Confident edges only unless `allow_ambiguous`.")]
+    async fn kc_path(&self, Parameters(p): Parameters<PathParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        let to_repo = match &p.to_repo {
+            Some(r) => self.scope(&Common { repo: Some(r.clone()), max_chars: None }, false)?.repos.into_iter().next(),
+            None => None,
+        };
+        let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
+        let path = move || {
+            let opts = crate::walk::PathOptions {
+                max_hops: p.max_hops.unwrap_or(8),
+                max_nodes: p.max_nodes.unwrap_or(2000).max(1),
+                max_repos: p.max_repos.unwrap_or(16).max(1),
+                paths: p.paths.unwrap_or(3),
+                one_way: false,
+                allow_ambiguous: p.allow_ambiguous,
+                edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
+                from_skip: 0,
+                to_skip: 0,
+            };
+            crate::walk::path(&p.from, &p.to, to_repo.as_deref(), &opts, &scope)
+        };
+        if tree {
+            run_text(p.common.max_chars, move || {
+                let out = path()?;
+                Ok((out.env, crate::render::path_text(&out.data)))
+            })
+            .await
+        } else {
+            run(p.common.max_chars, move || {
+                let out = path()?;
+                let mut env = out.env;
+                let a = &out.data;
+                if a.paths.is_empty() {
+                    let kind = if a.allow_ambiguous { "no path" } else { "no confident path (allow_ambiguous follows ambiguous edges too)" };
+                    env["note"] = Value::from(format!(
+                        "{kind} from {} to {} within {} hops; explored {} nodes in {} repos",
+                        a.from.qualified, a.to.qualified, a.max_hops, a.explored, a.repos_opened
+                    ));
+                }
+                if a.truncated {
+                    env["hint"] = Value::from("the node or repo budget stopped the search: raise max_nodes or max_repos");
+                }
+                Ok(env)
+            })
+            .await
+        }
+    }
+
+    #[tool(description = "What happens end to end from an entry point (Angular route or component, controller action, method, file:line): the steps it runs across repos through DI, HTTP, the bus, NgRx and EF.")]
+    async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
+        let entry = p.entry.clone();
+        let flow = move || {
+            let opts = crate::flow::FlowOptions {
+                depth: p.depth.unwrap_or(10).clamp(1, 16),
+                max_steps: p.limit.unwrap_or(60),
+                max_repos: p.max_repos.unwrap_or(16).max(1),
+                edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
+                children: p.children.unwrap_or(crate::flow::DEFAULT_CHILDREN),
+            };
+            crate::flow::flow(&p.entry, &opts, &scope)
+        };
+        if tree {
+            run_text(p.common.max_chars, move || {
+                let out = flow()?;
+                Ok((out.env, crate::render::flow_text(&entry, out.data.as_ref())))
+            })
+            .await
+        } else {
+            let what = format!("no Angular route, component or definition named {entry}");
+            run(p.common.max_chars, move || {
+                let out = flow()?;
+                let mut env = explain(out.env, &what, "");
+                if let Some(f) = &out.data {
+                    if f.steps.is_empty() {
+                        env["note"] = Value::from(format!("nothing followed from {entry}: no edge leaves it, or every one was left out ({:?})", f.left_out));
+                    }
+                    if f.truncated {
+                        env["hint"] = Value::from("stopped at the step or repo limit: raise limit or max_repos, or lower depth");
+                    }
+                }
+                Ok(env)
+            })
+            .await
+        }
+    }
+
+    #[tool(description = "What depends on a symbol, a file or a diff (`working` or a git revision): one hop by default (up to 16), across repos, HTTP, bus, SQL and deploy links. Dependents are classed by proximity (direct, near, far): graph distance, not risk.")]
+    async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        let tree = p.walk.tree()?;
+        let order: ops::ImpactOrder = p.order.as_deref().unwrap_or("rank").parse().map_err(|e| format!("{e:#}"))?;
+        let what = match (&p.symbol, &p.file, &p.diff) {
+            (Some(s), _, _) => format!("no definition named {s}"),
+            (_, Some(f), _) => format!("no indexed file {f}"),
+            (_, _, Some(d)) => format!("no changed lines in diff {d}"),
+            _ => String::new(),
+        };
+        let params = ops::ImpactParams {
+            symbol: p.symbol,
+            file: p.file,
+            diff: p.diff,
+            depth: p.depth.unwrap_or(1),
+            limit: p.limit.unwrap_or(60),
+            filter: p.walk.filter(),
+            order,
+            cochange: kc_index::vitals::Span { as_of: p.as_of, since: p.since },
+            coupled_max: None,
+        };
+        if tree {
+            run_text(p.common.max_chars, move || {
+                let out = ops::impact(&params, &scope)?;
+                let mut text = crate::render::impact_text(&out.data, out.data.len() > 1);
+                if out.data.is_empty() {
+                    text = format!("{what}\n");
+                } else if params.depth < 2 && out.data.iter().any(|r| !r.impact.affected.is_empty()) {
+                    text.push_str("(one hop: direct dependents only; pass depth 2-16 for more)\n");
+                }
+                Ok((out.env, text))
+            })
+            .await
+        } else {
+            run(p.common.max_chars, move || {
+                let out = ops::impact(&params, &scope)?;
+                let mut env = explain(out.env, &what, "");
+                let mut hints = Vec::new();
+                if out.data.iter().any(|r| r.impact.truncated) {
+                    hints.push(format!("symbol limit {} reached; raise limit, lower depth, or filter with edges/kinds", params.limit));
+                }
+                if params.depth < 2 && out.data.iter().any(|r| !r.impact.affected.is_empty()) {
+                    hints.push("one hop: direct dependents only; pass depth 2-16 for more".to_string());
+                }
+                if !hints.is_empty() {
+                    env["hint"] = Value::from(hints.join("; "));
+                }
+                Ok(env)
+            })
+            .await
+        }
+    }
+
+    #[tool(description = "Dead-code candidates: symbols nothing reaches, `unused` or `possibly_unused` with reasons; entry points and framework conventions exempt.")]
+    async fn kc_unused(&self, Parameters(p): Parameters<UnusedParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let params = crate::refactor::UnusedParams {
+                kinds: p.kinds,
+                tier: p.tier.unwrap_or_else(|| "all".into()),
+                limit: p.limit.unwrap_or(50),
+            };
+            Ok(crate::refactor::unused(&params, &scope)?.env)
+        })
+        .await
+    }
+
+    #[tool(description = "Preview renaming a C# or TypeScript symbol without editing: every site with its confidence, across dependent repos, plus collisions. `refused` says when it isn't safe to apply.")]
+    async fn kc_rename_preview(&self, Parameters(p): Parameters<RenamePreviewParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let params = crate::refactor::RenameParams { symbol: p.symbol, new_name: p.new_name, allow_ambiguous: p.allow_ambiguous };
+            Ok(crate::refactor::rename(&params, &scope)?.env)
+        })
+        .await
+    }
+
+    #[tool(description = "Files that change in the same commits as a file (git history), with support and confidence; `static_link: false`: a coupling no reference explains. History too thin to rank: `structural` lists guesses by structure, labelled (basis structure, low).")]
+    async fn kc_coupled(&self, Parameters(p): Parameters<CoupledParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = format!("no co-change partner of {} in the last 365 days of history", p.file);
+            let span = kc_index::vitals::Span { as_of: p.as_of, since: p.since };
+            Ok(explain(ops::coupled(&p.file, p.limit.unwrap_or(10), &span, &scope)?.env, &what, "limit"))
+        })
+        .await
+    }
+
+    #[tool(description = "The tests to run for a change (files, symbols or a diff), ranked by edges into tests (ambiguous ones too), naming and co-change. A likely sample, not every test the change reaches.")]
+    async fn kc_tests(&self, Parameters(p): Parameters<TestsParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = format!("no test reaches, is named for, or changes with {}", p.diff.as_deref().map_or_else(|| p.targets.join(", "), |d| format!("diff {d}")));
+            let params = ops::TestsParams { targets: p.targets, diff: p.diff, limit: p.limit.unwrap_or(10), evidence: p.evidence.unwrap_or_default() };
+            Ok(explain(ops::tests(&params, &scope)?.env, &what, "limit"))
+        })
+        .await
+    }
+
+    #[tool(description = "Files that keep hurting: churn, fix history, complexity, coupling and health findings. `path`: one file's vitals; `workspace`: rank repos.")]
+    async fn kc_hotspots(&self, Parameters(p): Parameters<HotspotsParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, p.workspace)?;
+        run(p.common.max_chars, move || {
+            let what = match &p.path {
+                Some(path) => format!("no indexed file {path} with history"),
+                None => "no file with history".to_string(),
+            };
+            Ok(explain(ops::hotspots(p.path.as_deref(), p.top.unwrap_or(10), p.as_of.as_deref(), &scope)?.env, &what, "top"))
+        })
+        .await
+    }
+
+    #[tool(description = "Historical contribution (git history) to a file, directory or repo: top contributor by lines added, truck factor, share added by authors gone; for a file, surviving lines by author. History, not current expertise.")]
+    async fn kc_ownership(&self, Parameters(p): Parameters<OwnershipParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = format!("no file in history under {}", p.path.as_deref().unwrap_or("the repo"));
+            let params = ops::OwnershipParams { path: p.path, without: p.without, depth: p.depth.unwrap_or(2), top: p.top.unwrap_or(10), as_of: None };
+            Ok(explain(ops::ownership(&params, &scope)?.env, &what, "top"))
+        })
+        .await
+    }
+
+    #[tool(description = "Who could review a change (files or a diff): authors ranked by recent lines added to the changed files, leaving out former authors and the change's own.")]
+    async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = format!(
+                "no author other than the change's own wrote {}",
+                p.diff.as_deref().map_or_else(|| p.files.join(", "), |d| format!("the files changed in diff {d}"))
+            );
+            let params = ops::ReviewersParams { files: p.files, diff: p.diff, limit: p.limit.unwrap_or(5), as_of: None };
+            Ok(explain(ops::reviewers(&params, &scope)?.env, &what, "limit"))
+        })
+        .await
+    }
+
+    #[tool(description = "What a repo is: languages, packages, dependencies both ways, entry points, key types, hotspots and a ranked map. `workspace`: one line per repo.")]
+    async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, p.workspace)?;
+        let budget = p.map_budget.unwrap_or(800);
+        let max = p.common.max_chars.or(Some((budget * 4 + 4_000).max(DEFAULT_CHARS)));
+        run(max, move || {
+            let mut env = ops::overview(&scope, p.focus.as_deref(), budget)?.env;
+            if let Some(f) = &p.focus
+                && env["items"].as_array().is_some_and(|items| items.iter().any(|i| i["map"]["focus_matched"] == Value::Bool(false)))
+            {
+                env["note"] = Value::from(format!("focus {f:?} matched no symbol name or path; the map is not biased"));
+            }
+            Ok(env)
+        })
+        .await
+    }
+
+    #[tool(description = "A repo's functional areas: files clustered over references, co-change and directories. `area`: one area's files.")]
+    async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await
+    }
+
+    #[tool(description = "Notes anchored to symbols (read only), each `current`, `stale` (the code changed since) or `orphaned` (the symbol is gone).")]
+    async fn kc_notes(&self, Parameters(p): Parameters<NotesParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || Ok(ops::note_list(p.symbol.as_deref(), &scope)?.env)).await
+    }
+
+    #[tool(description = "WRITES LOCAL STATE: attaches a short note (a decision, gotcha or todo) to a symbol, kept in KnowCode's data directory on this machine, never in the repo or the cache.")]
+    async fn kc_note_add(&self, Parameters(p): Parameters<NoteAddParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || Ok(ops::note_add(&p.symbol, &p.text, p.tag.as_deref(), &scope)?.env)).await
+    }
+
+    #[tool(description = "Ranked text or regex search over every file: definitions first, then code, tests, comments, docs. For strings and config keys that aren't symbol names.")]
+    async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, String> {
+        let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
+        let mut args: Vec<String> = vec!["search".into(), "--json".into()];
+        match p.case.as_deref() {
+            None | Some("sensitive") => {}
+            Some("insensitive") => args.push("-i".into()),
+            Some("smart") => args.push("-S".into()),
+            Some(other) => return Err(format!("case must be sensitive, insensitive or smart, not {other}")),
+        }
+        for (on, flag) in [(p.regex, "-e"), (p.word, "-w"), (p.files_only, "--files")] {
+            if on {
+                args.push(flag.into());
+            }
+        }
+        for l in p.lang {
+            args.extend(["-l".into(), l]);
+        }
+        for g in p.paths {
+            args.extend(["-g".into(), g]);
+        }
+        args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
+        args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
+        args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
+        if let Some(n) = p.max_lines {
+            args.extend(["--max-lines".into(), n.max(1).to_string()]);
+        }
+        for r in &scope.repos {
+            args.extend(["--repo".into(), r.to_string_lossy().into_owned()]);
+        }
+        let what = format!("no line matches {:?}", p.pattern);
+        args.extend(["--".into(), p.pattern]);
+        run_child(p.common.max_chars, move || Ok(explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)"))).await
+    }
+
+    #[tool(description = "Structural search with an ast-grep pattern over one language's syntax trees (`$X` one node, `$$$` any number). Patterns and filters: kc_help kc_grep_ast.")]
+    async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, String> {
+        let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
+        let mut args: Vec<String> = vec!["grep-ast".into(), "--json".into(), "-l".into(), p.lang];
+        for (flag, v) in [
+            ("--selector", p.selector),
+            ("--inside", p.inside),
+            ("--has", p.has),
+            ("--not-inside", p.not_inside),
+            ("--not-has", p.not_has),
+            ("--text", p.text),
+        ] {
+            if let Some(v) = v {
+                args.extend([flag.into(), v]);
+            }
+        }
+        for g in p.paths {
+            args.extend(["-g".into(), g]);
+        }
+        args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
+        args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
+        if let Some(n) = p.max_matches {
+            args.extend(["--max-matches".into(), n.max(1).to_string()]);
+        }
+        for r in &scope.repos {
+            args.extend(["--repo".into(), r.to_string_lossy().into_owned()]);
+        }
+        let what = format!("no {} code matches the pattern {:?}", args[3], p.pattern);
+        args.extend(["--".into(), p.pattern]);
+        run_child(p.common.max_chars, move || Ok(explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)"))).await
+    }
+
+    #[tool(description = "The next page of a list an answer cut: pass its `cursor` (or a `<list>_cursor`) as it is.")]
+    async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, String> {
+        // In a child, as a search: a page can be a search's. A handle (see `compact`) stands for the full cursor.
+        let args: Vec<String> = vec!["more".into(), "--json".into(), crate::compact::resolve(&p.cursor)?];
+        run_child(p.max_chars, move || search_in_child(&args)).await
+    }
+
+    #[tool(description = "Index status: schema, file coverage, parse errors, freshness, config, and SCIP coverage and agreement.")]
+    async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, p.workspace)?;
+        run(p.common.max_chars, move || {
+            let env = ops::status(&scope)?.env;
+            // Several repos answer as a list: wrap it so a cut says how many were left out.
+            Ok(match env {
+                Value::Array(list) => {
+                    let n = list.len();
+                    serde_json::json!({ "items": list, "total": n, "truncated": false })
+                }
+                one => one,
+            })
+        })
+        .await
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for KnowcodeServer {
+    /// Runs the tool as an operation the client can cancel: `notifications/cancelled` cancels the request's token,
+    /// which here cancels the operation (its child processes are killed, its work stops at the next check) rather
+    /// than leaving the blocking work to run on unseen.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
+            return Ok(rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!("{e:#}"))]).into());
+        }
+        let ct = context.ct.clone();
+        let op = kc_store::limits::Operation::new();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let call = OPERATION.scope(op.clone(), self.tool_router.call(tcc));
+        tokio::pin!(call);
+        tokio::select! {
+            r = &mut call => r,
+            _ = ct.cancelled() => {
+                op.cancel();
+                // The work stops soon after; its answer (an error) goes nowhere the client waits for.
+                call.await
+            }
+        }
+    }
+
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
+            .with_server_info(Implementation::new("knowcode", concat!(env!("CARGO_PKG_VERSION"), "+", env!("KNOWCODE_BUILD"))))
+            .with_instructions(INSTRUCTIONS)
+    }
+
+    /// The help topics, as resources (`knowcode://help/<topic>`), for clients that read resources.
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
+        let resources = crate::help::TOPICS
+            .iter()
+            .map(|t| {
+                rmcp::model::Resource::new(format!("{HELP_URI}{}", t.name), t.name).with_description(t.summary).with_mime_type("text/markdown")
+            })
+            .collect();
+        Ok(rmcp::model::ListResourcesResult::with_all_items(resources))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        let topic = request.uri.strip_prefix(HELP_URI).ok_or_else(|| rmcp::ErrorData::resource_not_found(format!("no resource {}", request.uri), None))?;
+        let text = self.help(Some(topic)).map_err(|e| rmcp::ErrorData::resource_not_found(e, None))?;
+        Ok(rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(text, request.uri)]).into())
+    }
+}
+
+/// Where the help topics are served as resources.
+const HELP_URI: &str = "knowcode://help/";
+
+/// The server's instructions: what KnowCode is for and how its answers read, short; the rest is in `kc_help`.
+const INSTRUCTIONS: &str = "KnowCode is a local code graph of the repos in your workspace, answered from the working tree. \
+Query it instead of reading files: kc_find (by name), kc_locate (by concept or bug report), kc_context (one symbol), kc_refs \
+(every use), kc_trace, kc_path and kc_flow (how code connects), kc_impact (before a change), kc_search (text). Every item has \
+file:line; every edge a confidence and evidence; ambiguous edges are listed, never guessed. Every answer says `complete`; \
+when false, `incomplete` says why and how to get the rest, and a `cursor` continues a cut list through kc_more. \
+Every tool takes `repo` (a repo path or indexed repo name; default the server's) and `max_chars` (answer size cap, \
+default 8000, max 40000). \
+`withheld` means a repo's AI privacy file blocks that content: don't try to read it another way. \
+kc_help {topic} documents every tool, parameter and concept.";
+
+/// Serves MCP over stdin/stdout until the client disconnects.
+pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
+    let server = KnowcodeServer::new(default, tools).map_err(anyhow::Error::msg)?;
+    kc_index::light::discover_roots()?;
+    crate::refresh::start();
+    kc_store::limit_sqlite_memory(SQLITE_MEMORY);
+    // Stdin and stdout each hold a blocking thread; the others run tool work, one per lane (see `WORK`).
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).max_blocking_threads(5).enable_all().build()?;
+    rt.block_on(async move {
+        let service = server.serve(rmcp::transport::stdio()).await?;
+        service.waiting().await?;
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn server(tools: &str) -> KnowcodeServer {
+        KnowcodeServer::new(Scope { repos: Vec::new(), no_sync: false }, tools).unwrap()
+    }
+
+    /// What tool discovery costs an agent's context, held to a budget so it can't creep back: the advertised schema
+    /// (every tool, as `tools/list` sends it), each description, each parameter's line, and the instructions.
+    #[test]
+    fn invariant_the_advertised_schema_keeps_within_its_budget() {
+        let tools = server("all").tool_router.list_all();
+        let bytes = serde_json::to_string(&tools).unwrap().len();
+        assert!(bytes <= 20_000, "advertised schema {bytes} bytes, budget 20000: move detail into a help topic");
+        for t in &tools {
+            let d = t.description.as_deref().unwrap_or("");
+            assert!(!d.is_empty() && d.len() <= 300, "{}: description {} bytes, budget 300", t.name, d.len());
+            assert!(!serde_json::to_string(&t.input_schema).unwrap().contains("\"$schema\""), "{}", t.name);
+            for (name, p) in t.input_schema.get("properties").and_then(Value::as_object).into_iter().flatten() {
+                let pd = p["description"].as_str().unwrap_or("");
+                assert!(pd.len() <= 120, "{}.{name}: {} bytes, budget 120", t.name, pd.len());
+                assert!(!p["type"].is_array(), "{}.{name}: optional parameters are typed plainly: {p}", t.name);
+            }
+        }
+        assert!(INSTRUCTIONS.len() <= 1_000, "instructions {} bytes", INSTRUCTIONS.len());
+        // The core profile is a fraction of it.
+        let core = serde_json::to_string(&server("core").tool_router.list_all()).unwrap().len();
+        assert!(core * 2 < bytes, "core {core} of all {bytes}");
+    }
+
+    /// Nothing an agent needs is lost by the short schemas: every tool has a help topic, and every parameter of every
+    /// tool is described in its schema or in that topic; every topic a description or topic points to exists.
+    #[test]
+    fn invariant_every_parameter_is_documented_where_an_agent_can_reach_it() {
+        let s = server("all");
+        let tools = s.tool_router.list_all();
+        for t in &tools {
+            let topic = crate::help::topic(&t.name).unwrap_or_else(|| panic!("{} has no help topic", t.name));
+            let text = s.help(Some(&t.name)).unwrap();
+            for (name, p) in t.input_schema.get("properties").and_then(Value::as_object).into_iter().flatten() {
+                let in_schema = p["description"].as_str().is_some_and(|d| !d.is_empty());
+                let line = text.lines().find(|l| l.starts_with(&format!("- `{name}` ")));
+                let in_help = line.is_some_and(|l| l.split_once("): ").is_some_and(|(_, d)| !d.trim().is_empty()));
+                assert!(in_schema || in_help, "{}.{name} is documented nowhere", t.name);
+                assert!(in_help, "{}.{name} is missing from its help topic {}", t.name, topic.name);
+            }
+        }
+        // Topics named in descriptions, the instructions and topics themselves exist.
+        let mut texts: Vec<String> = tools.iter().filter_map(|t| t.description.as_deref().map(str::to_string)).collect();
+        texts.push(INSTRUCTIONS.to_string());
+        texts.extend(crate::help::TOPICS.iter().map(|t| t.text.to_string()));
+        for text in &texts {
+            for (i, _) in text.match_indices("kc_help ") {
+                let name: String = text[i + 8..].chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.').collect();
+                let name = name.trim_end_matches('.');
+                if !name.is_empty() && !name.starts_with('{') {
+                    assert!(crate::help::topic(name).is_some(), "kc_help {name} named but no such topic");
+                }
+            }
+        }
+        // The concepts the brief names, and every tool's sections, are there.
+        for t in ["contract", "evidence", "cursors", "privacy", "profiles", "kc_context.http", "kc_impact.crossings"] {
+            assert!(crate::help::topic(t).is_some(), "{t}");
+        }
+        assert!(s.help(None).unwrap().contains("`kc_context.http`"));
+        assert!(s.help(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn profiles_pick_the_advertised_tools() {
+        let names = |s: &KnowcodeServer| s.tool_router.list_all().into_iter().map(|t| t.name.to_string()).collect::<Vec<_>>();
+        let core = server("core");
+        let mut got = names(&core);
+        got.sort();
+        let mut want: Vec<String> = CORE.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(got, want);
+        // A tool left out says so in help, and the index names it as not advertised.
+        assert!(core.help(Some("kc_unused")).unwrap().contains("doesn't advertise"));
+        assert!(core.help(None).unwrap().contains("`kc_unused`: dead-code candidates (not advertised"));
+        // Tools add to a profile, with or without their prefix; kc_help is always in; an unknown name is refused.
+        let more = server("core,tests,kc_flow");
+        assert!(names(&more).contains(&"kc_tests".to_string()) && names(&more).contains(&"kc_flow".to_string()));
+        assert_eq!(names(&server("kc_find")), ["kc_find", "kc_help"]);
+        assert!(KnowcodeServer::new(Scope { repos: Vec::new(), no_sync: false }, "core,kc_nope").is_err());
+        assert_eq!(names(&server("all")).len(), names(&server("core,all")).len());
+    }
+
+    #[test]
+    fn caps_long_responses() {
+        let items: Vec<Value> = (0..500).map(|i| json!({ "file": format!("Sources/F{i}.swift"), "line": i })).collect();
+        let env = json!({ "repo": "r", "items": items, "truncated": false });
+        let out = cap(env, 2_000);
+        assert!(out.len() <= 2_000);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["truncated"], json!(true));
+        assert!(!v["items"].as_array().unwrap().is_empty());
+    }
+
+    fn batch(max: usize, n: usize) -> Result<String, String> {
+        let inputs: Vec<String> = (0..n).map(|i| format!("name{i}")).collect();
+        let answer = |i: &str| -> anyhow::Result<Value> {
+            let items: Vec<Value> = (0..40).map(|k| json!({ "file": format!("src/{i}/F{k}.cs"), "line": k })).collect();
+            Ok(json!({ "repo": "r", "items": items, "total": 40, "truncated": false }))
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(run_batch(Some(max), inputs, answer))
+    }
+
+    #[test]
+    fn a_batch_answer_keeps_within_max_chars_and_names_the_inputs_left_out() {
+        for (max, n) in [(1_000, 20), (3_000, 20), (8_000, 7), (8_000, 1), (2_000, 3)] {
+            let out = batch(max, n).unwrap();
+            assert!(out.len() <= max, "max {max}, {n} inputs: {} chars", out.len());
+            let v: Value = serde_json::from_str(&out).unwrap();
+            let results = v["results"].as_array().unwrap();
+            let left: Vec<&str> = v["left_out"].as_array().map(|l| l.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            let more = v["left_out_more"].as_u64().unwrap_or(0) as usize;
+            // Every input is answered or accounted for, in order.
+            assert_eq!(results.len() + left.len() + more, n, "{out}");
+            for (k, r) in results.iter().enumerate() {
+                assert_eq!(r["input"], json!(format!("name{k}")));
+            }
+            if results.len() < n {
+                assert_eq!(v["truncated"], json!(true));
+                assert_eq!(left.first().copied(), Some(format!("name{}", results.len()).as_str()), "{out}");
+                assert!(v["hint"].as_str().unwrap().contains("call again with them"), "{out}");
+            }
+        }
+        // A batch above the bound is refused, saying so.
+        let err = batch(8_000, MAX_BATCH + 1).unwrap_err();
+        assert!(err.contains(&format!("at most {MAX_BATCH} per call")), "{err}");
+    }
+
+    #[test]
+    fn a_cut_to_fit_max_chars_makes_the_answer_incomplete() {
+        let callers: Vec<Value> = (0..300).map(|i| json!({ "file": format!("Sources/F{i}.swift"), "line": i })).collect();
+        let env = json!({ "repo": "r", "items": [{ "callers": callers }], "total": 1, "truncated": false, "cursor": null });
+        let v: Value = serde_json::from_str(&cap(env, 2_000)).unwrap();
+        assert_eq!(v["complete"], json!(false));
+        let i = &v["incomplete"][0];
+        assert_eq!((i["reason"].as_str(), i["detail"].as_str().is_some_and(|d| d.starts_with("/items/0/callers: "))), (Some("budget"), true), "{v}");
+        assert!(v.get("cursor").is_none(), "no dummy cursor: {v}");
+        // Within the cap: complete.
+        let v: Value = serde_json::from_str(&cap(json!({ "repo": "r", "items": [1], "total": 1, "truncated": false }), 2_000)).unwrap();
+        assert_eq!((v["complete"].as_bool(), v.get("incomplete")), (Some(true), None));
+        // A batch leaving inputs out is incomplete; one answering every input is not.
+        let v: Value = serde_json::from_str(&batch(1_000, 20).unwrap()).unwrap();
+        assert_eq!(v["complete"], json!(false));
+        assert!(v["incomplete"].as_array().unwrap().iter().any(|i| i["reason"] == "budget" && i["detail"].as_str().unwrap().starts_with("inputs: ")), "{v}");
+        let v: Value = serde_json::from_str(&batch(80_000, 1).unwrap()).unwrap();
+        assert_eq!(v["complete"], json!(true), "{v}");
+    }
+
+    #[test]
+    fn caps_array_responses() {
+        let repos: Vec<Value> = (0..50).map(|i| json!({ "repo": format!("r{i}"), "files": vec![i; 40] })).collect();
+        let out = cap(Value::Array(repos), 2_000);
+        assert!(out.len() <= 2_000, "{}", out.len());
+    }
+
+    #[test]
+    fn a_capped_list_says_how_many_items_it_lost_and_how_to_get_them() {
+        let callers: Vec<Value> = (0..300).map(|i| json!({ "file": format!("Sources/F{i}.swift"), "line": i })).collect();
+        let env = json!({ "repo": "r", "items": [{ "callers": callers }], "truncated": false });
+        let v = cap_full(env.clone(), 2_000);
+        let kept = v["items"][0]["callers"].as_array().unwrap().len() as u64;
+        assert_eq!(v["omitted"]["/items/0/callers"], json!(300 - kept));
+        assert!(v["hint"].as_str().unwrap().contains("max_chars"));
+        // Output in the compact form: the count is in the list's `incomplete` entry, with how to get the rest.
+        let v: Value = serde_json::from_str(&cap(env, 2_000)).unwrap();
+        let i = &v["incomplete"][0];
+        assert_eq!(i["detail"], json!(format!("/items/0/callers: {} items cut to fit max_chars", 300 - kept)), "{v}");
+        assert!(i["hint"].as_str().unwrap().contains("max_chars"), "{v}");
+    }
+
+    #[test]
+    fn text_is_cut_on_a_line_with_what_was_left_out() {
+        let text: String = (0..500).map(|i| format!("line {i}\n")).collect();
+        let out = cap_text(&text, 1_000);
+        assert!(out.len() <= 1_000, "{}", out.len());
+        let last = out.lines().last().unwrap();
+        assert!(last.starts_with("… ") && last.contains("more lines cut at max_chars=1000"), "{last}");
+        assert_eq!(cap_text("short\n", 1_000), "short\n");
+        // A path is never cut inside: the cut moves before its first line.
+        let paths: String = (1..=20).map(|i| format!("path {i} of 20: 3 hops, weight 6\n{}", "  A.b (x.cs:1)\n    ↳ calls\n    C.d (y.cs:2)\n".repeat(3))).collect();
+        let out = cap_text(&paths, 1_000);
+        let body: Vec<&str> = out.lines().filter(|l| !l.starts_with('…')).collect();
+        assert!(body.last().is_some_and(|l| l.ends_with("C.d (y.cs:2)")), "{out}");
+        assert_eq!(body.iter().filter(|l| l.starts_with("path ")).count() * 10, body.len(), "{out}");
+    }
+
+    #[test]
+    fn the_size_cap_never_cuts_a_rename_group_or_a_path_and_renews_cut_cursors() {
+        let steps: Vec<Value> = (0..40).map(|i| serde_json::json!({ "qualified": format!("S{i}.m"), "file": "a.cs", "line": i })).collect();
+        let env = serde_json::json!({
+            "items": [{ "paths": [{ "steps": steps }, { "steps": [{ "qualified": "X.y" }] }] }],
+            "group": (0..60).map(|i| format!("G{i}.m")).collect::<Vec<_>>(),
+            "total": 1, "truncated": false,
+        });
+        let out: Value = serde_json::from_str(&cap(env, 1_500)).unwrap();
+        assert_eq!(out["group"].as_array().map(Vec::len), Some(60), "{out}");
+        for p in out["items"][0]["paths"].as_array().unwrap() {
+            assert!(matches!(p["steps"].as_array().map(Vec::len), Some(40 | 1)), "{out}");
+        }
+    }
+
+    #[test]
+    fn empty_answers_say_what_was_searched_and_short_lists_how_to_get_more() {
+        let env = json!({ "repo": "/x/Orders", "items": [], "total": 0, "truncated": false });
+        let v = explain(env, "no definition named Foo", "limit");
+        assert_eq!(v["note"], "no definition named Foo in Orders");
+        let env = json!({ "repo": "/x/Orders", "items": [1, 2], "total": 9, "truncated": true });
+        let v = explain(env, "no definition named Foo", "limit");
+        assert!(v.get("note").is_none());
+        assert_eq!(v["hint"], "showing 2 of 9; raise limit for more");
+    }
+
+    #[test]
+    fn reference_edges_name_reference_kinds() {
+        assert_eq!(ref_kinds(&[], &["calls,uses".into()]).unwrap(), ["call", "type_ref"]);
+        assert_eq!(ref_kinds(&["member".into()], &["calls".into()]).unwrap(), ["call", "member"]);
+        assert!(ref_kinds(&[], &["http".into()]).is_err());
+    }
+
+    #[test]
+    fn context_bundles_say_which_lists_are_cut() {
+        let env = json!({ "items": [{ "symbol": { "name": "Save" }, "callers": [1], "callers_summary": { "total": 4 },
+            "callees": [], "callees_total": 0, "members_total": 0, "source_truncated": true, "source_mode": "full" }] });
+        let hints = context_hints(env)["items"][0]["hints"].clone();
+        assert_eq!(hints, json!(["callers: 1 of 4 shown; kc_refs Save lists them all", "source cut at the budget; raise budget or pass source=skeleton"]));
+    }
+
+    #[test]
+    fn text_answers_put_their_notes_first_and_name_mcp_parameters() {
+        let text = "method A  a.cs:1\n  calls method B  b.cs:2\n… truncated at the node limit: at least 3 more (raise --limit, lower --depth)\n(depth 1 shown; pass depth 2 (up to 3) for more)\n";
+        let out = notes_first(&mcp_names(text));
+        let lines: Vec<&str> = out.lines().collect();
+        assert!(lines[0].starts_with("… truncated") && lines[0].contains("raise limit, lower depth"), "{out}");
+        assert!(lines[1].starts_with("(depth 1 shown"));
+        assert_eq!(lines[2..], ["method A  a.cs:1", "  calls method B  b.cs:2"]);
+        assert_eq!(depth_note(1, 3, true).as_deref(), Some("(depth 1 shown; pass depth 2 (up to 3) for more)"));
+        assert!(depth_note(3, 3, true).is_none() && depth_note(1, 3, false).is_none());
+    }
+
+    #[test]
+    fn inner_lists_with_totals_say_how_many_are_left_out() {
+        let env = json!({ "repo": "/x/r", "items": [{ "partners": [1, 2], "partners_total": 19 }], "total": 1, "truncated": false });
+        let v = explain(env, "no partner", "limit");
+        assert_eq!(v["truncated"], true);
+        assert_eq!(v["hint"], "partners: showing 2 of 19; raise limit for more");
+        let env = json!({ "repo": "/x/r", "items": [{ "reviewers": [], "reviewers_total": 0 }], "total": 1, "truncated": false });
+        assert_eq!(explain(env, "no author wrote nope.cs", "limit")["note"], "no author wrote nope.cs in r");
+    }
+
+    #[test]
+    fn capping_a_page_moves_next_offset() {
+        let items: Vec<Value> = (0..200).map(|i| json!({ "file": format!("Sources/F{i}.swift"), "line": i })).collect();
+        let env = json!({ "repo": "r", "items": items, "truncated": false, "offset": 40, "next_offset": 240 });
+        let v: Value = serde_json::from_str(&cap(env, 2_000)).unwrap();
+        let shown = v["items"].as_array().unwrap().len() as u64;
+        assert_eq!(v["next_offset"], json!(40 + shown));
+    }
+
+    /// What the compact form drops, anywhere in an answer: timings, the build stamp, index generations, what cursors
+    /// are made from, and symbols' row ids. The places they were found.
+    fn noise(v: &Value, at: &str, out: &mut Vec<String>) {
+        match v {
+            Value::Array(a) => a.iter().enumerate().for_each(|(i, x)| noise(x, &format!("{at}[{i}]"), out)),
+            Value::Object(m) => {
+                let symbol = m.contains_key("qualified") || (m.contains_key("kind") && m.contains_key("name"));
+                for (k, x) in m {
+                    let timing = k == "ms" || k.ends_with("_ms") || matches!(k.as_str(), "elapsed" | "duration" | "took");
+                    let stamp = matches!(k.as_str(), "knowcode" | "build" | "generation" | "_resume");
+                    let row_id = k == "id" && symbol && !m.contains_key("text") && x.is_i64();
+                    if timing || stamp || row_id {
+                        out.push(format!("{at}.{k}"));
+                    }
+                    noise(x, &format!("{at}.{k}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The compact form's promise for every tool (see `compact`): no timings, build stamps, generations or row ids.
+    /// Each tool is called as an agent calls it (the search tools, which answer from a child process, through the
+    /// operation the child runs, cut and compacted as the server does).
+    #[test]
+    fn invariant_no_tool_answers_with_timings_build_stamps_or_row_ids() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-noise");
+        let root = crate::ops::tests::repo(
+            &base,
+            "shop",
+            &[
+                ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/IOrders.cs", "namespace Shop;\npublic interface IOrders { void Place(); }\n"),
+                ("src/Orders.cs", "namespace Shop;\npublic class Orders : IOrders\n{\n    public void Place() { Audit.Log(); }\n}\n"),
+                ("src/Audit.cs", "namespace Shop;\npublic static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/Checkout.cs", "namespace Shop;\npublic class Checkout\n{\n    private readonly IOrders _orders;\n    public void Run() { _orders.Place(); Audit.Log(); }\n}\n"),
+                ("tests/CheckoutTests.cs", "namespace Shop.Tests;\npublic class CheckoutTests\n{\n    public void Runs() { new Shop.Checkout().Run(); }\n}\n"),
+            ],
+        );
+        crate::ops::tests::commit_and_tag(&root, "v1");
+        let s = server("all");
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..s };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let mut answers: Vec<(&str, Result<String, String>)> = rt.block_on(async {
+            vec![
+                ("kc_symbol_at", s.kc_symbol_at(p(json!({ "file": "src/Orders.cs", "line": 4 }))).await),
+                ("kc_find", s.kc_find(p(json!({ "query": "Orders" }))).await),
+                ("kc_locate", s.kc_locate(p(json!({ "query": "place orders" }))).await),
+                ("kc_refs", s.kc_refs(p(json!({ "name": "Log" }))).await),
+                ("kc_context", s.kc_context(p(json!({ "symbol": "Orders.Place" }))).await),
+                ("kc_context repo", s.kc_context(p(json!({ "symbol": "shop" }))).await),
+                ("kc_trace", s.kc_trace(p(json!({ "symbol": "Audit.Log", "format": "json" }))).await),
+                ("kc_path", s.kc_path(p(json!({ "from": "Checkout.Run", "to": "Audit.Log", "format": "json" }))).await),
+                ("kc_flow", s.kc_flow(p(json!({ "entry": "Checkout.Run", "format": "json" }))).await),
+                ("kc_impact", s.kc_impact(p(json!({ "symbol": "Audit.Log", "format": "json" }))).await),
+                ("kc_unused", s.kc_unused(p(json!({}))).await),
+                ("kc_rename_preview", s.kc_rename_preview(p(json!({ "symbol": "Audit.Log", "new_name": "Write" }))).await),
+                ("kc_coupled", s.kc_coupled(p(json!({ "file": "src/Orders.cs" }))).await),
+                ("kc_tests", s.kc_tests(p(json!({ "targets": ["src/Checkout.cs"] }))).await),
+                ("kc_hotspots", s.kc_hotspots(p(json!({}))).await),
+                ("kc_ownership", s.kc_ownership(p(json!({}))).await),
+                ("kc_reviewers", s.kc_reviewers(p(json!({ "files": ["src/Orders.cs"] }))).await),
+                ("kc_overview", s.kc_overview(p(json!({}))).await),
+                ("kc_areas", s.kc_areas(p(json!({}))).await),
+                ("kc_notes", s.kc_notes(p(json!({}))).await),
+                ("kc_status", s.kc_status(p(json!({}))).await),
+            ]
+        });
+        // The tools answering from a child: the operation it runs, then the cap and the compact form.
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let opts = kc_index::search::SearchOptions {
+            pattern: "Log".into(),
+            regex: false,
+            case: kc_index::search::Case::Sensitive,
+            word: false,
+            langs: Vec::new(),
+            globs: Vec::new(),
+            max_lines: 50_000,
+        };
+        let search = ops::search(&ops::SearchParams { opts, limit: 1, offset: 0, context: 0, files_only: false }, &scope).unwrap().env;
+        let page = crate::cursor::more(search["cursor"].as_str().expect("a cut search continues")).unwrap();
+        answers.push(("kc_search", Ok(cap(search, DEFAULT_CHARS))));
+        answers.push(("kc_more", Ok(cap(page, DEFAULT_CHARS))));
+        let ast = ops::AstParams {
+            opts: kc_index::structural::AstOptions { pattern: "Audit.Log()".into(), lang: "csharp".into(), max_matches: 1000, ..Default::default() },
+            limit: 20,
+            offset: 0,
+        };
+        answers.push(("kc_grep_ast", Ok(cap(ops::grep_ast(&ast, &scope).unwrap().env, DEFAULT_CHARS))));
+        for (tool, answer) in answers {
+            let text = answer.unwrap_or_else(|e| panic!("{tool}: {e}"));
+            let v: Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{tool}: {e}: {text}"));
+            let mut found = Vec::new();
+            noise(&v, "", &mut found);
+            assert!(found.is_empty(), "{tool} leaks {found:?}: {text}");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).max_blocking_threads(6).enable_all().build().unwrap()
+    }
+
+    fn sleep_child(secs: &str) -> anyhow::Result<Value> {
+        let mut c = std::process::Command::new("sleep");
+        c.arg(secs);
+        kc_store::limits::output(c, kc_store::limits::Kind::Search, "sleep", None)?;
+        Ok(json!({ "items": [], "total": 0, "truncated": false }))
+    }
+
+    /// Execution limits, not just output limits: a cheap call isn't held behind a slow one, a child past its deadline
+    /// is killed and the answer says `incomplete: deadline`, and cancelling a call kills its child. One test: the lanes
+    /// and the deadline variable are process-wide.
+    #[test]
+    fn invariant_slow_calls_neither_block_cheap_ones_nor_outlive_their_deadline_or_cancellation() {
+        let rt = runtime();
+        rt.block_on(async {
+            // A slow in-process call holds the main lane; a cheap one waits at most SLOW and a little, not 6 s.
+            let slow = tokio::spawn(run(None, || {
+                std::thread::sleep(std::time::Duration::from_secs(6));
+                Ok(json!({ "items": [] }))
+            }));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let t = std::time::Instant::now();
+            run(None, || Ok(json!({ "items": [] }))).await.unwrap();
+            assert!(t.elapsed() < std::time::Duration::from_secs(5), "the cheap call waited {:?}", t.elapsed());
+            assert!(!slow.is_finished());
+
+            // A child-process call runs in its own lane, beside both. Past its deadline, the child is killed and the
+            // answer says so.
+            // SAFETY: no other test in this binary runs a search child.
+            unsafe { std::env::set_var("KNOWCODE_SEARCH_DEADLINE", "1") };
+            let t = std::time::Instant::now();
+            let out: Value = serde_json::from_str(&run_child(None, || match sleep_child("30") {
+                Err(e) if e.downcast_ref::<kc_store::limits::Cut>().is_some() => Ok(json!({ "items": [], "complete": false })),
+                other => other,
+            })
+            .await
+            .unwrap())
+            .unwrap();
+            assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+            assert_eq!(out["complete"], false);
+            assert_eq!(out["incomplete"][0]["reason"], "deadline", "{out}");
+            assert!(out["incomplete"][0]["hint"].as_str().unwrap().contains("KNOWCODE_SEARCH_DEADLINE"));
+            unsafe { std::env::set_var("KNOWCODE_SEARCH_DEADLINE", "0") };
+
+            // Cancelling the call's operation (as `call_tool` does on `notifications/cancelled`) kills its child.
+            let op = kc_store::limits::Operation::new();
+            let call = tokio::spawn(OPERATION.scope(op.clone(), run_child(None, || sleep_child("30"))));
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let t = std::time::Instant::now();
+            op.cancel();
+            let err = call.await.unwrap().unwrap_err();
+            assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+            assert!(err.contains("cancelled"), "{err}");
+            unsafe { std::env::remove_var("KNOWCODE_SEARCH_DEADLINE") };
+            slow.await.unwrap().unwrap();
+        });
+    }
+}

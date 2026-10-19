@@ -1,0 +1,17 @@
+# Installed (dist profile) binary budget in bytes, checked by scripts/check-size.sh (fails above budget + 1%).
+# Measured on aarch64-apple-darwin with `cargo build --profile dist`. Raise it only in the commit that grows the
+# binary, and say why in the commit message; lower it when the script says the binary has shrunk.
+# Public first-run UX adds bundled client setup, bounded background indexing and light root discovery,
+# coordinated cache eviction, update checks and self-update, and uninstall with client-settings and durable-note
+# preservation (35056608, up 513696 from 34542912).
+# Deploy answers continued by cursor, the compact form's timing rule, and constructs met but not read reported as
+# `unsupported` across the C#, SQL, Ansible, Terraform, GitLab CI and TypeScript extractors (35106208, up 49600).
+# Honest walks: constructor overload resolution, generic-argument, typeof, nameof and constraint type uses, C# global
+# and implicit usings, base-interface and override dispatch, the walk frontier and DI registration rows
+# (35255040, up 148832).
+# HTTP: minimal API routes and route groups, attribute request contracts, method-group references, `unsupported`
+# endpoint registrations, and host evidence from config files (a host config extractor) for linking (35436880, up
+# 181840). The MSTest.Sdk and Aspire.AppHost.Sdk implicit usings (35436896, up 16).
+# Configurable conventions and privacy file: the `[conventions.*]` and privacy-format config, its parsing, checks
+# and `config list` rows, and call-role matching in the C# extractor (35503072, up 66176).
+35503072

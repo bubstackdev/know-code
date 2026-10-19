@@ -1,0 +1,16 @@
+# Privacy guard: indexing and queries have no HTTP or TLS stack. `cargo deny check bans` fails if one sneaks
+# into the dependency tree. The isolated public-release checker invokes the system curl executable.
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "reqwest" },
+    { crate = "hyper" },
+    { crate = "ureq" },
+    { crate = "curl" },
+    { crate = "isahc" },
+    { crate = "surf" },
+    { crate = "attohttpc" },
+    { crate = "rustls" },
+    { crate = "native-tls" },
+    { crate = "openssl" },
+]
