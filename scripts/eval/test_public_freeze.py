@@ -12,6 +12,13 @@ import test_public_plan
 planner=test_public_plan.planner
 
 
+class SyntheticPolicy:
+    """Stands in for the macOS sandbox, so these tests run on any platform."""
+    parameters={};profile=''
+    def command(self,argv):return argv
+    def receipt(self):return {'synthetic':True}
+
+
 class FreezeTests(unittest.TestCase):
     def fixture(self, base, *, client=None, knowcode=None, client_version='1'):
         evidence=base/'evidence';evidence.mkdir()
@@ -125,7 +132,7 @@ class FreezeTests(unittest.TestCase):
             def failed_version(*args,**kwargs):
                 kwargs['stdout'].write_text('wrong version\n');kwargs['stderr'].touch()
                 return dict(returncode=0,cleanup_complete=True)
-            with patch.object(runner.owned_process,'run',side_effect=failed_version),patch.object(runner,'ModelRelay') as relay:
+            with patch.object(runner.owned_process,'run',side_effect=failed_version),patch.object(runner,'policy_for',return_value=SyntheticPolicy()),patch.object(runner,'ModelRelay') as relay:
                 with self.assertRaisesRegex(ValueError,'client version'):
                     runner.execute(freeze,session,binary,binary,base/'output',api_key='synthetic-key')
                 relay.assert_not_called()
@@ -149,10 +156,6 @@ class FreezeTests(unittest.TestCase):
                         return [] if client_raises else [dict(endpoint='/v1/messages',model='example-model',completed=True,
                                                               response_status=200,response_message_id='fixture-message')]
                 relay=SyntheticRelay()
-                class SyntheticPolicy:
-                    parameters={};profile=''
-                    def command(self,argv):return argv
-                    def receipt(self):return {'synthetic':True}
                 def process(argv,**kwargs):
                     if '--version' in argv:
                         kwargs['stdout'].write_text('1 (Claude Code)\n');kwargs['stderr'].touch()

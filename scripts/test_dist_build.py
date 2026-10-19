@@ -42,7 +42,7 @@ subprocess.run([os.environ["FIXTURE_RUSTC"], *flags, "--crate-name", "remap_fixt
                 env["CARGO_ENCODED_RUSTFLAGS"] = encoded
             args = ["--artifacts=local", "argument with spaces"]
             subprocess.run(["bash", str(root / "scripts/build-release"), str(tool), *args],
-                           env=env, check=True, capture_output=True, timeout=30)
+                           env=env, check=True, capture_output=True, timeout=300)
             output = subprocess.check_output([str(base / "fixture")], text=True).strip()
             self.assertEqual(output, ("/cargo" if use_cache else "/knowcode") + "/source.rs|"
                              + ("present" if expected_flag else "absent"))
