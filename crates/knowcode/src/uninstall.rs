@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -71,6 +71,11 @@ fn claude_json(reg: &Registration, args: &[&str]) -> Result<Vec<Value>> {
     serde_json::from_slice(&setup::claude_output(&reg.directory, &args)?).context("Claude Code returned an unexpected registration list")
 }
 
+fn has_marketplace(marketplaces: &[Value]) -> bool { marketplaces.iter().any(|m| m["name"] == "knowcode-local") }
+fn has_plugin(plugins: &[Value]) -> bool { plugins.iter().any(|p| p["id"] == setup::PLUGIN && p["scope"] == "user") }
+
+/// Each removal is checked against Claude Code's own listing afterwards: an exit status alone does not show the
+/// registration is gone, and a registration still listed keeps its retry entry.
 fn remove_claude(reg: &Registration) -> Result<()> {
     let expected = reg.marketplace.clone().unwrap_or(kc_index::data_dir()?.join("integrations/claude-marketplace"));
     let marketplaces = claude_json(reg, &["plugin", "marketplace", "list", "--json"])?;
@@ -90,11 +95,92 @@ fn remove_claude(reg: &Registration) -> Result<()> {
             bail!("Claude KnowCode plugin command changed since setup; retained");
         }
         setup::claude_output(&reg.directory, &["plugin".as_ref(), "uninstall".as_ref(), setup::PLUGIN.as_ref(), "--scope".as_ref(), "user".as_ref(), "--keep-data".as_ref()])?;
+        if has_plugin(&claude_json(reg, &["plugin", "list", "--json"])?) {
+            bail!("Claude Code still lists {} after uninstalling it; retained in {}", setup::PLUGIN, reg.directory.display());
+        }
     }
-    if marketplaces.iter().any(|m| m["name"] == "knowcode-local") {
-        setup::claude_output(&reg.directory, &["plugin".as_ref(), "marketplace".as_ref(), "remove".as_ref(), "knowcode-local".as_ref(), "--scope".as_ref(), "user".as_ref()])?;
+    // Setup declares the marketplace in user settings, but Claude Code can also hold it only in its own marketplace
+    // list, where a user-scoped removal reports it "not declared in user settings". The name is KnowCode's, so a
+    // removal from every scope follows when the user-scoped one leaves it listed.
+    let mut present = has_marketplace(&marketplaces);
+    let mut failures = Vec::new();
+    for scope in [&["--scope", "user"][..], &[]] {
+        if !present { break; }
+        let mut args = vec!["plugin", "marketplace", "remove", "knowcode-local"];
+        args.extend(scope);
+        let args: Vec<_> = args.iter().map(std::ffi::OsStr::new).collect();
+        if let Err(e) = setup::claude_output(&reg.directory, &args) { failures.push(format!("{e:#}")); }
+        present = has_marketplace(&claude_json(reg, &["plugin", "marketplace", "list", "--json"])?);
+    }
+    if present {
+        let why = if failures.is_empty() { String::new() } else { format!(": {}", failures.join("; ")) };
+        bail!("Claude Code still lists the knowcode-local marketplace; retained in {}{why}", reg.directory.display());
     }
     Ok(())
+}
+
+/// A path as typed into a shell: quoted only when it needs to be.
+fn sh(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if !text.is_empty() && text.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+@%:,=".contains(&b)) { return text.into_owned(); }
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// The shell installer has no uninstaller. When this executable came from it (its receipt names this binary), the
+/// exact steps to remove what the installer added, profile lines first: once `env.sh` is gone, every new shell that
+/// still sources it prints an error. Nothing is changed here; files outside KnowCode's directories are the user's.
+fn shell_install_steps() -> Option<String> {
+    let (prefix, receipt, _) = crate::update::installation().ok()?;
+    let dir = receipt.parent()?;
+    let home = dirs::home_dir();
+    let (env_sh, env_fish) = (dir.join("env.sh"), dir.join("env.fish"));
+    // The installer appends `. "$HOME/…/env.sh"` (`source` for fish), with the absolute path outside the home directory.
+    let sources = |line: &str, script: &Path| {
+        let line = line.trim();
+        let Some(quoted) = line.strip_prefix(". ").or_else(|| line.strip_prefix("source ")) else { return false };
+        let Some(path) = quoted.trim().strip_prefix('"').and_then(|q| q.strip_suffix('"')) else { return false };
+        match (path.strip_prefix("$HOME/"), &home) {
+            (Some(rest), Some(home)) => home.join(rest) == script,
+            _ => Path::new(path) == script,
+        }
+    };
+    let mut lines = Vec::new();
+    let mut remove = Vec::new();
+    if let Some(home) = &home {
+        let zsh = std::env::var_os("ZDOTDIR").map_or_else(|| home.clone(), PathBuf::from);
+        let profiles = [".profile", ".bashrc", ".bash_profile", ".bash_login"].map(|n| home.join(n)).into_iter()
+            .chain([".zshrc", ".zshenv"].map(|n| zsh.join(n)));
+        for profile in profiles {
+            let Ok(text) = fs::read_to_string(&profile) else { continue };
+            for (n, line) in text.lines().enumerate().filter(|(_, l)| sources(l, &env_sh)) {
+                lines.push((profile.clone(), n + 1, line.trim().to_string()));
+            }
+        }
+        // For fish the installer writes a file of its own holding just that line.
+        let fish = home.join(".config/fish/conf.d/knowcode.env.fish");
+        if let Ok(text) = fs::read_to_string(&fish) {
+            let content: Vec<_> = text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()).collect();
+            if !content.is_empty() && content.iter().all(|(_, l)| sources(l, &env_fish)) { remove.push(fish); }
+            else {
+                lines.extend(content.into_iter().filter(|(_, l)| sources(l, &env_fish)).map(|(n, l)| (fish.clone(), n + 1, l.trim().to_string())));
+            }
+        }
+    }
+    let mut steps = Vec::new();
+    if !lines.is_empty() {
+        let mut step = String::from("Delete these lines first; once env.sh is deleted, a shell that still sources it prints an error at every start:");
+        for (path, n, line) in &lines { step.push_str(&format!("\n       {}:{n}: {line}", path.display())); }
+        steps.push(step);
+    }
+    remove.push(prefix.join("knowcode"));
+    steps.push(format!("rm {}", remove.iter().map(|p| sh(p)).collect::<Vec<_>>().join(" ")));
+    let installer: Vec<_> = [receipt.clone(), env_sh, env_fish].into_iter().filter(|p| p.exists()).collect();
+    if !installer.is_empty() {
+        steps.push(format!("rm {} && rmdir {}", installer.iter().map(|p| sh(p)).collect::<Vec<_>>().join(" "), sh(dir)));
+    }
+    let mut text = String::from("KnowCode was installed with the shell installer, which has no uninstaller. To remove it:");
+    for (i, step) in steps.iter().enumerate() { text.push_str(&format!("\n  {}. {step}", i + 1)); }
+    Some(text)
 }
 
 pub fn run(options: Options) -> Result<()> {
@@ -163,7 +249,13 @@ pub fn run(options: Options) -> Result<()> {
         }
         let _ = fs::remove_dir(config); // only if empty; unrelated files stay
     } else { println!("retained configuration in {}", config.display()); }
-    println!("Remove the binary through the package manager or installer used to install it. Running clients were not stopped.");
+    // The default data directory is KnowCode's own; it goes once empty (notes, when kept, keep it).
+    if std::env::var_os("KNOWCODE_DATA_DIR").is_none() { let _ = fs::remove_dir(kc_index::data_dir()?); }
+    println!("Running clients were not stopped.");
+    // The binary finishes an incomplete uninstall, so its removal steps wait for a complete one.
+    if !errors.is_empty() { println!("Keep the binary until `knowcode uninstall` completes."); }
+    else if let Some(steps) = shell_install_steps() { println!("{steps}"); }
+    else { println!("Remove the binary through the package manager or installer used to install it."); }
     if !errors.is_empty() { bail!("uninstall is incomplete; retry after resolving:\n{}", errors.join("\n")); }
     Ok(())
 }

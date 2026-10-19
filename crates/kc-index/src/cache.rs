@@ -269,7 +269,8 @@ fn owned_lock(name: &str) -> bool {
 
 /// For uninstall, after [`purge`]: the coordination locks in `<cache>/locks` and the update check's state, which
 /// pruning and purging keep on purpose. A lock another process holds (a running client) is retained, since unlinking
-/// it would let the next process lock a different file. Unrecognized files are never touched.
+/// it would let the next process lock a different file. Unrecognized files are never touched. Directories left empty
+/// go, the cache directory itself only when it is the default one.
 pub fn remove_owned_state() -> Result<OwnedState> {
     let cache = crate::cache_dir()?;
     let notes = notes_paths()?;
@@ -295,18 +296,29 @@ pub fn remove_owned_state() -> Result<OwnedState> {
     }
     let updates = cache.join("updates");
     let state = updates.join("state.json");
-    if fs::symlink_metadata(&state).is_ok_and(|m| m.is_file()) {
-        if is_notes(&state, &notes) { out.retained.push((state, "notes")); }
+    let check = updates.join("check.lock");
+    let file = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.is_file());
+    if file(&state) || file(&check) {
+        if let Some(path) = [&state, &check].into_iter().find(|p| is_notes(p, &notes)) { out.retained.push((path.clone(), "notes")); }
+        else if fs::symlink_metadata(&check).is_ok_and(|m| m.is_symlink()) { out.retained.push((check, "symlink")); }
         else {
-            // The update check writes its state under this lock; it stays, as does anything else in the directory.
-            let lock = writer::lock_file(&updates.join("check.lock"))?;
+            // The update check writes its state under this lock. Holding it, the state and then the lock go, as the
+            // coordination locks above do; anything else in the directory stays.
+            let lock = writer::lock_file(&check)?;
             match lock.try_lock() {
-                Ok(()) => { fs::remove_file(&state).with_context(|| format!("removing {}", state.display()))?; out.removed.push(state); }
+                Ok(()) => for path in [state, check] {
+                    if !file(&path) { continue; }
+                    fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+                    out.removed.push(path);
+                },
                 Err(TryLockError::WouldBlock) => out.retained.push((state, "in_use")),
                 Err(TryLockError::Error(e)) => return Err(e).context("locking the update check"),
             }
         }
     }
+    let _ = fs::remove_dir(&updates); // only if empty
+    // The default cache directory is KnowCode's own; one the user chose stays even when empty.
+    if config::cache_dir()?.1 == config::Source::Default { let _ = fs::remove_dir(&cache); }
     Ok(out)
 }
 

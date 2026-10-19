@@ -275,6 +275,8 @@ pub(crate) fn remove_bundle(marketplace: &Path) -> Result<()> {
     let mut dirs: Vec<_> = dirs.into_iter().collect();
     dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
     for dir in dirs { let _ = fs::remove_dir(dir); }
+    // `integrations/` holds only what setup writes; it goes once empty.
+    if let Some(parent) = marketplace.parent() { let _ = fs::remove_dir(parent); }
     Ok(())
 }
 
@@ -285,6 +287,9 @@ pub(crate) fn claude_output(directory: &Path, args: &[&std::ffi::OsStr]) -> Resu
     // Claude keeps its global state. Only override it when selecting a different profile directory.
     let inherited = user_dir(Client::Claude).ok().and_then(|p| std::path::absolute(p).ok());
     if inherited.as_deref() != Some(directory) { cmd.env("CLAUDE_CONFIG_DIR", directory); }
+    // Every command KnowCode runs is user-scoped. Running it from the profile directory keeps a scope-less one
+    // (uninstall's fallback removal) away from the settings of whatever project the user is in.
+    if directory.is_dir() { cmd.current_dir(directory); }
     let out = kc_store::limits::output(cmd, kc_store::limits::Kind::Setup, "Claude Code plugin registration", None)
         .context("running Claude Code; install the claude CLI first, or use `knowcode setup claude --print`")?;
     if !out.status.success() {

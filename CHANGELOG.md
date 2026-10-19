@@ -49,7 +49,8 @@ The first public release, for macOS on Apple silicon and Linux on x86_64 and arm
 ### Running it
 
 - `knowcode setup claude`, `codex` or `cursor` connects a client; the Claude Code plugin adds a Grep/Glob hook and
-  four workflow skills. `knowcode uninstall` removes what setup recorded.
+  four workflow skills. `knowcode uninstall` removes what setup recorded, checks that the client no longer lists
+  it, and ends with the exact steps to remove a shell-installer installation.
 - The first query indexes automatically. MCP queries wait about two seconds and otherwise answer from the last
   snapshot, marked stale, while a low-priority background worker finishes.
 - Indexes live in the user cache directory, bounded by `cache.max_size` (2 GiB by default), with deleted checkouts

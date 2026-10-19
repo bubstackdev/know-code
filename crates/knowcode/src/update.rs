@@ -196,7 +196,8 @@ fn receipt_path() -> Result<PathBuf> {
     };
     Ok(dir.join("knowcode/knowcode-receipt.json"))
 }
-fn installation() -> Result<(PathBuf, PathBuf, String)> {
+/// The shell installer's receipt for this executable: the installation prefix, the receipt's path and its text.
+pub(crate) fn installation() -> Result<(PathBuf, PathBuf, String)> {
     let exe = std::env::current_exe()?;
     let receipt = receipt_path()?;
     if fs::symlink_metadata(&receipt).is_ok_and(|m| m.is_symlink()) { bail!("installer receipt is symlinked; reinstall with the shell installer"); }

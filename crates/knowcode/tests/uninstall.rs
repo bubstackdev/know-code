@@ -138,34 +138,152 @@ fn invariant_note_deletion_clears_migration_copies_and_respects_a_live_writer() 
     assert_eq!(fs::read_to_string(p.path("cache/notes.sqlite.migrated.unrelated")).unwrap(), "keep");
 }
 
+/// A stand-in for the `claude` CLI that keeps its marketplace and plugin lists in files, so removals show in later
+/// listings. `KNOWCODE_TEST_UNDECLARED=1` rejects the user-scoped marketplace removal the way Claude Code does when the
+/// marketplace is known but not declared in user settings; `KNOWCODE_TEST_STUCK=1` reports success yet keeps it listed.
+const FAKE_CLAUDE: &str = r#"#!/bin/sh
+printf '%s\n' "$*" >> "$KNOWCODE_TEST_CLAUDE_LOG"
+case "$*" in
+  'plugin marketplace list --json') cat "$KNOWCODE_TEST_MARKETS";;
+  'plugin list --json') cat "$KNOWCODE_TEST_PLUGINS";;
+  'plugin marketplace add '*|'plugin install '*) ;;
+  'plugin uninstall knowcode@knowcode-local --scope user --keep-data')
+    if [ "${KNOWCODE_TEST_FAIL_REMOVE:-0}" = 1 ]; then echo 'try again' >&2; exit 1; fi
+    printf '%s\n' "$KNOWCODE_TEST_OTHER_PLUGINS" > "$KNOWCODE_TEST_PLUGINS";;
+  'plugin marketplace remove knowcode-local --scope user')
+    if [ "${KNOWCODE_TEST_UNDECLARED:-0}" = 1 ]; then
+      echo "Failed to remove marketplace: Marketplace 'knowcode-local' is not declared in user settings. Omit --scope to remove it from all scopes." >&2
+      exit 1
+    fi
+    [ "${KNOWCODE_TEST_STUCK:-0}" = 1 ] || echo '[]' > "$KNOWCODE_TEST_MARKETS";;
+  'plugin marketplace remove knowcode-local')
+    pwd > "$KNOWCODE_TEST_CLAUDE_LOG.cwd"
+    [ "${KNOWCODE_TEST_STUCK:-0}" = 1 ] || echo '[]' > "$KNOWCODE_TEST_MARKETS";;
+  *) echo "unexpected claude command: $*" >&2; exit 2;;
+esac
+"#;
+
+struct Claude { p: Profile, path: std::ffi::OsString }
+impl Claude {
+    fn new(name: &str) -> Self {
+        let p = Profile::new(name);
+        p.write("bin/claude", FAKE_CLAUDE);
+        fs::set_permissions(p.path("bin/claude"), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut paths = vec![p.path("bin")];
+        paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+        let path = std::env::join_paths(paths).unwrap();
+        let marketplace = p.path("data/integrations/claude-marketplace");
+        p.write("markets.json", &json!([{"name": "knowcode-local", "source": "directory", "path": marketplace}]).to_string());
+        p.write("plugins.json", &json!([{"id": "knowcode@knowcode-local", "scope": "user", "mcpServers": {"knowcode": {"command": KC}}}, {"id": "other@another", "scope": "user"}]).to_string());
+        fs::create_dir_all(p.path("claude")).unwrap();
+        let claude = Self { p, path };
+        success(claude.command(&["setup", "claude", "--client-dir", claude.p.path("claude").to_str().unwrap()]).output().unwrap());
+        claude
+    }
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = self.p.command(args);
+        cmd.env("PATH", &self.path).env("KNOWCODE_TEST_CLAUDE_LOG", self.p.path("claude.log"))
+            .env("KNOWCODE_TEST_MARKETS", self.p.path("markets.json")).env("KNOWCODE_TEST_PLUGINS", self.p.path("plugins.json"))
+            .env("KNOWCODE_TEST_OTHER_PLUGINS", json!([{"id": "other@another", "scope": "user"}]).to_string());
+        cmd
+    }
+    fn log(&self) -> String { fs::read_to_string(self.p.path("claude.log")).unwrap() }
+    fn ledger(&self) -> Vec<Value> { serde_json::from_slice(&fs::read(self.p.path("config/integrations.json")).unwrap()).unwrap() }
+}
+
 #[test]
 fn claude_removal_is_user_scoped_preserves_extra_bundle_files_and_retries_failures() {
-    let p = Profile::new("claude");
-    p.write("bin/claude", "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$KNOWCODE_TEST_CLAUDE_LOG\"\ncase \"$1 $2 $3\" in\n 'plugin marketplace list') printf '%s\\n' \"$KNOWCODE_TEST_MARKETS\";;\n 'plugin list --json') printf '%s\\n' \"$KNOWCODE_TEST_PLUGINS\";;\n 'plugin uninstall knowcode@knowcode-local') if [ \"${KNOWCODE_TEST_FAIL_REMOVE:-0}\" = 1 ]; then echo 'try again' >&2; exit 1; fi;;\nesac\n");
-    fs::set_permissions(p.path("bin/claude"), fs::Permissions::from_mode(0o700)).unwrap();
-    let mut paths = vec![p.path("bin")];
-    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
-    let path = std::env::join_paths(paths).unwrap();
+    let c = Claude::new("claude");
+    let p = &c.p;
     let marketplace = p.path("data/integrations/claude-marketplace");
-    let command = |args: &[&str]| {
-        let mut cmd = p.command(args);
-        cmd.env("PATH", &path).env("KNOWCODE_TEST_CLAUDE_LOG", p.path("claude.log"))
-            .env("KNOWCODE_TEST_MARKETS", json!([{"name": "knowcode-local", "source": "directory", "path": marketplace}]).to_string())
-            .env("KNOWCODE_TEST_PLUGINS", json!([{"id": "knowcode@knowcode-local", "scope": "user", "mcpServers": {"knowcode": {"command": KC}}}, {"id": "other@another", "scope": "user"}]).to_string());
-        cmd
-    };
-    success(command(&["setup", "claude", "--client-dir", p.path("claude").to_str().unwrap()]).output().unwrap());
     p.write("data/integrations/claude-marketplace/keep.txt", "user addition");
-    let out = command(&["uninstall", "--delete-config"]).env("KNOWCODE_TEST_FAIL_REMOVE", "1").output().unwrap();
+    let out = c.command(&["uninstall", "--delete-config"]).env("KNOWCODE_TEST_FAIL_REMOVE", "1").output().unwrap();
     assert!(!out.status.success());
     assert!(p.path("config/integrations.json").exists());
     assert!(marketplace.join("knowcode/.mcp.json").exists());
-    success(command(&["uninstall", "--delete-config"]).output().unwrap());
+    success(c.command(&["uninstall", "--delete-config"]).output().unwrap());
     assert!(!p.path("config/integrations.json").exists());
     assert!(!marketplace.join("knowcode/.mcp.json").exists());
     assert_eq!(fs::read_to_string(marketplace.join("keep.txt")).unwrap(), "user addition");
-    let log = fs::read_to_string(p.path("claude.log")).unwrap();
+    let log = c.log();
     assert!(log.contains("plugin uninstall knowcode@knowcode-local --scope user"), "{log}");
     assert!(log.contains("plugin marketplace remove knowcode-local --scope user"), "{log}");
+    assert!(!log.lines().any(|l| l == "plugin marketplace remove knowcode-local"), "a user-scoped removal that worked needs no other: {log}");
     assert!(!log.contains("plugin uninstall other"));
+}
+
+#[test]
+fn claude_marketplace_not_declared_in_user_settings_is_removed_from_every_scope() {
+    let c = Claude::new("undeclared");
+    let p = &c.p;
+    p.write("cache/updates/check.lock", "");
+    p.write("cache/updates/state.json", "{\"format\":1}");
+    let out = c.command(&["uninstall", "--delete-config"]).env("KNOWCODE_TEST_UNDECLARED", "1").output().unwrap();
+    success(out);
+    let log = c.log();
+    let removes: Vec<_> = log.lines().filter(|l| l.starts_with("plugin marketplace remove")).collect();
+    assert_eq!(removes, ["plugin marketplace remove knowcode-local --scope user", "plugin marketplace remove knowcode-local"], "{log}");
+    let cwd = fs::read_to_string(p.path("claude.log.cwd")).unwrap();
+    assert_eq!(fs::canonicalize(cwd.trim()).unwrap(), fs::canonicalize(p.path("claude")).unwrap(), "the scope-less removal runs outside any project");
+    assert_eq!(fs::read_to_string(p.path("markets.json")).unwrap().trim(), "[]");
+    assert!(!p.path("config/integrations.json").exists());
+    assert!(!p.path("data/integrations").exists(), "the emptied integrations directory is KnowCode's");
+    assert!(!p.path("cache/updates").exists(), "the update check's lock and directory are KnowCode's");
+}
+
+#[test]
+fn claude_marketplace_still_listed_after_removal_is_reported_and_retried() {
+    let c = Claude::new("stuck");
+    let p = &c.p;
+    let out = c.command(&["uninstall", "--delete-config"]).env("KNOWCODE_TEST_STUCK", "1").output().unwrap();
+    assert!(!out.status.success(), "a registration Claude Code still lists is a failure");
+    let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(!stdout.contains("removed Claude registration"), "{stdout}");
+    assert!(stderr.contains("still lists the knowcode-local marketplace"), "{stderr}");
+    let ledger = c.ledger();
+    assert_eq!(ledger.len(), 1, "the registration stays for a rerun");
+    assert_eq!(ledger[0]["client"], "claude");
+    assert!(p.path("data/integrations/claude-marketplace/knowcode/.mcp.json").exists(), "the bundle the marketplace points at stays");
+    assert!(p.path("config/integrations.json").exists());
+    success(c.command(&["uninstall", "--delete-config"]).output().unwrap());
+    assert!(!p.path("config/integrations.json").exists());
+    assert!(!p.path("data/integrations").exists());
+}
+
+#[test]
+fn shell_installer_removal_steps_name_the_binary_receipt_and_profile_lines() {
+    let p = Profile::new("installer");
+    let home = p.path("home");
+    let prefix = home.join(".local/bin");
+    fs::create_dir_all(&prefix).unwrap();
+    let installed = prefix.join("knowcode");
+    if fs::hard_link(KC, &installed).is_err() { fs::copy(KC, &installed).unwrap(); }
+    let receipt = home.join(".config/knowcode");
+    p.write("home/.config/knowcode/knowcode-receipt.json", &json!({"provider": {"source": "cargo-dist"},
+        "source": {"owner": "bubstackdev", "name": "knowcode", "app_name": "knowcode"}, "install_layout": "flat",
+        "install_prefix": prefix}).to_string());
+    p.write("home/.config/knowcode/env.sh", "#!/bin/sh\n");
+    p.write("home/.config/knowcode/env.fish", "\n");
+    let line = ". \"$HOME/.config/knowcode/env.sh\"";
+    let profile = format!("# mine\nexport EDITOR=vi\n\n{line}\n");
+    p.write("home/.profile", &profile);
+    p.write("home/.bashrc", &format!("alias ll='ls -l'\n\n{line}\n"));
+    p.write("home/.zshrc", "# nothing of KnowCode's\n");
+    p.write("home/.config/fish/conf.d/knowcode.env.fish", "\nsource \"$HOME/.config/knowcode/env.fish\"\n");
+    let out = Command::new(&installed).args(["uninstall"]).current_dir(&p.root).stdin(Stdio::null())
+        .env("KNOWCODE_CONFIG_DIR", p.path("config")).env("KNOWCODE_CACHE_DIR", p.path("cache")).env("KNOWCODE_DATA_DIR", p.path("data"))
+        .env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config")).env_remove("ZDOTDIR").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("installed with the shell installer"), "{stdout}");
+    assert!(stdout.contains(&format!("{}:4: {line}", home.join(".profile").display())), "{stdout}");
+    assert!(stdout.contains(&format!("{}:3: {line}", home.join(".bashrc").display())), "{stdout}");
+    assert!(!stdout.contains(".zshrc"), "{stdout}");
+    assert!(stdout.contains(&format!("rm {} {}", home.join(".config/fish/conf.d/knowcode.env.fish").display(), installed.display())), "{stdout}");
+    assert!(stdout.contains(&format!("rm {r}/knowcode-receipt.json {r}/env.sh {r}/env.fish && rmdir {r}", r = receipt.display())), "{stdout}");
+    let (lines, rm) = (stdout.find(".profile:4").unwrap(), stdout.find(&format!("rm {}", home.join(".config/fish").display())).unwrap());
+    assert!(lines < rm, "the profile lines go before env.sh: {stdout}");
+    assert!(!stdout.contains("package manager"), "{stdout}");
+    assert_eq!(fs::read_to_string(home.join(".profile")).unwrap(), profile, "profiles are only read");
+    assert!(installed.exists() && receipt.join("env.sh").exists(), "the steps are printed, not run");
 }

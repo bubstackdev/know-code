@@ -9,10 +9,13 @@ KnowCode works with no configuration. Everything here is optional.
 | `config.toml`, `bot_authors`, `former_authors` | `~/Library/Application Support/dev.bubstack.knowcode/` | `~/.config/dev.bubstack.knowcode/` | `KNOWCODE_CONFIG_DIR` |
 | Indexes (one SQLite file per checkout) | `~/Library/Caches/dev.bubstack.knowcode/` | `~/.cache/dev.bubstack.knowcode/` | `cache.dir`, `KNOWCODE_CACHE_DIR` |
 | Notes on symbols (`notes.sqlite`), plugin files | `~/Library/Application Support/dev.bubstack.knowcode/` | `~/.local/share/dev.bubstack.knowcode/` | `notes.path`, `KNOWCODE_DATA_DIR` |
+| The shell installer's binary | `~/.local/bin/knowcode` | `~/.local/bin/knowcode` | `KNOWCODE_INSTALL_DIR` at install |
+| The shell installer's receipt, `env.sh`, `env.fish` | `~/.config/knowcode/` | `~/.config/knowcode/` | `XDG_CONFIG_HOME` |
 
 Nothing is written into the repos you index. `knowcode config path` prints the config file's path, and
 `knowcode status` shows the config file, the cache directory, the notes database and the workspace roots, each with
-where its setting came from.
+where its setting came from. `knowcode uninstall` removes what KnowCode wrote; removing a shell-installer
+installation is in [usage](usage.md#setup-settings-and-updates).
 
 ## config.toml
 

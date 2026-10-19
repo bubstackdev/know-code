@@ -136,9 +136,26 @@ settings. `--print` prints the configuration without changing anything, `--clien
 profile, and `--replace` replaces a different server already registered as `knowcode` (Codex, Cursor). Start a new
 client session afterwards.
 
-`uninstall` removes the registrations setup recorded, the bundled plugin files and the cached indexes, and keeps
-unrelated client settings. In a terminal it offers to remove configuration and notes (default no); otherwise pass
-`--delete-config` or `--delete-notes`. Remove the binary with the installer or package manager that installed it.
+`uninstall` removes the registrations setup recorded, the bundled plugin files, the cached indexes, KnowCode's lock
+and update-check files and the directories they leave empty, and keeps unrelated client settings and files. In a terminal it offers to remove configuration and notes (default no); otherwise pass
+`--delete-config` or `--delete-notes`. It checks each removal against the client's own listing: a registration still
+listed is reported, the command exits non-zero, and the registration stays recorded so running `uninstall` again
+finishes it. Claude Code marks its cached copy of the plugin as orphaned and cleans it up itself. Running clients are
+not stopped.
+
+`uninstall` does not remove the binary. A package manager removes what it installed. The shell installer has no
+uninstaller; for an installation it made, an `uninstall` that completes ends with the exact steps for that machine
+(keep the binary until then). They are, in order:
+
+1. Delete the line `. "$HOME/.config/knowcode/env.sh"` from each of `~/.profile`, `~/.bashrc`, `~/.bash_profile`,
+   `~/.bash_login`, `~/.zshrc` and `~/.zshenv` that has it (`$ZDOTDIR` for the zsh files when set), and delete
+   `~/.config/fish/conf.d/knowcode.env.fish`. Do this first: once `env.sh` is gone, every new shell that still
+   sources it prints an error.
+2. Delete the binary, `~/.local/bin/knowcode` by default.
+3. Delete the installer's directory, `~/.config/knowcode` (`$XDG_CONFIG_HOME/knowcode` when set): its receipt
+   `knowcode-receipt.json` and `env.sh` and `env.fish`.
+
+KnowCode's own configuration directory is a different one; `--delete-config` removes the files KnowCode wrote there.
 
 `serve --tools core` (or `KNOWCODE_TOOLS=core`) advertises fewer tools: `kc_find`, `kc_locate`, `kc_context`,
 `kc_refs`, `kc_trace`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. A comma list adds tools by name.
