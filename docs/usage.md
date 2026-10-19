@@ -160,6 +160,11 @@ KnowCode's own configuration directory is a different one; `--delete-config` rem
 `serve --tools core` (or `KNOWCODE_TOOLS=core`) advertises fewer tools: `kc_find`, `kc_locate`, `kc_context`,
 `kc_refs`, `kc_trace`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. A comma list adds tools by name.
 
+In Claude Code, `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` are marked always loaded (`_meta`
+`anthropic/alwaysLoad`), so they are in context from the start instead of waiting behind tool search; their schemas
+cost about 1k tokens up front. The other tools stay deferred. A server-level `alwaysLoad` setting overrides the mark,
+and a profile that leaves one of the four out doesn't list it.
+
 ## MCP tools
 
 | Tool | CLI equivalent | Help topic |
@@ -254,7 +259,7 @@ its coverage. To make one: `npx @sourcegraph/scip-typescript index` in a TypeScr
 
 ## Claude Code hook
 
-The Claude Code plugin adds a `PreToolUse` hook for Grep and Glob. When the pattern names a symbol in an existing
-index, it adds a short note beside the result: where the symbol is defined, its reference count by confidence, its
-top callers, and the `kc_context` call to make next. It never blocks the search and never indexes. See
-[integrations/claude-code](../integrations/claude-code/README.md).
+The Claude Code plugin adds a `PreToolUse` hook for Grep, Glob and Bash (for Bash, only code searches such as `grep`,
+`rg`, `git grep` or `find -name`). When the pattern names a symbol in an existing index, it adds a short note beside
+the result: where the symbol is defined, its reference count by confidence, its top callers, and the `kc_context` call
+to make next. It never blocks the search and never indexes. See [integrations/claude-code](../integrations/claude-code/README.md).

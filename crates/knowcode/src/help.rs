@@ -803,7 +803,9 @@ is named only as blocked. An answer that may have drawn on blocked content is in
         text: r#"The server advertises every tool by default (`all`). `KNOWCODE_TOOLS` (or `knowcode serve --tools`) picks
 fewer, to keep the tool list small in an agent's context: `core` is kc_find, kc_locate, kc_context, kc_refs, kc_trace,
 kc_impact, kc_search, kc_more and kc_help; a comma list adds tools by name (`core,kc_tests,kc_flow`). Tools left out
-are listed in the help index and can't be called until the server is started with them."#,
+are listed in the help index and can't be called until the server is started with them. Claude Code loads kc_context,
+kc_refs, kc_impact and kc_locate up front (`anthropic/alwaysLoad`, about 1k tokens) and defers the rest to tool
+search."#,
     },
 ];
 

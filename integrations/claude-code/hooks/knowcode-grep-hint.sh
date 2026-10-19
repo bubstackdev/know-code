@@ -1,5 +1,6 @@
 #!/bin/sh
-# KnowCode PreToolUse hook for Claude Code's Grep and Glob tools.
+# KnowCode PreToolUse hook for Claude Code's Grep, Glob and Bash tools (for Bash, only code searches: grep, rg, git grep,
+# find -name and the like; any other command adds nothing).
 #
 # When the pattern names a symbol the KnowCode index knows, it adds a short note for the agent: where the symbol is
 # defined, how many references resolve to it and with what confidence, its top callers, and the kc_context / kc_refs

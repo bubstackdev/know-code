@@ -1,6 +1,6 @@
 # KnowCode for Claude Code
 
-The plugin bundles the local MCP server, a Grep/Glob hook, and four workflow skills.
+The plugin bundles the local MCP server, a Grep/Glob/Bash search hook, and four workflow skills.
 It requires an installed `knowcode` binary and the Claude Code CLI. The first MCP
 query indexes its repository automatically; no manual `index` command is needed.
 
@@ -37,7 +37,7 @@ registration and copies when migrating; setup does not delete them.
 ## Components
 
 - `.mcp.json` starts `knowcode serve` on stdio.
-- `hooks/hooks.json` registers a `PreToolUse` hook for Grep and Glob.
+- `hooks/hooks.json` registers a `PreToolUse` hook for Grep, Glob and Bash.
 - `skills/knowcode-explore` covers overview, locate, context, and flow.
 - `skills/knowcode-before-edit` covers impact, tests, coupled files, and reviewers.
 - `skills/knowcode-debug-stack-trace` maps file/line frames to symbols and callers.
@@ -54,6 +54,18 @@ absence. The answer contract is in [docs/answers.md](../../docs/answers.md).
 The hook adds a short context note when a Grep or Glob pattern names a symbol in
 an existing index and its definition still matches the working tree. It does not
 block the search. It never creates or refreshes an index; the MCP query does that.
+The note names `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` both by
+their short names and as Claude sees them from the plugin
+(`mcp__plugin_knowcode_knowcode__kc_context`). The server marks those four always
+loaded (about 1k tokens up front), and the full name lets tool search load one in
+a single step if a client still defers it.
+
+For Bash, it reads the command and acts only on code searches: `grep`, `egrep`,
+`rg`, `ag`, `ack`, `git grep` and `find -name`, also in pipelines and in
+`cd dir && ...` or `;` chains. It takes the patterns (`-e`, quoted, and top-level
+alternations such as `A|B` or `A\|B`) and keeps the ones that look like symbols.
+Any other command, such as a build, `git status`, `sed -n` or `cat`, adds nothing,
+decided from the command string before any index is opened.
 
 Plain words, general regexes, unknown symbols, missing indexes, stale definitions,
 malformed input, and unavailable binaries get no note. On errors or after

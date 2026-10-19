@@ -566,6 +566,10 @@ pub struct KnowcodeServer {
 /// The tools of the `core` profile: finding, reading and following code, and the help that names the rest.
 pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_trace", "kc_impact", "kc_search", "kc_more", "kc_help"];
 
+/// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the ones
+/// that answer the first question about code, so an agent sees them before it reaches for grep (about 1k tokens).
+pub const ALWAYS_LOADED: &[&str] = &["kc_context", "kc_refs", "kc_impact", "kc_locate"];
+
 /// The tools a profile spec names, out of `all`: `all`, `core`, and tool names (with or without `kc_`), comma
 /// separated. `kc_help` is always in.
 pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
@@ -1361,6 +1365,11 @@ impl KnowcodeServer {
         let mut schemas = std::collections::BTreeMap::new();
         for mut route in Self::tool_router() {
             route.attr.input_schema = std::sync::Arc::new(slim(&route.attr.input_schema));
+            if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) {
+                let mut meta = rmcp::model::JsonObject::new();
+                meta.insert("anthropic/alwaysLoad".into(), Value::Bool(true));
+                route.attr.meta = Some(rmcp::model::MetaObject(meta));
+            }
             schemas.insert(route.attr.name.to_string(), (*route.attr.input_schema).clone());
             router.add_route(route);
         }
@@ -2039,6 +2048,34 @@ mod tests {
         assert_eq!(names(&server("kc_find")), ["kc_find", "kc_help"]);
         assert!(KnowcodeServer::new(Scope { repos: Vec::new(), no_sync: false }, "core,kc_nope").is_err());
         assert_eq!(names(&server("all")).len(), names(&server("core,all")).len());
+    }
+
+    /// Exactly the always-loaded tools carry Claude Code's `anthropic/alwaysLoad` mark; the rest stay deferred, and a
+    /// profile that leaves one out doesn't list it. Their schemas are the upfront cost, about 1k tokens.
+    #[test]
+    fn only_the_always_loaded_tools_are_marked() {
+        let tools = server("all").tool_router.list_all();
+        let mut marked: Vec<String> = Vec::new();
+        let mut bytes = 0;
+        for t in &tools {
+            let v = serde_json::to_value(t).unwrap();
+            match &v["_meta"] {
+                Value::Null => {}
+                meta => {
+                    assert_eq!(meta, &json!({ "anthropic/alwaysLoad": true }), "{}", t.name);
+                    marked.push(t.name.to_string());
+                    bytes += v.to_string().len();
+                }
+            }
+        }
+        marked.sort();
+        let mut want: Vec<String> = ALWAYS_LOADED.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        assert_eq!(marked, want);
+        assert!(bytes <= 5_000, "always-loaded schemas {bytes} bytes, about 1k tokens budgeted");
+        let few = server("kc_find,kc_context").tool_router.list_all();
+        let marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
+        assert_eq!(marked, ["kc_context"]);
     }
 
     #[test]

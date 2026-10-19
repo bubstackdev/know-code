@@ -141,7 +141,7 @@ fn claude_installs_embedded_plugin_and_records_partial_install_for_removal() {
         assert!(text.contains("incomplete") && text.contains("assumptions"));
     }
     let hook: Value = serde_json::from_slice(&fs::read(plugin.join("hooks/hooks.json")).unwrap()).unwrap();
-    assert_eq!(hook["hooks"]["PreToolUse"][0]["matcher"], "Grep|Glob");
+    assert_eq!(hook["hooks"]["PreToolUse"][0]["matcher"], "Grep|Glob|Bash");
     let mut cmd = p.command("claude");
     cmd.env("PATH", path).env("KNOWCODE_TEST_CLAUDE_LOG", &log);
     success(cmd.output().unwrap());

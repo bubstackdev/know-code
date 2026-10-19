@@ -1,5 +1,5 @@
 #!/bin/bash
-# Feeds the Grep/Glob hook sample PreToolUse events and checks that it adds context only when it should and fails
+# Feeds the Grep/Glob/Bash hook sample PreToolUse events and checks that it adds context only when it should and fails
 # open otherwise. On macOS it also reports the instructions each call retires (/usr/bin/time -l).
 #
 #   integrations/claude-code/test-hook.sh <indexed repo> <a symbol name defined in it>
@@ -17,6 +17,11 @@ fails=0
 event() { # tool pattern
     printf '{"session_id":"t","hook_event_name":"PreToolUse","cwd":"%s","tool_name":"%s","tool_input":{"pattern":"%s"},"tool_use_id":"toolu_test"}' \
         "$repo" "$1" "$2"
+}
+
+bash_event() { # command (no double quotes in it)
+    printf '{"session_id":"t","hook_event_name":"PreToolUse","cwd":"%s","tool_name":"Bash","tool_input":{"command":"%s","description":"t"},"tool_use_id":"toolu_test"}' \
+        "$repo" "$1"
 }
 
 # case name, expectation (context|none), event JSON, then any VAR=value for the hook's environment
@@ -52,6 +57,12 @@ check "Glob: file named for the symbol" context "$(event Glob "**/$symbol*")"
 check "Grep: unknown name" none "$(event Grep NoSuchSymbolAnywhere)"
 check "Grep: regex" none "$(event Grep "foo.*Bar|baz\\\\d+")"
 check "Grep: plain word" none "$(event Grep error)"
+check "Bash: grep for the symbol" context "$(bash_event "grep -rn '$symbol' --include=*.cs .")"
+check "Bash: cd chain, rg" context "$(bash_event "cd . && rg -n '$symbol' | head")"
+check "Bash: build" none "$(bash_event "cargo build")"
+check "Bash: git status" none "$(bash_event "git status")"
+check "Bash: sed -n" none "$(bash_event "sed -n 1,20p README.md")"
+check "Bash: grep for a plain word" none "$(bash_event "cat x | grep -c foo")"
 check "Read: not a search tool" none "$(event Read "$symbol")"
 check "malformed JSON" none '{"tool_name": "Grep", "tool_input": '
 check "missing binary" none "$(event Grep "$symbol")" KNOWCODE_BIN=/nonexistent/knowcode

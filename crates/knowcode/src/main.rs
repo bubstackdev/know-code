@@ -640,7 +640,7 @@ enum Cmd {
     /// One-shot release metadata helper, scheduled at most daily by normal commands.
     #[command(name = "_check-update", hide = true)]
     CheckUpdate,
-    /// Run as an agent hook: `claude-code` reads a Claude Code PreToolUse event (Grep or Glob) on stdin and, when
+    /// Run as an agent hook: `claude-code` reads a Claude Code PreToolUse event (Grep, Glob or Bash) on stdin and, when
     /// the pattern names a symbol the index knows, prints context for the agent. Never fails: on any error it prints
     /// nothing and exits 0. See integrations/claude-code.
     #[command(hide = true)]
