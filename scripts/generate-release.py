@@ -42,14 +42,10 @@ def replace(text: str, old: str, new: str, what: str, count: int = 1) -> str:
     return text.replace(old, new)
 
 
-TAP_AUTHOR = "KnowCode release bot"
-TAP_EMAIL = "knowcode-release-bot@users.noreply.github.com"
-
-
 def harden(text: str) -> str:
-    """Least privilege, a checksum-pinned generator, our own tap commit identity, and no tag text in shell source."""
+    """Least privilege, a checksum-pinned generator, and no tag text in shell source."""
     # Read-only by default; only the job creating the GitHub Release writes contents (attestations are on the build
-    # job already). The tap is pushed with its own token, not this workflow's.
+    # job already).
     text = replace(text, 'permissions:\n  "contents": "write"\n', 'permissions:\n  "contents": "read"\n', "workflow permissions")
     host = "  host:\n    needs:\n"
     text = replace(text, '    runs-on: "ubuntu-24.04"\n    outputs:\n      val: ${{ steps.host.outputs.manifest }}\n',
@@ -70,8 +66,6 @@ def harden(text: str) -> str:
                    "plan dist install")
     text = replace(text, "      - name: Install dist\n        run: ${{ matrix.install_dist.run }}\n",
                    "      - name: Install dist\n        shell: bash\n        run: bash scripts/install-dist.sh\n", "build dist install")
-    text = replace(text, '      GITHUB_USER: "axo bot"\n      GITHUB_EMAIL: "admin+bot@axo.dev"\n',
-                   f'      GITHUB_USER: "{TAP_AUTHOR}"\n      GITHUB_EMAIL: "{TAP_EMAIL}"\n', "tap commit identity")
     # The tag reaches shell steps through the environment, never spliced into the script text.
     text = replace(text,
                    "      - id: plan\n        run: |\n"

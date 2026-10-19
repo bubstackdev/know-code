@@ -24,13 +24,7 @@ repositories.
 
 ## Install
 
-macOS (Apple silicon):
-
-```sh
-brew install bubstackdev/tap/knowcode
-```
-
-Linux (x86_64 or arm64), or macOS without Homebrew:
+macOS (Apple silicon) or Linux (x86_64 or arm64):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh

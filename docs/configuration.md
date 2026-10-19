@@ -252,8 +252,8 @@ installs anything.
 
 - Turn it off with `knowcode config set update.check false` or `KNOWCODE_UPDATE_CHECK=0`.
 - `knowcode self-update --check` checks on demand, even with automatic checks off.
-- `knowcode self-update` installs the latest release for a shell-installer installation. Homebrew installations
-  update with `brew upgrade bubstackdev/tap/knowcode`.
+- `knowcode self-update` installs the latest release for a shell-installer installation. Other installations
+  (a source build, for example) update the way they were installed.
 
 Indexing and queries make no network calls, and there is no telemetry.
 

@@ -9,7 +9,8 @@ must never be pushed to the new public repository.
 
 [dist-workspace.toml](../dist-workspace.toml) pins cargo-dist and selects
 `knowcode` 0.1.0 for Apple-silicon macOS and Linux x86_64/arm64. It generates
-gzip archives, SHA-256 checksums, a shell installer, and a Homebrew formula.
+gzip archives, SHA-256 checksums, and a shell installer. Homebrew distribution
+is deferred to 0.1.1.
 Both [MIT](../LICENSE-MIT) and [Apache-2.0](../LICENSE-APACHE) licenses accompany
 the archives. There is no separate updater binary or background daemon.
 
@@ -36,9 +37,9 @@ That explicit condition prevents failed gates from being mistaken for intentiona
 The wrapper also hardens the generated workflow: contents are read-only except in the job that creates the
 GitHub Release (the build job's attestation permissions are cargo-dist's own); cargo-dist is installed by
 `scripts/install-dist.sh`, which runs its installer only when it matches the SHA-256 pinned there for the version
-in `dist-workspace.toml` (a new version needs its digest added); tap commits are authored and committed by
-"KnowCode release bot" with a noreply address; and the tag reaches shell steps through `env:`, never spliced into
-the script. `scripts/test_dist_build.py` checks all of this against the checked-in workflow.
+in `dist-workspace.toml` (a new version needs its digest added); and the tag reaches shell steps through `env:`,
+never spliced into the script. The workflow publishes nothing outside the GitHub Release and uses no secret
+besides its own `GITHUB_TOKEN`. `scripts/test_dist_build.py` checks all of this against the checked-in workflow.
 
 The workflow uses immutable commits of GitHub-owned Actions. Local archives
 build on native runners; installer generation follows all platform builds so it
@@ -63,22 +64,10 @@ installations. It covers daily coordination, opt-out, shell receipt ownership, c
 rollback, and cancellation of an installer's own descendants. A real cross-version update remains a release
 acceptance check once two reviewed public releases exist.
 
-## Homebrew prerequisites
+## Installation
 
-The [Homebrew publisher](https://axodotdev.github.io/cargo-dist/book/installers/homebrew.html)
-expects the `bubstackdev/homebrew-tap` repository and a `HOMEBREW_TAP_TOKEN`
-repository secret with write access to that tap. Tagged releases check that the
-tap is public and writable before builds and publishing. Keep credentials out of the
-tree and snapshot. Prepare and review the tap contents before its first push.
-
-These prerequisites have not yet been provisioned by this work. The planned
-installation command, once the reviewed release and formula are public, is:
-
-```sh
-brew install bubstackdev/tap/knowcode
-```
-
-The planned shell installation command is:
+Version 0.1.0 ships the shell installer only; Homebrew returns in 0.1.1. The planned
+installation command is:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh

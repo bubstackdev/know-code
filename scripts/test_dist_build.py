@@ -80,7 +80,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_contents_write_only_where_a_release_is_created(self):
         self.assertIn('permissions:\n  "contents": "read"\n', self.release)
         self.assertEqual(self.release.count('"contents": "write"'), 1)
-        host = self.release.split("\n  host:\n", 1)[1].split("\n  publish-homebrew-formula:\n", 1)[0]
+        host = self.release.split("\n  host:\n", 1)[1].split("\n  announce:\n", 1)[0]
         self.assertIn('"contents": "write"', host)
         self.assertIn("permissions:\n  contents: read\n", self.ci)
         self.assertNotIn("contents: write", self.ci)
@@ -92,9 +92,9 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("| sh", script)
         self.assertRegex(script, r"0\.33\.0\) expected=[0-9a-f]{64} ;;")
 
-    def test_tap_commits_are_ours_and_tags_reach_shell_through_the_environment(self):
-        self.assertIn('GITHUB_USER: "KnowCode release bot"', self.release)
-        self.assertIn("@users.noreply.github.com", self.release)
+    def test_only_the_shell_installer_is_published_and_tags_reach_shell_through_the_environment(self):
+        self.assertNotIn("homebrew", self.release.lower())
+        self.assertNotIn("secrets.", self.release.replace("secrets.GITHUB_TOKEN", ""))
         self.assertNotIn("axo.dev", self.release.split("\njobs:\n", 1)[1])
         for block in self.release.split("run: |")[1:]:
             body = block.split("\n      - ", 1)[0]

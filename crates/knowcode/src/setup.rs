@@ -92,7 +92,7 @@ fn user_dir(client: Client) -> Result<PathBuf> {
     }
 }
 
-/// Prefer the invocation's symlink (Homebrew's stable bin path) to a versioned executable in its Cellar.
+/// Prefer the invocation's symlink (a package manager's stable bin path) to the versioned executable it points at.
 fn executable() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let same = |p: &Path| fs::canonicalize(p).is_ok_and(|p| p == exe);

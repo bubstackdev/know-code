@@ -58,4 +58,4 @@ The first public release, for macOS on Apple silicon and Linux on x86_64 and arm
 - Repos can block content from AI tools with a privacy file (`.knowcode-privacy.yml`, or the name and keys
   `[privacy]` configures); blocked content never reaches an answer or the cache.
 - No telemetry. Indexing and queries make no network calls. A daily, notify-only update check can be turned off.
-- Shell installer and Homebrew formula built with cargo-dist; `knowcode self-update` for shell installs.
+- Shell installer built with cargo-dist; `knowcode self-update` for shell installs. Homebrew follows in 0.1.1.

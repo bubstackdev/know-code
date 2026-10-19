@@ -27,13 +27,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Verify Homebrew publishing prerequisites before a tagged release
-        if: github.ref_type == 'tag'
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          test -n "$GH_TOKEN" || { echo "HOMEBREW_TAP_TOKEN is required for a release" >&2; exit 1; }
-          gh api repos/bubstackdev/homebrew-tap --jq 'if .private then error("Homebrew tap must be public") elif .permissions.push != true then error("Homebrew tap token needs write access") else .full_name end'
       - name: Install the pinned release generator
         run: bash scripts/install-dist.sh
       - name: Verify compiled source-path privacy

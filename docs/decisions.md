@@ -11,9 +11,12 @@ Apple silicon and Linux x86_64 and arm64. Windows waits for hardware on which to
 validate it. Claude Code and other MCP clients are the primary interface; an editor
 extension and a human-first CLI are outside this release.
 
-Use cargo-dist for versioned GitHub releases and a shell installer, with Homebrew
-distribution. Releases follow SemVer, remaining on 0.x while the surface settles.
+Use cargo-dist for versioned GitHub releases and a shell installer. Releases follow
+SemVer, remaining on 0.x while the surface settles.
 The license is MIT OR Apache-2.0. There is no telemetry.
+
+2026-10-19: Homebrew distribution is deferred to 0.1.1; 0.1.0 ships the shell
+installer only.
 
 ## Runtime and indexing
 

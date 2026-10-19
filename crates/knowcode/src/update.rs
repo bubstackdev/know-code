@@ -12,7 +12,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 /// The GitHub repository releases come from, `owner/name`: the one place the update check and `self-update` read it.
-/// Cargo.toml's `repository` and the Homebrew tap in dist-workspace.toml must match (checked by a test below).
+/// Cargo.toml's `repository` must match (checked by a test below).
 macro_rules! release_repo { () => { "bubstackdev/knowcode" } }
 const REPO: &str = release_repo!();
 const API: &str = concat!("https://api.github.com/repos/", release_repo!(), "/releases/latest");
@@ -83,8 +83,6 @@ impl Cache {
 
 fn owner() -> &'static str { REPO.split_once('/').map_or(REPO, |(owner, _)| owner) }
 fn repo_name() -> &'static str { REPO.split_once('/').map_or(REPO, |(_, name)| name) }
-/// The Homebrew formula, in the owner's `homebrew-tap`.
-fn formula() -> String { format!("{}/tap/{}", owner(), repo_name()) }
 
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
 fn due(at: u64, clock: u64) -> bool { at == 0 || clock.saturating_sub(at) >= DAY || at > clock.saturating_add(DAY) }
@@ -105,7 +103,7 @@ fn schedule() -> Result<()> {
     if let Some(tag) = state.latest.as_ref().filter(|tag| newer(tag))
         && (state.notified_version.as_ref() != Some(tag) || due(state.notified_at, clock))
     {
-        eprintln!("knowcode: {tag} is available; run `knowcode self-update` (Homebrew: `brew upgrade {}`). Disable automatic checks with `knowcode config set update.check false`.", formula());
+        eprintln!("knowcode: {tag} is available; run `knowcode self-update`. Disable automatic checks with `knowcode config set update.check false`.");
         state.notified_version = Some(tag.clone());
         state.notified_at = clock;
         notified = true;
@@ -200,9 +198,6 @@ fn receipt_path() -> Result<PathBuf> {
 }
 fn installation() -> Result<(PathBuf, PathBuf, String)> {
     let exe = std::env::current_exe()?;
-    if exe.ancestors().any(|p| p.join("INSTALL_RECEIPT.json").is_file()) {
-        bail!("Homebrew manages this install; run `brew upgrade {}`", formula());
-    }
     let receipt = receipt_path()?;
     if fs::symlink_metadata(&receipt).is_ok_and(|m| m.is_symlink()) { bail!("installer receipt is symlinked; reinstall with the shell installer"); }
     let text = fs::read_to_string(&receipt).context("no matching shell-install receipt; update through your package manager or re-run the shell installer")?;
@@ -282,12 +277,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_release_repository_is_named_once_and_matches_the_package_and_the_tap() {
+    fn the_release_repository_is_named_once_and_matches_the_package() {
         assert_eq!(env!("CARGO_PKG_REPOSITORY"), format!("https://github.com/{REPO}"));
-        let dist = include_str!("../../../dist-workspace.toml");
-        let tap = dist.lines().find_map(|l| l.trim().strip_prefix("tap = ")).expect("dist-workspace.toml names a tap");
-        assert_eq!(tap.trim_matches('"'), format!("{}/homebrew-tap", owner()));
-        assert_eq!(formula(), "bubstackdev/tap/knowcode");
+        assert_eq!((owner(), repo_name()), ("bubstackdev", "knowcode"));
     }
 
     #[test]
