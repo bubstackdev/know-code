@@ -89,7 +89,17 @@ def harden(text: str) -> str:
     text = replace(text, '          RELEASE_COMMIT: "${{ github.sha }}"\n',
                    '          RELEASE_COMMIT: "${{ github.sha }}"\n          RELEASE_TAG: "${{ needs.plan.outputs.tag }}"\n', "release env")
     text = replace(text, 'gh release create "${{ needs.plan.outputs.tag }}" ', 'gh release create "$RELEASE_TAG" ', "release tag")
+    text = check_build_paths(text)
     return text
+
+
+def check_build_paths(text: str) -> str:
+    """Each native build fails, before attestation, if its archives carry the builder's home or checkout path."""
+    built = '          echo "dist ran successfully"\n'
+    step = ("      - name: Check for build-machine paths\n"
+            "        shell: bash\n"
+            "        run: python3 scripts/check-build-paths.py target/distrib\n")
+    return replace(text, built + "      - name: Attest\n", built + step + "      - name: Attest\n", "build-path check")
 
 
 def main() -> int:

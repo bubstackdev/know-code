@@ -162,6 +162,9 @@ jobs:
           # Actually do builds and make zips and whatnot
           bash scripts/build-release dist ${TAG_FLAG:+"$TAG_FLAG"} --print=linkage --output-format=json ${{ matrix.dist_args }} > dist-manifest.json
           echo "dist ran successfully"
+      - name: Check for build-machine paths
+        shell: bash
+        run: python3 scripts/check-build-paths.py target/distrib
       - name: Attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
