@@ -81,6 +81,9 @@ pub struct TraceNode {
     /// What the edge reaching the node rests on (see [`Evidence`]); none on the root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<Evidence>,
+    /// The lines the node rests on: the edge's site, else (the root) its declaration (see [`crate::answer::Cite`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cite: Option<crate::answer::Cite>,
 }
 
 /// An Ansible role crossed from the repo defining it to a play, task or role using it in another repo.
@@ -593,6 +596,7 @@ fn node(
         module: None,
         precise: false,
         evidence: None,
+        cite: None,
     }
 }
 
@@ -1211,6 +1215,9 @@ pub struct Affected {
     /// What the edge (`edge`, `confidence`) rests on (see [`Evidence`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<Evidence>,
+    /// The lines the row rests on: the edge's site, else its declaration (see [`crate::answer::Cite`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cite: Option<crate::answer::Cite>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1645,6 +1652,7 @@ pub fn dependents_filtered(
                     copies: Vec::new(),
                     via_removed: false,
                     evidence,
+                    cite: None,
                 };
                 let mut onward = Vec::new();
                 if grow {
@@ -2002,6 +2010,7 @@ mod tests {
             module: None,
             precise: false,
             evidence: None,
+            cite: None,
         }
     }
 

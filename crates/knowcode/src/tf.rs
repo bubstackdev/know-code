@@ -277,6 +277,7 @@ pub fn module_refs_elsewhere(o: &Opened, name: &str, no_sync: bool) -> Result<Ve
                 via_di_any: Vec::new(),
                 usage: None,
                 ctors: None,
+                cite: None,
                 args: None,
                 arg_types: None,
                 assigns: false,

@@ -215,6 +215,7 @@ pub fn dependents(
                 copies: Vec::new(),
                 via_removed: true,
                 evidence,
+                cite: None,
             });
         }
         list.push(Removed { qualified: via, kind: d.kind, file: d.file.clone(), line: d.line, named_by });

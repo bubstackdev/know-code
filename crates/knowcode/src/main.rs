@@ -1,6 +1,7 @@
 //! `knowcode`: index local repos and answer code-graph questions about them.
 
 mod bench;
+mod cite;
 mod contract;
 mod compact;
 mod cursor;
@@ -53,6 +54,23 @@ struct RepoArgs {
     /// Emit the JSON envelope instead of text.
     #[arg(long)]
     json: bool,
+}
+
+/// Whether an answer's rows quote the source lines they rest on.
+#[derive(clap::Args, Clone)]
+struct CiteArgs {
+    /// `brief`: the first 12 rows quote the line they rest on (an edge's site, else the line naming a declaration), up
+    /// to 120 characters, and the rest give where it is; `lines`: every row quotes its lines (a declaration's first lines
+    /// through its name), each up to 160 characters, saying what a cap left out; `none`: locations only.
+    #[arg(long, default_value = "brief")]
+    cite: kc_store::answer::CiteMode,
+}
+
+impl CiteArgs {
+    /// Sets the mode for the query this command runs.
+    fn enter(&self) {
+        kc_store::limits::current().set_cite(self.cite);
+    }
 }
 
 /// Which edges and symbol kinds a walk keeps.
@@ -178,6 +196,8 @@ enum Cmd {
         #[arg(long, short = 'n', default_value_t = 50)]
         limit: usize,
         #[command(flatten)]
+        cite: CiteArgs,
+        #[command(flatten)]
         repo: RepoArgs,
     },
     /// One bundle about a symbol: source, members, extensions, conformances, callers, callees. The symbol may be
@@ -199,6 +219,8 @@ enum Cmd {
         #[arg(long)]
         limit: Option<usize>,
         #[command(flatten)]
+        cite: CiteArgs,
+        #[command(flatten)]
         repo: RepoArgs,
     },
     /// Call and relation tree around a symbol: callers, callees, conformers, protocol implementations. Inward, a
@@ -217,6 +239,8 @@ enum Cmd {
         limit: usize,
         #[command(flatten)]
         filter: WalkArgs,
+        #[command(flatten)]
+        cite: CiteArgs,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -259,6 +283,8 @@ enum Cmd {
         #[arg(long, visible_alias = "min-evidence", default_value = "default")]
         evidence: String,
         #[command(flatten)]
+        cite: CiteArgs,
+        #[command(flatten)]
         repo: RepoArgs,
     },
     /// What happens end to end from an entry point (an Angular route path, a component by name, selector or file, an
@@ -290,6 +316,8 @@ enum Cmd {
         /// `policy` counts what was left out.
         #[arg(long, visible_alias = "min-evidence", default_value = "default")]
         evidence: String,
+        #[command(flatten)]
+        cite: CiteArgs,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -323,6 +351,8 @@ enum Cmd {
         since: Option<String>,
         #[command(flatten)]
         filter: WalkArgs,
+        #[command(flatten)]
+        cite: CiteArgs,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -874,12 +904,14 @@ fn run(cli: Cli) -> Result<()> {
             let out = ops::locate(&query, limit, &repo.scope())?;
             emit(&repo, &out.env, || render::locate(&out.data))
         }
-        Cmd::Refs { name, kind, limit, repo } => {
+        Cmd::Refs { name, kind, limit, cite, repo } => {
+            cite.enter();
             let out = ops::refs(&name, &kind, limit, &repo.scope())?;
             let d = &out.data;
             emit(&repo, &out.env, || render::refs(&name, &d.items, d.total, &d.by_confidence, d.multi))
         }
-        Cmd::Context { symbol, budget, source, limit, repo } => {
+        Cmd::Context { symbol, budget, source, limit, cite, repo } => {
+            cite.enter();
             let out = ops::context_limited(&symbol, budget, source.parse()?, limit, &repo.scope())?;
             emit(&repo, &out.env, || {
                 if out.data.found.is_empty() && out.data.table_hits.is_empty() && out.data.repo_hits.is_empty() && out.data.file_hits.is_empty() {
@@ -935,7 +967,8 @@ fn run(cli: Cli) -> Result<()> {
                 }
             })
         }
-        Cmd::Trace { symbol, direction, depth, limit, filter, repo } => {
+        Cmd::Trace { symbol, direction, depth, limit, filter, cite, repo } => {
+            cite.enter();
             let out = ops::trace(&symbol, &direction, depth, limit, &filter.filter(), &repo.scope())?;
             emit(&repo, &out.env, || {
                 if out.data.found.is_empty() {
@@ -946,18 +979,21 @@ fn run(cli: Cli) -> Result<()> {
                 }
             })
         }
-        Cmd::Path { from, to, to_repo, max_hops, paths, max_nodes, max_repos, one_way, allow_ambiguous, edges, evidence, repo } => {
+        Cmd::Path { from, to, to_repo, max_hops, paths, max_nodes, max_repos, one_way, allow_ambiguous, edges, evidence, cite, repo } => {
+            cite.enter();
             let edges = ops::edge_filter(&edges, &evidence)?;
             let opts = walk::PathOptions { max_hops, max_nodes, max_repos, paths, one_way, allow_ambiguous, edges, from_skip: 0, to_skip: 0 };
             let out = walk::path(&from, &to, to_repo.as_deref(), &opts, &repo.scope())?;
             emit(&repo, &out.env, || render::path(&out.data))
         }
-        Cmd::Flow { entry, depth, limit, max_repos, edges, children, evidence, repo } => {
+        Cmd::Flow { entry, depth, limit, max_repos, edges, children, evidence, cite, repo } => {
+            cite.enter();
             let opts = flow::FlowOptions { depth: depth.clamp(1, 16), max_steps: limit, max_repos, edges: ops::edge_filter(&edges, &evidence)?, children };
             let out = flow::flow(&entry, &opts, &repo.scope())?;
             emit(&repo, &out.env, || render::flow(&entry, out.data.as_ref()))
         }
-        Cmd::Impact { symbol, file, diff, depth, limit, order, as_of, since, filter, repo } => {
+        Cmd::Impact { symbol, file, diff, depth, limit, order, as_of, since, filter, cite, repo } => {
+            cite.enter();
             let cochange = kc_index::vitals::Span { as_of, since };
             let p = ops::ImpactParams { symbol, file, diff, depth, limit, filter: filter.filter(), order, cochange, coupled_max: None };
             let out = ops::impact(&p, &repo.scope())?;

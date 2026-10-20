@@ -28,6 +28,10 @@
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -47,6 +51,7 @@
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace out OrderPage.submit []
@@ -79,6 +84,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -88,6 +97,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "qualified": "OrderPage.submit"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -104,6 +117,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/order.page.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -130,9 +147,12 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 reaches (out):
   calls method OrderPage.check  src/order.page.ts:7  [exact] at src/order.page.ts:5
+       5 | this.check();
     calls property PlaceOrder  src/order.actions.ts:1  [unique_name] at src/order.page.ts:8
+         8 | this.store.dispatch(PlaceOrder({ id: 1 }));
 
 === trace both OrderPage.submit []
 {
@@ -164,6 +184,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -173,6 +197,10 @@ reaches (out):
           "qualified": "OrderPage.submit"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -189,6 +217,10 @@ reaches (out):
           "site": "src/order.page.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -215,9 +247,12 @@ reaches (out):
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 reaches (out):
   calls method OrderPage.check  src/order.page.ts:7  [exact] at src/order.page.ts:5
+       5 | this.check();
     calls property PlaceOrder  src/order.actions.ts:1  [unique_name] at src/order.page.ts:8
+         8 | this.store.dispatch(PlaceOrder({ id: 1 }));
 
 === impact OrderPage.submit []
 {
@@ -276,6 +311,10 @@ reaches (out):
       "repo": "web",
       "scope": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -297,6 +336,7 @@ reaches (out):
 --- text
 by proximity: nothing affected; low-confidence 0
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 
 === trace in OrderService.place []
 {
@@ -328,6 +368,10 @@ method OrderPage.submit  src/order.page.ts:4
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -337,6 +381,10 @@ method OrderPage.submit  src/order.page.ts:4
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "in",
@@ -363,8 +411,10 @@ method OrderPage.submit  src/order.page.ts:4
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reached by (in):
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrderService.place []
 {
@@ -396,6 +446,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -405,6 +459,10 @@ reached by (in):
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:4",
+            "text": "this.log.info('placing');"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -421,6 +479,10 @@ reached by (in):
           "site": "src/order.service.ts:4"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -447,9 +509,12 @@ reached by (in):
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
+       4 | this.log.info('placing');
   instantiates class ApiPlaceOrder  src/contracts.ts:1  [unique_name] at src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
 
 === trace both OrderService.place []
 {
@@ -481,6 +546,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -490,6 +559,10 @@ reaches (out):
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:4",
+            "text": "this.log.info('placing');"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -506,6 +579,10 @@ reaches (out):
           "site": "src/order.service.ts:4"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -522,6 +599,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "in",
@@ -548,11 +629,15 @@ reaches (out):
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
+       4 | this.log.info('placing');
   instantiates class ApiPlaceOrder  src/contracts.ts:1  [unique_name] at src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
 reached by (in):
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrderService.place []
 {
@@ -600,6 +685,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "direct",
           "confidence": "exact",
           "edge": "calls",
@@ -616,6 +705,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -632,6 +725,10 @@ reached by (in):
           "via": "OrderEffects.place$"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -663,6 +760,10 @@ reached by (in):
       "repo": "web",
       "scope": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -684,9 +785,13 @@ reached by (in):
 --- text
 by proximity: direct 1, near 1, far 1; low-confidence 1
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
     dispatches method OrderPage.check  src/order.page.ts:7  [unique_name] near at src/order.page.ts:8
+         8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       called by method OrderPage.submit  src/order.page.ts:4  [exact] far at src/order.page.ts:5
+           5 | this.check();
 
 === trace in CheckoutService.Place []
 {
@@ -737,6 +842,10 @@ method OrderService.place  src/order.service.ts:3
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -746,6 +855,10 @@ method OrderService.place  src/order.service.ts:3
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -762,6 +875,10 @@ method OrderService.place  src/order.service.ts:3
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -791,6 +908,10 @@ method OrderService.place  src/order.service.ts:3
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 3,
           "direction": "in",
@@ -818,10 +939,14 @@ method OrderService.place  src/order.service.ts:3
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reached by (in):
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out CheckoutService.Place []
 {
@@ -853,6 +978,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -862,6 +991,10 @@ reached by (in):
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -878,6 +1011,10 @@ reached by (in):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -898,6 +1035,10 @@ reached by (in):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 1,
@@ -925,9 +1066,12 @@ reached by (in):
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reaches (out):
   instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
   instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+      11 | _bus.Publish(new OrderPlaced());
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 
 === trace both CheckoutService.Place []
@@ -979,6 +1123,10 @@ reaches (out):
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -988,6 +1136,10 @@ reaches (out):
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -1004,6 +1156,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -1020,6 +1176,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -1041,6 +1201,10 @@ reaches (out):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -1057,6 +1221,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -1086,6 +1254,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 3,
           "direction": "in",
@@ -1113,14 +1285,20 @@ reaches (out):
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reaches (out):
   instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
   instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+      11 | _bus.Publish(new OrderPlaced());
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact CheckoutService.Place []
 {
@@ -1168,6 +1346,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "via_di",
@@ -1189,6 +1371,10 @@ reached by (in):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/OrderPlacedConsumer.cs:4",
+            "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+          },
           "class": "direct",
           "confidence": "exact",
           "edge": "bus",
@@ -1205,6 +1391,10 @@ reached by (in):
           "via": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "http",
@@ -1234,6 +1424,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -1251,6 +1445,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -1268,6 +1466,10 @@ reached by (in):
           "via": "OrderEffects.place$"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -1312,6 +1514,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -1333,12 +1539,19 @@ reached by (in):
 --- text
 by proximity: direct 2, near 1, far 3; low-confidence 3
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] direct at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] near at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+             8 | this.store.dispatch(PlaceOrder({ id: 1 }));
           called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+               5 | this.check();
   consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct at src/OrderPlacedConsumer.cs:4
+       4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   registered CheckoutService as IOrderService (scoped)  src/Startup.cs:5  [type on the path at hop 0]
 
 === trace in OrdersController.Orders []
@@ -1371,6 +1584,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -1380,6 +1597,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
           "qualified": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -1409,6 +1630,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 2,
           "direction": "in",
@@ -1436,9 +1661,12 @@ method CheckoutService.Place  src/CheckoutService.cs:7
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reached by (in):
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrdersController.Orders []
 {
@@ -1470,6 +1698,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -1480,6 +1712,10 @@ reached by (in):
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -1496,6 +1732,10 @@ reached by (in):
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -1512,6 +1752,10 @@ reached by (in):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -1532,6 +1776,10 @@ reached by (in):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -1559,10 +1807,13 @@ reached by (in):
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reaches (out):
   calls through DI method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
     instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+         9 | _db.Orders.Add(new Order());
     instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+        11 | _bus.Publish(new OrderPlaced());
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 
 === trace both OrdersController.Orders []
@@ -1595,6 +1846,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -1605,6 +1860,10 @@ reaches (out):
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -1621,6 +1880,10 @@ reaches (out):
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -1637,6 +1900,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -1653,6 +1920,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -1682,6 +1953,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 2,
           "direction": "in",
@@ -1703,6 +1978,10 @@ reaches (out):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -1730,14 +2009,19 @@ reaches (out):
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reaches (out):
   calls through DI method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
     instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+         9 | _db.Orders.Add(new Order());
     instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+        11 | _bus.Publish(new OrderPlaced());
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrdersController.Orders []
 {
@@ -1785,6 +2069,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "http",
@@ -1814,6 +2102,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "near",
           "confidence": "exact",
           "edge": "calls",
@@ -1831,6 +2123,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -1848,6 +2144,10 @@ reached by (in):
           "via": "OrderEffects.place$"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -1880,6 +2180,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -1901,10 +2205,15 @@ reached by (in):
 --- text
 by proximity: direct 1, near 1, far 2; low-confidence 2
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] direct at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
       dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
         called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+             5 | this.check();
 
 === trace in Order []
 {
@@ -1955,6 +2264,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -1964,6 +2277,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "qualified": "Order"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -1980,6 +2297,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -1996,6 +2317,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -2012,6 +2337,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/Shop.cs:6"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:5",
+            "text": "private readonly ShopContext _db;"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -2028,6 +2357,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/CheckoutService.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Startup.cs:5",
+            "text": "services.AddScoped<IOrderService, CheckoutService>();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -2044,6 +2377,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/Startup.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -2083,13 +2420,20 @@ method OrdersController.Orders  src/OrdersController.cs:4
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 reached by (in):
   instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
     called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+         5 | public void Orders() => _svc.Place();
   used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+       6 | public DbSet<Order> Orders { get; set; }
     used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+         5 | private readonly ShopContext _db;
       used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+           5 | services.AddScoped<IOrderService, CheckoutService>();
       requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
 
 === trace out Order []
 {
@@ -2121,6 +2465,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -2140,6 +2488,7 @@ reached by (in):
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace both Order []
@@ -2191,6 +2540,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -2200,6 +2553,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "qualified": "Order"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -2216,6 +2573,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -2232,6 +2593,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -2248,6 +2613,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/Shop.cs:6"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:5",
+            "text": "private readonly ShopContext _db;"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -2264,6 +2633,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/CheckoutService.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Startup.cs:5",
+            "text": "services.AddScoped<IOrderService, CheckoutService>();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -2280,6 +2653,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/Startup.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -2319,13 +2696,20 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 reached by (in):
   instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
     called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+         5 | public void Orders() => _svc.Place();
   used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+       6 | public DbSet<Order> Orders { get; set; }
     used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+         5 | private readonly ShopContext _db;
       used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+           5 | services.AddScoped<IOrderService, CheckoutService>();
       requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
 
 === impact Order []
 {
@@ -2380,6 +2764,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "instantiates",
@@ -2396,6 +2784,10 @@ reached by (in):
           "via": "Order"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "uses",
@@ -2412,6 +2804,10 @@ reached by (in):
           "via": "Order"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "via_di",
@@ -2433,6 +2829,10 @@ reached by (in):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/OrderPlacedConsumer.cs:4",
+            "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+          },
           "class": "near",
           "confidence": "exact",
           "edge": "bus",
@@ -2449,6 +2849,10 @@ reached by (in):
           "via": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "http",
@@ -2478,6 +2882,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -2495,6 +2903,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -2551,6 +2963,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -2611,13 +3027,21 @@ reached by (in):
 --- text
 by proximity: direct 2, near 2, far 3; low-confidence 5
 class Order  src/Shop.cs:2
+     3 | public class Order { }
   instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] direct at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
     called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] near at src/OrdersController.cs:5
+         5 | public void Orders() => _svc.Place();
       requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] far at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
         called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
           dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+               8 | this.store.dispatch(PlaceOrder({ id: 1 }));
     consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] near at src/OrderPlacedConsumer.cs:4
+         4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   used by class ShopContext  src/Shop.cs:4  [unique_name] direct at src/Shop.cs:6
+       6 | public DbSet<Order> Orders { get; set; }
 table orders_snap (Order) is read and written by:
   write  CheckoutService.Place  src/CheckoutService.cs:9  [unique_name]
   access OrdersController.Orders  src/OrdersController.cs:5  [unique_name]  (writes via CheckoutService.Place, which saves)
@@ -2641,6 +3065,10 @@ table orders_snap (Order) is read and written by:
         "schema"
       ],
       "start": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -2649,6 +3077,10 @@ table orders_snap (Order) is read and written by:
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 0,
           "edge": "ngrx",
@@ -2665,6 +3097,10 @@ table orders_snap (Order) is read and written by:
           "site": "src/order.page.ts:8"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "edge": "calls",
@@ -2681,6 +3117,11 @@ table orders_snap (Order) is read and written by:
           "site": "src/order.effects.ts:3"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 2,
           "edge": "http",
@@ -2710,6 +3151,10 @@ table orders_snap (Order) is read and written by:
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "edge": "via_di",
@@ -2726,6 +3171,10 @@ table orders_snap (Order) is read and written by:
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 4,
           "edge": "writes",
@@ -2742,6 +3191,11 @@ table orders_snap (Order) is read and written by:
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "repo": "api",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 5,
           "edge": "sql",
@@ -2774,6 +3228,10 @@ table orders_snap (Order) is read and written by:
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 4,
@@ -2800,24 +3258,32 @@ table orders_snap (Order) is read and written by:
 }
 --- text
 flow from [web] class OrderPage  src/order.page.ts:1
+     2 | export class OrderPage {
 7 steps in 3 repos (web, api, schema); hidden, followed through: 1 logging
   step 1 of 7  property OrderEffects.place$  src/order.effects.ts:3
     ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+       8 | this.store.dispatch(PlaceOrder({ id: 1 }));
     step 2 of 7  method OrderService.place  src/order.service.ts:3
       ↳ calls [exact] at src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 ── api
       step 3 of 7  method OrdersController.Orders  src/OrdersController.cs:4
         ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
         step 4 of 7  method CheckoutService.Place  src/CheckoutService.cs:7
           ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+             5 | public void Orders() => _svc.Place();
           step 5 of 7  property ShopContext.Orders  src/Shop.cs:6
             ↳ writes [unique_name] at src/CheckoutService.cs:9
+               9 | _db.Orders.Add(new Order());
 ── schema
             step 6 of 7  table shop.orders_snap  src/shop.sql:2
               ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                 6 | public DbSet<Order> Orders { get; set; }
 ── api
           step 7 of 7  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
             ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+              11 | _bus.Publish(new OrderPlaced());
 
 === flow /orders/new/ []
 {
@@ -2842,6 +3308,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
         "path": "orders/new"
       },
       "start": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -2850,6 +3320,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 0,
           "edge": "ngrx",
@@ -2866,6 +3340,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/order.page.ts:8"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "edge": "calls",
@@ -2882,6 +3360,11 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/order.effects.ts:3"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 2,
           "edge": "http",
@@ -2911,6 +3394,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "edge": "via_di",
@@ -2927,6 +3414,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 4,
           "edge": "writes",
@@ -2943,6 +3434,11 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "repo": "api",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 5,
           "edge": "sql",
@@ -2976,6 +3472,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 4,
           "edge": "bus",
@@ -3001,24 +3501,32 @@ flow from [web] class OrderPage  src/order.page.ts:1
 }
 --- text
 flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
+     2 | export class OrderPage {
 7 steps in 3 repos (web, api, schema); hidden, followed through: 1 logging
   step 1 of 7  property OrderEffects.place$  src/order.effects.ts:3
     ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+       8 | this.store.dispatch(PlaceOrder({ id: 1 }));
     step 2 of 7  method OrderService.place  src/order.service.ts:3
       ↳ calls [exact] at src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 ── api
       step 3 of 7  method OrdersController.Orders  src/OrdersController.cs:4
         ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
         step 4 of 7  method CheckoutService.Place  src/CheckoutService.cs:7
           ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+             5 | public void Orders() => _svc.Place();
           step 5 of 7  property ShopContext.Orders  src/Shop.cs:6
             ↳ writes [unique_name] at src/CheckoutService.cs:9
+               9 | _db.Orders.Add(new Order());
 ── schema
             step 6 of 7  table shop.orders_snap  src/shop.sql:2
               ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                 6 | public DbSet<Order> Orders { get; set; }
 ── api
           step 7 of 7  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
             ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+              11 | _bus.Publish(new OrderPlaced());
 
 === flow OrderService.place []
 {
@@ -3037,6 +3545,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         "schema"
       ],
       "start": {
+        "cite": {
+          "at": "src/order.service.ts:3",
+          "text": "place(): void {"
+        },
         "file": "src/order.service.ts",
         "kind": "method",
         "line": 3,
@@ -3045,6 +3557,11 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 0,
           "edge": "http",
@@ -3073,6 +3590,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "edge": "via_di",
@@ -3089,6 +3610,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "edge": "writes",
@@ -3105,6 +3630,11 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "repo": "api",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "edge": "sql",
@@ -3138,6 +3668,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 2,
           "edge": "bus",
@@ -3163,20 +3697,26 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
 }
 --- text
 flow from [web] method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 5 steps in 3 repos (web, api, schema); hidden, followed through: 1 logging
 ── api
   step 1 of 5  method OrdersController.Orders  src/OrdersController.cs:4
     ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     step 2 of 5  method CheckoutService.Place  src/CheckoutService.cs:7
       ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+         5 | public void Orders() => _svc.Place();
       step 3 of 5  property ShopContext.Orders  src/Shop.cs:6
         ↳ writes [unique_name] at src/CheckoutService.cs:9
+           9 | _db.Orders.Add(new Order());
 ── schema
         step 4 of 5  table shop.orders_snap  src/shop.sql:2
           ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+             6 | public DbSet<Order> Orders { get; set; }
 ── api
       step 5 of 5  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
         ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+          11 | _bus.Publish(new OrderPlaced());
 
 === path OrderPage.submit -> orders_snap one_way=false []
 {
@@ -3234,6 +3774,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "explored_backward": 3,
       "explored_forward": 13,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:4",
+          "text": "submit(): void {"
+        },
         "file": "src/order.page.ts",
         "kind": "method",
         "line": 4,
@@ -3246,6 +3790,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
           "hops": 7,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:4",
+                "text": "submit(): void {"
+              },
               "file": "src/order.page.ts",
               "kind": "method",
               "line": 4,
@@ -3253,6 +3801,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:5",
+                "text": "this.check();"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3266,6 +3818,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/order.page.ts:5"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -3280,6 +3836,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3293,6 +3853,11 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "exact",
               "edge": "http",
               "evidence": {
@@ -3319,6 +3884,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -3332,6 +3901,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/OrdersController.cs:5"
             },
             {
+              "cite": {
+                "at": "src/CheckoutService.cs:9",
+                "text": "_db.Orders.Add(new Order());"
+              },
               "confidence": "unique_name",
               "edge": "writes",
               "evidence": {
@@ -3345,6 +3918,11 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/CheckoutService.cs:9"
             },
             {
+              "cite": {
+                "at": "src/Shop.cs:6",
+                "repo": "api",
+                "text": "public DbSet<Order> Orders { get; set; }"
+              },
               "confidence": "unique_name",
               "edge": "sql",
               "evidence": {
@@ -3375,6 +3953,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       ],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/shop.sql:2",
+          "text": "CREATE TABLE `orders_snap` ("
+        },
         "file": "src/shop.sql",
         "kind": "table",
         "line": 2,
@@ -3391,19 +3973,27 @@ flow from [web] method OrderService.place  src/order.service.ts:3
 --- text
 path 1 of 1: 7 hops, weight 19
   [web] method OrderPage.submit  src/order.page.ts:4
+       4 | submit(): void {
     ↳ calls [exact] at src/order.page.ts:5
+         5 | this.check();
     method OrderPage.check  src/order.page.ts:7
       ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       property OrderEffects.place$  src/order.effects.ts:3
         ↳ calls [exact] at src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         method OrderService.place  src/order.service.ts:3
           ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+               5 | this.http.send(new ApiPlaceOrder());
           [api] method OrdersController.Orders  src/OrdersController.cs:4
             ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+                 5 | public void Orders() => _svc.Place();
             method CheckoutService.Place  src/CheckoutService.cs:7
               ↳ writes [unique_name] at src/CheckoutService.cs:9
+                   9 | _db.Orders.Add(new Order());
               property ShopContext.Orders  src/Shop.cs:6
                 ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                     6 | public DbSet<Order> Orders { get; set; }
                 [schema] table shop.orders_snap  src/shop.sql:2
 explored 16 nodes (13 forward, 3 backward), 3 repos open
 
@@ -3463,6 +4053,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       "explored_backward": 0,
       "explored_forward": 14,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:4",
+          "text": "submit(): void {"
+        },
         "file": "src/order.page.ts",
         "kind": "method",
         "line": 4,
@@ -3475,6 +4069,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
           "hops": 7,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:4",
+                "text": "submit(): void {"
+              },
               "file": "src/order.page.ts",
               "kind": "method",
               "line": 4,
@@ -3482,6 +4080,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:5",
+                "text": "this.check();"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3495,6 +4097,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/order.page.ts:5"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -3509,6 +4115,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3522,6 +4132,11 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "exact",
               "edge": "http",
               "evidence": {
@@ -3548,6 +4163,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -3561,6 +4180,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/OrdersController.cs:5"
             },
             {
+              "cite": {
+                "at": "src/CheckoutService.cs:9",
+                "text": "_db.Orders.Add(new Order());"
+              },
               "confidence": "unique_name",
               "edge": "writes",
               "evidence": {
@@ -3574,6 +4197,11 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/CheckoutService.cs:9"
             },
             {
+              "cite": {
+                "at": "src/Shop.cs:6",
+                "repo": "api",
+                "text": "public DbSet<Order> Orders { get; set; }"
+              },
               "confidence": "unique_name",
               "edge": "sql",
               "evidence": {
@@ -3604,6 +4232,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       ],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/shop.sql:2",
+          "text": "CREATE TABLE `orders_snap` ("
+        },
         "file": "src/shop.sql",
         "kind": "table",
         "line": 2,
@@ -3620,19 +4252,27 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
 --- text
 path 1 of 1: 7 hops, weight 19
   [web] method OrderPage.submit  src/order.page.ts:4
+       4 | submit(): void {
     ↳ calls [exact] at src/order.page.ts:5
+         5 | this.check();
     method OrderPage.check  src/order.page.ts:7
       ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       property OrderEffects.place$  src/order.effects.ts:3
         ↳ calls [exact] at src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         method OrderService.place  src/order.service.ts:3
           ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+               5 | this.http.send(new ApiPlaceOrder());
           [api] method OrdersController.Orders  src/OrdersController.cs:4
             ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+                 5 | public void Orders() => _svc.Place();
             method CheckoutService.Place  src/CheckoutService.cs:7
               ↳ writes [unique_name] at src/CheckoutService.cs:9
+                   9 | _db.Orders.Add(new Order());
               property ShopContext.Orders  src/Shop.cs:6
                 ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                     6 | public DbSet<Order> Orders { get; set; }
                 [schema] table shop.orders_snap  src/shop.sql:2
 explored 14 nodes (14 forward, 0 backward), 3 repos open
 
@@ -3692,6 +4332,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       "explored_backward": 7,
       "explored_forward": 16,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -3704,6 +4348,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
           "hops": 6,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:2",
+                "text": "export class OrderPage {"
+              },
               "file": "src/order.page.ts",
               "kind": "class",
               "line": 1,
@@ -3711,6 +4359,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:7",
+                "text": "private check(): void {"
+              },
               "confidence": "exact",
               "edge": "member",
               "evidence": {
@@ -3723,6 +4375,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -3737,6 +4393,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3750,6 +4410,11 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "unique_name",
               "edge": "http",
               "evidence": {
@@ -3776,6 +4441,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -3793,6 +4462,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
                 "link": "exact",
                 "message": "Shop.Apisnap.OrderPlaced",
                 "queue": "Orders"
+              },
+              "cite": {
+                "at": "src/CheckoutService.cs:11",
+                "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
               "edge": "bus",
@@ -3813,6 +4486,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
           "hops": 7,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:2",
+                "text": "export class OrderPage {"
+              },
               "file": "src/order.page.ts",
               "kind": "class",
               "line": 1,
@@ -3820,6 +4497,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:4",
+                "text": "submit(): void {"
+              },
               "confidence": "exact",
               "edge": "member",
               "evidence": {
@@ -3832,6 +4513,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:5",
+                "text": "this.check();"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3845,6 +4530,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.page.ts:5"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -3859,6 +4548,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -3872,6 +4565,11 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "unique_name",
               "edge": "http",
               "evidence": {
@@ -3898,6 +4596,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -3915,6 +4617,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
                 "link": "exact",
                 "message": "Shop.Apisnap.OrderPlaced",
                 "queue": "Orders"
+              },
+              "cite": {
+                "at": "src/CheckoutService.cs:11",
+                "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
               "edge": "bus",
@@ -3934,6 +4640,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       ],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/OrderPlacedConsumer.cs:4",
+          "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+        },
         "file": "src/OrderPlacedConsumer.cs",
         "kind": "method",
         "line": 4,
@@ -3950,23 +4660,32 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
 --- text
 path 1 of 2: 6 hops, weight 14
   [web] class OrderPage  src/order.page.ts:1
+       2 | export class OrderPage {
     ↳ member [exact]
+         7 | private check(): void {
     method OrderPage.check  src/order.page.ts:7
       ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       property OrderEffects.place$  src/order.effects.ts:3
         ↳ calls [exact] at src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         method OrderService.place  src/order.service.ts:3
           ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [unique_name] at web/src/order.service.ts:5
+               5 | this.http.send(new ApiPlaceOrder());
           [api] method OrdersController.Orders  src/OrdersController.cs:4
             ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+                 5 | public void Orders() => _svc.Place();
             method CheckoutService.Place  src/CheckoutService.cs:7
               ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+                  11 | _bus.Publish(new OrderPlaced());
               method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
 path 2 of 2: 7 hops, weight 16
   [web] class OrderPage  src/order.page.ts:1
     ↳ member [exact]
+         4 | submit(): void {
     method OrderPage.submit  src/order.page.ts:4
       ↳ calls [exact] at src/order.page.ts:5
+           5 | this.check();
       method OrderPage.check  src/order.page.ts:7
         ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
         property OrderEffects.place$  src/order.effects.ts:3
@@ -4011,6 +4730,10 @@ explored 23 nodes (16 forward, 7 backward), 3 repos open
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -4034,6 +4757,7 @@ explored 23 nodes (16 forward, 7 backward), 3 repos open
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace out OrderPage.submit [confirmed]
@@ -4074,6 +4798,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -4083,6 +4811,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "qualified": "OrderPage.submit"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -4116,8 +4848,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 reaches (out):
   calls method OrderPage.check  src/order.page.ts:7  [exact] at src/order.page.ts:5
+       5 | this.check();
 
 === trace both OrderPage.submit [confirmed]
 {
@@ -4157,6 +4891,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -4166,6 +4904,10 @@ reaches (out):
           "qualified": "OrderPage.submit"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -4199,8 +4941,10 @@ reaches (out):
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 reaches (out):
   calls method OrderPage.check  src/order.page.ts:7  [exact] at src/order.page.ts:5
+       5 | this.check();
 
 === impact OrderPage.submit [confirmed]
 {
@@ -4260,6 +5004,10 @@ reaches (out):
       "repo": "web",
       "scope": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -4285,6 +5033,7 @@ reaches (out):
 --- text
 by proximity: nothing affected; low-confidence 0
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 
 === trace in OrderService.place [confirmed]
 {
@@ -4317,6 +5066,10 @@ method OrderPage.submit  src/order.page.ts:4
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -4326,6 +5079,10 @@ method OrderPage.submit  src/order.page.ts:4
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "in",
@@ -4356,8 +5113,10 @@ method OrderPage.submit  src/order.page.ts:4
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reached by (in):
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrderService.place [confirmed]
 {
@@ -4397,6 +5156,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -4406,6 +5169,10 @@ reached by (in):
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:4",
+            "text": "this.log.info('placing');"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -4439,8 +5206,10 @@ reached by (in):
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
+       4 | this.log.info('placing');
 
 === trace both OrderService.place [confirmed]
 {
@@ -4480,6 +5249,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -4489,6 +5262,10 @@ reaches (out):
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:4",
+            "text": "this.log.info('placing');"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -4505,6 +5282,10 @@ reaches (out):
           "site": "src/order.service.ts:4"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "in",
@@ -4538,10 +5319,13 @@ reaches (out):
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
+       4 | this.log.info('placing');
 reached by (in):
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrderService.place [confirmed]
 {
@@ -4597,6 +5381,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "direct",
           "confidence": "exact",
           "edge": "calls",
@@ -4626,6 +5414,10 @@ reached by (in):
       "repo": "web",
       "scope": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -4654,7 +5446,9 @@ reached by (in):
 --- text
 by proximity: direct 1; low-confidence 0
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace in CheckoutService.Place [confirmed]
 {
@@ -4687,6 +5481,10 @@ method OrderService.place  src/order.service.ts:3
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -4696,6 +5494,10 @@ method OrderService.place  src/order.service.ts:3
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -4712,6 +5514,10 @@ method OrderService.place  src/order.service.ts:3
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -4741,6 +5547,10 @@ method OrderService.place  src/order.service.ts:3
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 3,
           "direction": "in",
@@ -4772,10 +5582,14 @@ method OrderService.place  src/order.service.ts:3
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reached by (in):
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out CheckoutService.Place [confirmed]
 {
@@ -4815,6 +5629,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -4828,6 +5646,10 @@ reached by (in):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 1,
@@ -4862,8 +5684,10 @@ reached by (in):
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reaches (out):
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
+      11 | _bus.Publish(new OrderPlaced());
 
 === trace both CheckoutService.Place [confirmed]
 {
@@ -4903,6 +5727,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -4912,6 +5740,10 @@ reaches (out):
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -4933,6 +5765,10 @@ reaches (out):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -4949,6 +5785,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -4978,6 +5818,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 3,
           "direction": "in",
@@ -5012,12 +5856,17 @@ reaches (out):
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reaches (out):
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
+      11 | _bus.Publish(new OrderPlaced());
 reached by (in):
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact CheckoutService.Place [confirmed]
 {
@@ -5073,6 +5922,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "via_di",
@@ -5094,6 +5947,10 @@ reached by (in):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/OrderPlacedConsumer.cs:4",
+            "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+          },
           "class": "direct",
           "confidence": "exact",
           "edge": "bus",
@@ -5110,6 +5967,10 @@ reached by (in):
           "via": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "http",
@@ -5139,6 +6000,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -5183,6 +6048,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -5211,10 +6080,15 @@ reached by (in):
 --- text
 by proximity: direct 2, near 1, far 1; low-confidence 2
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] direct at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] near at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
   consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct at src/OrderPlacedConsumer.cs:4
+       4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   registered CheckoutService as IOrderService (scoped)  src/Startup.cs:5  [type on the path at hop 0]
 
 === trace in OrdersController.Orders [confirmed]
@@ -5248,6 +6122,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -5257,6 +6135,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
           "qualified": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -5286,6 +6168,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 2,
           "direction": "in",
@@ -5317,9 +6203,12 @@ method CheckoutService.Place  src/CheckoutService.cs:7
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reached by (in):
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrdersController.Orders [confirmed]
 {
@@ -5359,6 +6248,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -5369,6 +6262,10 @@ reached by (in):
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -5389,6 +6286,10 @@ reached by (in):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -5423,9 +6324,11 @@ reached by (in):
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reaches (out):
   calls through DI method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
+        11 | _bus.Publish(new OrderPlaced());
 
 === trace both OrdersController.Orders [confirmed]
 {
@@ -5465,6 +6368,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -5475,6 +6382,10 @@ reaches (out):
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -5491,6 +6402,10 @@ reaches (out):
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -5520,6 +6435,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 2,
           "direction": "in",
@@ -5541,6 +6460,10 @@ reaches (out):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -5575,12 +6498,16 @@ reaches (out):
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reaches (out):
   calls through DI method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
+        11 | _bus.Publish(new OrderPlaced());
 reached by (in):
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrdersController.Orders [confirmed]
 {
@@ -5636,6 +6563,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "http",
@@ -5665,6 +6596,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "near",
           "confidence": "exact",
           "edge": "calls",
@@ -5696,6 +6631,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -5724,8 +6663,11 @@ reached by (in):
 --- text
 by proximity: direct 1, near 1; low-confidence 1
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] direct at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace in Order [confirmed]
 {
@@ -5765,6 +6707,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -5791,6 +6737,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace out Order [confirmed]
@@ -5824,6 +6771,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -5847,6 +6798,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace both Order [confirmed]
@@ -5887,6 +6839,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -5913,6 +6869,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === impact Order [confirmed]
@@ -5980,6 +6937,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -6047,6 +7008,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
 --- text
 by proximity: nothing affected; low-confidence 0
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 table orders_snap (Order) is read and written by:
   write  CheckoutService.Place  src/CheckoutService.cs:9  [unique_name]
   access OrdersController.Orders  src/OrdersController.cs:5  [unique_name]  (writes via CheckoutService.Place, which saves)
@@ -6070,6 +7032,10 @@ table orders_snap (Order) is read and written by:
         "web"
       ],
       "start": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -6093,6 +7059,7 @@ table orders_snap (Order) is read and written by:
 }
 --- text
 flow from [web] class OrderPage  src/order.page.ts:1
+     2 | export class OrderPage {
 0 steps in 1 repos (web)
 nothing followed: no edge leaves it, or every one was left out (see left out)
 
@@ -6121,6 +7088,10 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
         "path": "orders/new"
       },
       "start": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -6144,6 +7115,7 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
 }
 --- text
 flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
+     2 | export class OrderPage {
 0 steps in 1 repos (web)
 nothing followed: no edge leaves it, or every one was left out (see left out)
 
@@ -6170,6 +7142,10 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
         "api"
       ],
       "start": {
+        "cite": {
+          "at": "src/order.service.ts:3",
+          "text": "place(): void {"
+        },
         "file": "src/order.service.ts",
         "kind": "method",
         "line": 3,
@@ -6178,6 +7154,11 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 0,
           "edge": "http",
@@ -6206,6 +7187,10 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "edge": "via_di",
@@ -6226,6 +7211,10 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -6259,14 +7248,18 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
 }
 --- text
 flow from [web] method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 3 steps in 2 repos (web, api); hidden, followed through: 1 logging
 ── api
   step 1 of 3  method OrdersController.Orders  src/OrdersController.cs:4
     ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     step 2 of 3  method CheckoutService.Place  src/CheckoutService.cs:7
       ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+         5 | public void Orders() => _svc.Place();
       step 3 of 3  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
         ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+          11 | _bus.Publish(new OrderPlaced());
 
 === path OrderPage.submit -> orders_snap one_way=false [confirmed]
 {
@@ -6332,6 +7325,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "explored_backward": 1,
       "explored_forward": 2,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:4",
+          "text": "submit(): void {"
+        },
         "file": "src/order.page.ts",
         "kind": "method",
         "line": 4,
@@ -6342,6 +7339,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "paths": [],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/shop.sql:2",
+          "text": "CREATE TABLE `orders_snap` ("
+        },
         "file": "src/shop.sql",
         "kind": "table",
         "line": 2,
@@ -6430,6 +7431,10 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "explored_backward": 0,
       "explored_forward": 2,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:4",
+          "text": "submit(): void {"
+        },
         "file": "src/order.page.ts",
         "kind": "method",
         "line": 4,
@@ -6440,6 +7445,10 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "paths": [],
       "repos_opened": 2,
       "to": {
+        "cite": {
+          "at": "src/shop.sql:2",
+          "text": "CREATE TABLE `orders_snap` ("
+        },
         "file": "src/shop.sql",
         "kind": "table",
         "line": 2,
@@ -6528,6 +7537,10 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "explored_backward": 5,
       "explored_forward": 4,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -6538,6 +7551,10 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "paths": [],
       "repos_opened": 2,
       "to": {
+        "cite": {
+          "at": "src/OrderPlacedConsumer.cs:4",
+          "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+        },
         "file": "src/OrderPlacedConsumer.cs",
         "kind": "method",
         "line": 4,
@@ -6593,6 +7610,10 @@ no confident path from OrderPage to OrderPlacedConsumer.Consume within 8 hops (e
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -6616,6 +7637,7 @@ no confident path from OrderPage to OrderPlacedConsumer.Consume within 8 hops (e
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace out OrderPage.submit [all]
@@ -6649,6 +7671,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -6658,6 +7684,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "qualified": "OrderPage.submit"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -6674,6 +7704,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/order.page.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -6704,9 +7738,12 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 reaches (out):
   calls method OrderPage.check  src/order.page.ts:7  [exact] at src/order.page.ts:5
+       5 | this.check();
     calls property PlaceOrder  src/order.actions.ts:1  [unique_name] at src/order.page.ts:8
+         8 | this.store.dispatch(PlaceOrder({ id: 1 }));
 
 === trace both OrderPage.submit [all]
 {
@@ -6739,6 +7776,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -6748,6 +7789,10 @@ reaches (out):
           "qualified": "OrderPage.submit"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -6764,6 +7809,10 @@ reaches (out):
           "site": "src/order.page.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -6794,9 +7843,12 @@ reaches (out):
 }
 --- text
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 reaches (out):
   calls method OrderPage.check  src/order.page.ts:7  [exact] at src/order.page.ts:5
+       5 | this.check();
     calls property PlaceOrder  src/order.actions.ts:1  [unique_name] at src/order.page.ts:8
+         8 | this.store.dispatch(PlaceOrder({ id: 1 }));
 
 === impact OrderPage.submit [all]
 {
@@ -6856,6 +7908,10 @@ reaches (out):
       "repo": "web",
       "scope": [
         {
+          "cite": {
+            "at": "src/order.page.ts:4",
+            "text": "submit(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.page.ts",
@@ -6881,6 +7937,7 @@ reaches (out):
 --- text
 by proximity: nothing affected; low-confidence 0
 method OrderPage.submit  src/order.page.ts:4
+     4 | submit(): void {
 
 === trace in OrderService.place [all]
 {
@@ -6913,6 +7970,10 @@ method OrderPage.submit  src/order.page.ts:4
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -6922,6 +7983,10 @@ method OrderPage.submit  src/order.page.ts:4
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "in",
@@ -6952,8 +8017,10 @@ method OrderPage.submit  src/order.page.ts:4
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reached by (in):
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrderService.place [all]
 {
@@ -6986,6 +8053,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -6995,6 +8066,10 @@ reached by (in):
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:4",
+            "text": "this.log.info('placing');"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -7011,6 +8086,10 @@ reached by (in):
           "site": "src/order.service.ts:4"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -7041,9 +8120,12 @@ reached by (in):
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
+       4 | this.log.info('placing');
   instantiates class ApiPlaceOrder  src/contracts.ts:1  [unique_name] at src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
 
 === trace both OrderService.place [all]
 {
@@ -7076,6 +8158,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -7085,6 +8171,10 @@ reaches (out):
           "qualified": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:4",
+            "text": "this.log.info('placing');"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -7101,6 +8191,10 @@ reaches (out):
           "site": "src/order.service.ts:4"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -7117,6 +8211,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "in",
@@ -7147,11 +8245,15 @@ reaches (out):
 }
 --- text
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
+       4 | this.log.info('placing');
   instantiates class ApiPlaceOrder  src/contracts.ts:1  [unique_name] at src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
 reached by (in):
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrderService.place [all]
 {
@@ -7200,6 +8302,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "direct",
           "confidence": "exact",
           "edge": "calls",
@@ -7216,6 +8322,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -7232,6 +8342,10 @@ reached by (in):
           "via": "OrderEffects.place$"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -7263,6 +8377,10 @@ reached by (in):
       "repo": "web",
       "scope": [
         {
+          "cite": {
+            "at": "src/order.service.ts:3",
+            "text": "place(): void {"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/order.service.ts",
@@ -7288,9 +8406,13 @@ reached by (in):
 --- text
 by proximity: direct 1, near 1, far 1; low-confidence 1
 method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
   called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct at src/order.effects.ts:3
+       3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
     dispatches method OrderPage.check  src/order.page.ts:7  [unique_name] near at src/order.page.ts:8
+         8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       called by method OrderPage.submit  src/order.page.ts:4  [exact] far at src/order.page.ts:5
+           5 | this.check();
 
 === trace in CheckoutService.Place [all]
 {
@@ -7342,6 +8464,10 @@ method OrderService.place  src/order.service.ts:3
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -7351,6 +8477,10 @@ method OrderService.place  src/order.service.ts:3
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -7367,6 +8497,10 @@ method OrderService.place  src/order.service.ts:3
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -7396,6 +8530,10 @@ method OrderService.place  src/order.service.ts:3
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 3,
           "direction": "in",
@@ -7427,10 +8565,14 @@ method OrderService.place  src/order.service.ts:3
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reached by (in):
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out CheckoutService.Place [all]
 {
@@ -7463,6 +8605,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -7472,6 +8618,10 @@ reached by (in):
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -7488,6 +8638,10 @@ reached by (in):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -7508,6 +8662,10 @@ reached by (in):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 1,
@@ -7539,9 +8697,12 @@ reached by (in):
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reaches (out):
   instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
   instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+      11 | _bus.Publish(new OrderPlaced());
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 
 === trace both CheckoutService.Place [all]
@@ -7594,6 +8755,10 @@ reaches (out):
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -7603,6 +8768,10 @@ reaches (out):
           "qualified": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -7619,6 +8788,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -7635,6 +8808,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -7656,6 +8833,10 @@ reaches (out):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 1,
           "direction": "out",
@@ -7672,6 +8853,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -7701,6 +8886,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 3,
           "direction": "in",
@@ -7732,14 +8921,20 @@ reaches (out):
 }
 --- text
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
 reaches (out):
   instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
   instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+      11 | _bus.Publish(new OrderPlaced());
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact CheckoutService.Place [all]
 {
@@ -7788,6 +8983,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "via_di",
@@ -7809,6 +9008,10 @@ reached by (in):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/OrderPlacedConsumer.cs:4",
+            "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+          },
           "class": "direct",
           "confidence": "exact",
           "edge": "bus",
@@ -7825,6 +9028,10 @@ reached by (in):
           "via": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "http",
@@ -7854,6 +9061,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -7871,6 +9082,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -7888,6 +9103,10 @@ reached by (in):
           "via": "OrderEffects.place$"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -7932,6 +9151,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:7",
+            "text": "public void Place()"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/CheckoutService.cs",
@@ -7957,12 +9180,19 @@ reached by (in):
 --- text
 by proximity: direct 2, near 1, far 3; low-confidence 3
 method CheckoutService.Place  src/CheckoutService.cs:7
+     7 | public void Place()
   called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] direct at src/OrdersController.cs:5
+       5 | public void Orders() => _svc.Place();
     requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] near at web/src/order.service.ts:5
+         5 | this.http.send(new ApiPlaceOrder());
       called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+           3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+             8 | this.store.dispatch(PlaceOrder({ id: 1 }));
           called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+               5 | this.check();
   consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct at src/OrderPlacedConsumer.cs:4
+       4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   registered CheckoutService as IOrderService (scoped)  src/Startup.cs:5  [type on the path at hop 0]
 
 === trace in OrdersController.Orders [all]
@@ -7996,6 +9226,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -8005,6 +9239,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
           "qualified": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -8034,6 +9272,10 @@ method CheckoutService.Place  src/CheckoutService.cs:7
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 2,
           "direction": "in",
@@ -8065,9 +9307,12 @@ method CheckoutService.Place  src/CheckoutService.cs:7
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reached by (in):
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrdersController.Orders [all]
 {
@@ -8100,6 +9345,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -8110,6 +9359,10 @@ reached by (in):
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -8126,6 +9379,10 @@ reached by (in):
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -8142,6 +9399,10 @@ reached by (in):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -8162,6 +9423,10 @@ reached by (in):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -8193,10 +9458,13 @@ reached by (in):
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reaches (out):
   calls through DI method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
     instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+         9 | _db.Orders.Add(new Order());
     instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+        11 | _bus.Publish(new OrderPlaced());
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 
 === trace both OrdersController.Orders [all]
@@ -8230,6 +9498,10 @@ reaches (out):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -8240,6 +9512,10 @@ reaches (out):
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "out",
@@ -8256,6 +9532,10 @@ reaches (out):
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -8272,6 +9552,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "out",
@@ -8288,6 +9572,10 @@ reaches (out):
           "site": "src/CheckoutService.cs:11"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -8317,6 +9605,10 @@ reaches (out):
           "site": "src/order.service.ts:5"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 2,
           "direction": "in",
@@ -8338,6 +9630,10 @@ reaches (out):
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 2,
@@ -8369,14 +9665,19 @@ reaches (out):
 }
 --- text
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
 reaches (out):
   calls through DI method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
     instantiates class Order  src/Shop.cs:2  [unique_name] at src/CheckoutService.cs:9
+         9 | _db.Orders.Add(new Order());
     instantiates class OrderPlaced  src/OrderPlaced.cs:2  [unique_name] at src/CheckoutService.cs:11
+        11 | _bus.Publish(new OrderPlaced());
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrdersController.Orders [all]
 {
@@ -8425,6 +9726,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "http",
@@ -8454,6 +9759,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "near",
           "confidence": "exact",
           "edge": "calls",
@@ -8471,6 +9780,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -8488,6 +9801,10 @@ reached by (in):
           "via": "OrderEffects.place$"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:5",
+            "text": "this.check();"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -8520,6 +9837,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/OrdersController.cs",
@@ -8545,10 +9866,15 @@ reached by (in):
 --- text
 by proximity: direct 1, near 1, far 2; low-confidence 2
 method OrdersController.Orders  src/OrdersController.cs:4
+     5 | public void Orders() => _svc.Place();
   requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] direct at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near at web/src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
       dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
         called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+             5 | this.check();
 
 === trace in Order [all]
 {
@@ -8600,6 +9926,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -8609,6 +9939,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "qualified": "Order"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -8625,6 +9959,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -8641,6 +9979,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -8657,6 +9999,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/Shop.cs:6"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:5",
+            "text": "private readonly ShopContext _db;"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -8673,6 +10019,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/CheckoutService.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Startup.cs:5",
+            "text": "services.AddScoped<IOrderService, CheckoutService>();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -8689,6 +10039,10 @@ method OrdersController.Orders  src/OrdersController.cs:4
           "site": "src/Startup.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -8732,13 +10086,20 @@ method OrdersController.Orders  src/OrdersController.cs:4
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 reached by (in):
   instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
     called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+         5 | public void Orders() => _svc.Place();
   used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+       6 | public DbSet<Order> Orders { get; set; }
     used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+         5 | private readonly ShopContext _db;
       used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+           5 | services.AddScoped<IOrderService, CheckoutService>();
       requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
 
 === trace out Order [all]
 {
@@ -8771,6 +10132,10 @@ reached by (in):
     {
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -8794,6 +10159,7 @@ reached by (in):
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 nothing reaches it or is reached from it within the depth, direction and filters asked for
 
 === trace both Order [all]
@@ -8846,6 +10212,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
       ],
       "nodes": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -8855,6 +10225,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "qualified": "Order"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -8871,6 +10245,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -8887,6 +10265,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "direction": "in",
@@ -8903,6 +10285,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/Shop.cs:6"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:5",
+            "text": "private readonly ShopContext _db;"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "direction": "in",
@@ -8919,6 +10305,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/CheckoutService.cs:5"
         },
         {
+          "cite": {
+            "at": "src/Startup.cs:5",
+            "text": "services.AddScoped<IOrderService, CheckoutService>();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -8935,6 +10325,10 @@ nothing reaches it or is reached from it within the depth, direction and filters
           "site": "src/Startup.cs:5"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "direction": "in",
@@ -8978,13 +10372,20 @@ nothing reaches it or is reached from it within the depth, direction and filters
 }
 --- text
 class Order  src/Shop.cs:2
+     3 | public class Order { }
 reached by (in):
   instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
     called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+         5 | public void Orders() => _svc.Place();
   used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+       6 | public DbSet<Order> Orders { get; set; }
     used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+         5 | private readonly ShopContext _db;
       used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+           5 | services.AddScoped<IOrderService, CheckoutService>();
       requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
 
 === impact Order [all]
 {
@@ -9040,6 +10441,10 @@ reached by (in):
     {
       "affected": [
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "instantiates",
@@ -9056,6 +10461,10 @@ reached by (in):
           "via": "Order"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "class": "direct",
           "confidence": "unique_name",
           "edge": "uses",
@@ -9072,6 +10481,10 @@ reached by (in):
           "via": "Order"
         },
         {
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "class": "near",
           "confidence": "unique_name",
           "edge": "via_di",
@@ -9093,6 +10506,10 @@ reached by (in):
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/OrderPlacedConsumer.cs:4",
+            "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+          },
           "class": "near",
           "confidence": "exact",
           "edge": "bus",
@@ -9109,6 +10526,10 @@ reached by (in):
           "via": "CheckoutService.Place"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "http",
@@ -9138,6 +10559,10 @@ reached by (in):
           "via": "OrdersController.Orders"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "class": "far",
           "confidence": "exact",
           "edge": "calls",
@@ -9155,6 +10580,10 @@ reached by (in):
           "via": "OrderService.place"
         },
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "class": "far",
           "confidence": "unique_name",
           "edge": "ngrx",
@@ -9211,6 +10640,10 @@ reached by (in):
       "repo": "api",
       "scope": [
         {
+          "cite": {
+            "at": "src/Shop.cs:3",
+            "text": "public class Order { }"
+          },
           "depth": 0,
           "direction": "",
           "file": "src/Shop.cs",
@@ -9275,13 +10708,21 @@ reached by (in):
 --- text
 by proximity: direct 2, near 2, far 3; low-confidence 5
 class Order  src/Shop.cs:2
+     3 | public class Order { }
   instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] direct at src/CheckoutService.cs:9
+       9 | _db.Orders.Add(new Order());
     called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] near at src/OrdersController.cs:5
+         5 | public void Orders() => _svc.Place();
       requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] far at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
         called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
           dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+               8 | this.store.dispatch(PlaceOrder({ id: 1 }));
     consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] near at src/OrderPlacedConsumer.cs:4
+         4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   used by class ShopContext  src/Shop.cs:4  [unique_name] direct at src/Shop.cs:6
+       6 | public DbSet<Order> Orders { get; set; }
 table orders_snap (Order) is read and written by:
   write  CheckoutService.Place  src/CheckoutService.cs:9  [unique_name]
   access OrdersController.Orders  src/OrdersController.cs:5  [unique_name]  (writes via CheckoutService.Place, which saves)
@@ -9305,6 +10746,10 @@ table orders_snap (Order) is read and written by:
         "schema"
       ],
       "start": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -9313,6 +10758,10 @@ table orders_snap (Order) is read and written by:
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 0,
           "edge": "ngrx",
@@ -9329,6 +10778,10 @@ table orders_snap (Order) is read and written by:
           "site": "src/order.page.ts:8"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "edge": "calls",
@@ -9345,6 +10798,11 @@ table orders_snap (Order) is read and written by:
           "site": "src/order.effects.ts:3"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 2,
           "edge": "http",
@@ -9374,6 +10832,10 @@ table orders_snap (Order) is read and written by:
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "edge": "via_di",
@@ -9390,6 +10852,10 @@ table orders_snap (Order) is read and written by:
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 4,
           "edge": "writes",
@@ -9406,6 +10872,11 @@ table orders_snap (Order) is read and written by:
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "repo": "api",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 5,
           "edge": "sql",
@@ -9438,6 +10909,10 @@ table orders_snap (Order) is read and written by:
             "link": "exact",
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
+          },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
           "depth": 4,
@@ -9468,24 +10943,32 @@ table orders_snap (Order) is read and written by:
 }
 --- text
 flow from [web] class OrderPage  src/order.page.ts:1
+     2 | export class OrderPage {
 7 steps in 3 repos (web, api, schema); hidden, followed through: 1 logging
   step 1 of 7  property OrderEffects.place$  src/order.effects.ts:3
     ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+       8 | this.store.dispatch(PlaceOrder({ id: 1 }));
     step 2 of 7  method OrderService.place  src/order.service.ts:3
       ↳ calls [exact] at src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 ── api
       step 3 of 7  method OrdersController.Orders  src/OrdersController.cs:4
         ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
         step 4 of 7  method CheckoutService.Place  src/CheckoutService.cs:7
           ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+             5 | public void Orders() => _svc.Place();
           step 5 of 7  property ShopContext.Orders  src/Shop.cs:6
             ↳ writes [unique_name] at src/CheckoutService.cs:9
+               9 | _db.Orders.Add(new Order());
 ── schema
             step 6 of 7  table shop.orders_snap  src/shop.sql:2
               ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                 6 | public DbSet<Order> Orders { get; set; }
 ── api
           step 7 of 7  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
             ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+              11 | _bus.Publish(new OrderPlaced());
 
 === flow /orders/new/ [all]
 {
@@ -9510,6 +10993,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
         "path": "orders/new"
       },
       "start": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -9518,6 +11005,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.page.ts:8",
+            "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+          },
           "confidence": "unique_name",
           "depth": 0,
           "edge": "ngrx",
@@ -9534,6 +11025,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/order.page.ts:8"
         },
         {
+          "cite": {
+            "at": "src/order.effects.ts:3",
+            "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+          },
           "confidence": "exact",
           "depth": 1,
           "edge": "calls",
@@ -9550,6 +11045,11 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/order.effects.ts:3"
         },
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 2,
           "edge": "http",
@@ -9579,6 +11079,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "edge": "via_di",
@@ -9595,6 +11099,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 4,
           "edge": "writes",
@@ -9611,6 +11119,11 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "repo": "api",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 5,
           "edge": "sql",
@@ -9644,6 +11157,10 @@ flow from [web] class OrderPage  src/order.page.ts:1
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 4,
           "edge": "bus",
@@ -9673,24 +11190,32 @@ flow from [web] class OrderPage  src/order.page.ts:1
 }
 --- text
 flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
+     2 | export class OrderPage {
 7 steps in 3 repos (web, api, schema); hidden, followed through: 1 logging
   step 1 of 7  property OrderEffects.place$  src/order.effects.ts:3
     ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+       8 | this.store.dispatch(PlaceOrder({ id: 1 }));
     step 2 of 7  method OrderService.place  src/order.service.ts:3
       ↳ calls [exact] at src/order.effects.ts:3
+         3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 ── api
       step 3 of 7  method OrdersController.Orders  src/OrdersController.cs:4
         ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+           5 | this.http.send(new ApiPlaceOrder());
         step 4 of 7  method CheckoutService.Place  src/CheckoutService.cs:7
           ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+             5 | public void Orders() => _svc.Place();
           step 5 of 7  property ShopContext.Orders  src/Shop.cs:6
             ↳ writes [unique_name] at src/CheckoutService.cs:9
+               9 | _db.Orders.Add(new Order());
 ── schema
             step 6 of 7  table shop.orders_snap  src/shop.sql:2
               ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                 6 | public DbSet<Order> Orders { get; set; }
 ── api
           step 7 of 7  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
             ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+              11 | _bus.Publish(new OrderPlaced());
 
 === flow OrderService.place [all]
 {
@@ -9709,6 +11234,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         "schema"
       ],
       "start": {
+        "cite": {
+          "at": "src/order.service.ts:3",
+          "text": "place(): void {"
+        },
         "file": "src/order.service.ts",
         "kind": "method",
         "line": 3,
@@ -9717,6 +11246,11 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
       },
       "steps": [
         {
+          "cite": {
+            "at": "src/order.service.ts:5",
+            "repo": "web",
+            "text": "this.http.send(new ApiPlaceOrder());"
+          },
           "confidence": "exact",
           "depth": 0,
           "edge": "http",
@@ -9745,6 +11279,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         },
         {
           "binding": "src/Startup.cs:5, scoped",
+          "cite": {
+            "at": "src/OrdersController.cs:5",
+            "text": "public void Orders() => _svc.Place();"
+          },
           "confidence": "unique_name",
           "depth": 1,
           "edge": "via_di",
@@ -9761,6 +11299,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           "site": "src/OrdersController.cs:5"
         },
         {
+          "cite": {
+            "at": "src/CheckoutService.cs:9",
+            "text": "_db.Orders.Add(new Order());"
+          },
           "confidence": "unique_name",
           "depth": 2,
           "edge": "writes",
@@ -9777,6 +11319,11 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           "site": "src/CheckoutService.cs:9"
         },
         {
+          "cite": {
+            "at": "src/Shop.cs:6",
+            "repo": "api",
+            "text": "public DbSet<Order> Orders { get; set; }"
+          },
           "confidence": "unique_name",
           "depth": 3,
           "edge": "sql",
@@ -9810,6 +11357,10 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
             "message": "Shop.Apisnap.OrderPlaced",
             "queue": "Orders"
           },
+          "cite": {
+            "at": "src/CheckoutService.cs:11",
+            "text": "_bus.Publish(new OrderPlaced());"
+          },
           "confidence": "exact",
           "depth": 2,
           "edge": "bus",
@@ -9839,20 +11390,26 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
 }
 --- text
 flow from [web] method OrderService.place  src/order.service.ts:3
+     3 | place(): void {
 5 steps in 3 repos (web, api, schema); hidden, followed through: 1 logging
 ── api
   step 1 of 5  method OrdersController.Orders  src/OrdersController.cs:4
     ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+       5 | this.http.send(new ApiPlaceOrder());
     step 2 of 5  method CheckoutService.Place  src/CheckoutService.cs:7
       ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+         5 | public void Orders() => _svc.Place();
       step 3 of 5  property ShopContext.Orders  src/Shop.cs:6
         ↳ writes [unique_name] at src/CheckoutService.cs:9
+           9 | _db.Orders.Add(new Order());
 ── schema
         step 4 of 5  table shop.orders_snap  src/shop.sql:2
           ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+             6 | public DbSet<Order> Orders { get; set; }
 ── api
       step 5 of 5  method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
         ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+          11 | _bus.Publish(new OrderPlaced());
 
 === path OrderPage.submit -> orders_snap one_way=false [all]
 {
@@ -9911,6 +11468,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "explored_backward": 3,
       "explored_forward": 13,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:4",
+          "text": "submit(): void {"
+        },
         "file": "src/order.page.ts",
         "kind": "method",
         "line": 4,
@@ -9923,6 +11484,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
           "hops": 7,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:4",
+                "text": "submit(): void {"
+              },
               "file": "src/order.page.ts",
               "kind": "method",
               "line": 4,
@@ -9930,6 +11495,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:5",
+                "text": "this.check();"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -9943,6 +11512,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/order.page.ts:5"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -9957,6 +11530,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -9970,6 +11547,11 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "exact",
               "edge": "http",
               "evidence": {
@@ -9996,6 +11578,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -10009,6 +11595,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/OrdersController.cs:5"
             },
             {
+              "cite": {
+                "at": "src/CheckoutService.cs:9",
+                "text": "_db.Orders.Add(new Order());"
+              },
               "confidence": "unique_name",
               "edge": "writes",
               "evidence": {
@@ -10022,6 +11612,11 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "site": "src/CheckoutService.cs:9"
             },
             {
+              "cite": {
+                "at": "src/Shop.cs:6",
+                "repo": "api",
+                "text": "public DbSet<Order> Orders { get; set; }"
+              },
               "confidence": "unique_name",
               "edge": "sql",
               "evidence": {
@@ -10052,6 +11647,10 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       ],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/shop.sql:2",
+          "text": "CREATE TABLE `orders_snap` ("
+        },
         "file": "src/shop.sql",
         "kind": "table",
         "line": 2,
@@ -10072,19 +11671,27 @@ flow from [web] method OrderService.place  src/order.service.ts:3
 --- text
 path 1 of 1: 7 hops, weight 19
   [web] method OrderPage.submit  src/order.page.ts:4
+       4 | submit(): void {
     ↳ calls [exact] at src/order.page.ts:5
+         5 | this.check();
     method OrderPage.check  src/order.page.ts:7
       ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       property OrderEffects.place$  src/order.effects.ts:3
         ↳ calls [exact] at src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         method OrderService.place  src/order.service.ts:3
           ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+               5 | this.http.send(new ApiPlaceOrder());
           [api] method OrdersController.Orders  src/OrdersController.cs:4
             ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+                 5 | public void Orders() => _svc.Place();
             method CheckoutService.Place  src/CheckoutService.cs:7
               ↳ writes [unique_name] at src/CheckoutService.cs:9
+                   9 | _db.Orders.Add(new Order());
               property ShopContext.Orders  src/Shop.cs:6
                 ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                     6 | public DbSet<Order> Orders { get; set; }
                 [schema] table shop.orders_snap  src/shop.sql:2
 explored 16 nodes (13 forward, 3 backward), 3 repos open
 
@@ -10145,6 +11752,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       "explored_backward": 0,
       "explored_forward": 14,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:4",
+          "text": "submit(): void {"
+        },
         "file": "src/order.page.ts",
         "kind": "method",
         "line": 4,
@@ -10157,6 +11768,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
           "hops": 7,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:4",
+                "text": "submit(): void {"
+              },
               "file": "src/order.page.ts",
               "kind": "method",
               "line": 4,
@@ -10164,6 +11779,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:5",
+                "text": "this.check();"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -10177,6 +11796,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/order.page.ts:5"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -10191,6 +11814,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -10204,6 +11831,11 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "exact",
               "edge": "http",
               "evidence": {
@@ -10230,6 +11862,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -10243,6 +11879,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/OrdersController.cs:5"
             },
             {
+              "cite": {
+                "at": "src/CheckoutService.cs:9",
+                "text": "_db.Orders.Add(new Order());"
+              },
               "confidence": "unique_name",
               "edge": "writes",
               "evidence": {
@@ -10256,6 +11896,11 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "site": "src/CheckoutService.cs:9"
             },
             {
+              "cite": {
+                "at": "src/Shop.cs:6",
+                "repo": "api",
+                "text": "public DbSet<Order> Orders { get; set; }"
+              },
               "confidence": "unique_name",
               "edge": "sql",
               "evidence": {
@@ -10286,6 +11931,10 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       ],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/shop.sql:2",
+          "text": "CREATE TABLE `orders_snap` ("
+        },
         "file": "src/shop.sql",
         "kind": "table",
         "line": 2,
@@ -10306,19 +11955,27 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
 --- text
 path 1 of 1: 7 hops, weight 19
   [web] method OrderPage.submit  src/order.page.ts:4
+       4 | submit(): void {
     ↳ calls [exact] at src/order.page.ts:5
+         5 | this.check();
     method OrderPage.check  src/order.page.ts:7
       ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       property OrderEffects.place$  src/order.effects.ts:3
         ↳ calls [exact] at src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         method OrderService.place  src/order.service.ts:3
           ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [exact] at web/src/order.service.ts:5
+               5 | this.http.send(new ApiPlaceOrder());
           [api] method OrdersController.Orders  src/OrdersController.cs:4
             ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+                 5 | public void Orders() => _svc.Place();
             method CheckoutService.Place  src/CheckoutService.cs:7
               ↳ writes [unique_name] at src/CheckoutService.cs:9
+                   9 | _db.Orders.Add(new Order());
               property ShopContext.Orders  src/Shop.cs:6
                 ↳ maps to (sql unique_name: entity Order (shop.orders_snap)) [unique_name] at api/src/Shop.cs:6
+                     6 | public DbSet<Order> Orders { get; set; }
                 [schema] table shop.orders_snap  src/shop.sql:2
 explored 14 nodes (14 forward, 0 backward), 3 repos open
 
@@ -10379,6 +12036,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       "explored_backward": 7,
       "explored_forward": 16,
       "from": {
+        "cite": {
+          "at": "src/order.page.ts:2",
+          "text": "export class OrderPage {"
+        },
         "file": "src/order.page.ts",
         "kind": "class",
         "line": 1,
@@ -10391,6 +12052,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
           "hops": 6,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:2",
+                "text": "export class OrderPage {"
+              },
               "file": "src/order.page.ts",
               "kind": "class",
               "line": 1,
@@ -10398,6 +12063,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:7",
+                "text": "private check(): void {"
+              },
               "confidence": "exact",
               "edge": "member",
               "evidence": {
@@ -10410,6 +12079,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -10424,6 +12097,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -10437,6 +12114,11 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "unique_name",
               "edge": "http",
               "evidence": {
@@ -10463,6 +12145,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -10480,6 +12166,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
                 "link": "exact",
                 "message": "Shop.Apisnap.OrderPlaced",
                 "queue": "Orders"
+              },
+              "cite": {
+                "at": "src/CheckoutService.cs:11",
+                "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
               "edge": "bus",
@@ -10500,6 +12190,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
           "hops": 7,
           "steps": [
             {
+              "cite": {
+                "at": "src/order.page.ts:2",
+                "text": "export class OrderPage {"
+              },
               "file": "src/order.page.ts",
               "kind": "class",
               "line": 1,
@@ -10507,6 +12201,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:4",
+                "text": "submit(): void {"
+              },
               "confidence": "exact",
               "edge": "member",
               "evidence": {
@@ -10519,6 +12217,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "repo": "web"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:5",
+                "text": "this.check();"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -10532,6 +12234,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.page.ts:5"
             },
             {
+              "cite": {
+                "at": "src/order.page.ts:8",
+                "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
+              },
               "confidence": "unique_name",
               "edge": "ngrx",
               "evidence": {
@@ -10546,6 +12252,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.page.ts:8"
             },
             {
+              "cite": {
+                "at": "src/order.effects.ts:3",
+                "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
+              },
               "confidence": "exact",
               "edge": "calls",
               "evidence": {
@@ -10559,6 +12269,11 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "site": "src/order.effects.ts:3"
             },
             {
+              "cite": {
+                "at": "src/order.service.ts:5",
+                "repo": "web",
+                "text": "this.http.send(new ApiPlaceOrder());"
+              },
               "confidence": "unique_name",
               "edge": "http",
               "evidence": {
@@ -10585,6 +12300,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             },
             {
               "binding": "src/Startup.cs:5, scoped",
+              "cite": {
+                "at": "src/OrdersController.cs:5",
+                "text": "public void Orders() => _svc.Place();"
+              },
               "confidence": "unique_name",
               "edge": "via_di",
               "evidence": {
@@ -10602,6 +12321,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
                 "link": "exact",
                 "message": "Shop.Apisnap.OrderPlaced",
                 "queue": "Orders"
+              },
+              "cite": {
+                "at": "src/CheckoutService.cs:11",
+                "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
               "edge": "bus",
@@ -10621,6 +12344,10 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       ],
       "repos_opened": 3,
       "to": {
+        "cite": {
+          "at": "src/OrderPlacedConsumer.cs:4",
+          "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
+        },
         "file": "src/OrderPlacedConsumer.cs",
         "kind": "method",
         "line": 4,
@@ -10641,23 +12368,32 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
 --- text
 path 1 of 2: 6 hops, weight 14
   [web] class OrderPage  src/order.page.ts:1
+       2 | export class OrderPage {
     ↳ member [exact]
+         7 | private check(): void {
     method OrderPage.check  src/order.page.ts:7
       ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
+           8 | this.store.dispatch(PlaceOrder({ id: 1 }));
       property OrderEffects.place$  src/order.effects.ts:3
         ↳ calls [exact] at src/order.effects.ts:3
+             3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
         method OrderService.place  src/order.service.ts:3
           ↳ requests (http POST /Orderssnap exact: new ApiPlaceOrder) [unique_name] at web/src/order.service.ts:5
+               5 | this.http.send(new ApiPlaceOrder());
           [api] method OrdersController.Orders  src/OrdersController.cs:4
             ↳ calls through DI [unique_name] at src/OrdersController.cs:5 (bound at src/Startup.cs:5, scoped)
+                 5 | public void Orders() => _svc.Place();
             method CheckoutService.Place  src/CheckoutService.cs:7
               ↳ publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) [exact] at src/CheckoutService.cs:11
+                  11 | _bus.Publish(new OrderPlaced());
               method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
 path 2 of 2: 7 hops, weight 16
   [web] class OrderPage  src/order.page.ts:1
     ↳ member [exact]
+         4 | submit(): void {
     method OrderPage.submit  src/order.page.ts:4
       ↳ calls [exact] at src/order.page.ts:5
+           5 | this.check();
       method OrderPage.check  src/order.page.ts:7
         ↳ dispatches (ngrx PlaceOrder) [unique_name] at src/order.page.ts:8
         property OrderEffects.place$  src/order.effects.ts:3

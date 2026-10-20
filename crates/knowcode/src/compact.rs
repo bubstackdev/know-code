@@ -264,6 +264,21 @@ fn lean_row(m: &mut Map<String, Value>) {
     if m.contains_key("reasons") && m.contains_key("confidence") {
         m.remove("signals");
     }
+    // A cite at the place the row names already (its site, else its own line) doesn't say it again; one left with
+    // nothing to say goes.
+    let place = match (m.get("file").and_then(Value::as_str), m.get("line").and_then(Value::as_u64)) {
+        (Some(f), Some(l)) => Some(format!("{f}:{l}")),
+        _ => None,
+    };
+    let site = m.get("site").and_then(Value::as_str).map(str::to_string).or(place);
+    if let Some(Value::Object(c)) = m.get_mut("cite") {
+        if c.get("at").and_then(Value::as_str).is_some_and(|at| Some(at) == site.as_deref()) {
+            c.remove("at");
+        }
+        if c.is_empty() {
+            m.remove("cite");
+        }
+    }
 }
 
 /// An enclosing symbol `{container, kind, name}` as its qualified name, `container.name`.

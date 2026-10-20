@@ -728,6 +728,13 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   dirty, fresh}`; `fresh` says the index was checked against the working tree for this answer and matched it.
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
+- `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
+  and callees), the source lines it rests on, read from the working tree when the answer is built: an edge's site, else
+  the line naming the declaration. `{at, text, cut, repo}`: `at` is `file:line` or `file:start-end`; `cut` says what a
+  cap left out, or why nothing was quoted. By default (`cite: brief`) the first 12 rows quote one line, up to 120
+  characters, and the rest give `at` only (an `incomplete` entry, `capped`, says so); `cite: lines` quotes every row,
+  a declaration from its first line through its name (at most 3), each line up to 160 characters; `cite: none` leaves
+  it out. Text trees print the lines under each row.
 - An empty answer says what was searched (`note`). Older fields agree with `incomplete`: `truncated`, `total`,
   `capped`, `freshness.failed`, `left_out` and `hint`.
 

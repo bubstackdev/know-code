@@ -337,6 +337,7 @@ mod tests {
             via_di_any: Vec::new(),
             usage: None,
             ctors: None,
+            cite: None,
             args: None,
             arg_types: None,
             assigns: false,

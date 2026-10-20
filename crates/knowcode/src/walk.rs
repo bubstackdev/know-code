@@ -133,6 +133,11 @@ impl<'a> Graph<'a> {
         repo_name(&self.roots[repo])
     }
 
+    /// The roots of the repos the walk opened, the home repo first.
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
     /// What hop `h` rests on: its crossing's link, else the evidence of the reference it came from.
     pub fn evidence(&self, h: &Hop) -> Option<Evidence> {
         if let Some(via) = &h.via {
@@ -1151,6 +1156,9 @@ pub struct Step {
     /// utility code), outermost first: `OrdersHelper.Save (utility)`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub through: Vec<String>,
+    /// The lines the step rests on: the edge's site, else its declaration (see [`kc_store::answer::Cite`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cite: Option<kc_store::answer::Cite>,
 }
 
 impl Step {
@@ -1171,6 +1179,7 @@ impl Step {
             ngrx: None,
             evidence: None,
             through: Vec::new(),
+            cite: None,
         }
     }
 
@@ -1698,7 +1707,7 @@ pub fn path(from: &str, to: &str, to_repo: Option<&Path>, opts: &PathOptions, ar
     let focus: Vec<PathBuf> = roots.iter().cloned().chain(to_root.clone()).collect();
     let o = ops::open_fresh(root, args.no_sync)?;
     let summaries = ops::full_summaries_for(&o, &focus)?;
-    let answer = {
+    let (answer, cite_notes) = {
         let mut g = Graph::new(&o, &summaries, args.no_sync, opts.max_repos).with_edges(opts.edges.clone());
         // The ends past those skipped, at most MAX_ENDS of them, and whether more follow.
         let window = |all: Vec<SymbolRow>, skip: usize| -> (Vec<SymbolRow>, bool) {
@@ -1738,11 +1747,16 @@ pub fn path(from: &str, to: &str, to_repo: Option<&Path>, opts: &PathOptions, ar
         let mut answer = search(&mut g, a, b, opts)?;
         answer.from_candidates_truncated = from_cut;
         answer.to_candidates_truncated = to_cut;
-        answer
+        let mut citer = crate::cite::Citer::new(g.roots().to_vec());
+        citer.path(&mut answer);
+        (answer, citer.incomplete())
     };
     let items = serde_json::json!([answer]);
     let mut env = ops::envelope(std::slice::from_ref(&o), items, 1, 1);
     ops::report_policy(&mut env, &opts.edges);
+    for i in cite_notes {
+        ops::push_incomplete(&mut env, i);
+    }
     // Asked for longer paths than the search goes: said, so a shorter search never passes for the one asked for.
     if opts.max_hops > MAX_PATH_HOPS {
         ops::push_incomplete(

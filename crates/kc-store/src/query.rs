@@ -535,6 +535,9 @@ pub struct RefHit {
     /// it calls the implicit parameterless one; `None` when not decided (no single type, or none declared).
     #[serde(skip)]
     pub ctors: Option<Vec<i64>>,
+    /// The reference's line, quoted (see [`crate::answer::Cite`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cite: Option<crate::answer::Cite>,
 }
 
 /// A reference lists at most this many of its candidate targets (`targets_total` counts them all).
@@ -605,6 +608,7 @@ pub(crate) fn ref_row(r: &Row) -> rusqlite::Result<RefHit> {
         evidence: None,
         usage: r.get(14)?,
         ctors: None,
+        cite: None,
     })
 }
 

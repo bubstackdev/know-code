@@ -249,6 +249,52 @@ impl Evidence {
     }
 }
 
+/// Whether an answer's rows quote the source lines they rest on (see [`Cite`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiteMode {
+    /// The first rows' `cite` quotes one line each (the site, or the line naming a declaration), shortened; the
+    /// rest say where their lines are without quoting them.
+    #[default]
+    Brief,
+    /// Every row's `cite` quotes its lines: up to 3 for a declaration, each up to 160 characters.
+    Lines,
+    /// No `cite`.
+    None,
+}
+
+impl std::str::FromStr for CiteMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "" | "brief" => Ok(CiteMode::Brief),
+            "lines" => Ok(CiteMode::Lines),
+            "none" => Ok(CiteMode::None),
+            other => Err(format!("cite must be brief, lines or none, not {other}")),
+        }
+    }
+}
+
+/// The source lines a row of an answer rests on, read from the working tree when the answer is built: for an edge,
+/// the line where it happens (its `site`: the call, the request, the publish); for a symbol reached without one, its
+/// declaration's first lines. Bounded: what the cap leaves out is said in `cut`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cite {
+    /// `file:line` or `file:start-end`: the lines quoted.
+    pub at: String,
+    /// The repo `at` is in, when it isn't the row's own (a bus hop's publish, in the publisher's repo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// The lines, with their common indentation removed. Absent when the file could not be read (then `cut` says
+    /// why).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// What the cap left out (the rest of a declaration, the end of a long line), or why nothing could be quoted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut: Option<String>,
+}
+
 /// What a walk does with an edge, under an [`EvidencePolicy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
