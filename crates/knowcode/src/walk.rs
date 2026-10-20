@@ -2156,4 +2156,82 @@ public class StatementRepository\n{\n    public Task Get(int id) => null;\n    p
         assert_eq!((to("default"), to("confirmed")), (1, 0));
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// Every walk's whole answer, JSON and text, under each evidence policy, as a snapshot
+    /// (`tests/snapshots/walks.txt`): a refactor of the walks keeps them byte for byte, order included. Set
+    /// `KNOWCODE_TEST_BLESS=1` to write the snapshot again after a deliberate change, and review its diff.
+    #[test]
+    fn walk_answers_match_their_snapshot() {
+        let cache = test_cache();
+        let base = cache.dir("walk-snapshot");
+        let (web, api, schema) = shop(&base, "snap");
+        let scope = |r: &PathBuf| Scope { repos: vec![r.clone()], no_sync: false };
+        // What differs between two runs of the same walk: when it was answered, how long the check took, the commit
+        // and index generation read, and the cursors made from them.
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(o) => {
+                    for k in ["provenance", "freshness", "knowcode", "commit", "generation", "cursor", "cursors"] {
+                        o.remove(k);
+                    }
+                    // The generations a cursor resumes from.
+                    if let Some(r) = o.get_mut("_resume").and_then(|r| r.as_object_mut()) {
+                        r.remove("g");
+                    }
+                    o.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        let mut out = String::new();
+        let mut put = |title: String, mut env: serde_json::Value, text: String| {
+            strip(&mut env);
+            out.push_str(&format!("=== {title}\n{}\n--- text\n{text}\n", serde_json::to_string_pretty(&env).unwrap()));
+        };
+        for policy in ["", "confirmed", "all"] {
+            let f = crate::ops::WalkFilter { evidence: policy.to_string(), ..Default::default() };
+            for (root, symbol) in [(&web, "OrderPage.submit"), (&web, "OrderService.place"), (&api, "CheckoutService.Place"), (&api, "OrdersController.Orders"), (&api, "Order")] {
+                for direction in ["in", "out", "both"] {
+                    let t = crate::ops::trace(symbol, direction, 3, 500, &f, &scope(root)).unwrap();
+                    let text: String = t.data.found.iter().map(|(r, tr)| crate::render::trace_text(r, tr, t.data.multi)).collect();
+                    put(format!("trace {direction} {symbol} [{policy}]"), t.env, text);
+                }
+                let ip = crate::ops::ImpactParams { symbol: Some(symbol.into()), depth: 5, limit: 500, filter: f.clone(), ..Default::default() };
+                let i = crate::ops::impact(&ip, &scope(root)).unwrap();
+                let text = crate::render::impact_text(&i.data, i.data.len() > 1);
+                put(format!("impact {symbol} [{policy}]"), i.env, text);
+            }
+            let edges = crate::ops::edge_filter(&[], policy).unwrap();
+            for entry in ["OrderPage", "/orders/new/", "OrderService.place"] {
+                let fo = crate::flow::FlowOptions { depth: 10, max_steps: 500, max_repos: 16, edges: edges.clone(), children: crate::flow::DEFAULT_CHILDREN };
+                let fl = crate::flow::flow(entry, &fo, &scope(&web)).unwrap();
+                let text = crate::render::flow_text(entry, fl.data.as_ref());
+                put(format!("flow {entry} [{policy}]"), fl.env, text);
+            }
+            for (from, to, at, one_way) in
+                [("OrderPage.submit", "orders_snap", &schema, false), ("OrderPage.submit", "orders_snap", &schema, true), ("OrderPage", "OrderPlacedConsumer.Consume", &api, false)]
+            {
+                let po = PathOptions { edges: edges.clone(), max_nodes: 5000, ..opts(one_way) };
+                let p = path(from, to, Some(at), &po, &scope(&web)).unwrap();
+                let text = crate::render::path_text(&p.data);
+                put(format!("path {from} -> {to} one_way={one_way} [{policy}]"), p.env, text);
+            }
+        }
+        // Repos are named by their canonical path, which may differ from the base's (`/var` is `/private/var`).
+        let canonical = std::fs::canonicalize(&*base).unwrap_or_else(|_| base.to_path_buf());
+        let got = out.replace(canonical.to_string_lossy().as_ref(), "<base>").replace(base.to_string_lossy().as_ref(), "<base>");
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/walks.txt");
+        if std::env::var_os("KNOWCODE_TEST_BLESS").is_some() {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, &got).unwrap();
+        }
+        let want = std::fs::read_to_string(&file).unwrap_or_default();
+        if got != want {
+            let at = got.lines().zip(want.lines()).position(|(a, b)| a != b).unwrap_or(got.lines().count().min(want.lines().count()));
+            let around = |s: &str| s.lines().skip(at.saturating_sub(5)).take(12).collect::<Vec<_>>().join("\n");
+            panic!("walk answers differ from tests/snapshots/walks.txt at line {}:\n--- got\n{}\n--- want\n{}", at + 1, around(&got), around(&want));
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
