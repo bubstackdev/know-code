@@ -188,6 +188,12 @@ MCP answers are compact, so that rows rather than bookkeeping fill the size cap:
   and `dirty` say it), and the others are one string each (`billing @ 0123456789ab, from its last sync`);
 - `evidence` is a string, cursors are short handles, and row ids, the build stamp and timings (`ms`, `*_ms`, a
   search's `stats` timings) are left out;
+- a reference's `from` is the enclosing symbol's qualified name (`Checkout.Run`, what `kc_context` takes), and its
+  column is left out; what every row of a list of references shares (the same `targets`, `from` or `name`) is said
+  once beside the list, as `<list>_targets`, `<list>_from` or `<list>_name` (plain `targets`, `from`, `name` for
+  `items`);
+- a test file's ranking `signals` are left out (its `confidence` and `reasons` say them);
+- in a text tree, a use site in the listed symbol's own file is `at line N`, and is left out on the symbol's own line;
 - a repo's deploy answer is given once, at `items[0]` (the CLI's `--json` also repeats it as `deploy`). The size cap
   cuts its long tails (`ci_includes`, `ci_skipped`, `ci_templates`, `own`) before the deploy chains, and cuts a chain
   or an include whole, never inside.
@@ -196,6 +202,11 @@ Answers are capped at `max_chars` characters (default 8000, at most 40000). A li
 entry with its `kc_more` call. `kc_trace`, `kc_impact`, `kc_path` and `kc_flow` answer as indented text trees
 unless `format` is `json`. `kc_context`, `kc_refs` and `kc_locate` take several inputs (`symbols`, `names`,
 `queries`, at most 20) and answer `{"results": [...]}`; inputs that don't fit are listed in `left_out` with a hint.
+
+Default list sizes are small, so an answer leaves room for the next one: `kc_refs` 20 references, `kc_trace` 25
+nodes, `kc_impact` 30 dependents, `kc_flow` 40 steps, `kc_unused` 25 findings; `kc_context` a 1200-token bundle
+(capped at 6000 characters); `kc_overview` a 400-token map. A list cut at its default says so in `incomplete`, with
+its cursor or the parameter to raise.
 
 The CLI's `--json` output is the full envelope.
 

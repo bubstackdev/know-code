@@ -14,6 +14,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   have all the history they read.
 - Each index is rebuilt once on the first query after updating (index schema 20): constructs KnowCode doesn't read
   are now kept in a table of their own. Answers are unchanged.
+- Smaller MCP answers by default. `kc_refs` lists 20 references (was 25), `kc_trace` 25 nodes (was 40), `kc_impact`
+  30 dependents (was 60), `kc_flow` 40 steps (was 60), `kc_unused` 25 findings (was 50). The `kc_context` budget is
+  1200 tokens (was 2000), capped at 6000 characters, and the `kc_overview` map is 400 tokens (was 800). Every cut says
+  what it left out, and the rest comes through `kc_more` or the parameter it names. MCP rows are leaner. A
+  reference's `from` is the enclosing symbol's qualified name, with no column. What all rows of a reference list
+  share (`targets`, `from`, `name`) is said once beside the list. Test files drop their ranking `signals`. Tree use
+  sites in the symbol's own file are said by line. The CLI's output and `--json` are unchanged.
+  `scripts/mcp_tokens.py` measures answer sizes, with `--count-tokens` and `--compare`.
 
 ## 0.1.1 (2026-10-20)
 
