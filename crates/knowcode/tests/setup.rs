@@ -1,6 +1,7 @@
 //! Client registration is isolated from the real user's profiles and must preserve their other settings.
 
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -42,7 +43,7 @@ impl Profile {
     }
 
     fn mock_claude(&self) -> std::ffi::OsString {
-        self.write("bin/claude", "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$KNOWCODE_TEST_CLAUDE_LOG\"\nif [ \"$1 $2\" = 'plugin install' ] && [ \"${KNOWCODE_TEST_FAIL_INSTALL:-0}\" = 1 ]; then echo 'installation failed' >&2; exit 1; fi\n");
+        self.write("bin/claude", "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$KNOWCODE_TEST_CLAUDE_LOG\"\nif [ \"$1 $2\" = 'plugin install' ] && [ \"${KNOWCODE_TEST_FAIL_INSTALL:-0}\" = 1 ]; then echo 'installation failed' >&2; exit 1; fi\nif [ \"$1 $2\" = 'plugin update' ] && [ \"${KNOWCODE_TEST_FAIL_UPDATE:-0}\" = 1 ]; then echo 'update failed' >&2; exit 1; fi\n");
         fs::set_permissions(self.dir("bin/claude"), fs::Permissions::from_mode(0o700)).unwrap();
         let mut paths = vec![self.dir("bin")];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
@@ -148,6 +149,9 @@ fn claude_installs_embedded_plugin_and_records_partial_install_for_removal() {
     let log = fs::read_to_string(log).unwrap();
     assert!(log.contains("marketplace\nadd\n"));
     assert!(log.contains("plugin\ninstall\nknowcode@knowcode-local\n--scope\nuser"));
+    assert!(log.contains("plugin\nupdate\nknowcode@knowcode-local\n--scope\nuser"), "setup moves an installed plugin to this version");
+    let manifest: Value = serde_json::from_slice(&fs::read(plugin.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
+    assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
@@ -193,4 +197,115 @@ fn claude_registration_deadline_leaves_a_removable_partial_install() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("deadline"));
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
     assert!(p.dir("settings/integrations.json").exists());
+}
+
+const PLUGIN_DIR: &str = "data/integrations/claude-marketplace/knowcode";
+
+/// Sets Claude Code up with the mock CLI, then makes the bundle look like an older version wrote it.
+fn older_bundle(p: &Profile) -> std::ffi::OsString {
+    let path = p.mock_claude();
+    let mut cmd = p.command("claude");
+    cmd.env("PATH", &path).env("KNOWCODE_TEST_CLAUDE_LOG", p.dir("setup.log"));
+    success(cmd.output().unwrap());
+    let manifest = p.dir(&format!("{PLUGIN_DIR}/.claude-plugin/plugin.json"));
+    let mut value: Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
+    value["version"] = json!("0.0.1");
+    fs::write(&manifest, value.to_string()).unwrap();
+    p.write(&format!("{PLUGIN_DIR}/hooks/knowcode-grep-hint.sh"), "#!/bin/sh\nexec knowcode hook claude-code\n");
+    path
+}
+
+/// `knowcode serve` as a client runs it: it answers `initialize`, then stdin closes and it exits. Returns its stderr.
+fn serve(p: &Profile, path: &std::ffi::OsStr, fail_update: bool) -> String {
+    let mut child = Command::new(KC);
+    child.arg("serve").current_dir(&p.root)
+        .env("KNOWCODE_CONFIG_DIR", p.dir("settings")).env("KNOWCODE_CACHE_DIR", p.dir("cache"))
+        .env("KNOWCODE_DATA_DIR", p.dir("data")).env("KNOWCODE_UPDATE_CHECK", "0")
+        .env("PATH", path).env("KNOWCODE_TEST_CLAUDE_LOG", p.dir("claude.log"))
+        .env("KNOWCODE_TEST_FAIL_UPDATE", if fail_update { "1" } else { "0" })
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = child.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}})).unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    let reply: Value = serde_json::from_str(&line).unwrap_or_else(|_| panic!("the server answers initialize: {line}"));
+    assert_eq!(reply["id"], 1);
+    assert!(reply["result"]["serverInfo"].is_object(), "{reply}");
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stderr).unwrap()
+}
+
+#[test]
+fn serve_refreshes_an_older_plugin_bundle_and_has_claude_update_its_copy() {
+    let p = Profile::new("refresh");
+    let path = older_bundle(&p);
+    let stderr = serve(&p, &path, false);
+    assert!(stderr.contains(&format!("updated the Claude Code plugin to {}", env!("CARGO_PKG_VERSION"))), "{stderr}");
+    let plugin = p.dir(PLUGIN_DIR);
+    let manifest: Value = serde_json::from_slice(&fs::read(plugin.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
+    assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
+    let hook = fs::read_to_string(plugin.join("hooks/knowcode-grep-hint.sh")).unwrap();
+    assert!(hook.starts_with(&format!("#!/bin/sh\nexport KNOWCODE_BIN='{KC}'\n")), "{hook}");
+    assert!(hook.contains("\nKC=\"${KNOWCODE_BIN:-knowcode}\"\n"), "the current hook script: {hook}");
+    // The overrides setup recorded stay in the server configuration.
+    let config: Value = serde_json::from_slice(&fs::read(plugin.join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(config["mcpServers"]["knowcode"]["env"]["KNOWCODE_CACHE_DIR"], p.dir("cache").to_str().unwrap());
+    let log = fs::read_to_string(p.dir("claude.log")).unwrap();
+    assert_eq!(log, "plugin\nupdate\nknowcode@knowcode-local\n--scope\nuser\n");
+    // A current bundle is left alone.
+    let stderr = serve(&p, &path, false);
+    assert!(!stderr.contains("Claude Code plugin"), "{stderr}");
+    assert_eq!(fs::read_to_string(p.dir("claude.log")).unwrap(), log);
+}
+
+#[test]
+fn a_failed_plugin_update_is_reported_once_and_the_server_still_works() {
+    let p = Profile::new("refresh-fails");
+    let path = older_bundle(&p);
+    let stderr = serve(&p, &path, true);
+    assert_eq!(stderr.matches("could not update the Claude Code plugin").count(), 1, "{stderr}");
+    assert!(stderr.contains("update failed"), "{stderr}");
+    let finish = format!("knowcode setup claude --client-dir '{}'", p.dir("claude").display());
+    assert!(stderr.contains(&finish), "{stderr}");
+    // Finishing it: setup rewrites the bundle and moves Claude's copy to this version.
+    let mut cmd = p.command("claude");
+    cmd.env("PATH", &path).env("KNOWCODE_TEST_CLAUDE_LOG", p.dir("finish.log"));
+    success(cmd.output().unwrap());
+    assert!(fs::read_to_string(p.dir("finish.log")).unwrap().contains("plugin\nupdate\nknowcode@knowcode-local"));
+}
+
+#[test]
+fn the_refresh_after_self_update_reports_a_missing_claude_and_never_fails() {
+    let p = Profile::new("refresh-no-claude");
+    older_bundle(&p);
+    fs::create_dir_all(p.dir("empty-bin")).unwrap();
+    let out = Command::new(KC).arg("_refresh-plugin")
+        .env("KNOWCODE_CONFIG_DIR", p.dir("settings")).env("KNOWCODE_CACHE_DIR", p.dir("cache"))
+        .env("KNOWCODE_DATA_DIR", p.dir("data")).env("PATH", format!("{}:/usr/bin:/bin", p.dir("empty-bin").display()))
+        .output().unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(stderr.contains("could not update the Claude Code plugin") && stderr.contains("install the claude CLI"), "{stderr}");
+    assert!(stderr.contains("knowcode setup claude --client-dir"), "{stderr}");
+    let manifest: Value = serde_json::from_slice(&fs::read(p.dir(&format!("{PLUGIN_DIR}/.claude-plugin/plugin.json"))).unwrap()).unwrap();
+    assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"), "the bundle itself is current");
+}
+
+#[test]
+fn only_the_bundle_at_the_recorded_path_is_refreshed() {
+    let p = Profile::new("refresh-elsewhere");
+    let path = older_bundle(&p);
+    // A process with another data directory finds no bundle of its own to refresh.
+    let out = Command::new(KC).arg("_refresh-plugin")
+        .env("KNOWCODE_CONFIG_DIR", p.dir("settings")).env("KNOWCODE_CACHE_DIR", p.dir("cache"))
+        .env("KNOWCODE_DATA_DIR", p.dir("other-data")).env("PATH", &path).env("KNOWCODE_TEST_CLAUDE_LOG", p.dir("claude.log"))
+        .output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!p.dir("claude.log").exists());
+    assert!(!p.dir("other-data").exists());
 }

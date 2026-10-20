@@ -1,6 +1,7 @@
 #!/bin/bash
 # Feeds the Grep/Glob/Bash hook sample PreToolUse events and checks that it adds context only when it should and fails
-# open otherwise. On macOS it also reports the instructions each call retires (/usr/bin/time -l).
+# open otherwise, and that calls which can't be searches exit in the shell script without starting the binary. On
+# macOS it also reports the instructions each call retires (/usr/bin/time -l).
 #
 #   integrations/claude-code/test-hook.sh <indexed repo> <a symbol name defined in it>
 #
@@ -68,6 +69,44 @@ check "malformed JSON" none '{"tool_name": "Grep", "tool_input": '
 check "missing binary" none "$(event Grep "$symbol")" KNOWCODE_BIN=/nonexistent/knowcode
 check "timeout (1 ms budget)" none "$(event Grep "$symbol")" KNOWCODE_HOOK_MS=1
 check "repo without an index" none "$(event Grep "$symbol")" KNOWCODE_CACHE_DIR="$tmp/empty-cache"
+
+# The shell script decides first: a call that can't be a search exits without starting the binary. A KNOWCODE_BIN
+# that records being called tells which calls reached it.
+printf '#!/bin/sh\ncat >/dev/null\ntouch "%s/called"\n' "$tmp" >"$tmp/recorder"
+chmod +x "$tmp/recorder"
+starts() { # case name, expectation (binary|shell), event JSON
+    rm -f "$tmp/called"
+    printf '%s' "$3" | KNOWCODE_BIN="$tmp/recorder" "$hook" >/dev/null 2>&1
+    local got=shell verdict=PASS
+    [ -e "$tmp/called" ] && got=binary
+    if [ "$got" != "$2" ]; then
+        verdict=FAIL
+        fails=$((fails + 1))
+    fi
+    printf '%-4s %-34s decided by the %s\n' "$verdict" "$1" "$got"
+}
+starts "Grep" binary "$(event Grep "$symbol")"
+starts "Glob" binary "$(event Glob "**/$symbol*")"
+starts "Bash: grep" binary "$(bash_event "grep -rn $symbol .")"
+starts "Bash: egrep in a pipeline" binary "$(bash_event "cat x | egrep $symbol")"
+starts "Bash: fgrep" binary "$(bash_event "fgrep -r $symbol src")"
+starts "Bash: git grep" binary "$(bash_event "git grep -n $symbol")"
+starts "Bash: cd chain, rg" binary "$(bash_event "cd src && rg $symbol")"
+starts "Bash: ag" binary "$(bash_event "ag $symbol")"
+starts "Bash: ack" binary "$(bash_event "ack $symbol")"
+starts "Bash: find -name" binary "$(bash_event "find . -name '$symbol*'")"
+starts "Bash: find -iname" binary "$(bash_event "find . -iname '$symbol*'")"
+starts "Bash: find -path" binary "$(bash_event "find . -path '*/$symbol/*'")"
+starts "Bash: find -wholename" binary "$(bash_event "find . -wholename '*/$symbol.cs'")"
+starts "Bash: rg after a newline" binary "$(bash_event "cd src\\nrg $symbol")"
+starts "Bash: cargo build" shell "$(bash_event "cargo build")"
+starts "Bash: git status" shell "$(bash_event "git status")"
+starts "Bash: sed -n" shell "$(bash_event "sed -n 1,20p README.md")"
+starts "Bash: find -type f" shell "$(bash_event "find . -type f")"
+starts "Bash: words containing rg, ag" shell "$(bash_event "cargo fmt && npm run tag-release")"
+starts "Read" shell "$(event Read "$symbol")"
+starts "empty input" shell ''
+
 if [ -e "$tmp/empty-cache/repos" ] && [ -n "$(ls -A "$tmp/empty-cache/repos")" ]; then
     echo "FAIL the hook created an index"
     fails=$((fails + 1))

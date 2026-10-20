@@ -23,6 +23,12 @@ Each Claude registration command has a deadline of 120 seconds, configurable wit
 For an isolated Claude profile, pass `--client-dir DIR`. `knowcode setup claude
 --print` prints a plain MCP configuration snippet without installing anything.
 
+After `knowcode self-update`, or when `knowcode serve` starts with a bundle older
+than the binary, KnowCode rewrites the bundle and runs `claude plugin update
+knowcode@knowcode-local` for each profile setup recorded, so the next session uses
+the new hook and skills. When that can't finish, it prints the `knowcode setup
+claude` command that does.
+
 The repository is also a plugin marketplace for an installation that uses
 `knowcode` from `PATH`:
 
@@ -67,6 +73,12 @@ alternations such as `A|B` or `A\|B`) and keeps the ones that look like symbols.
 Any other command, such as a build, `git status`, `sed -n` or `cat`, adds nothing,
 decided from the command string before any index is opened.
 
+The hook script makes a cheap, deliberately loose test first, in POSIX `sh`: unless
+the tool is Grep or Glob, or the Bash command contains `grep`, `egrep`, `fgrep`,
+`rg`, `ag`, `ack`, `git grep`, or `find` with `-name`, `-iname`, `-path` or
+`-wholename`, it exits without starting the `knowcode` binary. The binary then
+parses what passes precisely.
+
 Plain words, general regexes, unknown symbols, missing indexes, stale definitions,
 malformed input, and unavailable binaries get no note. On errors or after
 `KNOWCODE_HOOK_MS` (default 1500 milliseconds), it prints nothing and exits zero.
@@ -87,7 +99,9 @@ integrations/claude-code/test-hook.sh /path/to/indexed/repo SymbolName
 The protocol smoke check uses an isolated synthetic checkout. Clean-machine
 installation and public-repository acceptance are separate release gates.
 
-`test-hook.sh` feeds the hook sample events and prints the instructions each call retires on macOS.
+`test-hook.sh` feeds the hook sample events and prints the instructions each call retires on macOS (those of the
+hook's shell, not of the binary it starts). It also checks, with a `KNOWCODE_BIN` that records being called, that only
+calls which can be searches start the binary.
 
 The manifest follows the [Claude plugin reference](https://code.claude.com/docs/en/plugins-reference)
 and [plugin MCP configuration](https://code.claude.com/docs/en/mcp#plugin-provided-mcp-servers).

@@ -178,7 +178,10 @@ nothing). Blocked content never reaches an answer or the cache:
   `withheld`, naming the repo, never a blocked path.
 - When the file changes so that something new is blocked, the repo's index, side caches, workspace summary entry and
   notes anchored in blocked files are deleted, and the repo is indexed again without them.
-- `status` shows the policy when it blocks anything or the file is malformed.
+- `status` always shows the policy (`privacy`): the file's state (`read`, `empty`, `absent` or `malformed`), the file
+  name it looked for, the global level, `block_at`, and how many paths are blocked (`blocked_paths`, with the rules'
+  own paths in `blocked`, or `"repo"`). The CLI prints it as one line. So a `privacy.file` that names no file in the
+  repo shows as `absent`, with the name it looked for.
 
 A file that can't be read as the expected format is warned about and taken as level 1 (the whole repo blocked) until
 it is fixed. `privacy.malformed = "default"` treats such a file as absent instead.

@@ -404,9 +404,31 @@ pub fn config_status(c: &serde_json::Value) {
     println!();
 }
 
+/// `status`'s privacy policy in one line: the file looked for and its state, the level, the threshold, what is blocked.
+fn privacy_line(p: &serde_json::Value) -> String {
+    let name = p["name"].as_str().unwrap_or("");
+    let state = match p["file"].as_str().unwrap_or("") {
+        "malformed" => format!("malformed, taken as {}", p["malformed_as"].as_str().unwrap_or("restricted")),
+        other => other.to_string(),
+    };
+    let blocked = if p["blocked"] == "repo" {
+        "the whole repo blocked".to_string()
+    } else {
+        match p["blocked_paths"].as_u64().unwrap_or(0) {
+            0 => "nothing blocked".to_string(),
+            1 => "1 path blocked".to_string(),
+            n => format!("{n} paths blocked"),
+        }
+    };
+    format!("{name} {state}; level {}, blocks at {} and below; {blocked}", p["global_level"], p["block_at"])
+}
+
 pub fn status(v: &serde_json::Value) {
     let s = |p: &str| v.pointer(p).cloned().unwrap_or_default();
     println!("repo     {}", s("/repo").as_str().unwrap_or(""));
+    if let Some(p) = v.get("privacy") {
+        println!("privacy  {}", privacy_line(p));
+    }
     if v.pointer("/index/exists").and_then(|v| v.as_bool()) == Some(false) {
         println!("index    not built ({})", s("/discovery").as_str().unwrap_or("unindexed"));
         for note in crate::ops::freshness_notes(v) { println!("{note}"); }

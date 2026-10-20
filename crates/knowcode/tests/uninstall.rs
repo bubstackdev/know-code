@@ -146,8 +146,8 @@ printf '%s\n' "$*" >> "$KNOWCODE_TEST_CLAUDE_LOG"
 case "$*" in
   'plugin marketplace list --json') cat "$KNOWCODE_TEST_MARKETS";;
   'plugin list --json') cat "$KNOWCODE_TEST_PLUGINS";;
-  'plugin marketplace add '*|'plugin install '*) ;;
-  'plugin uninstall knowcode@knowcode-local --scope user --keep-data')
+  'plugin marketplace add '*|'plugin install '*|'plugin update '*) ;;
+  'plugin uninstall knowcode@knowcode-local --scope user')
     if [ "${KNOWCODE_TEST_FAIL_REMOVE:-0}" = 1 ]; then echo 'try again' >&2; exit 1; fi
     printf '%s\n' "$KNOWCODE_TEST_OTHER_PLUGINS" > "$KNOWCODE_TEST_PLUGINS";;
   'plugin marketplace remove knowcode-local --scope user')
@@ -206,7 +206,8 @@ fn claude_removal_is_user_scoped_preserves_extra_bundle_files_and_retries_failur
     assert!(!marketplace.join("knowcode/.mcp.json").exists());
     assert_eq!(fs::read_to_string(marketplace.join("keep.txt")).unwrap(), "user addition");
     let log = c.log();
-    assert!(log.contains("plugin uninstall knowcode@knowcode-local --scope user"), "{log}");
+    assert!(log.lines().any(|l| l == "plugin uninstall knowcode@knowcode-local --scope user"), "{log}");
+    assert!(!log.contains("--keep-data"), "Claude Code deletes the plugin's data directory: {log}");
     assert!(log.contains("plugin marketplace remove knowcode-local --scope user"), "{log}");
     assert!(!log.lines().any(|l| l == "plugin marketplace remove knowcode-local"), "a user-scoped removal that worked needs no other: {log}");
     assert!(!log.contains("plugin uninstall other"));

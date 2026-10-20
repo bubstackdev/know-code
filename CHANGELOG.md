@@ -8,6 +8,29 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   worked out, a failing `git` call): it answers with the other repos and names the one left out as `missing_repo` or
   `failed`.
 
+- Updating refreshes the Claude Code plugin: after `self-update`, and when `serve` starts with an older bundle,
+  KnowCode rewrites the bundle and runs Claude Code's plugin update. If that can't finish, it prints the
+  `knowcode setup claude` command that does. `setup claude` also moves an installed plugin to the current version.
+- The Claude Code hook script exits without starting `knowcode` for Bash commands that can't be code searches.
+
+- `status` and `kc_status` always show the AI privacy policy they apply, indexed or not: the file's state, the file
+  name looked for, the global level, `block_at` and how many paths are blocked. The CLI text gives it one line.
+- `uninstall` no longer asks Claude Code to keep the plugin's data directory, where KnowCode keeps nothing. Claude
+  Code's orphaned cache copy of the plugin is left to Claude Code, for sessions still running.
+- Tests: the shared `commit` test helper reports git's output when a fixture commit fails.
+
+### Release
+
+- Release binaries no longer contain build-machine paths. The C code in tree-sitter and its grammars now gets the same
+  path remapping as Rust code, and each release build fails if a binary contains the builder's home or checkout path.
+
+### Release testing
+
+- Clean-machine acceptance is one script in the repo, `scripts/acceptance/clean-machine.sh`, for macOS and Linux. It
+  never starts an interactive shell, covers the installer adding `~/.local/bin` to PATH, compares client settings
+  entry by entry from a snapshot taken right before uninstall, records two client sessions per case from the
+  client's transcripts (recorded, not gated), and checks that a new shell starts cleanly after the removal steps.
+
 ## 0.1.0 (2026-10-19)
 
 The first public release, for macOS on Apple silicon and Linux on x86_64 and arm64.

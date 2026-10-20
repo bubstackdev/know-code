@@ -270,7 +270,19 @@ pub fn self_update(check_only: bool) -> Result<()> {
         return Err(error.context("previous binary and installer receipt restored"));
     }
     println!("Installed KnowCode {}. Start a new client session to use it.", release.version);
+    refresh_plugin(&prefix.join("knowcode"));
     Ok(())
+}
+
+/// The installed binary, not this one, carries the new plugin bundle: it rewrites a Claude Code bundle an older
+/// version wrote and has Claude Code update its copy. A problem is reported, never a failed update.
+fn refresh_plugin(binary: &Path) {
+    let mut cmd = Command::new(binary);
+    cmd.arg("_refresh-plugin").stdin(Stdio::null());
+    match limits::output(cmd, Kind::Setup, "Claude Code plugin refresh", None) {
+        Ok(out) => eprint!("{}", String::from_utf8_lossy(&out.stderr)),
+        Err(e) => eprintln!("knowcode: could not update the Claude Code plugin: {e:#}. Run `knowcode setup claude` to finish."),
+    }
 }
 
 #[cfg(test)]

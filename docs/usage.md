@@ -136,12 +136,25 @@ settings. `--print` prints the configuration without changing anything, `--clien
 profile, and `--replace` replaces a different server already registered as `knowcode` (Codex, Cursor). Start a new
 client session afterwards.
 
+Updating keeps the Claude Code plugin in step with the binary. After `self-update` installs a release, and whenever
+`serve` starts and finds that the plugin bundle setup wrote is older than the binary, KnowCode rewrites the bundle
+(manifest, hook and skills, keeping the binary path and overrides setup recorded) and runs
+`claude plugin update knowcode@knowcode-local --scope user` for each Claude profile it was set up in, so Claude Code
+picks up the new version in its next session. It touches only the bundle at the path setup recorded. If the `claude`
+CLI is missing or the update fails, it says so once on stderr with the `knowcode setup claude` command that finishes
+it; the update and the server go on regardless. Codex and Cursor registrations name only the binary, so an update
+needs nothing there.
+
 `uninstall` removes the registrations setup recorded, the bundled plugin files, the cached indexes, KnowCode's lock
 and update-check files and the directories they leave empty, and keeps unrelated client settings and files. In a terminal it offers to remove configuration and notes (default no); otherwise pass
 `--delete-config` or `--delete-notes`. It checks each removal against the client's own listing: a registration still
 listed is reported, the command exits non-zero, and the registration stays recorded so running `uninstall` again
-finishes it. Claude Code marks its cached copy of the plugin as orphaned and cleans it up itself. Running clients are
-not stopped.
+finishes it. Running clients are not stopped.
+
+For Claude Code, the plugin is uninstalled with its data directory (`~/.claude/plugins/data/knowcode-knowcode-local`),
+where KnowCode keeps nothing. Claude Code keeps its cached copy of the plugin, marked orphaned (`.orphaned_at`), so
+sessions still running keep working, and deletes it itself later. KnowCode leaves that copy alone: it belongs to
+Claude Code, and deleting it under a running session would break that session.
 
 `uninstall` does not remove the binary. A package manager removes what it installed. The shell installer has no
 uninstaller; for an installation it made, an `uninstall` that completes ends with the exact steps for that machine
@@ -262,4 +275,5 @@ its coverage. To make one: `npx @sourcegraph/scip-typescript index` in a TypeScr
 The Claude Code plugin adds a `PreToolUse` hook for Grep, Glob and Bash (for Bash, only code searches such as `grep`,
 `rg`, `git grep` or `find -name`). When the pattern names a symbol in an existing index, it adds a short note beside
 the result: where the symbol is defined, its reference count by confidence, its top callers, and the `kc_context` call
-to make next. It never blocks the search and never indexes. See [integrations/claude-code](../integrations/claude-code/README.md).
+to make next. It never blocks the search and never indexes. The hook script decides first: a Bash command without a
+search word in it exits in the shell without starting `knowcode`. See [integrations/claude-code](../integrations/claude-code/README.md).
