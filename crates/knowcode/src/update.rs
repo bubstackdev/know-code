@@ -346,12 +346,15 @@ mod tests {
 
     #[test]
     fn only_newer_stable_precedence_not_build_metadata_triggers_a_notice() {
-        assert!(!newer("v0.1.0"));
-        assert!(!newer("0.1.0+other-build"));
-        assert!(!newer("v0.2.0-rc.1"));
+        // Relative to this build's own version, so the test holds at every release.
+        let v = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        let (major, minor, patch) = (v.major, v.minor, v.patch);
+        assert!(!newer(&format!("v{major}.{minor}.{patch}")));
+        assert!(!newer(&format!("{major}.{minor}.{patch}+other-build")));
+        assert!(!newer(&format!("v{major}.{}.0-rc.1", minor + 1)));
         assert!(!newer("not-a-version"));
-        assert!(newer("v0.1.1"));
-        assert!(newer("0.2.0+build"));
+        assert!(newer(&format!("v{major}.{minor}.{}", patch + 1)));
+        assert!(newer(&format!("{major}.{}.0+build", minor + 1)));
     }
 
     #[test]
