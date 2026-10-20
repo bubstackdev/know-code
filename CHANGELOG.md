@@ -12,8 +12,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `knowcode history deepen` fetches more history into a shallow clone (`--by N`, 1000 by default, or `--since DATE`)
   and reports how deep it is before and after, and whether `hotspots`, `coupled`, `ownership` and `reviewers` now
   have all the history they read.
-
-## 0.1.1 (unreleased)
+- Each index is rebuilt once on the first query after updating (index schema 20): constructs KnowCode doesn't read
+  are now kept in a table of their own. Answers are unchanged.
 
 ## 0.1.1 (2026-10-20)
 

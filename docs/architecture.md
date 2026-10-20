@@ -20,6 +20,8 @@ Each checkout gets `<cache>/repos/<name>-<hash>.sqlite`, opened in WAL mode. It 
 - symbols, references with their site (file, line, column), relations, imports and tags;
 - framework facts: routes, DI registrations, table access, bus publishes and consumers, templates, Terraform and
   Ansible facts;
+- constructs an extractor recognised but doesn't read (an assembly scan, a dynamic include), in a table of their own,
+  so an answer drawing on them says it is incomplete with reason `unsupported`;
 - a trigram content index for `search` (one row per trigram with delta-encoded file ids; file contents are not
   stored, so every candidate is verified against the working tree);
 - the words `locate` ranks by, in a contentless FTS5 table;
@@ -74,6 +76,16 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a
   cancelled call, is killed; the answer is incomplete with reason `deadline`, and nothing computed from it is cached.
 
+## The query context
+
+Each query (an MCP tool call's work, a CLI command) runs with one context object (`kc_store::limits::Operation`). It
+holds the query's cancellation, its wait for indexing, and what the query collects on the side for its answer's
+`incomplete` entries: child processes cut at their deadline, repos a workspace fan-out left out because they could
+not be read, and gone checkouts that would have mattered. The code finishing the answer takes each entry once. Two
+queries never share a context, so two calls running at once, or one after another on the same pooled thread, never
+see each other's entries. A thread that runs no query of its own (a CLI command, a test) gets its own context on first
+use.
+
 ## Across repos
 
 The workspace summary holds, per indexed repo, its manifests, the routes, messages and tables it serves or uses, and
@@ -86,6 +98,20 @@ Checkouts of one origin (a clone, a worktree, a second clone, the remote URL wri
 picks the checkout that answers for a repo in every cross-repo link: the queried repo's own checkout, then one that
 exists, then one under the workspace roots, then the most recently synced. A deleted checkout is left out of every
 cross-repo link until pruned, and an answer it would have joined names it with `missing_repo`.
+
+## Walks
+
+`trace`, `impact`, `path` and `flow` decide about an edge in one place (`crates/knowcode/src/graph.rs`). A walk's
+gate holds the edge kinds it lists and follows, its evidence policy (an edge is followed, listed as a leaf, or left out
+and counted in the answer's `policy`), and the query it runs for: a cancelled query's walk stops at its next
+expansion. A hop across repos (an HTTP route, the bus, SQL, a deploy, a Terraform module) arrives with its confidence
+across the link and the evidence it rests on, worked out once for `trace`, `impact` and the check past where a walk
+stopped.
+
+`path` and `flow` read every edge, in a repo and across repos, through one symbol graph
+(`crates/knowcode/src/walk.rs`) that opens repos as the walk reaches them, up to `max_repos`. The in-repo edges of
+`trace` and `impact` come from `crates/kc-store/src/trace.rs`, under the same edge filter, and their crossings through
+the same gate. Walk answers are pinned by a snapshot test (`crates/knowcode/tests/snapshots/walks.txt`).
 
 ## The cache lifecycle
 

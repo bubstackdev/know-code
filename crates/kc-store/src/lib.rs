@@ -44,7 +44,7 @@ pub const RESOLVER_VERSION: u32 = 20;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].
-pub const SCHEMA_VERSION: u32 = 19;
+pub const SCHEMA_VERSION: u32 = 20;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -318,6 +318,18 @@ CREATE TABLE IF NOT EXISTS ansible_facts (
 );
 CREATE INDEX IF NOT EXISTS ansible_facts_file ON ansible_facts(file_id);
 CREATE INDEX IF NOT EXISTS ansible_facts_kind ON ansible_facts(kind, name);
+
+-- Constructs an extractor recognised but didn't read (`kc_extract::Unsupported`, see `unsupported`): the area they
+-- belong to (`di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular`, `imports`), the construct as written,
+-- and its line. Every language's; read per repo, never from the workspace summary.
+CREATE TABLE IF NOT EXISTS unsupported (
+    file_id   INTEGER NOT NULL,
+    area      TEXT NOT NULL,
+    construct TEXT NOT NULL,
+    line      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS unsupported_file ON unsupported(file_id);
+CREATE INDEX IF NOT EXISTS unsupported_area ON unsupported(area);
 
 -- Manifests: packages (SwiftPM package, XcodeGen project, Cargo package or workspace), their targets and products,
 -- and their dependencies. `resolved_repo` is the absolute root of the repo a path dependency lands in.
@@ -984,6 +996,7 @@ impl Batch<'_> {
             "DELETE FROM db_facts WHERE file_id = ?1",
             "DELETE FROM bus_facts WHERE file_id = ?1",
             "DELETE FROM ansible_facts WHERE file_id = ?1",
+            "DELETE FROM unsupported WHERE file_id = ?1",
         ] {
             self.tx.prepare_cached(sql)?.execute([id])?;
         }
@@ -1182,9 +1195,10 @@ impl Batch<'_> {
         for a in &rec.facts.ansible {
             ansible_stmt.execute(params![file_id, a.sym.map(|i| ids[i]), a.kind, a.name, a.value, a.line])?;
         }
-        // Constructs met but not read: kept beside the Ansible facts (see `answer::unsupported`).
+        // Constructs met but not read (see [`unsupported`]).
+        let mut unsupported_stmt = self.tx.prepare_cached("INSERT INTO unsupported(file_id, area, construct, line) VALUES (?1, ?2, ?3, ?4)")?;
         for u in &rec.facts.unsupported {
-            ansible_stmt.execute(params![file_id, Option::<i64>::None, "unsupported", u.area, u.construct, u.line])?;
+            unsupported_stmt.execute(params![file_id, u.area, u.construct, u.line])?;
         }
         for p in &rec.facts.packages {
             self.tx
@@ -1439,6 +1453,41 @@ mod tests {
         ] {
             assert_ne!(key(&edited), k, "{what}");
         }
+    }
+
+    /// Constructs met but not read have their own table: never among the Ansible (or CI) facts, replaced and removed
+    /// with their file.
+    #[test]
+    fn unsupported_constructs_are_kept_apart_from_infrastructure_facts() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-unsupported-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::open(&dir.join("i.sqlite")).unwrap();
+        let src = "- hosts: all\n  tasks:\n    - include_tasks: \"{{ item }}.yml\"\n    - name: restart the api\n      service: name=api state=restarted\n";
+        let facts = kc_extract::extract_file(Lang::Ansible, "site.yml", src);
+        assert!(!facts.unsupported.is_empty() && !facts.ansible.is_empty(), "{facts:?}");
+        let put = |store: &mut Store, facts: &FileFacts| {
+            let b = store.batch().unwrap();
+            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts }).unwrap();
+            b.commit().unwrap();
+        };
+        put(&mut store, &facts);
+        let count = |store: &Store, sql: &str| store.conn().query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM ansible_facts WHERE kind = 'unsupported'"), 0);
+        assert_eq!(count(&store, "SELECT COUNT(*) FROM ansible_facts"), facts.ansible.len() as i64);
+        let sites = unsupported::all(store.conn()).unwrap();
+        let want: Vec<(String, String, u32)> = facts.unsupported.iter().map(|u| (u.area.to_string(), u.construct.clone(), u.line)).collect();
+        assert_eq!(sites.iter().map(|s| (s.area.clone(), s.construct.clone(), s.line)).collect::<Vec<_>>(), want);
+        assert!(sites.iter().all(|s| s.file == "site.yml"));
+        // Written again: replaced, not added to.
+        put(&mut store, &facts);
+        assert_eq!(unsupported::all(store.conn()).unwrap().len(), want.len());
+        // Removed with its file.
+        let id: i64 = store.conn().query_row("SELECT id FROM files WHERE path = 'site.yml'", [], |r| r.get(0)).unwrap();
+        let b = store.batch().unwrap();
+        b.remove(id).unwrap();
+        b.commit().unwrap();
+        assert!(unsupported::all(store.conn()).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod cursor;
 mod completeness;
 mod fetch;
 mod flow;
+mod graph;
 mod help;
 mod history;
 mod hook;

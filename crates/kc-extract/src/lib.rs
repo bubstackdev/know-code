@@ -711,7 +711,7 @@ pub struct AnsibleFact {
 
 /// A construct an extractor recognises but doesn't read, so what it would add (a registration, a table, an include,
 /// a route) is missing from the facts: answers drawing on its `area` say they are incomplete (`unsupported`) instead
-/// of complete. Stored with the Ansible facts, kind `unsupported` (`name` the area, `value` the construct).
+/// of complete. Stored in the index's `unsupported` table (see `kc_store::unsupported`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Unsupported {
     /// `di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular` or `imports` (a C# project whose usings can't be read).

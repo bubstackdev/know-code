@@ -1,5 +1,4 @@
-//! Constructs an extractor recognised but didn't read (`kc_extract::Unsupported`), as stored (with the Ansible facts,
-//! kind `unsupported`), and the answer's `incomplete` entry (reason `unsupported`) for those an answer draws on: an
+//! Constructs an extractor recognised but didn't read (`kc_extract::Unsupported`), as stored (table `unsupported`), and the answer's `incomplete` entry (reason `unsupported`) for those an answer draws on: an
 //! answer that would otherwise say `complete: true` while what they register, link or include is missing from it.
 
 use anyhow::Result;
@@ -22,8 +21,8 @@ pub struct Site {
 /// The repo's constructs met but not read in `area`, by file and line.
 pub fn in_area(conn: &Connection, area: &str) -> Result<Vec<Site>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT a.name, a.value, f.path, a.line FROM ansible_facts a JOIN files f ON f.id = a.file_id
-         WHERE a.kind = 'unsupported' AND a.name = ?1 ORDER BY f.path, a.line",
+        "SELECT u.area, u.construct, f.path, u.line FROM unsupported u JOIN files f ON f.id = u.file_id
+         WHERE u.area = ?1 ORDER BY f.path, u.line, u.rowid",
     )?;
     let rows = stmt.query_map([area], |r| Ok(Site { area: r.get(0)?, construct: r.get(1)?, file: r.get(2)?, line: r.get(3)? }))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -32,8 +31,8 @@ pub fn in_area(conn: &Connection, area: &str) -> Result<Vec<Site>> {
 /// The repo's constructs met but not read in `file` between lines `from` and `to`, any area.
 pub fn in_span(conn: &Connection, file: &str, from: u32, to: u32) -> Result<Vec<Site>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT a.name, a.value, f.path, a.line FROM ansible_facts a JOIN files f ON f.id = a.file_id
-         WHERE a.kind = 'unsupported' AND f.path = ?1 AND a.line BETWEEN ?2 AND ?3 ORDER BY a.line",
+        "SELECT u.area, u.construct, f.path, u.line FROM unsupported u JOIN files f ON f.id = u.file_id
+         WHERE f.path = ?1 AND u.line BETWEEN ?2 AND ?3 ORDER BY u.line, u.rowid",
     )?;
     let rows = stmt.query_map(rusqlite::params![file, from, to], |r| Ok(Site { area: r.get(0)?, construct: r.get(1)?, file: r.get(2)?, line: r.get(3)? }))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -42,8 +41,8 @@ pub fn in_span(conn: &Connection, file: &str, from: u32, to: u32) -> Result<Vec<
 /// Every construct met but not read in the repo, any area: for counting.
 pub fn all(conn: &Connection) -> Result<Vec<Site>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT a.name, a.value, f.path, a.line FROM ansible_facts a JOIN files f ON f.id = a.file_id
-         WHERE a.kind = 'unsupported' ORDER BY a.name, f.path, a.line",
+        "SELECT u.area, u.construct, f.path, u.line FROM unsupported u JOIN files f ON f.id = u.file_id
+         ORDER BY u.area, f.path, u.line, u.rowid",
     )?;
     let rows = stmt.query_map([], |r| Ok(Site { area: r.get(0)?, construct: r.get(1)?, file: r.get(2)?, line: r.get(3)? }))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

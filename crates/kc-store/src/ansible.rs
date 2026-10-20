@@ -497,7 +497,7 @@ pub fn summary(conn: &Connection) -> Result<Summary> {
     })?;
     for row in rows {
         let row = row?;
-        if row.kind != "vars_file" && row.kind != "unsupported" {
+        if row.kind != "vars_file" {
             out.facts.push(row);
         }
     }

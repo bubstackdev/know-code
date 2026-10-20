@@ -1,6 +1,5 @@
 //! A shared freshness budget per MCP call and one background indexing worker per server process.
 
-use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak, mpsc};
@@ -11,22 +10,27 @@ use anyhow::{Result, anyhow};
 use kc_index::{SyncOptions, SyncReport};
 use kc_store::Store;
 
-thread_local! {
-    static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
-}
-
-pub struct Budget(Option<Instant>);
+/// How long the query this thread runs (see [`kc_store::limits::current`]) waits for indexing, across every repo it
+/// opens, until the guard drops; the query's earlier wait is restored then.
+pub struct Budget(Arc<kc_store::limits::Operation>, Option<Instant>);
 
 impl Budget {
     pub fn enter(duration: Duration) -> Self {
-        Self(DEADLINE.with(|d| d.replace(Some(Instant::now() + duration))))
+        let query = kc_store::limits::current();
+        let before = query.set_freshness_deadline(Some(Instant::now() + duration));
+        Self(query, before)
     }
 }
 
 impl Drop for Budget {
     fn drop(&mut self) {
-        DEADLINE.with(|d| d.set(self.0));
+        self.0.set_freshness_deadline(self.1);
     }
+}
+
+/// Until when the query this thread runs waits for indexing; `None` waits until it is done (a CLI command).
+fn deadline() -> Option<Instant> {
+    kc_store::limits::current().freshness_deadline()
 }
 
 type Outcome = std::result::Result<SyncReport, String>;
@@ -210,7 +214,7 @@ pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
     if no_sync {
         return Ok((store, None));
     }
-    let Some(deadline) = DEADLINE.with(Cell::get) else {
+    let Some(deadline) = deadline() else {
         let report = kc_index::sync(root, &mut store, &SyncOptions::default())?;
         return Ok((store, Some(report)));
     };
@@ -248,7 +252,7 @@ pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
 
 /// A cross-repo answer used an evicted checkout's summary: restore it without passing that snapshot off as fresh.
 pub fn restore_cached(root: &Path) -> Result<()> {
-    if DEADLINE.with(Cell::get).is_some() { Worker::shared().schedule(root)?; }
+    if deadline().is_some() { Worker::shared().schedule(root)?; }
     else { drop(open(root, false)?); }
     Ok(())
 }

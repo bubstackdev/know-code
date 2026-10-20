@@ -628,6 +628,8 @@ impl Tracer<'_> {
         if depth_left == 0 {
             return Ok(());
         }
+        // A cancelled query's walk stops here, as `knowcode::graph::Gate::expand` stops the others.
+        crate::limits::check()?;
         let Some(sym) = self.symbol(self.nodes[at].id)? else { return Ok(()) };
         let depth = self.nodes[at].depth + 1;
         let edges = if dir == "out" { self.out_edges(&sym)? } else { self.in_edges(&sym)? };
@@ -1604,6 +1606,7 @@ pub fn dependents_filtered(
         // What the walk continues from for symbols listed at an earlier hop and first reached confidently at this one.
         let mut late: Vec<SymbolRow> = Vec::new();
         for sym in &frontier {
+            crate::limits::check()?;
             let mut edges = t.in_edges(sym)?;
             edges.extend(ngrx_dispatchers(conn, sym)?);
             for (dep, edge, confidence, site) in edges {

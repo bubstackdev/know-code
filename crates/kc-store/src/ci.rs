@@ -53,7 +53,7 @@ pub fn summary(conn: &Connection) -> Result<Summary> {
     out.facts = conn
         .prepare(
             "SELECT a.kind, a.name, a.value, f.path, a.line, s.name FROM ansible_facts a JOIN files f ON f.id = a.file_id
-             LEFT JOIN symbols s ON s.id = a.symbol_id WHERE f.lang = 'gitlabci' AND a.kind != 'unsupported' ORDER BY f.path, a.line, a.rowid",
+             LEFT JOIN symbols s ON s.id = a.symbol_id WHERE f.lang = 'gitlabci' ORDER BY f.path, a.line, a.rowid",
         )?
         .query_map([], |r| {
             Ok(FactRow { kind: r.get(0)?, name: r.get(1)?, value: r.get(2)?, file: r.get(3)?, line: r.get(4)?, symbol: r.get(5)?, role: None })
