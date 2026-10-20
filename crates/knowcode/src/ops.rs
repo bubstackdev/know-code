@@ -236,6 +236,51 @@ pub fn open_fresh(root: &Path, no_sync: bool) -> Result<Opened> {
     Ok(Opened { root: root.to_path_buf(), store, head, sync, refresh_pending, generation, consulted: Consulted::default() })
 }
 
+thread_local! {
+    /// Repos the answer being worked out on this thread left out because they could not be read (see [`left_out`]).
+    static LEFT_OUT: std::cell::RefCell<Vec<Incomplete>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [`open_fresh`] for `root`, one of the `roots` a query fans out over: when there are several, a repo that can't be
+/// read is left out and named in the answer (see [`left_out`]) instead of failing it. A query for one repo fails with
+/// its error, as does a cancelled query.
+pub fn open_member(roots: &[PathBuf], root: &Path, no_sync: bool) -> Result<Option<Opened>> {
+    match open_fresh(root, no_sync) {
+        Ok(o) => Ok(Some(o)),
+        Err(e) => left_out(roots, root, e).map(|()| None),
+    }
+}
+
+/// Records that the answer leaves out the repo at `root`, one of the `roots` it fans out over, because reading it
+/// failed with `e`: `missing_repo` when its checkout is gone (deleted after the workspace was listed), `failed`
+/// otherwise, each naming the repo and the error. The envelope says so (see [`add_missing`]). Returns `e` when there
+/// is no other repo to answer with, or the query was cancelled.
+pub fn left_out(roots: &[PathBuf], root: &Path, e: anyhow::Error) -> Result<()> {
+    if roots.len() < 2 || kc_store::limits::cancelled() {
+        return Err(e);
+    }
+    let entry = unreadable(root, &e);
+    LEFT_OUT.with(|l| l.borrow_mut().push(entry));
+    Ok(())
+}
+
+/// The `incomplete` entry for a repo left out of an answer because reading it failed with `e` (see [`left_out`]).
+pub fn unreadable(root: &Path, e: &anyhow::Error) -> Incomplete {
+    let name = repo_name(root);
+    if !root.join(".git").exists() {
+        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display()))
+            .with_hint("clone it there again, or `knowcode prune` to forget its index")
+    } else {
+        Incomplete::new(Reason::Failed, format!("{name}: could not be read at {}; left out of this answer: {e:#}", root.display()))
+            .with_hint("the other repos answered; fix the error and ask again")
+    }
+}
+
+/// The entries [`left_out`] recorded on this thread since the last call.
+pub fn take_left_out() -> Vec<Incomplete> {
+    LEFT_OUT.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
 impl Opened {
     /// The provenance of this repo's reading.
     pub fn provenance(&self) -> Provenance {
@@ -368,8 +413,12 @@ pub fn add_cuts(env: &mut Value) {
 
 /// Says in the envelope which repos the answer's cross-repo links left out because their checkout is gone, where
 /// they would have mattered (see [`kc_index::workspace::note_missing`]): an `incomplete` entry with reason
-/// `missing_repo` each, unless the envelope names the repo missing already.
+/// `missing_repo` each, unless the envelope names the repo missing already. Also the repos a fan-out left out because
+/// they could not be read (see [`left_out`]).
 pub fn add_missing(env: &mut Value) {
+    for i in take_left_out() {
+        push_incomplete(env, i);
+    }
     for r in kc_index::workspace::take_missing() {
         let path = r.to_string_lossy();
         if crate::contract::incomplete_of(env).iter().any(|i| i.reason == Reason::MissingRepo && i.detail.contains(path.as_ref())) {
@@ -503,7 +552,7 @@ pub fn routes(args: &Scope) -> Result<Out<Vec<(PathBuf, HttpOut)>>> {
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
     for root in &roots {
-        opened.push(open_fresh(root, args.no_sync)?);
+        opened.extend(open_member(&roots, root, args.no_sync)?);
     }
     let summaries = full_workspace(&opened, &roots)?;
     let mut out = Vec::new();
@@ -698,7 +747,7 @@ pub fn tables_with(name: Option<&str>, args: &Scope, all_callers: bool) -> Resul
     let mut models = Vec::new();
     let mut sql_hits: Vec<(PathBuf, SqlObjectOut)> = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if let Some(n) = name {
             sql_hits.extend(sql_objects(&o, n)?.into_iter().map(|s| (o.root.clone(), s)));
         }
@@ -1073,7 +1122,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     let want_manifests = kind.is_none_or(|k| matches!(k, "package" | "target" | "product"));
     let mut manifests_total = 0;
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if kind.is_none_or(|k| !matches!(k, "package" | "target" | "product")) {
             // Ties go by path and line, not by a rank: the rank was only used when cached, so the order depended on
             // cache state, and ranking ties didn't help (concept-find on replayed commits: 0 better, 0 worse).
@@ -1136,7 +1185,7 @@ pub fn locate(text: &str, limit: usize, args: &Scope) -> Result<Out<LocateData>>
     let mut items = Vec::new();
     let mut total = 0;
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         // Ties keep path order: breaking them by PageRank (the more central file first) lowered concept-search
         // recall on replayed commits (recall@10 -0.8 pts [-1.5, -0.2], 0 tasks better and 5 worse of 189).
         let texts = kc_index::textdocs::docs(root, &o.store)?;
@@ -1219,7 +1268,7 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     let mut stale_rank: Vec<Incomplete> = Vec::new();
     let mut unread_imports: Vec<Incomplete> = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let (_, bare) = query::split_dotted(name.trim());
         let deps = open_dependencies(&o, Some(bare), args.no_sync)?;
         let dep_refs = dependency_refs(&deps);
@@ -2242,7 +2291,7 @@ pub fn events(args: &Scope) -> Result<Out<Vec<(PathBuf, BusOut)>>> {
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
     for root in &roots {
-        opened.push(open_fresh(root, args.no_sync)?);
+        opened.extend(open_member(&roots, root, args.no_sync)?);
     }
     let summaries = full_workspace(&opened, &roots)?;
     let mut out = Vec::new();
@@ -2320,7 +2369,7 @@ pub fn context_raised(
     // What the answer draws on that the extractors met but didn't read (`unsupported`).
     let mut unread: Vec<Incomplete> = Vec::new();
     for root in &roots {
-        let mut o = open_fresh(root, args.no_sync)?;
+        let Some(mut o) = open_member(&roots, root, args.no_sync)? else { continue };
         if let Some(r) = repo_ansible(&o, symbol)? {
             repo_hits.push((o.root.clone(), r));
         }
@@ -2819,7 +2868,7 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
     let mut ci_cuts: Vec<Vec<String>> = Vec::new();
     let mut frontiers: Vec<(Vec<trace::Frontier>, usize)> = Vec::new();
     for root in &roots {
-        let mut o = open_fresh(root, args.no_sync)?;
+        let Some(mut o) = open_member(&roots, root, args.no_sync)? else { continue };
         let mut t = trace::trace_filtered(o.store.conn(), symbol, &opts, &edges)?;
         // A role the repo's plays use but another repo defines: traced there.
         if t.is_none()
@@ -2993,7 +3042,15 @@ fn ensure_summaries(o: &Opened, focus: &[PathBuf], full: bool) -> Result<std::sy
             o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Stale, format!("{}: only manifests and names were scanned; graph joins are not indexed", s.root.display()))
                 .with_hint("ask again without --no-sync to index the needed checkout automatically"));
         } else {
-            let (store, report) = crate::refresh::open(&s.root, false)?;
+            // A checkout that can't be read (gone since the summaries were read, a failing `git`) is left out.
+            let (store, report) = match crate::refresh::open(&s.root, false) {
+                Ok(opened) => opened,
+                Err(e) if kc_store::limits::cancelled() => return Err(e),
+                Err(e) => {
+                    o.consulted.partial.borrow_mut().push(unreadable(&s.root, &e));
+                    continue;
+                }
+            };
             o.consulted.record(&s.root, &store, report.as_ref());
             match report {
                 None => o.consulted.pending.borrow_mut().push(s.root.clone()),
@@ -4090,7 +4147,7 @@ pub fn deps(args: &Scope, with_import_sites: bool) -> Result<Out<DepsData>> {
     let mut opened = Vec::new();
     let mut fresh_rows = Vec::new();
     for root in &selected {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&selected, root, args.no_sync)? else { continue };
         fresh_rows.push((manifests::packages(o.store.conn())?, query::provided_modules(o.store.conn())?));
         opened.push(o);
     }
@@ -4099,7 +4156,7 @@ pub fn deps(args: &Scope, with_import_sites: bool) -> Result<Out<DepsData>> {
     let mut members: Vec<kc_index::workspace::RepoSummary> = summaries.iter().filter(|s| s.root.join(".git").exists()).cloned().collect();
     let mut modules: HashMap<String, &[String]> = HashMap::new();
     let mut packages = serde_json::Map::new();
-    for (root, (pkgs, mods)) in selected.iter().zip(&fresh_rows) {
+    for (root, (pkgs, mods)) in opened.iter().map(|o| &o.root).zip(&fresh_rows) {
         modules.insert(root.to_string_lossy().into_owned(), mods);
         packages.insert(repo_name(root), serde_json::to_value(pkgs)?);
         match members.iter_mut().find(|s| &s.root == root) {
@@ -4703,7 +4760,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
     let mut found = Vec::new();
     let edges = p.filter.edges()?;
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let conn = o.store.conn();
         let mut changes = Vec::new();
         let (mut old_defs, mut base) = (Vec::new(), None);
@@ -5220,7 +5277,7 @@ pub fn coupled(file: &str, limit: usize, span: &vitals::Span, args: &Scope) -> R
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let rel = Path::new(file).strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| file.to_string());
         let (mut by_file, mut spans, dropped) = vitals::coupled_in_counted(root, &o.store, &[&rel], usize::MAX, false, span)?;
         let unrecorded = dropped.get(&rel).copied().unwrap_or(0) as usize;
@@ -5362,7 +5419,7 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let conn = o.store.conn();
         let mut ids: Vec<i64> = Vec::new();
         let mut changed: Vec<String> = Vec::new();
@@ -5478,7 +5535,7 @@ pub fn hotspots(path: Option<&str>, top: usize, as_of: Option<&str>, args: &Scop
     let mut boundary_only = Vec::new();
     let mut findings = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let anchor = vitals::anchor(root, as_of)?;
         let mut v = vitals::hotspots_at(root, &o.store, anchor)?;
         if let Some(p) = path {
@@ -5618,7 +5675,7 @@ pub fn ownership(p: &OwnershipParams, args: &Scope) -> Result<Out<Vec<OwnershipR
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let anchor = vitals::anchor(root, p.as_of.as_deref())?;
         let model = Ownership::load(root, &o.store, anchor, &p.without)?;
         let rel = p.path.as_deref().map(|p| {
@@ -5743,7 +5800,7 @@ pub fn reviewers(p: &ReviewersParams, args: &Scope) -> Result<Out<Vec<ReviewersR
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let me = ownership::user_email(root);
         let rev = p.diff.as_deref().filter(|d| *d != "working");
         let changed: Vec<String> = match &p.diff {
@@ -5891,7 +5948,7 @@ pub fn overview(args: &Scope, focus: Option<&str>, map_budget: usize) -> Result<
     let mut items = Vec::new();
     let mut stale_rank: Vec<Incomplete> = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let conn = o.store.conn();
         let stats = query::stats(conn)?;
         let name = repo_name(root);
@@ -6183,8 +6240,16 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     let mut scan_files = Vec::new();
     let mut gens = Vec::new();
     let (mut searchable, mut candidates, mut check_ms) = (0, 0, 0.0f64);
-    for r in opened {
-        let (o, files, stats, content, content_gen) = r?;
+    for (r, root) in opened.into_iter().zip(&roots) {
+        let (o, mut files, stats, content, content_gen) = match r {
+            Ok(r) => r,
+            Err(e) => {
+                left_out(&roots, root, e)?;
+                continue;
+            }
+        };
+        // Numbered by the repos answering: one left out is not among them.
+        files.iter_mut().for_each(|f| f.repo = repos.len());
         gens.push(content_gen);
         searchable += stats.files;
         candidates += stats.candidates;
@@ -6353,8 +6418,16 @@ pub fn grep_ast(p: &AstParams, args: &Scope) -> Result<Out<AstData>> {
         Ok((o, files, stats, content_gen))
     });
     let (mut repos, mut scan_files, mut searchable, mut candidates, mut gens) = (Vec::new(), Vec::new(), 0, 0, Vec::new());
-    for r in opened {
-        let (o, files, stats, content_gen) = r?;
+    for (r, root) in opened.into_iter().zip(&roots) {
+        let (o, mut files, stats, content_gen) = match r {
+            Ok(r) => r,
+            Err(e) => {
+                left_out(&roots, root, e)?;
+                continue;
+            }
+        };
+        // Numbered by the repos answering: one left out is not among them.
+        files.iter_mut().for_each(|f| f.repo = repos.len());
         gens.push(content_gen);
         searchable += stats.files;
         candidates += stats.candidates;
@@ -6529,7 +6602,7 @@ pub fn areas(area: Option<&str>, args: &Scope) -> Result<Out<Vec<AreasRepo>>> {
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let areas = kc_index::areas::areas(root, &o.store)?;
         let picked = area.and_then(|q| areas.find(q)).map(|a| a.id);
         found.push(AreasRepo { root: o.root.clone(), areas, picked });
@@ -6596,7 +6669,7 @@ pub fn note_add(symbol: &str, text: &str, tag: Option<&str>, args: &Scope) -> Re
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if found.is_empty() && !query::definitions(o.store.conn(), symbol)?.is_empty() {
             let view = kc_index::notes::add(root, &o.store, symbol, text, tag)?;
             found.push(NotesRepo { root: o.root.clone(), notes: vec![view] });
@@ -6616,7 +6689,7 @@ pub fn note_list(symbol: Option<&str>, args: &Scope) -> Result<Out<Vec<NotesRepo
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
-        let o = open_fresh(root, args.no_sync)?;
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let notes = match symbol {
             Some(s) => kc_index::notes::named(root, &o.store, s)?,
             None => kc_index::notes::all(root, &o.store)?,

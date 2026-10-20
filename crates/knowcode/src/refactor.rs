@@ -16,7 +16,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::ops::{Opened, Out, Scope, envelope, open_fresh, repo_name, target_repos};
+use crate::ops::{Opened, Out, Scope, envelope, open_fresh, open_member, repo_name, target_repos};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Occurrences: a small lexer that finds whole words and says where each sits.
@@ -1084,8 +1084,9 @@ pub fn unused(p: &UnusedParams, args: &Scope) -> Result<Out<Vec<UnusedRepo>>> {
     let kinds = kind_filter(&p.kinds)?;
     let mut opened = Vec::new();
     let mut repos = Vec::new();
-    for root in target_repos(&args.repos)? {
-        let mut o = open_fresh(&root, args.no_sync)?;
+    let roots = target_repos(&args.repos)?;
+    for root in &roots {
+        let Some(mut o) = open_member(&roots, root, args.no_sync)? else { continue };
         let files = text_files(&mut o, args.no_sync)?;
         repos.push(unused_in(&o, &files, &kinds, args.no_sync)?);
         opened.push(o);

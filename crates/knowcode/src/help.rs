@@ -711,8 +711,9 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   list, with how many of how many were shown), `hint` how to get the rest. Reasons: `capped` (a limit cut a list),
   `budget` (cut to fit max_chars, or a batch leaving inputs out), `deadline` (a time or work budget ran out), `stale`
   (answered from data that doesn't match the working tree), `failed` (files or includes could not be read; what comes
-  from them is as last indexed), `missing_repo` (a repo the answer needed isn't cloned or indexed, or its checkout was
-  deleted: such a repo is left out of cross-repo links and named where it would have joined one), `unsupported` (a
+  from them is as last indexed; also a repo, of several the answer spans, that could not be read at all), `missing_repo`
+  (a repo the answer needed isn't cloned or indexed, or its checkout was deleted: such a repo is left out of cross-repo
+  links and named where it would have joined one, or where the answer spans it), `unsupported` (a
   construct the analysis doesn't model, where known to be present: also one an extractor recognises but doesn't read,
   named with file:line, such as a DI assembly scan, SQL naming its table at run time, a publish of a message of unknown
   type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read),

@@ -2,6 +2,12 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.1.1 (unreleased)
+
+- A workspace-wide answer no longer fails because one repo can't be read (a checkout deleted while the answer was
+  worked out, a failing `git` call): it answers with the other repos and names the one left out as `missing_repo` or
+  `failed`.
+
 ## 0.1.0 (2026-10-19)
 
 The first public release, for macOS on Apple silicon and Linux on x86_64 and arm64.

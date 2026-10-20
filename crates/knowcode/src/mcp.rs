@@ -797,6 +797,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
         let _freshness = crate::refresh::Budget::enter(std::time::Duration::from_secs(2));
         // A pooled thread: what an earlier call that failed noted as missing is not this call's.
         drop(kc_index::workspace::take_missing());
+        drop(ops::take_left_out());
         kc_index::workspace::clear_cached_reads();
         let result = f();
         drop(kc_index::cache::take_touched());

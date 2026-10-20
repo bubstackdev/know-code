@@ -21,8 +21,8 @@ Agents get the same material through `kc_help contract`, `kc_help evidence` and 
 | `budget` | the answer was cut to fit a size budget (the MCP server's `max_chars`, or a batch that left inputs out) |
 | `deadline` | a time or work budget ran out before the answer was finished (a git command or search child past its deadline) |
 | `stale` | answered from data that doesn't match the working tree: a repo's workspace summary when the repo changed since its last sync, a pending first index, or derived data (areas, a file ranking) from an earlier index generation |
-| `failed` | files or includes could not be read; what comes from them is as last indexed |
-| `missing_repo` | a repo the answer needed isn't cloned or indexed, or its checkout was deleted; it is named where it would have joined a cross-repo link |
+| `failed` | files or includes could not be read; what comes from them is as last indexed. Also a repo, of several the answer spans, that could not be read at all (a `git` call failing): the answer is the other repos', and the entry names the repo and the error |
+| `missing_repo` | a repo the answer needed isn't cloned or indexed, or its checkout was deleted; it is named where it would have joined a cross-repo link, or where it was one of several repos the answer spans (deleted while the answer was worked out) |
 | `unsupported` | a construct the analysis doesn't model, where it is known to be present |
 | `policy` | the evidence policy asked for left edges out (see [Evidence policy](#evidence-policy)) |
 | `withheld` | a repo the answer read has content its privacy file blocks, which the answer may have drawn on (see [configuration](configuration.md#privacy-file)) |
