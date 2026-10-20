@@ -94,7 +94,8 @@ fn remove_claude(reg: &Registration) -> Result<()> {
         {
             bail!("Claude KnowCode plugin command changed since setup; retained");
         }
-        setup::claude_output(&reg.directory, &["plugin".as_ref(), "uninstall".as_ref(), setup::PLUGIN.as_ref(), "--scope".as_ref(), "user".as_ref(), "--keep-data".as_ref()])?;
+        // Without `--keep-data`: KnowCode keeps nothing in the plugin's data directory, so Claude Code deletes it.
+        setup::claude_output(&reg.directory, &["plugin".as_ref(), "uninstall".as_ref(), setup::PLUGIN.as_ref(), "--scope".as_ref(), "user".as_ref()])?;
         if has_plugin(&claude_json(reg, &["plugin", "list", "--json"])?) {
             bail!("Claude Code still lists {} after uninstalling it; retained in {}", setup::PLUGIN, reg.directory.display());
         }
