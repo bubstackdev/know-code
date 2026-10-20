@@ -140,8 +140,12 @@ client session afterwards.
 and update-check files and the directories they leave empty, and keeps unrelated client settings and files. In a terminal it offers to remove configuration and notes (default no); otherwise pass
 `--delete-config` or `--delete-notes`. It checks each removal against the client's own listing: a registration still
 listed is reported, the command exits non-zero, and the registration stays recorded so running `uninstall` again
-finishes it. Claude Code marks its cached copy of the plugin as orphaned and cleans it up itself. Running clients are
-not stopped.
+finishes it. Running clients are not stopped.
+
+For Claude Code, the plugin is uninstalled with its data directory (`~/.claude/plugins/data/knowcode-knowcode-local`),
+where KnowCode keeps nothing. Claude Code keeps its cached copy of the plugin, marked orphaned (`.orphaned_at`), so
+sessions still running keep working, and deletes it itself later. KnowCode leaves that copy alone: it belongs to
+Claude Code, and deleting it under a running session would break that session.
 
 `uninstall` does not remove the binary. A package manager removes what it installed. The shell installer has no
 uninstaller; for an installation it made, an `uninstall` that completes ends with the exact steps for that machine
