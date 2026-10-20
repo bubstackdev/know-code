@@ -2,6 +2,17 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.2.0 (unreleased)
+
+- `knowcode fetch-deps --into DIR` clones the git repos a repo depends on (manifest dependencies written as git
+  URLs, Terraform git module sources, GitLab CI includes of other projects, and repos whose checkout was deleted),
+  shallow, one directory each, so cross-repo answers can reach them. `--dry-run` prints the plan. DIR must be outside
+  every repo; only https and ssh remotes are cloned; a repo whose AI privacy file blocks it whole is skipped unless
+  `--include-blocked`. `--add-root` adds DIR as a workspace root. CLI only: the MCP server never clones.
+- `knowcode history deepen` fetches more history into a shallow clone (`--by N`, 1000 by default, or `--since DATE`)
+  and reports how deep it is before and after, and whether `hotspots`, `coupled`, `ownership` and `reviewers` now
+  have all the history they read.
+
 ## 0.1.1 (unreleased)
 
 - A workspace-wide answer no longer fails because one repo can't be read (a checkout deleted while the answer was

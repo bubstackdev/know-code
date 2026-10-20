@@ -96,6 +96,39 @@ base commit (`removed`), and warns about usual partners the diff leaves alone (`
 
 These read local git history only. They measure history, not who understands the code today.
 
+A shallow clone (`git clone --depth 1`, common in CI and in `fetch-deps`) has little or no history to read.
+`knowcode history deepen` fetches more: `git fetch --deepen=1000` by default, `--by N` for another number of
+commits, or `--since DATE` (`git fetch --shallow-since`). It reports the commits before and after and, for each of
+`hotspots`, `coupled` (their 365-day window), `ownership` and `reviewers` (all history), whether it now has
+everything it reads (`complete`), some (`partial`) or nothing (`none`). It writes nothing but what that fetch writes,
+and leaves a clone that isn't shallow alone. It is a CLI command only: the MCP server never fetches.
+
+## Fetching dependency repos
+
+Cross-repo answers reach only the repos you have cloned. `knowcode fetch-deps --into DIR` clones the git repos the
+current repo (or `--repo`) depends on into DIR, one directory per repo, so you can add them to the workspace. Running
+it clones; `--dry-run` prints what would be cloned from where and clones nothing. It is a CLI command only, using
+your git credentials: the MCP server never clones.
+
+- **What it finds.** Manifest dependencies written as git URLs (SwiftPM `Package.swift`, XcodeGen `project.yml`,
+  Cargo `git =`, npm `git+https:`, `git+ssh:` and `github:` specs), Terraform module sources from git
+  (`git::https://…`, `github.com/…`), GitLab CI includes of another project (cloned from the host of the repo's own
+  origin), and dependencies on a repo whose checkout was deleted (`missing_repo`), by that repo's origin. Registry
+  dependencies (NuGet, npm by version) name no repository: they are counted, not fetched. A repo with a checkout
+  already indexed is listed as `present`.
+- **How it clones.** Shallow by default (`--full` for all history; `knowcode history deepen` later), with your git
+  credentials. Only `https://`, `ssh://` and `user@host:path` remotes are cloned; others (`http://`, `file://`,
+  `git://`, local paths) are listed as `refused`.
+- **Where.** DIR is required and must be outside every git repo and indexed checkout; KnowCode never writes into an
+  existing repo. A dependency whose directory under DIR is taken by something else is `skipped`; one cloned there
+  before is `present`. When workspace roots are configured and DIR is under none of them, it says so, and
+  `--add-root` adds DIR as a root. With no roots configured it suggests `knowcode index --workspace DIR` instead,
+  since adding a root would narrow the workspace.
+- **Privacy.** Each repo is cloned without a checkout first and its AI privacy file read from the commit. A repo
+  blocked whole is removed again and listed as `blocked` (`withheld` in `incomplete`); `--include-blocked` keeps it,
+  though KnowCode still indexes and answers nothing from it.
+- **Nothing to fetch.** When no dependency names a git repo, it says so and changes nothing.
+
 ## Notes
 
 Short notes anchored to symbols, kept in the user data directory, never in the repo or the cache.
@@ -128,6 +161,8 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 | Run the MCP server on stdio | `knowcode serve` |
 | Show or change settings | `knowcode config path\|list\|get\|set\|unset\|migrate` |
 | Manage workspace roots | `knowcode workspace add\|remove\|list` |
+| Clone the git repos this repo depends on, for cross-repo answers | `knowcode fetch-deps --into DIR [--dry-run]` |
+| Fetch more history into a shallow clone | `knowcode history deepen [--by N \| --since DATE]` |
 | Check for or install an update | `knowcode self-update [--check]` |
 
 `setup claude` installs the bundled Claude Code plugin (MCP server, Grep/Glob hook and skills) through the local
@@ -249,6 +284,8 @@ Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not re
 | `grep-ast` | `-l/--lang`, `--selector`, `--inside`, `--has`, `--not-inside`, `--not-has`, `--text`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
 | `tables` | `--all-callers` |
 | `routes`, `events`, `deps` | |
+| `fetch-deps` | `--into DIR` (required), `--dry-run`, `--full`, `--add-root`, `--include-blocked` |
+| `history deepen` | `--by N`, `--since DATE` |
 | `note add` | `--tag` |
 | `note export`, `note import` | `--repo` |
 | `more` | |

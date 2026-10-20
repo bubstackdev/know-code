@@ -195,6 +195,8 @@ const QUESTIONS: &[&[&str]] = &[
     &["events"],
     &["status"],
     &["files"],
+    &["fetch-deps", "--into", "../fetched", "--dry-run"],
+    &["history", "deepen"],
 ];
 
 /// Commands that answer no question about code (see `invariants.rs`).
