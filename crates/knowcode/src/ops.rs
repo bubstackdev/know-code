@@ -7122,16 +7122,21 @@ public class OrderStore\n{\n    private readonly ShopContext _db;\n    private r
     /// Commits everything in `dir` with a fixed author.
     fn commit(dir: &Path, msg: &str) {
         let git = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let out = std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
                 .args(["-c", "user.name=t", "-c", "user.email=t@x", "-c", "commit.gpgsign=false"])
                 .args(args)
                 .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {args:?}");
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?} in {}: {}\n{}{}",
+                dir.display(),
+                out.status,
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         git(&["add", "-A"]);
         git(&["commit", "-q", "-m", msg]);
