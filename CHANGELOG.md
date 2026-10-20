@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.1.1 (unreleased)
 
+### Release
+
+- Release binaries no longer contain build-machine paths. The C code in tree-sitter and its grammars now gets the same
+  path remapping as Rust code, and each release build fails if a binary contains the builder's home or checkout path.
+
 ### Release testing
 
 - Clean-machine acceptance is one script in the repo, `scripts/acceptance/clean-machine.sh`, for macOS and Linux. It

@@ -15,9 +15,15 @@ Both [MIT](../LICENSE-MIT) and [Apache-2.0](../LICENSE-APACHE) licenses accompan
 the archives. There is no separate updater binary or background daemon.
 
 Local packaging and CI invoke `scripts/build-release` to remap builder home,
-Cargo cache, and checkout prefixes in Rust source-location strings. Debug-symbol
-stripping alone does not remove these paths. Every final artifact still needs
-the private-vocabulary scan.
+Cargo cache, and checkout prefixes in source-location strings: rustc's path-prefix
+remapping for Rust, and `-ffile-prefix-map` in `CFLAGS` and `CXXFLAGS` for the C code the
+`cc` crate compiles (tree-sitter and its grammars), appended to any flags the
+caller set. The wrapper turns on `CC_SHELL_ESCAPED_FLAGS` so a prefix containing
+spaces can be quoted. Debug-symbol stripping alone does not remove these paths.
+Each native release build then runs `scripts/check-build-paths.py`, which fails
+before attestation if any file in its archives contains the builder's home,
+Cargo home, or checkout path. Every final artifact still needs the
+private-vocabulary scan.
 
 Install the pinned version of [cargo-dist](https://axodotdev.github.io/cargo-dist/book/install.html)
 for release development. Regenerate the workflow with:
