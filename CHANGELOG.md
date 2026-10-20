@@ -2,6 +2,11 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.2.0 (unreleased)
+
+- Each index is rebuilt once on the first query after updating (index schema 20): constructs KnowCode doesn't read
+  are now kept in a table of their own. Answers are unchanged.
+
 ## 0.1.1 (2026-10-20)
 
 - A workspace-wide answer no longer fails because one repo can't be read (a checkout deleted while the answer was

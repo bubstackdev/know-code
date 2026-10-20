@@ -20,6 +20,8 @@ Each checkout gets `<cache>/repos/<name>-<hash>.sqlite`, opened in WAL mode. It 
 - symbols, references with their site (file, line, column), relations, imports and tags;
 - framework facts: routes, DI registrations, table access, bus publishes and consumers, templates, Terraform and
   Ansible facts;
+- constructs an extractor recognised but doesn't read (an assembly scan, a dynamic include), in a table of their own,
+  so an answer drawing on them says it is incomplete with reason `unsupported`;
 - a trigram content index for `search` (one row per trigram with delta-encoded file ids; file contents are not
   stored, so every candidate is verified against the working tree);
 - the words `locate` ranks by, in a contentless FTS5 table;
