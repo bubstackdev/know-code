@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.1.1 (unreleased)
 
+- Updating refreshes the Claude Code plugin: after `self-update`, and when `serve` starts with an older bundle,
+  KnowCode rewrites the bundle and runs Claude Code's plugin update. If that can't finish, it prints the
+  `knowcode setup claude` command that does. `setup claude` also moves an installed plugin to the current version.
+- The Claude Code hook script exits without starting `knowcode` for Bash commands that can't be code searches.
+
 - `status` and `kc_status` always show the AI privacy policy they apply, indexed or not: the file's state, the file
   name looked for, the global level, `block_at` and how many paths are blocked. The CLI text gives it one line.
 - `uninstall` no longer asks Claude Code to keep the plugin's data directory, where KnowCode keeps nothing. Claude
