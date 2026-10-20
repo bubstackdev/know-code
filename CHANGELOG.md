@@ -2,6 +2,14 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.1.1 (unreleased)
+
+- `status` and `kc_status` always show the AI privacy policy they apply, indexed or not: the file's state, the file
+  name looked for, the global level, `block_at` and how many paths are blocked. The CLI text gives it one line.
+- `uninstall` no longer asks Claude Code to keep the plugin's data directory, where KnowCode keeps nothing. Claude
+  Code's orphaned cache copy of the plugin is left to Claude Code, for sessions still running.
+- Tests: the shared `commit` test helper reports git's output when a fixture commit fails.
+
 ## 0.1.0 (2026-10-19)
 
 The first public release, for macOS on Apple silicon and Linux on x86_64 and arm64.
