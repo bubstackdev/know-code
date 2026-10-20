@@ -69,6 +69,8 @@ def run(args: argparse.Namespace) -> None:
             assert platform.system() == "Linux" and platform.machine() == "x86_64", "not Linux x86_64"
         if args.environment == "fresh-macos-account":
             assert platform.system() == "Darwin" and platform.machine() == "arm64", "not Apple-silicon macOS"
+        if args.environment == "clean-linux-arm64":
+            assert platform.system() == "Linux" and platform.machine() in ("aarch64", "arm64"), "not Linux arm64"
         def git(*params: str) -> str:
             return subprocess.check_output(["git", "-C", str(repo), *params], text=True).strip()
         assert git("rev-parse", "HEAD") == case["commit"], "clone must be at the acceptance manifest's exact commit"
@@ -206,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, default=Path("target/distrib"))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--environment", choices=["isolated-profile", "fresh-macos-account", "clean-linux-x86_64-container"], default="isolated-profile")
+    parser.add_argument("--environment", choices=["isolated-profile", "fresh-macos-account", "clean-linux-x86_64-container", "clean-linux-arm64"], default="isolated-profile")
     parser.add_argument("--quiet-confirmed", action="store_true", help="Operator confirms the machine was quiet; never inferred from an isolated profile")
     parser.add_argument("--machine-notes", default="", help="Record emulation, competing work, or other measurement limitations")
     run(parser.parse_args())

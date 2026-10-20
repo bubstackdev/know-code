@@ -163,6 +163,9 @@ def check(binary):
     script_flags = set()
     for f in (ROOT / "scripts").glob("**/*.py"):
         script_flags.update(re.findall(r"add_argument\(\s*(?:'-\w',\s*|\"-\w\",\s*)?['\"](--[a-z][\w-]*)['\"]", f.read_text()))
+    # Shell scripts parse their flags in a `case`: `--dry-run) …` or `-h|--help) …`.
+    for f in (ROOT / "scripts").glob("**/*.sh"):
+        script_flags.update(re.findall(r"(?m)^\s*(?:-\w\|)?(--[a-z][\w-]*)(?:\|[^)\s]*)?\)", f.read_text()))
 
     texts = {d: d.read_text() for d in docs()}
     for d, text in texts.items():
