@@ -570,7 +570,7 @@ pub struct KnowcodeServer {
 pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_trace", "kc_impact", "kc_search", "kc_more", "kc_help"];
 
 /// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the ones
-/// that answer the first question about code, so an agent sees them before it reaches for grep (about 1k tokens).
+/// that answer the first question about code, so an agent sees them before it reaches for grep (about 1.6k tokens; see eval/schema-cost.md).
 pub const ALWAYS_LOADED: &[&str] = &["kc_context", "kc_refs", "kc_impact", "kc_locate"];
 
 /// The tools a profile spec names, out of `all`: `all`, `core`, and tool names (with or without `kc_`), comma
@@ -2082,7 +2082,7 @@ mod tests {
     }
 
     /// Exactly the always-loaded tools carry Claude Code's `anthropic/alwaysLoad` mark; the rest stay deferred, and a
-    /// profile that leaves one out doesn't list it. Their schemas are the upfront cost, about 1k tokens.
+    /// profile that leaves one out doesn't list it. Their schemas are the upfront cost, about 1.6k tokens (eval/schema-cost.md).
     #[test]
     fn only_the_always_loaded_tools_are_marked() {
         let tools = server("all").tool_router.list_all();
@@ -2103,7 +2103,7 @@ mod tests {
         let mut want: Vec<String> = ALWAYS_LOADED.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(marked, want);
-        assert!(bytes <= 5_000, "always-loaded schemas {bytes} bytes, about 1k tokens budgeted");
+        assert!(bytes <= 5_000, "always-loaded schemas {bytes} bytes, about 1.6k tokens measured");
         let few = server("kc_find,kc_context").tool_router.list_all();
         let marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
         assert_eq!(marked, ["kc_context"]);
