@@ -60,7 +60,7 @@ class FreezeTests(unittest.TestCase):
                           questions_sha256=frozen.digest(questions.read_bytes()),labels=labels,
                           adjudications=[dict(id=l['id'],independent_label_sha256=frozen.canonical(l),
                                               final_label_sha256=frozen.canonical(l),resolution='Synthetic fixture only.') for l in labels]))
-        put('method',{'fixture':True});put('sampling_rules',{'fixture':True})
+        put('method',{'fixture':True});put('sampling_rules',{'fixture':True});put('protocol',{'fixture':True})
         spec=dict(format='knowcode-public-v1-freeze-1',client_sha256=frozen.digest(binary.read_bytes()),
                   files={k:dict(path=str(p),sha256=frozen.digest(p.read_bytes())) for k,p in files.items()},
                   producers={p:frozen.digest((frozen.ROOT/p).read_bytes()) for p in frozen.PRODUCERS})
@@ -76,7 +76,7 @@ class FreezeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             freeze,files,binary,_,_=self.fixture(Path(temp))
             study=frozen.FrozenStudy(freeze);study.binaries(binary,binary)
-            self.assertEqual(len(study.questions),24);self.assertEqual(len(study.order),48)
+            self.assertEqual(len(study.questions),24);self.assertEqual(len(study.order),72)
             files['method'].write_text('changed')
             with self.assertRaisesRegex(ValueError,'changed'):
                 study.unchanged()

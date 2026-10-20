@@ -1,0 +1,401 @@
+{
+  "01-read-stated-line.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 Read of AutofacServiceProvider.cs lines 1-40 includes stated line 15 (rule 1)"
+    }
+  },
+  "02-read-whole-file.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 Read with no offset/limit reads the whole stated file AutofacChildScopeProviderFactory.cs (rule 1)"
+    }
+  },
+  "03-read-far-range.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2 reads AutofacProviderFactory.cs 200-249, far from stated lines 12-69; t3 reads an unmentioned file; not a re-check"
+    }
+  },
+  "04-read-unrelated-file.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2/t3 read files the answer never mentions (ContainerBuilderExtensions.cs, README.md); no grep; not a re-check"
+    }
+  },
+  "05-relative-sed.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "AMBIGUOUS: t2 sed -n 10,30p on a bare relative path src/.../AutofacServiceProvider.cs (no cd shown; read as relative to the repo root) covers stated line 15 (rule 1)"
+    }
+  },
+  "06-impact-cat-file.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 cat of ServiceCollectionExtensions.cs, a file the impact tree states (lines 20/22), reads the whole file (rule 1)"
+    }
+  },
+  "07-find-sed-near.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 sed -n '5,20p' of the stated class file includes stated line 11 (rule 1)"
+    }
+  },
+  "08-sed-far-range.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2 sed -n '180,220p' of AutofacServiceProviderTests.cs; only stated line in that file is 15, far away; not a re-check"
+    }
+  },
+  "09-head-n.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 head -n 30 of AutofacServiceProvider.cs covers lines 1-30, including stated line 15 (rule 1)"
+    }
+  },
+  "10-tail-plus.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 tail -n +35 of KeyedResolutionBenchmark.cs reads line 35 to end, which includes stated line 40 (rule 1)"
+    }
+  },
+  "11-grep-stated-symbol.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 grep -rn for AutofacProviderFactory, the symbol asked about and defined in the answer (rule 2)"
+    }
+  },
+  "12-grep-e-caller.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 grep -e 'Ctor_NullLifetimeScope' -e 'Dispose': first pattern is a caller the answer named (rule 2)"
+    }
+  },
+  "13-trace-rg-callee.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 rg for GetKeyedService, a callee named in the trace tree (rule 2)"
+    }
+  },
+  "14-xargs-grep.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 find ... | xargs grep -n 'AddAutofac': AddAutofac is a caller named in the tree (rule 2); the find -name '*.cs' part alone would not count"
+    }
+  },
+  "15-grep-in-stated-file.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 grep -n 'return' is a generic word, but it is restricted to KeyedResolutionBenchmark.cs, a stated file (rule 2)"
+    }
+  },
+  "16-grep-generic-words.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2/t3 grep for generic words ('public class', 'Task') over directories, not stated files; not a re-check"
+    }
+  },
+  "17-grep-unrelated-name.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2 grep for AutofacRegistration and t3 for ConfigureContainer, names the answer never states; not a re-check"
+    }
+  },
+  "18-grep-substring-near-miss.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: t2 pattern 'AutofacProviderFactory' contains stated AutofacServiceProvider only as a prefix, not as a whole identifier; t3 'ServiceProvider' is a fragment of it; neither counts (rule 2 whole-identifier)"
+    }
+  },
+  "19-grep-short-name.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: t2 grep -rnw 'fee' over the payments/ directory; 'fee' is stated but shorter than 4 chars, never counts; directory, not a stated file"
+    }
+  },
+  "20-find-name-stated-file.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 find -name 'ServiceCollectionExtensions.cs' looks for a file the locate answer named (rule 2)"
+    }
+  },
+  "21-find-name-unrelated.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2 find -name '*.csproj' and t3 ls of the src dir look for nothing the answer stated; not a re-check"
+    }
+  },
+  "22-find-name-contains-symbol.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 find -name '*KeyedResolutionBenchmark*' looks for a name containing a stated symbol (class KeyedResolutionBenchmark) (rule 2)"
+    }
+  },
+  "23-reask-identical.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 is the same tool (kc_refs) with exactly the same arguments (rule 3)"
+    },
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "nothing after t2 covers it"
+    }
+  },
+  "24-similar-call-not-reask.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: t2 is kc_refs on the same symbol but with an extra limit argument, t3 is kc_context on it: different tool/arguments, not a re-ask; no plain calls"
+    },
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "nothing after t2 covers it (t3 is a different tool)"
+    },
+    "t3": {
+      "rechecked": false,
+      "scored": true,
+      "why": "last call; nothing after it"
+    }
+  },
+  "25-plain-before-only.jsonl": {
+    "t3": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t1 Read and t2 grep would cover it but come BEFORE the answer; nothing after; not a re-check"
+    }
+  },
+  "26-multi-partial.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t4 Read of KeyedResolutionBenchmark.cs 30-59 includes stated line 40 (rule 1)"
+    },
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "no later call touches the child-scope factory files or names; t4 and t5 cover other answers"
+    },
+    "t3": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t5 grep for CreateServiceProvider, a member the context answer named (rule 2)"
+    }
+  },
+  "27-no-knowcode.jsonl": {},
+  "28-error-then-read.jsonl": {
+    "t1": {
+      "rechecked": null,
+      "scored": false,
+      "why": "error result (is_error); not scored"
+    }
+  },
+  "29-empty-answer.jsonl": {
+    "t1": {
+      "rechecked": null,
+      "scored": false,
+      "why": "empty answer: no locations, no symbols (note only); not scored even though t2 greps the same text"
+    }
+  },
+  "30-impact-read-test-line.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 Read of AssumedBehaviorTests.cs 140-154 includes stated lines 140 and 146 (rule 1)"
+    }
+  },
+  "31-trace-unrelated.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2 reads AutofacLifetimeScopeExtensions.cs (not in the tree); t3 greps 'IServiceScopeFactory' (not stated); not a re-check"
+    }
+  },
+  "32-slack-edge.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "TRICKY: t2 Read of KeyedResolutionBenchmark.cs starts at 43, 3 lines after stated line 40; within 'a few lines of slack' (rule 1)"
+    }
+  },
+  "33-offset-no-limit-past.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: t2 Read of AutofacServiceProviderTests.cs from line 100 with no limit; the only stated line there is 15, well before the range; not a re-check"
+    }
+  },
+  "34-reask-reordered-keys.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "TRICKY: t2 is kc_refs with the same arguments in a different key order; same arguments (rule 3)"
+    },
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "nothing after it"
+    }
+  },
+  "35-awk-range.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 awk 'NR>=1 && NR<=25' of the stated test file covers stated line 9 (rule 1)"
+    }
+  },
+  "36-wc-stated-file.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "AMBIGUOUS: t2 wc -l of stated KeyedResolutionBenchmark.cs counts lines but reads no content; wc is not a read or search under rules 1-2; labelled not a re-check"
+    }
+  },
+  "37-ls-stated-dir.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t2 ls of the directory holding stated files lists names only; not a read or search of a stated file"
+    }
+  },
+  "38-locate-file-no-line.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "TRICKY: locate states AutofacWebApplicationFactory.cs with no line, so any read of it counts; t2 Read at 300-319 (rule 1, file without line)"
+    }
+  },
+  "39-search-then-grep.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 grep for UseProviderFactory, the identifier the kc_search call asked about and that the hits show (rule 2)"
+    }
+  },
+  "40-grep-regex-alternation.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 grep -E 'class (AutofacServiceProvider|AutofacRegistration)\\b' contains stated AutofacServiceProvider as a whole identifier (rule 2)"
+    }
+  },
+  "41-py-context-read.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 Read of payments/refunds.py 30-59 includes stated line 42 (definition) (rule 1)"
+    }
+  },
+  "42-py-impact-grep-method.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "TRICKY: t2 grep -rn 'charge(' \u2014 'charge' looks generic but is the stated method name (6 chars) and the symbol asked about (rule 2)"
+    }
+  },
+  "43-sibling-program-cs.jsonl": {
+    "t1": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: tree states test/Integration.Net10/Program.cs:10,12; t2 reads test/Integration.Net8/Program.cs 1-20, a different file the tree does not mention; not a re-check"
+    }
+  },
+  "44-reask-interleaved.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t3 repeats kc_refs with identical arguments (rule 3)"
+    },
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "nothing later touches its files or names"
+    },
+    "t3": {
+      "rechecked": false,
+      "scored": true,
+      "why": "last call; nothing after it"
+    }
+  },
+  "45-error-then-retry.jsonl": {
+    "t1": {
+      "rechecked": null,
+      "scored": false,
+      "why": "error result; not scored"
+    },
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: t2 is a retry of an errored call; t3 greps 'ILifetimeScope' (not stated in the refs answer); nothing later covers t2"
+    }
+  },
+  "46-before-and-after.jsonl": {
+    "t2": {
+      "rechecked": false,
+      "scored": true,
+      "why": "t1 grep of a stated symbol is BEFORE the answer and does not count; t3 Read of an unmentioned file; not a re-check"
+    }
+  },
+  "47-py-callee-grep.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 grep for record_ledger_entry, a callee the answer named (rule 2)"
+    }
+  },
+  "48-read-between-answers.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t2 Read of AutofacServiceProvider.cs 1-40 covers stated line 15 (rule 1)"
+    },
+    "t3": {
+      "rechecked": false,
+      "scored": true,
+      "why": "TRICKY: also states AutofacServiceProvider.cs:15, but the only read of it (t2) came BEFORE this answer; nothing after"
+    }
+  },
+  "49-dotdot-path.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "AMBIGUOUS-ish: t2 Read path test/../src/.../AutofacServiceProvider.cs normalizes to the stated file; lines 10-29 include 15 (rule 1)"
+    }
+  },
+  "50-py-mixed.jsonl": {
+    "t1": {
+      "rechecked": true,
+      "scored": true,
+      "why": "t3 grep -n 'amount' restricted to jobs/chargebacks.py, a file the answer named (rule 2); t2 read of api/views.py 300-339 is far from stated line 88 and does not count"
+    },
+    "t4": {
+      "rechecked": false,
+      "scored": true,
+      "why": "nothing after it"
+    }
+  }
+}

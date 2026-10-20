@@ -1,0 +1,92 @@
+{
+  "format": 1,
+  "stage": "subject scope recorded; questions pending; no scored runs",
+  "policy_sha256": "fdf92f2e01625bd85293e82b467ff84db3db3dedd7854c0db9b3c07dfb39aa47",
+  "census_sha256": "5e40c167d32bd68bf4314c816a0ae74d1d8484e3876ef92a171785e4177a2d9d",
+  "source_receipt_sha256": "2f833f92254341bc1341efb96ab419fe0687dfe65971771036ed608da7126a92",
+  "manifest_sha256": "a7fca3b431744f3dedf57bd3609bdda3f42847411ebcdcd9b626086beda6696c",
+  "tool_sha256": "3de4f12bf9ea393e80578ae6341b2dfbb55a45ea8e0e9504180ae3eccf24300a",
+  "census_tool_sha256": "aa3edec6e4a3b5834b9376064c1c3623d43e36e0d999e7322b686359b203bbe3",
+  "files_sha256": "ab1ab1d898218ce0e9c9f03db9053d8302adad7123d9b3c5fa9a355207c7c5a9",
+  "files": 20969,
+  "eligible_by_repo": {
+    "autofac": 268,
+    "autofac-di": 18,
+    "bitwarden-clients": 4764,
+    "bitwarden-server": 3684,
+    "jellyfin-server": 1875,
+    "jellyfin-web": 833
+  },
+  "exclusion_reasons": {
+    "flag:dependency-or-vendor-path": 10,
+    "flag:generated-filename": 549,
+    "flag:generated-header": 549,
+    "flag:sample-or-benchmark-path": 4,
+    "flag:test-path": 3667,
+    "outside-primary-source-roots": 2685,
+    "outside-subject-languages": 5550
+  },
+  "project_evidence": [
+    {
+      "repo": "autofac",
+      "path": "src/Autofac/Autofac.csproj",
+      "sha256": "eeb799073c44418c6e5964446331de9a846b6ed74eb342163f6a975f198fd5a5"
+    },
+    {
+      "repo": "autofac-di",
+      "path": "src/Autofac.Extensions.DependencyInjection/Autofac.Extensions.DependencyInjection.csproj",
+      "sha256": "526d8c4f9a2bbbd79f0c03b076aae03311b675d9fed3648192d2d3d4e0e3b684"
+    },
+    {
+      "repo": "bitwarden-clients",
+      "path": "package.json",
+      "sha256": "bb2b47485ccf7e3a82042b4d7677b95931c89a9ad4883260b03fe58bab6a304d"
+    },
+    {
+      "repo": "bitwarden-server",
+      "path": "src/Api/Api.csproj",
+      "sha256": "193eef21caeb33577fc835ebed3f6ba010113d956954df3a844f0d85a25284d2"
+    },
+    {
+      "repo": "bitwarden-server",
+      "path": "src/Core/Core.csproj",
+      "sha256": "2b50c193061e536e75240f8254e856d04f3110c72872ad3e56746b7a2e517c4c"
+    },
+    {
+      "repo": "bitwarden-server",
+      "path": "util/Server/Server.csproj",
+      "sha256": "ffb39179c41afae43f2db5e8f582c9aa05554e6ed53155db184101d4431d38cd"
+    },
+    {
+      "repo": "bitwarden-server",
+      "path": "AppHost/AppHost.csproj",
+      "sha256": "e63a68bbefdc4dfecbc87226e06d25b85487daf750b0d7b28c1131deb85b0bd9"
+    },
+    {
+      "repo": "jellyfin-server",
+      "path": "Jellyfin.Api/Jellyfin.Api.csproj",
+      "sha256": "ef1bf8f14fcc6778553896d3ba97799147c23ba07b7bee7537d0b720e90c9486"
+    },
+    {
+      "repo": "jellyfin-server",
+      "path": "Jellyfin.Server/Jellyfin.Server.csproj",
+      "sha256": "b13b5a29bfc98b39076966a73ce9217c1e1360c0857c4954fa81b4db87c102d1"
+    },
+    {
+      "repo": "jellyfin-server",
+      "path": "MediaBrowser.Controller/MediaBrowser.Controller.csproj",
+      "sha256": "3917abdb4cf82be2e7f598ab23ddcc683c3b45d0d0433b38535591dbc35d5084"
+    },
+    {
+      "repo": "jellyfin-server",
+      "path": "src/Jellyfin.Extensions/Jellyfin.Extensions.csproj",
+      "sha256": "fcc065f9bba6394ccc5f89a4e5fa0ab1630f056dd58b547b3561590fc5ffe6e0"
+    },
+    {
+      "repo": "jellyfin-web",
+      "path": "package.json",
+      "sha256": "52bfc380cce471a64d3a2f66a67677b6c8c2cebc600556d5d08ed2b1053a56e5"
+    }
+  ],
+  "source_availability": "All exported files remain available to both arms and labellers; eligibility only controls sampling subjects."
+}

@@ -17,6 +17,10 @@ macro_rules! release_repo { () => { "bubstackdev/knowcode" } }
 const REPO: &str = release_repo!();
 const API: &str = concat!("https://api.github.com/repos/", release_repo!(), "/releases/latest");
 const DOWNLOAD: &str = concat!("https://github.com/", release_repo!(), "/releases/download");
+/// The Homebrew tap releases publish the formula to (dist-workspace.toml's `tap`, checked by a test below), and the
+/// formula's name. Homebrew names a `<owner>/homebrew-<name>` repository `<owner>/<name>`.
+macro_rules! tap_repo { () => { "bubstackdev/homebrew-tap" } }
+const FORMULA: &str = "knowcode";
 const DAY: u64 = 24 * 60 * 60;
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -84,6 +88,20 @@ impl Cache {
 fn owner() -> &'static str { REPO.split_once('/').map_or(REPO, |(owner, _)| owner) }
 fn repo_name() -> &'static str { REPO.split_once('/').map_or(REPO, |(_, name)| name) }
 
+/// The command that upgrades a Homebrew install: `brew upgrade bubstackdev/tap/knowcode`.
+fn brew_upgrade() -> String {
+    let (owner, name) = tap_repo!().split_once('/').expect("owner/name");
+    format!("brew upgrade {owner}/{}/{FORMULA}", name.strip_prefix("homebrew-").unwrap_or(name))
+}
+
+/// Whether `exe` runs from a Homebrew keg: Homebrew writes INSTALL_RECEIPT.json at the root of each keg
+/// (`Cellar/knowcode/<version>/`), above `bin/knowcode`. The `bin` symlink Homebrew links is resolved first.
+fn homebrew_keg(exe: &Path) -> bool {
+    let exe = fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    exe.ancestors().skip(1).any(|dir| dir.join("INSTALL_RECEIPT.json").is_file())
+}
+fn homebrew() -> bool { std::env::current_exe().is_ok_and(|exe| homebrew_keg(&exe)) }
+
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
 fn due(at: u64, clock: u64) -> bool { at == 0 || clock.saturating_sub(at) >= DAY || at > clock.saturating_add(DAY) }
 fn version(tag: &str) -> Result<Version> { Ok(Version::parse(tag.strip_prefix('v').unwrap_or(tag))?) }
@@ -103,7 +121,8 @@ fn schedule() -> Result<()> {
     if let Some(tag) = state.latest.as_ref().filter(|tag| newer(tag))
         && (state.notified_version.as_ref() != Some(tag) || due(state.notified_at, clock))
     {
-        eprintln!("knowcode: {tag} is available; run `knowcode self-update`. Disable automatic checks with `knowcode config set update.check false`.");
+        let how = if homebrew() { brew_upgrade() } else { "knowcode self-update".into() };
+        eprintln!("knowcode: {tag} is available; run `{how}`. Disable automatic checks with `knowcode config set update.check false`.");
         state.notified_version = Some(tag.clone());
         state.notified_at = clock;
         notified = true;
@@ -231,6 +250,9 @@ fn verify(path: &Path, expected: &str) -> Result<()> {
 }
 
 pub fn self_update(check_only: bool) -> Result<()> {
+    // `brew upgrade` replaces the keg without running self-update; `serve` then refreshes the plugin bundle.
+    let brew = homebrew();
+    if brew && !check_only { bail!("Homebrew manages this install; run `{}`", brew_upgrade()); }
     let installation = if check_only { None } else { Some(installation()?) };
     let scratch = Scratch::new(&kc_index::cache_dir()?.join("updates"))?;
     let release = fetch(&scratch)?;
@@ -238,7 +260,11 @@ pub fn self_update(check_only: bool) -> Result<()> {
         println!("KnowCode {CURRENT} is current (latest stable release: {}).", release.version);
         return Ok(());
     }
-    if check_only { println!("KnowCode {} is available (installed: {CURRENT}); run `knowcode self-update` or upgrade through your package manager.", release.version); return Ok(()); }
+    if check_only {
+        let how = if brew { format!("`{}`", brew_upgrade()) } else { "`knowcode self-update` or upgrade through your package manager".into() };
+        println!("KnowCode {} is available (installed: {CURRENT}); run {how}.", release.version);
+        return Ok(());
+    }
     let (prefix, receipt, receipt_before) = installation.expect("checked above");
     let Some(_cache) = Cache::open(false)? else { bail!("another update check is running; retry shortly"); };
     let installer = scratch.path.join("installer.sh");
@@ -293,16 +319,42 @@ mod tests {
     fn the_release_repository_is_named_once_and_matches_the_package() {
         assert_eq!(env!("CARGO_PKG_REPOSITORY"), format!("https://github.com/{REPO}"));
         assert_eq!((owner(), repo_name()), ("bubstackdev", "knowcode"));
+        // Releases publish the formula to the tap that self-update names, under the package's name.
+        let dist = include_str!("../../../dist-workspace.toml");
+        assert_eq!(tap_repo!(), format!("{}/homebrew-tap", owner()));
+        assert!(dist.contains(&format!("\ntap = \"{}\"\n", tap_repo!())), "dist-workspace.toml's tap");
+        assert!(dist.contains(&format!("\npackages = [\"{FORMULA}\"]\n")) && !dist.contains("\nformula ="), "formula name");
+        assert_eq!(FORMULA, env!("CARGO_PKG_NAME"));
+        assert_eq!(brew_upgrade(), "brew upgrade bubstackdev/tap/knowcode");
+    }
+
+    #[test]
+    fn a_binary_in_a_homebrew_keg_is_recognized_through_its_bin_symlink() {
+        let base = std::env::temp_dir().join(format!("knowcode-keg-{}", std::process::id()));
+        let keg = base.join("Cellar/knowcode/0.1.1");
+        fs::create_dir_all(keg.join("bin")).unwrap();
+        fs::create_dir_all(base.join("bin")).unwrap();
+        let exe = keg.join("bin/knowcode");
+        fs::write(&exe, "").unwrap();
+        let link = base.join("bin/knowcode");
+        std::os::unix::fs::symlink(&exe, &link).unwrap();
+        assert!(!homebrew_keg(&exe) && !homebrew_keg(&link), "no receipt: not a Homebrew install");
+        fs::write(keg.join("INSTALL_RECEIPT.json"), "{}").unwrap();
+        assert!(homebrew_keg(&exe) && homebrew_keg(&link));
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
     fn only_newer_stable_precedence_not_build_metadata_triggers_a_notice() {
-        assert!(!newer("v0.1.0"));
-        assert!(!newer("0.1.0+other-build"));
-        assert!(!newer("v0.2.0-rc.1"));
+        // Relative to this build's own version, so the test holds at every release.
+        let v = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        let (major, minor, patch) = (v.major, v.minor, v.patch);
+        assert!(!newer(&format!("v{major}.{minor}.{patch}")));
+        assert!(!newer(&format!("{major}.{minor}.{patch}+other-build")));
+        assert!(!newer(&format!("v{major}.{}.0-rc.1", minor + 1)));
         assert!(!newer("not-a-version"));
-        assert!(newer("v0.1.1"));
-        assert!(newer("0.2.0+build"));
+        assert!(newer(&format!("v{major}.{minor}.{}", patch + 1)));
+        assert!(newer(&format!("{major}.{}.0+build", minor + 1)));
     }
 
     #[test]

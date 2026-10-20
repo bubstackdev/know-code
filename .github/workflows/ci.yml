@@ -36,6 +36,35 @@ jobs:
       - name: Plan all release targets without publishing
         run: dist plan --output-format=json --no-local-paths
 
+  # Release runs only (the release workflow calls this one on a tag push): the Homebrew tap must be public and the
+  # tap token able to push to it, before anything is published. Pull requests and pushes to main skip this job and
+  # need no secret.
+  homebrew-tap:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The Homebrew tap is public and HOMEBREW_TAP_TOKEN can push to it
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. A maintainer creates it as docs/releasing.md describes."
+            exit 1
+          fi
+          if ! repo=$(gh api repos/bubstackdev/homebrew-tap); then
+            echo "::error::HOMEBREW_TAP_TOKEN can't read bubstackdev/homebrew-tap (expired, or not scoped to it)."
+            exit 1
+          fi
+          if [ "$(jq -r '.private' <<<"$repo")" != "false" ]; then
+            echo "::error::bubstackdev/homebrew-tap is private; Homebrew users couldn't tap it."
+            exit 1
+          fi
+          if [ "$(jq -r '.permissions.push' <<<"$repo")" != "true" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN can't push to bubstackdev/homebrew-tap (needs Contents: read and write)."
+            exit 1
+          fi
+          echo "bubstackdev/homebrew-tap is public and the tap token can push to it."
+
   test:
     name: test (${{ matrix.os }})
     strategy:

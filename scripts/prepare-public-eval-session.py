@@ -57,7 +57,7 @@ def prepare(manifest, source, plan_root, session_id, out):
             raise ValueError('plan '+name+' hash differs')
     orders = [json.loads(line) for line in captured[plan_root/'order.jsonl'].decode().splitlines() if line.strip()]
     matches = [row for row in orders if row.get('session') == session_id]
-    if len(matches) != 1 or matches[0].get('arm') not in ('plain', 'knowcode'):
+    if len(matches) != 1 or matches[0].get('arm') not in ('plain', 'knowcode', 'knowcode-unprompted'):
         raise ValueError('session is absent, duplicated or has an unknown arm')
     selected = matches[0]
     questions = [json.loads(line) for line in captured[plan_root/'questions.jsonl'].decode().splitlines() if line.strip()]

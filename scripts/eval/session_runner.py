@@ -113,7 +113,7 @@ def _execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_co
     write(out/'started.json',dict(format=1,freeze_sha256=study.freeze_sha256,session=selected,
                                  stage='validated study; execution started',process_timeout_seconds=timeout))
     roots=None
-    if selected['arm']=='knowcode':
+    if selected['arm'] in bare_client.KNOWCODE_ARMS:
         preparer=load('runner_neutral_index',ROOT/'scripts/prepare-public-eval-index.py')
         preparer.prepare(study.inputs['manifest'],study.inputs['source_receipt'],session)
         roots={r['name']:session/'control/index'/r['name'] for r in study.receipt['repos']}

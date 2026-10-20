@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "stage": "draft paired schedule; not frozen; no agents or scored runs",
+  "scored_runs": 0,
+  "ready_to_run": false,
+  "seed": "knowcode-public-v1-run-order-2026-10-16",
+  "manifest_sha256": "a7fca3b431744f3dedf57bd3609bdda3f42847411ebcdcd9b626086beda6696c",
+  "source_receipt_sha256": "2f833f92254341bc1341efb96ab419fe0687dfe65971771036ed608da7126a92",
+  "verified_source_files": 20969,
+  "source_files_sha256": "f7090dd6326045abf8bacd973bd9b318e1e0d16943651b638ee2ee92900a6396",
+  "questions_input_sha256": "42cef56a0d4b040996b925cd71fa46641d7951a334d1d52657efecd154f79e40",
+  "operator_questions_sha256": "f5edfcfeb7ccb3b2243a294764c4f2644fb60895977a464d09d492b981db6110",
+  "order_sha256": "adf101f79b785f7866794b90d69be76be4bc9fd8d0d25faa6d2f82996b71c9ef",
+  "config_sha256": "1bb54c66f381b83947c8f24376048b7972a0d98afc3ec42170bf0131d9b76c7b",
+  "config": {
+    "client": "claude-code",
+    "client_version": "2.1.304",
+    "effort": "medium",
+    "knowcode_profile": "all",
+    "knowcode_sha256": "42c8fd09836dbe9b2e48bb4a0fcac1e2f01ed1701bb234e692f850a68ef92b45",
+    "model": "claude-opus-5-5",
+    "research_call_budget": 40
+  },
+  "producer_hashes": {
+    "scripts/plan-public-eval.py": "11d2f4eb758a83210e04d05cd7e81aa1ef7210e8005fb8ba731a1141d2ebea6b",
+    "scripts/census-public-eval.py": "86a9b3842170ee2e346cd44ab3bdc9a9707fd445110d7624854b36d365839f3f",
+    "scripts/eval/neutral/schema.py": "14f88939bb8d4bd9e5138adac79ec8486e715ca82e0d93e62e5ddf3875a50a87"
+  },
+  "questions": 24,
+  "sessions": 72,
+  "strata": {
+    "definition-lookup": 6,
+    "di-implementations": 6,
+    "http-cross-repo": 6,
+    "two-hop-impact": 6
+  },
+  "arms": {
+    "plain": [
+      "grep",
+      "find",
+      "read"
+    ],
+    "knowcode": [
+      "grep",
+      "find",
+      "read",
+      "knowcode-mcp"
+    ],
+    "knowcode-unprompted": [
+      "grep",
+      "find",
+      "read",
+      "knowcode-mcp (not named in the brief)"
+    ]
+  },
+  "order_rule": "Each arm sorts task IDs by SHA256(seed+NUL+arm+NUL+ID), ID as tie-breaker. Rotate arms in ARMS order; starting arm uses SHA256(seed+NUL+first-arm) modulo the number of arms.",
+  "remaining_gates": [
+    "accepted subject/sampling linkage and all rejections",
+    "complete source labels and independent review with adjudications",
+    "final common model/client/budget and actual binary/schema verification",
+    "separate source-identical isolated sessions with labels, memory and unrelated plugins inaccessible",
+    "hash-bound freeze of sampling, questions, labels, run order, configuration and runner"
+  ],
+  "timing_policy": "Record load/concurrency. Wall-clock comparisons require established quiet conditions; this plan asserts none.",
+  "isolation_policy": "Fresh sessions and separate source copies for both arms. Never expose labels, personal memory, unrelated MCP servers or upstream agent instructions. No source edits, notes or network. Controls only evaluation-owned processes."
+}

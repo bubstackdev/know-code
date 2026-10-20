@@ -45,7 +45,8 @@ class PublicPlanTests(unittest.TestCase):
         order = planner.schedule(questions, 'seed-one')
         self.assertEqual(order, planner.schedule(list(reversed(questions)), 'seed-one'))
         self.assertNotEqual(order, planner.schedule(questions, 'seed-two'))
-        self.assertEqual(len({row['session'] for row in order}), 40)
+        self.assertEqual(len({row['session'] for row in order}), 20*len(planner.ARMS))
+        self.assertEqual(planner.ARMS, ('plain', 'knowcode', 'knowcode-unprompted'))
         for arm in planner.ARMS:
             self.assertEqual({row['question_id'] for row in order if row['arm'] == arm}, {q['id'] for q in questions})
             self.assertEqual(sum(row['arm'] == arm for row in order), 20)
@@ -61,7 +62,7 @@ class PublicPlanTests(unittest.TestCase):
             self.assertFalse(result['ready_to_run'])
             self.assertEqual(result['scored_runs'], 0)
             self.assertEqual(result['verified_source_files'], 1)
-            self.assertEqual(result['sessions'], 16)
+            self.assertEqual(result['sessions'], 8*len(planner.ARMS))
             self.assertIsNone(result['config'])
             self.assertEqual({p.name for p in (base/'out').iterdir()}, {'plan.json', 'questions.jsonl', 'order.jsonl'})
             self.assertEqual(result['order_sha256'], hashlib.sha256((base/'out/order.jsonl').read_bytes()).hexdigest())
