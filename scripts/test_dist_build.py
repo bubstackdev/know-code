@@ -1,7 +1,6 @@
 """Compile Rust and C source-location fixtures through the release wrapper without network access."""
 import json
 import os
-import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -206,15 +205,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(local.index("bash scripts/build-release dist "), local.index(check))
         self.assertLess(local.index(check), local.index("- name: Attest\n"))
 
-    def job(self, name: str) -> str:
-        """One job's text in release.yml, up to the next job."""
-        body = self.release.split(f"\n  {name}:\n", 1)[1]
-        return re.split(r"\n  [a-z][a-z0-9-]*:\n", body, maxsplit=1)[0]
-
     def test_contents_write_only_where_a_release_is_created(self):
         self.assertIn('permissions:\n  "contents": "read"\n', self.release)
         self.assertEqual(self.release.count('"contents": "write"'), 1)
-        self.assertIn('"contents": "write"', self.job("host"))
+        host = self.release.split("\n  host:\n", 1)[1].split("\n  announce:\n", 1)[0]
+        self.assertIn('"contents": "write"', host)
         self.assertIn("permissions:\n  contents: read\n", self.ci)
         self.assertNotIn("contents: write", self.ci)
 
@@ -225,63 +220,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("| sh", script)
         self.assertRegex(script, r"0\.33\.0\) expected=[0-9a-f]{64} ;;")
 
-    def test_tags_and_secrets_reach_shell_only_through_the_environment(self):
+    def test_only_the_shell_installer_is_published_and_tags_reach_shell_through_the_environment(self):
+        self.assertNotIn("homebrew", self.release.lower())
+        self.assertNotIn("secrets.", self.release.replace("secrets.GITHUB_TOKEN", ""))
         self.assertNotIn("axo.dev", self.release.split("\njobs:\n", 1)[1])
         for block in self.release.split("run: |")[1:]:
             body = block.split("\n      - ", 1)[0]
             self.assertNotIn("github.ref_name", body)
             self.assertNotIn("needs.plan.outputs.tag", body)
-            self.assertNotIn("secrets.", body)
-        # The only secret besides GITHUB_TOKEN is the tap token, and only the Homebrew publish job uses it.
-        secrets = set(re.findall(r"secrets\.([A-Za-z0-9_]+)", self.release))
-        self.assertEqual(secrets, {"GITHUB_TOKEN", "HOMEBREW_TAP_TOKEN"})
-        token = "${{ secrets.HOMEBREW_TAP_TOKEN }}"
-        self.assertEqual(self.release.count(token), 1)
-        self.assertIn(token, self.job("publish-homebrew-formula"))
-
-    def test_homebrew_job_is_least_privilege_with_its_own_commit_identity(self):
-        job = self.job("publish-homebrew-formula")
-        self.assertIn('    permissions:\n      "contents": "read"\n', job)
-        self.assertNotIn('"write"', job)
-        self.assertIn('GITHUB_USER: "KnowCode release bot"\n', job)
-        email = re.search(r'GITHUB_EMAIL: "([^"]+)"\n', job).group(1)
-        self.assertTrue(email.endswith("@users.noreply.github.com"), email)
-        for variable in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
-            self.assertIn(f'{variable}="${{GITHUB_USER}}"', job)
-        for variable in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
-            self.assertIn(f'{variable}="${{GITHUB_EMAIL}}"', job)
-        # The checkout doesn't keep a credential; the tap token reaches only the push step, through `env:`.
-        self.assertIn('persist-credentials: false\n          repository: "bubstackdev/homebrew-tap"\n', job)
-        steps = job.split("\n      - ")
-        with_token = [step for step in steps if "HOMEBREW_TAP_TOKEN" in step]
-        self.assertEqual(len(with_token), 1)
-        self.assertTrue(with_token[0].startswith("name: Push formula files\n        env:\n"
-                                                 "          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}\n"),
-                        with_token[0])
-        self.assertNotIn("brew ", with_token[0])
-        # Publishing to the tap waits for the GitHub Release, and the announcement waits for the tap.
-        self.assertIn("    needs:\n      - plan\n      - host\n", job)
-        self.assertIn("needs.publish-homebrew-formula.result == 'success'", self.job("announce"))
-
-    def test_tag_ci_checks_the_tap_and_prs_need_no_secret(self):
-        workflows = Path(__file__).resolve().parent.parent / ".github/workflows"
-        ci = (workflows / "ci.yml").read_text()
-        self.assertIn("secrets: inherit", self.release)
-        tap = ci.split("\n  homebrew-tap:\n", 1)[1].split("\n\n  ", 1)[0]
-        self.assertIn("if: startsWith(github.ref, 'refs/tags/')", tap)
-        self.assertIn("gh api repos/bubstackdev/homebrew-tap", tap)
-        self.assertIn(".permissions.push", tap)
-        self.assertIn(".private", tap)
-        self.assertIn("HOMEBREW_TAP_TOKEN is not set", tap)
-        # No other CI job reads a secret, so pull requests and pushes to main run without one.
-        self.assertEqual(ci.count("secrets."), 1)
-        self.assertIn("secrets.HOMEBREW_TAP_TOKEN", tap)
-
-    def test_dist_publishes_the_shell_installer_and_the_homebrew_formula(self):
-        settings = (Path(__file__).resolve().parent.parent / "dist-workspace.toml").read_text()
-        self.assertIn('installers = ["shell", "homebrew"]\n', settings)
-        self.assertIn('tap = "bubstackdev/homebrew-tap"\n', settings)
-        self.assertIn('publish-jobs = ["homebrew"]\n', settings)
 
 
 if __name__ == "__main__":

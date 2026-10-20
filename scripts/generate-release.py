@@ -90,48 +90,6 @@ def harden(text: str) -> str:
                    '          RELEASE_COMMIT: "${{ github.sha }}"\n          RELEASE_TAG: "${{ needs.plan.outputs.tag }}"\n', "release env")
     text = replace(text, 'gh release create "${{ needs.plan.outputs.tag }}" ', 'gh release create "$RELEASE_TAG" ', "release tag")
     text = check_build_paths(text)
-    text = homebrew(text)
-    return text
-
-
-HOMEBREW_TOKEN = "${{ secrets.HOMEBREW_TAP_TOKEN }}"
-BOT_NAME = "KnowCode release bot"
-BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
-
-
-def homebrew(text: str) -> str:
-    """The tap publish job: read-only GITHUB_TOKEN, KnowCode's own commit identity, and the tap token kept out of
-    the checkout's git config and out of every step but the push, which receives it through `env:`."""
-    job = "  publish-homebrew-formula:\n"
-    assert text.count(job) == 1, "expected the Homebrew publish job; review dist-workspace.toml's publish-jobs"
-    text = replace(text, '    runs-on: "ubuntu-24.04"\n    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n'
-                   '      PLAN: ${{ needs.plan.outputs.val }}\n',
-                   '    runs-on: "ubuntu-24.04"\n    permissions:\n      "contents": "read"\n    env:\n'
-                   '      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      PLAN: ${{ needs.plan.outputs.val }}\n',
-                   "Homebrew job permissions")
-    text = replace(text, '      GITHUB_USER: "axo bot"\n      GITHUB_EMAIL: "admin+bot@axo.dev"\n',
-                   f'      GITHUB_USER: "{BOT_NAME}"\n      GITHUB_EMAIL: "{BOT_EMAIL}"\n', "Homebrew commit identity")
-    text = replace(text,
-                   "          persist-credentials: true\n          repository: \"bubstackdev/homebrew-tap\"\n"
-                   f"          token: {HOMEBREW_TOKEN}\n",
-                   "          persist-credentials: false\n          repository: \"bubstackdev/homebrew-tap\"\n",
-                   "Homebrew tap checkout")
-    # `git config --global` sets both author and committer; the variables make that explicit for `git commit`.
-    text = replace(text, '            git add "Formula/${filename}"\n            git commit -m "${name} ${version}"\n'
-                   '          done\n          git push\n',
-                   '            git add "Formula/${filename}"\n'
-                   '            GIT_AUTHOR_NAME="${GITHUB_USER}" GIT_AUTHOR_EMAIL="${GITHUB_EMAIL}" '
-                   'GIT_COMMITTER_NAME="${GITHUB_USER}" GIT_COMMITTER_EMAIL="${GITHUB_EMAIL}" '
-                   'git commit -m "${name} ${version}"\n'
-                   '          done\n'
-                   '      - name: Push formula files\n'
-                   '        env:\n'
-                   f'          TAP_TOKEN: {HOMEBREW_TOKEN}\n'
-                   '        run: |\n'
-                   '          auth=$(printf \'x-access-token:%s\' "$TAP_TOKEN" | base64 -w0)\n'
-                   '          echo "::add-mask::$auth"\n'
-                   '          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push\n',
-                   "Homebrew push")
     return text
 
 

@@ -19,17 +19,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   Code's orphaned cache copy of the plugin is left to Claude Code, for sessions still running.
 - Tests: the shared `commit` test helper reports git's output when a fixture commit fails.
 
-- Homebrew is back: `brew install bubstackdev/tap/knowcode`. For a Homebrew installation `self-update` refuses with
-  "Homebrew manages this install; run `brew upgrade bubstackdev/tap/knowcode`", and the update notice and
-  `self-update --check` name that command. After `brew upgrade`, the next `serve` start refreshes the Claude Code
-  plugin.
-
 ### Release
 
-- Releases publish a Homebrew formula to `bubstackdev/homebrew-tap` again. The publish job commits as "KnowCode
-  release bot" with a noreply address, has read-only `GITHUB_TOKEN` permissions, and is the only job given the
-  `HOMEBREW_TAP_TOKEN` secret, which reaches only its push step, through `env:`. On a tag push, CI first checks that
-  the tap is public and that the token can push to it; pull requests and pushes to `main` need no secret.
 - Release binaries no longer contain build-machine paths. The C code in tree-sitter and its grammars now gets the same
   path remapping as Rust code, and each release build fails if a binary contains the builder's home or checkout path.
 

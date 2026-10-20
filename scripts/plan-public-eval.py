@@ -18,7 +18,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SEED = 'knowcode-public-v1-run-order-2026-10-16'
-ARMS = ('plain', 'knowcode')
+# The plain arm; KnowCode named in the brief; KnowCode available but not named (unprompted use).
+ARMS = ('plain', 'knowcode', 'knowcode-unprompted')
+KNOWCODE_ARMS = ('knowcode', 'knowcode-unprompted')
 TASKS = {'http-cross-repo': ('http-callers', 'files'),
          'di-implementations': ('implementations', 'file_lines'),
          'two-hop-impact': ('impact', 'file_lines'),
@@ -73,7 +75,7 @@ def schedule(questions, seed):
     for arm in ARMS:
         orders[arm] = sorted((q['id'] for q in questions),
                             key=lambda qid: (digest((seed+'\0'+arm+'\0'+qid).encode()), qid))
-    start = int(digest((seed+'\0first-arm').encode()), 16) % 2
+    start = int(digest((seed+'\0first-arm').encode()), 16) % len(ARMS)
     arms = ARMS[start:] + ARMS[:start]
     rows = []
     for index in range(len(questions)):
@@ -136,8 +138,9 @@ def plan(manifest_path, source, questions_path, out, seed=SEED, config_path=None
               'config': config, 'producer_hashes': producers,
               'questions': len(questions), 'sessions': len(rows),
               'strata': dict(sorted(Counter(q['stratum'] for q in questions).items())),
-              'arms': {'plain': ['grep', 'find', 'read'], 'knowcode': ['grep', 'find', 'read', 'knowcode-mcp']},
-              'order_rule': 'Each arm sorts task IDs by SHA256(seed+NUL+arm+NUL+ID), ID as tie-breaker. Alternate arms; starting arm uses SHA256(seed+NUL+first-arm) modulo two.',
+              'arms': {'plain': ['grep', 'find', 'read'], 'knowcode': ['grep', 'find', 'read', 'knowcode-mcp'],
+                       'knowcode-unprompted': ['grep', 'find', 'read', 'knowcode-mcp (not named in the brief)']},
+              'order_rule': 'Each arm sorts task IDs by SHA256(seed+NUL+arm+NUL+ID), ID as tie-breaker. Rotate arms in ARMS order; starting arm uses SHA256(seed+NUL+first-arm) modulo the number of arms.',
               'remaining_gates': ['accepted subject/sampling linkage and all rejections',
                                   'complete source labels and independent review with adjudications',
                                   'final common model/client/budget and actual binary/schema verification',
