@@ -17,7 +17,11 @@
 //! - internal row ids, the build stamp (`knowcode`, also in the server's info), zero freshness counters and timings
 //!   (`ms` and `*_ms` anywhere, a search's `stats` among them) are left out; a continuation hint names the `kc_more`
 //!   call without the CLI form;
-//! - a repo's deploy answer is said once, at `items[0]` (the full form repeats it as `deploy`; see [`once`]).
+//! - a repo's deploy answer is said once, at `items[0]` (the full form repeats it as `deploy`; see [`once`]);
+//! - a reference row's `from` is the enclosing symbol's qualified name, and its column is left out; a list whose rows
+//!   all have the same `targets`, `from` or `name` says it once, beside the list (see [`lean_row`],
+//!   [`shared_targets`]);
+//! - a test file's ranking `signals` are left out: its `confidence` and `reasons` say them.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
@@ -232,6 +236,8 @@ fn rows(v: &mut Value, cursor: &mut dyn FnMut(&str) -> String) {
             // Timings (a search's `stats.ms`, `stats.read_ms`, …), wherever they are: they change between two runs
             // of the same answer and no agent acts on them.
             m.retain(|k, x| !(x.is_number() && (k == "ms" || k.ends_with("_ms"))));
+            lean_row(m);
+            shared_targets(m);
             for (k, x) in m.iter_mut() {
                 match x {
                     Value::String(s) if (k == "cursor" || k.ends_with("_cursor")) && s.starts_with("kc1.") => *s = cursor(s),
@@ -240,6 +246,62 @@ fn rows(v: &mut Value, cursor: &mut dyn FnMut(&str) -> String) {
             }
         }
         _ => {}
+    }
+}
+
+/// A row said in fewer characters: a reference's enclosing symbol (`from`) as the name kc_context takes
+/// (`Checkout.Run`), without its kind; a reference's column left out (its line is the citation); a test file's
+/// ranking `signals` left out (its `confidence` and `reasons` say them in words). `--json` keeps all three.
+fn lean_row(m: &mut Map<String, Value>) {
+    if let Some(q) = m.get("from").and_then(qualified) {
+        m.insert("from".into(), q);
+    }
+    // A reference: its targets, or (they being said beside its list) its confidence and evidence.
+    let reference = m.contains_key("targets") || (m.contains_key("confidence") && m.contains_key("evidence"));
+    if reference && m.contains_key("line") {
+        m.remove("col");
+    }
+    if m.contains_key("reasons") && m.contains_key("confidence") {
+        m.remove("signals");
+    }
+}
+
+/// An enclosing symbol `{container, kind, name}` as its qualified name, `container.name`.
+fn qualified(from: &Value) -> Option<Value> {
+    let from = from.as_object()?;
+    let name = from.get("name").and_then(Value::as_str)?;
+    if !from.keys().all(|k| matches!(k.as_str(), "name" | "container" | "kind" | "id")) {
+        return None;
+    }
+    Some(Value::from(match from.get("container").and_then(Value::as_str) {
+        Some(c) if !c.is_empty() => format!("{c}.{name}"),
+        _ => name.to_string(),
+    }))
+}
+
+/// What every row of a list of references says alike, said once beside the list instead: the same `targets` (every
+/// use of one name), the same `from` (a symbol's callees), the same `name`. The list's key names it:
+/// `<list>_targets`, `<list>_from`, `<list>_name` (for `items`, plain `targets`, `from`, `name`).
+fn shared_targets(m: &mut Map<String, Value>) {
+    let refs = |x: &Value| x.as_array().is_some_and(|a| a.len() >= 2 && a.iter().all(|r| r.get("targets").is_some_and(Value::is_array)));
+    let lists: Vec<String> = m.iter().filter(|(_, x)| refs(x)).map(|(k, _)| k.clone()).collect();
+    for k in lists {
+        for field in ["targets", "from", "name"] {
+            let key = if k == "items" { field.to_string() } else { format!("{k}_{field}") };
+            if m.contains_key(&key) {
+                continue;
+            }
+            let Some(Value::Array(rows)) = m.get_mut(&k) else { continue };
+            let Some(first) = rows[0].get(field).cloned() else { continue };
+            if !rows.iter().all(|r| r.get(field) == Some(&first)) {
+                continue;
+            }
+            for r in rows.iter_mut().filter_map(Value::as_object_mut) {
+                r.remove(field);
+            }
+            let first = if field == "from" { qualified(&first).unwrap_or(first) } else { first };
+            m.insert(key, first);
+        }
     }
 }
 
@@ -364,6 +426,54 @@ mod tests {
         assert!(resolve("kc~ffffffff").unwrap_err().contains("ask the original question again"));
         // Measured never shorter than output: a cut to fit stays within the cap.
         assert!(measure(&env, &names).len() >= output(&env, &names).len());
+    }
+
+    /// Lean rows lose nothing an agent acts on: `from` is the name kc_context takes, the column and ranking signals go,
+    /// and what every row of a reference list says alike is said once beside the list, never over a key the answer
+    /// already has.
+    #[test]
+    fn reference_rows_say_what_they_share_once() {
+        let row = |file: &str, line: u32, from: &str| {
+            json!({ "file": file, "line": line, "col": 9, "kind": "call", "name": "Log", "confidence": "exact",
+                    "evidence": { "mechanism": "receiver_type" },
+                    "from": { "id": 4, "container": from, "kind": "method", "name": "Run" },
+                    "targets": [{ "id": 1, "qualified": "Audit.Log", "file": "a.cs", "line": 3 }] })
+        };
+        let env = json!({ "repo": "shop", "items": [row("b.cs", 5, "B"), row("c.cs", 7, "C")], "total": 2, "truncated": false });
+        let v: Value = serde_json::from_str(&output(&env, &Names::default())).unwrap();
+        assert_eq!(v["targets"], json!([{ "qualified": "Audit.Log", "file": "a.cs", "line": 3 }]), "{v}");
+        assert_eq!(v["name"], "Log");
+        assert!(v.get("from").is_none(), "rows differ in `from`: kept in each: {v}");
+        for (r, from) in v["items"].as_array().unwrap().iter().zip(["B.Run", "C.Run"]) {
+            assert_eq!(r["from"], from);
+            assert!(r.get("targets").is_none() && r.get("name").is_none() && r.get("col").is_none(), "{r}");
+            assert_eq!((r["line"].is_u64(), r["confidence"].as_str(), r["evidence"].as_str()), (true, Some("exact"), Some("receiver_type")));
+        }
+        // A symbol's callees: one `from`, said beside the list; targets that differ stay in each row.
+        let mut callees = vec![row("b.cs", 5, "B"), row("b.cs", 6, "B")];
+        callees[1]["targets"][0]["qualified"] = json!("Audit.Flush");
+        let v: Value = serde_json::from_str(&output(&json!({ "items": [{ "callees": callees }] }), &Names::default())).unwrap();
+        let item = &v["items"][0];
+        assert_eq!(item["callees_from"], "B.Run", "{v}");
+        assert!(item.get("callees_targets").is_none() && item["callees"][1]["targets"][0]["qualified"] == "Audit.Flush", "{v}");
+        // A key the answer has is never overwritten: the rows keep theirs.
+        let env = json!({ "name": "query", "items": [row("b.cs", 5, "B"), row("c.cs", 7, "C")] });
+        let v: Value = serde_json::from_str(&output(&env, &Names::default())).unwrap();
+        assert_eq!((v["name"].as_str(), v["items"][0]["name"].as_str()), (Some("query"), Some("Log")), "{v}");
+        // One row: nothing to share. Rows that aren't references (no targets) are left as they are.
+        let v: Value = serde_json::from_str(&output(&json!({ "items": [row("b.cs", 5, "B")] }), &Names::default())).unwrap();
+        assert!(v["items"][0]["targets"].is_array() && v.get("targets").is_none(), "{v}");
+        let defs = json!({ "items": [{ "name": "Log", "file": "a.cs", "line": 3, "col": 5 }, { "name": "Log", "file": "b.cs", "line": 4, "col": 5 }] });
+        let v: Value = serde_json::from_str(&output(&defs, &Names::default())).unwrap();
+        assert_eq!(v["items"][0]["col"], 5, "{v}");
+        assert!(v.get("name").is_none(), "{v}");
+        // A test file's ranking signals go; its confidence and reasons stay.
+        let tests = json!({ "items": [{ "tests": [{ "file": "t.cs", "confidence": 0.9, "reasons": ["calls Audit.Log at hop 1"], "signals": { "hop": 1 } }] }] });
+        let v: Value = serde_json::from_str(&output(&tests, &Names::default())).unwrap();
+        let t = &v["items"][0]["tests"][0];
+        assert!(t.get("signals").is_none() && t["confidence"] == 0.9 && t["reasons"][0] == "calls Audit.Log at hop 1", "{v}");
+        // Measured never shorter than output.
+        assert!(measure(&env, &Names::default()).len() >= output(&env, &Names::default()).len());
     }
 
     #[test]

@@ -28,6 +28,9 @@ use crate::ops::{self, Scope};
 
 /// Responses longer than this many characters lose list items until they fit (about 4 characters per token).
 const DEFAULT_CHARS: usize = 8_000;
+
+/// The least a `kc_context` bundle is capped at (its default budget makes 6,000).
+const CONTEXT_CHARS: usize = 6_000;
 const MAX_CHARS: usize = 40_000;
 
 /// SQLite's memory budget in the server, across all connections.
@@ -93,7 +96,7 @@ pub struct RefsParams {
     /// `kinds` by edge name: calls, instantiates, uses, member, reads, writes.
     #[serde(default)]
     pub edges: Vec<String>,
-    /// References (default 25).
+    /// References (default 20).
     #[serde(default)]
     pub limit: Option<usize>,
     #[serde(flatten)]
@@ -108,7 +111,7 @@ pub struct ContextParams {
     /// Several symbols instead of `symbol` (at most 20), sharing the budget.
     #[serde(default)]
     pub symbols: Vec<String>,
-    /// Token budget for the bundle (default 2000).
+    /// Token budget for the bundle (default 1200).
     #[serde(default)]
     pub budget: Option<usize>,
     /// `auto` (default), `full`, `skeleton` or `none`.
@@ -131,7 +134,7 @@ pub struct TraceParams {
     /// Hops, 1 (default) to 3.
     #[serde(default)]
     pub depth: Option<u8>,
-    /// Node cap (default 40).
+    /// Node cap (default 25).
     #[serde(default)]
     pub limit: Option<usize>,
     #[serde(flatten)]
@@ -215,7 +218,7 @@ pub struct FlowParams {
     /// Steps deep, 1 to 16 (default 10).
     #[serde(default)]
     pub depth: Option<u8>,
-    /// Steps to list (default 60).
+    /// Steps to list (default 40).
     #[serde(default)]
     pub limit: Option<usize>,
     /// Repos to open at most (default 16).
@@ -251,7 +254,7 @@ pub struct ImpactParams {
     /// Hops, 1 (default) to 5.
     #[serde(default)]
     pub depth: Option<u8>,
-    /// Affected symbols to list (default 60).
+    /// Affected symbols to list (default 30).
     #[serde(default)]
     pub limit: Option<usize>,
     /// Order within a hop: `rank` (default) or `hop`.
@@ -277,7 +280,7 @@ pub struct UnusedParams {
     /// `unused` (confident only), `possibly`, or `all` (default).
     #[serde(default)]
     pub tier: Option<String>,
-    /// Findings (default 50).
+    /// Findings (default 25).
     #[serde(default)]
     pub limit: Option<usize>,
     #[serde(flatten)]
@@ -391,7 +394,7 @@ pub struct OverviewParams {
     /// Bias the map toward a name or path fragment.
     #[serde(default)]
     pub focus: Option<String>,
-    /// Token budget for the map (default 800; 0: none).
+    /// Token budget for the map (default 400; 0: none).
     #[serde(default)]
     pub map_budget: Option<usize>,
     #[serde(flatten)]
@@ -834,7 +837,33 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
     })
     .await?;
     let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS);
-    Ok(cap_text(&format!("{}{}", header(&env), notes_first(&mcp_names(&text))), max))
+    Ok(cap_text(&format!("{}{}", header(&env), notes_first(&lean_sites(&mcp_names(&text)))), max))
+}
+
+/// A tree line's use site said once: `at <file>:<line>` after a symbol in that same file becomes `at line <line>`,
+/// or nothing when it is the symbol's own line (`used by method A.b  a.cs:113  [exact] direct at a.cs:113`).
+fn lean_sites(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        out.push_str(&lean_site(line));
+        out.push('\n');
+    }
+    out
+}
+
+fn lean_site(line: &str) -> String {
+    let Some(at) = line.rfind(" at ") else { return line.to_string() };
+    let site = &line[at + 4..];
+    let (token, rest) = site.split_once(char::is_whitespace).map_or((site, ""), |(t, r)| (t, r));
+    let Some((file, n)) = token.rsplit_once(':') else { return line.to_string() };
+    if file.is_empty() || n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return line.to_string();
+    }
+    let head = &line[..at];
+    let Some(def) = head.find(&format!("  {file}:")) else { return line.to_string() };
+    let own: String = head[def + 3 + file.len()..].chars().take_while(char::is_ascii_digit).collect();
+    let rest = if rest.is_empty() { String::new() } else { format!(" {rest}") };
+    if own == n { format!("{head}{rest}") } else { format!("{head} at line {n}{rest}") }
 }
 
 /// The text with its notes (`… truncated`, depth and hidden-kind notes) moved to the top, so a size cap never cuts them.
@@ -1429,7 +1458,7 @@ impl KnowcodeServer {
     #[tool(description = "Every reference to a name, resolved to its definition with a confidence and evidence, including from dependent repos (also SQL, Ansible, Terraform). Details: kc_help kc_refs.")]
     async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
-        let limit = p.limit.unwrap_or(25);
+        let limit = p.limit.unwrap_or(20);
         let kinds = ref_kinds(&p.kinds, &p.edges)?;
         let refs = move |name: &str| -> anyhow::Result<Value> {
             let what = format!("no reference to {name}{}", if kinds.is_empty() { String::new() } else { format!(" of kind {}", kinds.join(", ")) });
@@ -1448,13 +1477,15 @@ impl KnowcodeServer {
         let symbols = inputs(p.symbol, p.symbols, "symbol or symbols")?;
         let n = symbols.len();
         // Several symbols share the budget; each still gets enough for a useful bundle.
-        let budget = (p.budget.unwrap_or(2000) / n).max(600);
+        let budget = (p.budget.unwrap_or(1200) / n).max(600);
         let limit = p.limit;
         let context = move |sym: &str| -> anyhow::Result<Value> {
             let what = format!("no definition or table named {sym}");
             Ok(explain(ops::context_limited(sym, budget, source, limit, &scope)?.env, &what, ""))
         };
-        let max = p.common.max_chars.or(Some((budget * n * 5).max(DEFAULT_CHARS)));
+        // The bundle's own size: five characters a budget token (source, members, callers and callees with their
+        // bookkeeping), at least [`CONTEXT_CHARS`].
+        let max = p.common.max_chars.or(Some((budget * n * 5).max(CONTEXT_CHARS)));
         if n == 1 {
             let sym = symbols.into_iter().next().unwrap_or_default();
             run(max, move || context(&sym)).await
@@ -1473,7 +1504,7 @@ impl KnowcodeServer {
         // Asked deeper than a trace goes, the answer says so (`ops::trace`); the notes go by the depth walked.
         let asked = p.depth.unwrap_or(1).max(1);
         let depth = asked.min(kc_store::trace::MAX_TRACE_DEPTH);
-        let limit = p.limit.unwrap_or(40);
+        let limit = p.limit.unwrap_or(25);
         let trace = move || ops::trace(&p.symbol, &dir, asked, limit, &filter, &scope);
         // Whether a node at the last depth leads further (a confident edge the walk would expand).
         let deeper = move |t: &kc_store::trace::Trace| t.nodes.iter().any(|n| n.depth == depth && matches!(n.confidence, "exact" | "unique_name"));
@@ -1574,7 +1605,7 @@ impl KnowcodeServer {
         let flow = move || {
             let opts = crate::flow::FlowOptions {
                 depth: p.depth.unwrap_or(10).clamp(1, 16),
-                max_steps: p.limit.unwrap_or(60),
+                max_steps: p.limit.unwrap_or(40),
                 max_repos: p.max_repos.unwrap_or(16).max(1),
                 edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
                 children: p.children.unwrap_or(crate::flow::DEFAULT_CHILDREN),
@@ -1622,7 +1653,7 @@ impl KnowcodeServer {
             file: p.file,
             diff: p.diff,
             depth: p.depth.unwrap_or(1),
-            limit: p.limit.unwrap_or(60),
+            limit: p.limit.unwrap_or(30),
             filter: p.walk.filter(),
             order,
             cochange: kc_index::vitals::Span { as_of: p.as_of, since: p.since },
@@ -1667,7 +1698,7 @@ impl KnowcodeServer {
             let params = crate::refactor::UnusedParams {
                 kinds: p.kinds,
                 tier: p.tier.unwrap_or_else(|| "all".into()),
-                limit: p.limit.unwrap_or(50),
+                limit: p.limit.unwrap_or(25),
             };
             Ok(crate::refactor::unused(&params, &scope)?.env)
         })
@@ -1747,7 +1778,7 @@ impl KnowcodeServer {
     #[tool(description = "What a repo is: languages, packages, dependencies both ways, entry points, key types, hotspots and a ranked map. `workspace`: one line per repo.")]
     async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
-        let budget = p.map_budget.unwrap_or(800);
+        let budget = p.map_budget.unwrap_or(400);
         let max = p.common.max_chars.or(Some((budget * 4 + 4_000).max(DEFAULT_CHARS)));
         run(max, move || {
             let mut env = ops::overview(&scope, p.focus.as_deref(), budget)?.env;
@@ -2355,6 +2386,77 @@ mod tests {
             assert!(found.is_empty(), "{tool} leaks {found:?}: {text}");
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The cut/continuation contract at the default caps: an answer cut by its default limit says so (`complete:
+    /// false`, an `incomplete` entry with how to get the rest), and its cursor continues to exactly the rest; the
+    /// trees name the parameter to raise; the context bundle keeps within its cap and its cut lists continue too.
+    #[test]
+    fn default_caps_cut_with_what_was_left_out_and_continue() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-caps");
+        let mut files: Vec<(String, String)> = vec![
+            ("src/Shop.csproj".into(), "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n".into()),
+            ("src/Audit.cs".into(), "namespace Shop;\npublic static class Audit\n{\n    public static void Log() { }\n}\n".into()),
+        ];
+        for i in 0..40 {
+            files.push((format!("src/C{i}.cs"), format!("namespace Shop;\npublic class C{i}\n{{\n    public void Run() {{ Audit.Log(); }}\n}}\n")));
+        }
+        let files: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let root = crate::ops::tests::repo(&base, "shop", &files);
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("all") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+
+        // kc_refs: 20 of 40, the rest by cursor; the target said once, beside the rows.
+        let v: Value = serde_json::from_str(&rt.block_on(s.kc_refs(p(json!({ "name": "Audit.Log" })))).unwrap()).unwrap();
+        let shown = v["items"].as_array().unwrap();
+        assert_eq!((shown.len(), v["total"].as_u64(), v["complete"].as_bool()), (20, Some(40), Some(false)), "{v}");
+        let capped = v["incomplete"].as_array().unwrap().iter().find(|i| i["reason"] == "capped").expect("a capped entry");
+        assert!(capped["detail"].as_str().unwrap().contains("20 of 40") && capped["hint"].as_str().unwrap().contains("kc_more"), "{v}");
+        assert_eq!(v["targets"][0]["qualified"], "Audit.Log", "{v}");
+        assert!(shown.iter().all(|r| r["from"].as_str().is_some_and(|f| f.ends_with(".Run")) && r.get("col").is_none()), "{v}");
+        let rest = crate::cursor::more(&crate::compact::resolve(v["cursor"].as_str().unwrap()).unwrap()).unwrap();
+        let rest: Value = serde_json::from_str(&cap(rest, DEFAULT_CHARS)).unwrap();
+        let mut seen: Vec<String> = shown.iter().chain(rest["items"].as_array().unwrap()).map(|r| r["from"].as_str().unwrap().to_string()).collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!((seen.len(), rest["complete"].as_bool()), (40, Some(true)), "{rest}");
+
+        // kc_impact and kc_trace: cut at their default limits (30, 25), saying how to get the rest.
+        let impact = rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log" })))).unwrap();
+        assert_eq!(impact.lines().filter(|l| l.trim_start().starts_with("called by method")).count(), 30, "{impact}");
+        assert!(impact.contains("incomplete (capped)") && impact.contains("kc_more {cursor: \"kc~") && impact.contains("raise limit"), "{impact}");
+        // A use site in the dependent's own file is said by its line, or not at all on the dependent's own line.
+        assert!(!impact.lines().any(|l| l.contains("called by method") && l.contains(" at ")), "{impact}");
+        let trace = rt.block_on(s.kc_trace(p(json!({ "symbol": "Audit.Log", "direction": "in" })))).unwrap();
+        assert!(trace.contains("truncated at the node limit") && trace.contains("raise limit"), "{trace}");
+
+        // kc_context: within its cap; its callers list cut, with the cursor that continues it.
+        let out = rt.block_on(s.kc_context(p(json!({ "symbol": "Audit.Log" })))).unwrap();
+        assert!(out.len() <= CONTEXT_CHARS, "{} chars", out.len());
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["complete"], false, "{v}");
+        let callers = v["incomplete"].as_array().unwrap().iter().find(|i| i["detail"].as_str().unwrap().contains("callers")).expect("callers cut");
+        assert!(callers["hint"].as_str().unwrap().contains("items[0].callers_cursor"), "{v}");
+        assert!(crate::compact::resolve(v["items"][0]["callers_cursor"].as_str().unwrap()).is_ok(), "{v}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn use_sites_in_the_same_file_are_said_by_their_line() {
+        assert_eq!(lean_site("  used by method A.b  src/a.cs:10  [exact] direct at src/a.cs:12"), "  used by method A.b  src/a.cs:10  [exact] direct at line 12");
+        assert_eq!(lean_site("  used by method A.b  src/a.cs:10  [exact] direct at src/a.cs:10"), "  used by method A.b  src/a.cs:10  [exact] direct");
+        // Another file, or no site: as it was.
+        let other = "  calls method C.d  src/c.cs:4  [exact] at src/a.cs:12";
+        assert_eq!(lean_site(other), other);
+        let note = "incomplete (depth): shop: 3 symbols the walk stopped at not checked";
+        assert_eq!(lean_site(note), note);
+        // A prefix of another file's name isn't the same file.
+        let prefix = "  used by method A.b  src/a.cs:10  [exact] direct at a.cs:12";
+        assert_eq!(lean_site(prefix), prefix);
     }
 
     fn runtime() -> tokio::runtime::Runtime {

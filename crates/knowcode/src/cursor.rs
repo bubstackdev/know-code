@@ -1026,7 +1026,17 @@ mod tests {
         let base = cache.dir("cursor-compact");
         let root = fixture(&base);
         let s = scope(&root);
-        let all = keys(&rows_at(&crate::ops::refs("Hub.Ping", &[], 1000, &s).unwrap().env, "/items"));
+        // The compact form leaves out a reference's column and says the name every row shares once, beside the list
+        // (see `compact`): rows are compared without the column, with that name put back.
+        let no_col = |rows: Vec<Value>| -> Vec<Value> {
+            rows.into_iter()
+                .map(|mut r| {
+                    r.as_object_mut().map(|o| o.remove("col"));
+                    r
+                })
+                .collect()
+        };
+        let all = keys(&no_col(rows_at(&crate::ops::refs("Hub.Ping", &[], 1000, &s).unwrap().env, "/items")));
         assert!(all.len() >= 55);
         for max in [1_000, 2_000, 4_000, 8_000] {
             let env = crate::ops::refs("Hub.Ping", &[], 25, &s).unwrap().env;
@@ -1039,8 +1049,13 @@ mod tests {
                 assert!(!i.hint.as_deref().unwrap_or("").contains("CLI:"), "{}", i.detail);
             }
             v["cursor"] = Value::from(crate::compact::resolve(&handle).unwrap());
+            if let Some(name) = v.get("name").cloned() {
+                for r in v["items"].as_array_mut().unwrap() {
+                    r["name"] = name.clone();
+                }
+            }
             let (rows, _) = follow(&v, "/items");
-            assert_eq!(keys(&rows), all, "max_chars {max}");
+            assert_eq!(keys(&no_col(rows)), all, "max_chars {max}");
         }
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -105,7 +105,7 @@ or registry address) links to it."#,
         name: "kc_context",
         summary: "one bundle about a symbol (sections: kc_context.*)",
         text: r#"One bundle about a symbol: its source, members, extensions, conformances, top callers and callees with
-file:line, within a token budget (`budget`, default 2000). Usually the first call after kc_find. Give the repo's own
+file:line, within a token budget (`budget`, default 1200). Usually the first call after kc_find. Give the repo's own
 name to ask how the repo is deployed (`kc_context.deploy`).
 
 When several definitions share the name (copies, template variants), the live one is shown and the others are listed in
@@ -374,7 +374,7 @@ Publish call at the site of an http or bus edge).
 
 `steps` are numbered depth first (index, parent, depth), each with repo, symbol, file:line, the edge reaching it, its
 confidence and site; each symbol appears once, unless the depth limit (`depth`, default 10, up to 16) cut it where first
-reached and it is reached again nearer the entry, where it is grown. `limit` caps the steps (default 60), `max_repos`
+reached and it is reached again nearer the entry, where it is grown. `limit` caps the steps (default 40), `max_repos`
 the repos opened (default 16). Answers as an indented tree of text by default; `format: json` for the envelope. `edges`
 limits the edge kinds followed (calls, reads, writes, uses, http, bus, sql, ngrx, dialog, child); `evidence` as in
 `evidence`."#,
@@ -398,7 +398,7 @@ implementations and subclasses, or implementing members, in repos depending on i
 `implements`). Each dependent is listed once, by its best way: a confident edge over an ambiguous one, then the nearest
 hop; when an ambiguous way reaches it nearer, `nearest_ambiguous_hop` says so and its class goes by that hop. An
 ambiguous link counts as low-confidence and, under the default evidence policy, isn't walked past (`evidence: all`
-walks past it, marked ambiguous). When the walk stops at the limit (`limit`, default 60; `truncated`), `counts_cover`
+walks past it, marked ambiguous). When the walk stops at the limit (`limit`, default 30; `truncated`), `counts_cover`
 is "shown": the counts are of the affected symbols listed, not all.
 
 Where the walk stops: the walk goes up to 16 hops (deeper asked: `depth: {asked, walked}`), its budget the symbol
@@ -589,7 +589,7 @@ measure of expertise."#,
         text: r#"What a repo is: languages, packages and targets, repos it depends on and repos that depend on it (one entry
 per repo, with `dependencies` and the manifest `sites` declaring them, consecutive lines joined: `package.json:119-145`),
 entry points, key types, top hotspots, and a ranked map (the most central files and the symbols other files use,
-within `map_budget` tokens, default 800, 0 to leave it out; `focus` biases it toward a name or path). Repos with Entity
+within `map_budget` tokens, default 400, 0 to leave it out; `focus` biases it toward a name or path). Repos with Entity
 Framework or SQL tables also list their tables (per DbContext, with read and write counts; the 20 most used when there
 are more, `tables_total` counting all) and a stored procedure count. With workspace=true, one line per indexed repo
 plus repo-to-repo edges."#,
