@@ -305,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("sessions")
     p = sub.add_parser("summary")
     p.add_argument("report_dir")
+    p = sub.add_parser("use")
+    p.add_argument("report_dir")
     args = parser.parse_args(argv)
 
     if args.command == "machine":
@@ -346,7 +348,34 @@ def main(argv: list[str] | None = None) -> int:
                         for label, s in (_load_json(args.sessions) or {}).items()))
     elif args.command == "summary":
         print(summary(Path(args.report_dir)))
+    elif args.command == "use":
+        print(json.dumps(knowcode_use(Path(args.report_dir)), indent=2))
     return 0
+
+
+def knowcode_use(report: Path) -> dict:
+    """KnowCode use per case and session, from the per-case session reports: one stable, machine-readable record.
+
+    `unprompted` sessions don't mention KnowCode in the prompt; `named` ones do. Each row counts the session's KnowCode
+    calls by tool and its other tool calls; a session not found is listed with `found: false` and no counts.
+    """
+    rows = []
+    for path in sorted(report.glob("sessions-*.json")):
+        case = path.stem[len("sessions-"):]
+        for label, s in sorted((_load_json(path) or {}).items()):
+            row = {"case": case, "session": label, "question": s.get("prompt"), "found": bool(s.get("found"))}
+            if row["found"]:
+                by_tool: dict = {}
+                for call in s.get("kc_calls") or []:
+                    name = "cli" if call.startswith("Bash: ") else call.rsplit("__", 1)[-1]
+                    by_tool[name] = by_tool.get(name, 0) + 1
+                row.update({"used_knowcode": bool(s.get("used_knowcode")), "kc_calls": s.get("kc_call_count", 0),
+                            "kc_calls_by_tool": by_tool, "other_tool_calls": s.get("other_tool_call_count", 0)})
+            rows.append(row)
+    unprompted = [r for r in rows if r["session"] == "unprompted" and r["found"]]
+    return {"format": 1, "sessions": rows,
+            "unprompted": {"sessions": len(unprompted), "using_knowcode": sum(r["used_knowcode"] for r in unprompted),
+                           "kc_calls": sum(r["kc_calls"] for r in unprompted)}}
 
 
 def summary(report: Path) -> str:

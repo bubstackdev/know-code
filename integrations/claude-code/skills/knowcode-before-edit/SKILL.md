@@ -1,6 +1,6 @@
 ---
 name: knowcode-before-edit
-description: Assess a change before making it, with the KnowCode index - what depends on the code, which tests cover it, which files historically change with it, and who should review it. Use before editing a shared method, type, table or contract, or before opening a merge request.
+description: What breaks if I change X, which tests cover it - assess a change before making it with the KnowCode index - dependents, tests to run, files that historically change with it, reviewers. Use before editing a shared method, type, table or contract, or a merge request.
 ---
 
 # Assess a change before editing

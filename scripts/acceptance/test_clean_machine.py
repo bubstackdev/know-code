@@ -133,6 +133,23 @@ class TranscriptTest(unittest.TestCase):
             cm.main(["session-line", str(out)])
         self.assertIn("unprompted: found=False", line_out.getvalue())
 
+    def test_use_record_counts_knowcode_calls_per_case_and_session(self):
+        report = self.root / "report"
+        report.mkdir()
+        (report / "sessions-mitt.json").write_text(json.dumps({
+            "unprompted": {"found": True, "prompt": QUESTION, "used_knowcode": True, "kc_call_count": 3,
+                           "kc_calls": ["mcp__plugin_knowcode_knowcode__kc_context",
+                                        "mcp__plugin_knowcode_knowcode__kc_context", "Bash: knowcode refs mitt"],
+                           "other_tool_call_count": 2},
+            "named": {"found": False, "prompt": cm.NAMED_PROMPT.format(question=QUESTION)}}))
+        use = cm.knowcode_use(report)
+        self.assertEqual(use["format"], 1)
+        self.assertEqual(use["sessions"][0], {"case": "mitt", "session": "named", "question": use["sessions"][0]["question"],
+                                              "found": False})
+        self.assertEqual(use["sessions"][1]["kc_calls_by_tool"], {"kc_context": 2, "cli": 1})
+        self.assertEqual(use["sessions"][1]["other_tool_calls"], 2)
+        self.assertEqual(use["unprompted"], {"sessions": 1, "using_knowcode": 1, "kc_calls": 3})
+
 
 BEFORE = {
     "model": "opus",

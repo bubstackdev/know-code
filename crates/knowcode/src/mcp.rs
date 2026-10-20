@@ -1430,7 +1430,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Find definitions by name, prefix, camelCase words or `Type.member`, each with file:line and signature. Don't know the name? kc_locate.")]
+    #[tool(description = "Where a name is defined: by name, prefix, camelCase words or `Type.member`, with file:line and signature. Only a concept? kc_locate.")]
     async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1441,7 +1441,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Find the files for a concept, bug report or ticket in plain words (\"refund approval\"), ranked by paths, symbols, docs and commit subjects. Use it first when you don't know the names.")]
+    #[tool(description = "Where the code for a concept, bug report or ticket is (\"refund approval\"): files ranked by paths, symbols, docs and commit subjects. Use it first when you don't know the names.")]
     async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
         let limit = p.limit.unwrap_or(10);
@@ -1455,7 +1455,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Every reference to a name, resolved to its definition with a confidence and evidence, including from dependent repos (also SQL, Ansible, Terraform). Details: kc_help kc_refs.")]
+    #[tool(description = "Who calls or uses a name: every reference, resolved with confidence and evidence, also from dependent repos, SQL, Ansible and Terraform. Details: kc_help kc_refs.")]
     async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
@@ -1470,7 +1470,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "One bundle about a symbol: source (skeleton when long), members, callers and callees with file:line, and cross-repo links (HTTP, DI, EF tables, bus, SQL, Angular, Ansible, Terraform). A repo's own name: how it deploys. Details: kc_help kc_context.")]
+    #[tool(description = "What a symbol is and who calls it: source (skeleton when long), members, callers and callees with file:line, cross-repo links (HTTP, DI, EF tables, bus, SQL, Angular, Ansible, Terraform). A repo's name: how it deploys. Details: kc_help kc_context.")]
     async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let source: kc_store::skeleton::SourceMode = p.source.as_deref().unwrap_or("auto").parse().map_err(|e| format!("{e:#}"))?;
@@ -1494,7 +1494,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Call tree around a symbol: callers (in), callees (out) or both, one hop by default (up to 3), through DI, HTTP routes, the bus and SQL. Text tree; `format: json` for the envelope.")]
+    #[tool(description = "Call tree: callers (in), callees (out) or both of a symbol, one hop by default (up to 3), through DI, HTTP routes, the bus and SQL. Text tree; `format: json` for the envelope.")]
     async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let dir = p.direction.clone().unwrap_or_else(|| "both".into());
@@ -1637,7 +1637,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "What depends on a symbol, a file or a diff (`working` or a git revision): one hop by default (up to 16), across repos, HTTP, bus, SQL and deploy links. Dependents are classed by proximity (direct, near, far): graph distance, not risk.")]
+    #[tool(description = "What breaks if you change a symbol, file or diff (`working` or a git revision): its dependents, one hop by default (up to 16), across repos, HTTP, bus, SQL and deploy links, classed direct, near or far by graph distance, not risk.")]
     async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let tree = p.walk.tree()?;
@@ -1810,7 +1810,7 @@ impl KnowcodeServer {
         run(p.common.max_chars, move || Ok(ops::note_add(&p.symbol, &p.text, p.tag.as_deref(), &scope)?.env)).await
     }
 
-    #[tool(description = "Ranked text or regex search over every file: definitions first, then code, tests, comments, docs. For strings and config keys that aren't symbol names.")]
+    #[tool(description = "Grep, ranked: text or regex over every file, definitions first, then code, tests, comments, docs. For strings and config keys that aren't symbol names.")]
     async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, String> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let mut args: Vec<String> = vec!["search".into(), "--json".into()];
@@ -1966,13 +1966,13 @@ impl ServerHandler for KnowcodeServer {
 const HELP_URI: &str = "knowcode://help/";
 
 /// The server's instructions: what KnowCode is for and how its answers read, short; the rest is in `kc_help`.
-const INSTRUCTIONS: &str = "KnowCode is a local code graph of the repos in your workspace, answered from the working tree. \
-Query it instead of reading files: kc_find (by name), kc_locate (by concept or bug report), kc_context (one symbol), kc_refs \
-(every use), kc_trace, kc_path and kc_flow (how code connects), kc_impact (before a change), kc_search (text). Every item has \
-file:line; every edge a confidence and evidence; ambiguous edges are listed, never guessed. Every answer says `complete`; \
-when false, `incomplete` says why and how to get the rest, and a `cursor` continues a cut list through kc_more. \
-Every tool takes `repo` (a repo path or indexed repo name; default the server's) and `max_chars` (answer size cap, \
-default 8000, max 40000). \
+const INSTRUCTIONS: &str = "KnowCode: a local code graph of your workspace's repos, read from the working tree. Use it \
+instead of grep or reading files: who calls or uses X (kc_refs), where X is defined (kc_find), where a concept or bug \
+lives (kc_locate), what X is (kc_context), what breaks if X changes (kc_impact), how code connects (kc_trace, kc_path, \
+kc_flow), text (kc_search). Every item has file:line; every edge a confidence and evidence; ambiguous ones are listed, \
+never guessed. Every answer says `complete`; when false, `incomplete` says why and how to get the rest; a `cursor` \
+continues a cut list (kc_more). Every tool takes `repo` (path or indexed name; default the server's) and `max_chars` \
+(answer cap, default 8000, max 40000). \
 `withheld` means a repo's AI privacy file blocks that content: don't try to read it another way. \
 kc_help {topic} documents every tool, parameter and concept.";
 

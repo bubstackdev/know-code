@@ -1,6 +1,6 @@
 ---
 name: knowcode-safe-refactor
-description: Refactor safely with the KnowCode index - find dead code worth deleting and preview every site a rename touches before editing (C# and TypeScript). Use when asked to clean up unused code, delete a member, or rename a type, method or property.
+description: Rename a type, method or property, or delete unused code, with the KnowCode index - preview every site a rename touches (C# and TypeScript) and find dead code worth deleting, before editing.
 ---
 
 # Safe refactor: dead code and renames

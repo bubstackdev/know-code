@@ -22,6 +22,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   share (`targets`, `from`, `name`) is said once beside the list. Test files drop their ranking `signals`. Tree use
   sites in the symbol's own file are said by line. The CLI's output and `--json` are unchanged.
   `scripts/mcp_tokens.py` measures answer sizes, with `--count-tokens` and `--compare`.
+- The MCP server's instructions, the descriptions of `kc_find`, `kc_locate`, `kc_refs`, `kc_context`, `kc_trace`,
+  `kc_impact` and `kc_search`, and the plugin's skill descriptions now lead with the questions they answer ("who calls
+  or uses", "where is", "what breaks if"). None is longer than before.
+- The clean-machine acceptance report adds `knowcode-use.json`: KnowCode calls per case and session, by tool.
 
 ## 0.1.1 (2026-10-20)
 
