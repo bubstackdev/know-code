@@ -70,18 +70,37 @@ def answer_from_result(result, question_id, source_root, two_hop):
     if not isinstance(raw, str):
         return failure, ['client result has no answer text']
     raw = raw.strip()
-    fence = re.fullmatch(r'```(?:json)?\s*\n(.*?)\n```', raw, re.S)
-    if fence:
-        raw = fence.group(1)
+    # The answer is the whole text when it is one JSON object; otherwise the last fenced ```json block, with prose
+    # allowed around it. Nothing else is extracted or repaired: the block itself must be one complete object.
+    fences = re.findall(r'```json[ \t]*\n(.*?)\n[ \t]*```', raw, re.S)
+    whole = re.fullmatch(r'```(?:json)?\s*\n(.*?)\n```', raw, re.S)
+    if whole:
+        raw = whole.group(1)
+    elif not raw.startswith('{') and fences:
+        raw = fences[-1]
     try:
         answer = load_json(raw)
     except ValueError:
         return failure, ['answer is not one complete JSON object']
+
+    def located(item):
+        # A plain location, or {"location": ..., "kind": ...} where the question asks for kinds.
+        if isinstance(item, str) and item.strip():
+            return item
+        if (isinstance(item, dict) and isinstance(item.get('location'), str) and item['location'].strip()
+                and set(item) <= {'location', 'kind', 'note'} and all(isinstance(v, str) for v in item.values())):
+            return item['location']
+        return None
+
     if (not isinstance(answer, dict) or answer.get('status') not in ('answered', 'unsupported', 'error')
             or not isinstance(answer.get('items'), list)
-            or not all(isinstance(item, str) and item.strip() for item in answer['items'])
+            or not all(located(item) for item in answer['items'])
             or ('id' in answer and answer['id'] != question_id)):
         return failure, ['invalid answer contract']
+    kinds = [item.get('kind') if isinstance(item, dict) else None for item in answer['items']]
+    answer = dict(answer, items=[located(item) for item in answer['items']])
+    if any(kind is not None for kind in kinds):
+        answer['item_kinds'] = kinds
 
     def location(value):
         # Only an exact granted source prefix is portable. Preserve wrong/unknown

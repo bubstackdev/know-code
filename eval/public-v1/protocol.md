@@ -1,6 +1,7 @@
 # Pre-registered agent study (public-v1)
 
-Frozen October 20, 2026, before any scored session ran. This document, the [study inputs](study/) and the scripts
+Frozen October 20, 2026, before any scored session ran, then frozen again the same day after a pilot exposed an
+answer-format flaw (see [Pilot and correction](#pilot-and-correction-2026-10-20)). This document, the [study inputs](study/) and the scripts
 named below are fixed by [freeze.json](study/freeze.json), and its SHA-256 identifies the study. The general design is
 in [method.md](method.md) and the sampling plan in [sampling.md](sampling.md). This page adds what those two leave
 open: arms, model, metrics, the four success criteria from the 0.2 plan, the re-check detector, and the scoring
@@ -99,6 +100,19 @@ reports every metric.
 - KnowCode binary: built from main at 36eec45 (the 0.1.1 code; it reports version `0.1.0`). Its hash is in
   config.json.
 - Index preparation runs before the client starts, outside the research interval.
+
+**Answer contract.** The brief asks the agent to end its reply with one JSON object in a ```` ```json ```` block,
+with `status` (answered, unsupported or error), `items` and `notes`. Prose before the block is allowed.
+
+- `items` is one flat list. Each entry is a `repo/path[:line]` location, or `{"location": ..., "kind": ...}` where
+  the question asks for kinds. The DI questions ask for kind `declaration` or `registration`.
+- Groupings and assumptions go in `notes`.
+- Impact answers also give `hops`.
+
+The parser in [public_transcript.py](../../scripts/eval/public_transcript.py) accepts the whole reply when it is one
+object, or else the last fenced ```` ```json ```` block. Nothing else is extracted or repaired. Grouped `items`, a
+missing or broken block, and an unknown status are contract failures, and the session is scored as an error. Scoring
+uses only the locations. Kinds are recorded but not scored.
 
 The runner is [session_runner.py](../../scripts/eval/session_runner.py), with the isolation in method.md:
 
@@ -233,9 +247,41 @@ Publication follows method.md. The committed results are the summary and per-ses
 outside the repository, because they contain the build machine's paths. They are available on request, with those
 paths removed.
 
+## Pilot and correction (2026-10-20)
+
+The first freeze's baseline was stopped after 23 of its 72 sessions. In 12 of them the agent's answer failed the
+answer contract, and the failures were spread evenly over the arms: 4 in `plain`, 4 in `knowcode` and 4 in
+`knowcode-unprompted`. There were two patterns:
+
+- **Grouped `items` (7 sessions, all DI questions).** The DI questions asked for declarations and registrations "in
+  separate groups", while the brief required one flat list, so agents returned an object of groups.
+- **Prose before the JSON (5 sessions).** The old parser accepted only a whole-reply object.
+
+Every failed session exited normally, with clean transcript and transport integrity: these were format failures,
+not infrastructure failures. One more session was cut off by the operator's stop and has no result.
+
+With the user's approval, the 23 completed sessions and the cut-off one are declared a **pilot**. No criterion,
+correctness score or token comparison was computed or inspected from them, and none will be reported. Their raw
+transcripts are kept outside the repository.
+
+What changed for the second freeze:
+
+1. **Parser.** It accepts prose before the last fenced ```` ```json ```` block, and `{"location", "kind"}` entries
+   in `items`. Tests cover both failure shapes, using synthetic fixtures.
+2. **Brief.** It now states that format, and says groupings belong in `notes`.
+3. **DI questions.** The six questions now ask for each declaration and registration site "as one item with its
+   file:line location and kind", with the implementation and registration distinctions going in `notes`. Subjects,
+   ids and what is asked are unchanged. `review.json` records both question hashes.
+
+Nothing else changed: labels, arms, model, client, binary, metrics, criteria, detector and intervals are all as
+before. The full baseline runs again from scratch under the second freeze, and the pilot's spend counts toward the
+baseline budget.
+
 ## Deviations from method.md and sampling.md
 
 - **2026-10-20:** method.md describes two paired arms. A third arm, `knowcode-unprompted`, was added before any scored
   run to measure criterion 4 without changing the other two. The plain arm's brief changed from "use only the granted
   plain tools" to "use only the granted tools", so that the unprompted arm can use word-for-word the same brief.
 - **2026-10-20:** labels, review and adjudication were done by AI agent sessions, as described above.
+- **2026-10-20:** the answer contract was corrected after a pilot, as described in "Pilot and correction". The six DI
+  questions were reworded for answer format only, after their labels and independent review.

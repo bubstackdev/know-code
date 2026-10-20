@@ -77,10 +77,13 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
         instructions += ', including the advertised KnowCode MCP tools; use repository names or configured defaults and do not add notes'
     prompt = (instructions+'.\nThe stated research-call budget is '+str(budget)+
               '; it is a soft budget and any overrun will be reported.\nSource copies:\n'+
-              '\n'.join(declarations)+'\nReturn one JSON object with status (answered, unsupported or error), '
-              'items (repo/path[:line] source locations) and notes.\nQuestion:\n'+question['question'])
+              '\n'.join(declarations)+'\nEnd your reply with one JSON object in a ```json block (text before it is '
+              'fine) with status (answered, unsupported or error), items and notes. items is one flat list: each '
+              'entry is a repo/path[:line] source location, or {"location": "repo/path:line", "kind": "..."} when the '
+              'question asks for kinds. Put groupings, distinctions and assumptions in notes, not in items.'
+              '\nQuestion:\n'+question['question'])
     if question.get('stratum') == 'two-hop-impact':
-        prompt += '\nAlso return hops as {"1": [source locations], "2": [source locations]} by shortest named-member distance; items is their union.'
+        prompt += '\nAlso include hops in the JSON object, as {"1": [source locations], "2": [source locations]} by shortest named-member distance; items is their union.'
     servers = {}
     additional_executables = []
     if knowcode_arm:
