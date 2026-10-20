@@ -737,37 +737,23 @@ pub fn gone(summaries: &[RepoSummary]) -> Vec<&RepoSummary> {
     out
 }
 
-thread_local! {
-    /// Gone checkouts that would have mattered to the answer being worked out on this thread (see [`note_missing`]).
-    static MISSING: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 /// Records that the repo at `root`, left out of cross-repo links because its checkout is gone (see [`distinct`]),
-/// would have mattered to the answer being worked out on this thread: it served a route the answer links, consumed a
-/// message, defined a table, named a module or role. The answer names it as missing (see [`take_missing`]).
+/// would have mattered to the answer being worked out (the query this thread runs, see [`kc_store::limits::current`]):
+/// it served a route the answer links, consumed a message, defined a table, named a module or role. The answer names
+/// it as missing (see [`take_missing`]).
 pub fn note_missing(root: &Path) {
-    MISSING.with(|m| {
-        let mut m = m.borrow_mut();
-        if !m.iter().any(|r| r == root) {
-            m.push(root.to_path_buf());
-        }
-    });
+    kc_store::limits::current().note_missing(root);
 }
 
-/// The repos [`note_missing`] recorded on this thread since the last call, sorted; each once.
+/// The repos [`note_missing`] recorded for the query this thread runs since the last call, sorted; each once.
 pub fn take_missing() -> Vec<PathBuf> {
-    let mut out = MISSING.with(|m| std::mem::take(&mut *m.borrow_mut()));
-    out.sort();
-    out
+    kc_store::limits::current().take_missing()
 }
 
 /// `f`, with what it notes as missing (see [`note_missing`]) dropped: for work reading every repo's facts, most of
 /// which the answer may not need.
 pub fn quietly<T>(f: impl FnOnce() -> T) -> T {
-    let before = MISSING.with(|m| std::mem::take(&mut *m.borrow_mut()));
-    let out = f();
-    MISSING.with(|m| *m.borrow_mut() = before);
-    out
+    kc_store::limits::current().quietly(f)
 }
 
 /// Records each gone repo of `gone` that `matters` accepts (see [`note_missing`]).

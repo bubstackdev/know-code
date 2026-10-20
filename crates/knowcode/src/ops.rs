@@ -236,11 +236,6 @@ pub fn open_fresh(root: &Path, no_sync: bool) -> Result<Opened> {
     Ok(Opened { root: root.to_path_buf(), store, head, sync, refresh_pending, generation, consulted: Consulted::default() })
 }
 
-thread_local! {
-    /// Repos the answer being worked out on this thread left out because they could not be read (see [`left_out`]).
-    static LEFT_OUT: std::cell::RefCell<Vec<Incomplete>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 /// [`open_fresh`] for `root`, one of the `roots` a query fans out over: when there are several, a repo that can't be
 /// read is left out and named in the answer (see [`left_out`]) instead of failing it. A query for one repo fails with
 /// its error, as does a cancelled query.
@@ -253,14 +248,15 @@ pub fn open_member(roots: &[PathBuf], root: &Path, no_sync: bool) -> Result<Opti
 
 /// Records that the answer leaves out the repo at `root`, one of the `roots` it fans out over, because reading it
 /// failed with `e`: `missing_repo` when its checkout is gone (deleted after the workspace was listed), `failed`
-/// otherwise, each naming the repo and the error. The envelope says so (see [`add_missing`]). Returns `e` when there
+/// otherwise, each naming the repo and the error. The query's context keeps it (see
+/// [`kc_store::limits::Operation::leave_out`]) and the envelope says so (see [`add_missing`]). Returns `e` when there
 /// is no other repo to answer with, or the query was cancelled.
 pub fn left_out(roots: &[PathBuf], root: &Path, e: anyhow::Error) -> Result<()> {
-    if roots.len() < 2 || kc_store::limits::cancelled() {
+    let query = kc_store::limits::current();
+    if roots.len() < 2 || query.is_cancelled() {
         return Err(e);
     }
-    let entry = unreadable(root, &e);
-    LEFT_OUT.with(|l| l.borrow_mut().push(entry));
+    query.leave_out(unreadable(root, &e));
     Ok(())
 }
 
@@ -274,11 +270,6 @@ pub fn unreadable(root: &Path, e: &anyhow::Error) -> Incomplete {
         Incomplete::new(Reason::Failed, format!("{name}: could not be read at {}; left out of this answer: {e:#}", root.display()))
             .with_hint("the other repos answered; fix the error and ask again")
     }
-}
-
-/// The entries [`left_out`] recorded on this thread since the last call.
-pub fn take_left_out() -> Vec<Incomplete> {
-    LEFT_OUT.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 
 impl Opened {
@@ -403,12 +394,18 @@ pub use crate::contract::{finish, push_incomplete};
 /// their deadline (see [`kc_store::limits`]): an `incomplete` entry with reason `deadline` each. Values computed from
 /// a cut child are not cached, so asking again (with a higher deadline) computes them again.
 pub fn add_cuts(env: &mut Value) {
-    for cut in kc_store::limits::take_cuts() {
+    add_notes(&kc_store::limits::current(), env);
+}
+
+/// What the query `query` collected on the side, said in its envelope: the cut children (see [`add_cuts`]), the repos
+/// left out and the gone checkouts (see [`add_missing`]); each taken from it once.
+pub fn add_notes(query: &kc_store::limits::Operation, env: &mut Value) {
+    for cut in query.take_cuts() {
         if cut.reason == "deadline" {
             push_incomplete(env, Incomplete::new(Reason::Deadline, cut.detail).with_hint(cut.hint));
         }
     }
-    add_missing(env);
+    add_missing_of(query, env);
 }
 
 /// Says in the envelope which repos the answer's cross-repo links left out because their checkout is gone, where
@@ -416,10 +413,15 @@ pub fn add_cuts(env: &mut Value) {
 /// `missing_repo` each, unless the envelope names the repo missing already. Also the repos a fan-out left out because
 /// they could not be read (see [`left_out`]).
 pub fn add_missing(env: &mut Value) {
-    for i in take_left_out() {
+    add_missing_of(&kc_store::limits::current(), env);
+}
+
+/// [`add_missing`] for the query `query`.
+fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
+    for i in query.take_left_out() {
         push_incomplete(env, i);
     }
-    for r in kc_index::workspace::take_missing() {
+    for r in query.take_missing() {
         let path = r.to_string_lossy();
         if crate::contract::incomplete_of(env).iter().any(|i| i.reason == Reason::MissingRepo && i.detail.contains(path.as_ref())) {
             continue;
@@ -6833,6 +6835,40 @@ pub(crate) mod tests {
         git(&["add", "-A"]);
         git(&["commit", "-q", "--allow-empty", "-m", "x"]);
         git(&["tag", tag]);
+    }
+
+    /// Two queries answered at once on two threads, as two MCP calls in the two lanes are: each envelope names only
+    /// the repos its own query left out and the gone checkouts its own links needed, whichever thread finishes first.
+    #[test]
+    fn invariant_concurrent_queries_never_see_each_others_incomplete_entries() {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let query = |name: &'static str| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let _q = kc_store::limits::enter(kc_store::limits::Operation::new());
+                let roots = [PathBuf::from(format!("/nowhere/{name}-a")), PathBuf::from(format!("/nowhere/{name}-b"))];
+                left_out(&roots, &roots[1], anyhow::anyhow!("unreadable")).unwrap();
+                kc_index::workspace::note_missing(Path::new(&format!("/nowhere/{name}-gone")));
+                // Both have collected; neither has answered.
+                barrier.wait();
+                let mut env = json!({ "items": [] });
+                if name == "second" {
+                    // The other answers first.
+                    barrier.wait();
+                }
+                add_cuts(&mut env);
+                if name == "first" {
+                    barrier.wait();
+                }
+                crate::contract::incomplete_of(&env).into_iter().map(|i| i.detail).collect::<Vec<_>>()
+            })
+        };
+        let (first, second) = (query("first"), query("second"));
+        for (name, details) in [("first", first.join().unwrap()), ("second", second.join().unwrap())] {
+            assert_eq!(details.len(), 2, "{details:?}");
+            assert!(details[0].starts_with(&format!("{name}-b: its checkout at /nowhere/{name}-b is gone")), "{details:?}");
+            assert!(details[1].starts_with(&format!("{name}-gone: indexed, but its checkout at /nowhere/{name}-gone")), "{details:?}");
+        }
     }
 
     fn impact_of(root: &Path, symbol: &str) -> ImpactRepo {

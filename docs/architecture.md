@@ -74,6 +74,16 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a
   cancelled call, is killed; the answer is incomplete with reason `deadline`, and nothing computed from it is cached.
 
+## The query context
+
+Each query (an MCP tool call's work, a CLI command) runs with one context object (`kc_store::limits::Operation`). It
+holds the query's cancellation, its wait for indexing, and what the query collects on the side for its answer's
+`incomplete` entries: child processes cut at their deadline, repos a workspace fan-out left out because they could
+not be read, and gone checkouts that would have mattered. The code finishing the answer takes each entry once. Two
+queries never share a context, so two calls running at once, or one after another on the same pooled thread, never
+see each other's entries. A thread that runs no query of its own (a CLI command, a test) gets its own context on first
+use.
+
 ## Across repos
 
 The workspace summary holds, per indexed repo, its manifests, the routes, messages and tables it serves or uses, and

@@ -1,4 +1,11 @@
-//! Execution limits: deadlines for child processes, and cancellation of the operation a thread is running.
+//! Execution limits: deadlines for child processes, and the per-query context ([`Operation`]) a thread runs: its
+//! cancellation, its freshness wait, and what it collects for the answer's envelope (cut children, repos left out of
+//! a fan-out, gone checkouts that mattered).
+//!
+//! One query is one [`Operation`], created where the query starts (an MCP tool call, a CLI command) and entered for
+//! the thread doing its work ([`enter`]). Everything the answer collects on the side is kept in it, never per thread,
+//! so two queries never see each other's entries, wherever they run, and a query's entries go with it to any thread
+//! entering it. A thread that entered none runs as its own operation, made on first use (a CLI command, a test).
 //!
 //! Output limits (`max_chars`, `limit`) cap what an answer shows, not what computing it costs. Here a child process
 //! (a `git` command, a search run in a child) gets a deadline by its kind, and is killed when it passes it or when the
@@ -10,6 +17,7 @@
 
 use std::cell::RefCell;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -80,16 +88,35 @@ impl std::fmt::Display for Cut {
 
 impl std::error::Error for Cut {}
 
-/// The operation a thread runs: whether it was cancelled, and the cuts made while running it.
+/// One query's context: whether it was cancelled, how long it may wait for indexing, and what it collected on the
+/// side for its answer's envelope, each taken once by the code finishing the answer.
 #[derive(Default)]
 pub struct Operation {
-    cancelled: AtomicBool,
+    /// Shared with the operations made [`Operation::sharing_cancellation`] of this one.
+    cancelled: Arc<AtomicBool>,
+    /// A thread's own operation, made because it entered none: its cuts are the process's loose ones (see [`LOOSE`]).
+    own: bool,
     cuts: Mutex<Vec<Cut>>,
+    /// When waiting for a repo's indexing gives up, answering from the committed snapshot; `None` waits for it.
+    freshness: Mutex<Option<Instant>>,
+    /// The `incomplete` entries for repos a fan-out left out because they could not be read.
+    left_out: Mutex<Vec<crate::answer::Incomplete>>,
+    /// Gone checkouts that would have mattered to the answer.
+    missing: Mutex<Vec<PathBuf>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Operation {
     pub fn new() -> Arc<Operation> {
         Arc::new(Operation::default())
+    }
+
+    /// A new operation, with nothing collected, cancelled whenever this one is: one query of several a request runs.
+    pub fn sharing_cancellation(&self) -> Arc<Operation> {
+        Arc::new(Operation { cancelled: self.cancelled.clone(), ..Operation::default() })
     }
 
     /// Cancels the operation: its running child is killed within [`POLL`], and no new one starts.
@@ -100,9 +127,69 @@ impl Operation {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
+
+    /// An error when the operation was cancelled: for the points where long work can stop early.
+    pub fn check(&self) -> anyhow::Result<()> {
+        if self.is_cancelled() {
+            return Err(anyhow::Error::new(Cut { reason: "cancelled", detail: "the request was cancelled".into(), hint: String::new() }));
+        }
+        Ok(())
+    }
+
+    /// Until when the operation waits for a repo's indexing; `None` waits until it is done.
+    pub fn freshness_deadline(&self) -> Option<Instant> {
+        *lock(&self.freshness)
+    }
+
+    /// Sets [`Operation::freshness_deadline`]; returns the one it replaces.
+    pub fn set_freshness_deadline(&self, deadline: Option<Instant>) -> Option<Instant> {
+        std::mem::replace(&mut *lock(&self.freshness), deadline)
+    }
+
+    /// Records that the answer leaves a repo out, as `entry` says.
+    pub fn leave_out(&self, entry: crate::answer::Incomplete) {
+        lock(&self.left_out).push(entry);
+    }
+
+    /// The entries [`Operation::leave_out`] recorded since the last call.
+    pub fn take_left_out(&self) -> Vec<crate::answer::Incomplete> {
+        std::mem::take(&mut *lock(&self.left_out))
+    }
+
+    /// Records that the gone checkout at `root` would have mattered to the answer; each once.
+    pub fn note_missing(&self, root: &Path) {
+        let mut m = lock(&self.missing);
+        if !m.iter().any(|r| r == root) {
+            m.push(root.to_path_buf());
+        }
+    }
+
+    /// The checkouts [`Operation::note_missing`] recorded since the last call, sorted.
+    pub fn take_missing(&self) -> Vec<PathBuf> {
+        let mut out = std::mem::take(&mut *lock(&self.missing));
+        out.sort();
+        out
+    }
+
+    /// `f`, with what it notes as missing dropped.
+    pub fn quietly<T>(&self, f: impl FnOnce() -> T) -> T {
+        let before = std::mem::take(&mut *lock(&self.missing));
+        let out = f();
+        *lock(&self.missing) = before;
+        out
+    }
+
+    /// The cuts made since the last call, by this operation and on threads running none; each once.
+    pub fn take_cuts(&self) -> Vec<Cut> {
+        let mut out = if self.own { Vec::new() } else { std::mem::take(&mut *lock(&self.cuts)) };
+        out.append(&mut lock(&LOOSE));
+        out.dedup();
+        out
+    }
 }
 
 thread_local! {
+    /// The operation the thread runs: the one entered (see [`enter`]), else its own, made on first use.
     static CURRENT: RefCell<Option<Arc<Operation>>> = const { RefCell::new(None) };
 }
 
@@ -126,22 +213,20 @@ impl Drop for Entered {
     }
 }
 
-fn current() -> Option<Arc<Operation>> {
-    CURRENT.with(|c| c.borrow().clone())
+/// The operation this thread runs: the one entered, else the thread's own.
+pub fn current() -> Arc<Operation> {
+    CURRENT.with(|c| c.borrow_mut().get_or_insert_with(|| Arc::new(Operation { own: true, ..Operation::default() })).clone())
 }
 
 /// Whether this thread's operation was cancelled.
 pub fn cancelled() -> bool {
-    current().is_some_and(|op| op.is_cancelled())
+    current().is_cancelled()
 }
 
 /// An error when this thread's operation was cancelled: for the points where long work can stop early (before
 /// opening the next repo's index).
 pub fn check() -> anyhow::Result<()> {
-    if cancelled() {
-        return Err(anyhow::Error::new(Cut { reason: "cancelled", detail: "the request was cancelled".into(), hint: String::new() }));
-    }
-    Ok(())
+    current().check()
 }
 
 /// Every cut made in the process so far, never reset: a value computed while it moved may be missing what a cut
@@ -156,18 +241,14 @@ pub fn cuts_so_far() -> usize {
 
 fn record(cut: Cut) {
     CUT_COUNT.fetch_add(1, Ordering::Relaxed);
-    match current() {
-        Some(op) => op.cuts.lock().unwrap_or_else(|e| e.into_inner()).push(cut),
-        None => LOOSE.lock().unwrap_or_else(|e| e.into_inner()).push(cut),
-    }
+    let op = current();
+    lock(if op.own { &LOOSE } else { &op.cuts }).push(cut);
 }
 
-/// The cuts made since the last call, by this thread's operation and on threads running none; each once.
+/// The cuts made since the last call, by this thread's operation and on threads running none; each once (see
+/// [`Operation::take_cuts`]).
 pub fn take_cuts() -> Vec<Cut> {
-    let mut out = current().map(|op| std::mem::take(&mut *op.cuts.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-    out.append(&mut LOOSE.lock().unwrap_or_else(|e| e.into_inner()));
-    out.dedup();
-    out
+    current().take_cuts()
 }
 
 /// How often a waiting child is checked for its deadline and for cancellation.
@@ -178,9 +259,7 @@ pub const POLL: Duration = Duration::from_millis(20);
 /// and a [`Cut`] returned as the error. `what` names the command in the cut's detail.
 pub fn output(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) -> anyhow::Result<Output> {
     let op = current();
-    if op.as_ref().is_some_and(|o| o.is_cancelled()) {
-        return Err(check().expect_err("cancelled"));
-    }
+    op.check()?;
     // Update installers can spawn curl/tar. Give this explicitly requested child its own group, so a timeout
     // can clean up its descendants without signalling any pre-existing terminal session or process.
     if kind == Kind::UpdateInstall {
@@ -217,7 +296,7 @@ pub fn output(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) ->
     drop(closed_tx);
     let started = Instant::now();
     let deadline = kind.deadline();
-    let stopped = wait(&mut child, &closed, started, deadline, op.as_deref())?;
+    let stopped = wait(&mut child, &closed, started, deadline, &op)?;
     let status = match stopped {
         Ok(status) => status,
         Err(reason) => {
@@ -255,14 +334,14 @@ fn wait(
     closed: &std::sync::mpsc::Receiver<()>,
     started: Instant,
     deadline: Option<Duration>,
-    op: Option<&Operation>,
+    op: &Operation,
 ) -> std::io::Result<Result<std::process::ExitStatus, &'static str>> {
     let mut open = 2;
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Ok(status));
         }
-        if op.is_some_and(Operation::is_cancelled) {
+        if op.is_cancelled() {
             return Ok(Err("cancelled"));
         }
         if deadline.is_some_and(|d| started.elapsed() >= d) {
@@ -329,6 +408,70 @@ mod tests {
         assert!(check().is_err());
         assert!(output(Command::new("true"), Kind::Search, "true", None).is_err());
         unsafe { std::env::remove_var("KNOWCODE_SEARCH_DEADLINE") };
+    }
+
+    /// Two queries running at once, on two threads, or one after the other on one thread (a call nested in another,
+    /// interleaved), each see only what they collected; a query's entries go with it to any thread entering it.
+    #[test]
+    fn invariant_a_query_sees_only_what_it_collected() {
+        use crate::answer::{Incomplete, Reason};
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let run = |name: &'static str| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let op = Operation::new();
+                let _in = enter(op.clone());
+                for i in 0..50 {
+                    current().leave_out(Incomplete::new(Reason::Failed, format!("{name} {i}")));
+                    current().note_missing(Path::new(&format!("/gone/{name}")));
+                    if i == 25 {
+                        // Both queries are half way: neither has taken anything yet.
+                        barrier.wait();
+                    }
+                }
+                barrier.wait();
+                (current().take_left_out(), current().take_missing())
+            })
+        };
+        let (a, b) = (run("a"), run("b"));
+        for (name, (left, missing)) in [("a", a.join().unwrap()), ("b", b.join().unwrap())] {
+            assert_eq!(left.len(), 50);
+            assert!(left.iter().all(|e| e.detail.starts_with(&format!("{name} "))), "{left:?}");
+            assert_eq!(missing, [PathBuf::from(format!("/gone/{name}"))]);
+        }
+
+        // Interleaved on one thread: a second query entered while the first runs, then the first again.
+        let first = Operation::new();
+        let _outer = enter(first.clone());
+        current().note_missing(Path::new("/gone/first"));
+        {
+            let second = first.sharing_cancellation();
+            let _inner = enter(second.clone());
+            current().note_missing(Path::new("/gone/second"));
+            current().leave_out(Incomplete::new(Reason::Failed, "second"));
+            assert_eq!(current().take_missing(), [PathBuf::from("/gone/second")]);
+            first.cancel();
+            assert!(second.is_cancelled(), "cancelling the request cancels each of its queries");
+        }
+        assert!(current().take_left_out().is_empty());
+        assert_eq!(current().take_missing(), [PathBuf::from("/gone/first")]);
+
+        // Carried to a worker thread entering the same query.
+        let op = Operation::new();
+        let worker = op.clone();
+        std::thread::spawn(move || {
+            let _in = enter(worker);
+            current().note_missing(Path::new("/gone/worker"));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(op.take_missing(), [PathBuf::from("/gone/worker")]);
+
+        // The freshness wait is the query's.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert_eq!(op.set_freshness_deadline(Some(deadline)), None);
+        assert_eq!(op.freshness_deadline(), Some(deadline));
+        assert_eq!(Operation::new().freshness_deadline(), None);
     }
 
     #[test]

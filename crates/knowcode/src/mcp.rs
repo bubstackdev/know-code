@@ -788,16 +788,15 @@ fn with_cuts(f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> impl
 /// future is dropped first, so a cancelled call never lets more work run than the lanes allow.
 async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
     let lane = lane(child).await?;
-    let op = OPERATION.try_with(|o| o.clone()).unwrap_or_else(|_| kc_store::limits::Operation::new());
+    let call = OPERATION.try_with(|o| o.clone()).unwrap_or_else(|_| kc_store::limits::Operation::new());
     // Dropping the awaiting future (the client went away) cancels the work too.
-    let mut cancel_on_drop = CancelOnDrop(Some(op.clone()));
+    let mut cancel_on_drop = CancelOnDrop(Some(call.clone()));
+    // The work is one query: its own context, starting with nothing collected, cancelled with the call.
+    let query = call.sharing_cancellation();
     let result = tokio::task::spawn_blocking(move || {
         let _lane = lane;
-        let _entered = kc_store::limits::enter(op);
+        let _entered = kc_store::limits::enter(query);
         let _freshness = crate::refresh::Budget::enter(std::time::Duration::from_secs(2));
-        // A pooled thread: what an earlier call that failed noted as missing is not this call's.
-        drop(kc_index::workspace::take_missing());
-        drop(ops::take_left_out());
         kc_index::workspace::clear_cached_reads();
         let result = f();
         drop(kc_index::cache::take_touched());
