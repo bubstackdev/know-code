@@ -408,6 +408,76 @@ fn malformed_and_empty_files() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// `status` always shows the policy it applies, indexed or not: the file's state, the name it looked for, the level,
+/// the threshold and how many paths are blocked; and the CLI text says it in one line.
+#[test]
+fn status_always_shows_the_privacy_policy() {
+    let base = scratch("status");
+    let env = Env::new(&base);
+    let rules: &'static str = "level: 3\nrules:\n  - path: secret/\n    level: 1\n  - path: keys.txt\n    level: 1\n";
+    // (case, the privacy file's text if any, its state, the global level, blocked paths, whole repo blocked, text line)
+    type Case = (&'static str, Option<&'static str>, &'static str, u8, usize, bool, &'static str);
+    let cases: [Case; 3] = [
+        ("absent", None, "absent", 3, 0, false, "privacy  .knowcode-privacy.yml absent; level 3, blocks at 1 and below; nothing blocked"),
+        ("read", Some(rules), "read", 3, 2, false, "privacy  .knowcode-privacy.yml read; level 3, blocks at 1 and below; 2 paths blocked"),
+        (
+            "malformed",
+            Some("rules: [unclosed\n"),
+            "malformed",
+            1,
+            0,
+            true,
+            "privacy  .knowcode-privacy.yml malformed, taken as restricted; level 1, blocks at 1 and below; the whole repo blocked",
+        ),
+    ];
+    for indexed in [false, true] {
+        for (case, text, state, level, paths, whole, line) in cases {
+            let repo = base.join(format!("{case}-{indexed}"));
+            std::fs::create_dir_all(&repo).unwrap();
+            git(&repo, &["init", "-q"]);
+            write(&repo.join("src/main.py"), "def run():\n    return 1\n");
+            write(&repo.join("secret/store.py"), "def seal():\n    return 2\n");
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-qm", "Add the app"]);
+            if indexed {
+                let (code, out) = env.run(&base, &["index", repo.to_str().unwrap()]);
+                assert_eq!(code, 0, "{out}");
+            }
+            if let Some(text) = text {
+                write(&repo.join(".knowcode-privacy.yml"), text);
+            }
+            let what = format!("{case}, indexed: {indexed}");
+            let v = env.json(&repo, &["status", "--json"]);
+            let p = &v["privacy"];
+            assert_eq!(v["index"]["exists"] == json!(false), !indexed, "{what}: {v}");
+            assert_eq!(p["file"], state, "{what}: {v}");
+            assert_eq!(p["name"], ".knowcode-privacy.yml", "{what}: {v}");
+            assert_eq!(p["global_level"], level, "{what}: {v}");
+            assert_eq!(p["block_at"], 1, "{what}: {v}");
+            assert_eq!(p["blocked_paths"], paths, "{what}: {v}");
+            assert_eq!(p["blocked"] == "repo", whole, "{what}: {v}");
+            let (code, out) = env.run(&repo, &["status"]);
+            assert_eq!(code, 0, "{what}: {out}");
+            assert!(out.lines().any(|l| l == line), "{what}: {out}");
+        }
+    }
+    // A configured file name: the default-named file is not read, and status says which name it looked for.
+    write(&env.config.join("config.toml"), "[privacy]\nfile = \".team-policy.yml\"\n");
+    let repo = base.join("read-true");
+    let v = env.json(&repo, &["status", "--json"]);
+    assert_eq!(v["privacy"]["file"], "absent", "{v}");
+    assert_eq!(v["privacy"]["name"], ".team-policy.yml", "{v}");
+    assert_eq!(v["privacy"]["blocked_paths"], 0, "{v}");
+    std::fs::rename(repo.join(".knowcode-privacy.yml"), repo.join(".team-policy.yml")).unwrap();
+    let v = env.json(&repo, &["status", "--json"]);
+    assert_eq!(v["privacy"]["file"], "read", "{v}");
+    assert_eq!(v["privacy"]["name"], ".team-policy.yml", "{v}");
+    assert_eq!(v["privacy"]["blocked_paths"], 2, "{v}");
+    let (_, out) = env.run(&repo, &["status"]);
+    assert!(out.contains("privacy  .team-policy.yml read; level 3, blocks at 1 and below; 2 paths blocked"), "{out}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A line-delimited JSON-RPC client of `knowcode serve`.
 struct Mcp {
     child: std::process::Child,

@@ -221,6 +221,8 @@ impl Blocked {
 /// A repo's privacy policy, as its file and the config give it.
 #[derive(Debug, Clone)]
 pub struct Privacy {
+    /// The file's name looked for at the repo's root (`[privacy] file`).
+    pub file: String,
     pub state: FileState,
     pub levels: Levels,
     pub block_at: u8,
@@ -273,7 +275,7 @@ impl Privacy {
         };
         blocked.sort();
         blocked.dedup();
-        Privacy { state, levels, block_at, malformed, blocked, whole }
+        Privacy { file: format.file.clone(), state, levels, block_at, malformed, blocked, whole }
     }
 
     /// Whether the whole repo is blocked.

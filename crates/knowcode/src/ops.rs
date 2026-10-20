@@ -4341,10 +4341,8 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
         if let Some(scip) = scip_status(&store)? {
             value["scip"] = scip;
         }
-        // Shown when it decides something: what it blocks, or that it can't be read.
-        if privacy.blocks_anything() || matches!(privacy.state, kc_index::privacy::FileState::Malformed { .. }) {
-            value["privacy"] = privacy_status(&privacy);
-        }
+        // Always shown, so a privacy file that was never found (a wrong `[privacy] file`) is told from one read.
+        value["privacy"] = privacy_status(&privacy);
         if let Some(i) = withheld(root) {
             push_incomplete(&mut value, i);
         }
@@ -4368,13 +4366,16 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
     Ok(Out { env, data: out })
 }
 
-/// A repo's AI privacy policy, for `status`: the file's state (with why, when malformed), its global level, the
-/// threshold, and what is blocked (the repo, or the rules' own paths; never a path below them).
+/// A repo's AI privacy policy, for `status`: the file's state (with why, when malformed), the file name looked for,
+/// its global level, the threshold, how many paths are blocked, and what is blocked (the repo, or the rules' own
+/// paths; never a path below them).
 fn privacy_status(p: &kc_index::privacy::Privacy) -> Value {
     let mut v = json!(p.state);
+    v["name"] = json!(p.file);
     v["global_level"] = json!(p.levels.global);
     v["block_at"] = json!(p.block_at);
     let b = p.blocked();
+    v["blocked_paths"] = json!(b.paths.len());
     if b.whole {
         v["blocked"] = json!("repo");
     } else if !b.paths.is_empty() {
