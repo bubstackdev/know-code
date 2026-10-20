@@ -124,6 +124,35 @@ class TranscriptTests(unittest.TestCase):
         events=self.valid();events[-1]['result']='```json\n'+events[-1]['result']+'\n```'
         self.assertEqual(self.run_audit(events)['answer']['status'],'answered')
 
+    def test_prose_before_the_last_json_block_is_allowed(self):
+        # Synthetic shapes of the pilot's format failures: prose, then a fenced answer.
+        answer=dict(status='answered',items=['example/app.ts:8'],notes='n')
+        events=self.valid()
+        events[-1]['result']='I found one caller.\n\n```json\n'+json.dumps(answer)+'\n```\nDone.'
+        out=self.run_audit(events)
+        self.assertEqual((out['answer']['status'],out['answer']['items']),('answered',['example/app.ts:8']))
+        draft=dict(status='error',items=[],notes='draft')
+        events=self.valid()
+        events[-1]['result']='Draft:\n```json\n'+json.dumps(draft)+'\n```\nFinal:\n```json\n'+json.dumps(answer)+'\n```'
+        self.assertEqual(self.run_audit(events)['answer']['items'],['example/app.ts:8'])
+        events=self.valid();events[-1]['result']='Answer:\n```json\n{"status": "answered", "items": [\n```'
+        self.assertEqual(self.run_audit(events)['answer_issues'],['answer is not one complete JSON object'])
+
+    def test_grouped_items_fail_and_kinded_items_are_flattened(self):
+        grouped=dict(status='answered',items={'declarations':['example/app.ts:8'],'registrations':[]})
+        events=self.valid();events[-1]['result']='```json\n'+json.dumps(grouped)+'\n```'
+        out=self.run_audit(events)
+        self.assertEqual((out['answer']['status'],out['answer_issues']),('error',['invalid answer contract']))
+        kinded=dict(status='answered',items=[{'location':'example/app.ts:8','kind':'declaration'},
+                                             {'location':'example/di.ts:3','kind':'registration'},'example/x.ts:1'])
+        events=self.valid();events[-1]['result']='Found two.\n```json\n'+json.dumps(kinded)+'\n```'
+        out=self.run_audit(events)
+        self.assertEqual(out['answer']['items'],['example/app.ts:8','example/di.ts:3','example/x.ts:1'])
+        self.assertEqual(out['answer']['item_kinds'],['declaration','registration',None])
+        for bad in [{'location':'example/app.ts:8','role':'x'},{'kind':'declaration'},{'location':3}]:
+            events=self.valid();events[-1]['result']=json.dumps(dict(status='answered',items=[bad]))
+            self.assertEqual(self.run_audit(events)['answer']['status'],'error')
+
     def test_unknown_paths_and_duplicate_items_are_preserved_for_scoring(self):
         events=self.valid();events[-1]=result(dict(status='answered',items=['/study/source/example/app.ts:8','example/app.ts:8','/outside/wrong.ts:1','example/../wrong.ts'],notes='test'))
         out=self.run_audit(events)

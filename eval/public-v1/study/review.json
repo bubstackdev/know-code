@@ -947,7 +947,9 @@
     }
   ],
   "primary_labels_read": false,
-  "questions_sha256": "42cef56a0d4b040996b925cd71fa46641d7951a334d1d52657efecd154f79e40",
+  "question_revision": "2026-10-20, after review and after the pilot: the six DI questions ask for one flat list with a kind per item instead of separate groups (answer format only; subjects, ids and what is asked are unchanged). Labels are unaffected.",
+  "questions_sha256": "1a05b2b3631a7574f5ac5a7bbe13d3aa258ea96b48338ebd7545b620b09bd79e",
+  "reviewed_questions_sha256": "42cef56a0d4b040996b925cd71fa46641d7951a334d1d52657efecd154f79e40",
   "reviewer": "Independent blind AI labeller sessions (Claude Opus 5.5 in Claude Code, separate sessions with no access to primary labels, evidence reports or tool outputs): A for lookup, DI and impact; B for HTTP. Adjudicated by the study operator session (also an AI agent). No human has reviewed these labels.",
   "reviewer_sessions": {
     "blind-a": "independent blind AI labeller session A (model: claude-opus-5-5)",
