@@ -1340,7 +1340,7 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         }
     }
     items.truncate(limit);
-    let mut citer = crate::cite::Citer::new(opened.iter().map(|o: &Opened| o.root.clone()));
+    let mut citer = crate::cite::Citer::new([]).with_stores(opened.iter().map(|o: &Opened| (o.root.clone(), &o.store)));
     for (root, h) in &mut items {
         citer.refs(root, std::iter::once(h));
     }
@@ -2491,8 +2491,14 @@ pub fn context_raised(
             ctx.conformers_elsewhere_total = (n > elsewhere_max).then_some(n);
             ctx.conformers_elsewhere.truncate(elsewhere_max);
             // Each caller and callee quotes its line; without cites, callers show it as `code`.
-            let mut citer = crate::cite::Citer::new(std::iter::once(o.root.clone()).chain(deps.iter().map(|d| d.root.clone())));
+            let mut citer = crate::cite::Citer::new([])
+                .with_stores(std::iter::once((o.root.clone(), &o.store)).chain(deps.iter().map(|d| (d.root.clone(), &d.store))));
             if citer.on() {
+                // The symbol's own lines: checked, not quoted again (`source` has them).
+                let mut own = citer.span(&o.root, &ctx.symbol);
+                own.text = None;
+                own.cut = None;
+                ctx.cite = Some(own);
                 citer.refs(&o.root, ctx.callers.iter_mut().chain(ctx.callees.iter_mut()));
                 unread.extend(citer.incomplete());
                 for h in &mut ctx.callers {
@@ -2911,7 +2917,7 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
             let budget = if t.truncated { 0 } else { FRONTIER_CHECKS };
             frontiers.push(crossing.frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?);
             ci_cuts.push(std::mem::take(&mut crossing.ci_cut));
-            let mut citer = crate::cite::Citer::new(crossing.roots());
+            let mut citer = crate::cite::Citer::new([]).with_stores(crossing.stores());
             citer.trace(&o.root, &mut t);
             cite_notes.extend(citer.incomplete());
             drop(crossing);
@@ -3529,9 +3535,14 @@ impl<'a> HttpCrossing<'a> {
         self.stores.len() + 1
     }
 
-    /// The roots of the repos open, the home repo first.
-    pub(crate) fn roots(&self) -> Vec<PathBuf> {
-        std::iter::once(self.home.root.clone()).chain(self.stores.iter().map(|(r, _)| r.clone())).collect()
+    /// The indexes open, the home repo's first: what the answer read, for checking its cites (see `crate::cite`).
+    pub(crate) fn stores(&self) -> Vec<(PathBuf, &Store)> {
+        std::iter::once((self.home.root.clone(), &self.home.store)).chain(self.stores.iter().map(|(r, s)| (r.clone(), s))).collect()
+    }
+
+    /// Whether the repo at `root` is open.
+    pub(crate) fn opened_root(&self, root: &Path) -> bool {
+        root == self.home.root || self.stores.iter().any(|(r, _)| r == root)
     }
 
     /// The crossings from `qualified` (symbol `id`, defined in `file` of the repo at `root`, which is open) of the edge
@@ -4906,8 +4917,6 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         let (frontier, frontier_unchecked) =
             crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
-        let cite_roots = crossing.roots();
-        drop(crossing);
         let registrations = registrations_on_path(conn, &impact)?;
         if impact.affected.iter().any(|a| kc_store::sql::is_sql_path(&a.file)) {
             impact.collapse_sql_copies();
@@ -5010,10 +5019,12 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         } else {
             Vec::new()
         };
-        let mut citer = crate::cite::Citer::new(cite_roots);
+        let mut citer = crate::cite::Citer::new([]).with_stores(crossing.stores());
         citer.impact(&o.root, &mut impact);
         citer.refs(&o.root, cross_repo.iter_mut());
         cite_notes.extend(citer.incomplete());
+        drop(citer);
+        drop(crossing);
         found.push(ImpactRepo {
             root: o.root.clone(),
             impact,
