@@ -214,8 +214,8 @@ KnowCode's own configuration directory is a different one; `--delete-config` rem
 
 In Claude Code, `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` are marked always loaded (`_meta`
 `anthropic/alwaysLoad`), so they are in context from the start instead of waiting behind tool search; their schemas
-cost about 1k tokens up front. The other tools stay deferred. A server-level `alwaysLoad` setting overrides the mark,
-and a profile that leaves one of the four out doesn't list it.
+cost about 1.6k tokens up front (measured in [schema cost](../eval/schema-cost.md)). The other tools stay deferred.
+A server-level `alwaysLoad` setting overrides the mark, and a profile that leaves one of the four out doesn't list it.
 
 ## MCP tools
 
