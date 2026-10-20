@@ -136,13 +136,17 @@ settings. `--print` prints the configuration without changing anything, `--clien
 profile, and `--replace` replaces a different server already registered as `knowcode` (Codex, Cursor). Start a new
 client session afterwards.
 
+`self-update` updates a shell-installer installation. For a Homebrew installation it refuses and names
+`brew upgrade bubstackdev/tap/knowcode`, which updates it instead.
+
 Updating keeps the Claude Code plugin in step with the binary. After `self-update` installs a release, and whenever
 `serve` starts and finds that the plugin bundle setup wrote is older than the binary, KnowCode rewrites the bundle
 (manifest, hook and skills, keeping the binary path and overrides setup recorded) and runs
 `claude plugin update knowcode@knowcode-local --scope user` for each Claude profile it was set up in, so Claude Code
 picks up the new version in its next session. It touches only the bundle at the path setup recorded. If the `claude`
 CLI is missing or the update fails, it says so once on stderr with the `knowcode setup claude` command that finishes
-it; the update and the server go on regardless. Codex and Cursor registrations name only the binary, so an update
+it; the update and the server go on regardless. `brew upgrade` doesn't run `self-update`, so for a Homebrew
+installation the next `serve` start does the refresh. Codex and Cursor registrations name only the binary, so an update
 needs nothing there.
 
 `uninstall` removes the registrations setup recorded, the bundled plugin files, the cached indexes, KnowCode's lock
