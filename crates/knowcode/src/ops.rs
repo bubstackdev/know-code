@@ -3438,8 +3438,9 @@ pub(crate) struct HttpCrossing<'a> {
     chains: Option<Vec<kc_index::ci::Chain>>,
     stores: Vec<(PathBuf, Store)>,
     no_sync: bool,
-    /// The edges `impact` and `trace` follow (an `http`, `bus` or `sql` crossing is an edge too).
-    filter: trace::EdgeFilter,
+    /// The edges `impact` and `trace` follow (an `http`, `bus` or `sql` crossing is an edge too), with their evidence
+    /// policy, for the query the walk runs for (see [`crate::graph::Gate`]).
+    gate: crate::graph::Gate,
     /// Repos that may be open at once, the home repo included (`path` and `flow` set it).
     max_repos: usize,
     /// A repo was left closed because `max_repos` were open.
@@ -3456,7 +3457,7 @@ impl<'a> HttpCrossing<'a> {
             chains: None,
             stores: Vec::new(),
             no_sync,
-            filter: trace::EdgeFilter::default(),
+            gate: crate::graph::Gate::default(),
             max_repos: usize::MAX,
             limited: false,
             ci_cut: Vec::new(),
@@ -3465,7 +3466,7 @@ impl<'a> HttpCrossing<'a> {
 
     /// Follows only the edges `filter` allows.
     pub(crate) fn with_filter(mut self, filter: &trace::EdgeFilter) -> Self {
-        self.filter = filter.clone();
+        self.gate = crate::graph::Gate::new(filter.clone());
         self
     }
 
@@ -3499,6 +3500,18 @@ impl<'a> HttpCrossing<'a> {
     /// Repos open, the home repo included.
     pub(crate) fn opened(&self) -> usize {
         self.stores.len() + 1
+    }
+
+    /// The crossings from `qualified` (symbol `id`, defined in `file` of the repo at `root`, which is open) of the edge
+    /// kinds the walk follows, each arrival at its confidence across the link (see [`crate::graph::Crossing`]): what
+    /// `impact`, `trace` and the frontier check read across repos.
+    fn crossings(&mut self, root: &Path, id: i64, qualified: &str, file: &str) -> Result<Vec<crate::graph::Crossing>> {
+        let landings = self.landings(root, id, qualified, file)?;
+        Ok(landings
+            .into_iter()
+            .filter(|l| self.gate.allows(l.via.edge()))
+            .map(|l| crate::graph::Crossing::new(l.root, l.via, l.publish, l.creators))
+            .collect())
     }
 
     /// The code depending on `qualified` (symbol `id`, defined in `file` of the repo at `root`, which is open) across
@@ -3883,8 +3896,8 @@ impl<'a> HttpCrossing<'a> {
         };
         // Symbols an HTTP route may continue from: in a repo, at a hop, expanded.
         let mut work: Vec<(PathBuf, i64, String, String, u8)> = impact.scope.iter().map(|s| (home.clone(), s.id, s.qualified.clone(), s.file.clone(), 0)).collect();
-        let filter = self.filter.clone();
-        let expands = |a: &trace::Affected| filter.follows(a.confidence, a.evidence.as_ref());
+        let gate = self.gate.clone();
+        let expands = |a: &trace::Affected| gate.follows(a.confidence, a.evidence.as_ref());
         work.extend(impact.affected.iter().filter(|a| expands(a)).map(|a| (home.clone(), a.id, a.qualified.clone(), a.file.clone(), a.hop)));
         let mut i = 0;
         while i < work.len() {
@@ -3894,20 +3907,17 @@ impl<'a> HttpCrossing<'a> {
             if hop >= depth || seen.get(&root).and_then(|r| r.hop(id)).is_some_and(|h| h < hop) {
                 continue;
             }
-            for landing in self.landings(&root, id, &qualified, &file)? {
-                if !self.filter.allows(landing.via.edge()) {
-                    continue;
-                }
+            self.gate.expand()?;
+            for landing in self.crossings(&root, id, &qualified, &file)? {
                 let label = (landing.root != home).then(|| repo_name(&landing.root));
                 let seen_there = seen.entry(landing.root.clone()).or_default();
                 let mut from = Vec::new();
-                for (s, confidence, site) in landing.creators {
-                    let confidence = trace::via_confidence(&landing.via, confidence);
-                    let evidence = landing.via.evidence(confidence);
-                    let verdict = self.filter.judge((&root, id, &landing.root, s.id, landing.via.edge(), &site), confidence, evidence.as_ref());
+                for arrival in &landing.arrivals {
+                    let verdict = landing.judge(&self.gate, &root, id, arrival);
                     if verdict == Verdict::Exclude {
                         continue;
                     }
+                    let (s, confidence) = (arrival.sym(), arrival.confidence);
                     let new = !rows.contains_key(&(label.clone(), s.id));
                     if new && impact.affected.len() >= max {
                         impact.truncated = true;
@@ -3926,7 +3936,7 @@ impl<'a> HttpCrossing<'a> {
                         edge: landing.via.edge(),
                         confidence,
                         via: qualified.clone(),
-                        site,
+                        site: arrival.site().clone(),
                         repo: label.clone(),
                         http: landing.via.http(),
                         bus: landing.via.bus(),
@@ -3936,7 +3946,7 @@ impl<'a> HttpCrossing<'a> {
                         module: landing.via.module(),
                         copies: Vec::new(),
                         via_removed: false,
-                        evidence,
+                        evidence: arrival.evidence.clone(),
                     };
                     if grow {
                         // At the depth asked for, it is where the walk stops.
@@ -3951,7 +3961,7 @@ impl<'a> HttpCrossing<'a> {
                 }
                 let room = max.saturating_sub(impact.affected.len());
                 let (more, truncated) =
-                    trace::dependents_filtered(self.store(&landing.root).conn(), &from, hop + 1, depth, room, seen_there, &self.filter)?;
+                    trace::dependents_filtered(self.store(&landing.root).conn(), &from, hop + 1, depth, room, seen_there, self.gate.filter())?;
                 impact.truncated |= truncated;
                 for mut a in more {
                     a.repo.clone_from(&label);
@@ -4012,7 +4022,7 @@ impl<'a> HttpCrossing<'a> {
             let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
-            let (found, skipped) = trace::frontier(self.store(&root).conn(), &group, &mine, &self.filter, room)?;
+            let (found, skipped) = trace::frontier(self.store(&root).conn(), &group, &mine, self.gate.filter(), room)?;
             unchecked += skipped;
             out.extend(found);
             // Dependents across a route, the bus, SQL or a deploy, of a stop that has none through references.
@@ -4020,16 +4030,11 @@ impl<'a> HttpCrossing<'a> {
             for st in without {
                 let Some(sym) = trace::symbol(self.store(&root).conn(), st.id)? else { continue };
                 let mut beyond = HashSet::new();
-                for landing in self.landings(&root, sym.id, &sym.qualified(), &sym.file)? {
-                    if !self.filter.allows(landing.via.edge()) {
-                        continue;
-                    }
+                for landing in self.crossings(&root, sym.id, &sym.qualified(), &sym.file)? {
                     let there = (landing.root != self.home.root).then(|| repo_name(&landing.root));
-                    for (c, confidence, _) in &landing.creators {
-                        let confidence = trace::via_confidence(&landing.via, confidence);
-                        let evidence = landing.via.evidence(confidence);
-                        if !listed(there.as_deref(), c.id) && self.filter.policy().judge(confidence, evidence.as_ref()) != Verdict::Exclude {
-                            beyond.insert((there.clone(), c.id));
+                    for a in &landing.arrivals {
+                        if !listed(there.as_deref(), a.sym().id) && !self.gate.leaves_out(a.confidence, a.evidence.as_ref()) {
+                            beyond.insert((there.clone(), a.sym().id));
                         }
                     }
                 }
@@ -4068,7 +4073,7 @@ impl<'a> HttpCrossing<'a> {
             queued = t.nodes.len();
             let Some(std::cmp::Reverse((_, at))) = queue.pop() else { break };
             let n = &t.nodes[at];
-            let confident = !n.confidence.is_empty() && self.filter.follows(n.confidence, n.evidence.as_ref());
+            let confident = !n.confidence.is_empty() && self.gate.follows(n.confidence, n.evidence.as_ref());
             let expanded = at == 0 || (confident && ((n.direction == "in" && inward) || (n.direction == "out" && outward)));
             if !expanded || n.depth >= depth {
                 continue;
@@ -4081,14 +4086,12 @@ impl<'a> HttpCrossing<'a> {
                 continue;
             }
             let (id, qualified, file) = (n.id, n.qualified.clone(), n.file.clone());
+            self.gate.expand()?;
             // A publishing method's consumers run after it (out); a message type's consumers depend on it (in), as
             // does the code requesting an action.
             let publisher = matches!(n.kind.as_str(), "method" | "function" | "init");
             let downward = at == 0 || n.direction == "out";
-            for landing in self.landings(&root, id, &qualified, &file)? {
-                if !self.filter.allows(landing.via.edge()) {
-                    continue;
-                }
+            for landing in self.crossings(&root, id, &qualified, &file)? {
                 let downstream = publisher && matches!(landing.via, trace::Via::Bus(_));
                 if (downstream && !(outward && downward)) || (!downstream && !inward) {
                     continue;
@@ -4097,20 +4100,18 @@ impl<'a> HttpCrossing<'a> {
                 if let Some(l) = &label {
                     roots.insert(l.clone(), landing.root.clone());
                 }
-                for c in &landing.creators {
+                for a in &landing.arrivals {
                     // Code already in the tree (a test calling the action directly, say) isn't listed again.
-                    if t.nodes.iter().any(|n| n.id == c.0.id && n.repo == label) {
+                    if t.nodes.iter().any(|n| n.id == a.sym().id && n.repo == label) {
                         continue;
                     }
-                    let confidence = trace::via_confidence(&landing.via, c.1);
-                    let evidence = landing.via.evidence(confidence);
-                    if self.filter.judge((&root, id, &landing.root, c.0.id, landing.via.edge(), &c.2), confidence, evidence.as_ref()) == Verdict::Exclude {
+                    if landing.judge(&self.gate, &root, id, a) == Verdict::Exclude {
                         continue;
                     }
                     let dir = if downstream { "out" } else { "in" };
-                    let Some(idx) = trace::push_via(t, max, at, c, label.clone(), landing.via.clone(), dir) else { return Ok(()) };
+                    let Some(idx) = trace::push_via(t, max, at, &a.creator, label.clone(), landing.via.clone(), dir) else { return Ok(()) };
                     // A node the tree won't grow: at its depth, or reached by an ambiguous link.
-                    let (n, follows) = (&t.nodes[idx], self.filter.follows(confidence, evidence.as_ref()));
+                    let (n, follows) = (&t.nodes[idx], self.gate.follows(a.confidence, a.evidence.as_ref()));
                     let reason = if !follows { Some("ambiguous") } else if n.depth >= depth { Some("depth") } else { None };
                     if let Some(reason) = reason {
                         let stop = trace::Stop { id: n.id, hop: n.depth, reason, dir, repo: n.repo.clone() };
@@ -4126,7 +4127,7 @@ impl<'a> HttpCrossing<'a> {
                         }
                     }
                     if !downstream {
-                        trace::extend_in(self.store(&landing.root).conn(), label.clone(), t, idx, depth, max, &self.filter)?;
+                        trace::extend_in(self.store(&landing.root).conn(), label.clone(), t, idx, depth, max, self.gate.filter())?;
                     }
                 }
             }

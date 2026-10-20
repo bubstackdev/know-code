@@ -25,6 +25,7 @@ use kc_store::query::{self, SymbolRow};
 use kc_store::trace::{self, BusVia, EdgeCache, HttpVia, SqlVia, Via};
 use serde::Serialize;
 
+use crate::graph::Gate;
 use crate::ops::{self, HttpCrossing, Opened, Out, Scope, repo_name};
 
 /// A node: the repo (an index into [`Graph`]'s roots) and the symbol's id there.
@@ -75,20 +76,18 @@ pub struct Graph<'a> {
     children: HashMap<usize, Rc<HashMap<i64, Vec<query::NgChild>>>>,
     /// Nodes whose edges were read, either way.
     pub expanded: usize,
-    /// The edges walks follow (`member`, between a type and its members at a path's ends, always).
-    filter: trace::EdgeFilter,
+    /// The edges walks follow (`member`, between a type and its members at a path's ends, always), with their
+    /// evidence policy, for the query the walk runs for: every edge [`Graph::out`] and [`Graph::into`] read passes it.
+    gate: Gate,
 }
 
-/// Link confidence as an edge confidence label: an ambiguous link makes the edge ambiguous; a `dominant` link (one
-/// of several handlers or schemas, preferred by a heuristic) is labelled `unique_name`, the nearest of the
-/// confidence values. Whether a walk follows it is not decided here: its evidence is `name_dominant` (see
-/// [`Graph::evidence`]), and the walk's evidence policy decides (`default` follows it, `confirmed` doesn't).
+/// Link confidence as an edge confidence label (see [`crate::graph::across`]): an ambiguous link makes the edge
+/// ambiguous; a `dominant` link (one of several handlers or schemas, preferred by a heuristic) is labelled
+/// `unique_name`, the nearest of the confidence values. Whether a walk follows it is not decided here: its evidence is
+/// `name_dominant` (see [`Graph::evidence`]), and the walk's evidence policy decides (`default` follows it,
+/// `confirmed` doesn't).
 fn crossed(confidence: &'static str, link: &'static str) -> &'static str {
-    match link {
-        "ambiguous" => "ambiguous",
-        "dominant" | "unique_name" if confidence == "exact" => "unique_name",
-        _ => confidence,
-    }
+    crate::graph::across(confidence, link)
 }
 
 /// An Entity Framework accessor's edge to its DbSet: a use of the DbSet property, found through the context's type.
@@ -115,13 +114,13 @@ impl<'a> Graph<'a> {
             protocols: HashMap::new(),
             children: HashMap::new(),
             expanded: 0,
-            filter: trace::EdgeFilter::default(),
+            gate: Gate::default(),
         }
     }
 
     /// Follows only the edges `filter` allows.
     pub fn with_edges(mut self, filter: trace::EdgeFilter) -> Self {
-        self.filter = filter;
+        self.gate = Gate::new(filter);
         self
     }
 
@@ -144,22 +143,22 @@ impl<'a> Graph<'a> {
 
     /// The walk's edge filter, with its evidence policy.
     pub fn filter(&self) -> &trace::EdgeFilter {
-        &self.filter
+        self.gate.filter()
     }
 
     /// Keeps the hops the walk's filter allows: of the edge kinds asked for, and not excluded by its evidence policy
     /// (counted there). `k` is the node they were read from, forward (`out`) or backward (`into`).
     fn keep(&self, k: Key, forward: bool, hops: &mut Vec<Hop>) {
         hops.retain(|h| {
-            if !self.filter.allows(h.edge) {
+            if !self.gate.allows(h.edge) {
                 return false;
             }
-            if self.filter.policy().is_default() {
+            if self.gate.filter().policy().is_default() {
                 return true;
             }
             let evidence = h.evidence.clone().or_else(|| self.evidence(h));
             let (from, to) = if forward { (k, h.to) } else { (h.to, k) };
-            self.filter.judge((from, to, h.edge, &h.site), h.confidence, evidence.as_ref()) != Verdict::Exclude
+            self.gate.judge((from, to, h.edge, &h.site), h.confidence, evidence.as_ref()) != Verdict::Exclude
         });
     }
 
@@ -420,7 +419,7 @@ impl<'a> Graph<'a> {
                 hops.push(Hop { evidence: None, to: (k.0, svc.id), sym: svc, edge: "constructs", confidence: "exact", site: site(&file, line), binding, via: None, action: None });
             }
         }
-        hops.retain(|h| self.filter.allows(h.edge));
+        hops.retain(|h| self.gate.allows(h.edge));
         Ok(hops)
     }
 
@@ -644,6 +643,7 @@ impl<'a> Graph<'a> {
 
     /// What `sym` (node `k`) leads to.
     pub fn out(&mut self, k: Key, sym: &SymbolRow) -> Result<Vec<Hop>> {
+        self.gate.expand()?;
         self.expanded += 1;
         let repo = k.0;
         let mut hops = Vec::new();
@@ -680,6 +680,7 @@ impl<'a> Graph<'a> {
 
     /// What leads to `sym` (node `k`): each hop's `to` is a predecessor, and its edge runs from there to `sym`.
     pub fn into(&mut self, k: Key, sym: &SymbolRow) -> Result<Vec<Hop>> {
+        self.gate.expand()?;
         self.expanded += 1;
         let repo = k.0;
         let mut hops = Vec::new();
@@ -2154,6 +2155,27 @@ public class StatementRepository\n{\n    public Task Get(int id) => null;\n    p
             path("DomService.place", "DomController.Orders", Some(&main), &po, &Scope { repos: vec![web.clone()], no_sync: false }).unwrap().data.paths.len()
         };
         assert_eq!((to("default"), to("confirmed")), (1, 0));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A walk reads no more edges once its query is cancelled: the next expansion fails as cancelled.
+    #[test]
+    fn a_cancelled_query_stops_its_walk_at_the_next_expansion() {
+        let cache = test_cache();
+        let base = cache.dir("cancelled-walk");
+        let (web, _api, _schema) = shop(&base, "c");
+        let query = kc_store::limits::Operation::new();
+        let _q = kc_store::limits::enter(query.clone());
+        let o = ops::open_fresh(&web, false).unwrap();
+        let summaries = ops::full_summaries_for(&o, std::slice::from_ref(&web)).unwrap();
+        let mut g = Graph::new(&o, &summaries, false, 16);
+        let sym = g.resolve(0, "OrderService.place").unwrap().unwrap();
+        assert!(!g.out((0, sym.id), &sym).unwrap().is_empty());
+        query.cancel();
+        let err = g.out((0, sym.id), &sym).err().expect("cancelled");
+        assert_eq!(err.downcast_ref::<kc_store::limits::Cut>().map(|c| c.reason), Some("cancelled"));
+        assert!(Graph::into(&mut g, (0, sym.id), &sym).is_err());
+        drop(g);
         let _ = std::fs::remove_dir_all(&base);
     }
 

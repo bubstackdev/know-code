@@ -7,6 +7,7 @@ mod cursor;
 #[cfg(test)]
 mod completeness;
 mod flow;
+mod graph;
 mod help;
 mod hook;
 mod mcp;

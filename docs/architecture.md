@@ -99,6 +99,20 @@ picks the checkout that answers for a repo in every cross-repo link: the queried
 exists, then one under the workspace roots, then the most recently synced. A deleted checkout is left out of every
 cross-repo link until pruned, and an answer it would have joined names it with `missing_repo`.
 
+## Walks
+
+`trace`, `impact`, `path` and `flow` decide about an edge in one place (`crates/knowcode/src/graph.rs`). A walk's
+gate holds the edge kinds it lists and follows, its evidence policy (an edge is followed, listed as a leaf, or left out
+and counted in the answer's `policy`), and the query it runs for: a cancelled query's walk stops at its next
+expansion. A hop across repos (an HTTP route, the bus, SQL, a deploy, a Terraform module) arrives with its confidence
+across the link and the evidence it rests on, worked out once for `trace`, `impact` and the check past where a walk
+stopped.
+
+`path` and `flow` read every edge, in a repo and across repos, through one symbol graph
+(`crates/knowcode/src/walk.rs`) that opens repos as the walk reaches them, up to `max_repos`. The in-repo edges of
+`trace` and `impact` come from `crates/kc-store/src/trace.rs`, under the same edge filter, and their crossings through
+the same gate. Walk answers are pinned by a snapshot test (`crates/knowcode/tests/snapshots/walks.txt`).
+
 ## The cache lifecycle
 
 - **Seeding.** A new worktree or clone of an indexed repo starts from a copy of that repo's index and extracts only
