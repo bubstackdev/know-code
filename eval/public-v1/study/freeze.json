@@ -27,11 +27,11 @@
     },
     "plan": {
       "path": "plan.json",
-      "sha256": "2be95539cdae16138c789c1eb81e5b77faa46eb8bbbb66ed3c9bc2ff970b9720"
+      "sha256": "7348e5fe248cf43a470c309da7e1dfbe17d20e204e2f6c8ec9fe6f88c7a9052c"
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "d319abca00bd826530115b77437d151f409cd03aa0333b9b76b6e1b7a3195135"
+      "sha256": "7eafea90dbd7203569fd62d65bc66a13f01bced4e9914f2c2a922b937dc67827"
     },
     "provisional": {
       "path": "provisional.json",
@@ -43,11 +43,11 @@
     },
     "questions": {
       "path": "questions.jsonl",
-      "sha256": "42cef56a0d4b040996b925cd71fa46641d7951a334d1d52657efecd154f79e40"
+      "sha256": "1a05b2b3631a7574f5ac5a7bbe13d3aa258ea96b48338ebd7545b620b09bd79e"
     },
     "review": {
       "path": "review.json",
-      "sha256": "49325ff7c31e2495a505648a801f4c501a4a71d8fe4cf8d2f3ebbf39a097dfc2"
+      "sha256": "605efcb3df2102ea595c61296d8b027b5a7aa8cf4d5cb266ac3d67bb048bb692"
     },
     "sampling": {
       "path": "sampling.json",
@@ -75,14 +75,14 @@
   "process_timeout_seconds": 1800,
   "producers": {
     "scripts/census-public-eval.py": "86a9b3842170ee2e346cd44ab3bdc9a9707fd445110d7624854b36d365839f3f",
-    "scripts/eval/bare_client.py": "d1dca80747cf5569fa0f75984d96ea8d3143cec9387dad17029c7c07879ee206",
+    "scripts/eval/bare_client.py": "125cb8cc30773dfb9702c3104c605df3b21ad6d88582b5c2f973aed90c50854a",
     "scripts/eval/frozen_study.py": "8697918b7bfb4c898be97f334d3f8a554b0a926c0462118bca8c4bbcbf7894f7",
     "scripts/eval/macos_sandbox.py": "e49f6d4661f45f36a85ba1bd1f70a9c4d615f01c97ad0802027fdff7f9078bed",
     "scripts/eval/model_relay.py": "c38bf552a57d69ab0c613f712042e2225ddec57d94a3dd96cc21c301b81c3a4c",
     "scripts/eval/neutral/schema.py": "14f88939bb8d4bd9e5138adac79ec8486e715ca82e0d93e62e5ddf3875a50a87",
     "scripts/eval/neutral/score.py": "4153528baccbbe7ab920dfd7cd68ae8b31da8d36717d2e368eadadf72321e758",
     "scripts/eval/owned_process.py": "762d4ffc07f3da67b076feddc212cad333fb7cfa14338f3ab8e2cc61d67e1b87",
-    "scripts/eval/public_transcript.py": "6d1d4e952057a5ae84e47ed8358ce461467d2fb0b29dd24dee28fb90100a958f",
+    "scripts/eval/public_transcript.py": "dfd4e58b978ea1ad4f66933b373293fa479f970b26dd957a1c53d0fe1a9fc6f6",
     "scripts/eval/recheck.py": "04bd2a178b2f1e2900fbbc0be7775a82ec9af0df82b89ae96899ad175a57f95e",
     "scripts/eval/score_public_study.py": "b778c89b2ac8b19418c5b6a5764f9c02734c1c5e938f5a304099a2bea67b5b55",
     "scripts/eval/session_runner.py": "1041737fdb038a400de876d68a7e051a1dc532237aa4f52df598856f9fdf878c",
