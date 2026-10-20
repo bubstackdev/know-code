@@ -36,30 +36,59 @@ Update checks are disabled so external release availability does not affect the 
 the source snapshot: local paths and unreviewed timing results must not accidentally become public claims.
 
 Use `--machine-notes` to record competing work or architecture emulation. `--quiet-confirmed` records an operator's
-confirmation; the runner does not infer quiet conditions or manipulate other processes. Environment labels are
-operator declarations, with platform and architecture checked for the macOS and Linux labels.
+confirmation; the runner does not infer quiet conditions or manipulate other processes. Environment labels
+(`fresh-macos-account`, `clean-linux-x86_64-container`, `clean-linux-arm64`) are operator declarations, with platform
+and architecture checked.
 
 ## Clean-machine gate
 
 Isolated-profile success does not complete this gate. Repeat on a fresh Apple-silicon macOS user account when the
-machine is quiet, and in a clean Linux x86_64 container. Record whether Linux runs natively or under emulation.
-Do not restart shared services or stop other sessions to obtain these conditions.
+machine is quiet, and on clean Linux x86_64 (a container is fine) and, when available, Linux arm64. Record whether
+Linux runs natively or under emulation. Do not restart shared services or stop other sessions to obtain these
+conditions.
 
-In each clean environment, additionally verify the default installation path and shell profile behavior:
+In each clean environment, install Claude Code and sign in, then run as that user, in a terminal:
 
-1. Start without a KnowCode executable, cache, configuration, notes, or client registration. Install Claude Code.
-2. Install with the single generated shell command and no path/configuration overrides. Before the public release,
-   use the reviewed local installer and artifact mirror; record that this does not verify public download hosting.
-3. Start a new shell as instructed by the installer. `knowcode --version` must resolve through the default PATH.
-4. In the fresh clone, run `knowcode setup claude`. Start a new Claude session and invoke `kc_context` using the
-   manifest's symbol. Do not run an index command or edit configuration.
-5. Save the first answer, source evidence, incomplete disclosures, time to a correct complete answer, machine and
-   load, binary checksum, exact installation command, and repository commit. Repeat with the other case.
-6. Verify uninstall removes the registration and disposable indexes and preserves unrelated client settings.
+```sh
+bash scripts/acceptance/clean-machine.sh --commit <sha> [--artifacts <dir>]
+```
 
-The isolated runner can provide the reproducible protocol check within those environments using the matching
-`--environment` label. Its report always records `default_paths_validated: false`; attach separate evidence for
-the default-path steps above. Do not mark clean-machine acceptance complete from that report alone.
+[clean-machine.sh](../scripts/acceptance/clean-machine.sh) installs into the real home directory: run it only on a
+machine or account set aside for this. It asks whether the machine is quiet and for notes (emulation, competing
+work), then:
+
+1. Records the machine (OS, architecture, CPU, memory, load, client version) and checks it is clean: no `knowcode`
+   on PATH, no KnowCode cache, configuration or data directory, no installer directory (`~/.config/knowcode`), no
+   `KNOWCODE_*` overrides, and no KnowCode plugin, marketplace or settings entry in Claude Code.
+2. Clones KnowCode at the given commit and each case in the manifest at its pinned commit, and runs
+   `scripts/check-public-first-run.py` per case with the environment label for the platform and the operator's notes.
+3. Installs with the single shell command and no path or configuration overrides: from a local artifact mirror
+   (`KNOWCODE_DOWNLOAD_URL=file://…`) with `--artifacts`, which does not verify public download hosting, otherwise
+   from the public release. The report records which, the exact command and the binary checksum.
+4. Records the installer's shell-profile changes and whether `~/.local/bin` was already on PATH. When it was not,
+   the installer must have added it; `--hide-local-bin` runs the installer without it to cover that case on a
+   machine whose PATH already has it. A new login shell must then resolve `knowcode --version`. New shells are
+   started with `-l` and stdin from `/dev/null`, never `-i`, and source the rc file an interactive shell reads.
+5. Runs `knowcode setup claude` in each case clone. No index command and no configuration edit.
+6. Asks the operator for two real Claude Code sessions per case, each in a new terminal: unprompted (the manifest's
+   question) and named ("Use the KnowCode kc_context tool to answer: …"). From the client's transcripts it reports,
+   per session, the prompt, `used_knowcode`, KnowCode calls, other tool calls and seconds to the final answer. These
+   numbers are recorded, not gated.
+7. Snapshots Claude Code's settings right before uninstall, runs `knowcode uninstall --delete-config
+   --delete-notes`, and checks the exit code, that the plugin and marketplace are gone, that no index and no KnowCode
+   cache, configuration or data directory is left, and
+   that settings are unchanged entry by entry except KnowCode's own entries (`enabledPlugins` and
+   `extraKnownMarketplaces` entries for `knowcode-local`); no other entry and no whole key may go.
+8. Pauses while the operator follows uninstall's printed removal steps, then checks `knowcode` is gone, no profile
+   line remains, and a new login shell starts without errors it did not print before installation.
+
+Every step is recorded in `report/steps.tsv` and `report/summary.md` under the work directory (default
+`~/knowcode-acceptance`), archived as `clean-machine-report.tar.gz`. The script exits non-zero when a gated step
+failed. `--dry-run` runs only the machine record and the read-only clean checks and prints the plan; `--self-test`
+runs the tests of the transcript parser and the settings comparison.
+
+The isolated runner's report always records `default_paths_validated: false`; the default-path steps above are the
+script's own. Do not mark clean-machine acceptance complete from the runner's report alone.
 
 Public download hosting and public CI require separate verification after the audited snapshot is approved and
 published. Keep comparative claims and evaluation numbers out of public materials until their supporting public

@@ -1,9 +1,10 @@
-"""Compile source-location fixtures through the release wrapper without network access."""
+"""Compile Rust and C source-location fixtures through the release wrapper without network access."""
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -62,6 +63,126 @@ subprocess.run([os.environ["FIXTURE_RUSTC"], *flags, "--crate-name", "remap_fixt
         self.compile_fixture(rustflags="--invalid-ignored-flag", encoded="")
 
 
+C_FAKE_DIST = '''#!/usr/bin/env python3
+import json, os, pathlib, shlex, subprocess, sys
+assert sys.argv[1] == "build"
+flags = os.environ["CFLAGS"]
+assert flags == os.environ["CXXFLAGS"]
+escaped = os.environ.get("CC_SHELL_ESCAPED_FLAGS")
+pathlib.Path(os.environ["FIXTURE_FLAGS"]).write_text(json.dumps([flags, escaped]))
+# Split CFLAGS the way the cc crate does.
+words = shlex.split(flags) if escaped not in (None, "", "0", "false", "no") else flags.split()
+root = pathlib.Path(os.environ["FIXTURE_ROOT"])
+objects = []
+for source in os.environ["FIXTURE_SOURCES"].split(os.pathsep):
+    obj = root / (pathlib.Path(source).stem + ".o")
+    subprocess.run([os.environ["FIXTURE_CC"], *words, "-g", "-c", source, "-o", str(obj)], check=True, cwd=root)
+    objects.append(str(obj))
+subprocess.run([os.environ["FIXTURE_CC"], "-Wl,-S", *objects, "-o", os.environ["FIXTURE_BINARY"]], check=True, cwd=root)
+'''
+
+
+class DistBuildCTests(unittest.TestCase):
+    """C dependencies (built by the cc crate from CFLAGS) get the same prefix mapping as Rust code."""
+
+    def compile_c_fixture(self, *, cflags=None, escaped=None):
+        compiler = shutil.which("cc")
+        if compiler is None:
+            self.skipTest("no C compiler")
+        with tempfile.TemporaryDirectory(prefix="knowcode-remap-c-") as temporary:
+            base = Path(temporary).resolve()
+            home = base / "home with spaces"
+            root = base / "checkout with spaces"
+            cache = base / "cargo cache with spaces"
+            (root / "scripts").mkdir(parents=True)
+            cache.mkdir()
+            home.mkdir()
+            shutil.copyfile(Path(__file__).with_name("build-release"), root / "scripts/build-release")
+            for directory, name in ((cache, "dependency"), (root, "local"), (home, "home")):
+                (directory / f"{name}.c").write_text(
+                    f'#include <stdio.h>\nvoid {name}(void) {{ printf("%s\\n", __FILE__); }}\n')
+            (root / "main.c").write_text(
+                "#include <stdio.h>\nvoid dependency(void); void local(void); void home(void);\n"
+                "int main(void) { dependency(); local(); home();\n"
+                '#ifdef CALLER_FLAG\nputs("caller");\n#endif\nreturn 0; }\n')
+            tool = base / "fake-dist"
+            tool.write_text(C_FAKE_DIST)
+            tool.chmod(0o755)
+            dropped = ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CFLAGS", "CXXFLAGS", "CC_SHELL_ESCAPED_FLAGS")
+            env = {k: v for k, v in os.environ.items() if k not in dropped}
+            sources = [cache / "dependency.c", root / "local.c", home / "home.c", root / "main.c"]
+            env.update(HOME=str(home), CARGO_HOME=str(cache), FIXTURE_CC=compiler, FIXTURE_ROOT=str(root),
+                       FIXTURE_SOURCES=os.pathsep.join(map(str, sources)), FIXTURE_BINARY=str(base / "fixture"),
+                       FIXTURE_FLAGS=str(base / "flags.json"))
+            if cflags is not None:
+                env["CFLAGS"] = env["CXXFLAGS"] = cflags
+            if escaped is not None:
+                env["CC_SHELL_ESCAPED_FLAGS"] = escaped
+            run = subprocess.run(["bash", str(root / "scripts/build-release"), str(tool), "--artifacts=local"],
+                                 env=env, capture_output=True, text=True, timeout=300)
+            if run.returncode:
+                return run, None
+            output = subprocess.check_output([str(base / "fixture")], text=True).splitlines()
+            for artifact in [*root.glob("*.o"), base / "fixture"]:
+                data = artifact.read_bytes()
+                for prefix in (base, home, root, cache):
+                    self.assertFalse(str(prefix).encode() in data, f"{artifact.name} contains {prefix}")
+            return run, (output, json.loads((base / "flags.json").read_text()))
+
+    def test_cache_checkout_and_home_paths_are_mapped(self):
+        run, (output, (flags, escaped)) = self.compile_c_fixture()
+        self.assertEqual(output, ["/cargo/dependency.c", "/src/local.c", "/build-home/home.c"])
+        self.assertEqual(escaped, "1")
+        self.assertTrue(flags.startswith("'-ffile-prefix-map="), flags)
+
+    def test_caller_cflags_come_first(self):
+        run, (output, (flags, _)) = self.compile_c_fixture(cflags="-DCALLER_FLAG=1 -O0")
+        self.assertTrue(flags.startswith("-DCALLER_FLAG=1 -O0 '-ffile-prefix-map="), flags)
+        self.assertEqual(output[-1], "caller")
+
+    def test_whitespace_prefix_needs_shell_escaped_flags(self):
+        run, result = self.compile_c_fixture(escaped="0")
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIsNone(result)
+        self.assertIn("CC_SHELL_ESCAPED_FLAGS", run.stderr)
+
+
+class CheckBuildPathsTests(unittest.TestCase):
+    """The release check finds builder prefixes inside archives and refuses to pass with nothing checked."""
+
+    def check(self, directory: Path, home: Path):
+        env = {k: v for k, v in os.environ.items() if k not in ("CARGO_HOME", "GITHUB_WORKSPACE")}
+        env["HOME"] = str(home)
+        return subprocess.run([sys.executable, str(Path(__file__).with_name("check-build-paths.py")), str(directory)],
+                              env=env, capture_output=True, text=True, timeout=60)
+
+    def archive(self, directory: Path, payload: bytes):
+        import io
+        import tarfile
+        with tarfile.open(directory / "knowcode-test.tar.gz", "w:gz") as archive:
+            info = tarfile.TarInfo("knowcode-test/knowcode")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+    def test_clean_leaky_and_empty(self):
+        with tempfile.TemporaryDirectory(prefix="knowcode-paths-") as temporary:
+            base = Path(temporary).resolve()
+            home = base / "builder home"
+            distrib = base / "distrib"
+            distrib.mkdir()
+            empty = self.check(distrib, home)
+            self.assertEqual(empty.returncode, 1)
+            self.assertIn("no files to check", empty.stderr)
+            self.archive(distrib, b"\0/cargo/registry/src/x.c\0/src/lib.rs\0")
+            clean = self.check(distrib, home)
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            for leaked in (home / ".cargo/registry/src/x.c", Path(__file__).resolve().parent / "x.rs"):
+                self.archive(distrib, b"\0assert " + str(leaked).encode() + b"\0")
+                leaky = self.check(distrib, home)
+                self.assertEqual(leaky.returncode, 1)
+                self.assertIn("knowcode-test.tar.gz!knowcode-test/knowcode", leaky.stderr)
+
+
 class ReleaseWorkflowTests(unittest.TestCase):
     """The checked-in release workflow carries scripts/generate-release.py's hardening."""
 
@@ -76,6 +197,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
 
     def test_hardening_is_already_applied_and_idempotent(self):
         self.assertEqual(self.generator.gate(self.release), self.release)
+
+    def test_native_builds_check_for_build_paths_before_attesting(self):
+        local = self.release.split("\n  build-local-artifacts:\n", 1)[1].split("\n  build-global-artifacts:\n", 1)[0]
+        check = "run: python3 scripts/check-build-paths.py target/distrib\n"
+        self.assertEqual(self.release.count(check), 1)
+        self.assertLess(local.index("bash scripts/build-release dist "), local.index(check))
+        self.assertLess(local.index(check), local.index("- name: Attest\n"))
 
     def test_contents_write_only_where_a_release_is_created(self):
         self.assertIn('permissions:\n  "contents": "read"\n', self.release)
