@@ -640,6 +640,9 @@ enum Cmd {
     /// One-shot release metadata helper, scheduled at most daily by normal commands.
     #[command(name = "_check-update", hide = true)]
     CheckUpdate,
+    /// Run by `self-update` on the binary it installed: refresh a Claude Code plugin bundle an older version wrote.
+    #[command(name = "_refresh-plugin", hide = true)]
+    RefreshPlugin,
     /// Run as an agent hook: `claude-code` reads a Claude Code PreToolUse event (Grep, Glob or Bash) on stdin and, when
     /// the pattern names a symbol the index knows, prints context for the agent. Never fails: on any error it prints
     /// nothing and exits 0. See integrations/claude-code.
@@ -746,7 +749,7 @@ fn notes_repo(path: &std::path::Path) -> Result<PathBuf> {
 
 fn main() {
     let cli = Cli::parse();
-    let notify = !matches!(&cli.command, Cmd::Config { .. } | Cmd::Workspace { .. } | Cmd::Setup(_) | Cmd::Uninstall(_) | Cmd::SelfUpdate { .. } | Cmd::CheckUpdate | Cmd::Hook { .. });
+    let notify = !matches!(&cli.command, Cmd::Config { .. } | Cmd::Workspace { .. } | Cmd::Setup(_) | Cmd::Uninstall(_) | Cmd::SelfUpdate { .. } | Cmd::CheckUpdate | Cmd::RefreshPlugin | Cmd::Hook { .. });
     // Once per command, before it runs: a long-lived `serve` would otherwise check only when it exits.
     if notify { update::start(); }
     if let Err(e) = guard_privacy().and_then(|_| run(cli)) {
@@ -760,7 +763,7 @@ fn main() {
 /// anything is opened. Commands that index or manage the cache and config take no question.
 fn guard_privacy() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_none_or(|c| ["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "_check-update", "help", "status"].contains(&c.as_str())) {
+    if args.first().is_none_or(|c| ["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "_check-update", "_refresh-plugin", "help", "status"].contains(&c.as_str())) {
         return Ok(());
     }
     let mut repos = Vec::new();
@@ -1128,7 +1131,11 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Serve { repos, tools } => {
             let tools = tools.or_else(|| std::env::var("KNOWCODE_TOOLS").ok()).unwrap_or_else(|| "all".into());
-            mcp::serve(ops::Scope { repos, no_sync: false }, &tools)
+            // A plugin bundle an older version wrote is refreshed beside the server, never in its way.
+            let refresh = std::thread::spawn(setup::refresh_claude_plugin);
+            let served = mcp::serve(ops::Scope { repos, no_sync: false }, &tools);
+            let _ = refresh.join();
+            served
         }
         Cmd::Deps { repo } => {
             let out = ops::deps(&repo.scope(), true)?;
@@ -1167,6 +1174,10 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Uninstall(options) => uninstall::run(options),
         Cmd::SelfUpdate { check } => update::self_update(check),
         Cmd::CheckUpdate => update::probe(),
+        Cmd::RefreshPlugin => {
+            setup::refresh_claude_plugin();
+            Ok(())
+        }
         // Any agent but a known one: nothing to add, and the tool runs.
         Cmd::Hook { agent } if agent == "claude-code" => hook::run(),
         Cmd::Hook { .. } => Ok(()),

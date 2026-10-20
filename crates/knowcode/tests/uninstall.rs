@@ -146,7 +146,7 @@ printf '%s\n' "$*" >> "$KNOWCODE_TEST_CLAUDE_LOG"
 case "$*" in
   'plugin marketplace list --json') cat "$KNOWCODE_TEST_MARKETS";;
   'plugin list --json') cat "$KNOWCODE_TEST_PLUGINS";;
-  'plugin marketplace add '*|'plugin install '*) ;;
+  'plugin marketplace add '*|'plugin install '*|'plugin update '*) ;;
   'plugin uninstall knowcode@knowcode-local --scope user --keep-data')
     if [ "${KNOWCODE_TEST_FAIL_REMOVE:-0}" = 1 ]; then echo 'try again' >&2; exit 1; fi
     printf '%s\n' "$KNOWCODE_TEST_OTHER_PLUGINS" > "$KNOWCODE_TEST_PLUGINS";;

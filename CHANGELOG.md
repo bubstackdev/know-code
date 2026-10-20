@@ -2,6 +2,13 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.1.1 (unreleased)
+
+- Updating refreshes the Claude Code plugin: after `self-update`, and when `serve` starts with an older bundle,
+  KnowCode rewrites the bundle and runs Claude Code's plugin update. If that can't finish, it prints the
+  `knowcode setup claude` command that does. `setup claude` also moves an installed plugin to the current version.
+- The Claude Code hook script exits without starting `knowcode` for Bash commands that can't be code searches.
+
 ## 0.1.0 (2026-10-19)
 
 The first public release, for macOS on Apple silicon and Linux on x86_64 and arm64.

@@ -230,11 +230,23 @@ fn cursor(directory: &Path, command: &Path, env: &BTreeMap<String, String>, repl
 
 fn shell_quote(text: &str) -> String { format!("'{}'", text.replace('\'', "'\\''")) }
 
+fn marketplace_dir() -> Result<PathBuf> { Ok(kc_index::data_dir()?.join("integrations/claude-marketplace")) }
+
 fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
-    let marketplace = kc_index::data_dir()?.join("integrations/claude-marketplace");
+    let marketplace = marketplace_dir()?;
     let plugin = marketplace.join("knowcode");
+    let mut writes = Vec::new();
+    let mut manifest = None;
     for (name, text) in FILES {
         let text = match *name {
+            // Claude Code keys its cached copy by the manifest's version, so it always names this binary's. It is
+            // written last: a manifest at this version means the rest of the bundle is too.
+            ".claude-plugin/plugin.json" => {
+                let mut value: Value = serde_json::from_str(text)?;
+                value["version"] = json!(env!("CARGO_PKG_VERSION"));
+                manifest = Some((plugin.join(name), format!("{}\n", serde_json::to_string_pretty(&value)?)));
+                continue;
+            }
             ".mcp.json" => format!("{}\n", serde_json::to_string_pretty(&json!({"mcpServers": {"knowcode": server(command, env)}}))?),
             "hooks/knowcode-grep-hint.sh" => {
                 let mut prefix = format!("#!/bin/sh\nexport KNOWCODE_BIN={}\n", shell_quote(&command.to_string_lossy()));
@@ -243,15 +255,16 @@ fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
             }
             _ => text.to_string(),
         };
-        let path = plugin.join(name);
-        let before = read(&path)?;
-        write_checked(&path, before.as_deref(), &text)?;
+        writes.push((plugin.join(name), text));
     }
     let catalog = json!({"name": MARKETPLACE, "description": "KnowCode's bundled local code-context plugin.", "owner": {"name": "KnowCode contributors"},
         "plugins": [{"name": "knowcode", "source": "./knowcode", "version": env!("CARGO_PKG_VERSION"), "description": "Local code context and cross-repository tracing."}]});
-    let path = marketplace.join(".claude-plugin/marketplace.json");
-    let before = read(&path)?;
-    write_checked(&path, before.as_deref(), &format!("{}\n", serde_json::to_string_pretty(&catalog)?))?;
+    writes.push((marketplace.join(".claude-plugin/marketplace.json"), format!("{}\n", serde_json::to_string_pretty(&catalog)?)));
+    writes.extend(manifest);
+    for (path, text) in writes {
+        let before = read(&path)?;
+        write_checked(&path, before.as_deref(), &text)?;
+    }
     Ok(marketplace)
 }
 
@@ -302,6 +315,70 @@ fn claude_command(directory: &Path, args: &[&std::ffi::OsStr]) -> Result<()> {
     claude_output(directory, args).map(|_| ())
 }
 
+fn update_plugin(directory: &Path) -> Result<()> {
+    claude_command(directory, &["plugin".as_ref(), "update".as_ref(), PLUGIN.as_ref(), "--scope".as_ref(), "user".as_ref()])
+}
+
+/// The version in the plugin manifest of the bundle at `marketplace`, if it has a readable one.
+fn bundle_version(marketplace: &Path) -> Option<semver::Version> {
+    let text = fs::read_to_string(marketplace.join("knowcode/.claude-plugin/plugin.json")).ok()?;
+    let manifest: Value = serde_json::from_str(&text).ok()?;
+    semver::Version::parse(manifest["version"].as_str()?).ok()
+}
+
+fn stale(marketplace: &Path) -> bool {
+    let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("package SemVer");
+    bundle_version(marketplace).is_some_and(|v| v < current)
+}
+
+/// After an update: when a Claude Code plugin bundle this install wrote is older than this binary, rewrite it and
+/// have Claude Code update its copy in each profile it was installed in. Never fails; a problem is reported once on
+/// stderr with the `knowcode setup claude` command that finishes the job. Codex and Cursor registrations name only
+/// the binary, so they need nothing.
+pub fn refresh_claude_plugin() {
+    let mut profiles = Vec::new();
+    if let Err(e) = refresh(&mut profiles) {
+        // Another server process may have finished the same refresh first.
+        if marketplace_dir().is_ok_and(|m| !stale(&m)) && profiles.is_empty() { return; }
+        let commands: Vec<String> = if profiles.is_empty() { vec!["knowcode setup claude".into()] } else { profiles.iter().map(|d| finish_command(d)).collect() };
+        eprintln!("knowcode: could not update the Claude Code plugin to {}: {e:#}. Run `{}` to finish.", env!("CARGO_PKG_VERSION"), commands.join("` and `"));
+    }
+}
+
+fn finish_command(directory: &Path) -> String {
+    let default = user_dir(Client::Claude).ok().and_then(|p| std::path::absolute(p).ok());
+    if default.as_deref() == Some(directory) { "knowcode setup claude".into() }
+    else { format!("knowcode setup claude --client-dir {}", shell_quote(&directory.to_string_lossy())) }
+}
+
+/// Fills `failed` with the profiles whose plugin update did not go through.
+fn refresh(failed: &mut Vec<PathBuf>) -> Result<()> {
+    let marketplace = marketplace_dir()?;
+    // Only a bundle and marketplace this install created, at the path recorded for it.
+    let ours: Vec<Registration> = registrations()?.into_iter()
+        .filter(|r| r.client == Client::Claude && r.marketplace.as_deref() == Some(marketplace.as_path()))
+        .collect();
+    if ours.is_empty() || !marketplace.ends_with("integrations/claude-marketplace") || !stale(&marketplace) { return Ok(()); }
+    // The latest registration wrote the bundle; keep its binary and the overrides its server configuration carries.
+    let latest = ours.last().expect("not empty").command.clone();
+    let config: Value = read(&marketplace.join("knowcode/.mcp.json"))?.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let env: BTreeMap<String, String> = config["mcpServers"]["knowcode"]["env"].as_object().into_iter().flatten()
+        .filter(|(key, _)| OVERRIDES.contains(&key.as_str()))
+        .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
+        .collect();
+    bundle(&latest, &env)?;
+    let mut errors = Vec::new();
+    for registration in &ours {
+        if let Err(e) = update_plugin(&registration.directory) {
+            errors.push(format!("{e:#}"));
+            failed.push(registration.directory.clone());
+        }
+    }
+    if !errors.is_empty() { bail!("the plugin files are updated, but Claude Code's copy is not ({})", errors.join("; ")); }
+    eprintln!("knowcode: updated the Claude Code plugin to {}; start a new Claude Code session to use it.", env!("CARGO_PKG_VERSION"));
+    Ok(())
+}
+
 pub fn run(options: Options) -> Result<()> {
     let command = executable()?;
     command.to_str().context("the executable path must be valid UTF-8 for MCP client configuration")?;
@@ -337,6 +414,8 @@ pub fn run(options: Options) -> Result<()> {
             remember(Registration { client: options.client, directory: directory.clone(), command: command.clone(), marketplace: installed_marketplace.clone() })?;
             claude_command(&directory, &["plugin".as_ref(), "marketplace".as_ref(), "add".as_ref(), marketplace.as_os_str(), "--scope".as_ref(), "user".as_ref()])?;
             claude_command(&directory, &["plugin".as_ref(), "install".as_ref(), PLUGIN.as_ref(), "--scope".as_ref(), "user".as_ref()])?;
+            // `install` leaves an already installed plugin at the version it recorded; `update` moves it to this one.
+            update_plugin(&directory)?;
         }
     }
     remember(Registration { client: options.client, directory: directory.clone(), command, marketplace: installed_marketplace })?;

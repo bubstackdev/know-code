@@ -76,7 +76,7 @@ set -eu
 test "$KNOWCODE_NO_MODIFY_PATH" = 1
 test "$KNOWCODE_DISABLE_UPDATE" = 1
 test -z "${KNOWCODE_DOWNLOAD_URL:-}"
-printf '#!/bin/sh\\nprintf "knowcode 0.2.0\\\\n"\\n' > "$KNOWCODE_INSTALL_DIR/.new"
+printf '#!/bin/sh\\necho "${1:-}" >> "$UPDATE_FIXTURE/invoked"\\nprintf "knowcode 0.2.0\\\\n"\\n' > "$KNOWCODE_INSTALL_DIR/.new"
 chmod 700 "$KNOWCODE_INSTALL_DIR/.new"
 mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
 '''
@@ -139,6 +139,8 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
             requests.unlink(missing_ok=True)
         reset()
         run("self-update", executable=installed, extra={"KNOWCODE_DOWNLOAD_URL": "https://invalid.example"})
+        # The installed binary, which carries the new plugin bundle, refreshes it after the version check.
+        assert (root / "invoked").read_text().split() == ["--version", "_refresh-plugin"]
         assert run("--version", executable=installed).stdout.strip() == "knowcode 0.2.0"
         assert [c["url"] for c in calls()] == [API, DOWNLOAD]
 

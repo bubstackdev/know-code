@@ -89,3 +89,37 @@ fn bash_searches_get_a_note_and_other_commands_nothing() {
     assert_eq!(f.hook("{\"tool_name\": \"Bash\", \"tool_input\": "), "", "malformed JSON");
     assert_eq!(f.hook(""), "", "no input");
 }
+
+/// The hook script decides first, in the shell: a call that can't be a search exits without starting the binary.
+#[test]
+fn the_hook_script_starts_the_binary_only_for_possible_searches() {
+    let f = Fixture::new("script");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../integrations/claude-code/hooks/knowcode-grep-hint.sh");
+    let called = f.dir.join("called");
+    let recorder = f.dir.join("recorder");
+    std::fs::write(&recorder, format!("#!/bin/sh\ncat >/dev/null\ntouch '{}'\n", called.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&recorder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let starts = |input: &str| -> bool {
+        let _ = std::fs::remove_file(&called);
+        let mut child = Command::new("sh").arg(&script).env("KNOWCODE_BIN", &recorder)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success() && out.stdout.is_empty());
+        called.exists()
+    };
+    let tool = |name: &str| json!({"tool_name": name, "tool_input": {"pattern": "CatalogApi"}}).to_string();
+    let bash = |command: &str| json!({"cwd": "/work/grep-tools", "tool_name": "Bash", "tool_input": {"command": command}}).to_string();
+    assert!(starts(&tool("Grep")) && starts(&tool("Glob")));
+    for command in ["grep -rn CatalogApi .", "cat x | egrep Items", "fgrep -r Items src", "git grep -n Items", "cd src && rg Items",
+        "ag Items", "ack Items", "find . -name 'Items*'", "find . -iname 'items*'", "find . -path '*/Apis/*'",
+        "find . -wholename '*/Items.cs'", "cd src\nrg Items"] {
+        assert!(starts(&bash(command)), "{command}");
+    }
+    for command in ["cargo build", "git status", "sed -n 1,20p README.md", "find . -type f", "cargo fmt && npm run tag-release"] {
+        assert!(!starts(&bash(command)), "{command}");
+    }
+    assert!(!starts(&tool("Read")));
+    assert!(!starts(""));
+}
