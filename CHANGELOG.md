@@ -2,6 +2,13 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.1.1 (unreleased)
+
+### Release
+
+- Release binaries no longer contain build-machine paths. The C code in tree-sitter and its grammars now gets the same
+  path remapping as Rust code, and each release build fails if a binary contains the builder's home or checkout path.
+
 ## 0.1.0 (2026-10-19)
 
 The first public release, for macOS on Apple silicon and Linux on x86_64 and arm64.
