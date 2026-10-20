@@ -6,9 +6,11 @@ mod compact;
 mod cursor;
 #[cfg(test)]
 mod completeness;
+mod fetch;
 mod flow;
 mod graph;
 mod help;
+mod history;
 mod hook;
 mod mcp;
 mod ops;
@@ -597,6 +599,17 @@ enum Cmd {
         #[command(flatten)]
         repo: RepoArgs,
     },
+    /// Clone the git repos this repo's manifests depend on into DIR, so cross-repo answers can reach them: dependencies
+    /// written as git URLs (SwiftPM, XcodeGen, Cargo, npm), Terraform git module sources, GitLab CI includes of other
+    /// projects, and dependencies on repos whose checkout is gone. Shallow, one directory each; only https and ssh
+    /// remotes; DIR must be outside every repo. Uses your git credentials; the MCP server never clones.
+    #[command(name = "fetch-deps")]
+    FetchDeps(fetch::Options),
+    /// Git history for the history-based answers (hotspots, coupled, ownership, reviewers).
+    History {
+        #[command(subcommand)]
+        action: HistoryCmd,
+    },
     /// Index coverage, freshness and schema.
     Status {
         /// Repo path, the same as `--repo`. Defaults to the repo containing the current directory, else every indexed
@@ -682,6 +695,14 @@ enum ConfigCmd {
     Unset { key: String },
     /// Fold the legacy `cache_dir` and `ignore` files into config.toml and rename them to `*.migrated`.
     Migrate,
+}
+
+#[derive(Subcommand)]
+enum HistoryCmd {
+    /// Fetch more history into a shallow clone (`git fetch --deepen=N`, 1000 by default, or `--shallow-since`), and
+    /// report how deep it is before and after and what each history-based answer now has to read. A clone that isn't
+    /// shallow is left alone.
+    Deepen(history::DeepenOptions),
 }
 
 #[derive(Subcommand)]
@@ -1138,6 +1159,8 @@ fn run(cli: Cli) -> Result<()> {
             let _ = refresh.join();
             served
         }
+        Cmd::FetchDeps(options) => fetch::run(options),
+        Cmd::History { action: HistoryCmd::Deepen(options) } => history::deepen(options),
         Cmd::Deps { repo } => {
             let out = ops::deps(&repo.scope(), true)?;
             emit(&repo, &out.env, || render::deps(&out.data.packages, &out.data.edges))
