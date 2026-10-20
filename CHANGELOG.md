@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.1.1 (unreleased)
 
+- A workspace-wide answer no longer fails because one repo can't be read (a checkout deleted while the answer was
+  worked out, a failing `git` call): it answers with the other repos and names the one left out as `missing_repo` or
+  `failed`.
+
 - Updating refreshes the Claude Code plugin: after `self-update`, and when `serve` starts with an older bundle,
   KnowCode rewrites the bundle and runs Claude Code's plugin update. If that can't finish, it prints the
   `knowcode setup claude` command that does. `setup claude` also moves an installed plugin to the current version.
