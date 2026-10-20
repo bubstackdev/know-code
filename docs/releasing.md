@@ -8,9 +8,9 @@ must never be pushed to the new public repository.
 ## Build and distribution
 
 [dist-workspace.toml](../dist-workspace.toml) pins cargo-dist and selects
-`knowcode` for Apple-silicon macOS and Linux x86_64/arm64. It generates
-gzip archives, SHA-256 checksums, a shell installer, and a Homebrew formula that
-the release publishes to the tap `bubstackdev/homebrew-tap`.
+`knowcode` 0.1.0 for Apple-silicon macOS and Linux x86_64/arm64. It generates
+gzip archives, SHA-256 checksums, and a shell installer. Homebrew distribution
+is deferred to 0.1.1.
 Both [MIT](../LICENSE-MIT) and [Apache-2.0](../LICENSE-APACHE) licenses accompany
 the archives. There is no separate updater binary or background daemon.
 
@@ -44,11 +44,8 @@ The wrapper also hardens the generated workflow: contents are read-only except i
 GitHub Release (the build job's attestation permissions are cargo-dist's own); cargo-dist is installed by
 `scripts/install-dist.sh`, which runs its installer only when it matches the SHA-256 pinned there for the version
 in `dist-workspace.toml` (a new version needs its digest added); and the tag reaches shell steps through `env:`,
-never spliced into the script. Outside the GitHub Release the workflow publishes only the Homebrew formula. Its
-only secret besides its own `GITHUB_TOKEN` is `HOMEBREW_TAP_TOKEN`, used by the Homebrew publish job alone: that job
-has read-only `GITHUB_TOKEN` permissions, checks out the tap without keeping a credential, commits as
-"KnowCode release bot" (author and committer) with a GitHub noreply address, and passes the token through `env:` to
-its push step only. `scripts/test_dist_build.py` checks all of this against the checked-in workflow.
+never spliced into the script. The workflow publishes nothing outside the GitHub Release and uses no secret
+besides its own `GITHUB_TOKEN`. `scripts/test_dist_build.py` checks all of this against the checked-in workflow.
 
 The workflow uses immutable commits of GitHub-owned Actions. Local archives
 build on native runners; installer generation follows all platform builds so it
@@ -73,34 +70,14 @@ installations. It covers daily coordination, opt-out, shell receipt ownership, c
 rollback, and cancellation of an installer's own descendants. A real cross-version update remains a release
 acceptance check once two reviewed public releases exist.
 
-## Homebrew prerequisites
-
-A release publishes the formula `knowcode.rb` to the public tap repository
-[bubstackdev/homebrew-tap](https://github.com/bubstackdev/homebrew-tap). Before tagging:
-
-- The tap repository exists and is public.
-- The repository secret `HOMEBREW_TAP_TOKEN` holds a fine-grained personal access token with resource owner
-  `bubstackdev`, repository access to `bubstackdev/homebrew-tap` only, and the repository permission
-  **Contents: Read and write** (Metadata read-only follows automatically); nothing else. Store it with
-  `gh secret set HOMEBREW_TAP_TOKEN -R bubstackdev/knowcode`, which prompts for the value.
-- The token has an expiry (90 days). Renew it before it lapses: create a new token with the same settings, set the
-  secret again, and revoke the old token.
-
-On a tag push, CI's `homebrew-tap` job checks both before anything is published: it fails if the secret is missing,
-if the tap is private, or if the token can't push to it (`gh api repos/bubstackdev/homebrew-tap` reports
-`permissions.push`). Pull requests and pushes to `main` skip that job and need no secret. To release without
-Homebrew instead, remove `"homebrew"` from `installers` and `publish-jobs` in `dist-workspace.toml` and regenerate
-the workflow.
-
 ## Installation
+
+Version 0.1.0 ships the shell installer only; Homebrew returns in 0.1.1. The planned
+installation command is:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
-brew install bubstackdev/tap/knowcode
 ```
-
-`knowcode self-update` updates a shell-installer installation. A Homebrew installation updates with
-`brew upgrade bubstackdev/tap/knowcode`; `self-update` refuses there and names that command.
 
 After installation, run `knowcode setup claude`, `knowcode setup codex`, or
 `knowcode setup cursor`. The client session's first query indexes automatically.

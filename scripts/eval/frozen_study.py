@@ -14,12 +14,14 @@ from public_transcript import load_json
 
 ROOT=Path(__file__).resolve().parents[2]
 FILES={'manifest','source_receipt','plan','questions','labels','order','config','scope','sampling',
-       'candidates','provisional','subject_review','question_subjects','review','method','sampling_rules'}
+       'candidates','provisional','subject_review','question_subjects','review','method','sampling_rules',
+       'protocol'}
 PRODUCERS={
     'scripts/plan-public-eval.py','scripts/census-public-eval.py','scripts/prepare-public-eval-session.py',
     'scripts/prepare-public-eval-index.py','scripts/eval/neutral/schema.py','scripts/eval/frozen_study.py',
     'scripts/eval/session_runner.py','scripts/eval/bare_client.py','scripts/eval/macos_sandbox.py',
     'scripts/eval/owned_process.py','scripts/eval/model_relay.py','scripts/eval/public_transcript.py',
+    'scripts/eval/recheck.py','scripts/eval/score_public_study.py','scripts/eval/neutral/score.py',
 }
 REVIEW_SEED='knowcode-public-v1-independent-review-2026-10-16'
 
@@ -96,7 +98,7 @@ class FrozenStudy:
                   'order_sha256':self.hashes['order'],'config_sha256':self.hashes['config']}
         if any(self.plan.get(key)!=expected for key,expected in bindings.items()) or self.plan.get('config')!=self.config:
             raise ValueError('plan differs from frozen inputs/configuration')
-        if self.order!=self.planner.schedule(self.questions,self.plan['seed']) or len(self.order)!=48:
+        if self.order!=self.planner.schedule(self.questions,self.plan['seed']) or len(self.order)!=24*len(self.planner.ARMS):
             raise ValueError('paired schedule differs from the frozen order rule')
         self.receipt=self.read('source_receipt')
         if self.receipt.get('manifest_sha256')!=self.hashes['manifest']:

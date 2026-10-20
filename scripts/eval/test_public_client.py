@@ -75,6 +75,27 @@ class BareClientTests(unittest.TestCase):
             self.assertIn('mcp__knowcode__kc_note_add', result['argv'])
             self.assertEqual(result['argv'][result['argv'].index('--tools')+1], 'Bash,Read')
 
+    def test_unprompted_arm_gets_the_server_and_exactly_the_plain_brief(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            briefs = {}
+            for arm in client.ARMS:
+                root, binary, config = self.fixture(base, arm)
+                kwargs = {}
+                if arm in client.KNOWCODE_ARMS:
+                    index = root/'control/index/example'
+                    index.mkdir(parents=True)
+                    kwargs = {'knowcode': binary, 'index_repos': {'example': index}}
+                result = client.prepare(root, config, binary, **kwargs)
+                argv = result['argv']
+                briefs[arm] = argv[argv.index('--print')+1].replace(str(root.resolve()), 'ROOT')
+                servers = json.loads((root/'control/mcp.json').read_text())['mcpServers']
+                self.assertEqual(set(servers), {'knowcode'} if arm in client.KNOWCODE_ARMS else set())
+                self.assertEqual('mcp__knowcode__kc_note_add' in argv, arm in client.KNOWCODE_ARMS)
+            self.assertEqual(briefs['knowcode-unprompted'], briefs['plain'])
+            self.assertNotIn('KnowCode', briefs['plain'])
+            self.assertIn('KnowCode MCP tools', briefs['knowcode'])
+
     def test_plain_arm_cannot_be_given_an_mcp_binary(self):
         with tempfile.TemporaryDirectory() as temp:
             root, binary, config = self.fixture(Path(temp), 'plain')

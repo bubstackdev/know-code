@@ -239,7 +239,6 @@ fn serve(p: &Profile, path: &std::ffi::OsStr, fail_update: bool) -> String {
     String::from_utf8(out.stderr).unwrap()
 }
 
-/// A binary newer than its bundle with no self-update run: how `brew upgrade` (or any package manager) leaves it.
 #[test]
 fn serve_refreshes_an_older_plugin_bundle_and_has_claude_update_its_copy() {
     let p = Profile::new("refresh");

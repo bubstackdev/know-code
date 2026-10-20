@@ -109,7 +109,7 @@ def answer_from_result(result, question_id, source_root, two_hop):
 
 
 def audit(events, *, question_id, arm, research_call_budget, source_root, two_hop=False, parse_issues=()):
-    if arm not in ('plain', 'knowcode') or not isinstance(question_id, str) or not question_id:
+    if arm not in ('plain', 'knowcode', 'knowcode-unprompted') or not isinstance(question_id, str) or not question_id:
         raise ValueError('explicit question id and arm required')
     if type(research_call_budget) is not int or research_call_budget <= 0:
         raise ValueError('positive soft research-call budget required')
@@ -179,7 +179,7 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
                     continue
                 calls[tool_id] = dict(id=tool_id, name=name, input=inp, identity=identity, event_position=position)
                 is_kc = name.startswith('mcp__knowcode__')
-                if name not in ('Bash', 'Read') and not (arm == 'knowcode' and is_kc):
+                if name not in ('Bash', 'Read') and not (arm != 'plain' and is_kc):
                     flags.append('tool outside arm: ' + name)
                 if name == 'mcp__knowcode__kc_note_add':
                     flags.append('persistent note tool forbidden')

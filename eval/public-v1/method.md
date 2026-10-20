@@ -2,6 +2,8 @@
 
 No scored runs have been performed for this cohort. The [manifest](manifest.json) selects and pins public
 repository families before KnowCode is run against them. This document defines the study, not its results.
+The agent study's arms, model, metrics, success criteria, re-check detector and scoring script are pre-registered in
+[protocol.md](protocol.md), with its frozen inputs in [study/](study/).
 The acceptance examples used during development are excluded from primary scores; their failures and limits
 belong in a separate, clearly labelled section of the results page.
 

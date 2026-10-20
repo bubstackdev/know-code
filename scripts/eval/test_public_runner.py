@@ -29,6 +29,10 @@ class NativeRunnerTests(unittest.TestCase):
     def test_knowcode_complete_runner_with_scripted_provider(self):
         self.exercise('knowcode')
 
+    @unittest.skipUnless(os.environ.get('KNOWCODE_NATIVE_MCP_TESTS')=='1','requires native KnowCode opt-in')
+    def test_unprompted_complete_runner_with_scripted_provider(self):
+        self.exercise('knowcode-unprompted')
+
     def exercise(self,arm):
         client=Path(os.environ['KNOWCODE_TEST_CLAUDE']).resolve(strict=True)
         knowcode=Path(os.environ['KNOWCODE_TEST_KNOWCODE']).resolve(strict=True)
@@ -48,7 +52,7 @@ class NativeRunnerTests(unittest.TestCase):
             source_file=session/'source/example-client/api.ts'
             calls=[dict(type='tool_use',id='fixture_read',name='Read',input=dict(file_path=str(source_file))),
                    dict(type='tool_use',id='fixture_labels',name='Read',input=dict(file_path=str(files['labels'])))]
-            if arm=='knowcode':
+            if arm!='plain':
                 calls.append(dict(type='tool_use',id='fixture_context',name='mcp__knowcode__kc_context',
                                   input=dict(symbol='example',source='full')))
             requests=[];errors=[]
@@ -96,8 +100,8 @@ class NativeRunnerTests(unittest.TestCase):
             self.assertFalse(results['fixture_read'].get('is_error',False))
             self.assertTrue(results['fixture_labels']['is_error'])
             self.assertEqual(result['audit']['refused_calls'],1)
-            self.assertEqual(result['audit']['research_calls'],3 if arm=='knowcode' else 2)
-            if arm=='knowcode':
+            self.assertEqual(result['audit']['research_calls'],3 if arm!='plain' else 2)
+            if arm!='plain':
                 self.assertFalse(results['fixture_context'].get('is_error',False),results['fixture_context'])
                 body=results['fixture_context']['content']
                 context=json.loads(body if isinstance(body,str) else ''.join(b['text'] for b in body if b['type']=='text'))

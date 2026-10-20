@@ -195,30 +195,7 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         assert state["last_attempt"] > 0 and state["last_success"] == 0
         run("status", extra={"KNOWCODE_UPDATE_CHECK": "1"})
         assert [c["url"] for c in calls()] == [API]
-
-        # A binary in a Homebrew keg: self-update refuses before any request; --check and the notice name
-        # `brew upgrade`, and only for that install.
-        brew = "brew upgrade bubstackdev/tap/knowcode"
-        keg = root / "Cellar/knowcode/0.1.0"
-        (keg / "bin").mkdir(parents=True)
-        brewed = keg / "bin/knowcode"
-        shutil.copy2(binary, brewed)
-        (keg / "INSTALL_RECEIPT.json").write_text("{}")
-        requests.unlink()
-        refused = run("self-update", executable=brewed, ok=False)
-        assert f"Homebrew manages this install; run `{brew}`" in refused.stderr, refused.stderr
-        assert not calls()
-        checked = run("self-update", "--check", executable=brewed)
-        assert f"run `{brew}`." in checked.stdout and "self-update" not in checked.stdout, checked.stdout
-        clock = int(time.time())
-        known = json.dumps({"format": 1, "last_attempt": clock, "last_success": clock, "latest": "v0.2.0"})
-        state_path.write_text(known)
-        notice = run("status", executable=brewed, extra={"KNOWCODE_UPDATE_CHECK": "1"})
-        assert f"v0.2.0 is available; run `{brew}`." in notice.stderr, notice.stderr
-        state_path.write_text(known)
-        notice = run("status", extra={"KNOWCODE_UPDATE_CHECK": "1"})
-        assert "v0.2.0 is available; run `knowcode self-update`." in notice.stderr, notice.stderr
-    print("update checks passed: isolated metadata, opt-out, daily coordination, receipt ownership, checksum rejection, rollback, deadlines, Homebrew installs")
+    print("update checks passed: isolated metadata, opt-out, daily coordination, receipt ownership, checksum rejection, rollback, deadlines")
 
 
 if __name__ == "__main__":
