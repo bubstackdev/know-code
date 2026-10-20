@@ -30,6 +30,14 @@ macOS (Apple silicon) or Linux (x86_64 or arm64):
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
 ```
 
+Or with Homebrew:
+
+```sh
+brew install bubstackdev/tap/knowcode
+```
+
+Update with `knowcode self-update`, or `brew upgrade bubstackdev/tap/knowcode` for a Homebrew install.
+
 From source, with a Rust toolchain: `cargo build --release --locked`, then put `target/release/knowcode` on your
 `PATH`. Windows is not supported yet.
 

@@ -18,6 +18,10 @@ The license is MIT OR Apache-2.0. There is no telemetry.
 2026-10-19: Homebrew distribution is deferred to 0.1.1; 0.1.0 ships the shell
 installer only.
 
+2026-10-20: Homebrew restored for 0.1.1: releases publish a formula to the tap
+`bubstackdev/homebrew-tap`, and `self-update` defers to `brew upgrade` for a
+Homebrew installation.
+
 ## Runtime and indexing
 
 There is no daemon. The MCP server watches repositories and keeps their indexes
