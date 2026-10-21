@@ -17,6 +17,12 @@ differs from the second in two ways only:
 
 Questions, labels, arms, model, client, profile, metrics, criteria, detector and intervals are unchanged.
 
+After the final run's results were published, a fix round landed on main (still version 0.2.0, at 702da21), and the
+study is run once more as a **rerun** under a fourth freeze. The fourth freeze differs from the third only in
+`knowcode_sha256`, which names the 702da21 build, and in the hash of this document. Questions, labels, arms, model,
+client, profile, metrics, criteria, detector, intervals and the transport rule are unchanged. The rerun's results are
+reported next to the baseline and the final run; they do not replace them.
+
 ## Cohort and questions
 
 - **Cohort:** the six public repositories pinned in [manifest.json](manifest.json), exported as described in
@@ -249,8 +255,7 @@ writes per-session rows and the per-arm aggregates, paired differences, interval
 view. The summary contains no local paths.
 
 Publication follows method.md. The committed results are the summary and per-session rows. Raw transcripts are kept
-outside the repository, because they contain the build machine's paths. They are available on request, with those
-paths removed.
+outside the repository, because they contain the build machine's paths.
 
 ## Transport retries (adopted 2026-10-21)
 
@@ -327,3 +332,5 @@ baseline budget.
   questions were reworded for answer format only, after their labels and independent review.
 - **2026-10-21:** after the baseline, a rule for transport retries was adopted for the final run. See "Transport
   retries"; the baseline is also re-scored under it.
+- **2026-10-21:** fourth freeze for a rerun on the 702da21 build (see the introduction). On the user's request, the
+  offer to share raw transcripts on request was removed from "Scoring script".

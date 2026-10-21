@@ -225,12 +225,13 @@ class NativeStreamTests(unittest.TestCase):
                 self.assertNotIn('mcp__knowcode__kc_note_add', advertised)
                 self.assertEqual(set(advertised)-{'Bash','Read'}, {key for key in advertised if key.startswith('mcp__knowcode__')})
                 properties = advertised['mcp__knowcode__kc_context']['input_schema']['properties']
-                self.assertTrue({'symbol','source','repo'}.issubset(properties))
+                self.assertIn('symbol', properties)  # 0.2 advertises common parameters only
                 self.assertFalse(results['fixture_context'].get('is_error', False), results['fixture_context'])
                 body = results['fixture_context']['content']
                 context = json.loads(body if isinstance(body, str) else ''.join(block['text'] for block in body if block['type']=='text'))
-                self.assertTrue(context['complete'])
-                self.assertFalse(context['truncated'])
+                # 0.2 answers carry `complete`/`truncated` only when the answer is cut.
+                self.assertTrue(context.get('complete', True))
+                self.assertFalse(context.get('truncated', False))
                 self.assertEqual(context['items'][0]['source'], source_text.strip())
                 self.assertEqual(context['items'][0]['symbol']['file'], 'app.ts')
                 self.assertEqual(context['freshness']['reparsed'], 1)

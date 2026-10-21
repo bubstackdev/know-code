@@ -105,7 +105,7 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertFalse(results['fixture_context'].get('is_error',False),results['fixture_context'])
                 body=results['fixture_context']['content']
                 context=json.loads(body if isinstance(body,str) else ''.join(b['text'] for b in body if b['type']=='text'))
-                self.assertTrue(context['complete']);self.assertFalse(context['truncated'])
+                self.assertTrue(context.get('complete',True));self.assertFalse(context.get('truncated',False))
                 self.assertEqual(context['items'][0]['source'],source_file.read_text().strip())
                 self.assertEqual(context['items'][0]['symbol']['file'],'api.ts')
                 advertised={tool['name'] for tool in requests[0]['tools']}

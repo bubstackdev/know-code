@@ -7,7 +7,7 @@
     },
     "config": {
       "path": "config.json",
-      "sha256": "5ebda8431cd6a2f04654ad5bbac14dc1894283fab059f34c4110c1b4638b94f3"
+      "sha256": "2160ddf54b77b6bd3a6afe776e4fd0c12adba6a1459a6b5b6f4d35ba7ede2ad6"
     },
     "labels": {
       "path": "labels.jsonl",
@@ -27,11 +27,11 @@
     },
     "plan": {
       "path": "plan.json",
-      "sha256": "f5280a6bdb5955d85abdf8db436aac44a457b075799ac5aacd3db755ebf844d2"
+      "sha256": "1c4093318c0a655797f10ad479aad6c4085cfe164e47e1aa331853c90fa33214"
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "1df0c135c503bd3e6182bb2f6cfb7c8e2165ef09e2e467b16a7a5c3d5412c553"
+      "sha256": "a678c995d9e4ca2cc7737c7aff4d602b2b9ed8a1908738985ae0014b83ac6c8d"
     },
     "provisional": {
       "path": "provisional.json",
@@ -89,5 +89,6 @@
     "scripts/plan-public-eval.py": "11d2f4eb758a83210e04d05cd7e81aa1ef7210e8005fb8ba731a1141d2ebea6b",
     "scripts/prepare-public-eval-index.py": "d48844a6199399367e32fc41ea9ba9603adc33397bef3b47be83e6ece29f99e0",
     "scripts/prepare-public-eval-session.py": "aa4881a3e5137d971a624106c6e7f4665a7c6bce9ba96b8791cfd96fa5efca3e"
-  }
+  },
+  "revision": "Fourth freeze (2026-10-21), for a rerun on the 702da21 build. Changed from the third freeze (0141cee5): config.knowcode_sha256 (0.2.0 at 00aae5b, f7a15757..., to 0.2.0 at 702da21, 5323abc9...), plan.json (re-planned with that configuration; order unchanged) and protocol.md (rerun note; offer to share transcripts removed). Everything else, including every runner and scorer implementation, is byte-identical."
 }
