@@ -227,3 +227,62 @@ fn base_members_and_foreign_receivers_do_not_land_on_lookalikes() {
     assert_eq!(exec.iter().map(|r| r.confidence).collect::<Vec<_>>(), ["unresolved", "exact"]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const EXTENSIONS: &str = r#"
+namespace App;
+
+public class ContainerBuilder { }
+public class ServiceCollection { }
+public interface IService { }
+public class Decorator : IService { }
+
+public static partial class RegistrationExtensions
+{
+    public static void RegisterDecorator<TDecorator, TService>(this ContainerBuilder builder) { }
+    public static void RegisterDecorator<TService>(this ContainerBuilder builder, Func<TService, TService> d) { }
+    public static void RegisterDecorator<TService>(this ContainerBuilder builder, Func<TService, TService> d, object key) { }
+    public static void RegisterDecorator(this ContainerBuilder builder, Type decorator, Type service) { }
+    public static void RegisterDecorator(this ContainerBuilder builder, Type decorator, Type service, object key) { }
+    public static void RegisterDecorator(this ContainerBuilder builder, Func<object, object> d, Type service, object key) { }
+}
+
+public static class CollectionExtensions
+{
+    public static void RegisterDecorator(this ServiceCollection services, Type decorator) { }
+}
+
+public class Module
+{
+    public void Load(ContainerBuilder builder, ServiceCollection services)
+    {
+        builder.RegisterDecorator<Decorator, IService>();
+        builder.RegisterDecorator(typeof(Decorator), typeof(IService));
+        builder.RegisterDecorator<IService>(s => s, "key");
+        services.RegisterDecorator(typeof(Decorator));
+    }
+}
+"#;
+
+#[test]
+fn extension_methods_are_found_by_the_static_class_declaring_them() {
+    let root = scratch("extension-hosts");
+    write(&root, "src/App/Extensions.cs", EXTENSIONS);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+
+    // Written after the static class declaring them, every overload is a definition, and the other class's is not.
+    let defs = query::definitions(conn, "RegistrationExtensions.RegisterDecorator").unwrap();
+    assert_eq!(defs.len(), 6, "{defs:?}");
+    assert!(defs.iter().all(|d| d.container.as_deref() == Some("ContainerBuilder")));
+    let found = query::find_counted(conn, "RegistrationExtensions.RegisterDecorator", None, 20, &Default::default()).unwrap();
+    assert_eq!(found.hits.iter().filter(|h| h.matched == "exact").count(), 6);
+    assert_eq!(query::definitions(conn, "App.RegistrationExtensions.RegisterDecorator").unwrap().len(), 6);
+
+    // Their references, as by the extended type: none of the other class's.
+    let lines_of = |q: &str| -> Vec<u32> { query::refs(conn, q, &[], 50).unwrap().0.iter().map(|r| r.line).collect() };
+    assert_eq!(lines_of("RegistrationExtensions.RegisterDecorator"), vec![28, 29, 30]);
+    assert_eq!(lines_of("ContainerBuilder.RegisterDecorator"), vec![28, 29, 30]);
+    assert_eq!(lines_of("CollectionExtensions.RegisterDecorator"), vec![31]);
+    let _ = std::fs::remove_dir_all(&root);
+}

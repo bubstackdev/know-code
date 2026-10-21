@@ -26,6 +26,7 @@ mod update;
 mod tf;
 mod tree;
 mod walk;
+mod whole;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -534,7 +535,8 @@ enum Cmd {
         /// Language filter (repeatable): swift, python, rust, markdown, json, yaml, toml, shell, ...
         #[arg(long, short = 'l')]
         lang: Vec<String>,
-        /// Path glob (repeatable); `!` excludes. Without a `/` it matches file names: `-g '*.swift' -g '!*Tests*'`.
+        /// Path glob (repeatable); `!` excludes. Without a `/` it matches file names: `-g '*.swift' -g '!*Tests*'`. After a
+        /// repo's name (`-g 'shop/src/**'`), it searches that repo only.
         #[arg(long, short = 'g')]
         glob: Vec<String>,
         /// Lines of context around each hit.
@@ -897,7 +899,7 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || {
                 let d = &out.data;
                 if !d.items.is_empty() || d.manifests.is_empty() {
-                    render::find(&d.items, d.total, d.multi, d.capped);
+                    render::find(&d.items, d.total, d.multi, d.capped, &d.declared);
                 }
                 render::manifest_hits(&d.manifests);
             })
@@ -910,7 +912,7 @@ fn run(cli: Cli) -> Result<()> {
             cite.enter();
             let out = ops::refs(&name, &kind, limit, &repo.scope())?;
             let d = &out.data;
-            emit(&repo, &out.env, || render::refs(&name, &d.items, d.total, &d.by_confidence, d.multi))
+            emit(&repo, &out.env, || render::refs(&name, d))
         }
         Cmd::Context { symbol, budget, source, limit, cite, repo } => {
             cite.enter();
@@ -1323,6 +1325,12 @@ fn index(
         let report = kc_index::sync(root, &mut store, &opts)?;
         changed |= report.parsed + report.removed > 0;
         let content = kc_index::content::sync_content(root, &mut store, opts.threads)?;
+        // Derived data earlier queries computed (areas, the file ranking), brought up to this index: left stale, the
+        // first query after `index` would wait for it.
+        // Not fatal: the index is complete without it, and a query brings it up to date.
+        if let Err(e) = kc_index::refresh_derived(root, &store) {
+            eprintln!("knowcode: {}: areas and file ranking not refreshed: {e:#}", repo_name(root));
+        }
         drop(store);
         let bytes = kc_index::index_bytes(root)?;
         let privacy = kc_index::privacy::Privacy::load(root);

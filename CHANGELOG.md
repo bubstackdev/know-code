@@ -15,6 +15,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `kc_help <tool>`), and instructions that no longer repeat the descriptions. The instructions and the `kc_refs` and
   `kc_find` descriptions now send "what calls X" and "what breaks if X changes" to `kc_impact` (or `kc_trace`, depth
   2) with a `file:line` selector. The CLI's output and `--json` are unchanged.
+- Answers whole enough to stop on. `find` on an exact name adds `declared`: one line per repo saying it has every
+  declaration of the name there, with a C# `partial` type's parts (file:line each), a type's constructors (a record's
+  primary one too), a method's overloads, and how many references in code name it (the other mentions are uses, for
+  `refs`). `refs` groups references by caller (code before tests), marks rows in test files `test`, tallies callers
+  and sites in `callers`, numbers the overloads the references resolve to (`overloads`, with signatures and the sites
+  reaching each) and says which one each row calls (`overload`, in place of its `targets`). For an interface or base
+  class, `refs` adds `hierarchy` (implementers or subclasses, those reaching it through another type, derived
+  interfaces, DI registrations of it and of them) and `context` adds `conformers_indirect` and `di_implementers`; both
+  say each empty list as "none found" with what was searched (`none_found`). A `context` on a partial type lists its
+  `parts` instead of calling them other definitions, and lists constructors first among members.
 - HTTP routes across repos find more of their callers. A controller with no `[Route]` of its own takes the nearest
   one up its base classes, in any file of the repo, with `[controller]` its own name, as ASP.NET does; `[Area]`,
   `[ActionName]`, `[NonAction]`, `[RoutePrefix]` and a method's lone `[Route]` (every verb) are read. Conventional
@@ -92,6 +102,25 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - The pre-registered public agent study measured this release's candidate (commit 00aae5b): it missed 2 of its 4
   criteria (re-check rate, tokens) and met 2 (answer F1 and recall, unprompted use). See
   [eval/public-v1/results.md](eval/public-v1/results.md).
+- `search` and `grep-ast` (`kc_search`, `kc_grep_ast`) take a `paths` glob written after a repo's name
+  (`web/**`, `web/src/**`): it searches that repo only, relative to it. Such a glob used to match nothing, and the
+  answer said "no line matches" in every repo. An absolute path searches the repo it is in. A `lang` may be an
+  extension (`ts`, `cs`, `py`). When the filter matches no file, the note says `paths matched 0 files (…)` (or
+  `lang matched 0 files`), naming the repos, instead of a no-match note for lines that were never read.
+- `at` (`kc_symbol_at`) finds the file's repo across the workspace: a path after the repo's name (`web/src/a.ts`),
+  one relative to a workspace root, a repo-relative path held by exactly one repo, an absolute path inside a repo, and
+  an absolute path outside any repo holding a repo's name (a copy of the tree, a stack frame from another machine).
+  It used to refuse any relative path in a workspace ("pass --repo") and any absolute path outside a repo ("not
+  inside a git repo"). A path in several repos names them.
+- `index` brings derived data earlier queries computed (areas, the file ranking) up to the new index. An MCP call on
+  a current index no longer waits for that work: it was scheduled on the session's first call, which then could run
+  out of its budget and say "indexing is queued or running" right after `index`. The note is now only for repos
+  that changed since their index, and only where it bears on the answer (the repo asked about, one never indexed, or
+  one the answer's items come from). It names the repo, not its local path.
+- C#: an extension method is found by the static class declaring it (`RegistrationExtensions.RegisterDecorator`) as
+  well as by the type it extends: `find`, `context`, `trace`, `impact` and the other lookups, and `refs`, which
+  answered nothing for it. A constructor initializer on the line after the colon (`… int x) :` then `base(x)`) is
+  placed at `base`/`this`, not a line early. C# files are reparsed once.
 
 ## 0.1.1 (2026-10-20)
 

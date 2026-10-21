@@ -527,8 +527,18 @@ fn workspace_envelope(opened: &[Opened], workspace: bool, items: serde_json::Val
         held.extend(kc_index::blocked_roots().unwrap_or_default().into_iter().map(|(r, _)| r));
     }
     env["provenance"] = json!(provenance);
+    // A repo whose indexing didn't finish within the call's budget, where it bears on the answer: the one repo asked
+    // about, one never indexed (its part may be missing whole), or one the answer's items come from. A repo of a
+    // workspace-wide answer that has an index and gave nothing is still listed in `repos` as indexing.
+    let answered: HashSet<String> = match env["items"].as_array() {
+        Some(items) => items.iter().filter_map(|i| i["repo"].as_str()).map(repo_label).collect(),
+        None => HashSet::new(),
+    };
     for o in opened.iter().filter(|o| o.refresh_pending) {
-        push_incomplete(&mut env, crate::refresh::pending(&o.root));
+        let relevant = opened.len() == 1 || !indexed_before(&o.store) || answered.contains(&repo_name(&o.root));
+        if relevant {
+            push_incomplete(&mut env, crate::refresh::pending(&o.root));
+        }
     }
     for i in opened.iter().flat_map(|o| o.consulted.incomplete()) {
         push_incomplete(&mut env, i);
@@ -557,6 +567,16 @@ pub fn repo_name(root: &Path) -> String {
     root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// A repo as an item names it (its name, or its path): its name.
+fn repo_label(r: &str) -> String {
+    repo_name(Path::new(r))
+}
+
+/// Whether the index holds a committed snapshot of any file: false for one never indexed yet.
+fn indexed_before(store: &Store) -> bool {
+    store.conn().query_row("SELECT EXISTS (SELECT 1 FROM files)", [], |r| r.get(0)).unwrap_or(true)
+}
+
 pub struct FindData {
     pub items: Vec<(PathBuf, FindHit)>,
     pub total: usize,
@@ -564,6 +584,8 @@ pub struct FindData {
     pub capped: bool,
     pub multi: bool,
     pub manifests: Vec<ManifestHit>,
+    /// Per repo, its declarations of the name (see [`crate::whole::declared`]).
+    pub declared: Vec<String>,
 }
 
 /// Every client route (request contract) in the selected repos, with the actions serving it. Reads the workspace
@@ -1104,24 +1126,123 @@ fn sql_facts(o: &Opened, ctx: &Context, tables: &SymbolTables, max_accessors: us
     Ok(out)
 }
 
-/// The symbols enclosing `line` of `file`, innermost first. An absolute `file` picks its repo; otherwise it is
-/// relative to the one repo in scope.
-pub fn at(file: &str, line: u32, args: &Scope) -> Result<Out<Vec<query::SymbolAt>>> {
+/// The repo and repo-relative path `file` names, for `at`: an absolute path inside a repo; one that isn't (a stack
+/// frame from another machine, a copy of the tree) by the repo name in it (`…/<repo>/src/a.cs`); a path relative to
+/// the one repo in scope, written after the repo's name (`<repo>/src/a.cs`), relative to a workspace root or the
+/// current directory, or found in exactly one of the repos in scope.
+fn at_file(file: &str, args: &Scope) -> Result<(PathBuf, String)> {
     let path = Path::new(file);
-    let root = if path.is_absolute() && args.repos.is_empty() {
-        target_repos(&[path.parent().unwrap_or(path).to_path_buf()])?.remove(0)
-    } else {
-        match target_repos(&args.repos)?.as_slice() {
-            [one] => one.clone(),
-            _ => bail!("`at` answers for one repo: pass --repo, or an absolute file path"),
+    // A file there that the repo's AI privacy file doesn't block: a blocked one is never a candidate (and never named).
+    let exists = |root: &Path, rel: &str| !rel.is_empty() && root.join(rel).is_file() && !kc_index::privacy::blocks(root, rel);
+    let rel_in = |root: &Path, p: &Path| -> Option<String> {
+        let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        abs.strip_prefix(root).ok().map(|r| r.to_string_lossy().into_owned())
+    };
+    // `…/<repo>/rest`: each place a component names one of `roots` and the rest is a file in it.
+    let by_name = |roots: &[PathBuf], p: &str| -> Vec<(PathBuf, String)> {
+        let parts: Vec<&str> = p.split('/').collect();
+        let mut out: Vec<(PathBuf, String)> = Vec::new();
+        for root in roots {
+            let name = repo_name(root);
+            for (i, part) in parts.iter().enumerate() {
+                let rest = parts[i + 1..].join("/");
+                if *part == name && exists(root, &rest) && !out.iter().any(|(r, _)| r == root) {
+                    out.push((root.clone(), rest));
+                }
+            }
+        }
+        out
+    };
+    let one = |found: Vec<(PathBuf, String)>, what: &str| -> Result<(PathBuf, String)> {
+        match found.as_slice() {
+            [one] => Ok(one.clone()),
+            [] => bail!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"),
+            many => {
+                let names: Vec<String> = many.iter().map(|(r, _)| repo_name(r)).collect();
+                bail!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+            }
         }
     };
-    let rel = if path.is_absolute() {
-        let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        abs.strip_prefix(&root).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| file.to_string())
-    } else {
-        file.trim_start_matches("./").to_string()
+    if path.is_absolute() {
+        let dir = path.parent().unwrap_or(path);
+        if args.repos.is_empty() && kc_index::repo_root(dir).is_ok() {
+            let root = target_repos(&[dir.to_path_buf()])?.remove(0);
+            let rel = rel_in(&root, path).unwrap_or_else(|| file.to_string());
+            return Ok((root, rel));
+        }
+        let roots = target_repos(&args.repos)?;
+        if let Some(root) = roots.iter().find(|r| rel_in(r, path).is_some()) {
+            return Ok((root.clone(), rel_in(root, path).unwrap_or_default()));
+        }
+        // Not inside a repo here: by the repo name in it.
+        let mut found = by_name(&roots, file.trim_start_matches('/'));
+        if found.is_empty() && args.repos.is_empty() {
+            found = by_name(&kc_index::indexed_roots()?, file.trim_start_matches('/'));
+        }
+        return one(found, "is not inside a git repo, and no indexed repo's name is in it");
+    }
+    let rel = file.trim_start_matches("./");
+    let roots = target_repos(&args.repos)?;
+    // `<repo>/rest`, unless the repo holds that path itself.
+    let after_name = |root: &PathBuf| -> Option<(PathBuf, String)> {
+        let rest = rel.strip_prefix(&format!("{}/", repo_name(root)))?;
+        (!exists(root, rel) && exists(root, rest)).then(|| (root.clone(), rest.to_string()))
     };
+    // The one repo in scope: one named, or around the current directory, unless the path is in no such file there
+    // and no repo was named (then the workspace's repos are tried too, and this one as it was written last).
+    let only = match roots.as_slice() {
+        [root] => {
+            if let Some(found) = after_name(root) {
+                return Ok(found);
+            }
+            if exists(root, rel) || !args.repos.is_empty() {
+                return Ok((root.clone(), rel.to_string()));
+            }
+            Some(root.clone())
+        }
+        _ => None,
+    };
+    let roots = match &only {
+        Some(root) => {
+            let mut all = vec![root.clone()];
+            all.extend(kc_index::indexed_roots()?.into_iter().filter(|r| r != root));
+            all
+        }
+        None => roots,
+    };
+    let mut found: Vec<(PathBuf, String)> = roots.iter().filter_map(after_name).collect();
+    if found.is_empty() {
+        // Relative to a workspace root, or to the current directory.
+        let mut bases = kc_index::config::workspace().map(|w| w.0).unwrap_or_default();
+        bases.extend(std::env::current_dir().ok());
+        for base in bases {
+            let p = base.join(rel);
+            if p.is_file()
+                && let Some(root) = roots.iter().find(|r| rel_in(r, &p).is_some())
+                && !found.iter().any(|(r, _)| r == root)
+            {
+                found.push((root.clone(), rel_in(root, &p).unwrap_or_default()));
+            }
+        }
+    }
+    if found.is_empty() {
+        found = roots.iter().filter(|r| exists(r, rel)).map(|r| (r.clone(), rel.to_string())).collect();
+    }
+    if found.is_empty() {
+        // A repo's name further in (`checkouts/<repo>/src/a.cs`).
+        found = by_name(&roots, rel);
+    }
+    match only {
+        // As written, in the repo around the current directory: the answer says the file isn't indexed.
+        Some(root) if found.is_empty() => Ok((root, rel.to_string())),
+        _ => one(found, &format!("is in none of the {} repos searched", roots.len())),
+    }
+}
+
+/// The symbols enclosing `line` of `file`, innermost first. `file` names its repo (see [`at_file`]).
+pub fn at(file: &str, line: u32, args: &Scope) -> Result<Out<Vec<query::SymbolAt>>> {
+    let (root, rel) = at_file(file, args)?;
+    guard_inputs(std::slice::from_ref(&root), std::slice::from_ref(&rel))?;
     let o = open_fresh(&root, args.no_sync)?;
     let chain = query::symbols_at(o.store.conn(), &rel, line)?;
     let indexed: bool = o.store.conn().query_row("SELECT EXISTS (SELECT 1 FROM files WHERE path = ?1)", [&rel], |r| r.get(0))?;
@@ -1144,6 +1265,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     let mut manifest_hits = Vec::new();
     let want_manifests = kind.is_none_or(|k| matches!(k, "package" | "target" | "product"));
     let mut manifests_total = 0;
+    let mut declared = Vec::new();
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if kind.is_none_or(|k| !matches!(k, "package" | "target" | "product")) {
@@ -1153,6 +1275,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
             total += found.total;
             capped |= found.capped;
             items.extend(found.hits.into_iter().map(|h| (o.root.clone(), h)));
+            declared.extend(crate::whole::declared(&o, q, kind)?);
         }
         if want_manifests {
             let (hits, n) = manifests::find(o.store.conn(), q, 10)?;
@@ -1183,6 +1306,10 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
             query::FIND_CANDIDATES
         ));
     }
+    // Every declaration of the name, said in one line per repo: so the answer is known to be whole.
+    if !declared.is_empty() {
+        env["declared"] = json!(declared.join(" "));
+    }
     if !manifest_hits.is_empty() {
         env["manifests"] = json!(manifest_hits);
     }
@@ -1190,7 +1317,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         env["manifests_total"] = json!(manifests_total);
     }
     finish(&mut env);
-    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits } })
+    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared } })
 }
 
 pub struct LocateData {
@@ -1261,6 +1388,12 @@ pub struct RefsData {
     pub total: usize,
     pub by_confidence: BTreeMap<&'static str, usize>,
     pub multi: bool,
+    /// The tally of callers and sites (see [`crate::whole::Callers`]).
+    pub callers: Option<String>,
+    /// The overloads the references resolve to, numbered.
+    pub overloads: Vec<String>,
+    /// For an interface or base type (see [`crate::whole::hierarchy`]).
+    pub hierarchy: Option<Value>,
 }
 
 pub fn refs(name: &str, kinds: &[String], limit: usize, args: &Scope) -> Result<Out<RefsData>> {
@@ -1290,6 +1423,9 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     let (mut precise, mut corrected) = (0, 0);
     let mut stale_rank: Vec<Incomplete> = Vec::new();
     let mut unread_imports: Vec<Incomplete> = Vec::new();
+    let mut callers = crate::whole::Callers::default();
+    let mut overloads = crate::whole::Overloads::default();
+    let mut hierarchy = None;
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let (_, bare) = query::split_dotted(name.trim());
@@ -1331,6 +1467,18 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         if let Some(g) = order_refs(&o.store, name, &mut hits)? {
             stale_rank.push(kc_store::answer::stale_derived(&format!("order of references ({}): file ranking", repo_name(&o.root)), &g, &o.generation));
         }
+        // Each caller's references together, code before tests; the tally and the overloads over all of them.
+        crate::whole::group_by_caller(&mut hits);
+        callers.add(&o.root, &hits);
+        overloads.add(o.store.conn(), &o.root, &hits)?;
+        // An interface or base type: what reaches it through other types, its DI registrations, and what is empty.
+        if hierarchy.is_none() && (kinds.is_empty() || kinds.iter().any(|k| matches!(*k, "type_ref" | "instantiate"))) {
+            hierarchy = crate::whole::hierarchy(&o, name.trim(), args.no_sync)?;
+            if hierarchy.is_some() && let Some(ty) = query::definitions(o.store.conn(), name.trim())?.into_iter().find(|d| matches!(d.kind.as_str(), "class" | "protocol")) {
+                let label = multi.then(|| repo_name(&o.root));
+                unread_imports.extend(kc_store::unsupported::incomplete(&di_unread(o.store.conn(), &ty)?, label.as_deref()));
+            }
+        }
         if !multi {
             hits.truncate(limit);
         }
@@ -1364,6 +1512,10 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         for (_, h) in &items {
             *by_conf.entry(h.confidence).or_insert(0) += 1;
         }
+        callers = crate::whole::Callers::default();
+        for (root, h) in &items {
+            callers.add(root, std::iter::once(h));
+        }
     }
     items.truncate(limit);
     let mut citer = crate::cite::Citer::new([]).with_stores(opened.iter().map(|o: &Opened| (o.root.clone(), &o.store)));
@@ -1379,10 +1531,24 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
             if let Some(r) = &h.repo {
                 v["repo"] = json!(r);
             }
+            if kc_store::is_test_path(&h.file) {
+                v["test"] = json!(true);
+            }
+            overloads.mark(root, h, &mut v);
             v
         })
         .collect();
     let mut env = workspace_envelope(&opened, workspace, json!(list), total, items.len());
+    let said = callers.statement(name.trim());
+    if let Some(s) = &said {
+        env["callers"] = json!(s);
+    }
+    if !overloads.list.is_empty() {
+        env["overloads"] = json!(overloads.list);
+    }
+    if let Some(h) = &hierarchy {
+        env["hierarchy"] = h.clone();
+    }
     for i in cite_notes {
         push_incomplete(&mut env, i);
     }
@@ -1399,7 +1565,7 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         env["corrected"] = json!(corrected);
     }
     finish(&mut env);
-    Ok(Out { env, data: RefsData { items, total, by_confidence: by_conf, multi } })
+    Ok(Out { env, data: RefsData { items, total, by_confidence: by_conf, multi, callers: said, overloads: overloads.list, hierarchy } })
 }
 
 /// References found from several repos, each reference site once: the same site (repo, file, line, name) is found
@@ -2309,29 +2475,38 @@ fn unread_for(o: &Opened, s: &kc_store::query::SymbolRow, bus: Vec<kc_store::uns
             }
         }
     }
-    if matches!(s.kind.as_str(), "class" | "protocol") && s.file.ends_with(".cs") {
-        let word = |c: &str| c.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == s.name);
-        for u in unsupported::in_area(conn, "di")? {
-            let applies = match u.construct.strip_prefix("assembly scan ") {
-                // A scan registers what its name filter lets through (`[*Service]`), every type without one.
-                Some(rest) => match rest.rsplit_once('[').map(|(_, f)| f.trim_end_matches(']')) {
-                    Some(f) if s.kind == "class" => match (f.strip_prefix('*'), f.strip_suffix('*')) {
-                        (Some(end), _) => s.name.ends_with(end),
-                        (_, Some(start)) => s.name.starts_with(start),
-                        _ => s.name == f,
-                    },
-                    _ => true,
-                },
-                None => word(&u.construct),
-            };
-            if applies {
-                sites.push(u);
-            }
-        }
-    }
+    sites.extend(di_unread(conn, s)?);
     sites.sort_by(|a, b| (&a.area, &a.file, a.line).cmp(&(&b.area, &b.file, b.line)));
     sites.dedup_by(|a, b| a.area == b.area && a.file == b.file && a.line == b.line && a.construct == b.construct);
     Ok(unsupported::incomplete(&sites, None))
+}
+
+/// The DI registrations the C# extractor met but couldn't read that may register the class or interface `s`: an
+/// assembly scan whose name filter lets it through (every type, without one), another construct naming it.
+fn di_unread(conn: &rusqlite::Connection, s: &kc_store::query::SymbolRow) -> Result<Vec<kc_store::unsupported::Site>> {
+    let mut sites = Vec::new();
+    if !(matches!(s.kind.as_str(), "class" | "protocol") && s.file.ends_with(".cs")) {
+        return Ok(sites);
+    }
+    let word = |c: &str| c.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == s.name);
+    for u in kc_store::unsupported::in_area(conn, "di")? {
+        let applies = match u.construct.strip_prefix("assembly scan ") {
+            // A scan registers what its name filter lets through (`[*Service]`), every type without one.
+            Some(rest) => match rest.rsplit_once('[').map(|(_, f)| f.trim_end_matches(']')) {
+                Some(f) if s.kind == "class" => match (f.strip_prefix('*'), f.strip_suffix('*')) {
+                    (Some(end), _) => s.name.ends_with(end),
+                    (_, Some(start)) => s.name.starts_with(start),
+                    _ => s.name == f,
+                },
+                _ => true,
+            },
+            None => word(&u.construct),
+        };
+        if applies {
+            sites.push(u);
+        }
+    }
+    Ok(sites)
 }
 
 /// Every message the selected repos publish or consume, outside tests, with the code on the other side across indexed
@@ -2529,6 +2704,22 @@ pub fn context_raised(
             let n = ctx.conformers_elsewhere.len();
             ctx.conformers_elsewhere_total = (n > elsewhere_max).then_some(n);
             ctx.conformers_elsewhere.truncate(elsewhere_max);
+            // An interface or base type: each of its lists that came back empty, said with what was searched.
+            let subtypes = !ctx.conformers.is_empty() || !ctx.conformers_elsewhere.is_empty();
+            if crate::whole::is_base(&ctx.symbol, subtypes) {
+                let protocol = |k: &str| k == "protocol";
+                let found = crate::whole::Found {
+                    implementers: ctx.conformers.iter().filter(|c| !protocol(&c.kind)).count()
+                        + ctx.conformers_indirect.iter().filter(|c| !protocol(&c.kind)).count()
+                        + ctx.conformers_elsewhere.iter().filter(|c| !protocol(&c.symbol.kind)).count(),
+                    derived: ctx.conformers.iter().filter(|c| protocol(&c.kind)).count()
+                        + ctx.conformers_indirect.iter().filter(|c| protocol(&c.kind)).count()
+                        + ctx.conformers_elsewhere.iter().filter(|c| protocol(&c.symbol.kind)).count(),
+                    registrations: ctx.di.as_ref().map_or(0, |d| d.registrations.len()) + ctx.di_implementers.len(),
+                    cut: ctx.conformers_total.is_some() || ctx.conformers_indirect_total.is_some() || ctx.conformers_elsewhere_total.is_some(),
+                };
+                ctx.none_found = crate::whole::none_found(o.store.conn(), &ctx.symbol, &repo_name(&o.root), &found)?;
+            }
             // Each caller and callee quotes its line; without cites, callers show it as `code`.
             let mut citer = crate::cite::Citer::new([])
                 .with_stores(std::iter::once((o.root.clone(), &o.store)).chain(deps.iter().map(|d| (d.root.clone(), &d.store))));
@@ -2745,6 +2936,7 @@ pub fn context_raised(
         lists.push(cursor::List::new(format!("{at}/callees"), limits.callees, c.callees_total > c.callees.len()));
         lists.push(cursor::List::new(format!("{at}/members"), limits.members, c.members_total > c.members.len()));
         lists.push(cursor::List::new(format!("{at}/conformers"), limits.conformers, c.conformers_total.is_some()));
+        lists.push(cursor::List::new(format!("{at}/conformers_indirect"), limits.conformers, c.conformers_indirect_total.is_some()));
         lists.push(cursor::List::new(format!("{at}/conformers_elsewhere"), elsewhere_max, c.conformers_elsewhere_total.is_some()));
         for (j, t) in tables[i].tables.iter().enumerate() {
             let cut = t.accessors_total.is_some_and(|n| n > t.accessors.len());
@@ -3134,7 +3326,7 @@ fn ensure_summaries(o: &Opened, focus: &[PathBuf], full: bool) -> Result<std::sy
     }
     for s in summaries.iter().filter(|s| s.light && !s.blocked.whole && !s.gone && s.root != o.root && (full || !kc_index::light::unchanged(&s.root))) {
         if no_sync {
-            o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Stale, format!("{}: only manifests and names were scanned; graph joins are not indexed", s.root.display()))
+            o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Stale, format!("{}: only manifests and names were scanned; graph joins are not indexed", repo_name(&s.root)))
                 .with_hint("ask again without --no-sync to index the needed checkout automatically"));
         } else {
             // A checkout that can't be read (gone since the summaries were read, a failing `git`) is left out.
@@ -3149,7 +3341,7 @@ fn ensure_summaries(o: &Opened, focus: &[PathBuf], full: bool) -> Result<std::sy
             o.consulted.record(&s.root, &store, report.as_ref());
             match report {
                 None => o.consulted.pending.borrow_mut().push(s.root.clone()),
-                Some(report) if !report.failed.is_empty() => o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Failed, format!("{}: files could not be read while building its full index", s.root.display()))
+                Some(report) if !report.failed.is_empty() => o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Failed, format!("{}: files could not be read while building its full index", repo_name(&s.root)))
                     .with_hint("check this checkout's status, fix unreadable files, and ask again")),
                 _ => {},
             }
@@ -6138,15 +6330,67 @@ pub struct SearchData {
     pub capped: bool,
 }
 
+/// Of `roots`, those the paths filter `globs` is for, each with its filter as `compile` builds it from the globs as they
+/// apply there (see [`search::globs_in`]); repos with the same globs share one.
+fn repo_filters<M>(roots: &[PathBuf], globs: &[String], compile: impl Fn(Vec<String>) -> Result<M>) -> Result<(Vec<PathBuf>, Vec<std::sync::Arc<M>>)> {
+    let names: Vec<String> = roots.iter().map(|r| repo_name(r)).collect();
+    let mut compiled: HashMap<Vec<String>, std::sync::Arc<M>> = HashMap::new();
+    let (mut kept, mut filters) = (Vec::new(), Vec::new());
+    for root in roots {
+        let Some(globs) = search::globs_in(globs, root, &names) else { continue };
+        let filter = match compiled.get(&globs) {
+            Some(f) => f.clone(),
+            None => {
+                let f = std::sync::Arc::new(compile(globs.clone())?);
+                compiled.insert(globs, f.clone());
+                f
+            }
+        };
+        kept.push(root.clone());
+        filters.push(filter);
+    }
+    Ok((kept, filters))
+}
+
+/// The note of an answer whose paths or lang filter matched no file (`searchable` is 0) in the repos `searched`, of
+/// `all` asked about: a false absence otherwise ("no line matches" where nothing was read). `None` without a filter
+/// or with files to search.
+fn no_files_note(globs: &[String], langs: &[String], searchable: usize, searched: &[PathBuf], all: &[PathBuf]) -> Option<String> {
+    if searchable > 0 || (globs.is_empty() && langs.is_empty()) {
+        return None;
+    }
+    let list = |roots: &[PathBuf]| {
+        let names: Vec<String> = roots.iter().take(10).map(|r| repo_name(r)).collect();
+        let more = roots.len().saturating_sub(10);
+        if more > 0 { format!("{} and {more} more", names.join(", ")) } else { names.join(", ") }
+    };
+    let mut filter = Vec::new();
+    if !globs.is_empty() {
+        filter.push(globs.join(", "));
+    }
+    if !langs.is_empty() {
+        filter.push(if globs.is_empty() { langs.join(", ") } else { format!("lang {}", langs.join(", ")) });
+    }
+    let what = if globs.is_empty() { "lang" } else { "paths" };
+    let place = if searched.is_empty() {
+        format!("they name none of the repos searched ({}); a path is relative to its repo, or written after the repo's name (`<repo>/src/**`)", list(all))
+    } else {
+        format!("in {}; nothing was searched", list(searched))
+    };
+    Some(format!("{what} matched 0 files ({}): {place}", filter.join("; ")))
+}
+
 /// Full-text or regex search over every searchable file, ranked: definitions, then declarations, then code, then
 /// tests, comments and prose. Repos are checked for freshness in parallel and candidates read on a shared pool.
 pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     let t0 = std::time::Instant::now();
-    let roots = target_repos(&args.repos)?;
+    let all = target_repos(&args.repos)?;
     let matcher = search::compile(&p.opts)?;
+    // The paths filter as it applies in each repo (`<repo>/…` scopes it to that repo); repos it leaves out aren't read.
+    let (roots, filters) = repo_filters(&all, &p.opts.globs, |globs| search::compile(&search::SearchOptions { globs, ..p.opts.clone() }))?;
     let threads = SyncOptions::default().threads;
     let per_repo = (threads / roots.len().max(1)).max(1);
-    let opened = pool_map(roots.iter().enumerate().collect(), threads, |(i, root)| -> Result<_> {
+    let opened = pool_map(roots.iter().zip(&filters).enumerate().collect(), threads, |(i, (root, filter))| -> Result<_> {
         let mut o = open_fresh(root, args.no_sync)?;
         let (content, files) = if args.no_sync {
             (None, o.store.cfiles()?)
@@ -6156,7 +6400,7 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
         };
         // The files as the sync left them: the list it returns holds their state before.
         let content_gen = cursor::content_gen(root, &o.store.cfiles()?);
-        let (files, stats) = search::candidates(&o.store, files, &matcher, i)?;
+        let (files, stats) = search::candidates(&o.store, files, filter, i)?;
         Ok((o, files, stats, content, content_gen))
     });
     let mut repos = Vec::new();
@@ -6265,6 +6509,9 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
             p.opts.max_lines, scan.files_read
         ));
     }
+    if let Some(note) = no_files_note(&p.opts.globs, &p.opts.langs, searchable, &roots, &all) {
+        env["note"] = json!(note);
+    }
     search_failed(&mut env, &roots, &scan.failed);
     env["stats"] = json!({
         "searchable_files": searchable,
@@ -6328,16 +6575,18 @@ pub struct AstData {
 /// Structural (ast-grep) search over one language's files: candidates from the trigram index, parsed and matched in
 /// parallel. Matches in non-test code come first, then tests; each group by repo, path and position.
 pub fn grep_ast(p: &AstParams, args: &Scope) -> Result<Out<AstData>> {
-    let roots = target_repos(&args.repos)?;
+    let all = target_repos(&args.repos)?;
     let matcher = structural::compile(&p.opts)?;
+    // The paths filter as it applies in each repo, as in `search`.
+    let (roots, filters) = repo_filters(&all, &p.opts.globs, |globs| structural::compile(&structural::AstOptions { globs, ..p.opts.clone() }))?;
     let threads = SyncOptions::default().threads;
     let per_repo = (threads / roots.len().max(1)).max(1);
-    let opened = pool_map(roots.iter().enumerate().collect(), threads, |(i, root)| -> Result<_> {
+    let opened = pool_map(roots.iter().zip(&filters).enumerate().collect(), threads, |(i, (root, filter))| -> Result<_> {
         let mut o = open_fresh(root, args.no_sync)?;
         let files = if args.no_sync { o.store.cfiles()? } else { content::sync_content_files(root, &mut o.store, per_repo)?.1 };
         // The files as the sync left them: the list it returns holds their state before.
         let content_gen = cursor::content_gen(root, &o.store.cfiles()?);
-        let (files, stats) = structural::candidates(&o.store, files, &matcher, i)?;
+        let (files, stats) = structural::candidates(&o.store, files, filter, i)?;
         Ok((o, files, stats, content_gen))
     });
     let (mut repos, mut scan_files, mut searchable, mut candidates, mut gens) = (Vec::new(), Vec::new(), 0, 0, Vec::new());
@@ -6381,6 +6630,9 @@ pub fn grep_ast(p: &AstParams, args: &Scope) -> Result<Out<AstData>> {
             "the scan stopped at {} matches, after {} of {candidates} candidate files in order: narrow the pattern or paths, or raise the cap (CLI --max-matches {more})",
             p.opts.max_matches, scan.files_parsed
         ));
+    }
+    if let Some(note) = no_files_note(&p.opts.globs, &[], searchable, &roots, &all) {
+        env["note"] = json!(note);
     }
     search_failed(&mut env, &roots, &scan.failed);
     env["stats"] = json!({
@@ -10564,6 +10816,78 @@ public class CatalogService(HttpClient httpClient)
         let index = context("HomeController.Index", 4000, Default::default(), &scope).unwrap().env;
         let why = unsupported(&index);
         assert!(why.iter().any(|w| w.contains("conventional routes") && w.contains("MapControllerRoute")), "{why:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A paths filter written after a repo's name searches that repo; one matching no file says so instead of "no line
+    /// matches", which would be a false absence.
+    #[test]
+    fn search_paths_after_a_repo_name_scope_it_and_an_empty_filter_says_so() {
+        let cache = test_cache();
+        let base = cache.dir("search-repo-paths");
+        let web = repo(&base, "web", &[("src/app.ts", "export const retryLimit = 3;\n")]);
+        let api = repo(&base, "api", &[("src/limits.py", "retryLimit = 5\n")]);
+        let both = Scope { repos: vec![web.clone(), api.clone()], no_sync: false };
+        let run = |globs: &[&str], langs: &[&str]| {
+            let opts = search::SearchOptions {
+                pattern: "retryLimit".into(),
+                regex: false,
+                case: search::Case::Sensitive,
+                word: false,
+                langs: langs.iter().map(|l| l.to_string()).collect(),
+                globs: globs.iter().map(|g| g.to_string()).collect(),
+                max_lines: 1000,
+            };
+            search(&SearchParams { opts, limit: 20, offset: 0, context: 0, files_only: false }, &both).unwrap().env
+        };
+        let files = |env: &Value| -> Vec<String> { env["items"].as_array().unwrap().iter().map(|i| i["file"].as_str().unwrap().to_string()).collect() };
+        // After the repo's name: that repo only, relative to it.
+        let env = run(&["web/**"], &[]);
+        assert_eq!((env["repo"].as_str().map(repo_label), files(&env)), (Some("web".to_string()), vec!["src/app.ts".to_string()]));
+        assert_eq!(files(&run(&["api/src/*.py"], &[])), vec!["src/limits.py"]);
+        // An extension names the language.
+        assert_eq!(files(&run(&["web/**"], &["ts"])), vec!["src/app.ts"]);
+        // Matching no file: said, not "no line matches".
+        let env = run(&["web/docs/**"], &[]);
+        assert_eq!(env["note"], "paths matched 0 files (web/docs/**): in web; nothing was searched", "{env}");
+        let env = run(&[], &["cobol"]);
+        assert!(env["note"].as_str().unwrap().starts_with("lang matched 0 files (cobol): in web, api"), "{env}");
+        let env = run(&["/elsewhere/**"], &[]);
+        assert!(env["note"].as_str().unwrap().starts_with("paths matched 0 files (/elsewhere/**): they name none of the repos searched (web, api)"), "{env}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `at` takes a file the way a workspace names it: after its repo's name, relative to the one repo it is in, an
+    /// absolute path inside a repo, or an absolute path elsewhere holding a repo's name (a copy, another machine's).
+    #[test]
+    fn at_finds_the_repo_a_workspace_path_names() {
+        let cache = test_cache();
+        let base = cache.dir("at-paths");
+        let shop = repo(&base, "shop", &[("src/cart.py", "def add_item():\n    return 1\n"), ("README.md", "# shop\n")]);
+        let billing = repo(&base, "billing", &[("src/invoice.py", "class Invoice:\n    def total(self):\n        return 2\n"), ("README.md", "# billing\n")]);
+        let both = Scope { repos: vec![shop.clone(), billing.clone()], no_sync: false };
+        let names = |file: &str, scope: &Scope| -> (String, String, Vec<String>) {
+            let out = at(file, 3, scope).unwrap_or_else(|e| panic!("{file}: {e:#}"));
+            let names = out.data.iter().map(|s| s.name.clone()).collect();
+            (repo_label(out.env["repo"].as_str().unwrap()), out.env["file"].as_str().unwrap().to_string(), names)
+        };
+        let invoice = ("billing".to_string(), "src/invoice.py".to_string(), vec!["total".to_string(), "Invoice".to_string()]);
+        // After the repo's name, across repos and with the repo named.
+        assert_eq!(names("billing/src/invoice.py", &both), invoice);
+        assert_eq!(names("billing/src/invoice.py", &Scope { repos: vec![billing.clone()], no_sync: false }), invoice);
+        // Relative to the one repo holding it.
+        assert_eq!(names("src/invoice.py", &both), invoice);
+        // Absolute, inside the repo; and in a copy of the tree with no git repo around it.
+        assert_eq!(names(&billing.join("src/invoice.py").to_string_lossy(), &Scope { repos: Vec::new(), no_sync: false }), invoice);
+        let copy = base.join("view/billing/src");
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::copy(billing.join("src/invoice.py"), copy.join("invoice.py")).unwrap();
+        assert_eq!(names(&copy.join("invoice.py").to_string_lossy(), &both), invoice);
+        // A path in several repos names them; one in none says so.
+        let several = at("README.md", 1, &both).err().unwrap().to_string();
+        assert!(several.contains("in 2 repos (shop, billing)"), "{several}");
+        let none = at("src/nowhere.py", 1, &both).err().unwrap().to_string();
+        assert!(none.contains("in none of the 2 repos searched"), "{none}");
         let _ = std::fs::remove_dir_all(&base);
     }
 }
