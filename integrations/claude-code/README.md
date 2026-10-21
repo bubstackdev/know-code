@@ -63,7 +63,7 @@ block the search. It never creates or refreshes an index; the MCP query does tha
 The note names `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` both by
 their short names and as Claude sees them from the plugin
 (`mcp__plugin_knowcode_knowcode__kc_context`). The server marks those four always
-loaded (about 1k tokens up front), and the full name lets tool search load one in
+loaded (about 1.6k tokens up front), and the full name lets tool search load one in
 a single step if a client still defers it.
 
 For Bash, it reads the command and acts only on code searches: `grep`, `egrep`,
