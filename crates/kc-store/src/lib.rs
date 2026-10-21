@@ -487,6 +487,11 @@ pub struct Store {
     _lease: Option<std::fs::File>,
 }
 
+/// A file's content hash as the index records it (`files.hash`): blake3 of its bytes, in hex.
+pub fn content_hash(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
 /// Whether a path is test code by convention: a test directory (`tests/`, `Api.UnitTests/`, `__tests__/`) or a test
 /// file name (`FooTests.cs`, `test_api.py`, `foo_test.go`, `foo.spec.ts`). Names merely containing the word (`Latest`,
 /// `Testimonial`, `MonitorTestFailed`, `DeleteState`) are not.

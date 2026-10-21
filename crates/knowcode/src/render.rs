@@ -31,6 +31,10 @@ fn cite_text(out: &mut String, indent: &str, cite: Option<&kc_store::answer::Cit
     if let Some(cut) = &c.cut {
         w!(out, "{indent}       … {cut}");
     }
+    // Checked against the index: said when the lines drifted.
+    if let Some(d) = &c.drift {
+        w!(out, "{indent}       ! {}: {d}", c.check.as_str());
+    }
 }
 
 /// [`cite_text`], printed.

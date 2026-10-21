@@ -733,8 +733,11 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   the line naming the declaration. `{at, text, cut, repo}`: `at` is `file:line` or `file:start-end`; `cut` says what a
   cap left out, or why nothing was quoted. By default (`cite: brief`) the first 12 rows quote one line, up to 120
   characters, and the rest give `at` only (an `incomplete` entry, `capped`, says so); `cite: lines` quotes every row,
-  a declaration from its first line through its name (at most 3), each line up to 160 characters; `cite: none` leaves
-  it out. Text trees print the lines under each row.
+  a declaration from its first line through its name (at most 3), each line up to 160 characters; `cite: check` gives
+  no lines; `cite: none` leaves it out. Text trees print the lines under each row. Every cite's `check` compares the
+  file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),
+  `moved` (`at` is where it is now, `was` where the index had it), `gone`, or `unchecked`; `drift` says what moved,
+  and any drift makes the answer `stale`.
 - An empty answer says what was searched (`note`). Older fields agree with `incomplete`: `truncated`, `total`,
   `capped`, `freshness.failed`, `left_out` and `hint`.
 

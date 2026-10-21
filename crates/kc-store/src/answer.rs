@@ -259,6 +259,8 @@ pub enum CiteMode {
     Brief,
     /// Every row's `cite` quotes its lines: up to 3 for a declaration, each up to 160 characters.
     Lines,
+    /// Each row's `cite` says where its lines are and whether they match the index, without quoting them.
+    Check,
     /// No `cite`.
     None,
 }
@@ -270,19 +272,64 @@ impl std::str::FromStr for CiteMode {
         match s {
             "" | "brief" => Ok(CiteMode::Brief),
             "lines" => Ok(CiteMode::Lines),
+            "check" => Ok(CiteMode::Check),
             "none" => Ok(CiteMode::None),
-            other => Err(format!("cite must be brief, lines or none, not {other}")),
+            other => Err(format!("cite must be brief, lines, check or none, not {other}")),
         }
+    }
+}
+
+/// How a cited line compares with the index the answer was built from, checked when the answer is built. A closed
+/// set, documented in docs/answers.md.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Check {
+    /// The file is byte for byte what the index read: the lines are the ones the answer's facts come from.
+    Verified,
+    /// The file changed since it was indexed; the cited line still names what the row cites (or there is no name to
+    /// look for), so the place holds, but what the index drew from the file may not.
+    Changed,
+    /// The file changed since it was indexed and what the row cites is on another line now: `at` quotes it there,
+    /// `was` says where the index had it.
+    Moved,
+    /// The file is gone from the working tree, or no longer names what the row cites.
+    Gone,
+    /// The lines could not be checked: the file isn't in the index the answer read, can't be read, or is blocked.
+    Unchecked,
+}
+
+impl Check {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Check::Verified => "verified",
+            Check::Changed => "changed",
+            Check::Moved => "moved",
+            Check::Gone => "gone",
+            Check::Unchecked => "unchecked",
+        }
+    }
+
+    /// Whether the cited lines differ from what the index read.
+    pub fn drifted(self) -> bool {
+        matches!(self, Check::Changed | Check::Moved | Check::Gone)
     }
 }
 
 /// The source lines a row of an answer rests on, read from the working tree when the answer is built: for an edge,
 /// the line where it happens (its `site`: the call, the request, the publish); for a symbol reached without one, its
-/// declaration's first lines. Bounded: what the cap leaves out is said in `cut`.
+/// declaration's first lines. Bounded: what the cap leaves out is said in `cut`. Checked against the index: `check`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cite {
     /// `file:line` or `file:start-end`: the lines quoted.
     pub at: String,
+    /// The lines against the index: `verified`, or the drift.
+    pub check: Check,
+    /// What drifted, when `check` isn't `verified`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift: Option<String>,
+    /// For `moved`: where the index had the lines (`file:line`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub was: Option<String>,
     /// The repo `at` is in, when it isn't the row's own (a bus hop's publish, in the publisher's repo).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
@@ -612,6 +659,12 @@ mod tests {
         for r in [Reason::Capped, Reason::Budget, Reason::Deadline, Reason::Stale, Reason::Failed, Reason::MissingRepo, Reason::Unsupported, Reason::Policy] {
             assert_eq!(serde_json::to_value(r).unwrap(), serde_json::json!(r.as_str()));
         }
+        for c in [Check::Verified, Check::Changed, Check::Moved, Check::Gone, Check::Unchecked] {
+            assert_eq!(serde_json::to_value(c).unwrap(), serde_json::json!(c.as_str()));
+            assert_eq!(c.drifted(), matches!(c, Check::Changed | Check::Moved | Check::Gone));
+        }
+        assert_eq!("check".parse::<CiteMode>(), Ok(CiteMode::Check));
+        assert_eq!("".parse::<CiteMode>(), Ok(CiteMode::Brief));
     }
 
     #[test]
