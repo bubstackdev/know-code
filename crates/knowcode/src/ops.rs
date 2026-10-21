@@ -62,6 +62,24 @@ fn scope_repos(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
     Ok((roots, workspace))
 }
 
+/// Razor files (`.razor`, `.cshtml`) in the repo `o`, which KnowCode doesn't read: the `unsupported` entry saying a
+/// C# answer may lack the uses in their markup and `@code` blocks, naming the repo when `named`. `None` without any.
+pub fn razor_unread(o: &Opened, named: bool) -> Result<Option<Incomplete>> {
+    let mut stmt = o.store.conn().prepare_cached("SELECT path FROM cfiles WHERE path LIKE '%.razor' OR path LIKE '%.cshtml' ORDER BY path")?;
+    let paths: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let Some(first) = paths.first() else { return Ok(None) };
+    let repo = if named { format!("{}: ", repo_name(&o.root)) } else { String::new() };
+    let n = paths.len();
+    let files = if n == 1 { "1 Razor file".to_string() } else { format!("{n} Razor files") };
+    Ok(Some(
+        Incomplete::new(
+            Reason::Unsupported,
+            format!("{repo}{files} (.razor, .cshtml) not read, such as {first}: uses of C# code in their markup and @code blocks are not listed"),
+        )
+        .with_hint("kc_search finds them as text (paths: [\"*.razor\", \"*.cshtml\"])"),
+    ))
+}
+
 /// The `withheld` entry for the repo at `root` when its AI privacy file blocks anything: an answer drawing on it may
 /// lack what is blocked. Names the repo and the level, never a blocked path.
 pub fn withheld(root: &Path) -> Option<Incomplete> {
@@ -1327,6 +1345,11 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
             let sites: Vec<_> = kc_store::unsupported::in_area(o.store.conn(), "imports")?.into_iter().filter(|u| holds(&dir(&u.file))).collect();
             let label = multi.then(|| repo_name(&o.root));
             unread_imports.extend(kc_store::unsupported::incomplete(&sites, label.as_deref()));
+        }
+        // C# used from Razor markup, which isn't read: references there aren't listed.
+        let csharp = hits.iter().any(|h| h.file.ends_with(".cs")) || query::definitions(o.store.conn(), name)?.iter().any(|d| d.file.ends_with(".cs"));
+        if csharp {
+            unread_imports.extend(razor_unread(&o, multi)?);
         }
         items.extend(hits.into_iter().map(|h| (o.root.clone(), h)));
         opened.push(o);
@@ -4684,6 +4707,10 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         if ids.is_empty() && p.diff.is_none() && bare_file.is_none() {
             opened.push(o);
             continue;
+        }
+        // C# used from Razor markup, which isn't read: dependents there aren't listed.
+        if ids.iter().any(|&id| trace::symbol(conn, id).ok().flatten().is_some_and(|s| s.file.ends_with(".cs"))) {
+            stale_rank.extend(razor_unread(&o, roots.len() > 1)?);
         }
         // The walk reads every edge through the symbol graph and its gate, as `path` and `flow` do.
         let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
@@ -9636,6 +9663,60 @@ public class Service\n{\n    private Repo _r;\n    public void Place()\n    {\n 
         a.sort();
         b.sort();
         assert_eq!(a, b, "ranking reorders, never adds or drops");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Razor files aren't read: a C# answer from a repo holding them says so, naming one, rather than passing its
+    /// references off as all of them. An answer about other code doesn't.
+    #[test]
+    fn a_csharp_answer_says_razor_files_were_not_read() {
+        let cache = test_cache();
+        let base = cache.dir("razor-unread");
+        let root = repo(
+            &base,
+            "web",
+            &[
+                ("src/Catalog.cs", "public class Catalog\n{\n    public int Count() => 1;\n}\npublic class Home\n{\n    public int Show(Catalog c) => c.Count();\n}\n"),
+                ("src/Pages/Index.razor", "@inject Catalog Catalog\n<p>@Catalog.Count()</p>\n"),
+                ("src/Views/Home.cshtml", "<p>@Model.Count()</p>\n"),
+                ("src/app.ts", "export function count(): number { return 1; }\nexport function show(): number { return count(); }\n"),
+            ],
+        );
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let razor = |env: &Value| crate::contract::incomplete_of(env).into_iter().find(|i| i.detail.contains("Razor files"));
+        let r = refs("Count", &[], 20, &scope).unwrap();
+        let entry = razor(&r.env).expect("said");
+        assert_eq!(entry.reason, Reason::Unsupported);
+        assert_eq!(
+            entry.detail,
+            "2 Razor files (.razor, .cshtml) not read, such as src/Pages/Index.razor: uses of C# code in their markup and @code blocks are not listed"
+        );
+        let i = impact(&ImpactParams { symbol: Some("Catalog.Count".into()), depth: 1, limit: 20, ..Default::default() }, &scope).unwrap();
+        assert!(razor(&i.env).is_some(), "{}", i.env);
+        // TypeScript: nothing to say about Razor.
+        assert!(razor(&refs("count", &[], 20, &scope).unwrap().env).is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A name both the code and a test helper define: the code's definition answers, whatever kind each is; the test
+    /// helper is listed among the alternatives.
+    #[test]
+    fn a_test_helper_sharing_a_name_never_answers_for_the_code() {
+        let cache = test_cache();
+        let base = cache.dir("test-helper-name");
+        let root = repo(
+            &base,
+            "store",
+            &[
+                ("src/vanilla.ts", "const createStoreImpl = (init: () => number) => ({ get: init });\nexport const createStore = ((init) => (init ? createStoreImpl(init) : createStoreImpl)) as CreateStore;\n"),
+                ("tests/helpers.ts", "export function createStore() {\n  return null;\n}\n"),
+            ],
+        );
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let c = context("createStore", 2000, kc_store::skeleton::SourceMode::Auto, &scope).unwrap();
+        let item = &c.env["items"][0];
+        assert_eq!(item["symbol"]["file"], "src/vanilla.ts", "{}", c.env);
+        assert!(item["alternatives"].as_array().is_some_and(|a| a.iter().any(|d| d["file"] == "tests/helpers.ts")), "{}", c.env);
         let _ = std::fs::remove_dir_all(&base);
     }
 

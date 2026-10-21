@@ -289,6 +289,7 @@ on them is incomplete with reason `unsupported`, naming the first few with `file
 | Terraform | `moved`, `import`, `removed` and `check` blocks | the addresses they name, as uses |
 | GitLab CI | an include or trigger in a form not read (kind `unknown` in `ci_includes`) | the jobs and includes it brings |
 | Angular | a lazy route in a form not read (a default export, a module string) | the routes it loads |
+| Razor | `.razor` and `.cshtml` files, which aren't read at all: a C# `refs` or `impact` answer from a repo holding any says so, naming one | uses of C# code in their markup and `@code` blocks |
 | HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes (`MapControllerRoute`, `MapDefaultControllerRoute`, `MapRoute`, `MapHttpRoute`), an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
 
 Constructs not in this table and not listed as gaps above are simply not seen, and an answer can be `complete`

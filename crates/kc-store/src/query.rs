@@ -341,9 +341,10 @@ fn definitions_split(conn: &Connection, _query: &str, (container, name): (Option
             })
             .collect();
     }
-    // An Ansible role's meta symbol after its main tasks.
+    // Code before tests and copies, whatever its kind (a test helper sharing the name of the code it tests never comes
+    // first), then by kind; an Ansible role's meta symbol after its main tasks.
     let meta = |s: &SymbolRow| s.kind == "role" && s.tags == "meta";
-    let key = |s: &SymbolRow| (kind_rank(&s.kind), crate::path_rank(&s.file), meta(s), s.file.clone(), s.line);
+    let key = |s: &SymbolRow| (crate::path_rank(&s.file), kind_rank(&s.kind), meta(s), s.file.clone(), s.line);
     rows.sort_by_cached_key(key);
     Ok(rows)
 }
