@@ -1050,7 +1050,7 @@ mod tests {
         for max in [1_000, 2_000, 4_000, 8_000] {
             let env = crate::ops::refs("Hub.Ping", &[], 25, &s).unwrap().env;
             let mut v: Value = serde_json::from_str(&crate::mcp::cap(env, max)).unwrap();
-            assert_eq!(v["complete"].as_bool(), Some(v.get("incomplete").is_none()), "{v}");
+            assert_eq!(v["complete"].as_bool(), v.get("incomplete").map(|_| false), "{v}");
             assert!(v.get("_resume").is_none() && v.get("knowcode").is_none(), "{v}");
             let handle = v["cursor"].as_str().expect("a cut list continues").to_string();
             assert!(handle.starts_with("kc~"), "{handle}");
@@ -1141,7 +1141,7 @@ mod tests {
         while let Some(handle) = next {
             let full = crate::compact::resolve(&handle).unwrap();
             let page: Value = serde_json::from_str(&crate::mcp::cap(more(&full).unwrap_or_else(|e| panic!("{e:#}")), max)).unwrap();
-            assert_eq!(page["complete"].as_bool(), Some(page.get("incomplete").is_none()), "{page}");
+            assert_eq!(page["complete"].as_bool(), page.get("incomplete").map(|_| false), "{page}");
             rows.extend(rows_at(&page, "/items"));
             next = page["cursor"].as_str().map(str::to_string);
             pages += 1;
@@ -1183,7 +1183,7 @@ mod tests {
             if max >= floor {
                 assert!(v.to_string().len() <= max, "{max}");
             }
-            assert_eq!(v["complete"].as_bool(), Some(v.get("incomplete").is_none()), "{v}");
+            assert_eq!(v["complete"].as_bool(), v.get("incomplete").map(|_| false), "{v}");
             // The deploy steps go last: a chain is cut only once every tail is down to one row.
             let shown = |k: &str| v["items"][0]["ansible"][k].as_array().map_or(0, Vec::len);
             if shown("deploy_chains") < 8 {

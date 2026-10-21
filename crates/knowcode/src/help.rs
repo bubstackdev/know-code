@@ -637,8 +637,11 @@ kc_context picks it. Answers the note as kc_notes does. Notes are removed with `
         summary: "ranked text and regex search",
         text: r#"Search file contents across repos (literal by default, or regex: Rust syntax, matches never span lines),
 like a ranked grep over an index: definitions of matching symbols first, then declarations, other code, then tests,
-comments and docs. Matches are per line. Each item: file, line, kind (def, decl, code, test, comment, doc), trimmed
-text, and the declared or enclosing symbol. `case`: sensitive (default), insensitive, or smart (insensitive unless the
+comments and docs. Matches are per line. Each item is a text row, `repo/file:line kind symbol | text`: `repo/` when
+the answer spans repos; kind def, decl, code, test, comment or doc; the symbol a def or decl declares, or `in X` for
+the one enclosing the line; `[stale]` for a file that could not be read; the trimmed line after the first ` | `. With
+`context`, the lines around the hit follow it, one per line (`  41- text`); with `files_only`, a row per file,
+`repo/file:line best (n matches)`. `case`: sensitive (default), insensitive, or smart (insensitive unless the
 pattern has an uppercase letter); `word` for whole words. Filter with `lang` (swift, python, rust, markdown, json, yaml,
 toml, shell, …) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file names: "*.swift",
 "!*Tests*"); `context` lines around each hit (max 10); `files_only` for one item per file. Page with `offset`
@@ -665,7 +668,8 @@ subscribe calls inside ngOnInit are pattern "$S.subscribe($$$)" with inside
 "kind:method_definition~^[\w\s]*ngOnInit\("; and `text` (a regex over the match). Modifiers in a pattern must line up
 with the code's ("async void $M" misses "public async void"): use "kind:method_declaration" with a text regex instead.
 
-Each item: file, line, end_line, column, the match's first line, and captured metavariables. Non-test code first; page
+Each item is a text row, `repo/file:line:column[-end_line] [$X=captured, …] | text` (`repo/` when the answer spans
+repos; the match's first line after the first ` | `). Non-test code first; page
 with `offset` (`next_offset`). `paths` globs (a leading `!` excludes); `max_matches` stops reading files after that many
 matches (default 50000), at the same file on every run. `workspace` searches every indexed repo, `repos` the ones
 named."#,
@@ -676,9 +680,9 @@ named."#,
         text: r#"The next page of a list an answer cut. Pass the answer's `cursor` (its `items`) or a list's
 `<list>_cursor` (a context's callers, conformers, members, callees, a table's accessors; a trace's nodes; impact's
 affected and coupled; a path search's paths and candidate ends; rename sites; search and grep-ast hits) as it is;
-every `incomplete` entry for a cut list gives the call. Answers `items` (the page), `list` (which list), `offset`,
-`total` when known and `cursor` for the page after: following every cursor gives each row of the list once, in its
-order. See `cursors`."#,
+every `incomplete` entry for a cut list gives the call. Answers `items` (the page, its rows as the list's own: a
+search's are text rows), `list` (which list), `offset`, `total` when known and `cursor` for the page after: following
+every cursor gives each row of the list once, in its order. See `cursors`."#,
     },
     Topic {
         name: "kc_status",
@@ -709,7 +713,8 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
         summary: "complete, incomplete, provenance: what every answer says about itself",
         text: r#"Every answer, from every tool, says how complete it is and which repos it was read from.
 
-- `complete`: true only when nothing below makes the answer partial.
+- `complete`: true only when nothing below makes the answer partial. The MCP server says it only when it is `false`:
+  an answer without `incomplete` is complete.
 - `incomplete`: why it is partial, one entry per reason, `{reason, detail, hint}`: `detail` names what is missing (the
   list, with how many of how many were shown), `hint` how to get the rest. Reasons: `capped` (a limit cut a list),
   `budget` (cut to fit max_chars, or a batch leaving inputs out), `deadline` (a time or work budget ran out), `stale`
@@ -745,11 +750,14 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   `capped`, `freshness.failed`, `left_out` and `hint`.
 
 The MCP server's answers are compact: repos are named by their short name (what `repo` parameters take; the full path
-only when two indexed repos share a name), commits by 12 hex digits, the queried repo's own provenance entry is left out
-(the envelope's `repo`, `commit` and `dirty` say it) and the others are strings (`billing @ 0123456789ab (dirty),
-from its last sync`), `evidence` is a string (`"receiver_type [project_unverified]"`:
-mechanism, then any assumptions), cursors are short handles, a repo's deploy answer is given once (at `items[0]`), and
-internal row ids, the build stamp and timings (`ms`, `*_ms`, a search's `stats` timings) are left out. Answers are
+only when two indexed repos share a name); what goes without saying is left out (`complete: true`, false flags such as
+`dirty` and `truncated`, nulls, `offset: 0`, a search's `stats`); a clean, current answer has no `repos` or
+`provenance` (no repo dirty or answered from its last sync, nothing `stale`, `failed` or `missing_repo`), and otherwise
+commits are 12 hex digits, the queried repo's own provenance entry is left out (the envelope's `repo`, `commit` and
+`dirty` say it) and the others are strings (`billing @ 0123456789ab (dirty), from its last sync`); `stale` is one
+entry naming repos by name; `evidence` is a string (`"receiver_type [project_unverified]"`: mechanism, then any
+assumptions), cursors are short handles, a repo's deploy answer is given once (at `items[0]`), search hits are text
+rows (see kc_search), and internal row ids, the build stamp and timings (`ms`, `*_ms`) are left out. Answers are
 capped at `max_chars` (default 8000, up to 40000): a list cut to fit has a `budget` entry. kc_trace, kc_impact, kc_path
 and kc_flow answer as text trees by default: a header line per `incomplete` entry, with the kc_more call naming the
 cursor. kc_context, kc_refs and kc_locate take several inputs (`symbols`, `names`, `queries`, at most 20) and answer

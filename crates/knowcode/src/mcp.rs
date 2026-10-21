@@ -594,29 +594,29 @@ pub const ALWAYS_LOADED: &[&str] = &["kc_context", "kc_refs", "kc_impact", "kc_l
 /// documented in the tool's help topic, with its full line. A client without tool search loads every schema on every
 /// turn, so a parameter belongs here only when most questions need it.
 pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
-    ("kc_help", &[("topic", "A tool, section (`kc_context.http`) or concept; none: the index.")]),
-    ("kc_symbol_at", &[("file", "Repo-relative or absolute."), ("line", "1-based.")]),
-    ("kc_find", &[("query", "A name, prefix or `Type.member`."), ("kind", "type, method, property, ...")]),
-    ("kc_locate", &[("query", "What the code does, in plain words."), ("queries", "Several (at most 20).")]),
-    ("kc_refs", &[("name", "A name or `Type.member`."), ("names", "Several (at most 20).")]),
-    ("kc_context", &[("symbol", "A name or `Type.member`; a repo's name for its deploy."), ("symbols", "Several (at most 20).")]),
-    ("kc_trace", &[("symbol", "A name or `Type.member`."), ("direction", "`in`, `out` or `both` (default)."), ("depth", "Hops, 1 (default) to 3.")]),
-    ("kc_path", &[("from", "A name or `Type.member`."), ("to", "A name or `Type.member`.")]),
-    ("kc_flow", &[("entry", "A route, component, action, `Type.member` or `file:line`."), ("depth", "Steps deep, 1 to 16 (default 10).")]),
-    ("kc_impact", &[("symbol", "A name or `Type.member`."), ("file", "A file instead."), ("diff", "`working` or a git revision instead."), ("depth", "Hops, 1 (default) to 5.")]),
+    ("kc_help", &[("topic", "")]),
+    ("kc_symbol_at", &[("file", ""), ("line", "")]),
+    ("kc_find", &[("query", "")]),
+    ("kc_locate", &[("query", ""), ("queries", "Several, at most 20.")]),
+    ("kc_refs", &[("name", ""), ("names", "Several, at most 20.")]),
+    ("kc_context", &[("symbol", ""), ("symbols", "Several, at most 20.")]),
+    ("kc_trace", &[("symbol", "A name, `Type.member` or file:line."), ("direction", "`in`, `out` or `both` (default)."), ("depth", "1 (default) to 3.")]),
+    ("kc_path", &[("from", ""), ("to", "")]),
+    ("kc_flow", &[("entry", "")]),
+    ("kc_impact", &[("symbol", "A name, `Type.member` or file:line."), ("file", ""), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
     ("kc_unused", &[]),
-    ("kc_rename_preview", &[("symbol", "`Type.member`, a name or `file:line`."), ("new_name", "")]),
+    ("kc_rename_preview", &[("symbol", ""), ("new_name", "")]),
     ("kc_coupled", &[("file", "")]),
-    ("kc_tests", &[("targets", "Changed files or symbols."), ("diff", "`working` or a git revision instead.")]),
-    ("kc_hotspots", &[("path", "One file's vitals instead.")]),
-    ("kc_ownership", &[("path", "A file or directory (default: the repo).")]),
-    ("kc_reviewers", &[("files", "Changed files."), ("diff", "`working` or a git revision instead.")]),
+    ("kc_tests", &[("targets", ""), ("diff", "`working` or a git revision.")]),
+    ("kc_hotspots", &[]),
+    ("kc_ownership", &[("path", "")]),
+    ("kc_reviewers", &[("files", ""), ("diff", "`working` or a git revision.")]),
     ("kc_overview", &[]),
-    ("kc_areas", &[("area", "One area: id, name or directory.")]),
-    ("kc_notes", &[("symbol", "Default: every note in the repo.")]),
-    ("kc_note_add", &[("symbol", ""), ("text", ""), ("tag", "decision, gotcha or todo.")]),
+    ("kc_areas", &[("area", "")]),
+    ("kc_notes", &[("symbol", "")]),
+    ("kc_note_add", &[("symbol", ""), ("text", "")]),
     ("kc_search", &[("pattern", "Literal unless `regex`."), ("regex", ""), ("paths", "Globs; `!` excludes.")]),
-    ("kc_grep_ast", &[("pattern", "An ast-grep pattern (kc_help kc_grep_ast)."), ("lang", "csharp, typescript, javascript, python, rust or swift."), ("paths", "Globs; `!` excludes.")]),
+    ("kc_grep_ast", &[("pattern", ""), ("lang", "csharp, typescript, javascript, python, rust or swift.")]),
     ("kc_more", &[("cursor", "A `cursor` or `<list>_cursor`, as it is.")]),
     ("kc_status", &[]),
 ];
@@ -908,6 +908,7 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
         crate::contract::finish(&mut env);
         // The text shows no cursor fields: its hints name the cursors themselves.
         crate::compact::text_hints(&mut env);
+        crate::compact::text_stale(&mut env);
         Ok((env, text))
     })
     .await?;
@@ -976,21 +977,25 @@ fn depth_note(depth: u8, max: u8, deeper: bool) -> Option<String> {
     (deeper && depth < max).then(|| format!("(depth {depth} shown; pass depth {} (up to {max}) for more)", depth + 1))
 }
 
-/// `repo orders-api @ 1a2b3c4 (dirty)`: what the text answers for.
+/// `repo orders-api @ 1a2b3c4 (dirty)`: what the text answers for. A clean, current answer over several repos names
+/// them only, and not the repos it consulted besides (as the compact JSON leaves out `repos` and `provenance`; see
+/// [`crate::compact::clean`]).
 fn header(env: &Value) -> String {
-    let repo = |v: &Value| {
+    let clean = crate::compact::clean(env);
+    let repo = |v: &Value, commit: bool| {
         let path = v["repo"].as_str().unwrap_or("");
         let name = Path::new(path).file_name().map_or(path.into(), |n| n.to_string_lossy().into_owned());
-        let commit = v["commit"].as_str().map(|c| format!(" @ {}", &c[..c.len().min(7)])).unwrap_or_default();
+        let commit = v["commit"].as_str().filter(|_| commit).map(|c| format!(" @ {}", &c[..c.len().min(7)])).unwrap_or_default();
         let dirty = if v["dirty"].as_bool() == Some(true) { " (dirty)" } else { "" };
         format!("{name}{commit}{dirty}")
     };
     let head = match env["repos"].as_array() {
-        Some(list) => format!("repos {}\n", list.iter().map(repo).collect::<Vec<_>>().join(", ")),
-        None => format!("repo {}\n", repo(env)),
+        Some(list) => format!("repos {}\n", list.iter().map(|r| repo(r, !clean)).collect::<Vec<_>>().join(", ")),
+        None => format!("repo {}\n", repo(env, true)),
     };
     // Why the answer is incomplete (files that could not be read, lists cut), and the other repos it consulted.
-    crate::ops::freshness_notes(env).into_iter().fold(head, |h, n| format!("{h}{n}\n"))
+    let notes = crate::ops::freshness_notes(env).into_iter().filter(|n| !(clean && n.starts_with("also consulted: ")));
+    notes.fold(head, |h, n| format!("{h}{n}\n"))
 }
 
 /// `text` within `max` characters, cut on a line boundary, ending with what was cut and how to get it.
@@ -1095,9 +1100,9 @@ fn batch_answer(results: &[String], left: &[String], max: usize) -> String {
                 .with_hint("call again with the inputs in left_out, or pass a larger max_chars"),
         );
     }
-    out.push_str(&format!(",\"complete\":{}", incomplete.is_empty()));
+    // As in every compact answer, a complete one doesn't say so.
     if !incomplete.is_empty() {
-        out.push_str(&format!(",\"incomplete\":{}", serde_json::to_string(&incomplete).unwrap_or_default()));
+        out.push_str(&format!(",\"complete\":false,\"incomplete\":{}", serde_json::to_string(&incomplete).unwrap_or_default()));
     }
     if !left.is_empty() {
         let hint = format!(
@@ -1498,12 +1503,12 @@ impl KnowcodeServer {
         Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden) })
     }
 
-    #[tool(description = "KnowCode's documentation by topic: a tool's details and every parameter (`kc_context`, `kc_impact`), sections (`kc_context.http`) and concepts (`contract`, `evidence`, `cursors`, `privacy`). No topic: the index.")]
+    #[tool(description = "Docs: a tool with all its parameters, a section (`kc_context.http`) or a concept (`contract`). None: the index.")]
     async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, String> {
         self.help(p.topic.as_deref())
     }
 
-    #[tool(description = "The symbols enclosing a file:line, innermost first, each with the qualified name kc_context takes. For mapping a stack frame to code.")]
+    #[tool(description = "The symbols enclosing a file:line, innermost first: a stack frame's code.")]
     async fn kc_symbol_at(&self, Parameters(p): Parameters<SymbolAtParams>) -> Result<String, String> {
         let scope = if Path::new(&p.file).is_absolute() && p.common.repo.is_none() {
             Scope { repos: Vec::new(), ..self.default.clone() }
@@ -1517,7 +1522,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Where a name is defined: by name, prefix, camelCase words or `Type.member`, with file:line and signature. Only a concept? kc_locate.")]
+    #[tool(description = "Where a name is defined (name, prefix or `Type.member`): file:line and signature. What calls it or breaks if it changes: kc_impact on that file:line.")]
     async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1528,7 +1533,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Where the code for a concept, bug report or ticket is (\"refund approval\"): files ranked by paths, symbols, docs and commit subjects. Use it first when you don't know the names.")]
+    #[tool(description = "Files for a concept, bug report or ticket (\"refund approval\"), ranked. First, when you don't know the names.")]
     async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
         let limit = p.limit.unwrap_or(10);
@@ -1542,7 +1547,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Who calls or uses a name: every reference, resolved with confidence and evidence, also from dependent repos, SQL, Ansible and Terraform. Details: kc_help kc_refs.")]
+    #[tool(description = "Every reference to a name, resolved, across repos. What calls X or breaks if X changes: kc_impact (or kc_trace depth 2) on X's file:line.")]
     async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
@@ -1559,7 +1564,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "What a symbol is and who calls it: source (skeleton when long), members, callers and callees with file:line, cross-repo links (HTTP, DI, EF tables, bus, SQL, Angular, Ansible, Terraform). A repo's name: how it deploys. Details: kc_help kc_context.")]
+    #[tool(description = "One symbol: source, members, callers, callees and cross-repo links (HTTP, DI, bus, SQL). A repo's name: how it deploys.")]
     async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let source: kc_store::skeleton::SourceMode = p.source.as_deref().unwrap_or("auto").parse().map_err(|e| format!("{e:#}"))?;
@@ -1585,7 +1590,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Call tree: callers (in), callees (out) or both of a symbol, one hop by default (up to 3), through DI, HTTP routes, the bus and SQL. Text tree; `format: json` for the envelope.")]
+    #[tool(description = "Call tree of a symbol: callers (`in`), callees (`out`) or both, across DI, HTTP, bus and SQL.")]
     async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let dir = p.direction.clone().unwrap_or_else(|| "both".into());
@@ -1643,7 +1648,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "How symbol `from` reaches symbol `to`, possibly across repos: the best paths, each step with its edge, confidence and site. Confident edges only unless `allow_ambiguous`.")]
+    #[tool(description = "How symbol `from` reaches symbol `to`, across repos: the best paths, step by step.")]
     async fn kc_path(&self, Parameters(p): Parameters<PathParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let to_repo = match &p.to_repo {
@@ -1694,7 +1699,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "What happens end to end from an entry point (Angular route or component, controller action, method, file:line): the steps it runs across repos through DI, HTTP, the bus, NgRx and EF.")]
+    #[tool(description = "What runs end to end from an entry point (route, component, action, method), step by step across repos.")]
     async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
@@ -1736,7 +1741,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "What breaks if you change a symbol, file or diff (`working` or a git revision): its dependents, one hop by default (up to 16), across repos, HTTP, bus, SQL and deploy links, classed direct, near or far by graph distance, not risk.")]
+    #[tool(description = "What calls or breaks if a symbol, file or diff changes: its dependents, by hop, across repos, HTTP, bus and SQL.")]
     async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let tree = p.walk.tree()?;
@@ -1793,7 +1798,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Dead-code candidates: symbols nothing reaches, `unused` or `possibly_unused` with reasons; entry points and framework conventions exempt.")]
+    #[tool(description = "Dead-code candidates: symbols nothing reaches, with reasons.")]
     async fn kc_unused(&self, Parameters(p): Parameters<UnusedParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1807,7 +1812,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Preview renaming a C# or TypeScript symbol without editing: every site with its confidence, across dependent repos, plus collisions. `refused` says when it isn't safe to apply.")]
+    #[tool(description = "Every site renaming a C# or TypeScript symbol would edit, and collisions. Edits nothing.")]
     async fn kc_rename_preview(&self, Parameters(p): Parameters<RenamePreviewParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1817,7 +1822,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Files that change in the same commits as a file (git history), with support and confidence; `static_link: false`: a coupling no reference explains. History too thin to rank: `structural` lists guesses by structure, labelled (basis structure, low).")]
+    #[tool(description = "Files that change in the same commits as a file (git history).")]
     async fn kc_coupled(&self, Parameters(p): Parameters<CoupledParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1828,7 +1833,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "The tests to run for a change (files, symbols or a diff), ranked by edges into tests (ambiguous ones too), naming and co-change. A likely sample, not every test the change reaches.")]
+    #[tool(description = "Tests to run for changed files, symbols or a diff, ranked: a likely sample.")]
     async fn kc_tests(&self, Parameters(p): Parameters<TestsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1839,7 +1844,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Files that keep hurting: churn, fix history, complexity, coupling and health findings. `path`: one file's vitals; `workspace`: rank repos.")]
+    #[tool(description = "Files that keep hurting: churn, fixes, complexity and coupling.")]
     async fn kc_hotspots(&self, Parameters(p): Parameters<HotspotsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
         run(p.common.max_chars, move || {
@@ -1852,7 +1857,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Historical contribution (git history) to a file, directory or repo: top contributor by lines added, truck factor, share added by authors gone; for a file, surviving lines by author. History, not current expertise.")]
+    #[tool(description = "Who wrote a file, directory or repo (git history): top authors, truck factor.")]
     async fn kc_ownership(&self, Parameters(p): Parameters<OwnershipParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1863,7 +1868,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Who could review a change (files or a diff): authors ranked by recent lines added to the changed files, leaving out former authors and the change's own.")]
+    #[tool(description = "Who could review a change (files or a diff), by recent lines written.")]
     async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1877,7 +1882,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "What a repo is: languages, packages, dependencies both ways, entry points, key types, hotspots and a ranked map. `workspace`: one line per repo.")]
+    #[tool(description = "What a repo is: languages, dependencies, entry points, key types and a map.")]
     async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
         let budget = p.map_budget.unwrap_or(400);
@@ -1894,25 +1899,25 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "A repo's functional areas: files clustered over references, co-change and directories. `area`: one area's files.")]
+    #[tool(description = "A repo's functional areas: files clustered by references, co-change and directory.")]
     async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await
     }
 
-    #[tool(description = "Notes anchored to symbols (read only), each `current`, `stale` (the code changed since) or `orphaned` (the symbol is gone).")]
+    #[tool(description = "Notes on symbols, each current, stale or orphaned.")]
     async fn kc_notes(&self, Parameters(p): Parameters<NotesParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::note_list(p.symbol.as_deref(), &scope)?.env)).await
     }
 
-    #[tool(description = "WRITES LOCAL STATE: attaches a short note (a decision, gotcha or todo) to a symbol, kept in KnowCode's data directory on this machine, never in the repo or the cache.")]
+    #[tool(description = "WRITES LOCAL STATE: adds a note to a symbol, kept in KnowCode's data directory, never the repo.")]
     async fn kc_note_add(&self, Parameters(p): Parameters<NoteAddParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::note_add(&p.symbol, &p.text, p.tag.as_deref(), &scope)?.env)).await
     }
 
-    #[tool(description = "Grep, ranked: text or regex over every file, definitions first, then code, tests, comments, docs. For strings and config keys that aren't symbol names.")]
+    #[tool(description = "Ranked grep over every file, definitions first: for strings and keys that aren't symbol names.")]
     async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, String> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let mut args: Vec<String> = vec!["search".into(), "--json".into()];
@@ -1947,7 +1952,7 @@ impl KnowcodeServer {
         run_child(p.common.max_chars, move || Ok(explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)"))).await
     }
 
-    #[tool(description = "Structural search with an ast-grep pattern over one language's syntax trees (`$X` one node, `$$$` any number). Patterns and filters: kc_help kc_grep_ast.")]
+    #[tool(description = "Structural search: an ast-grep pattern (`$X`, `$$$`) over one language. kc_help kc_grep_ast.")]
     async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, String> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let mut args: Vec<String> = vec!["grep-ast".into(), "--json".into(), "-l".into(), p.lang];
@@ -1979,14 +1984,14 @@ impl KnowcodeServer {
         run_child(p.common.max_chars, move || Ok(explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)"))).await
     }
 
-    #[tool(description = "The next page of a list an answer cut: pass its `cursor` (or a `<list>_cursor`) as it is.")]
+    #[tool(description = "The next page of a cut list.")]
     async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, String> {
         // In a child, as a search: a page can be a search's. A handle (see `compact`) stands for the full cursor.
         let args: Vec<String> = vec!["more".into(), "--json".into(), crate::compact::resolve(&p.cursor)?];
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 
-    #[tool(description = "Index status: schema, file coverage, parse errors, freshness, config, and SCIP coverage and agreement.")]
+    #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
     async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
         run(p.common.max_chars, move || {
@@ -2067,16 +2072,14 @@ impl ServerHandler for KnowcodeServer {
 /// Where the help topics are served as resources.
 const HELP_URI: &str = "knowcode://help/";
 
-/// The server's instructions: what KnowCode is for and how its answers read, short; the rest is in `kc_help`.
-const INSTRUCTIONS: &str = "KnowCode: a local code graph of your workspace's repos, read from the working tree. Use it \
-instead of grep or reading files: who calls or uses X (kc_refs), where X is defined (kc_find), where a concept or bug \
-lives (kc_locate), what X is (kc_context), what breaks if X changes (kc_impact), how code connects (kc_trace, kc_path, \
-kc_flow), text (kc_search). Every item has file:line; every edge a confidence and evidence; ambiguous ones are listed, \
-never guessed. Every answer says `complete`; when false, `incomplete` says why and how to get the rest; a `cursor` \
-continues a cut list (kc_more). Every tool takes `repo` (path or indexed name; default the server's) and `max_chars` \
-(answer cap, default 8000, max 40000). \
-`withheld` means a repo's AI privacy file blocks that content: don't try to read it another way. \
-kc_help {topic} documents every tool, parameter and concept.";
+/// The server's instructions: what KnowCode is for and how its answers read, short; which tool answers what is in the
+/// tools' descriptions, the rest in `kc_help`. The one routing said here is the one agents miss: callers and impact.
+const INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use it instead \
+of grep and reading files. What calls X, or what breaks if X changes: kc_impact (or kc_trace, depth 2) with X as \
+file:line or `Type.member`. Rows have file:line; edges a confidence, ambiguous ones listed, never guessed. A partial \
+answer says `complete: false` and why in `incomplete`; a `cursor` continues a cut list (kc_more). Every tool takes \
+`repo` (path or indexed name) and `max_chars` (default 8000, max 40000). `withheld`: a privacy file blocks it; don't \
+read it another way. kc_help {topic} documents every tool, parameter and concept.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2108,10 +2111,12 @@ mod tests {
     fn invariant_the_advertised_schema_keeps_within_its_budget() {
         let tools = server("all").tool_router.list_all();
         let bytes = serde_json::to_string(&tools).unwrap().len();
-        assert!(bytes <= 10_500, "advertised schema {bytes} bytes, budget 10500: advertise fewer parameters (ADVERTISED) or move detail into a help topic");
+        // 9,766 bytes and 875 of instructions before the second diet (0.2.0's study); 6,550 and 636 after it.
+        assert!(bytes <= 6_800, "advertised schema {bytes} bytes, budget 6800: advertise fewer parameters (ADVERTISED) or move detail into a help topic");
+        assert!(bytes + INSTRUCTIONS.len() <= 7_450, "schema and instructions {} bytes: at least 30% under 0.2.0's 10,641", bytes + INSTRUCTIONS.len());
         for t in &tools {
             let d = t.description.as_deref().unwrap_or("");
-            assert!(!d.is_empty() && d.len() <= 300, "{}: description {} bytes, budget 300", t.name, d.len());
+            assert!(!d.is_empty() && d.len() <= 160, "{}: description {} bytes, budget 160", t.name, d.len());
             assert!(!serde_json::to_string(&t.input_schema).unwrap().contains("\"$schema\""), "{}", t.name);
             for (name, p) in t.input_schema.get("properties").and_then(Value::as_object).into_iter().flatten() {
                 let pd = p["description"].as_str().unwrap_or("");
@@ -2119,10 +2124,31 @@ mod tests {
                 assert!(!p["type"].is_array(), "{}.{name}: optional parameters are typed plainly: {p}", t.name);
             }
         }
-        assert!(INSTRUCTIONS.len() <= 1_000, "instructions {} bytes", INSTRUCTIONS.len());
+        assert!(INSTRUCTIONS.len() <= 700, "instructions {} bytes", INSTRUCTIONS.len());
+        // Said once: the instructions don't repeat the descriptions' routing (which tool answers what).
+        for t in tools.iter().filter(|t| !matches!(t.name.as_ref(), "kc_impact" | "kc_trace" | "kc_more" | "kc_help")) {
+            assert!(!INSTRUCTIONS.contains(t.name.as_ref()), "the instructions route to {}: its description says when to use it", t.name);
+        }
         // The core profile is a fraction of it.
         let core = serde_json::to_string(&server("core").tool_router.list_all()).unwrap().len();
         assert!(core * 2 < bytes, "core {core} of all {bytes}");
+    }
+
+    /// "What calls X" and "what breaks if X changes" go to kc_impact (or a two-hop kc_trace) with a `file:line`
+    /// selector, said where an agent asking them looks: the instructions, and the tools it would otherwise use, kc_refs
+    /// and kc_find. The selector those name is one kc_impact and kc_trace take.
+    #[test]
+    fn caller_and_impact_questions_are_steered_to_kc_impact_by_file_line() {
+        let tools = server("all").tool_router.list_all();
+        let described = |name: &str| tools.iter().find(|t| t.name == name).and_then(|t| t.description.as_deref()).unwrap_or("").to_string();
+        for (place, text) in [("instructions", INSTRUCTIONS.to_string()), ("kc_refs", described("kc_refs")), ("kc_find", described("kc_find"))] {
+            assert!(text.contains("kc_impact") && text.contains("file:line") && text.contains("calls"), "{place}: {text}");
+        }
+        assert!(INSTRUCTIONS.contains("kc_trace, depth 2") && described("kc_refs").contains("kc_trace depth 2"));
+        for tool in ["kc_impact", "kc_trace"] {
+            let t = tools.iter().find(|t| t.name == tool).unwrap();
+            assert!(t.input_schema["properties"]["symbol"]["description"].as_str().unwrap().contains("file:line"), "{tool}");
+        }
     }
 
     /// Nothing an agent needs is lost by the short schemas: every tool has a help topic, and every parameter of every
@@ -2297,7 +2323,7 @@ mod tests {
         let mut want: Vec<String> = ALWAYS_LOADED.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(marked, want);
-        assert!(bytes <= 2_500, "always-loaded schemas {bytes} bytes, about 0.8k tokens measured");
+        assert!(bytes <= 1_600, "always-loaded schemas {bytes} bytes");
         let few = server("kc_find,kc_context").tool_router.list_all();
         let marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
         assert_eq!(marked, ["kc_context"]);
@@ -2358,15 +2384,15 @@ mod tests {
         let i = &v["incomplete"][0];
         assert_eq!((i["reason"].as_str(), i["detail"].as_str().is_some_and(|d| d.starts_with("/items/0/callers: "))), (Some("budget"), true), "{v}");
         assert!(v.get("cursor").is_none(), "no dummy cursor: {v}");
-        // Within the cap: complete.
+        // Within the cap: complete, which the compact form leaves unsaid.
         let v: Value = serde_json::from_str(&cap(json!({ "repo": "r", "items": [1], "total": 1, "truncated": false }), 2_000)).unwrap();
-        assert_eq!((v["complete"].as_bool(), v.get("incomplete")), (Some(true), None));
+        assert_eq!((v.get("complete"), v.get("incomplete")), (None, None), "{v}");
         // A batch leaving inputs out is incomplete; one answering every input is not.
         let v: Value = serde_json::from_str(&batch(1_000, 20).unwrap()).unwrap();
         assert_eq!(v["complete"], json!(false));
         assert!(v["incomplete"].as_array().unwrap().iter().any(|i| i["reason"] == "budget" && i["detail"].as_str().unwrap().starts_with("inputs: ")), "{v}");
         let v: Value = serde_json::from_str(&batch(80_000, 1).unwrap()).unwrap();
-        assert_eq!(v["complete"], json!(true), "{v}");
+        assert_eq!((v.get("complete"), v.get("incomplete"), v["results"][0].get("complete")), (None, None, None), "{v}");
     }
 
     #[test]
@@ -2578,6 +2604,16 @@ mod tests {
             let mut found = Vec::new();
             noise(&v, "", &mut found);
             assert!(found.is_empty(), "{tool} leaks {found:?}: {text}");
+            // A search's hits, and a page of them, are text rows: `file:line kind symbol | text`.
+            if matches!(tool, "kc_search" | "kc_more" | "kc_grep_ast") {
+                let rows = v["items"].as_array().unwrap();
+                assert!(!rows.is_empty() && rows.iter().all(|r| r.as_str().is_some_and(|r| r.contains(".cs:") && r.contains(" | "))), "{tool}: {text}");
+            }
+            // A clean, current answer from one repo says nothing about repos or defaults.
+            for key in ["provenance", "repos"] {
+                assert!(v.get(key).is_none(), "{tool}: {key}: {text}");
+            }
+            assert!(v.get("dirty") != Some(&Value::Bool(false)) && v.get("complete") != Some(&Value::Bool(true)), "{tool}: {text}");
         }
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2617,7 +2653,7 @@ mod tests {
         let mut seen: Vec<String> = shown.iter().chain(rest["items"].as_array().unwrap()).map(|r| r["from"].as_str().unwrap().to_string()).collect();
         seen.sort();
         seen.dedup();
-        assert_eq!((seen.len(), rest["complete"].as_bool()), (40, Some(true)), "{rest}");
+        assert_eq!((seen.len(), rest.get("complete"), rest.get("incomplete")), (40, None, None), "{rest}");
 
         // kc_impact and kc_trace: cut at their default limits (30, 25), saying how to get the rest.
         let impact = rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log" })))).unwrap();
