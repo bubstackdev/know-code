@@ -3,7 +3,7 @@
 tool that doesn't exist, or a reference page leaves out one that does.
 
 Read from the binary: commands and flags (`knowcode --help`, `knowcode <command> --help`, recursively), MCP tools and
-their parameters (`tools/list` from `knowcode serve`), and config keys (`knowcode config list`). Read from the source:
+their parameters (`tools/list` from `knowcode serve`, and each tool's `kc_help` topic), and config keys (`knowcode config list`). Read from the source:
 environment variables (`"KNOWCODE_…"` in `crates/*/src`) and the answer contract's closed sets (`Reason`,
 `Mechanism`, `Assumption` in `crates/kc-store/src/answer.rs`).
 
@@ -91,30 +91,42 @@ def cli(binary, env):
 
 
 def mcp(binary, env, cwd):
-    """{tool: set of parameters}."""
+    """{tool: set of parameters}, and the help topics. A tool's parameters are the ones its help topic lists: its
+    schema advertises only the common ones, and takes every one the topic lists."""
     p = subprocess.Popen([binary, "serve"], cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, text=True)
-    msgs = [
+
+    def send(msgs, want):
+        for m in msgs:
+            p.stdin.write(json.dumps(m) + "\n")
+        p.stdin.flush()
+        got = {}
+        while len(got) < want:
+            line = p.stdout.readline()
+            if not line:
+                break
+            m = json.loads(line)
+            if "id" in m:
+                got[m["id"]] = m
+        return got
+
+    got = send([
         {"jsonrpc": "2.0", "id": 0, "method": "initialize",
          "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "check-docs", "version": "0"}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
         {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "kc_help", "arguments": {}}},
-    ]
-    for m in msgs:
-        p.stdin.write(json.dumps(m) + "\n")
-    p.stdin.flush()
-    got = {}
-    while len(got) < 3:
-        line = p.stdout.readline()
-        if not line:
-            break
-        m = json.loads(line)
-        if "id" in m:
-            got[m["id"]] = m
+    ], 3)
+    tools = {t["name"]: set(t["inputSchema"].get("properties", {})) for t in got[1]["result"]["tools"]}
+    names = sorted(tools)
+    helps = send([{"jsonrpc": "2.0", "id": 10 + i, "method": "tools/call", "params": {"name": "kc_help", "arguments": {"topic": n}}}
+                  for i, n in enumerate(names)], len(names))
+    for i, n in enumerate(names):
+        text = "".join(c.get("text", "") for c in helps.get(10 + i, {}).get("result", {}).get("content", []))
+        section = text.split("\nParameters:\n", 1)[1].split("\n\n", 1)[0] if "\nParameters:\n" in text else ""
+        tools[n] |= set(re.findall(r"^- `([^`]+)` \(", section, re.M))
     p.stdin.close()
     p.wait(timeout=30)
-    tools = {t["name"]: set(t["inputSchema"].get("properties", {})) for t in got[1]["result"]["tools"]}
     index = "".join(c.get("text", "") for c in got[2]["result"]["content"])
     topics = set(re.findall(r"^- `([^`]+)`", index, re.M))
     return tools, topics

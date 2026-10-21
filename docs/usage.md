@@ -212,9 +212,13 @@ KnowCode's own configuration directory is a different one; `--delete-config` rem
 `serve --tools core` (or `KNOWCODE_TOOLS=core`) advertises fewer tools: `kc_find`, `kc_locate`, `kc_context`,
 `kc_refs`, `kc_trace`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. A comma list adds tools by name.
 
+Each tool's schema lists only the parameters most calls need. Every other parameter, `repo` and `max_chars` among
+them, is accepted all the same and documented in `kc_help <tool>`, so a client that loads every schema on every turn
+carries less.
+
 In Claude Code, `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` are marked always loaded (`_meta`
 `anthropic/alwaysLoad`), so they are in context from the start instead of waiting behind tool search; their schemas
-cost about 1.6k tokens up front (measured in [schema cost](../eval/schema-cost.md)). The other tools stay deferred.
+cost about 0.8k tokens up front (measured in [schema cost](../eval/schema-cost.md)). The other tools stay deferred.
 A server-level `alwaysLoad` setting overrides the mark, and a profile that leaves one of the four out doesn't list it.
 
 ## MCP tools

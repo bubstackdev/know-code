@@ -585,8 +585,63 @@ pub struct KnowcodeServer {
 pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_trace", "kc_impact", "kc_search", "kc_more", "kc_help"];
 
 /// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the ones
-/// that answer the first question about code, so an agent sees them before it reaches for grep (about 1.6k tokens; see eval/schema-cost.md).
+/// that answer the first question about code, so an agent sees them before it reaches for grep (about 0.8k tokens; see eval/schema-cost.md).
 pub const ALWAYS_LOADED: &[&str] = &["kc_context", "kc_refs", "kc_impact", "kc_locate"];
+
+/// The parameters each tool's schema advertises, with the line each carries there: the ones most calls need. Every
+/// other parameter (`repo` and `max_chars`, which the instructions state once for every tool, and the rarer ones such
+/// as `as_of`, `since`, `order`, `format`, `kinds`, `evidence`, `edges`, `cite`) is accepted all the same and
+/// documented in the tool's help topic, with its full line. A client without tool search loads every schema on every
+/// turn, so a parameter belongs here only when most questions need it.
+pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
+    ("kc_help", &[("topic", "A tool, section (`kc_context.http`) or concept; none: the index.")]),
+    ("kc_symbol_at", &[("file", "Repo-relative or absolute."), ("line", "1-based.")]),
+    ("kc_find", &[("query", "A name, prefix or `Type.member`."), ("kind", "type, method, property, ...")]),
+    ("kc_locate", &[("query", "What the code does, in plain words."), ("queries", "Several (at most 20).")]),
+    ("kc_refs", &[("name", "A name or `Type.member`."), ("names", "Several (at most 20).")]),
+    ("kc_context", &[("symbol", "A name or `Type.member`; a repo's name for its deploy."), ("symbols", "Several (at most 20).")]),
+    ("kc_trace", &[("symbol", "A name or `Type.member`."), ("direction", "`in`, `out` or `both` (default)."), ("depth", "Hops, 1 (default) to 3.")]),
+    ("kc_path", &[("from", "A name or `Type.member`."), ("to", "A name or `Type.member`.")]),
+    ("kc_flow", &[("entry", "A route, component, action, `Type.member` or `file:line`."), ("depth", "Steps deep, 1 to 16 (default 10).")]),
+    ("kc_impact", &[("symbol", "A name or `Type.member`."), ("file", "A file instead."), ("diff", "`working` or a git revision instead."), ("depth", "Hops, 1 (default) to 5.")]),
+    ("kc_unused", &[]),
+    ("kc_rename_preview", &[("symbol", "`Type.member`, a name or `file:line`."), ("new_name", "")]),
+    ("kc_coupled", &[("file", "")]),
+    ("kc_tests", &[("targets", "Changed files or symbols."), ("diff", "`working` or a git revision instead.")]),
+    ("kc_hotspots", &[("path", "One file's vitals instead.")]),
+    ("kc_ownership", &[("path", "A file or directory (default: the repo).")]),
+    ("kc_reviewers", &[("files", "Changed files."), ("diff", "`working` or a git revision instead.")]),
+    ("kc_overview", &[]),
+    ("kc_areas", &[("area", "One area: id, name or directory.")]),
+    ("kc_notes", &[("symbol", "Default: every note in the repo.")]),
+    ("kc_note_add", &[("symbol", ""), ("text", ""), ("tag", "decision, gotcha or todo.")]),
+    ("kc_search", &[("pattern", "Literal unless `regex`."), ("regex", ""), ("paths", "Globs; `!` excludes.")]),
+    ("kc_grep_ast", &[("pattern", "An ast-grep pattern (kc_help kc_grep_ast)."), ("lang", "csharp, typescript, javascript, python, rust or swift."), ("paths", "Globs; `!` excludes.")]),
+    ("kc_more", &[("cursor", "A `cursor` or `<list>_cursor`, as it is.")]),
+    ("kc_status", &[]),
+];
+
+/// `schema` (a tool's full input schema) cut to the parameters [`ADVERTISED`] lists for `tool`, each with its line
+/// there (none when the line is empty).
+fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    let Some((_, keep)) = ADVERTISED.iter().find(|(t, _)| *t == tool) else { return schema.clone() };
+    let mut out = schema.clone();
+    let full = schema.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut props = serde_json::Map::new();
+    for (name, line) in keep.iter() {
+        let Some(mut p) = full.get(*name).cloned() else { continue };
+        if let Some(o) = p.as_object_mut() {
+            if line.is_empty() {
+                o.remove("description");
+            } else {
+                o.insert("description".into(), Value::from(*line));
+            }
+        }
+        props.insert(name.to_string(), p);
+    }
+    out.insert("properties".into(), Value::Object(props));
+    out
+}
 
 /// The tools a profile spec names, out of `all`: `all`, `core`, and tool names (with or without `kc_`), comma
 /// separated. `kc_help` is always in.
@@ -681,6 +736,11 @@ impl KnowcodeServer {
         let Some(name) = topic.map(str::trim).filter(|t| !t.is_empty()) else { return Ok(crate::help::index(&self.hidden)) };
         let t = crate::help::topic(name).ok_or_else(|| format!("no help topic {name:?}; kc_help without a topic lists them"))?;
         let mut text = crate::help::render(t, self.schemas.get(t.name));
+        if let Some((_, keep)) = ADVERTISED.iter().find(|(n, _)| *n == t.name) {
+            let names: Vec<String> = keep.iter().map(|(p, _)| format!("`{p}`")).collect();
+            let shown = if names.is_empty() { "none of them".to_string() } else { names.join(", ") };
+            text.push_str(&format!("\nThe tool's schema lists {shown}; every parameter above is accepted.\n"));
+        }
         if self.hidden.iter().any(|h| h == t.name) {
             text.push_str("\nThis server doesn't advertise this tool (see `profiles`).\n");
         }
@@ -1418,13 +1478,15 @@ impl KnowcodeServer {
         let mut router = ToolRouter::new();
         let mut schemas = std::collections::BTreeMap::new();
         for mut route in Self::tool_router() {
-            route.attr.input_schema = std::sync::Arc::new(slim(&route.attr.input_schema));
+            // The full schema documents every parameter in help; the advertised one only the common ones.
+            let full = slim(&route.attr.input_schema);
+            route.attr.input_schema = std::sync::Arc::new(advertised(&route.attr.name, &full));
             if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) {
                 let mut meta = rmcp::model::JsonObject::new();
                 meta.insert("anthropic/alwaysLoad".into(), Value::Bool(true));
                 route.attr.meta = Some(rmcp::model::MetaObject(meta));
             }
-            schemas.insert(route.attr.name.to_string(), (*route.attr.input_schema).clone());
+            schemas.insert(route.attr.name.to_string(), full);
             router.add_route(route);
         }
         let all: Vec<String> = schemas.keys().cloned().collect();
@@ -2046,7 +2108,7 @@ mod tests {
     fn invariant_the_advertised_schema_keeps_within_its_budget() {
         let tools = server("all").tool_router.list_all();
         let bytes = serde_json::to_string(&tools).unwrap().len();
-        assert!(bytes <= 20_000, "advertised schema {bytes} bytes, budget 20000: move detail into a help topic");
+        assert!(bytes <= 10_500, "advertised schema {bytes} bytes, budget 10500: advertise fewer parameters (ADVERTISED) or move detail into a help topic");
         for t in &tools {
             let d = t.description.as_deref().unwrap_or("");
             assert!(!d.is_empty() && d.len() <= 300, "{}: description {} bytes, budget 300", t.name, d.len());
@@ -2072,7 +2134,9 @@ mod tests {
         for t in &tools {
             let topic = crate::help::topic(&t.name).unwrap_or_else(|| panic!("{} has no help topic", t.name));
             let text = s.help(Some(&t.name)).unwrap();
-            for (name, p) in t.input_schema.get("properties").and_then(Value::as_object).into_iter().flatten() {
+            // Every parameter the tool takes, advertised or not.
+            let full = s.schemas.get(t.name.as_ref()).unwrap();
+            for (name, p) in full.get("properties").and_then(Value::as_object).into_iter().flatten() {
                 let in_schema = p["description"].as_str().is_some_and(|d| !d.is_empty());
                 let line = text.lines().find(|l| l.starts_with(&format!("- `{name}` ")));
                 let in_help = line.is_some_and(|l| l.split_once("): ").is_some_and(|(_, d)| !d.trim().is_empty()));
@@ -2101,6 +2165,96 @@ mod tests {
         assert!(s.help(Some("nope")).is_err());
     }
 
+    /// The tool's parameters struct read from `args`, as the server reads a call's arguments: its `Debug` form, or why
+    /// the arguments don't fit it.
+    fn parse(tool: &str, args: Value) -> Result<String, String> {
+        fn as_<T: serde::de::DeserializeOwned + std::fmt::Debug>(args: Value) -> Result<String, String> {
+            serde_json::from_value::<T>(args).map(|p| format!("{p:?}")).map_err(|e| e.to_string())
+        }
+        match tool {
+            "kc_help" => as_::<HelpParams>(args),
+            "kc_symbol_at" => as_::<SymbolAtParams>(args),
+            "kc_find" => as_::<FindParams>(args),
+            "kc_locate" => as_::<LocateParams>(args),
+            "kc_refs" => as_::<RefsParams>(args),
+            "kc_context" => as_::<ContextParams>(args),
+            "kc_trace" => as_::<TraceParams>(args),
+            "kc_path" => as_::<PathParams>(args),
+            "kc_flow" => as_::<FlowParams>(args),
+            "kc_impact" => as_::<ImpactParams>(args),
+            "kc_unused" => as_::<UnusedParams>(args),
+            "kc_rename_preview" => as_::<RenamePreviewParams>(args),
+            "kc_coupled" => as_::<CoupledParams>(args),
+            "kc_tests" => as_::<TestsParams>(args),
+            "kc_hotspots" => as_::<HotspotsParams>(args),
+            "kc_ownership" => as_::<OwnershipParams>(args),
+            "kc_reviewers" => as_::<ReviewersParams>(args),
+            "kc_overview" => as_::<OverviewParams>(args),
+            "kc_areas" => as_::<AreasParams>(args),
+            "kc_notes" => as_::<NotesParams>(args),
+            "kc_note_add" => as_::<NoteAddParams>(args),
+            "kc_search" => as_::<SearchParams>(args),
+            "kc_grep_ast" => as_::<GrepAstParams>(args),
+            "kc_more" => as_::<MoreParams>(args),
+            "kc_status" => as_::<RepoOnlyParams>(args),
+            other => Err(format!("no parameters type for {other}")),
+        }
+    }
+
+    /// The schema advertises each tool's common parameters only; every other parameter is still taken. For every tool:
+    /// what it advertises is a parameter it has, every required one is advertised, and every parameter it doesn't
+    /// advertise is documented in its help topic and read from a call's arguments (its value reaches the parameters
+    /// the tool runs with, not dropped as unknown).
+    #[test]
+    fn every_unadvertised_parameter_is_documented_and_accepted() {
+        let s = server("all");
+        let tools = s.tool_router.list_all();
+        assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
+        let mut unadvertised = 0;
+        for t in &tools {
+            let full = s.schemas.get(t.name.as_ref()).unwrap();
+            let all = full.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
+            let shown = t.input_schema.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
+            let (_, keep) = ADVERTISED.iter().find(|(n, _)| *n == t.name).unwrap_or_else(|| panic!("{} not in ADVERTISED", t.name));
+            assert_eq!(shown.len(), keep.len(), "{}: an advertised name it doesn't take", t.name);
+            for r in full.get("required").and_then(Value::as_array).into_iter().flatten() {
+                assert!(shown.contains_key(r.as_str().unwrap()), "{}: required {r} not advertised", t.name);
+            }
+            let help = s.help(Some(&t.name)).unwrap();
+            let mut required = serde_json::Map::new();
+            for r in full.get("required").and_then(Value::as_array).into_iter().flatten() {
+                let r = r.as_str().unwrap();
+                required.insert(r.into(), sample(&all[r], r));
+            }
+            for (name, p) in all.iter().filter(|(n, _)| !shown.contains_key(*n)) {
+                unadvertised += 1;
+                assert!(help.lines().any(|l| l.starts_with(&format!("- `{name}` ("))), "{}.{name} isn't in its help topic", t.name);
+                let mut args = required.clone();
+                let value = sample(p, name);
+                args.insert(name.clone(), value.clone());
+                let read = parse(&t.name, Value::Object(args)).unwrap_or_else(|e| panic!("{}.{name}: {e}", t.name));
+                let want = match &value {
+                    Value::String(v) => v.clone(),
+                    Value::Array(a) => a[0].as_str().unwrap().to_string(),
+                    other => other.to_string(),
+                };
+                assert!(read.contains(&want), "{}.{name}: {value} was dropped: {read}", t.name);
+            }
+        }
+        // `repo`, `max_chars` and the rare ones: the bulk of what a tool takes.
+        assert!(unadvertised > 60, "{unadvertised}");
+    }
+
+    /// A value of `p`'s type, distinct enough to find in the parameters it was read into.
+    fn sample(p: &Value, name: &str) -> Value {
+        match p["type"].as_str() {
+            Some("integer") => json!(213),
+            Some("boolean") => json!(true),
+            Some("array") => json!([format!("zq-{name}")]),
+            _ => json!(format!("zq-{name}")),
+        }
+    }
+
     #[test]
     fn profiles_pick_the_advertised_tools() {
         let names = |s: &KnowcodeServer| s.tool_router.list_all().into_iter().map(|t| t.name.to_string()).collect::<Vec<_>>();
@@ -2122,7 +2276,7 @@ mod tests {
     }
 
     /// Exactly the always-loaded tools carry Claude Code's `anthropic/alwaysLoad` mark; the rest stay deferred, and a
-    /// profile that leaves one out doesn't list it. Their schemas are the upfront cost, about 1.6k tokens (eval/schema-cost.md).
+    /// profile that leaves one out doesn't list it. Their schemas are the upfront cost, about 0.8k tokens (eval/schema-cost.md).
     #[test]
     fn only_the_always_loaded_tools_are_marked() {
         let tools = server("all").tool_router.list_all();
@@ -2143,7 +2297,7 @@ mod tests {
         let mut want: Vec<String> = ALWAYS_LOADED.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(marked, want);
-        assert!(bytes <= 5_000, "always-loaded schemas {bytes} bytes, about 1.6k tokens measured");
+        assert!(bytes <= 2_500, "always-loaded schemas {bytes} bytes, about 0.8k tokens measured");
         let few = server("kc_find,kc_context").tool_router.list_all();
         let marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
         assert_eq!(marked, ["kc_context"]);
