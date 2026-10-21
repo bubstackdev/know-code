@@ -3,7 +3,7 @@
   "client_version": "2.1.304",
   "effort": "medium",
   "knowcode_profile": "all",
-  "knowcode_sha256": "5323abc9a009f11b07e0fc5a2c5647fa28d8c62efaba2f876d0941de58bc4333",
+  "knowcode_sha256": "e55fdc317f5a35ad178929dc82964d9d3dbbb0a913f6c1d987387572967e728a",
   "model": "claude-opus-5-5",
   "research_call_budget": 40
 }

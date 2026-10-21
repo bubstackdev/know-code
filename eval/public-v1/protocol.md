@@ -20,7 +20,9 @@ Questions, labels, arms, model, client, profile, metrics, criteria, detector and
 After the final run's results were published, a fix round landed on main (still version 0.2.0, at 702da21), and the
 study is run once more as a **rerun** under a fourth freeze. The fourth freeze differs from the third in three ways:
 
-- `knowcode_sha256` names the 702da21 build.
+- `knowcode_sha256` names the 702da21 build. On 2026-10-21 the user stopped that rerun after 6 of its 72 sessions.
+  Those 6 sessions are discarded and not scored. The build then moved to b0a3564, which lowers memory use in search and
+  indexing and leaves answers unchanged, and the rerun starts again from scratch on it.
 - The re-check detector reads 0.2's compact answer forms, a format adaptation fixed before the rerun (see
   [Re-check detector](#re-check-detector)).
 - The scorer reports one more descriptive measure, stale-index answers (see [Metrics](#metrics)).
@@ -370,3 +372,6 @@ baseline budget.
   offer to share raw transcripts on request was removed from "Scoring script".
 - **2026-10-21:** before the rerun, the re-check detector was adapted to 0.2's compact answer forms, and a descriptive
   stale-index measure was added. See "Re-check detector" and "Metrics"; no criterion or threshold changed.
+- **2026-10-21:** the user stopped the fourth-freeze rerun after 6 of 72 sessions; those sessions are discarded and not
+  scored. The rerun's binary moved from 702da21 to b0a3564 (memory fixes in search and indexing, answers unchanged),
+  and the rerun starts again from scratch. Nothing else changed.
