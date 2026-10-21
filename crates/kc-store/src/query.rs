@@ -152,6 +152,20 @@ pub fn split_dotted(query: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Whether `qualified` is the type `c` names: `c` itself or ending in `.c`.
+fn names_type(qualified: &str, c: &str) -> bool {
+    qualified == c || qualified.strip_suffix(c).is_some_and(|head| head.ends_with('.'))
+}
+
+/// Whether the symbol `id` is declared in a type named `c` other than its container: a C# extension method is a member
+/// of the type it extends (its container), and is written `Extensions.Method` after the static class declaring it.
+fn declared_in(conn: &Connection, id: i64, c: &str) -> bool {
+    let parent = conn
+        .prepare_cached("SELECT p.name, p.container FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")
+        .and_then(|mut stmt| stmt.query_row([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))).optional());
+    matches!(parent, Ok(Some((name, container))) if names_type(&join(container.as_deref(), &name), c))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FindHit {
     #[serde(flatten)]
@@ -215,13 +229,14 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
     let mut hits: HashMap<i64, (u8, FindHit)> = HashMap::new();
     let mut capped = false;
     let like = |t: &str| t.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-    // `Outer.name`: in a container named `Outer`, or ending in `.Outer`.
-    let in_container = "(?2 IS NULL OR s.container = ?2 OR s.container LIKE ?3 ESCAPE '\\')";
+    // `Outer.name`: in a container named `Outer`, or ending in `.Outer`; or declared in it (an extension method).
+    let in_container = "(?2 IS NULL OR s.container = ?2 OR s.container LIKE ?3 ESCAPE '\\'
+        OR EXISTS (SELECT 1 FROM symbols p WHERE p.id = s.parent_id AND (p.name = ?2 OR ifnull(p.container, '') || '.' || p.name LIKE ?3 ESCAPE '\\')))";
     let suffix = container.map(|c| format!("%.{}", like(c)));
     // The SQL narrows by container ignoring case (`LIKE`); this decides, with case.
     let wanted = |s: &SymbolRow| {
         kind_matches(kind, &s.kind)
-            && container.is_none_or(|c| s.container.as_deref().is_some_and(|hc| hc == c || hc.ends_with(&format!(".{c}"))))
+            && container.is_none_or(|c| s.container.as_deref().is_some_and(|hc| names_type(hc, c)) || declared_in(conn, s.id, c))
     };
 
     let pattern = format!("{}%", like(name));
@@ -321,7 +336,7 @@ fn definitions_split(conn: &Connection, _query: &str, (container, name): (Option
         .into_iter()
         .filter(|s| match container {
             None => true,
-            Some(c) => s.container.as_deref().is_some_and(|sc| sc == c || sc.ends_with(&format!(".{c}"))),
+            Some(c) => s.container.as_deref().is_some_and(|sc| names_type(sc, c)) || declared_in(conn, s.id, c),
         })
         .collect();
     if rows.is_empty() {
@@ -4501,6 +4516,8 @@ fn refs_filtered(
                     t.qualified == format!("{c}.{name}")
                         || t.qualified.ends_with(&format!(".{c}.{name}"))
                         || (crate::sql::is_sql_path(&t.file) && t.qualified.to_lowercase() == format!("{lc}.{ln}"))
+                        // An extension method, by the static class declaring it (a target in this repo).
+                        || (t.repo.is_none() && declared_in(conn, t.id, c))
                 })
         });
     }

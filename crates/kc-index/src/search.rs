@@ -84,7 +84,7 @@ pub fn compile(o: &SearchOptions) -> Result<Matcher> {
     Ok(Matcher {
         re,
         plan: grams::plan(&hir),
-        langs: o.langs.iter().map(|l| l.to_ascii_lowercase()).collect(),
+        langs: o.langs.iter().map(|l| lang_name(l)).collect(),
         include,
         exclude: exclude.into_iter().map(|g| g[1..].to_string()).collect(),
         ignore_case,
@@ -130,6 +130,59 @@ impl Matcher {
             return false;
         }
         self.include.is_empty() || self.include.iter().any(|g| path_glob(g, path))
+    }
+}
+
+/// `globs` as they apply in the repo at `root`, one of the repos a search covers (named `names`): a glob written after
+/// this repo's name (`shop/src/**`) is relative to it, and one after another of the repos' names (`billing/**`) is
+/// not for this one, unless the repo has a directory of that name (then the glob as written stays too). An absolute
+/// path is relative to the repo it is in, and not for the others. `None` when globs to include were given and none
+/// is for this repo: the search leaves the repo out.
+pub fn globs_in(globs: &[String], root: &Path, names: &[String]) -> Option<Vec<String>> {
+    let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let root_text = root.to_string_lossy();
+    let mut out = Vec::new();
+    let (mut includes, mut kept) = (false, false);
+    for g in globs.iter().map(|g| g.trim()).filter(|g| !g.is_empty()) {
+        let (negated, body) = match g.strip_prefix('!') {
+            Some(b) => (true, b),
+            None => (false, g),
+        };
+        includes |= !negated;
+        let whole = |rest: &str| if rest.is_empty() { "**".to_string() } else { rest.to_string() };
+        let mapped: Vec<String> = if Path::new(body).is_absolute() {
+            match body.strip_prefix(root_text.as_ref()) {
+                Some(rest) if rest.is_empty() || rest.starts_with('/') => vec![whole(rest.trim_start_matches('/'))],
+                _ => Vec::new(),
+            }
+        } else {
+            let body = body.trim_start_matches("./");
+            let (first, rest) = body.split_once('/').unwrap_or((body, ""));
+            let own_dir = root.join(first).is_dir();
+            if first == name {
+                let mut v = vec![whole(rest)];
+                if own_dir {
+                    v.push(body.to_string());
+                }
+                v
+            } else if !own_dir && names.iter().any(|n| n == first) {
+                Vec::new()
+            } else {
+                vec![body.to_string()]
+            }
+        };
+        kept |= !negated && !mapped.is_empty();
+        out.extend(mapped.into_iter().map(|m| if negated { format!("!{m}") } else { m }));
+    }
+    (!includes || kept).then_some(out)
+}
+
+/// A content language as written (`typescript`, or an extension: `ts`, `cs`, `py`): its name in [`content_lang`].
+pub fn lang_name(lang: &str) -> String {
+    let l = lang.trim().trim_start_matches('.').to_ascii_lowercase();
+    match content_lang(&format!("x.{l}")) {
+        "other" => l,
+        known => known.to_string(),
     }
 }
 
@@ -943,6 +996,33 @@ mod tests {
         assert!(path_glob("*Tests*", "Tests/ATests.swift"));
         assert!(!path_glob("*.py", "a.pyc"));
         assert!(path_glob("crates/*/src/*.rs", "crates/kc-index/src/lib.rs"));
+    }
+
+    #[test]
+    fn globs_after_a_repo_name_apply_in_that_repo_only() {
+        let base = std::env::temp_dir().join(format!("knowcode-test-globs-in-{}", std::process::id()));
+        let (web, server) = (base.join("web"), base.join("server"));
+        std::fs::create_dir_all(server.join("web")).unwrap(); // the server repo has a `web` directory of its own
+        std::fs::create_dir_all(&web).unwrap();
+        let names = vec!["web".to_string(), "server".to_string()];
+        let g = |globs: &[&str], root: &Path| globs_in(&globs.iter().map(|g| g.to_string()).collect::<Vec<_>>(), root, &names);
+        // After the repo's name: relative to it; the other repo is left out.
+        assert_eq!(g(&["web/src/**"], &web), Some(vec!["src/**".to_string()]));
+        assert_eq!(g(&["server/**"], &web), None);
+        assert_eq!(g(&["web"], &web), Some(vec!["**".to_string()]));
+        // A repo holding a directory named like the other repo keeps the glob as written.
+        assert_eq!(g(&["web/**"], &server), Some(vec!["web/**".to_string()]));
+        // Exclusions and plain globs apply everywhere; an exclusion alone leaves no repo out.
+        assert_eq!(g(&["*.ts", "!web/dist/**"], &web), Some(vec!["*.ts".to_string(), "!dist/**".to_string()]));
+        assert_eq!(g(&["!server/bin/**"], &web), Some(vec![]));
+        // An absolute path: relative to the repo it is in, and for no other.
+        let abs = format!("{}/src/**", web.display());
+        assert_eq!(g(&[&abs], &web), Some(vec!["src/**".to_string()]));
+        assert_eq!(g(&[&abs], &server), None);
+        assert_eq!(g(&["/elsewhere/**"], &web), None);
+        // Extensions name languages.
+        assert_eq!((lang_name("ts"), lang_name(".cs"), lang_name("Python"), lang_name("cobol")), ("typescript".into(), "csharp".into(), "python".into(), "cobol".into()));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

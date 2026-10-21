@@ -911,6 +911,29 @@ pub fn changed_since_sync(root: &Path, db: &Path) -> bool {
     fresh::changed(root, db)
 }
 
+/// Whether derived data an earlier query computed (the areas, the file ranking) is from an earlier index generation
+/// or history than `store`'s. Never computed, it isn't stale: the query needing it computes it.
+pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
+    let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
+    let generation = store.generation()?;
+    Ok(areas::needs_refresh(root, store)? || store.derived_gen(&rank_key)?.is_some_and(|g| g != generation))
+}
+
+/// Brings stale derived data (see [`derived_stale`]) up to date, after a sync: `index` does, and the background
+/// indexer, so the next query finds it current.
+pub fn refresh_derived(root: &Path, store: &Store) -> Result<()> {
+    if areas::needs_refresh(root, store)? {
+        areas::areas(root, store)?;
+    }
+    let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
+    let generation = store.generation()?;
+    if store.derived_gen(&rank_key)?.is_some_and(|g| g != generation) {
+        store.ref_graph()?;
+        store.file_rank_at(&[], kc_store::rank::Flow::Uses, true)?;
+    }
+    Ok(())
+}
+
 /// Within a [`ChangeMemo`], [`changed_repos`] checks each repo once (a query consults the workspace summary from
 /// several places). Outside one, every call checks afresh.
 static CHANGE_MEMO: std::sync::Mutex<(usize, Option<HashMap<PathBuf, bool>>)> = std::sync::Mutex::new((0, None));
