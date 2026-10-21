@@ -47,7 +47,9 @@ name, kc_search for exact text."#,
         summary: "the symbols enclosing a file:line",
         text: r#"The symbols enclosing a line of a file, innermost first (a method, then its class), each with its
 qualified name (what kc_context takes), kind, signature and line range. For mapping a stack frame to code.
-`file_indexed` is false when the file has no symbol index. An absolute `file` picks its repo."#,
+`file_indexed` is false when the file has no symbol index. `file` picks its repo: an absolute path inside a repo, one
+elsewhere by the repo name in it (a stack frame from another machine), a path after the repo's name (`shop/src/a.cs`),
+one relative to a workspace root, or a repo-relative path in exactly one repo; or pass `repo`."#,
     },
     Topic {
         name: "kc_refs",
@@ -661,10 +663,11 @@ the one enclosing the line; `[stale]` for a file that could not be read; the tri
 `context`, the lines around the hit follow it, one per line (`  41- text`); with `files_only`, a row per file,
 `repo/file:line best (n matches)`. `case`: sensitive (default), insensitive, or smart (insensitive unless the
 pattern has an uppercase letter); `word` for whole words. Filter with `lang` (swift, python, rust, markdown, json, yaml,
-toml, shell, …) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file names: "*.swift",
-"!*Tests*"); `context` lines around each hit (max 10); `files_only` for one item per file. Page with `offset`
-(`next_offset`) or kc_more with `cursor`. The scan stops at `max_lines` matching lines (default 50000) at the same file
-on every run, saying `capped`; unreadable files are an `incomplete` entry (failed). A search past its deadline
+toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
+names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` searches that repo only; an absolute path, the repo it is
+in). A filter matching no file says so in `note` (`paths matched 0 files (…)`), never as a missing match. `context`
+lines around each hit (max 10). Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
+`max_lines` matching lines (default 50000) at the same file on every run, saying `capped`; unreadable files are an `incomplete` entry (failed). A search past its deadline
 (KNOWCODE_SEARCH_DEADLINE, 120 s) answers `complete: false` with an `incomplete` entry of reason `deadline`.
 `workspace` searches every indexed repo, `repos` the ones named. Use it for strings, config keys, error messages, TODOs
 and anything that isn't a symbol name."#,
@@ -688,7 +691,7 @@ with the code's ("async void $M" misses "public async void"): use "kind:method_d
 
 Each item is a text row, `repo/file:line:column[-end_line] [$X=captured, …] | text` (`repo/` when the answer spans
 repos; the match's first line after the first ` | `). Non-test code first; page
-with `offset` (`next_offset`). `paths` globs (a leading `!` excludes); `max_matches` stops reading files after that many
+with `offset` (`next_offset`). `paths` globs (a leading `!` excludes; `<repo>/…` scopes to that repo); `max_matches` stops reading files after that many
 matches (default 50000), at the same file on every run. `workspace` searches every indexed repo, `repos` the ones
 named."#,
     },

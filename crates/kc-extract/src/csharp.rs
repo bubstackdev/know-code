@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 26;
+pub const VERSION: u32 = 27;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -507,7 +507,10 @@ impl<'a> Cx<'a> {
             "constructor_initializer" => {
                 let receiver = if self.text(node).trim_start_matches(':').trim_start().starts_with("this") { "this" } else { "base" };
                 let args = children(node).find(|c| c.kind() == "argument_list");
-                self.chained(receiver, args, node);
+                // At the `base`/`this` keyword, not the colon, which may end the line before (`… int x) :`).
+                let mut cursor = node.walk();
+                let keyword = node.children(&mut cursor).find(|c| matches!(c.kind(), "base" | "this")).unwrap_or(node);
+                self.chained(receiver, args, keyword);
                 self.visit_children(node);
             }
             // `where T : IHandler, new()`: the constraint names the type.
@@ -5236,6 +5239,17 @@ public class CartServiceTests
         // The extension lives in the static class, which still contains it.
         assert_eq!(f.symbols[m("ThrowIfError").parent.unwrap()].name, "ResultExtensions");
         assert_eq!(m("Helper").container.as_deref(), Some("ResultExtensions"));
+    }
+
+    #[test]
+    fn a_constructor_initializer_is_at_its_keyword_not_the_colon() {
+        let f = extract(
+            "public class One : Base\n{\n    public One(long z) :\n        base((int)z)\n    {\n    }\n    public One(int x)\n        : this(\n            x, 1)\n    {\n    }\n    public One(string s) : base(1) { }\n}\n",
+        );
+        let inits: Vec<(&str, u32, u32)> =
+            f.refs.iter().filter(|r| r.name == "init").map(|r| (r.receiver.as_deref().unwrap_or(""), r.line, r.col)).collect();
+        // The colon ending line 3 is not the call: `base` on line 4 is.
+        assert_eq!(inits, vec![("base", 4, 9), ("this", 8, 11), ("base", 12, 28)]);
     }
 
     #[test]

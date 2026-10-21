@@ -432,7 +432,7 @@ pub struct SearchParams {
     /// Languages to keep.
     #[serde(default)]
     pub lang: Vec<String>,
-    /// Path globs; a leading `!` excludes.
+    /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`), that repo only.
     #[serde(default)]
     pub paths: Vec<String>,
     /// Lines of context around each hit (max 10).
@@ -484,7 +484,7 @@ pub struct GrepAstParams {
     /// Keep matches whose text matches this regex.
     #[serde(default)]
     pub text: Option<String>,
-    /// Path globs; a leading `!` excludes.
+    /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`), that repo only.
     #[serde(default)]
     pub paths: Vec<String>,
     /// Results per page (default 20).

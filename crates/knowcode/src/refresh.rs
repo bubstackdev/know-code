@@ -106,15 +106,7 @@ impl Worker {
                         kc_index::content::sync_content(&root, &mut store, 1)?;
                         // Context intentionally reuses old derived caches for latency. Bring existing caches up to
                         // date here so repeated queries eventually become complete without a manual overview call.
-                        if kc_index::areas::needs_refresh(&root, &store)? {
-                            kc_index::areas::areas(&root, &store)?;
-                        }
-                        let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
-                        let generation = store.generation()?;
-                        if store.derived_gen(&rank_key)?.is_some_and(|g| g != generation) {
-                            store.ref_graph()?;
-                            store.file_rank_at(&[], kc_store::rank::Flow::Uses, true)?;
-                        }
+                        kc_index::refresh_derived(&root, &store)?;
                         Ok(report)
                     });
                     let outcome = match result {
@@ -220,12 +212,14 @@ pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
     };
     Worker::shared().watch(root); // watch even when this call finds an already-fresh index
     let db = kc_index::db_path(root)?;
-    let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
-    let generation = store.generation()?;
-    let stale_rank = store.derived_gen(&rank_key)?.is_some_and(|g| g != generation);
-    if !SyncOptions::default().verify && !kc_index::changed_since_sync(root, &db)
-        && !kc_index::areas::needs_refresh(root, &store)? && !stale_rank
-    {
+    if !SyncOptions::default().verify && !kc_index::changed_since_sync(root, &db) {
+        // The index matches the working tree. Derived data an earlier query computed may be from an earlier index
+        // (after a CLI command synced it): the worker brings it up to date, but the index answers now, and an answer
+        // drawing on the older data says so itself (`stale_derived`). Waiting for it, the first call of a session
+        // ran out of its budget and called a current index "queued or running".
+        if kc_index::derived_stale(root, &store)? {
+            Worker::shared().schedule(root)?;
+        }
         // The worker may have committed after open() pinned its snapshot, before the stat check.
         store.end_snapshot()?;
         store.begin_snapshot()?;
@@ -257,10 +251,12 @@ pub fn restore_cached(root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The `stale` entry for a repo whose working tree changed since its index and whose indexing didn't finish within
+/// the call's budget. Named by the repo's name: the answer never shows the local path.
 pub fn pending(root: &Path) -> kc_store::answer::Incomplete {
     kc_store::answer::Incomplete::new(
         kc_store::answer::Reason::Stale,
-        format!("{}: indexing is queued or running; this answer uses the available committed snapshot and may be empty or incomplete", root.display()),
+        format!("{}: changed since its last index, and indexing is queued or running; this answer uses the available committed snapshot and may be empty or incomplete", crate::ops::repo_name(root)),
     ).with_hint("indexing continues in the background; ask again after it finishes")
 }
 
@@ -303,6 +299,81 @@ mod tests {
         assert_eq!(out.env["complete"], true);
         assert_eq!(out.env["provenance"][0]["fresh"], true);
         assert_eq!(out.env["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_current_index_with_older_derived_data_answers_at_once_and_index_brings_it_up_to_date() {
+        let cache = test_cache();
+        let base = cache.dir("refresh-derived");
+        let root = repo(&base, "app", &[("src/app.py", "def handler():\n    return helper()\n\ndef helper():\n    return 1\n")]);
+        // Derived data computed by an earlier query, then an edit a CLI command synced (no budget: it waits).
+        let store = kc_index::open(&root).unwrap();
+        kc_index::areas::areas(&root, &store).unwrap();
+        store.file_rank_at(&[], kc_store::rank::Flow::Uses, true).unwrap();
+        drop(store);
+        std::fs::write(root.join("src/app.py"), "def handler():\n    return helper() + 1\n\ndef helper():\n    return 1\n").unwrap();
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        ops::find("handler", None, 10, &scope).unwrap();
+        let store = kc_index::open(&root).unwrap();
+        assert!(kc_index::derived_stale(&root, &store).unwrap());
+        drop(store);
+
+        // The index matches the working tree: a query within a budget answers from it, whatever the derived data,
+        // even while the worker can't start (another writer holds the repo).
+        let writer = kc_index::writer::WriterLock::acquire(&root).unwrap();
+        let budget = Budget::enter(Duration::from_millis(1));
+        let out = ops::find("handler", None, 10, &scope).unwrap();
+        drop(budget);
+        assert_eq!(out.env["complete"], true, "{}", out.env);
+        assert_eq!(out.env["provenance"][0]["fresh"], true);
+        assert!(out.env["freshness"]["status"].is_null(), "{}", out.env);
+        // The worker brings the derived data up to date once the writer is gone.
+        let job = Worker::shared().schedule(&root).unwrap();
+        drop(writer);
+        let done = job.done.lock().unwrap();
+        let (done, timeout) = job.changed.wait_timeout_while(done, Duration::from_secs(60), |d| d.is_none()).unwrap();
+        assert!(!timeout.timed_out());
+        assert!(done.as_ref().unwrap().is_ok(), "{:?}", *done);
+        drop(done);
+        assert!(!kc_index::derived_stale(&root, &kc_index::open(&root).unwrap()).unwrap());
+
+        // What `index` does after its sync: nothing derived is left behind the index.
+        std::fs::write(root.join("src/app.py"), "def handler():\n    return helper() + 2\n\ndef helper():\n    return 1\n").unwrap();
+        ops::find("handler", None, 10, &scope).unwrap();
+        let store = kc_index::open(&root).unwrap();
+        assert!(kc_index::derived_stale(&root, &store).unwrap());
+        kc_index::refresh_derived(&root, &store).unwrap();
+        assert!(!kc_index::derived_stale(&root, &store).unwrap());
+    }
+
+    #[test]
+    fn a_repo_still_indexing_is_flagged_where_it_bears_on_the_answer() {
+        let cache = test_cache();
+        let base = cache.dir("refresh-relevant");
+        let a = repo(&base, "alpha", &[("src/a.py", "def alpha_handler():\n    return 1\n")]);
+        let b = repo(&base, "beta", &[("src/b.py", "def beta_handler():\n    return 2\n")]);
+        for (root, text) in [(&a, "def alpha_handler():\n    return 10\n"), (&b, "def beta_handler():\n    return 20\n")] {
+            std::fs::write(root.join(if root == &a { "src/a.py" } else { "src/b.py" }), text).unwrap();
+        }
+        let writers = [kc_index::writer::WriterLock::acquire(&a).unwrap(), kc_index::writer::WriterLock::acquire(&b).unwrap()];
+        let scope = Scope { repos: vec![a.clone(), b.clone()], no_sync: false };
+        let budget = Budget::enter(Duration::from_millis(1));
+        let out = ops::find("alpha_handler", None, 10, &scope).unwrap();
+        drop(budget);
+        drop(writers);
+        let stale: Vec<String> = out.env["incomplete"].as_array().into_iter().flatten().filter(|i| i["reason"] == "stale").map(|i| i["detail"].as_str().unwrap().to_string()).collect();
+        // Both are behind; only the one the answer comes from is said to be.
+        assert_eq!(out.env["repos"][1]["freshness"]["status"], "indexing", "{}", out.env);
+        assert_eq!(stale.len(), 1, "{stale:?}");
+        assert!(stale[0].starts_with("alpha: "), "{stale:?}");
+        assert!(!stale[0].contains(&base.to_string_lossy().into_owned()), "{stale:?}");
+    }
+
+    #[test]
+    fn the_pending_note_names_the_repo_not_its_local_path() {
+        let entry = pending(Path::new("/home/someone/src/shop-api"));
+        assert!(entry.detail.starts_with("shop-api: changed since its last index"), "{}", entry.detail);
+        assert!(!entry.detail.contains("/home/"), "{}", entry.detail);
     }
 
     #[test]
