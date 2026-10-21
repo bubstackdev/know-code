@@ -52,6 +52,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   as before; the hop now counts in `impact`'s `low_confidence`. Under the default evidence policy it is still followed;
   under `confirmed` it is still left out.
 
+- When a name has definitions in code and in tests (a test helper named like the function it tests), the code's
+  answers first, whatever the kinds: `context`, `trace`, `impact` and the other symbol lookups used to rank a test
+  file's function above a source file's constant. The test's definition is listed among the alternatives.
+- Razor files (`.razor`, `.cshtml`) aren't read. A C# `refs` or `impact` answer from a repo holding any is now
+  incomplete with reason `unsupported`, naming one and saying their markup's uses aren't listed, with a `kc_search`
+  hint, instead of looking complete.
+
 ## 0.1.1 (2026-10-20)
 
 - A workspace-wide answer no longer fails because one repo can't be read (a checkout deleted while the answer was
