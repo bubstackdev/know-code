@@ -62,21 +62,52 @@ fn scope_repos(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
     Ok((roots, workspace))
 }
 
-/// Razor files (`.razor`, `.cshtml`) in the repo `o`, which KnowCode doesn't read: the `unsupported` entry saying a
-/// C# answer may lack the uses in their markup and `@code` blocks, naming the repo when `named`. `None` without any.
-pub fn razor_unread(o: &Opened, named: bool) -> Result<Option<Incomplete>> {
+/// At most this many names are checked as text in Razor files; past it, the files are only said to exist.
+const RAZOR_NAMES: usize = 20;
+
+/// Razor files (`.razor`, `.cshtml`) in the repo `o`, which KnowCode doesn't read, checked as text for `names` (see
+/// [`crate::unread`]): an `unsupported` entry naming the lines that name one (uses there are not listed), or, when none
+/// does, a statement for `checked` saying so. The repo is named when `named`. Neither without Razor files; the
+/// unconditional entry when there are too many names to check or a Razor file can't be searched.
+pub fn razor_unread(o: &Opened, named: bool, names: &[&str]) -> Result<(Option<Incomplete>, Option<String>)> {
+    use crate::unread::{Files, mentions};
+    let repo = if named { format!("{}: ", repo_name(&o.root)) } else { String::new() };
+    let files = |n: usize| if n == 1 { "1 Razor file".to_string() } else { format!("{n} Razor files") };
+    let who = match names {
+        [one] => one.to_string(),
+        _ => format!("any of {} names", names.len()),
+    };
+    if !names.is_empty() && names.len() <= RAZOR_NAMES {
+        let m = mentions(o, names, Files::Razor)?;
+        if m.files == 0 {
+            return Ok((None, None));
+        }
+        if !m.lines.is_empty() {
+            let lines = m.lines.len();
+            let detail = format!(
+                "{repo}{who} is named on {lines}{} line{} of Razor files (.razor, .cshtml), which KnowCode doesn't read: {}; uses there are not listed",
+                if m.capped { "+" } else { "" },
+                if lines == 1 && !m.capped { "" } else { "s" },
+                m.named()
+            );
+            return Ok((Some(Incomplete::new(Reason::Unsupported, detail)), None));
+        }
+        if m.unsearchable == 0 {
+            return Ok((None, Some(format!("{repo}none of {} (.razor, .cshtml), which KnowCode doesn't read, names {who}", files(m.files)))));
+        }
+    }
     let mut stmt = o.store.conn().prepare_cached("SELECT path FROM cfiles WHERE path LIKE '%.razor' OR path LIKE '%.cshtml' ORDER BY path")?;
     let paths: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    let Some(first) = paths.first() else { return Ok(None) };
-    let repo = if named { format!("{}: ", repo_name(&o.root)) } else { String::new() };
-    let n = paths.len();
-    let files = if n == 1 { "1 Razor file".to_string() } else { format!("{n} Razor files") };
-    Ok(Some(
-        Incomplete::new(
-            Reason::Unsupported,
-            format!("{repo}{files} (.razor, .cshtml) not read, such as {first}: uses of C# code in their markup and @code blocks are not listed"),
-        )
-        .with_hint("kc_search finds them as text (paths: [\"*.razor\", \"*.cshtml\"])"),
+    let Some(first) = paths.first() else { return Ok((None, None)) };
+    Ok((
+        Some(
+            Incomplete::new(
+                Reason::Unsupported,
+                format!("{repo}{} (.razor, .cshtml) not read, such as {first}: uses of C# code in their markup and @code blocks are not listed", files(paths.len())),
+            )
+            .with_hint("kc_search finds them as text (paths: [\"*.razor\", \"*.cshtml\"])"),
+        ),
+        None,
     ))
 }
 
@@ -1266,9 +1297,14 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     let want_manifests = kind.is_none_or(|k| matches!(k, "package" | "target" | "product"));
     let mut manifests_total = 0;
     let mut declared = Vec::new();
+    let mut uses = crate::whole::Uses::default();
+    let symbols = kind.is_none_or(|k| !matches!(k, "package" | "target" | "product"));
+    // The rest of the workspace, for the `declared` statement: each repo whose summary says it may declare the name, or
+    // name it, is opened; the others are known not to, as last indexed.
+    let bare = query::split_dotted(q.trim()).1.to_string();
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
-        if kind.is_none_or(|k| !matches!(k, "package" | "target" | "product")) {
+        if symbols {
             // Ties go by path and line, not by a rank: the rank was only used when cached, so the order depended on
             // cache state, and ranking ties didn't help (concept-find on replayed commits: 0 better, 0 worse).
             let found = query::find_counted(o.store.conn(), q, kind, limit, &kc_store::rank::FileRank::default())?;
@@ -1284,6 +1320,62 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         }
         opened.push(o);
     }
+    // A lookup never indexes another repo: one without a full index yet is left out, and counted as not checked
+    // unless its light summary rules the name out.
+    let (rest, unchecked): (Vec<PathBuf>, usize) = if symbols && !bare.is_empty() && !q.contains(['#', ':', '/', ' ']) {
+        // Other checkouts of a repo asked about (a worktree, a second clone) are the same code, under their own
+        // branch and privacy policy: left out.
+        let all = kc_index::indexed_roots()?;
+        let summaries = kc_index::workspace::summaries(&all)?;
+        let asked: Vec<String> = roots.iter().map(|r| kc_index::workspace::identity_of(r, &summaries)).collect();
+        let others: Vec<PathBuf> = all.iter().filter(|r| !roots.contains(r) && !asked.contains(&kc_index::workspace::identity_of(r, &summaries))).cloned().collect();
+        let (full, light): (Vec<PathBuf>, Vec<PathBuf>) = others.into_iter().partition(|r| kc_index::db_path(r).is_ok_and(|p| p.exists()));
+        let unchecked = if light.is_empty() {
+            0
+        } else {
+            let summaries = kc_index::workspace::summaries(&light)?;
+            light.iter().filter(|r| summaries.iter().find(|s| s.root == **r).is_none_or(|s| s.generation().is_empty() || s.may_define(q))).count()
+        };
+        (full, unchecked)
+    } else {
+        (Vec::new(), 0)
+    };
+    let repos = roots.len() + rest.len();
+    let named = |o: &Opened| (repos > 1).then(|| repo_name(&o.root));
+    // The rest of the workspace, for the statement only (its declarations aren't in `items`): first the repos that may
+    // declare the name, then, when something declares it, those that may only name it.
+    if !rest.is_empty() {
+        let define = workspace_roots(rest.clone(), args.no_sync, |s| s.may_define(q))?;
+        let mut list = define.clone();
+        for pass in 0..2 {
+            if pass == 1 {
+                if declared.is_empty() {
+                    break;
+                }
+                let rest: Vec<PathBuf> = rest.iter().filter(|r| !define.contains(r)).cloned().collect();
+                list = workspace_roots(rest, args.no_sync, |s| s.may_reference(&bare))?;
+            }
+            for root in &list {
+                let Some(o) = open_member(&list, root, args.no_sync)? else { continue };
+                declared.extend(crate::whole::declared(&o, q, kind)?);
+                uses.add(&o, &bare, named(&o).as_deref())?;
+                // Consulted on the side: in the answer's provenance, not among the repos it answers for.
+                if let Some(first) = opened.first() {
+                    first.consulted.record(&o.root, &o.store, o.sync.as_ref());
+                }
+            }
+        }
+    }
+    // Uses in the repos asked about, counted only when something in the workspace declares the name.
+    if symbols && !bare.is_empty() && !declared.is_empty() {
+        for o in &opened {
+            uses.add(o, &bare, named(o).as_deref())?;
+        }
+    }
+    let declared: Vec<String> = crate::whole::statement(q, kind, &declared, &uses, repos)
+        .map(|s| if unchecked == 0 { s } else { format!("{s}. Not checked: {unchecked} repo{} of the workspace not indexed yet", if unchecked == 1 { "" } else { "s" }) })
+        .into_iter()
+        .collect();
     // Across repos, keep each repo's ranking but interleave by match quality.
     if roots.len() > 1 {
         let rank = |m: &str| match m {
@@ -1423,6 +1515,8 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     let (mut precise, mut corrected) = (0, 0);
     let mut stale_rank: Vec<Incomplete> = Vec::new();
     let mut unread_imports: Vec<Incomplete> = Vec::new();
+    // Files not read as code that were checked for the name and don't name it, said (`checked`).
+    let mut checked: Vec<String> = Vec::new();
     let mut callers = crate::whole::Callers::default();
     let mut overloads = crate::whole::Overloads::default();
     let mut hierarchy = None;
@@ -1474,9 +1568,16 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         // An interface or base type: what reaches it through other types, its DI registrations, and what is empty.
         if hierarchy.is_none() && (kinds.is_empty() || kinds.iter().any(|k| matches!(*k, "type_ref" | "instantiate"))) {
             hierarchy = crate::whole::hierarchy(&o, name.trim(), args.no_sync)?;
-            if hierarchy.is_some() && let Some(ty) = query::definitions(o.store.conn(), name.trim())?.into_iter().find(|d| matches!(d.kind.as_str(), "class" | "protocol")) {
+            if let Some(Value::Object(h)) = hierarchy.as_mut()
+                && let Some(ty) = query::definitions(o.store.conn(), name.trim())?.into_iter().find(|d| matches!(d.kind.as_str(), "class" | "protocol"))
+            {
                 let label = multi.then(|| repo_name(&o.root));
-                unread_imports.extend(kc_store::unsupported::incomplete(&di_unread(o.store.conn(), &ty)?, label.as_deref()));
+                let mut none: Vec<String> = h.get("none_found").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                let di = di_aside(di_unread(&o, &ty)?, h.contains_key("di"), &mut none);
+                if !none.is_empty() {
+                    h.insert("none_found".into(), json!(none));
+                }
+                unread_imports.extend(kc_store::unsupported::incomplete(&di, label.as_deref()));
             }
         }
         if !multi {
@@ -1500,7 +1601,28 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         // C# used from Razor markup, which isn't read: references there aren't listed.
         let csharp = hits.iter().any(|h| h.file.ends_with(".cs")) || query::definitions(o.store.conn(), name)?.iter().any(|d| d.file.ends_with(".cs"));
         if csharp {
-            unread_imports.extend(razor_unread(&o, multi)?);
+            let (note, none) = razor_unread(&o, multi, &[bare])?;
+            unread_imports.extend(note);
+            checked.extend(none);
+        }
+        // Other source files KnowCode doesn't read as code (vendored or built JavaScript, a file over the size limit)
+        // that name it: their lines, since uses there aren't listed.
+        let mut other = crate::unread::mentions(&o, &[bare], crate::unread::Files::NotCode)?;
+        if csharp {
+            other.lines.retain(|(f, _)| !crate::unread::is_razor(f));
+        }
+        if !other.lines.is_empty() {
+            let repo = if multi { format!("{}: ", repo_name(&o.root)) } else { String::new() };
+            let n = other.lines.len();
+            unread_imports.push(Incomplete::new(
+                Reason::Unsupported,
+                format!(
+                    "{repo}{bare} is named on {n}{} line{} of files KnowCode doesn't read as code: {}; uses there are not listed",
+                    if other.capped { "+" } else { "" },
+                    if n == 1 && !other.capped { "" } else { "s" },
+                    other.named()
+                ),
+            ));
         }
         items.extend(hits.into_iter().map(|h| (o.root.clone(), h)));
         opened.push(o);
@@ -1554,6 +1676,9 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     }
     for i in unread_imports {
         push_incomplete(&mut env, i);
+    }
+    if !checked.is_empty() {
+        env["checked"] = json!(checked);
     }
     for i in stale_rank {
         push_incomplete(&mut env, i);
@@ -2443,9 +2568,10 @@ fn bus_for(o: &Opened, ctx: &Context) -> Result<(Vec<BusOut>, Vec<kc_store::unsu
 }
 
 /// Constructs met but not read (see `kc_store::unsupported`) that the context of `s` draws on: those inside it, a
-/// role's in its files, a Terraform address's in its directory naming it, the repo's DI registrations it can't read
-/// for a type they may register, and `bus` (publishes of unknown messages). One `unsupported` entry per area.
-fn unread_for(o: &Opened, s: &kc_store::query::SymbolRow, bus: Vec<kc_store::unsupported::Site>) -> Result<Vec<Incomplete>> {
+/// role's in its files, a Terraform address's in its directory naming it, `di` (DI registrations it can't read that
+/// may register the type, when the answer speaks of its registrations: see [`di_aside`]) and `bus` (publishes of
+/// unknown messages). One `unsupported` entry per area.
+fn unread_for(o: &Opened, s: &kc_store::query::SymbolRow, bus: Vec<kc_store::unsupported::Site>, di: Vec<kc_store::unsupported::Site>) -> Result<Vec<Incomplete>> {
     use kc_store::unsupported;
     let conn = o.store.conn();
     let mut sites = bus;
@@ -2475,38 +2601,186 @@ fn unread_for(o: &Opened, s: &kc_store::query::SymbolRow, bus: Vec<kc_store::uns
             }
         }
     }
-    sites.extend(di_unread(conn, s)?);
+    sites.extend(di);
     sites.sort_by(|a, b| (&a.area, &a.file, a.line).cmp(&(&b.area, &b.file, b.line)));
     sites.dedup_by(|a, b| a.area == b.area && a.file == b.file && a.line == b.line && a.construct == b.construct);
     Ok(unsupported::incomplete(&sites, None))
 }
 
 /// The DI registrations the C# extractor met but couldn't read that may register the class or interface `s`: an
-/// assembly scan whose name filter lets it through (every type, without one), another construct naming it.
-fn di_unread(conn: &rusqlite::Connection, s: &kc_store::query::SymbolRow) -> Result<Vec<kc_store::unsupported::Site>> {
-    let mut sites = Vec::new();
+/// assembly scan whose name filter lets it through (every type, without one) and whose assembly, when its argument
+/// says (`typeof(T).Assembly`, `GetExecutingAssembly()`), is a project holding `s` (or, for an interface, naming it);
+/// another construct naming it.
+fn di_unread(o: &Opened, s: &kc_store::query::SymbolRow) -> Result<DiUnread> {
+    let conn = o.store.conn();
+    let mut out = DiUnread::default();
     if !(matches!(s.kind.as_str(), "class" | "protocol") && s.file.ends_with(".cs")) {
-        return Ok(sites);
+        return Ok(out);
     }
     let word = |c: &str| c.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == s.name);
+    let mut projects: Option<Vec<String>> = None;
     for u in kc_store::unsupported::in_area(conn, "di")? {
-        let applies = match u.construct.strip_prefix("assembly scan ") {
-            // A scan registers what its name filter lets through (`[*Service]`), every type without one.
+        // A scan registers what its name filter lets through (`[*Service]`), every type without one.
+        let (applies, mut named) = match u.construct.strip_prefix("assembly scan ") {
             Some(rest) => match rest.rsplit_once('[').map(|(_, f)| f.trim_end_matches(']')) {
-                Some(f) if s.kind == "class" => match (f.strip_prefix('*'), f.strip_suffix('*')) {
-                    (Some(end), _) => s.name.ends_with(end),
-                    (_, Some(start)) => s.name.starts_with(start),
-                    _ => s.name == f,
-                },
-                _ => true,
+                Some(f) if s.kind == "class" => (
+                    match (f.strip_prefix('*'), f.strip_suffix('*')) {
+                        (Some(end), _) => s.name.ends_with(end),
+                        (_, Some(start)) => s.name.starts_with(start),
+                        _ => s.name == f,
+                    },
+                    true,
+                ),
+                _ => (true, false),
             },
-            None => word(&u.construct),
+            None => (word(&u.construct), true),
         };
-        if applies {
-            sites.push(u);
+        if !applies {
+            continue;
+        }
+        if u.construct.starts_with("assembly scan ") {
+            let projects = match &projects {
+                Some(p) => p,
+                None => projects.insert(csharp_projects(conn)?),
+            };
+            if let Some(scanned) = scanned_projects(o, &u, projects)? {
+                if !scanned.iter().any(|p| project_reaches(conn, p, s, projects).unwrap_or(true)) {
+                    continue;
+                }
+                named = true;
+            }
+        }
+        if named { out.known.push(u) } else { out.unknown.push(u) }
+    }
+    Ok(out)
+}
+
+/// The DI constructs not read that may register a type (see [`di_unread`]).
+#[derive(Default)]
+struct DiUnread {
+    /// Those known to reach it: a scan whose name filter or assembly lets it through, a construct naming it.
+    known: Vec<kc_store::unsupported::Site>,
+    /// Scans that may: of assemblies the code doesn't say (a variable), without a name filter.
+    unknown: Vec<kc_store::unsupported::Site>,
+}
+
+/// Which DI constructs not read that may register a type bear on an answer about it: those known to reach it always;
+/// scans that only may (of an assembly the code doesn't say, without a name filter) when the answer lists the type's
+/// registrations or injections (`di_found`). Otherwise those go into its "DI registrations: none found" line (in
+/// `none`), not into an `unsupported` entry: nothing ties the type to the container, and an answer about its
+/// implementations or members doesn't depend on them. Returns the sites the answer's `unsupported` entries keep.
+fn di_aside(d: DiUnread, di_found: bool, none: &mut [String]) -> Vec<kc_store::unsupported::Site> {
+    let DiUnread { mut known, unknown: sites } = d;
+    if di_found || !known.is_empty() || sites.is_empty() {
+        known.extend(sites);
+        known.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+        return known;
+    }
+    if let Some(line) = none.iter_mut().find(|l| l.starts_with("DI registrations: none found")) {
+        let named: Vec<String> = sites.iter().take(3).map(|s| format!("{}:{}", s.file, s.line)).collect();
+        let more = sites.len().saturating_sub(3);
+        let what = if sites.len() == 1 {
+            "1 assembly scan not read (its assembly isn't named) may add one".to_string()
+        } else {
+            format!("{} assembly scans not read (their assemblies aren't named) may add one", sites.len())
+        };
+        line.push_str(&format!("; {what}: {}{}", named.join(", "), if more > 0 { format!(", {more} more") } else { String::new() }));
+    }
+    Vec::new()
+}
+
+/// The repo's C# project directories (each holding a `.csproj`; `""` for the repo root).
+fn csharp_projects(conn: &rusqlite::Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached("SELECT path FROM files WHERE path LIKE '%.csproj'")?;
+    let paths: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(paths.iter().map(|p| p.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string())).collect())
+}
+
+/// The project holding `file`: the deepest of `projects` it is under.
+fn project_of<'p>(file: &str, projects: &'p [String]) -> Option<&'p str> {
+    projects.iter().filter(|p| p.is_empty() || file.starts_with(&format!("{p}/"))).max_by_key(|p| p.len()).map(String::as_str)
+}
+
+/// The projects an assembly scan reads, when its argument says: `typeof(T).Assembly` (or `.GetTypeInfo().Assembly`)
+/// T's, `Assembly.GetExecutingAssembly()`, `GetType().Assembly` and `ThisAssembly` the scan's own. `None` when it
+/// doesn't (a variable, a list built elsewhere) or a type there isn't declared in the repo.
+fn scanned_projects(o: &Opened, u: &kc_store::unsupported::Site, projects: &[String]) -> Result<Option<Vec<String>>> {
+    let Ok(bytes) = std::fs::read(o.root.join(&u.file)) else { return Ok(None) };
+    let text = kc_extract::decode(&bytes);
+    // The site is the call chain's line, which may be past the scan's own: the last scan starting by it.
+    let first = u.line.saturating_sub(6) as usize;
+    let lines: Vec<&str> = text.lines().skip(first).take(u.line as usize - first + 5).collect();
+    let upto: usize = lines.iter().take(u.line as usize - first).map(|l| l.len() + 1).sum();
+    let call = lines.join("\n");
+    let Some(at) = call[..upto.min(call.len())].rfind("RegisterAssemblyTypes(") else { return Ok(None) };
+    let args = &call[at + "RegisterAssemblyTypes(".len()..];
+    let mut depth = 1;
+    let end = args
+        .char_indices()
+        .find(|&(_, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+        })
+        .map_or(args.len(), |(i, _)| i);
+    let args = &args[..end];
+    if args.trim().is_empty() {
+        return Ok(None);
+    }
+    // Each argument (split at top-level commas) must say its assembly.
+    let mut parts = Vec::new();
+    let (mut depth, mut from) = (0, 0);
+    for (i, c) in args.char_indices() {
+        match c {
+            '(' | '<' | '[' => depth += 1,
+            ')' | '>' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&args[from..i]);
+                from = i + 1;
+            }
+            _ => {}
         }
     }
-    Ok(sites)
+    parts.push(&args[from..]);
+    let mut out: Vec<String> = Vec::new();
+    for part in parts {
+        if part.contains("GetExecutingAssembly()") || part.contains("GetType()") || part.contains("ThisAssembly") {
+            let Some(p) = project_of(&u.file, projects) else { return Ok(None) };
+            out.push(p.to_string());
+            continue;
+        }
+        let Some(i) = part.find("typeof(") else { return Ok(None) };
+        let ty = part[i + "typeof(".len()..].split([')', '<']).next().unwrap_or("").trim();
+        let ty = ty.rsplit('.').next().unwrap_or(ty);
+        let found: Vec<String> = query::definitions(o.store.conn(), ty)?
+            .iter()
+            .filter(|d| d.file.ends_with(".cs") && d.name == ty && query::is_type_or_extension(&d.kind))
+            .filter_map(|d| project_of(&d.file, projects).map(str::to_string))
+            .collect();
+        if found.is_empty() {
+            return Ok(None);
+        }
+        out.extend(found);
+    }
+    Ok(Some(out))
+}
+
+/// Whether a scan of the project `p` may register `s`: a class declared in it; an interface one of whose
+/// implementations (directly or through another type) is declared in it.
+fn project_reaches(conn: &rusqlite::Connection, p: &str, s: &kc_store::query::SymbolRow, projects: &[String]) -> Result<bool> {
+    if s.kind != "protocol" {
+        return Ok(project_of(&s.file, projects) == Some(p));
+    }
+    let direct = query::direct_conformers(conn, &s.name)?;
+    let (indirect, n) = query::indirect_conformers(conn, &s.name, query::INDIRECT_READ)?;
+    if n >= query::INDIRECT_READ {
+        return Ok(true);
+    }
+    let files = direct.iter().filter(|c| c.kind != "protocol").map(|c| c.file.as_str()).chain(indirect.iter().filter(|c| c.kind != "protocol").map(|c| c.file.as_str()));
+    Ok(files.into_iter().any(|f| project_of(f, projects) == Some(p)))
 }
 
 /// Every message the selected repos publish or consume, outside tests, with the code on the other side across indexed
@@ -2761,7 +3035,10 @@ pub fn context_raised(
             tables.push(t);
             let (bus, mut unknown_publishes) = bus_for(&o, &ctx)?;
             unknown_publishes.extend(unplaced);
-            unread.extend(unread_for(&o, &ctx.symbol, unknown_publishes)?);
+            let di_found = ctx.di.as_ref().is_some_and(|d| !d.registrations.is_empty() || !d.registered_as.is_empty() || d.injection_sites > 0)
+                || !ctx.di_implementers.is_empty();
+            let di = di_aside(di_unread(&o, &ctx.symbol)?, di_found, &mut ctx.none_found);
+            unread.extend(unread_for(&o, &ctx.symbol, unknown_publishes, di)?);
             ansible.push(ansible_for(&o, &ctx)?);
             terraform.push(crate::tf::terraform_for(&o, &ctx.symbol)?);
             let s = &ctx.symbol;
@@ -4917,8 +5194,17 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             continue;
         }
         // C# used from Razor markup, which isn't read: dependents there aren't listed.
-        if ids.iter().any(|&id| trace::symbol(conn, id).ok().flatten().is_some_and(|s| s.file.ends_with(".cs"))) {
-            stale_rank.extend(razor_unread(&o, roots.len() > 1)?);
+        // Only when a Razor file names one of them (a constructor by its type's name).
+        let mut names: Vec<String> = Vec::new();
+        for s in ids.iter().filter_map(|&id| trace::symbol(conn, id).ok().flatten()).filter(|s| s.file.ends_with(".cs")) {
+            let name = if s.kind == "init" { s.container.as_deref().map_or(s.name.as_str(), |c| c.rsplit('.').next().unwrap_or(c)) } else { s.name.as_str() };
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+        if !names.is_empty() {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            stale_rank.extend(razor_unread(&o, roots.len() > 1, &names)?.0);
         }
         // The walk reads every edge through the symbol graph and its gate, as `path` and `flow` do.
         let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
@@ -9934,8 +10220,9 @@ public class Service\n{\n    private Repo _r;\n    public void Place()\n    {\n 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Razor files aren't read: a C# answer from a repo holding them says so, naming one, rather than passing its
-    /// references off as all of them. An answer about other code doesn't.
+    /// Razor files aren't read, but are checked as text: a C# answer from a repo holding them names the lines there that
+    /// name the symbol, rather than passing its references off as all of them; when none does, it says so (`checked`)
+    /// and stays complete. An answer about other code says nothing of them.
     #[test]
     fn a_csharp_answer_says_razor_files_were_not_read() {
         let cache = test_cache();
@@ -9944,8 +10231,11 @@ public class Service\n{\n    private Repo _r;\n    public void Place()\n    {\n 
             &base,
             "web",
             &[
-                ("src/Catalog.cs", "public class Catalog\n{\n    public int Count() => 1;\n}\npublic class Home\n{\n    public int Show(Catalog c) => c.Count();\n}\n"),
-                ("src/Pages/Index.razor", "@inject Catalog Catalog\n<p>@Catalog.Count()</p>\n"),
+                (
+                    "src/Catalog.cs",
+                    "public class Catalog\n{\n    public int Count() => 1;\n    public int Total() => 2;\n}\npublic class Home\n{\n    public int Show(Catalog c) => c.Count() + c.Total();\n}\n",
+                ),
+                ("src/Pages/Index.razor", "@inject Catalog Catalog\n<p>@Catalog.Count()</p>\n@* Total is shown elsewhere *@\n"),
                 ("src/Views/Home.cshtml", "<p>@Model.Count()</p>\n"),
                 ("src/app.ts", "export function count(): number { return 1; }\nexport function show(): number { return count(); }\n"),
             ],
@@ -9957,10 +10247,20 @@ public class Service\n{\n    private Repo _r;\n    public void Place()\n    {\n 
         assert_eq!(entry.reason, Reason::Unsupported);
         assert_eq!(
             entry.detail,
-            "2 Razor files (.razor, .cshtml) not read, such as src/Pages/Index.razor: uses of C# code in their markup and @code blocks are not listed"
+            "Count is named on 2 lines of Razor files (.razor, .cshtml), which KnowCode doesn't read: src/Pages/Index.razor:2, src/Views/Home.cshtml:1; uses there are not listed"
         );
+        assert!(r.env.get("checked").is_none(), "{}", r.env);
         let i = impact(&ImpactParams { symbol: Some("Catalog.Count".into()), depth: 1, limit: 20, ..Default::default() }, &scope).unwrap();
         assert!(razor(&i.env).is_some(), "{}", i.env);
+        // A name no Razor file names: said checked, and the answer complete. The check is text: a Razor comment naming
+        // one counts.
+        assert!(razor(&refs("Total", &[], 20, &scope).unwrap().env).is_some_and(|i| i.detail.contains("src/Pages/Index.razor:3")));
+        let r = refs("Show", &[], 20, &scope).unwrap();
+        assert!(razor(&r.env).is_none(), "{}", r.env);
+        assert_eq!(r.env["checked"], json!(["none of 2 Razor files (.razor, .cshtml), which KnowCode doesn't read, names Show"]), "{}", r.env);
+        assert_eq!(r.env["complete"], true, "{}", r.env);
+        let i = impact(&ImpactParams { symbol: Some("Home.Show".into()), depth: 1, limit: 20, ..Default::default() }, &scope).unwrap();
+        assert!(razor(&i.env).is_none(), "{}", i.env);
         // TypeScript: nothing to say about Razor.
         assert!(razor(&refs("count", &[], 20, &scope).unwrap().env).is_none());
         let _ = std::fs::remove_dir_all(&base);

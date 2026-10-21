@@ -864,11 +864,16 @@ const JS_LIBRARIES: &[&str] = &[
 const JS_VENDOR_DIRS: &[&str] =
     &["dist", "bundles", "plugins", "oldplugins", "external", "third-party", "thirdparty", "vendors", "bower_components", "jspm_packages", "webjars", "i18n"];
 
+/// Of [`JS_VENDOR_DIRS`], those an app's own sources also use (`src/plugins/player/plugin.js`): vendored only outside
+/// a `src` directory, or under a web root within it (`src/Admin/wwwroot/plugins/`).
+const JS_VENDOR_DIRS_OUTSIDE_SRC: &[&str] = &["plugins", "oldplugins"];
+
 /// A JavaScript path that is built or vendored rather than written: minified (`.min.js`), bundled (`.bundle.js`,
 /// `*-bundle.js`, `.chunk.js`), a library's unminified build (`.src.js`) or a known library by name
 /// ([`JS_LIBRARIES`]); or under a build-output or vendored directory ([`JS_VENDOR_DIRS`]), a versioned one
 /// (`jquery-ui-1.8.2/`, `phantomjs.exe.1.8.1/`), one named for a library, or `lib`/`libs` under a web root (`wwwroot`,
-/// `js`, `scripts`, `static`, `assets`, `content`, `public`). `node_modules` and `vendor` are never indexed at all.
+/// `js`, `scripts`, `static`, `assets`, `content`, `public`). A `plugins` directory under `src` is the app's own code.
+/// `node_modules` and `vendor` are never indexed at all.
 fn is_built_js(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let parts: Vec<&str> = lower.split('/').collect();
@@ -889,9 +894,12 @@ fn is_built_js(path: &str) -> bool {
             && name.bytes().any(|b| b.is_ascii_alphabetic())
             && d[version.len()..].starts_with(|c: char| c.is_ascii_digit())
     };
-    dirs.iter().any(|d| JS_VENDOR_DIRS.contains(d) || versioned(d) || JS_LIBRARIES.contains(&first_word(d).as_str()))
+    const WEB_ROOTS: &[&str] = &["wwwroot", "js", "scripts", "static", "assets", "content", "public"];
+    let in_src = |i: usize| dirs[..i].contains(&"src") && !dirs[..i].iter().any(|d| WEB_ROOTS.contains(d));
+    let vendor_dir = |i: usize, d: &str| JS_VENDOR_DIRS.contains(&d) && !(JS_VENDOR_DIRS_OUTSIDE_SRC.contains(&d) && in_src(i));
+    dirs.iter().enumerate().any(|(i, d)| vendor_dir(i, d) || versioned(d) || JS_LIBRARIES.contains(&first_word(d).as_str()))
         || dirs.windows(2).any(|w| {
-            matches!(w[1], "lib" | "libs") && matches!(w[0], "wwwroot" | "js" | "scripts" | "static" | "assets" | "content" | "public")
+            matches!(w[1], "lib" | "libs") && WEB_ROOTS.contains(&w[0])
         })
 }
 
@@ -978,6 +986,7 @@ mod tests {
             "editor/ace-editor-122/mode-sql.js",
             "js/jquery-ui-1.8.2/ui.core.js",
             "web/plugins/slider.js",
+            "src/Admin/wwwroot/plugins/slider.js",
             "static/js/lib/util.js",
             "js/qForms_v2/cal.js",
         ] {
@@ -990,7 +999,7 @@ mod tests {
         assert!(extract(Lang::JavaScript, &packed).symbols.is_empty());
         let banner = "/*! Chosen v1.2 | (c) 2011 Harvest | Licensed under the MIT license */\nfunction chosen() {}\n";
         assert!(extract(Lang::JavaScript, banner).symbols.is_empty());
-        for p in ["lib/index.js", "api/v2/routes.js", "migrations/2024-09/up.js", "src/es2015/a.js"] {
+        for p in ["lib/index.js", "api/v2/routes.js", "migrations/2024-09/up.js", "src/es2015/a.js", "src/plugins/htmlVideoPlayer/plugin.js"] {
             assert_eq!(Lang::from_path(p), Some(Lang::JavaScript), "{p}");
         }
     }

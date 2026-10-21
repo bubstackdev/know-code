@@ -35,6 +35,15 @@ include or Angular lazy route in a form not read, an HTTP endpoint registration 
 as a `MapGet` template that isn't a constant or `MapControllerRoute`). The entry names them with `file:line` and says what the answer
 may lack because of them; [languages.md](languages.md#constructs-recognised-but-not-read) lists them all.
 
+Files KnowCode doesn't read as code (Razor markup, vendored or built JavaScript) are checked as text before an
+answer says uses there may be missing. `refs` names the lines there that name the symbol, as an `unsupported` entry;
+when no Razor file names a C# symbol, `checked` says so (`"none of 59 Razor files (.razor, .cshtml), which KnowCode
+doesn't read, names IPushRegistrationService"`) and the answer stays `complete`. `find`'s `declared` speaks for the
+whole workspace, whichever repo was asked: where the name is declared, and how many references name it in every repo;
+when files not read as code name it too, the count is "at least" and those lines follow. An assembly scan of an
+assembly the code doesn't name is an `unsupported` entry only for a type the container knows (registered or
+injected); for any other type it is said in the "DI registrations: none found" line of `none_found`.
+
 The text rendering ends with one line per entry, for example
 `incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}`.
 
