@@ -4,6 +4,7 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.2.0 (unreleased)
 
+- Lower memory in search and indexing, with answers unchanged. Trigram lists are intersected one at a time, in place, starting from the smallest; indexing workers allocate the trigram set only for files they index; a file read reserves its own size instead of growing twice. Path globs can no longer take exponential time: a bounded matcher takes over after a fixed amount of backtracking. The revision and manifest-version caches keep at most 1,024 entries each, so a long-running server no longer grows with every checkout state it has seen.
 - Leaner MCP answers and tool list. A clean, current answer no longer lists its repos: `repos` and `provenance` are
   left out unless a repo is dirty or was answered from its last sync, or something is `stale`, `failed` or
   `missing_repo`. `complete` is said only when it is `false` (no `incomplete` means complete), and false flags, nulls,

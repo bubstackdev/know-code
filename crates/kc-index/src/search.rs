@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
 use kc_store::Store;
-use kc_store::content::{CFile, FileSymbol, INDEXED, PENDING, intersect, union};
+use kc_store::content::{CFile, FileSymbol, INDEXED, PENDING, intersect_in_place, union};
 use regex::bytes::{Regex, RegexBuilder};
 use serde::Serialize;
 
@@ -201,28 +201,98 @@ pub fn path_glob(pattern: &str, path: &str) -> bool {
 }
 
 fn glob_match(p: &[u8], s: &[u8]) -> bool {
-    match p.first() {
-        None => s.is_empty(),
-        Some(b'*') if p.get(1) == Some(&b'*') => {
-            // `**/` also matches nothing.
-            let rest = if p.get(2) == Some(&b'/') { &p[3..] } else { &p[2..] };
-            (0..=s.len()).any(|i| glob_match(rest, &s[i..])) || (p.get(2) == Some(&b'/') && glob_match(&p[2..], s))
-        }
-        Some(b'*') => {
-            let rest = &p[1..];
-            for i in 0..=s.len() {
-                if glob_match(rest, &s[i..]) {
-                    return true;
+    // Keep ordinary globs allocation-free; abandon backtracking after a fixed amount of work.
+    let mut budget = 64;
+    glob_match_fast(p, s, &mut budget).unwrap_or_else(|| glob_match_bounded(p, s))
+}
+
+fn glob_match_fast(mut p: &[u8], mut s: &[u8], budget: &mut usize) -> Option<bool> {
+    *budget = budget.checked_sub(1)?;
+    loop {
+        match p.first() {
+            None => return Some(s.is_empty()),
+            Some(b'*') => {
+                let crosses_slash = p.get(1) == Some(&b'*');
+                let skip = if crosses_slash { if p.get(2) == Some(&b'/') { 3 } else { 2 } } else { 1 };
+                let rest = &p[skip..];
+                if rest.is_empty() {
+                    return Some(crosses_slash || !s.contains(&b'/'));
                 }
-                if i < s.len() && s[i] == b'/' {
-                    break;
+                for i in 0..=s.len() {
+                    if glob_match_fast(rest, &s[i..], budget)? {
+                        return Some(true);
+                    }
+                    if !crosses_slash && s.get(i) == Some(&b'/') {
+                        break;
+                    }
                 }
+                return Some(false);
             }
-            false
+            Some(&b) => {
+                if s.first().is_none_or(|&c| if b == b'?' { c == b'/' } else { c != b }) {
+                    return Some(false);
+                }
+                p = &p[1..];
+                s = &s[1..];
+            }
         }
-        Some(b'?') => !s.is_empty() && s[0] != b'/' && glob_match(&p[1..], &s[1..]),
-        Some(&c) => !s.is_empty() && s[0] == c && glob_match(&p[1..], &s[1..]),
     }
+}
+
+fn glob_match_bounded(p: &[u8], s: &[u8]) -> bool {
+    // Strip the literal prefix before allocating the suffix-matching rows. Most paths fail here.
+    let prefix = p.iter().position(|b| matches!(b, b'*' | b'?')).unwrap_or(p.len());
+    if !s.starts_with(&p[..prefix]) {
+        return false;
+    }
+    let (mut p, mut s) = (&p[prefix..], &s[prefix..]);
+    if p.is_empty() {
+        return s.is_empty();
+    }
+    // Tokenize forwards so runs such as `***/` have the same grouping as the recursive matcher.
+    let mut tokens = Vec::new();
+    while let Some(&b) = p.first() {
+        if p.starts_with(b"**") {
+            tokens.push((b'*', true));
+            // Historically `**/` permits any prefix, including one with no slash. The alternative
+            // that matches an initial slash is already included in that set of prefixes.
+            p = &p[if p.get(2) == Some(&b'/') { 3 } else { 2 }..];
+        } else {
+            tokens.push((b, false));
+            p = &p[1..];
+        }
+    }
+    // Check the literal suffix once. Common globs such as `*.rs` then need no matching rows.
+    while let Some(&(b, _)) = tokens.last() {
+        if matches!(b, b'*' | b'?') {
+            break;
+        }
+        if s.last() != Some(&b) {
+            return false;
+        }
+        s = &s[..s.len() - 1];
+        tokens.pop();
+    }
+    if let [(b'*', crosses_slash)] = tokens.as_slice() {
+        return *crosses_slash || !s.contains(&b'/');
+    }
+    // Each row says which suffixes of s match the remaining tokens. O(pattern * path) work,
+    // O(pattern + path) scratch, with no recursive backtracking or stack growth.
+    let mut next = vec![false; s.len() + 1];
+    let mut row = vec![false; s.len() + 1];
+    next[s.len()] = true;
+    for (b, crosses_slash) in tokens.into_iter().rev() {
+        row[s.len()] = b == b'*' && next[s.len()];
+        for i in (0..s.len()).rev() {
+            row[i] = match b {
+                b'*' => next[i] || (crosses_slash || s[i] != b'/') && row[i + 1],
+                b'?' => s[i] != b'/' && next[i + 1],
+                _ => s[i] == b && next[i + 1],
+            };
+        }
+        std::mem::swap(&mut row, &mut next);
+    }
+    next[0]
 }
 
 /// The content language of a path, from its extension or name.
@@ -360,30 +430,16 @@ pub fn candidates(store: &Store, files: Vec<CFile>, m: &Matcher, repo: usize) ->
 pub(crate) fn eval(store: &Store, plan: &Plan) -> Result<Option<Vec<u32>>> {
     Ok(match plan {
         Plan::All => None,
-        Plan::Grams(gs) => {
-            let mut lists = Vec::with_capacity(gs.len());
-            for &g in gs {
-                match store.posting(g)? {
-                    Some(l) => lists.push(l),
-                    None => return Ok(Some(Vec::new())),
-                }
-            }
-            lists.sort_by_key(Vec::len);
-            let mut acc = lists.first().cloned().unwrap_or_default();
-            for l in &lists[1..] {
-                if acc.is_empty() {
-                    break;
-                }
-                acc = intersect(&acc, l);
-            }
-            Some(acc)
-        }
+        Plan::Grams(gs) => Some(store.intersect_postings(gs)?),
         Plan::And(ps) => {
             let mut acc: Option<Vec<u32>> = None;
             for p in ps {
                 if let Some(ids) = eval(store, p)? {
                     acc = Some(match acc {
-                        Some(a) => intersect(&a, &ids),
+                        Some(mut a) => {
+                            intersect_in_place(&mut a, &ids);
+                            a
+                        }
                         None => ids,
                     });
                 }
@@ -594,7 +650,8 @@ pub fn read_into(path: &Path, buf: &mut Vec<u8>) -> std::io::Result<()> {
     buf.clear();
     let mut f = std::fs::File::open(path)?;
     let len = f.metadata()?.len() as usize;
-    buf.reserve(len.saturating_sub(buf.capacity()) + 1);
+    // reserve() is relative to len (zero after clear), rather than the existing capacity.
+    buf.reserve(len.saturating_add(1));
     f.read_to_end(buf)?;
     Ok(())
 }
@@ -996,6 +1053,68 @@ mod tests {
         assert!(path_glob("*Tests*", "Tests/ATests.swift"));
         assert!(!path_glob("*.py", "a.pyc"));
         assert!(path_glob("crates/*/src/*.rs", "crates/kc-index/src/lib.rs"));
+    }
+
+    /// The bounded matcher must preserve even unusual wildcard runs and slash behavior.
+    #[test]
+    fn invariant_glob_matches_recursive_definition() {
+        fn reference(p: &[u8], s: &[u8]) -> bool {
+            match p.first() {
+                None => s.is_empty(),
+                Some(b'*') if p.get(1) == Some(&b'*') => {
+                    // `**/` also matches nothing.
+                    let rest = if p.get(2) == Some(&b'/') { &p[3..] } else { &p[2..] };
+                    (0..=s.len()).any(|i| reference(rest, &s[i..])) || (p.get(2) == Some(&b'/') && reference(&p[2..], s))
+                }
+                Some(b'*') => {
+                    let rest = &p[1..];
+                    for i in 0..=s.len() {
+                        if reference(rest, &s[i..]) {
+                            return true;
+                        }
+                        if i < s.len() && s[i] == b'/' {
+                            break;
+                        }
+                    }
+                    false
+                }
+                Some(b'?') => !s.is_empty() && s[0] != b'/' && reference(&p[1..], &s[1..]),
+                Some(&c) => !s.is_empty() && s[0] == c && reference(&p[1..], &s[1..]),
+            }
+        }
+
+        fn words(alphabet: &[u8], max: usize) -> Vec<Vec<u8>> {
+            let mut all = vec![Vec::new()];
+            let mut level = vec![Vec::new()];
+            for _ in 0..max {
+                let mut next = Vec::new();
+                for word in &level {
+                    for &b in alphabet {
+                        let mut w = word.clone();
+                        w.push(b);
+                        next.push(w);
+                    }
+                }
+                all.extend(next.iter().cloned());
+                level = next;
+            }
+            all
+        }
+        let patterns = words(b"a/*?", 5);
+        let paths = words(b"ab/", 5);
+        for pattern in &patterns {
+            for path in &paths {
+                assert_eq!(glob_match(pattern, path), reference(pattern, path), "pattern {pattern:?}, path {path:?}");
+                assert_eq!(glob_match_bounded(pattern, path), reference(pattern, path), "pattern {pattern:?}, path {path:?}");
+            }
+        }
+        for pattern in ["**/é?", "*é*", "?", "**/*/", "***a"] {
+            for path in ["é", "a/éa", "é/", "日本語", "a/b/"] {
+                assert_eq!(glob_match(pattern.as_bytes(), path.as_bytes()), reference(pattern.as_bytes(), path.as_bytes()));
+            }
+        }
+        // Previously exponential rejection; its running time should be bounded by pattern * path length.
+        assert!(!glob_match(b"*a*a*a*a*a*a*a*a*b*", &[b'a'; 1024]));
     }
 
     #[test]

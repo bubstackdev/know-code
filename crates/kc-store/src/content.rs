@@ -51,12 +51,39 @@ impl Store {
 
     /// The file ids listed under one trigram, ascending. `None` when no file has it.
     pub fn posting(&self, gram: u32) -> Result<Option<Vec<u32>>> {
-        let blob: Option<Vec<u8>> = self
+        Ok(self
             .conn
             .prepare_cached("SELECT posts FROM grams WHERE gram = ?1")?
-            .query_row([gram], |r| r.get(0))
-            .optional()?;
-        Ok(blob.map(|b| decode_posts(&b)))
+            .query_row([gram], |r| Ok(decode_posts(r.get_ref(0)?.as_blob()?)))
+            .optional()?)
+    }
+
+    /// Intersection of trigram lists, ascending. Only an accumulator and one decoded list are held at once.
+    pub fn intersect_postings(&self, grams: &[u32]) -> Result<Vec<u32>> {
+        let mut sizes = Vec::with_capacity(grams.len());
+        {
+            // length(blob) reads its size without loading the blob. Encoded length is a cheap approximation
+            // of list cardinality: start with a selective list without decoding every list up front.
+            let mut stmt = self.conn.prepare_cached("SELECT length(posts) FROM grams WHERE gram = ?1")?;
+            for &gram in grams {
+                let Some(size) = stmt.query_row([gram], |r| r.get::<_, i64>(0)).optional()? else {
+                    return Ok(Vec::new());
+                };
+                sizes.push((size, gram));
+            }
+        }
+        sizes.sort_unstable();
+        let mut lists = sizes.into_iter();
+        let Some((_, first)) = lists.next() else { return Ok(Vec::new()) };
+        let mut acc = self.posting(first)?.unwrap_or_default();
+        for (_, gram) in lists {
+            if acc.is_empty() {
+                break;
+            }
+            let ids = self.posting(gram)?.unwrap_or_default();
+            intersect_in_place(&mut acc, &ids);
+        }
+        Ok(acc)
     }
 
     /// Content coverage for `status`: searchable files, pending files, skipped files by reason, trigram count.
@@ -247,6 +274,17 @@ pub fn intersect(a: &[u32], b: &[u32]) -> Vec<u32> {
     out
 }
 
+/// Intersects two ascending id lists while reusing the first list's allocation.
+pub fn intersect_in_place(a: &mut Vec<u32>, b: &[u32]) {
+    let mut j = 0;
+    a.retain(|id| {
+        while j < b.len() && b[j] < *id {
+            j += 1;
+        }
+        b.get(j) == Some(id)
+    });
+}
+
 /// Ascending ids as varint deltas.
 pub fn encode_posts(ids: &[u32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(ids.len() + 4);
@@ -287,6 +325,36 @@ pub fn decode_posts(bytes: &[u8]) -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invariant_in_place_intersection_preserves_sorted_ids() {
+        let lists: Vec<Vec<u32>> = (0..256).map(|mask| (0..8).filter(|i| mask & (1 << i) != 0).collect()).collect();
+        for a in &lists {
+            for b in &lists {
+                let expected: Vec<u32> = a.iter().copied().filter(|id| b.contains(id)).collect();
+                let mut actual = a.clone();
+                intersect_in_place(&mut actual, b);
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn streamed_postings_preserve_intersections() {
+        let mut store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let batch = store.batch().unwrap();
+        // One list has large deltas: byte length and cardinality rank the lists differently.
+        let pairs = [(1u64 << 32) | 1, (1 << 32) | 2, (1 << 32) | 3, (1 << 32) | 300_000,
+                     (2 << 32) | 1, (2 << 32) | 300_000, (2 << 32) | 4_000_000_000,
+                     (3 << 32) | 2, (3 << 32) | 300_000];
+        batch.replace_grams(pairs).unwrap();
+        batch.commit().unwrap();
+        for grams in [vec![], vec![1], vec![2], vec![3], vec![1, 2], vec![2, 1], vec![1, 2, 3], vec![3, 2, 1], vec![1, 1], vec![1, 9]] {
+            let expected = grams.iter().map(|&g| store.posting(g).unwrap().unwrap_or_default())
+                .reduce(|a, b| intersect(&a, &b)).unwrap_or_default();
+            assert_eq!(store.intersect_postings(&grams).unwrap(), expected, "{grams:?}");
+        }
+    }
 
     #[test]
     fn posts_round_trip() {

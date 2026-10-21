@@ -7,7 +7,7 @@
 //! declares. Anything that can't be checked (no checkout, a revision the checkout doesn't have, a version computed at
 //! build time) counts as not matching: the link then says `revision_unverified`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -16,12 +16,40 @@ use crate::git::{GitDir, resolve_commit};
 /// A revision resolved in a checkout: the checkout, the revision, and HEAD when it was resolved.
 type Checked = (PathBuf, String, String);
 
+/// Revision checks are inexpensive to repeat, so old checkout states must not accumulate for the server's lifetime.
+const CACHE_ENTRIES: usize = 1024;
+
+#[derive(Default)]
+struct Cache<K> {
+    values: HashMap<K, Option<String>>,
+    order: VecDeque<K>,
+}
+
+impl<K: std::hash::Hash + Eq + Clone> Cache<K> {
+    fn get(&self, key: &K) -> Option<&Option<String>> {
+        self.values.get(key)
+    }
+
+    fn insert(&mut self, key: K, value: Option<String>) {
+        // Two callers may finish the same lookup concurrently; replacing it must not consume another slot.
+        if let Some(old) = self.values.get_mut(&key) {
+            *old = value;
+            return;
+        }
+        if self.values.len() == CACHE_ENTRIES && let Some(oldest) = self.order.pop_front() {
+            self.values.remove(&oldest);
+        }
+        self.order.push_back(key.clone());
+        self.values.insert(key, value);
+    }
+}
+
 /// Whether the git revision `rev` (a branch, a tag, a sha) is the commit the checkout at `root` has checked out:
 /// `None` when that can't be told (no checkout, no such revision there).
 pub fn at_head(root: &Path, rev: &str) -> Option<bool> {
     let head = GitDir::find(root)?.head_commit()?;
     // Cached per checkout, revision and HEAD: one answer resolves the same `ref` for every module call using it.
-    static SEEN: OnceLock<Mutex<HashMap<Checked, Option<String>>>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<Cache<Checked>>> = OnceLock::new();
     let key = (root.to_path_buf(), rev.to_string(), head.clone());
     let cache = SEEN.get_or_init(Default::default);
     if let Some(found) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&key) {
@@ -153,7 +181,7 @@ impl Version {
 pub fn declared_version(root: &Path, manifest: &str) -> Option<String> {
     let path = root.join(manifest);
     // Cached per file as it is (size and mtime): one answer checks a package once for all its dependents.
-    static SEEN: OnceLock<Mutex<HashMap<Stamped, Option<String>>>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<Cache<Stamped>>> = OnceLock::new();
     let meta = std::fs::metadata(&path).ok()?;
     let key = (path.clone(), meta.len(), crate::git::mtime_ns(&meta));
     let cache = SEEN.get_or_init(Default::default);
@@ -233,6 +261,30 @@ pub fn assumptions_into(edges: &[kc_store::manifests::RepoEdge], to: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revision_cache_bounds_old_states_and_replaces_duplicate_lookups() {
+        let mut cache = Cache::default();
+        cache.insert(0, None);
+        cache.insert(0, Some("resolved".to_string()));
+        assert_eq!(cache.order.len(), 1);
+        assert_eq!(cache.get(&0), Some(&Some("resolved".to_string())));
+        for i in 1..CACHE_ENTRIES {
+            cache.insert(i, Some(i.to_string()));
+        }
+        assert!(cache.get(&0).is_some());
+        for i in CACHE_ENTRIES..CACHE_ENTRIES * 3 {
+            cache.insert(i, None);
+            assert_eq!(cache.values.len(), CACHE_ENTRIES);
+            assert_eq!(cache.order.len(), CACHE_ENTRIES);
+        }
+        assert!(cache.get(&0).is_none());
+        assert_eq!(cache.get(&(CACHE_ENTRIES * 3 - 1)), Some(&None));
+        // An evicted lookup can be computed and cached again, including a negative result.
+        cache.insert(0, None);
+        assert_eq!(cache.get(&0), Some(&None));
+        assert_eq!(cache.values.len(), CACHE_ENTRIES);
+    }
 
     #[test]
     fn npm_and_nuget_requirements() {
