@@ -4,6 +4,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.2.0 (unreleased)
 
+- `serve` advertises the `core` tools by default: `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`,
+  `kc_search`, `kc_more` and `kc_help`. A client that doesn't defer tools loads every advertised schema and the
+  server's instructions on every turn; for the default that is now 3,462 characters, down from 7,186 (all 25 tools).
+  `serve --tools all` (or `KNOWCODE_TOOLS=all`) still advertises every tool, and a comma list adds tools by name
+  (`core,kc_trace`). `kc_trace` left the core set (kc_impact answers callers by hop). The core tools are the ones
+  marked always loaded (`anthropic/alwaysLoad`), so under `all` Claude Code loads the same eight up front and defers
+  the rest. The Claude Code plugin's server sets `KNOWCODE_TOOLS=all` unless the user set it, since its skills use
+  the other tools. The server instructions map questions to the core tools again (where X is defined, every use of X, what X
+  is, where a concept lives, text, what calls X or breaks if it changes), leading with "use it instead of grep and
+  reading files", and say every answer states `complete`.
+- MCP answers say `complete: true` again when they are complete (0.2.0's leaner answers said it only when false). A
+  text tree ends its first line with `; complete`.
 - Lower memory in search and indexing, with answers unchanged. Trigram lists are intersected one at a time, in place, starting from the smallest; indexing workers allocate the trigram set only for files they index; a file read reserves its own size instead of growing twice. Path globs can no longer take exponential time: a bounded matcher takes over after a fixed amount of backtracking. The revision and manifest-version caches keep at most 1,024 entries each, so a long-running server no longer grows with every checkout state it has seen.
 - Leaner MCP answers and tool list. A clean, current answer no longer lists its repos: `repos` and `provenance` are
   left out unless a repo is dirty or was answered from its last sync, or something is `stale`, `failed` or

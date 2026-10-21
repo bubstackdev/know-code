@@ -623,7 +623,7 @@ enum Cmd {
         /// Default repo for tools called without one (default: the current directory's repo).
         #[arg(long = "repo", short = 'r')]
         repos: Vec<PathBuf>,
-        /// The tools to advertise: `all` (default), `core`, and tool names, comma-separated (`core,kc_tests`).
+        /// The tools to advertise: `core` (default), `all`, and tool names, comma-separated (`core,kc_tests`).
         /// `KNOWCODE_TOOLS` does the same.
         #[arg(long)]
         tools: Option<String>,
@@ -1192,7 +1192,7 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Serve { repos, tools } => {
-            let tools = tools.or_else(|| std::env::var("KNOWCODE_TOOLS").ok()).unwrap_or_else(|| "all".into());
+            let tools = tools.or_else(|| std::env::var("KNOWCODE_TOOLS").ok()).unwrap_or_else(|| "core".into());
             // A plugin bundle an older version wrote is refreshed beside the server, never in its way.
             let refresh = std::thread::spawn(setup::refresh_claude_plugin);
             let served = mcp::serve(ops::Scope { repos, no_sync: false }, &tools);

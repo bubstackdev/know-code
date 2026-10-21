@@ -489,7 +489,7 @@ struct Mcp {
 
 impl Mcp {
     fn start(env: &Env, cwd: &Path) -> Mcp {
-        let mut child = env.cmd(cwd, &["serve"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let mut child = env.cmd(cwd, &["serve", "--tools", "all"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
         let out = BufReader::new(child.stdout.take().unwrap());
         let mut m = Mcp { child, out, id: 0 };
         m.call("initialize", json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }));

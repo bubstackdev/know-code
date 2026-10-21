@@ -13,7 +13,7 @@
 //!
 //! What tools are advertised costs every agent context, so each is described in a sentence or two, with a line per
 //! parameter (held to a budget by a test); the details are in `kc_help` topics (see [`crate::help`]). A profile
-//! (`KNOWCODE_TOOLS`, see [`profile`]) advertises fewer tools.
+//! (`KNOWCODE_TOOLS`, see [`profile`]) picks the tools advertised: [`CORE`] by default, every tool with `all`.
 
 use std::path::{Path, PathBuf};
 
@@ -581,12 +581,17 @@ pub struct KnowcodeServer {
     hidden: std::sync::Arc<Vec<String>>,
 }
 
-/// The tools of the `core` profile: finding, reading and following code, and the help that names the rest.
-pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_trace", "kc_impact", "kc_search", "kc_more", "kc_help"];
+/// The tools of the `core` profile, the default: the ones that answer the first questions about code (where X is
+/// defined, every use of X, what X is, where a concept lives, text, what calls X or breaks if X changes), paging, and
+/// the help that names the rest. A client that loads every tool's schema on every turn carries these only; `all`
+/// advertises the rest too. kc_trace is left out: kc_impact answers callers by hop and kc_context a symbol's callers
+/// and callees, and its schema is one of the largest.
+pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_impact", "kc_search", "kc_more", "kc_help"];
 
-/// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the ones
-/// that answer the first question about code, so an agent sees them before it reaches for grep (about 0.8k tokens; see eval/schema-cost.md).
-pub const ALWAYS_LOADED: &[&str] = &["kc_context", "kc_refs", "kc_impact", "kc_locate"];
+/// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the
+/// core set, so an agent sees the same tools whether its client defers the rest (`all`) or the server leaves them out
+/// (`core`).
+pub const ALWAYS_LOADED: &[&str] = CORE;
 
 /// The parameters each tool's schema advertises, with the line each carries there: the ones most calls need. Every
 /// other parameter (`repo` and `max_chars`, which the instructions state once for every tool, and the rarer ones such
@@ -913,7 +918,14 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
     })
     .await?;
     let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS);
-    Ok(cap_text(&format!("{}{}", header(&env), notes_first(&lean_sites(&mcp_names(&text)))), max))
+    let body = notes_first(&lean_sites(&mcp_names(&text)));
+    // Complete when the envelope says so and the tree says nothing was cut (its cut notes come first).
+    let complete = env["complete"].as_bool() != Some(false) && crate::contract::incomplete_of(&env).is_empty() && !body.starts_with('…');
+    let whole = format!("{}{body}", header(&env, complete));
+    if whole.len() <= max {
+        return Ok(whole);
+    }
+    Ok(cap_text(&format!("{}{body}", header(&env, false)), max))
 }
 
 /// A tree line's use site said once: `at <file>:<line>` after a symbol in that same file becomes `at line <line>`,
@@ -979,8 +991,9 @@ fn depth_note(depth: u8, max: u8, deeper: bool) -> Option<String> {
 
 /// `repo orders-api @ 1a2b3c4 (dirty)`: what the text answers for. A clean, current answer over several repos names
 /// them only, and not the repos it consulted besides (as the compact JSON leaves out `repos` and `provenance`; see
-/// [`crate::compact::clean`]).
-fn header(env: &Value) -> String {
+/// [`crate::compact::clean`]). A `complete` answer says so at the end of that line (`repo shop @ 1a2b3c4; complete`); a partial one
+/// says why in the lines that follow.
+fn header(env: &Value, complete: bool) -> String {
     let clean = crate::compact::clean(env);
     let repo = |v: &Value, commit: bool| {
         let path = v["repo"].as_str().unwrap_or("");
@@ -989,9 +1002,10 @@ fn header(env: &Value) -> String {
         let dirty = if v["dirty"].as_bool() == Some(true) { " (dirty)" } else { "" };
         format!("{name}{commit}{dirty}")
     };
+    let done = if complete { "; complete" } else { "" };
     let head = match env["repos"].as_array() {
-        Some(list) => format!("repos {}\n", list.iter().map(|r| repo(r, !clean)).collect::<Vec<_>>().join(", ")),
-        None => format!("repo {}\n", repo(env, true)),
+        Some(list) => format!("repos {}{done}\n", list.iter().map(|r| repo(r, !clean)).collect::<Vec<_>>().join(", ")),
+        None => format!("repo {}{done}\n", repo(env, true)),
     };
     // Why the answer is incomplete (files that could not be read, lists cut), and the other repos it consulted.
     let notes = crate::ops::freshness_notes(env).into_iter().filter(|n| !(clean && n.starts_with("also consulted: ")));
@@ -1100,8 +1114,10 @@ fn batch_answer(results: &[String], left: &[String], max: usize) -> String {
                 .with_hint("call again with the inputs in left_out, or pass a larger max_chars"),
         );
     }
-    // As in every compact answer, a complete one doesn't say so.
-    if !incomplete.is_empty() {
+    // As every compact answer, the batch says whether it is complete.
+    if incomplete.is_empty() {
+        out.push_str(",\"complete\":true");
+    } else {
         out.push_str(&format!(",\"complete\":false,\"incomplete\":{}", serde_json::to_string(&incomplete).unwrap_or_default()));
     }
     if !left.is_empty() {
@@ -1549,7 +1565,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Every reference to a name, resolved, across repos. What calls X or breaks if X changes: kc_impact (or kc_trace depth 2) on X's file:line.")]
+    #[tool(description = "Every reference to a name, resolved, across repos. What calls X or breaks if X changes: kc_impact on X's file:line.")]
     async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
@@ -2074,14 +2090,14 @@ impl ServerHandler for KnowcodeServer {
 /// Where the help topics are served as resources.
 const HELP_URI: &str = "knowcode://help/";
 
-/// The server's instructions: what KnowCode is for and how its answers read, short; which tool answers what is in the
-/// tools' descriptions, the rest in `kc_help`. The one routing said here is the one agents miss: callers and impact.
+/// The server's instructions: what KnowCode is for, which core tool answers which question (a short map; each tool's
+/// description says more), and how its answers read; the rest is in `kc_help`.
 const INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use it instead \
-of grep and reading files. What calls X, or what breaks if X changes: kc_impact (or kc_trace, depth 2) with X as \
-file:line or `Type.member`. Rows have file:line; edges a confidence, ambiguous ones listed, never guessed. A partial \
-answer says `complete: false` and why in `incomplete`; a `cursor` continues a cut list (kc_more). Every tool takes \
-`repo` (path or indexed name) and `max_chars` (default 8000, max 40000). `withheld`: a privacy file blocks it; don't \
-read it another way. kc_help {topic} documents every tool, parameter and concept.";
+of grep and reading files: where X is defined kc_find; every use of X kc_refs; what X is kc_context; where a concept or \
+bug lives kc_locate; text kc_search; what calls X or breaks if X changes kc_impact, X as file:line or `Type.member`. \
+Rows have file:line; edges a confidence, ambiguous ones listed. Every answer says `complete`; if false, `incomplete` \
+says why; a `cursor` continues (kc_more). Tools take `repo` and `max_chars` (default 8000). `withheld`: a privacy file \
+blocks it; don't read it another way. kc_help {topic} documents every parameter, concept and tool, listed or not.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2107,6 +2123,10 @@ mod tests {
         KnowcodeServer::new(Scope { repos: Vec::new(), no_sync: false }, tools).unwrap()
     }
 
+    /// Bytes the default (`core`) tool list and the instructions may take together: 3,707 at b0a3564 with kc_trace in
+    /// core and the shorter instructions.
+    const CORE_BUDGET: usize = 3_500;
+
     /// What tool discovery costs an agent's context, held to a budget so it can't creep back: the advertised schema
     /// (every tool, as `tools/list` sends it), each description, each parameter's line, and the instructions.
     #[test]
@@ -2127,18 +2147,22 @@ mod tests {
             }
         }
         assert!(INSTRUCTIONS.len() <= 700, "instructions {} bytes", INSTRUCTIONS.len());
-        // Said once: the instructions don't repeat the descriptions' routing (which tool answers what).
-        for t in tools.iter().filter(|t| !matches!(t.name.as_ref(), "kc_impact" | "kc_trace" | "kc_more" | "kc_help")) {
-            assert!(!INSTRUCTIONS.contains(t.name.as_ref()), "the instructions route to {}: its description says when to use it", t.name);
+        // The instructions map questions to the core tools, every one of them and no other: the default server
+        // advertises only those.
+        assert!(INSTRUCTIONS.contains("Use it instead of grep and reading files"));
+        for t in &tools {
+            let core = CORE.contains(&t.name.as_ref());
+            assert_eq!(INSTRUCTIONS.contains(t.name.as_ref()), core, "{}: the instructions name the core tools only, all of them", t.name);
         }
-        // The core profile is a fraction of it.
+        // The core profile, the default, is a fraction of it: what a client loading every schema on every turn carries.
         let core = serde_json::to_string(&server("core").tool_router.list_all()).unwrap().len();
         assert!(core * 2 < bytes, "core {core} of all {bytes}");
+        assert!(core + INSTRUCTIONS.len() <= CORE_BUDGET, "core schema and instructions {} bytes, budget {CORE_BUDGET}", core + INSTRUCTIONS.len());
     }
 
-    /// "What calls X" and "what breaks if X changes" go to kc_impact (or a two-hop kc_trace) with a `file:line`
-    /// selector, said where an agent asking them looks: the instructions, and the tools it would otherwise use, kc_refs
-    /// and kc_find. The selector those name is one kc_impact and kc_trace take.
+    /// "What calls X" and "what breaks if X changes" go to kc_impact with a `file:line` selector, said where an agent
+    /// asking them looks: the instructions, and the tools it would otherwise use, kc_refs and kc_find. The selector
+    /// those name is one kc_impact and kc_trace take.
     #[test]
     fn caller_and_impact_questions_are_steered_to_kc_impact_by_file_line() {
         let tools = server("all").tool_router.list_all();
@@ -2146,7 +2170,6 @@ mod tests {
         for (place, text) in [("instructions", INSTRUCTIONS.to_string()), ("kc_refs", described("kc_refs")), ("kc_find", described("kc_find"))] {
             assert!(text.contains("kc_impact") && text.contains("file:line") && text.contains("calls"), "{place}: {text}");
         }
-        assert!(INSTRUCTIONS.contains("kc_trace, depth 2") && described("kc_refs").contains("kc_trace depth 2"));
         for tool in ["kc_impact", "kc_trace"] {
             let t = tools.iter().find(|t| t.name == tool).unwrap();
             assert!(t.input_schema["properties"]["symbol"]["description"].as_str().unwrap().contains("file:line"), "{tool}");
@@ -2303,8 +2326,8 @@ mod tests {
         assert_eq!(names(&server("all")).len(), names(&server("core,all")).len());
     }
 
-    /// Exactly the always-loaded tools carry Claude Code's `anthropic/alwaysLoad` mark; the rest stay deferred, and a
-    /// profile that leaves one out doesn't list it. Their schemas are the upfront cost, about 0.8k tokens (eval/schema-cost.md).
+    /// Exactly the always-loaded tools, the core set, carry Claude Code's `anthropic/alwaysLoad` mark; the rest stay
+    /// deferred, and a profile that leaves one out doesn't list it. Their schemas are the upfront cost under `all`.
     #[test]
     fn only_the_always_loaded_tools_are_marked() {
         let tools = server("all").tool_router.list_all();
@@ -2325,10 +2348,14 @@ mod tests {
         let mut want: Vec<String> = ALWAYS_LOADED.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(marked, want);
-        assert!(bytes <= 1_600, "always-loaded schemas {bytes} bytes");
-        let few = server("kc_find,kc_context").tool_router.list_all();
-        let marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
-        assert_eq!(marked, ["kc_context"]);
+        let mut core: Vec<&str> = CORE.to_vec();
+        core.sort();
+        assert_eq!(marked, core, "always loaded is the core set");
+        assert!(bytes <= 3_200, "always-loaded schemas {bytes} bytes");
+        let few = server("kc_trace,kc_context").tool_router.list_all();
+        let mut marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
+        marked.sort();
+        assert_eq!(marked, ["kc_context", "kc_help"]);
     }
 
     #[test]
@@ -2386,15 +2413,15 @@ mod tests {
         let i = &v["incomplete"][0];
         assert_eq!((i["reason"].as_str(), i["detail"].as_str().is_some_and(|d| d.starts_with("/items/0/callers: "))), (Some("budget"), true), "{v}");
         assert!(v.get("cursor").is_none(), "no dummy cursor: {v}");
-        // Within the cap: complete, which the compact form leaves unsaid.
+        // Within the cap: complete, and it says so.
         let v: Value = serde_json::from_str(&cap(json!({ "repo": "r", "items": [1], "total": 1, "truncated": false }), 2_000)).unwrap();
-        assert_eq!((v.get("complete"), v.get("incomplete")), (None, None), "{v}");
+        assert_eq!((v.get("complete"), v.get("incomplete")), (Some(&json!(true)), None), "{v}");
         // A batch leaving inputs out is incomplete; one answering every input is not.
         let v: Value = serde_json::from_str(&batch(1_000, 20).unwrap()).unwrap();
         assert_eq!(v["complete"], json!(false));
         assert!(v["incomplete"].as_array().unwrap().iter().any(|i| i["reason"] == "budget" && i["detail"].as_str().unwrap().starts_with("inputs: ")), "{v}");
         let v: Value = serde_json::from_str(&batch(80_000, 1).unwrap()).unwrap();
-        assert_eq!((v.get("complete"), v.get("incomplete"), v["results"][0].get("complete")), (None, None, None), "{v}");
+        assert_eq!((v.get("complete"), v.get("incomplete"), v["results"][0].get("complete")), (Some(&json!(true)), None, Some(&json!(true))), "{v}");
     }
 
     #[test]
@@ -2615,7 +2642,9 @@ mod tests {
             for key in ["provenance", "repos"] {
                 assert!(v.get(key).is_none(), "{tool}: {key}: {text}");
             }
-            assert!(v.get("dirty") != Some(&Value::Bool(false)) && v.get("complete") != Some(&Value::Bool(true)), "{tool}: {text}");
+            assert!(v.get("dirty") != Some(&Value::Bool(false)), "{tool}: {text}");
+            // Every answer says whether it is complete, true included.
+            assert!(v["complete"].is_boolean(), "{tool}: {text}");
         }
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -2655,16 +2684,18 @@ mod tests {
         let mut seen: Vec<String> = shown.iter().chain(rest["items"].as_array().unwrap()).map(|r| r["from"].as_str().unwrap().to_string()).collect();
         seen.sort();
         seen.dedup();
-        assert_eq!((seen.len(), rest.get("complete"), rest.get("incomplete")), (40, None, None), "{rest}");
+        assert_eq!((seen.len(), rest.get("complete"), rest.get("incomplete")), (40, Some(&json!(true)), None), "{rest}");
 
         // kc_impact and kc_trace: cut at their default limits (30, 25), saying how to get the rest.
         let impact = rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log" })))).unwrap();
         assert_eq!(impact.lines().filter(|l| l.trim_start().starts_with("called by method")).count(), 30, "{impact}");
         assert!(impact.contains("incomplete (capped)") && impact.contains("kc_more {cursor: \"kc~") && impact.contains("raise limit"), "{impact}");
+        assert!(!impact.lines().next().unwrap().ends_with("; complete"), "{impact}");
         // A use site in the dependent's own file is said by its line, or not at all on the dependent's own line.
         assert!(!impact.lines().any(|l| l.contains("called by method") && l.contains(" at ")), "{impact}");
         let trace = rt.block_on(s.kc_trace(p(json!({ "symbol": "Audit.Log", "direction": "in" })))).unwrap();
         assert!(trace.contains("truncated at the node limit") && trace.contains("raise limit"), "{trace}");
+        assert!(!trace.lines().next().unwrap().ends_with("; complete"), "{trace}");
 
         // kc_context: within its cap; its callers list cut, with the cursor that continues it.
         let out = rt.block_on(s.kc_context(p(json!({ "symbol": "Audit.Log" })))).unwrap();
@@ -2675,6 +2706,17 @@ mod tests {
         assert!(callers["hint"].as_str().unwrap().contains("items[0].callers_cursor"), "{v}");
         assert!(crate::compact::resolve(v["items"][0]["callers_cursor"].as_str().unwrap()).is_ok(), "{v}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A text answer's first line says it is complete when it is; a partial one says why on the lines after it.
+    #[test]
+    fn a_complete_text_answer_says_so_in_its_header() {
+        let env = json!({ "repo": "/w/shop", "commit": "0123456789ab", "dirty": false, "complete": true });
+        assert_eq!(header(&env, true), "repo shop @ 0123456; complete\n");
+        let env = json!({ "repo": "/w/shop", "commit": "0123456789ab", "complete": false,
+            "incomplete": [{ "reason": "capped", "detail": "items: 3 of 9 shown" }] });
+        let h = header(&env, false);
+        assert!(h.starts_with("repo shop @ 0123456\n") && h.contains("incomplete (capped)"), "{h}");
     }
 
     #[test]

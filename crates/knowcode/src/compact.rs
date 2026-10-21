@@ -25,9 +25,9 @@
 //! - a clean, current answer says nothing about its repos: `repos` and `provenance` are left out when no repo is dirty,
 //!   every repo was checked against its working tree, and nothing is `stale`, `failed` or `missing_repo` (see
 //!   [`clean`]); otherwise `provenance` stays, and `repos` keeps the entries whose `freshness` says something;
-//! - what goes without saying is left out of the envelope: `complete: true` (an answer without `incomplete` is
-//!   complete), `false` flags (`dirty`, `truncated`, `capped`), nulls, `offset: 0`, a search's `stats` and its
-//!   `matches` when `total` says it;
+//! - what goes without saying is left out of the envelope: `false` flags (`dirty`, `truncated`, `capped`), nulls,
+//!   `offset: 0`, a search's `stats` and its `matches` when `total` says it. `complete` stays, true or false, so a
+//!   complete answer says it is;
 //! - `stale` entries are said in one: the repos named by their short name, entries saying the same thing joined (see
 //!   [`one_stale`]);
 //! - a search's or a structural search's hits, in its answer and in a page of them, are text rows (see [`hit_row`]):
@@ -202,12 +202,11 @@ pub fn clean(env: &Value) -> bool {
         && list("provenance").iter().all(|p| !dirty(p) && p["fresh"] != Value::Bool(false))
 }
 
-/// The envelope without what goes without saying (see the module): `complete: true`, false flags, nulls, a first
-/// page's `offset`, a search's `stats`, and `matches` equal to `total`.
+/// The envelope without what goes without saying (see the module): false flags, nulls, a first page's `offset`, a
+/// search's `stats`, and `matches` equal to `total`. `complete` stays.
 fn defaults(obj: &mut Map<String, Value>) {
     obj.retain(|k, v| match (k.as_str(), &*v) {
         (_, Value::Null) => false,
-        ("complete", Value::Bool(true)) => false,
         ("dirty" | "truncated" | "capped", Value::Bool(false)) => false,
         ("offset", n) => n.as_u64() != Some(0),
         ("stats", _) => false,
@@ -696,13 +695,13 @@ mod tests {
         })
     }
 
-    /// A clean, current answer says nothing about its repos or the defaults; one with a dirty or unchecked repo, or a
+    /// A clean, current answer says nothing about its repos or the defaults, only that it is complete; one with a dirty or unchecked repo, or a
     /// `stale`, `failed` or `missing_repo` entry, keeps its provenance. Never what the contract says when it is partial.
     #[test]
     fn a_clean_answer_leaves_out_its_repos_and_defaults_and_a_dirty_one_keeps_them() {
         let names = Names::default();
         let v: Value = serde_json::from_str(&output(&workspace("", true), &names)).unwrap();
-        assert_eq!(v, json!({ "repo": "workspace", "items": [], "total": 0 }));
+        assert_eq!(v, json!({ "repo": "workspace", "items": [], "total": 0, "complete": true }));
         // Dirty: provenance says which, as strings; `repos` adds nothing to it.
         let v: Value = serde_json::from_str(&output(&workspace("/w/shop", true), &names)).unwrap();
         assert_eq!(v["provenance"], json!(["audit @ 0123456789ab", "billing @ 0123456789ab", "shop @ 0123456789ab (dirty)"]), "{v}");

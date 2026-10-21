@@ -739,8 +739,8 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
         summary: "complete, incomplete, provenance: what every answer says about itself",
         text: r#"Every answer, from every tool, says how complete it is and which repos it was read from.
 
-- `complete`: true only when nothing below makes the answer partial. The MCP server says it only when it is `false`:
-  an answer without `incomplete` is complete.
+- `complete`: true only when nothing below makes the answer partial. Every answer says it, true or false; a text
+  answer (a tree) ends its first line with `; complete` when it is.
 - `incomplete`: why it is partial, one entry per reason, `{reason, detail, hint}`: `detail` names what is missing (the
   list, with how many of how many were shown), `hint` how to get the rest. Reasons: `capped` (a limit cut a list),
   `budget` (cut to fit max_chars, or a batch leaving inputs out), `deadline` (a time or work budget ran out), `stale`
@@ -776,8 +776,8 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   `capped`, `freshness.failed`, `left_out` and `hint`.
 
 The MCP server's answers are compact: repos are named by their short name (what `repo` parameters take; the full path
-only when two indexed repos share a name); what goes without saying is left out (`complete: true`, false flags such as
-`dirty` and `truncated`, nulls, `offset: 0`, a search's `stats`); a clean, current answer has no `repos` or
+only when two indexed repos share a name); what goes without saying is left out (false flags such as `dirty` and
+`truncated`, nulls, `offset: 0`, a search's `stats`; `complete` stays); a clean, current answer has no `repos` or
 `provenance` (no repo dirty or answered from its last sync, nothing `stale`, `failed` or `missing_repo`), and otherwise
 commits are 12 hex digits, the queried repo's own provenance entry is left out (the envelope's `repo`, `commit` and
 `dirty` say it) and the others are strings (`billing @ 0123456789ab (dirty), from its last sync`); `stale` is one
@@ -849,12 +849,12 @@ is named only as blocked. An answer that may have drawn on blocked content is in
     Topic {
         name: "profiles",
         summary: "which tools the server advertises",
-        text: r#"The server advertises every tool by default (`all`). `KNOWCODE_TOOLS` (or `knowcode serve --tools`) picks
-fewer, to keep the tool list small in an agent's context: `core` is kc_find, kc_locate, kc_context, kc_refs, kc_trace,
-kc_impact, kc_search, kc_more and kc_help; a comma list adds tools by name (`core,kc_tests,kc_flow`). Tools left out
-are listed in the help index and can't be called until the server is started with them. Claude Code loads kc_context,
-kc_refs, kc_impact and kc_locate up front (`anthropic/alwaysLoad`, about 0.8k tokens) and defers the rest to tool
-search."#,
+        text: r#"The server advertises the `core` tools by default: kc_find, kc_locate, kc_context, kc_refs, kc_impact,
+kc_search, kc_more and kc_help. A client that loads every tool's schema on every turn carries only these. `all`
+(`KNOWCODE_TOOLS=all`, or `knowcode serve --tools all`) advertises every tool; a comma list adds tools by name
+(`core,kc_trace,kc_tests`). Tools left out are listed in the help index and can't be called until the server is
+started with them. The core tools are marked always loaded (`anthropic/alwaysLoad`), so Claude Code loads them up front
+under any profile and defers the rest to tool search."#,
     },
 ];
 
