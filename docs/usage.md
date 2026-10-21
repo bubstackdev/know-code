@@ -16,7 +16,9 @@ command, run `knowcode <command> --help`.
   share a wait of about two seconds for indexing; past it they answer from the last committed snapshot and say so
   (`stale`), while a background worker finishes.
 - **Output.** Text by default; `--json` prints the full JSON envelope. MCP answers are compact JSON, or text trees
-  for `kc_trace`, `kc_impact`, `kc_path` and `kc_flow` (`format: "json"` for the envelope), capped at `max_chars`.
+  for `kc_trace`, `kc_impact`, `kc_path` and `kc_flow` (`format: "json"` for the envelope), capped at `max_chars`;
+  `kc_search` and `kc_grep_ast` hits are text rows (`repo/file:line kind symbol | text`). See
+  [MCP answers](answers.md#mcp-answers).
 - **Picking one of several definitions.** Anything taking a symbol accepts a name, `Type.member`, a name qualified by
   namespace or module (`Acme.Billing.Invoice.Total`, `src/worker.Worker.run`), `path/to/file#name`, or `file:line`
   (the innermost definition spanning the line).

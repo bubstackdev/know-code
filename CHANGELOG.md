@@ -4,6 +4,17 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.2.0 (unreleased)
 
+- Leaner MCP answers and tool list. A clean, current answer no longer lists its repos: `repos` and `provenance` are
+  left out unless a repo is dirty or was answered from its last sync, or something is `stale`, `failed` or
+  `missing_repo`. `complete` is said only when it is `false` (no `incomplete` means complete), and false flags, nulls,
+  `offset: 0` and a search's `stats` are left out. `stale` is one `incomplete` entry naming repos by name, not path.
+  `kc_search` and `kc_grep_ast` hits, and `kc_more` pages of them, are text rows (`repo/file:line kind symbol |
+  text`) instead of objects; docs/answers.md has the format. On a three-repo sample, search answers are 40-60%
+  smaller. The tool schemas and server instructions under profile `all` are 7,186 characters, down from 10,641:
+  shorter descriptions and parameter lines, fewer advertised parameters (the rest are still accepted and in
+  `kc_help <tool>`), and instructions that no longer repeat the descriptions. The instructions and the `kc_refs` and
+  `kc_find` descriptions now send "what calls X" and "what breaks if X changes" to `kc_impact` (or `kc_trace`, depth
+  2) with a `file:line` selector. The CLI's output and `--json` are unchanged.
 - `knowcode fetch-deps --into DIR` clones the git repos a repo depends on (manifest dependencies written as git
   URLs, Terraform git module sources, GitLab CI includes of other projects, and repos whose checkout was deleted),
   shallow, one directory each, so cross-repo answers can reach them. `--dry-run` prints the plan. DIR must be outside

@@ -9,8 +9,9 @@ Agents get the same material through `kc_help contract`, `kc_help evidence` and 
 
 ## complete and incomplete
 
-- `complete` is always present. It is `true` only when nothing makes the answer partial, and it is always the
-  same as `incomplete` being absent.
+- `complete` is `true` only when nothing makes the answer partial, and it is always the same as `incomplete` being
+  absent. The CLI's `--json` always has it; an MCP answer says it only when it is `false` (see
+  [MCP answers](#mcp-answers)).
 - `incomplete` lists why the answer is partial, one entry per reason: `{reason, detail, hint}`. `detail` names what
   is missing (for a cut list, how many of how many were shown). `hint`, when present, says how to get the rest:
   usually the exact `kc_more` call, or a limit to raise.
@@ -62,7 +63,8 @@ with `freshness.status`, a list's `<list>_total` and `<list>_truncated`, and the
 
 A list that was cut and can be continued carries a cursor: `cursor` for the answer's own `items`, `<list>_cursor`
 beside a nested list (`items[0].callers_cursor`). Pass it unchanged to `knowcode more <cursor>` or `kc_more`. Each
-page is `{list, items, offset, total, cursor}` and has its own cursor until the list ends.
+page is `{list, items, offset, total, cursor}` and has its own cursor until the list ends; its rows are the list's
+own (over MCP, a search's hits are text rows there too).
 
 - Following every cursor gives each row of the full list exactly once. For a walk's ranked list (impact's
   `affected`, a path search's `paths`), the rows shown first come first, then the rest of the walk, ranked the
@@ -249,10 +251,27 @@ implementation, lifetime, file, line, hop}`), where the container makes or hands
 MCP answers are compact, so that rows rather than bookkeeping fill the size cap:
 
 - repos are named by their short name (the full path only when two indexed repos share a name);
-- commits are 12 hex digits; the queried repo's own `provenance` entry is left out (the envelope's `repo`, `commit`
-  and `dirty` say it), and the others are one string each (`billing @ 0123456789ab, from its last sync`);
-- `evidence` is a string, cursors are short handles, and row ids, the build stamp and timings (`ms`, `*_ms`, a
-  search's `stats` timings) are left out;
+- what goes without saying is left out: `complete: true` (an answer with no `incomplete` is complete; a partial one
+  always says `complete: false`), `false` flags (`dirty`, `truncated`, `capped`), null fields, a first page's
+  `offset: 0`, a search's `stats`, and its `matches` when `total` says the same;
+- a clean, current answer leaves out `repos` and `provenance`: no repo it read is dirty or was answered from its last
+  sync, and nothing is `stale`, `failed` or `missing_repo`. Otherwise `provenance` stays: commits are 12 hex digits,
+  the queried repo's own entry is left out (the envelope's `repo`, `commit` and `dirty` say it), and the others are
+  one string each (`billing @ 0123456789ab (dirty), from its last sync`); `repos` keeps only the repos whose
+  `freshness` says files could not be read;
+- `stale` is one `incomplete` entry, repos named by their short name, entries saying the same of several repos joined
+  (`shop, billing: indexing is queued or running; …`);
+- `kc_search` and `kc_grep_ast` hits, in the answer and in a `kc_more` page of them, are text rows rather than
+  objects. The location comes first (`repo/` before the file when the answer spans repos) and the line's text last,
+  after the first ` | `:
+  - a search hit: `repo/file:line kind symbol | text`, where kind is `def`, `decl`, `code`, `test`, `comment` or `doc`,
+    and the symbol is the one a `def` or `decl` declares, or `in X` for the one containing the line; `[stale]` before
+    the ` | ` marks a file that could not be read. With `context`, the lines around the hit follow it, one per line:
+    `  41- text`;
+  - with `files_only`: `repo/file:line best (n matches)`, the line and kind of the file's best-ranked hit;
+  - a structural match: `repo/file:line:column[-end_line] [$X=captured, …] | text`.
+- `evidence` is a string, cursors are short handles, and row ids, the build stamp and timings (`ms`, `*_ms`) are left
+  out;
 - a reference's `from` is the enclosing symbol's qualified name (`Checkout.Run`, what `kc_context` takes), and its
   column is left out; what every row of a list of references shares (the same `targets`, `from` or `name`) is said
   once beside the list, as `<list>_targets`, `<list>_from` or `<list>_name` (plain `targets`, `from`, `name` for
@@ -277,7 +296,8 @@ The CLI's `--json` output is the full envelope.
 
 ## How to use an answer
 
-- Check `complete`. If it is `false`, read each `incomplete` entry before drawing a conclusion.
+- Check `complete` (over MCP, present only when `false`). If it is `false`, read each `incomplete` entry before drawing
+  a conclusion.
 - Follow `hint`s and cursors when the rest of a list matters to the question. A first page is not the whole list.
 - Treat `ambiguous` and `unique_name` edges as leads to confirm in the source, and read the assumptions on `exact`
   ones that cross repos.

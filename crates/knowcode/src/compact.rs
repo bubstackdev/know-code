@@ -21,7 +21,17 @@
 //! - a reference row's `from` is the enclosing symbol's qualified name, and its column is left out; a list whose rows
 //!   all have the same `targets`, `from` or `name` says it once, beside the list (see [`lean_row`],
 //!   [`shared_targets`]);
-//! - a test file's ranking `signals` are left out: its `confidence` and `reasons` say them.
+//! - a test file's ranking `signals` are left out: its `confidence` and `reasons` say them;
+//! - a clean, current answer says nothing about its repos: `repos` and `provenance` are left out when no repo is dirty,
+//!   every repo was checked against its working tree, and nothing is `stale`, `failed` or `missing_repo` (see
+//!   [`clean`]); otherwise `provenance` stays, and `repos` keeps the entries whose `freshness` says something;
+//! - what goes without saying is left out of the envelope: `complete: true` (an answer without `incomplete` is
+//!   complete), `false` flags (`dirty`, `truncated`, `capped`), nulls, `offset: 0`, a search's `stats` and its
+//!   `matches` when `total` says it;
+//! - `stale` entries are said in one: the repos named by their short name, entries saying the same thing joined (see
+//!   [`one_stale`]);
+//! - a search's or a structural search's hits, in its answer and in a page of them, are text rows (see [`hit_row`]):
+//!   `repo/file:line kind symbol | text`, the same row for every hit instead of an object repeating its keys.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::Mutex;
@@ -128,6 +138,7 @@ pub fn once(env: &mut Value) {
 /// Rewrites `env` in its compact form, giving each cursor the value `cursor` makes of it.
 fn compact(env: &mut Value, names: &Names, cursor: &mut dyn FnMut(&str) -> String) {
     once(env);
+    let clean = clean(env);
     let Some(obj) = env.as_object_mut() else {
         rows(env, cursor);
         return;
@@ -141,7 +152,19 @@ fn compact(env: &mut Value, names: &Names, cursor: &mut dyn FnMut(&str) -> Strin
         for r in repos.iter_mut().filter_map(Value::as_object_mut) {
             freshness(r);
             repo(r, names);
+            if r.get("dirty") == Some(&Value::Bool(false)) {
+                r.remove("dirty");
+            }
         }
+        // A repo's commit and dirty state are in `provenance`; only what its freshness says is its own.
+        repos.retain(|r| r.get("freshness").is_some_and(|f| f.get("failed").is_some() || f.get("status").is_some()));
+        if repos.is_empty() {
+            obj.remove("repos");
+        }
+    }
+    if clean {
+        obj.remove("repos");
+        obj.remove("provenance");
     }
     if let Some(Value::Array(list)) = obj.get_mut("provenance") {
         for p in list.iter_mut() {
@@ -154,12 +177,118 @@ fn compact(env: &mut Value, names: &Names, cursor: &mut dyn FnMut(&str) -> Strin
                 *h = short_hint(h, None);
             }
         }
+        one_stale(list, names);
     }
     // The size cap's own hint: each cut list's `incomplete` entry says how to get the rest.
     if obj.get("hint").and_then(Value::as_str).is_some_and(|h| h.contains(" list items cut to fit max_chars=")) && obj.contains_key("incomplete") {
         obj.remove("hint");
     }
+    defaults(obj);
     rows(env, cursor);
+}
+
+/// Whether the answer is clean and current, so that its repos go without saying: no repo it read is dirty or was
+/// answered from its last sync (not checked against its working tree), none had files it could not read, and nothing
+/// in it is `stale`, `failed` or `missing_repo`. Read from the full envelope.
+pub fn clean(env: &Value) -> bool {
+    let dirty = |v: &Value| v["dirty"] == Value::Bool(true);
+    let unread = |v: &Value| v["freshness"]["failed"].as_array().is_some_and(|f| !f.is_empty()) || v["freshness"]["status"].is_string();
+    let list = |key: &str| env[key].as_array().cloned().unwrap_or_default();
+    let matters = list("incomplete").iter().any(|i| matches!(i["reason"].as_str(), Some("stale" | "failed" | "missing_repo")));
+    !matters
+        && !dirty(env)
+        && !unread(env)
+        && list("repos").iter().all(|r| !dirty(r) && !unread(r))
+        && list("provenance").iter().all(|p| !dirty(p) && p["fresh"] != Value::Bool(false))
+}
+
+/// The envelope without what goes without saying (see the module): `complete: true`, false flags, nulls, a first
+/// page's `offset`, a search's `stats`, and `matches` equal to `total`.
+fn defaults(obj: &mut Map<String, Value>) {
+    obj.retain(|k, v| match (k.as_str(), &*v) {
+        (_, Value::Null) => false,
+        ("complete", Value::Bool(true)) => false,
+        ("dirty" | "truncated" | "capped", Value::Bool(false)) => false,
+        ("offset", n) => n.as_u64() != Some(0),
+        ("stats", _) => false,
+        _ => true,
+    });
+    if obj.contains_key("total") && obj.get("matches") == obj.get("total") {
+        obj.remove("matches");
+    }
+}
+
+/// The `stale` entries of `incomplete` said as one: the repos they name by their short name (not an absolute path),
+/// and entries saying the same thing of different repos joined (`a, b: indexing is queued or running; …`), each hint
+/// once. One entry per reason, as the contract has it.
+fn one_stale(list: &mut Vec<Value>, names: &Names) {
+    let at: Vec<usize> = (0..list.len()).filter(|&i| list[i]["reason"] == "stale").collect();
+    let Some(&first) = at.first() else { return };
+    // What each says, with the subjects saying it, in the order first said.
+    let mut said: Vec<(String, Vec<String>)> = Vec::new();
+    let mut hints: Vec<String> = Vec::new();
+    for &i in &at {
+        let detail = short_paths(list[i]["detail"].as_str().unwrap_or(""), names);
+        let (subject, what) = match detail.split_once(": ") {
+            Some((s, w)) => (s.to_string(), w.to_string()),
+            None => (String::new(), detail.clone()),
+        };
+        match said.iter_mut().find(|(w, _)| *w == what) {
+            Some((_, subjects)) => subjects.push(subject),
+            None => said.push((what, vec![subject])),
+        }
+        if let Some(h) = list[i]["hint"].as_str()
+            && !hints.iter().any(|x| x == h)
+        {
+            hints.push(h.to_string());
+        }
+    }
+    let detail: Vec<String> = said
+        .into_iter()
+        .map(|(what, subjects)| {
+            let subjects: Vec<String> = subjects.into_iter().filter(|s| !s.is_empty()).collect();
+            if subjects.is_empty() { what } else { format!("{}: {what}", subjects.join(", ")) }
+        })
+        .collect();
+    let mut one = Map::new();
+    one.insert("reason".into(), Value::from("stale"));
+    one.insert("detail".into(), Value::from(detail.join("; ")));
+    if !hints.is_empty() {
+        one.insert("hint".into(), Value::from(hints.join("; ")));
+    }
+    list[first] = Value::Object(one);
+    for &i in at.iter().skip(1).rev() {
+        list.remove(i);
+    }
+}
+
+/// For an answer said as text (a tree): its `stale` entries said as one, as the compact JSON says them.
+pub fn text_stale(env: &mut Value) {
+    if let Some(Value::Array(list)) = env.get_mut("incomplete") {
+        one_stale(list, &Names::load());
+    }
+}
+
+/// `text` with every absolute path in it (a word starting with `/`, up to a space or one of `,;:)]`) said as
+/// [`Names::key`] says a repo.
+fn short_paths(text: &str, names: &Names) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('/') {
+        let starts_word = i == 0 || rest[..i].ends_with([' ', '(', '[']);
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let end = tail.find(|c: char| c.is_whitespace() || ",;:)]".contains(c)).unwrap_or(tail.len());
+        let word = &tail[..end];
+        if starts_word && word.len() > 1 {
+            out.push_str(&names.key(word));
+        } else {
+            out.push_str(word);
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Freshness without its timing and zero counters; gone when nothing is left.
@@ -223,6 +352,12 @@ fn rows(v: &mut Value, cursor: &mut dyn FnMut(&str) -> String) {
     match v {
         Value::Array(a) => a.iter_mut().for_each(|x| rows(x, cursor)),
         Value::Object(m) => {
+            // A search's hits (its answer, or a page of it): one text row each.
+            if let Some(Value::Array(items)) = m.get_mut("items")
+                && let Some(lines) = items.iter().map(hit_row).collect::<Option<Vec<String>>>()
+            {
+                *items = lines.into_iter().map(Value::from).collect();
+            }
             if let Some(e) = m.get("evidence").filter(|e| e.get("mechanism").is_some()) {
                 let s = evidence(e);
                 m.insert("evidence".into(), Value::from(s));
@@ -279,6 +414,64 @@ fn lean_row(m: &mut Map<String, Value>) {
             m.remove("cite");
         }
     }
+}
+
+/// A search hit as one text row, `None` for any other row. The location first, `repo/` before the file when the
+/// answer spans repos, and the line's text last, after the first ` | `:
+///
+/// - `kc_search`: `repo/file:line kind symbol | text`, the symbol a `def` or `decl` declares, or `in` the one
+///   containing the line; `[stale]` for a file that could not be read (as last indexed); with `context`, the lines
+///   around it follow, one per line, `  line- text`;
+/// - `kc_search` with `files_only`: `repo/file:line best (n matches)`, the line and kind of its best-ranked hit;
+/// - `kc_grep_ast`: `repo/file:line:column[-end_line] [$X=captured, …] | text`.
+pub fn hit_row(v: &Value) -> Option<String> {
+    let m = v.as_object()?;
+    let file = m.get("file")?.as_str()?;
+    let line = m.get("line")?.as_u64()?;
+    let repo = match m.get("repo") {
+        Some(r) => format!("{}/", r.as_str()?),
+        None => String::new(),
+    };
+    let stale = if m.get("stale") == Some(&Value::Bool(true)) { " [stale]" } else { "" };
+    let only = |keys: &[&str]| m.keys().all(|k| keys.contains(&k.as_str()) || k == "repo" || k == "stale");
+    let str_of = |key: &str| m.get(key).and_then(Value::as_str);
+    // A search hit.
+    if let (Some(kind), Some(text)) = (str_of("kind"), str_of("text"))
+        && matches!(kind, "def" | "decl" | "code" | "test" | "comment" | "doc")
+        && only(&["file", "line", "kind", "text", "symbol", "in", "before", "after"])
+    {
+        let at = match (str_of("symbol"), str_of("in")) {
+            (Some(s), _) => format!(" {s}"),
+            (None, Some(s)) => format!(" in {s}"),
+            _ => String::new(),
+        };
+        let mut row = format!("{repo}{file}:{line} {kind}{at}{stale} | {text}");
+        let lines = |key: &str| m.get(key).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>()).unwrap_or_default();
+        let (before, after) = (lines("before"), lines("after"));
+        let first = line.saturating_sub(before.len() as u64);
+        let around = before.iter().enumerate().map(|(i, l)| (first + i as u64, l)).chain(after.iter().enumerate().map(|(i, l)| (line + 1 + i as u64, l)));
+        for (n, l) in around {
+            row.push_str(&format!("\n  {n}- {l}"));
+        }
+        return Some(row);
+    }
+    // A file of a `files_only` search.
+    if let (Some(best), Some(n)) = (str_of("best"), m.get("matches").and_then(Value::as_u64))
+        && only(&["file", "line", "best", "matches"])
+    {
+        return Some(format!("{repo}{file}:{line} {best}{stale} ({n} {})", if n == 1 { "match" } else { "matches" }));
+    }
+    // A structural match.
+    if let (Some(col), Some(end), Some(text)) = (m.get("column").and_then(Value::as_u64), m.get("end_line").and_then(Value::as_u64), str_of("text"))
+        && only(&["file", "line", "end_line", "column", "text", "vars"])
+    {
+        let end = if end > line { format!("-{end}") } else { String::new() };
+        let vars: Vec<String> =
+            m.get("vars").and_then(Value::as_object).map(|vs| vs.iter().map(|(k, x)| format!("${k}={}", x.as_str().unwrap_or_default())).collect()).unwrap_or_default();
+        let vars = if vars.is_empty() { String::new() } else { format!(" [{}]", vars.join(", ")) };
+        return Some(format!("{repo}{file}:{line}:{col}{end}{vars}{stale} | {text}"));
+    }
+    None
 }
 
 /// An enclosing symbol `{container, kind, name}` as its qualified name, `container.name`.
@@ -416,8 +609,8 @@ mod tests {
         assert_eq!(v["provenance"], json!(["billing @ def, from its last sync"]));
         assert_eq!(v["repo"], "shop");
         assert!(v.get("knowcode").is_none() && v.get("freshness").is_none() && v.get("hint").is_none(), "{v}");
-        // Timings anywhere are dropped, counts kept; `deploy` is kept unless it repeats the first item.
-        assert_eq!(v["stats"], json!({ "candidates": 4 }));
+        // A search's stats are dropped; `deploy` is kept unless it repeats the first item.
+        assert!(v.get("stats").is_none(), "{v}");
         assert_eq!(v["deploy"]["repo"], "shop");
         let mut twice = json!({ "deploy": { "repo": "shop", "ansible": {} }, "items": [{ "repo": "shop", "ansible": {}, "own_cursor": "kc1.x" }] });
         once(&mut twice);
@@ -487,6 +680,142 @@ mod tests {
         let v: Value = serde_json::from_str(&output(&tests, &Names::default())).unwrap();
         let t = &v["items"][0]["tests"][0];
         assert!(t.get("signals").is_none() && t["confidence"] == 0.9 && t["reasons"][0] == "calls Audit.Log at hop 1", "{v}");
+        // Measured never shorter than output.
+        assert!(measure(&env, &Names::default()).len() >= output(&env, &Names::default()).len());
+    }
+
+    /// A workspace answer's bookkeeping, as the server builds it: three repos, each with its provenance entry.
+    fn workspace(dirty: &str, fresh: bool) -> Value {
+        let repos = ["/w/audit", "/w/billing", "/w/shop"];
+        json!({
+            "repo": "workspace", "commit": null, "dirty": repos.contains(&dirty),
+            "repos": repos.iter().map(|r| json!({ "repo": r, "commit": "0123456789abcdef", "dirty": *r == dirty, "freshness": { "check_ms": 0.4, "reparsed": 0, "removed": 0 } })).collect::<Vec<_>>(),
+            "provenance": repos.iter().map(|r| json!({ "repo": r, "commit": "0123456789abcdef", "generation": "g", "dirty": *r == dirty, "fresh": fresh })).collect::<Vec<_>>(),
+            "items": [], "total": 0, "truncated": false, "offset": 0, "next_offset": null, "complete": true,
+            "matches": 0, "stats": { "searchable_files": 9, "candidates": 0 },
+        })
+    }
+
+    /// A clean, current answer says nothing about its repos or the defaults; one with a dirty or unchecked repo, or a
+    /// `stale`, `failed` or `missing_repo` entry, keeps its provenance. Never what the contract says when it is partial.
+    #[test]
+    fn a_clean_answer_leaves_out_its_repos_and_defaults_and_a_dirty_one_keeps_them() {
+        let names = Names::default();
+        let v: Value = serde_json::from_str(&output(&workspace("", true), &names)).unwrap();
+        assert_eq!(v, json!({ "repo": "workspace", "items": [], "total": 0 }));
+        // Dirty: provenance says which, as strings; `repos` adds nothing to it.
+        let v: Value = serde_json::from_str(&output(&workspace("/w/shop", true), &names)).unwrap();
+        assert_eq!(v["provenance"], json!(["audit @ 0123456789ab", "billing @ 0123456789ab", "shop @ 0123456789ab (dirty)"]), "{v}");
+        assert_eq!((v["dirty"].as_bool(), v.get("repos")), (Some(true), None), "{v}");
+        // Unchecked against the working tree: kept.
+        let v: Value = serde_json::from_str(&output(&workspace("", false), &names)).unwrap();
+        assert!(v["provenance"][0].as_str().unwrap().ends_with("from its last sync"), "{v}");
+        // A repo's unread files: its `repos` entry stays, with them; `complete: false` and `incomplete` always stay.
+        let mut env = workspace("", true);
+        env["repos"][1]["freshness"] = json!({ "failed": ["a.cs"], "status": "incomplete" });
+        env["complete"] = json!(false);
+        env["incomplete"] = json!([{ "reason": "failed", "detail": "billing: could not read a.cs" }]);
+        let v: Value = serde_json::from_str(&output(&env, &names)).unwrap();
+        assert_eq!(v["repos"], json!([{ "repo": "billing", "commit": "0123456789ab", "freshness": { "failed": ["a.cs"], "status": "incomplete" } }]), "{v}");
+        assert_eq!((v["complete"].as_bool(), v["provenance"].as_array().map(Vec::len)), (Some(false), Some(3)), "{v}");
+        // A list cut to fit doesn't make the repos matter; a missing repo does.
+        let mut env = workspace("", true);
+        env["complete"] = json!(false);
+        env["incomplete"] = json!([{ "reason": "capped", "detail": "items: 3 of 9 shown" }]);
+        let v: Value = serde_json::from_str(&output(&env, &names)).unwrap();
+        assert!(v.get("provenance").is_none() && v["complete"] == false, "{v}");
+        env["incomplete"] = json!([{ "reason": "missing_repo", "detail": "gone: indexed, but its checkout is gone" }]);
+        let v: Value = serde_json::from_str(&output(&env, &names)).unwrap();
+        assert!(v["provenance"].is_array(), "{v}");
+        // Matches that aren't the total, and a later page's offset, are said; so is a true flag.
+        let mut env = workspace("", true);
+        env["matches"] = json!(40);
+        env["offset"] = json!(20);
+        env["truncated"] = json!(true);
+        let v: Value = serde_json::from_str(&output(&env, &names)).unwrap();
+        assert_eq!((v["matches"].as_u64(), v["offset"].as_u64(), v["truncated"].as_bool()), (Some(40), Some(20), Some(true)), "{v}");
+    }
+
+    /// Staleness is one entry: repos by name, not path, entries saying the same thing of several repos joined, each
+    /// hint once; an answer with one stale entry keeps it, its paths shortened.
+    #[test]
+    fn stale_entries_are_said_once_by_repo_name() {
+        let pending = |r: &str| {
+            json!({ "reason": "stale", "detail": format!("/Users/me/src/{r}: indexing is queued or running; this answer uses the available committed snapshot"),
+                    "hint": "indexing continues in the background; ask again after it finishes" })
+        };
+        let env = json!({
+            "repo": "workspace", "complete": false, "items": [],
+            "incomplete": [pending("shop"), { "reason": "capped", "detail": "items: 3 of 9 shown" }, pending("billing"),
+                           { "reason": "stale", "detail": "workspace summary: audit changed since last synced", "hint": "index them" }],
+        });
+        let v: Value = serde_json::from_str(&output(&env, &Names::default())).unwrap();
+        let list = v["incomplete"].as_array().unwrap();
+        assert_eq!(list.len(), 2, "{v}");
+        assert_eq!(list[0]["reason"], "stale");
+        assert_eq!(
+            list[0]["detail"],
+            "shop, billing: indexing is queued or running; this answer uses the available committed snapshot; workspace summary: audit changed since last synced"
+        );
+        assert_eq!(list[0]["hint"], "indexing continues in the background; ask again after it finishes; index them");
+        assert_eq!(list[1]["reason"], "capped");
+        // One entry: as it was, without the path. A name two repos share keeps its path.
+        let one = json!({ "incomplete": [pending("shop")], "complete": false });
+        let v: Value = serde_json::from_str(&output(&one, &Names::default())).unwrap();
+        assert!(v["incomplete"][0]["detail"].as_str().unwrap().starts_with("shop: indexing is queued"), "{v}");
+        let v: Value = serde_json::from_str(&output(&one, &Names(["shop".to_string()].into()))).unwrap();
+        assert!(v["incomplete"][0]["detail"].as_str().unwrap().starts_with("/Users/me/src/shop: "), "{v}");
+        assert_eq!(short_paths("a/b and (/x/y), c:/z", &Names::default()), "a/b and (y), c:/z");
+    }
+
+    /// Search hits are text rows: location, kind, symbol, then the line after ` | `; the lines around a hit follow it;
+    /// a files-only search and a structural search have rows of their own. Any other row stays an object, and so does
+    /// a list mixing hits with other rows.
+    #[test]
+    fn search_hits_are_text_rows() {
+        let env = json!({
+            "repo": "workspace", "total": 4, "truncated": true, "cursor": "kc1.page",
+            "items": [
+                { "file": "src/Audit.cs", "line": 3, "kind": "def", "repo": "audit", "symbol": "Audit.Log", "text": "public void Log(string m) { }" },
+                { "file": "src/Orders.cs", "line": 6, "kind": "code", "repo": "shop", "in": "Orders.Place", "text": "_audit.Log(\"placed | ok\");",
+                  "before": ["// Log it"], "after": ["Validate(o);", "}"] },
+                { "file": "README.md", "line": 2, "kind": "doc", "repo": "billing", "text": "Logged through Audit.Log.", "stale": true },
+                { "file": "a.cs", "line": 1, "kind": "comment", "text": "// Log" },
+            ],
+        });
+        let v: Value = serde_json::from_str(&output(&env, &Names::default())).unwrap();
+        assert_eq!(
+            v["items"],
+            json!([
+                "audit/src/Audit.cs:3 def Audit.Log | public void Log(string m) { }",
+                "shop/src/Orders.cs:6 code in Orders.Place | _audit.Log(\"placed | ok\");\n  5- // Log it\n  7- Validate(o);\n  8- }",
+                "billing/README.md:2 doc [stale] | Logged through Audit.Log.",
+                "a.cs:1 comment | // Log",
+            ]),
+            "{v}"
+        );
+        assert!(v["cursor"].as_str().unwrap().starts_with(HANDLE), "{v}");
+        // A page of them, as kc_more answers it.
+        let page = json!({ "list": "items", "offset": 20, "total": 21, "items": [{ "file": "a.cs", "line": 9, "kind": "test", "text": "Log();" }] });
+        let v: Value = serde_json::from_str(&output(&page, &Names::default())).unwrap();
+        assert_eq!((v["items"][0].as_str(), v["offset"].as_u64()), (Some("a.cs:9 test | Log();"), Some(20)), "{v}");
+        // Files only, and structural matches.
+        let files = json!({ "items": [{ "file": "a.cs", "line": 4, "best": "def", "matches": 2 }, { "file": "b.cs", "line": 1, "best": "doc", "matches": 1, "repo": "r" }] });
+        let v: Value = serde_json::from_str(&output(&files, &Names::default())).unwrap();
+        assert_eq!(v["items"], json!(["a.cs:4 def (2 matches)", "r/b.cs:1 doc (1 match)"]), "{v}");
+        let ast = json!({ "items": [
+            { "file": "a.cs", "line": 3, "end_line": 3, "column": 26, "text": "new Audit().Log(\"x\")", "vars": { "A": "new Audit()", "B": "\"x\"" } },
+            { "file": "b.cs", "line": 5, "end_line": 7, "column": 9, "text": "Run(", "repo": "shop" },
+        ] });
+        let v: Value = serde_json::from_str(&output(&ast, &Names::default())).unwrap();
+        assert_eq!(v["items"], json!(["a.cs:3:26 [$A=new Audit(), $B=\"x\"] | new Audit().Log(\"x\")", "shop/b.cs:5:9-7 | Run("]), "{v}");
+        // Not hits: left as they are.
+        let find = json!({ "items": [{ "file": "a.cs", "line": 3, "kind": "method", "name": "Log", "text": "x" }] });
+        let v: Value = serde_json::from_str(&output(&find, &Names::default())).unwrap();
+        assert!(v["items"][0].is_object(), "{v}");
+        let mixed = json!({ "items": [{ "file": "a.cs", "line": 1, "kind": "code", "text": "x" }, { "file": "a.cs", "line": 2, "kind": "code", "text": "y", "id": 4 }] });
+        let v: Value = serde_json::from_str(&output(&mixed, &Names::default())).unwrap();
+        assert!(v["items"][0].is_object() && v["items"][1].is_object(), "{v}");
         // Measured never shorter than output.
         assert!(measure(&env, &Names::default()).len() >= output(&env, &Names::default()).len());
     }
