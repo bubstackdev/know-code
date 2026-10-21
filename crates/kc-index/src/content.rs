@@ -396,7 +396,8 @@ fn read_files(
     std::thread::scope(|scope| {
         for _ in 0..threads.clamp(1, which.len()) {
             scope.spawn(|| {
-                let mut set = GramSet::default();
+                // Pending-only reads and skipped files never need the 2 MB bitmap.
+                let mut set = None::<GramSet>;
                 let (mut local, mut pairs) = (Vec::new(), Pairs::default());
                 let mut bytes = Vec::new();
                 loop {
@@ -423,7 +424,7 @@ fn read_files(
                     let skip = skip_reason(&f.path, &bytes);
                     if grams && skip.is_none() {
                         let id = f.id as u64;
-                        for g in set.grams(&bytes) {
+                        for g in set.get_or_insert_with(GramSet::default).grams(&bytes) {
                             pairs.push((g as u64) << 32 | id);
                         }
                         pairs.files.push(idx);
