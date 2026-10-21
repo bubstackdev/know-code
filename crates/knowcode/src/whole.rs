@@ -357,8 +357,7 @@ impl Overloads {
                         1 => " (1 site)".to_string(),
                         k => format!(" ({k} sites)"),
                     };
-                    let owner = d.container.as_deref().map(|c| format!("{c}.")).unwrap_or_default();
-                    self.list.push(format!("{n}: {owner}{} at {}{reached}", from_name(d), site(d)));
+                    self.list.push(format!("{n}: {} at {}{reached}", from_name(d), site(d)));
                 }
             }
         }
@@ -687,7 +686,7 @@ public class Startup
         assert!(rows[..6].iter().all(|r| r.get("test").is_none()) && rows[6]["test"] == true, "{env}");
         assert_eq!(env["callers"], "4 callers at 7 sites; in tests: 1 caller at 1 site", "{env}");
         let overloads: Vec<&str> = env["overloads"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert_eq!(overloads, ["1: Audit.Log(string m) at src/Audit.cs:4 (5 sites)", "2: Audit.Log(string m, int level) at src/Audit.cs:5 (1 site)"], "{env}");
+        assert_eq!(overloads, ["1: Log(string m) at src/Audit.cs:4 (5 sites)", "2: Log(string m, int level) at src/Audit.cs:5 (1 site)"], "{env}");
         let marks: Vec<Value> = rows.iter().map(|r| r["overload"].clone()).collect();
         assert_eq!(marks, [json!(1), json!(2), Value::Null, json!(1), json!(1), json!(1), json!(1)], "{env}");
         // The overload says the target: a resolved row's `targets` go.
