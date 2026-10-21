@@ -1884,6 +1884,9 @@ pub fn path_text(a: &crate::walk::PathAnswer) -> String {
                 a.explored
             );
         }
+        if let Some(n) = &a.next {
+            w!(out, "continue: {n}");
+        }
         return out;
     }
     for (i, p) in a.paths.iter().enumerate() {
@@ -1949,6 +1952,9 @@ pub fn flow_text(entry: &str, f: Option<&crate::flow::Flow>) -> String {
         let from = s.parent.and_then(|i| f.steps.get(i - 1)).map_or(f.start.repo.as_str(), |p| p.step.repo.as_str());
         w!(out, "{indent}  ↳ {}", step_edge(&s.step, from));
         cite_text(&mut out, &indent, s.step.cite.as_ref(), &mut seen);
+        if let Some(stop) = &s.stop {
+            w!(out, "{indent}    stops at the depth, {}+ steps past it; continue: {}", stop.beyond, stop.next);
+        }
     }
     if f.truncated {
         w!(out, "… truncated at the step limit (raise --limit or --max-repos, or lower --depth)");

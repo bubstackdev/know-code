@@ -14,4 +14,7 @@
 # 181840). The MSTest.Sdk and Aspire.AppHost.Sdk implicit usings (35436896, up 16).
 # Configurable conventions and privacy file: the `[conventions.*]` and privacy-format config, its parsing, checks
 # and `config list` rows, and call-role matching in the C# extractor (35503072, up 66176).
-35503072
+# Answers agents don't re-check: cited source with its check against the index, trace and impact on the walk graph,
+# and every stop's continuation call (0.2 items 2.1-2.3): 35850208, up 115648 from main before them (35734560) and
+# 347136 from the last budget.
+35850208

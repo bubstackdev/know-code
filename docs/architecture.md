@@ -105,13 +105,13 @@ cross-repo link until pruned, and an answer it would have joined names it with `
 gate holds the edge kinds it lists and follows, its evidence policy (an edge is followed, listed as a leaf, or left out
 and counted in the answer's `policy`), and the query it runs for: a cancelled query's walk stops at its next
 expansion. A hop across repos (an HTTP route, the bus, SQL, a deploy, a Terraform module) arrives with its confidence
-across the link and the evidence it rests on, worked out once for `trace`, `impact` and the check past where a walk
-stopped.
+across the link and the evidence it rests on, worked out once for every walk and the check past where a walk stopped.
 
-`path` and `flow` read every edge, in a repo and across repos, through one symbol graph
-(`crates/knowcode/src/walk.rs`) that opens repos as the walk reaches them, up to `max_repos`. The in-repo edges of
-`trace` and `impact` come from `crates/kc-store/src/trace.rs`, under the same edge filter, and their crossings through
-the same gate. Walk answers are pinned by a snapshot test (`crates/knowcode/tests/snapshots/walks.txt`).
+All four read every edge, in a repo and across repos, through one symbol graph (`crates/knowcode/src/walk.rs`) that
+opens repos as the walk reaches them, up to `max_repos`. `path` and `flow` read it forward and backward
+(`Graph::out`, `Graph::into`); `trace` and `impact` read the tree edges (`Graph::tree_edges`: a type's conformances
+and conformers too) and the crossings, in `crates/knowcode/src/tree.rs`. Every place a walk stops short names the
+exact call going on from it. Walk answers are pinned by a snapshot test (`crates/knowcode/tests/snapshots/walks.txt`).
 
 ## The cache lifecycle
 

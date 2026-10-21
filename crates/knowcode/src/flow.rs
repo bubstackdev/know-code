@@ -81,7 +81,25 @@ pub struct FlowStep {
     pub depth: u8,
     #[serde(flatten)]
     pub step: Step,
+    /// Where the flow stopped at this step with steps past it it didn't list: why, how many (at least), and the exact
+    /// call going on from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<FlowStop>,
 }
+
+/// A step the flow didn't go past, though steps lead on from it.
+#[derive(Debug, Clone, Serialize)]
+pub struct FlowStop {
+    /// `depth`: the step is at the depth asked for.
+    pub reason: &'static str,
+    /// Steps one hop past it, at least.
+    pub beyond: usize,
+    /// The call going on from it.
+    pub next: String,
+}
+
+/// Steps at the depth limit checked for what lies past them; past this many the rest are counted, not checked.
+const STOP_CHECKS: usize = 200;
 
 #[derive(Debug, Serialize)]
 pub struct Flow {
@@ -105,6 +123,9 @@ pub struct Flow {
     /// what a deeper flow would grow.
     #[serde(skip_serializing_if = "is_zero")]
     pub at_depth_limit: usize,
+    /// Steps at the depth limit not checked for steps past them (past the first [`STOP_CHECKS`]).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stops_unchecked: usize,
     /// What the answer's `incomplete` says about its cites (see [`crate::cite::Citer::incomplete`]).
     #[serde(skip)]
     pub cite_notes: Vec<kc_store::answer::Incomplete>,
@@ -210,6 +231,8 @@ struct Walker<'g, 'a> {
     payloads: HashMap<Key, Option<(Vec<String>, bool)>>,
     /// How many `constructs` steps the walk is under: callbacks stored for later don't run then.
     constructing: usize,
+    /// The steps the depth limit cut, by their index, with the symbol each is.
+    stops: Vec<(usize, Key, SymbolRow)>,
 }
 
 /// Marks a step one of several that may run (a provider, a branch): followed although ambiguous.
@@ -368,10 +391,11 @@ impl Walker<'_, '_> {
             let at = self.steps.len();
             let mut step = Step::by(self.g, &h);
             step.through = (*via).clone();
-            self.steps.push(FlowStep { index: at + 1, parent: parent.map(|p| p + 1), depth, step });
+            self.steps.push(FlowStep { index: at + 1, parent: parent.map(|p| p + 1), depth, step, stop: None });
             if depth + 1 >= self.opts.depth {
                 self.cut.insert(h.to);
                 self.cuts += 1;
+                self.stops.push((at, h.to, h.sym.clone()));
                 led = true;
                 continue;
             }
@@ -486,6 +510,7 @@ pub fn flow_in(g: &mut Graph, entry: &str, opts: &FlowOptions) -> Result<Option<
         cap: opts.max_steps,
         payloads: HashMap::new(),
         constructing: 0,
+        stops: Vec::new(),
     };
     let (sources, owners, kids) = if query::is_type_or_extension(&start.kind) {
         w.component(key, &start, 0)?
@@ -498,9 +523,37 @@ pub fn flow_in(g: &mut Graph, entry: &str, opts: &FlowOptions) -> Result<Option<
     w.seen.extend(sources.iter().map(|(k, _)| *k));
     w.grow(None, 0, sources, owners, kids, 0)?;
     let at_depth_limit = w.cuts;
-    let (steps, left_out, hidden, truncated) = (w.steps, w.left_out, w.hidden, w.truncated || g.repo_limit());
+    let cut_at = std::mem::take(&mut w.stops);
+    let (mut steps, left_out, hidden, truncated) = (w.steps, w.left_out, w.hidden, w.truncated || g.repo_limit());
+    // Where the depth stopped the flow: the steps leading on, each with the call going on from it.
+    let all = g.filter().policy().follows_ambiguous();
+    let mut unchecked = 0;
+    for (n, (at, k, sym)) in cut_at.into_iter().enumerate() {
+        if at >= steps.len() || steps[at].step.qualified != sym.qualified() {
+            continue;
+        }
+        if n >= STOP_CHECKS {
+            unchecked += 1;
+            continue;
+        }
+        let owners: Vec<String> = sym.container.clone().into_iter().collect();
+        let beyond = g.out(k, &sym)?.iter().filter(|h| !matches!(classify(h, &owners, false, all), Class::Leave(_))).count();
+        if beyond > 0 {
+            let s = &steps[at].step;
+            let mut call = serde_json::json!({ "entry": format!("{}:{}", s.file, s.line), "repo": s.repo, "depth": opts.depth });
+            let names = opts.edges.names();
+            if !names.is_empty() {
+                call["edges"] = serde_json::json!(names);
+            }
+            let policy = ops::policy_word(&opts.edges);
+            if !policy.is_empty() {
+                call["evidence"] = policy.into();
+            }
+            steps[at].stop = Some(FlowStop { reason: "depth", beyond, next: format!("kc_flow {call}") });
+        }
+    }
+    let stops_unchecked = unchecked;
     let mut start = Step::at(g, 0, &start);
-    let mut steps = steps;
     let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
     citer.flow(&mut start, &mut steps);
     let cite_notes = citer.incomplete();
@@ -510,7 +563,53 @@ pub fn flow_in(g: &mut Graph, entry: &str, opts: &FlowOptions) -> Result<Option<
             repos.push(s.step.repo.clone());
         }
     }
-    Ok(Some(Flow { entry: entry.to_string(), route, start, steps, repos, left_out, hidden, truncated, at_depth_limit, cite_notes }))
+    Ok(Some(Flow { entry: entry.to_string(), route, start, steps, repos, left_out, hidden, truncated, at_depth_limit, stops_unchecked, cite_notes }))
+}
+
+/// The `incomplete` entries saying where `f` stopped short: at its depth with steps leading on (the first named, with
+/// the call going on), stops left unchecked, and a step or repo limit (with the call raising it).
+fn stop_incomplete(f: &Flow, opts: &FlowOptions) -> Vec<kc_store::answer::Incomplete> {
+    use kc_store::answer::{Incomplete, Reason};
+    let mut out = Vec::new();
+    let stopped: Vec<&FlowStep> = f.steps.iter().filter(|s| s.stop.is_some()).collect();
+    if let Some(first) = stopped.first().and_then(|s| s.stop.as_ref()) {
+        let mut names: Vec<String> = stopped.iter().take(5).map(|s| s.step.qualified.clone()).collect();
+        if stopped.len() > 5 {
+            names.push(format!("… {} more", stopped.len() - 5));
+        }
+        let beyond: usize = stopped.iter().filter_map(|s| s.stop.as_ref()).map(|s| s.beyond).sum();
+        let deeper = if opts.depth < 16 { format!("pass depth {} (up to 16), or ", opts.depth + 1) } else { String::new() };
+        out.push(
+            Incomplete::new(
+                Reason::Depth,
+                format!(
+                    "flow: depth {} reached: {} there {} to {beyond}+ steps not listed ({}); see each step's stop",
+                    opts.depth,
+                    if stopped.len() == 1 { "1 step".to_string() } else { format!("{} steps", stopped.len()) },
+                    if stopped.len() == 1 { "leads" } else { "lead" },
+                    names.join(", ")
+                ),
+            )
+            .with_hint(format!("{deeper}continue: {}", first.next)),
+        );
+    }
+    if f.stops_unchecked > 0 {
+        out.push(
+            Incomplete::new(Reason::Deadline, format!("flow: {} steps at the depth limit not checked for steps past them", f.stops_unchecked))
+                .with_hint("lower depth, or flow from one of them"),
+        );
+    }
+    if f.truncated {
+        let mut call = serde_json::json!({ "entry": f.entry, "repo": f.start.repo, "depth": opts.depth, "limit": opts.max_steps.saturating_mul(2) });
+        if opts.max_repos < usize::MAX / 2 {
+            call["max_repos"] = opts.max_repos.saturating_mul(2).into();
+        }
+        out.push(
+            Incomplete::new(Reason::Capped, format!("flow: the step limit ({}) or repo limit ({}) cut it short: later branches were left out", opts.max_steps, opts.max_repos))
+                .with_hint(format!("continue: kc_flow {call}")),
+        );
+    }
+    out
 }
 
 /// `knowcode flow`: what happens end to end from `entry` in the queried repo.
@@ -535,6 +634,11 @@ pub fn flow(entry: &str, opts: &FlowOptions, args: &Scope) -> Result<Out<Option<
     ops::report_policy(&mut env, &opts.edges);
     for i in found.iter().flat_map(|f| f.cite_notes.clone()) {
         ops::push_incomplete(&mut env, i);
+    }
+    if let Some(f) = &found {
+        for i in stop_incomplete(f, opts) {
+            ops::push_incomplete(&mut env, i);
+        }
     }
     ops::finish(&mut env);
     Ok(Out { env, data: found })

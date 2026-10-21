@@ -118,10 +118,64 @@ impl<'a> Graph<'a> {
         }
     }
 
-    /// Follows only the edges `filter` allows.
+    /// Follows only the edges `filter` allows, crossings included.
     pub fn with_edges(mut self, filter: trace::EdgeFilter) -> Self {
+        self.crossing.set_filter(&filter);
         self.gate = Gate::new(filter);
         self
+    }
+
+    /// The walk's gate: its edges, evidence policy and query.
+    pub fn gate(&self) -> &Gate {
+        &self.gate
+    }
+
+    /// The crossings across repos the walk reads (HTTP, the bus, SQL, deploys, Terraform modules), and the repos open.
+    pub(crate) fn crossing(&mut self) -> &mut HttpCrossing<'a> {
+        &mut self.crossing
+    }
+
+    /// The root of repo `repo`.
+    pub fn root(&self, repo: usize) -> &Path {
+        &self.roots[repo]
+    }
+
+    /// The index of repo `repo`.
+    pub fn conn(&self, repo: usize) -> &rusqlite::Connection {
+        self.store(repo).conn()
+    }
+
+    /// The repo at `root` as the walk numbers it, once the crossing has opened it.
+    pub(crate) fn index_of(&mut self, root: &Path) -> usize {
+        self.index(root)
+    }
+
+    /// The edges `trace` and `impact` read at `sym` (node `k`), in its repo: what it uses (`out`: calls,
+    /// instantiations, a call through a DI-bound service to the implementation, a type's conformances), or what
+    /// reaches it (`in`: callers, uses, conformers, implementations of a protocol requirement and calls through one,
+    /// and with `dispatchers`, code dispatching an NgRx action an effect handles). Each with whether a SCIP index
+    /// answered it. Of the kinds the walk allows; its evidence policy is the walk's to apply (see [`Gate::judge`]).
+    pub fn tree_edges(&mut self, k: Key, sym: &SymbolRow, dir: &str, dispatchers: bool) -> Result<Vec<(Hop, bool)>> {
+        self.gate.expand()?;
+        self.expanded += 1;
+        let repo = k.0;
+        let conn = self.crossing.store(&self.roots[repo]).conn();
+        let cache = &mut self.caches[repo];
+        let mut edges = if dir == "out" { trace::out_edges(conn, cache, sym)? } else { trace::tree_in_edges(conn, cache, sym)? };
+        if dispatchers {
+            edges.extend(trace::ngrx_dispatchers(conn, sym)?);
+        }
+        let mut out = Vec::with_capacity(edges.len());
+        for (t, edge, confidence, site) in edges {
+            if !self.gate.allows(edge) {
+                continue;
+            }
+            let precise = cache.precise(t.id, site.as_deref());
+            let evidence = cache.evidence(t.id, edge, confidence, site.as_deref());
+            let binding = if edge == "via_di" { cache.binding(t.id).map(str::to_string) } else { None };
+            out.push((Hop { to: (repo, t.id), sym: t, edge, confidence, site, binding, via: None, action: None, evidence }, precise));
+        }
+        Ok(out)
     }
 
     /// The home repo's Angular routes.
@@ -1268,6 +1322,9 @@ pub struct PathAnswer {
     pub allow_ambiguous: bool,
     /// The node or repo budget stopped the search: a path may exist that it didn't reach.
     pub truncated: bool,
+    /// With no path found within the bounds asked: the call looking further (more hops, or ambiguous edges too).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// How long an edge is: confident edges short, ambiguous ones long.
@@ -1613,6 +1670,7 @@ pub fn search(g: &mut Graph, from: Vec<(Key, SymbolRow)>, to: Vec<(Key, SymbolRo
         repos_opened: s.g.repos_opened(),
         allow_ambiguous: opts.allow_ambiguous || opts.edges.policy().follows_ambiguous(),
         truncated: truncated || s.g.repo_limit(),
+        next: None,
     })
 }
 
@@ -1707,7 +1765,7 @@ pub fn path(from: &str, to: &str, to_repo: Option<&Path>, opts: &PathOptions, ar
     let focus: Vec<PathBuf> = roots.iter().cloned().chain(to_root.clone()).collect();
     let o = ops::open_fresh(root, args.no_sync)?;
     let summaries = ops::full_summaries_for(&o, &focus)?;
-    let (answer, cite_notes) = {
+    let (mut answer, cite_notes) = {
         let mut g = Graph::new(&o, &summaries, args.no_sync, opts.max_repos).with_edges(opts.edges.clone());
         // The ends past those skipped, at most MAX_ENDS of them, and whether more follow.
         let window = |all: Vec<SymbolRow>, skip: usize| -> (Vec<SymbolRow>, bool) {
@@ -1751,10 +1809,47 @@ pub fn path(from: &str, to: &str, to_repo: Option<&Path>, opts: &PathOptions, ar
         citer.path(&mut answer);
         (answer, citer.incomplete())
     };
+    // Where the search stopped: its budget (with the call raising it), or its hops with no path found (with the call
+    // going further).
+    let call = |set: &[(&str, serde_json::Value)]| {
+        let mut c = serde_json::json!({ "from": from, "to": to, "repo": repo_name(root), "max_hops": opts.max_hops.min(MAX_PATH_HOPS) });
+        if let Some(r) = to_repo {
+            c["to_repo"] = repo_name(r).into();
+        }
+        let policy = ops::policy_word(&opts.edges);
+        if !policy.is_empty() {
+            c["evidence"] = policy.into();
+        }
+        for (k, v) in set {
+            c[*k] = v.clone();
+        }
+        format!("kc_path {c}")
+    };
+    let mut stop = None;
+    if answer.truncated {
+        let next = call(&[("max_nodes", (opts.max_nodes.saturating_mul(2)).into()), ("max_repos", (opts.max_repos.saturating_mul(2)).into())]);
+        stop = Some(
+            Incomplete::new(
+                Reason::Capped,
+                format!("path search: the node budget ({}) or repo limit ({}) stopped it: a path may exist that it didn't reach", opts.max_nodes, opts.max_repos),
+            )
+            .with_hint(format!("continue: {next}")),
+        );
+    } else if answer.paths.is_empty() {
+        // A complete answer within the bounds asked: the call that looks further.
+        let next = if opts.max_hops < MAX_PATH_HOPS {
+            Some(call(&[("max_hops", MAX_PATH_HOPS.into())]))
+        } else if !opts.allow_ambiguous {
+            Some(call(&[("allow_ambiguous", true.into())]))
+        } else {
+            None
+        };
+        answer.next = next;
+    }
     let items = serde_json::json!([answer]);
     let mut env = ops::envelope(std::slice::from_ref(&o), items, 1, 1);
     ops::report_policy(&mut env, &opts.edges);
-    for i in cite_notes {
+    for i in stop.into_iter().chain(cite_notes) {
         ops::push_incomplete(&mut env, i);
     }
     // Asked for longer paths than the search goes: said, so a shorter search never passes for the one asked for.

@@ -24,6 +24,7 @@ mod setup;
 mod uninstall;
 mod update;
 mod tf;
+mod tree;
 mod walk;
 
 use std::path::PathBuf;

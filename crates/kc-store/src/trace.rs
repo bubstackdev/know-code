@@ -564,7 +564,8 @@ pub fn trace_filtered(conn: &Connection, query: &str, opts: &TraceOptions, filte
     Ok(Some(Trace { nodes: t.nodes, truncated: t.truncated, omitted: t.omitted, stopped: t.stops }))
 }
 
-fn node(
+/// A tree node for `s` at `depth` below `parent`, reached `direction` by an edge of kind `edge`.
+pub fn node(
     s: &SymbolRow,
     depth: u8,
     parent: Option<usize>,
@@ -1110,6 +1111,13 @@ pub fn in_edges(conn: &Connection, cache: &mut EdgeCache, sym: &SymbolRow) -> Re
     })
 }
 
+/// What reaches `sym` as `trace -d in` and `impact` list it ([`in_edges`]), a call through a protocol requirement
+/// several types implement keeping the call's own confidence: the trees list the requirement's callers under each
+/// implementation, where `path` and `flow` (reading [`in_edges`]) count the call as one of several (`ambiguous`).
+pub fn tree_in_edges(conn: &Connection, cache: &mut EdgeCache, sym: &SymbolRow) -> Result<Vec<Edge>> {
+    cache.with(conn, |t| t.in_edges(sym))
+}
+
 /// For a protocol (interface) member, its implementations in the types that declare the protocol; nothing for
 /// other symbols.
 pub fn implementations(conn: &Connection, sym: &SymbolRow) -> Result<Vec<SymbolRow>> {
@@ -1268,8 +1276,14 @@ pub struct Frontier {
     pub beyond: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// The exact call going on from it (set by the answer: the tool, its symbol, repo, depth and filters).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub next: String,
     #[serde(skip)]
     pub id: i64,
+    /// Which way the walk went past it: `in` or `out`.
+    #[serde(skip)]
+    pub dir: &'static str,
 }
 
 /// Of the symbols `stops` names (of the repo `conn` indexes), those with neighbours one hop past them in the stop's
@@ -1336,7 +1350,9 @@ pub fn frontier(
                 reason: s.reason,
                 beyond: beyond.len(),
                 repo: s.repo.clone(),
+                next: String::new(),
                 id: sym.id,
+                dir: s.dir,
             });
         }
     }
@@ -1722,7 +1738,7 @@ pub fn dependents_filtered(
 
 /// When `context` is an Entity Framework context with DbSets of the type `entity`: those DbSet properties. Empty
 /// otherwise.
-fn entity_sets(conn: &Connection, entity: &SymbolRow, context: &SymbolRow) -> Result<Vec<SymbolRow>> {
+pub fn entity_sets(conn: &Connection, entity: &SymbolRow, context: &SymbolRow) -> Result<Vec<SymbolRow>> {
     if !is_type_or_extension(&entity.kind) || context.kind != "class" {
         return Ok(Vec::new());
     }
@@ -1855,67 +1871,6 @@ pub fn symbol(conn: &Connection, id: i64) -> Result<Option<SymbolRow>> {
 
 /// The deepest `trace` goes.
 pub const MAX_TRACE_DEPTH: u8 = 3;
-
-/// The confidence of a hop across `via` reaching code found at `confidence`: an ambiguous link makes it ambiguous.
-pub fn via_confidence(via: &Via, confidence: &'static str) -> &'static str {
-    if via.link() == "ambiguous" { "ambiguous" } else { confidence }
-}
-
-/// Adds to `t`, below node `parent`, a node for `s`, which depends on `parent` across `via`: it requests `parent`
-/// over an HTTP route, or consumes a message `parent` is or publishes. `repo` names its repo when it isn't the traced
-/// one. Returns its index, or `None` when `t` already holds `max` nodes.
-pub fn push_via(t: &mut Trace, max: usize, parent: usize, creator: &Creator, repo: Option<String>, via: Via, direction: &'static str) -> Option<usize> {
-    if t.nodes.len() >= max {
-        t.truncated = true;
-        t.omitted += 1;
-        return None;
-    }
-    let (s, confidence, site) = creator;
-    let confidence = via_confidence(&via, confidence);
-    let mut n = node(s, t.nodes[parent].depth + 1, Some(parent), direction, via.edge(), confidence, site.clone());
-    n.evidence = via.evidence(confidence);
-    n.repo = repo;
-    n.http = via.http();
-    n.bus = via.bus();
-    n.sql = via.sql();
-    n.role = via.role();
-    n.deploy = via.deploy();
-    n.module = via.module();
-    t.nodes.push(n);
-    Some(t.nodes.len() - 1)
-}
-
-/// Grows `t` inward from node `at`, a symbol of the repo `conn` indexes (`repo` naming it when it isn't the traced
-/// repo), as [`trace`] does to `depth`: for continuing a trace past an HTTP route. Only an `exact` or `unique_name`
-/// node is grown.
-pub fn extend_in(conn: &Connection, repo: Option<String>, t: &mut Trace, at: usize, depth: u8, max: usize, filter: &EdgeFilter) -> Result<()> {
-    if t.nodes[at].confidence.is_empty() || !filter.follows(t.nodes[at].confidence, t.nodes[at].evidence.as_ref()) {
-        return Ok(());
-    }
-    let left = depth.clamp(1, MAX_TRACE_DEPTH).saturating_sub(t.nodes[at].depth);
-    let mut expanded = HashMap::from([(t.nodes[at].id, left)]);
-    let mut tr = Tracer {
-        conn,
-        repo,
-        nodes: std::mem::take(&mut t.nodes),
-        max,
-        truncated: false,
-        omitted: 0,
-        refs_by_name: HashMap::new(),
-        bindings: HashMap::new(),
-        filter: filter.clone(),
-        precise: HashSet::new(),
-        evidence: HashMap::new(),
-        one_of: false,
-        stops: Vec::new(),
-    };
-    let res = tr.expand(at, left, "in", &mut expanded);
-    t.nodes = tr.nodes;
-    t.truncated |= tr.truncated;
-    t.omitted += tr.omitted;
-    t.stopped.extend(tr.stops);
-    res
-}
 
 /// Symbols whose span overlaps a changed line range, innermost first: for each range, the overlapping symbols
 /// with no overlapping child.

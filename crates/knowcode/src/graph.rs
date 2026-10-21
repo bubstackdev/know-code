@@ -6,14 +6,16 @@
 //! - [`Crossing`]: a hop across repos (an HTTP route, the bus, SQL, a deploy, a Terraform module) from a symbol to the
 //!   code on the other side, each arrival with the confidence it has across the link and the evidence it rests on.
 //!   `trace`, `impact` and the frontier check read their crossings as these (see `ops::HttpCrossing::crossings`).
-//! - Confidence across a link: [`across`] for `path` and `flow` (`walk::Graph`), [`trace::via_confidence`] for
-//!   `trace` and `impact`. They differ on a `dominant` link (one of several handlers, preferred by a heuristic): the
-//!   graph labels the edge `unique_name` and lets its evidence (`name_dominant`) decide, the trees keep the code's own
-//!   confidence.
+//! - Confidence across a link, for every walk: [`across`]. An ambiguous link makes the edge ambiguous; a link matched
+//!   by name (`unique_name`: an SQL object by its name) or preferred by a heuristic (`dominant`: one of several
+//!   handlers or schemas) reaching exact code is `unique_name`, and its evidence (`sql_name`, `name_dominant`) lets the
+//!   policy decide. Before 0.2 `trace` and `impact` kept the code's own `exact` there.
 //!
-//! `walk::Graph` reads every edge of `path` and `flow`, in a repo and across repos, through its gate
-//! (`walk::Graph::out`, `walk::Graph::into`). The in-repo edges of `trace` and `impact` are read in `kc_store::trace`
-//! under the same edge filter; their crossings, through the same gate.
+//! `walk::Graph` reads every edge of every walk, in a repo and across repos, through its gate: `path` and `flow` through
+//! `walk::Graph::out` and `walk::Graph::into`, `trace` and `impact` through `walk::Graph::tree_edges` and the crossings
+//! (see `crate::tree`). The one difference left is what the trees list in a repo: a type's conformances and
+//! conformers, an interface member's implementations, and a call through an interface member several types implement
+//! at its own confidence (`kc_store::trace::tree_in_edges`), where `path` and `flow` count it as one of several.
 
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -90,7 +92,7 @@ pub fn across(confidence: &'static str, link: &'static str) -> &'static str {
 pub struct Arrival {
     /// The symbol, the confidence it was found at in its own repo, and the site.
     pub creator: trace::Creator,
-    /// The hop's confidence across the link (see [`trace::via_confidence`]).
+    /// The hop's confidence across the link (see [`across`]).
     pub confidence: &'static str,
     /// What the hop rests on: the link's evidence.
     pub evidence: Option<Evidence>,
@@ -121,7 +123,7 @@ impl Crossing {
         let arrivals = creators
             .into_iter()
             .map(|creator| {
-                let confidence = trace::via_confidence(&via, creator.1);
+                let confidence = across(creator.1, via.link());
                 let evidence = via.evidence(confidence);
                 Arrival { creator, confidence, evidence }
             })
