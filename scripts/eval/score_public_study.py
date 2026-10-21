@@ -145,6 +145,9 @@ def summarize(rows, questions, rng, baseline=None):
             'research_calls_mean': mean(r['research_calls'] for r in arm_rows),
             'knowcode_calls_mean': mean(r['knowcode_calls'] for r in arm_rows),
             'sessions_with_knowcode_call': sum((r['knowcode_calls'] or 0) > 0 for r in arm_rows),
+            'stale_answers': sum((r.get('stale_answers') or {}).get('stale', 0) for r in arm_rows),
+            'knowcode_answers_total': sum((r.get('stale_answers') or {}).get('answers', 0) for r in arm_rows),
+            'sessions_with_stale_answer': sum(((r.get('stale_answers') or {}).get('stale', 0)) > 0 for r in arm_rows),
             'budget_overruns': sum((r['overrun'] or 0) > 0 for r in arm_rows),
             'cost_usd': round(sum(r['cost_usd'] or 0 for r in arm_rows), 4),
             'knowcode_answers_with_claims': claims, 'knowcode_answers_rechecked': rechecked,
@@ -252,6 +255,7 @@ def score(freeze_path, run_dir, baseline=None):
             row['recheck_sequences'] = [{'tool': a['tool'], 'rechecked': a['rechecked'],
                                          'by': [{'tool': b['tool'], 'reasons': [reason_kind(x) for x in b['reasons']]} for b in a['by']]}
                                         for a in found['answers']]
+            row['stale_answers'] = stale_answers(events)
         rows.append(row)
     rng = random.Random(SEED)
     summary = summarize(rows, questions, rng, baseline)
@@ -264,6 +268,16 @@ def score(freeze_path, run_dir, baseline=None):
             **summary, 'sensitivity': dict(summary_note='Bitwarden HTTP questions 001 and 003 excluded (labels depend on '
                                                          'the separately licensed tree left out of the export)', **sensitivity),
             'sessions': rows}
+
+
+STALE = 'indexing is queued or running'
+
+
+def stale_answers(events):
+    """Descriptive (not a criterion): successful KnowCode answers saying the index was still being built."""
+    answers = [c for c in recheck.calls_in_order(events) if c['name'].startswith(recheck.KC_PREFIX) and c['result']
+               and c['result'].get('is_error') is not True]
+    return {'answers': len(answers), 'stale': sum(STALE in recheck.result_text(c['result']) for c in answers)}
 
 
 def reason_kind(reason):
