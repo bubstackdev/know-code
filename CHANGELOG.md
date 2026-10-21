@@ -39,6 +39,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   with `was`), `gone`, or `unchecked`. Every cite is checked, past the brief quote cap too. Any drift makes the answer
   `stale`, naming the cites. `--cite check` (MCP `cite: "check"`) gives the check without the lines. A `context`'s own
   symbol carries a check-only `cite`.
+- Walks that finish: every place a walk stops short gives the exact call going on from it. Each `frontier` stop of
+  `trace` and `impact` has `next` (`kc_impact {"depth":3,"repo":"web","symbol":"OrderService.place"}`), and the
+  `incomplete` hint ends with the first one. A `flow` step at the depth limit that leads on has `stop` `{reason,
+  beyond, next}`, and the flow is incomplete (`depth`); a flow cut by its step or repo limit, and a path search cut by
+  its node or repo budget, are `capped` with the call raising the limits; a path search finding nothing within its
+  hops has `next`, the call looking further.
+- `trace` and `impact` now walk the same symbol graph as `path` and `flow`, through the same gate. One visible change:
+  a hop across a link matched by name, from code found `exact`, is now `unique_name` in `trace` and `impact` too, as
+  `path` and `flow` always labelled it. That covers an SQL object matched by its name (evidence `sql_name`) and one of
+  several HTTP handlers or SQL schemas preferred by a heuristic (`dominant`, evidence `name_dominant`). The evidence is
+  as before; the hop now counts in `impact`'s `low_confidence`. Under the default evidence policy it is still followed;
+  under `confirmed` it is still left out.
 
 ## 0.1.1 (2026-10-20)
 

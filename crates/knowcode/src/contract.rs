@@ -255,7 +255,9 @@ impl Cuts {
                 {
                     self.add(format!("{path}.callers"), shown, Some(total), obj.get("callers_cursor").and_then(Value::as_str));
                 }
-                if obj.get("truncated").and_then(Value::as_bool) == Some(true) {
+                // A flow or a path search says its own cut, with the call going on (`flow::stop_incomplete`, `walk::path`).
+                let says_own = (obj.contains_key("entry") && obj.contains_key("steps")) || obj.contains_key("explored_forward");
+                if obj.get("truncated").and_then(Value::as_bool) == Some(true) && !says_own {
                     let shown = len("nodes").unwrap_or(0);
                     let omitted = obj.get("omitted").and_then(Value::as_u64);
                     // The ranked map within its budget is a sample; a walk at its node limit is cut.

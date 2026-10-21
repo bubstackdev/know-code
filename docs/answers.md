@@ -221,12 +221,25 @@ A walk never ends short without saying so. `impact` goes up to 16 hops, its budg
 (`--limit`); `trace` goes up to 3 and `path` up to 12. Asked deeper, the answer has `depth: {asked, walked}`.
 
 A symbol the walk listed but didn't walk past, that has dependents (for `trace`, neighbours) the answer doesn't
-list, is on the item's `frontier`: `{qualified, file, line, hop, reason, beyond}`. `reason` is `depth` (the walk
+list, is on the item's `frontier`: `{qualified, file, line, hop, reason, beyond, next}`. `reason` is `depth` (the walk
 reached its depth) or `ambiguous` (only ambiguous edges reach it, and the policy lists those without walking past);
-`beyond` counts the neighbours one hop past it, at least. Each kind makes the answer incomplete, reason `depth` or
-`policy`, naming the first frontier symbols and how to go on: a deeper depth, `--evidence all`, or a walk from one
-of them. Past 200 stops the rest are counted, not checked (reason `deadline`); a walk the symbol limit cut has its
+`beyond` counts the neighbours one hop past it, at least. `next` is the exact call going on from it: the same tool,
+on that symbol (as `file#Name` when other definitions share its name), in its repo, with the walk's depth, direction
+and filters, such as `kc_impact {"depth":3,"repo":"web","symbol":"OrderService.place"}`. Each kind makes the answer
+incomplete, reason `depth` or `policy`, naming the first frontier symbols and how to go on: a deeper depth,
+`--evidence all`, or the first stop's `next`. Past 200 stops the rest are counted, not checked (reason `deadline`); a walk the symbol limit cut has its
 stops counted, not checked (reason `depth`), beside the `capped` entry and cursor the cut gives.
+
+`flow` says the same of a step at its depth that leads on: the step's `stop` is `{reason, beyond, next}` (`next` a
+`kc_flow` call from the step's `file:line`), and the answer is incomplete with reason `depth`. A flow its step or repo
+limit cut is incomplete with reason `capped`, the hint being the call with the limits raised. A path search its node
+or repo budget stopped is incomplete with reason `capped`, likewise; one that found no path within its hops has `next`,
+the call looking further (up to 12 hops, then ambiguous edges too).
+
+`trace` and `impact` read every edge through the same symbol graph as `path` and `flow` (see
+[architecture](architecture.md#walks)), so a hop across a link matched by name is `unique_name` in every walk, even
+from code found `exact`: an SQL object matched by its name (evidence `sql_name`), or one of several HTTP handlers or
+SQL schemas preferred by a heuristic (evidence `name_dominant`).
 
 `impact` also lists `registrations`: the DI registrations of the types on its path (`{type, role, service,
 implementation, lifetime, file, line, hop}`), where the container makes or hands out a type no reference reaches.

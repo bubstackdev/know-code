@@ -2798,6 +2798,22 @@ pub fn policy_word(filter: &trace::EdgeFilter) -> String {
 }
 
 impl WalkFilter {
+    /// The filter as a walk's parameters, for a call continuing it: `edges`, `kinds` and `evidence` when set.
+    pub fn args(&self, edges: &trace::EdgeFilter) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        if !self.edges.is_empty() {
+            m.insert("edges".into(), json!(self.edges));
+        }
+        if !self.kinds.is_empty() {
+            m.insert("kinds".into(), json!(self.kinds));
+        }
+        let policy = policy_word(edges);
+        if !policy.is_empty() {
+            m.insert("evidence".into(), policy.into());
+        }
+        m
+    }
+
     fn edges(&self) -> Result<trace::EdgeFilter> {
         edge_filter(&self.edges, &self.evidence)
     }
@@ -2884,7 +2900,6 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
         "both" => trace::Direction::Both,
         other => bail!("direction must be in, out or both, not {other}"),
     };
-    let opts = trace::TraceOptions { direction, depth, max_nodes: limit };
     let edges = filter.edges()?;
     let kinds = filter.kinds()?;
     let roots = target_repos(&args.repos)?;
@@ -2896,31 +2911,39 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
     let mut cite_notes: Vec<Incomplete> = Vec::new();
     for root in &roots {
         let Some(mut o) = open_member(&roots, root, args.no_sync)? else { continue };
-        let mut t = trace::trace_filtered(o.store.conn(), symbol, &opts, &edges)?;
+        let mut start = query::definitions(o.store.conn(), symbol)?.into_iter().next();
         // A role the repo's plays use but another repo defines: traced there.
-        if t.is_none()
+        if start.is_none()
             && let Some((droot, at)) = role_defined_elsewhere(&o, symbol)?
         {
             let d = open_fresh(&droot, args.no_sync)?;
-            t = trace::trace_filtered(d.store.conn(), &at, &opts, &edges)?;
-            if t.is_some() {
+            start = query::definitions(d.store.conn(), &at)?.into_iter().next();
+            if start.is_some() {
                 opened.push(std::mem::replace(&mut o, d));
             }
         }
-        if let Some(mut t) = t {
-            let (inward, outward) = (direction != trace::Direction::Out, direction != trace::Direction::In);
-            let mut crossing = HttpCrossing::new(&o, args.no_sync).with_filter(&edges);
-            crossing.trace(&mut t, depth, limit, inward, outward)?;
+        if let Some(start) = start {
+            // The walk reads every edge through the symbol graph and its gate, as `path` and `flow` do.
+            let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
+            let mut t = crate::tree::trace(&mut g, &start, direction, depth, limit)?;
             // Where the tree stopped short: nodes it listed without growing that lead to symbols it doesn't list.
             let listed: HashSet<(Option<String>, i64)> = t.nodes.iter().map(|n| (n.repo.clone(), n.id)).collect();
             let stops = std::mem::take(&mut t.stopped);
             let budget = if t.truncated { 0 } else { FRONTIER_CHECKS };
-            frontiers.push(crossing.frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?);
-            ci_cuts.push(std::mem::take(&mut crossing.ci_cut));
-            let mut citer = crate::cite::Citer::new([]).with_stores(crossing.stores());
+            let mut fr = g.crossing().frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            // Each stop's exact call going on from it, the way the walk went.
+            let mut go_on = filter.args(&edges);
+            go_on.insert("depth".into(), depth.clamp(1, trace::MAX_TRACE_DEPTH).into());
+            crate::tree::continuations(&mut g, &mut fr.0, "kc_trace", &go_on, |f, call| {
+                call.insert("direction".into(), f.dir.into());
+            })?;
+            frontiers.push(fr);
+            ci_cuts.push(std::mem::take(&mut g.crossing().ci_cut));
+            let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
             citer.trace(&o.root, &mut t);
             cite_notes.extend(citer.incomplete());
-            drop(crossing);
+            drop(citer);
+            drop(g);
             hidden.push(if kinds.is_empty() { 0 } else { t.retain_kinds(|k| WalkFilter::keeps(&kinds, k)) });
             found.push((o.root.clone(), t));
         }
@@ -3497,10 +3520,9 @@ impl<'a> HttpCrossing<'a> {
         }
     }
 
-    /// Follows only the edges `filter` allows.
-    pub(crate) fn with_filter(mut self, filter: &trace::EdgeFilter) -> Self {
+    /// Follows only the edges `filter` allows (see [`crate::graph::Gate`]).
+    pub(crate) fn set_filter(&mut self, filter: &trace::EdgeFilter) {
         self.gate = crate::graph::Gate::new(filter.clone());
-        self
     }
 
     /// Opens at most `n` repos, the home repo included.
@@ -3535,9 +3557,9 @@ impl<'a> HttpCrossing<'a> {
         self.stores.len() + 1
     }
 
-    /// The indexes open, the home repo's first: what the answer read, for checking its cites (see `crate::cite`).
-    pub(crate) fn stores(&self) -> Vec<(PathBuf, &Store)> {
-        std::iter::once((self.home.root.clone(), &self.home.store)).chain(self.stores.iter().map(|(r, s)| (r.clone(), s))).collect()
+    /// The root of the queried repo.
+    pub(crate) fn home_root(&self) -> PathBuf {
+        self.home.root.clone()
     }
 
     /// Whether the repo at `root` is open.
@@ -3548,7 +3570,7 @@ impl<'a> HttpCrossing<'a> {
     /// The crossings from `qualified` (symbol `id`, defined in `file` of the repo at `root`, which is open) of the edge
     /// kinds the walk follows, each arrival at its confidence across the link (see [`crate::graph::Crossing`]): what
     /// `impact`, `trace` and the frontier check read across repos.
-    fn crossings(&mut self, root: &Path, id: i64, qualified: &str, file: &str) -> Result<Vec<crate::graph::Crossing>> {
+    pub(crate) fn crossings(&mut self, root: &Path, id: i64, qualified: &str, file: &str) -> Result<Vec<crate::graph::Crossing>> {
         let landings = self.landings(root, id, qualified, file)?;
         Ok(landings
             .into_iter()
@@ -3909,135 +3931,6 @@ impl<'a> HttpCrossing<'a> {
         Ok(out)
     }
 
-    /// Continues `impact` (of the home repo, to `depth` hops, at most `max` affected) across HTTP routes and the bus:
-    /// from each action among the changed or affected symbols to the code requesting it, from each message type or
-    /// publisher to the consumers, and on to their dependents. Each symbol is listed once, by its best way in any
-    /// order the crossings are found (see [`trace::Reached`]): a better way replaces its row and grows it again.
-    fn impact(&mut self, impact: &mut Impact, depth: u8, max: usize) -> Result<()> {
-        let depth = depth.clamp(1, trace::MAX_IMPACT_DEPTH);
-        let home = self.home.root.clone();
-        let mut seen: HashMap<PathBuf, trace::Reached> = HashMap::new();
-        let mine = seen.entry(home.clone()).or_default();
-        for s in &impact.scope {
-            mine.root(s.id);
-        }
-        for a in &impact.affected {
-            if let Some(h) = a.nearest_ambiguous_hop {
-                mine.offer(a.id, h, "ambiguous");
-            }
-            mine.offer(a.id, a.hop, a.confidence);
-        }
-        // Each row's place, by repo and symbol, for replacing it.
-        let mut rows: HashMap<(Option<String>, i64), usize> = impact.affected.iter().enumerate().map(|(i, a)| ((a.repo.clone(), a.id), i)).collect();
-        let mut changed = false;
-        let place = |impact: &mut Impact, rows: &mut HashMap<(Option<String>, i64), usize>, a: trace::Affected| match rows.get(&(a.repo.clone(), a.id)) {
-            Some(&i) => impact.affected[i] = a,
-            None => {
-                rows.insert((a.repo.clone(), a.id), impact.affected.len());
-                impact.affected.push(a);
-            }
-        };
-        // Symbols an HTTP route may continue from: in a repo, at a hop, expanded.
-        let mut work: Vec<(PathBuf, i64, String, String, u8)> = impact.scope.iter().map(|s| (home.clone(), s.id, s.qualified.clone(), s.file.clone(), 0)).collect();
-        let gate = self.gate.clone();
-        let expands = |a: &trace::Affected| gate.follows(a.confidence, a.evidence.as_ref());
-        work.extend(impact.affected.iter().filter(|a| expands(a)).map(|a| (home.clone(), a.id, a.qualified.clone(), a.file.clone(), a.hop)));
-        let mut i = 0;
-        while i < work.len() {
-            let (root, id, qualified, file, hop) = work[i].clone();
-            i += 1;
-            // Reached nearer since it was queued: that way's item continues from it.
-            if hop >= depth || seen.get(&root).and_then(|r| r.hop(id)).is_some_and(|h| h < hop) {
-                continue;
-            }
-            self.gate.expand()?;
-            for landing in self.crossings(&root, id, &qualified, &file)? {
-                let label = (landing.root != home).then(|| repo_name(&landing.root));
-                let seen_there = seen.entry(landing.root.clone()).or_default();
-                let mut from = Vec::new();
-                for arrival in &landing.arrivals {
-                    let verdict = landing.judge(&self.gate, &root, id, arrival);
-                    if verdict == Verdict::Exclude {
-                        continue;
-                    }
-                    let (s, confidence) = (arrival.sym(), arrival.confidence);
-                    let new = !rows.contains_key(&(label.clone(), s.id));
-                    if new && impact.affected.len() >= max {
-                        impact.truncated = true;
-                        break;
-                    }
-                    let Some(grow) = seen_there.offer_as(s.id, hop + 1, confidence, verdict == Verdict::Follow) else { continue };
-                    let a = trace::Affected {
-                        id: s.id,
-                        qualified: s.qualified(),
-                        kind: s.kind.clone(),
-                        file: s.file.clone(),
-                        line: s.line,
-                        hop: hop + 1,
-                        nearest_ambiguous_hop: None,
-                        class: trace::class_of(hop + 1, &s.file),
-                        edge: landing.via.edge(),
-                        confidence,
-                        via: qualified.clone(),
-                        site: arrival.site().clone(),
-                        repo: label.clone(),
-                        http: landing.via.http(),
-                        bus: landing.via.bus(),
-                        sql: landing.via.sql(),
-                        role: landing.via.role(),
-                        deploy: landing.via.deploy(),
-                        module: landing.via.module(),
-                        copies: Vec::new(),
-                        via_removed: false,
-                        evidence: arrival.evidence.clone(),
-                        cite: None,
-                    };
-                    if grow {
-                        // At the depth asked for, it is where the walk stops.
-                        if hop + 1 < depth { seen_there.grew(s.id) } else { seen_there.stop(s.id, hop + 1, "depth") }
-                        from.push(s.id);
-                        work.push((landing.root.clone(), a.id, a.qualified.clone(), a.file.clone(), a.hop));
-                    } else if verdict == Verdict::Leaf {
-                        seen_there.stop(s.id, hop + 1, "ambiguous");
-                    }
-                    place(impact, &mut rows, a);
-                    changed = true;
-                }
-                let room = max.saturating_sub(impact.affected.len());
-                let (more, truncated) =
-                    trace::dependents_filtered(self.store(&landing.root).conn(), &from, hop + 1, depth, room, seen_there, self.gate.filter())?;
-                impact.truncated |= truncated;
-                for mut a in more {
-                    a.repo.clone_from(&label);
-                    if expands(&a) {
-                        work.push((landing.root.clone(), a.id, a.qualified.clone(), a.file.clone(), a.hop));
-                    }
-                    place(impact, &mut rows, a);
-                    changed = true;
-                }
-            }
-        }
-        // Where the walk stopped, in every repo it reached: what a later way walked past is no stop.
-        let by_label: HashMap<Option<String>, &trace::Reached> = seen.iter().map(|(root, r)| ((*root != home).then(|| repo_name(root)), r)).collect();
-        let mut stops = std::mem::take(&mut impact.stopped);
-        for (label, r) in &by_label {
-            stops.extend(r.stops(label.as_deref()));
-        }
-        let mut kept = HashSet::new();
-        stops.retain(|st| !by_label.get(&st.repo).is_some_and(|r| r.was_grown(st.id)) && kept.insert((st.repo.clone(), st.id)));
-        impact.stopped = stops;
-        if changed {
-            // Each row's class by the nearest way, ambiguous or not, to it in its repo.
-            for a in &mut impact.affected {
-                if let Some(r) = by_label.get(&a.repo) {
-                    r.settle(a);
-                }
-            }
-            impact.recount();
-        }
-        Ok(())
-    }
-
     /// Of the symbols a walk stopped at (`stops`, see [`trace::Stop`]), those with neighbours one hop past them that
     /// `listed` says the answer doesn't have: through references, and for dependents, across HTTP routes, the bus,
     /// SQL and deploys too. At most `budget` are checked; also returns how many weren't.
@@ -4092,7 +3985,9 @@ impl<'a> HttpCrossing<'a> {
                         reason: st.reason,
                         beyond: beyond.len(),
                         repo: label.clone(),
+                        next: String::new(),
                         id: sym.id,
+                        dir: st.dir,
                     });
                 }
             }
@@ -4100,84 +3995,6 @@ impl<'a> HttpCrossing<'a> {
         Ok((out, unchecked))
     }
 
-    /// Continues the inward half of `t` (a trace of the home repo, to `depth`, at most `max` nodes) across HTTP
-    /// routes and the bus: below each action, the code requesting it; below each message type or publisher, the
-    /// consumers; each traced inward in its own repo.
-    fn trace(&mut self, t: &mut Trace, depth: u8, max: usize, inward: bool, outward: bool) -> Result<()> {
-        let depth = depth.clamp(1, trace::MAX_TRACE_DEPTH);
-        let mut roots: HashMap<String, PathBuf> = HashMap::new();
-        let mut crossed: HashSet<(PathBuf, i64)> = HashSet::new();
-        // Shallowest first, so a symbol in the tree twice crosses where the most depth is left below it.
-        let mut queue: std::collections::BinaryHeap<std::cmp::Reverse<(u8, usize)>> = std::collections::BinaryHeap::new();
-        let mut queued = 0;
-        loop {
-            for j in queued..t.nodes.len() {
-                queue.push(std::cmp::Reverse((t.nodes[j].depth, j)));
-            }
-            queued = t.nodes.len();
-            let Some(std::cmp::Reverse((_, at))) = queue.pop() else { break };
-            let n = &t.nodes[at];
-            let confident = !n.confidence.is_empty() && self.gate.follows(n.confidence, n.evidence.as_ref());
-            let expanded = at == 0 || (confident && ((n.direction == "in" && inward) || (n.direction == "out" && outward)));
-            if !expanded || n.depth >= depth {
-                continue;
-            }
-            let root = match &n.repo {
-                Some(name) => roots[name].clone(),
-                None => self.home.root.clone(),
-            };
-            if !crossed.insert((root.clone(), n.id)) {
-                continue;
-            }
-            let (id, qualified, file) = (n.id, n.qualified.clone(), n.file.clone());
-            self.gate.expand()?;
-            // A publishing method's consumers run after it (out); a message type's consumers depend on it (in), as
-            // does the code requesting an action.
-            let publisher = matches!(n.kind.as_str(), "method" | "function" | "init");
-            let downward = at == 0 || n.direction == "out";
-            for landing in self.crossings(&root, id, &qualified, &file)? {
-                let downstream = publisher && matches!(landing.via, trace::Via::Bus(_));
-                if (downstream && !(outward && downward)) || (!downstream && !inward) {
-                    continue;
-                }
-                let label = (landing.root != self.home.root).then(|| repo_name(&landing.root));
-                if let Some(l) = &label {
-                    roots.insert(l.clone(), landing.root.clone());
-                }
-                for a in &landing.arrivals {
-                    // Code already in the tree (a test calling the action directly, say) isn't listed again.
-                    if t.nodes.iter().any(|n| n.id == a.sym().id && n.repo == label) {
-                        continue;
-                    }
-                    if landing.judge(&self.gate, &root, id, a) == Verdict::Exclude {
-                        continue;
-                    }
-                    let dir = if downstream { "out" } else { "in" };
-                    let Some(idx) = trace::push_via(t, max, at, &a.creator, label.clone(), landing.via.clone(), dir) else { return Ok(()) };
-                    // A node the tree won't grow: at its depth, or reached by an ambiguous link.
-                    let (n, follows) = (&t.nodes[idx], self.gate.follows(a.confidence, a.evidence.as_ref()));
-                    let reason = if !follows { Some("ambiguous") } else if n.depth >= depth { Some("depth") } else { None };
-                    if let Some(reason) = reason {
-                        let stop = trace::Stop { id: n.id, hop: n.depth, reason, dir, repo: n.repo.clone() };
-                        t.stopped.push(stop);
-                    }
-                    // A publisher's bus hop happens at the publish call, in the publisher's repo; the consumer is
-                    // the node.
-                    if downstream && let Some(publish) = &landing.publish {
-                        let from = t.nodes[at].repo.clone();
-                        t.nodes[idx].site = Some(publish.clone());
-                        if from != label {
-                            t.nodes[idx].site_repo = Some(from.unwrap_or_else(|| repo_name(&self.home.root)));
-                        }
-                    }
-                    if !downstream {
-                        trace::extend_in(self.store(&landing.root).conn(), label.clone(), t, idx, depth, max, self.gate.filter())?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 pub struct DepsData {
@@ -4868,7 +4685,9 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             opened.push(o);
             continue;
         }
-        let mut impact = trace::impact_filtered(conn, &ids, p.depth, p.limit, &edges)?;
+        // The walk reads every edge through the symbol graph and its gate, as `path` and `flow` do.
+        let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
+        let mut impact = crate::tree::impact(&mut g, &ids, p.depth, p.limit)?;
         // The diff's pre-change side: code still naming a definition the change removed.
         let gone = crate::removed::removed(conn, &old_defs, &ids)?;
         let mut removed = Vec::new();
@@ -4885,7 +4704,8 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             }
             let room = p.limit.saturating_sub(impact.affected.len());
             let depth = p.depth.clamp(1, trace::MAX_IMPACT_DEPTH);
-            let (more, list, cut) = crate::removed::dependents(conn, &gone, &mut seen, &edges, depth, room)?;
+            let mut onward = |from: &[i64], room: usize, seen: &mut trace::Reached| crate::tree::dependents(&mut g, 0, from, 1, depth, room, seen);
+            let (more, list, cut) = crate::removed::dependents(conn, &gone, &mut seen, &edges, depth, room, &mut onward)?;
             // A better way to a symbol listed already replaces its row; each row's class by its nearest way.
             let mut at: HashMap<i64, usize> = impact.affected.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
             for a in more {
@@ -4906,17 +4726,21 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             impact.recount();
             removed = list;
         }
-        let mut crossing = HttpCrossing::new(&o, args.no_sync).with_filter(&edges);
-        crossing.impact(&mut impact, p.depth, p.limit)?;
+        crate::tree::cross_impact(&mut g, &mut impact, p.depth, p.limit)?;
+        let crossing = g.crossing();
         // Where the walk stopped short: the symbols it listed without walking past that have dependents it doesn't list.
         let listed: HashSet<(Option<String>, i64)> =
             impact.affected.iter().map(|a| (a.repo.clone(), a.id)).chain(impact.scope.iter().map(|s| (None, s.id))).collect();
         // A walk the symbol limit cut already says so, with a cursor: its stops are counted, not checked (checking costs
         // what one more hop does).
         let budget = if impact.truncated { 0 } else { FRONTIER_CHECKS };
-        let (frontier, frontier_unchecked) =
+        let (mut frontier, frontier_unchecked) =
             crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
+        // Each stop's exact call going on from it.
+        let mut go_on = p.filter.args(&edges);
+        go_on.insert("depth".into(), p.depth.clamp(1, trace::MAX_IMPACT_DEPTH).into());
+        crate::tree::continuations(&mut g, &mut frontier, "kc_impact", &go_on, |_, _| {})?;
         let registrations = registrations_on_path(conn, &impact)?;
         if impact.affected.iter().any(|a| kc_store::sql::is_sql_path(&a.file)) {
             impact.collapse_sql_copies();
@@ -5019,12 +4843,12 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         } else {
             Vec::new()
         };
-        let mut citer = crate::cite::Citer::new([]).with_stores(crossing.stores());
+        let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
         citer.impact(&o.root, &mut impact);
         citer.refs(&o.root, cross_repo.iter_mut());
         cite_notes.extend(citer.incomplete());
         drop(citer);
-        drop(crossing);
+        drop(g);
         found.push(ImpactRepo {
             root: o.root.clone(),
             impact,
@@ -5174,6 +4998,8 @@ pub fn frontier_incomplete(
     what: &str,
 ) -> Vec<Incomplete> {
     let symbols = |n: usize| if n == 1 { "1 symbol".to_string() } else { format!("{n} symbols") };
+    // The exact call going on from the first stop of a reason.
+    let next = |reason: &str| frontier.iter().find(|f| f.reason == reason && !f.next.is_empty()).map(|f| format!("; continue: {}", f.next)).unwrap_or_default();
     let named = |reason: &str| -> (usize, usize, String) {
         let of: Vec<&trace::Frontier> = frontier.iter().filter(|f| f.reason == reason).collect();
         let beyond = of.iter().map(|f| f.beyond).sum();
@@ -5198,7 +5024,7 @@ pub fn frontier_incomplete(
         };
         out.push(
             Incomplete::new(Reason::Depth, format!("{repo}: {reached}: {} there {} {beyond}+ {what} not listed ({names}); see frontier", symbols(n), if n == 1 { "has" } else { "have" }))
-                .with_hint(deeper),
+                .with_hint(format!("{deeper}{}", next("depth"))),
         );
     }
     let (n, beyond, names) = named("ambiguous");
@@ -5212,7 +5038,7 @@ pub fn frontier_incomplete(
                     if n == 1 { "has" } else { "have" }
                 ),
             )
-            .with_hint(format!("pass evidence all to walk past ambiguous edges (marked ambiguous), or {cmd} one of them")),
+            .with_hint(format!("pass evidence all to walk past ambiguous edges (marked ambiguous), or {cmd} one of them{}", next("ambiguous"))),
         );
     }
     if unchecked > 0 && cut {
@@ -8745,10 +8571,11 @@ public class OrderService\n{\n    private readonly OrderStore _store;\n    publi
             [
                 (1, None, "shop.place_order".to_string(), "writes", "exact", None),
                 (1, None, "shop.big_orders".to_string(), "reads", "exact", None),
-                // Ranked by hop: the code across the link comes before the next hop's routines.
-                (1, api_name.clone(), "OrderStore.Save".to_string(), "sql", "exact", None),
+                // Ranked by hop: the code across the link comes before the next hop's routines. The table is matched by
+                // its name across repos: `unique_name` (evidence `sql_name`), as every walk labels such a link.
+                (1, api_name.clone(), "OrderStore.Save".to_string(), "sql", "unique_name", None),
                 (2, None, "shop.nightly".to_string(), "calls", "exact", None),
-                (2, api_name.clone(), "OrderStore.Place".to_string(), "sql", "exact", None),
+                (2, api_name.clone(), "OrderStore.Place".to_string(), "sql", "unique_name", None),
                 (3, api_name.clone(), "OrderService.Checkout".to_string(), "calls", r.impact.affected[5].confidence, None),
             ]
         );

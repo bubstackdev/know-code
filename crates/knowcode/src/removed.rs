@@ -112,6 +112,10 @@ pub fn removed(conn: &Connection, old: &[OldDefinition], scope: &[i64]) -> Resul
 ///
 /// A reference counts when it is in the definition's language and its receiver's type, if known, is the definition's
 /// container. It is `unique_name` when nothing else of the name is left in that language (or the receiver's type
+/// Walks on from code naming a removed definition (symbols reached at hop 1): `(from, room, seen)` to the rows found
+/// and whether the room cut them (see `crate::tree::dependents`).
+pub type OnwardWalk<'w> = dyn FnMut(&[i64], usize, &mut trace::Reached) -> Result<(Vec<Affected>, bool)> + 'w;
+
 /// says it is this one), else `ambiguous`; one the current graph binds `exact`ly to another definition is left out.
 pub fn dependents(
     conn: &Connection,
@@ -120,6 +124,7 @@ pub fn dependents(
     filter: &EdgeFilter,
     depth: u8,
     max: usize,
+    onward_walk: &mut OnwardWalk,
 ) -> Result<(Vec<Affected>, Vec<Removed>, bool)> {
     let mut affected: Vec<Affected> = Vec::new();
     // The code naming a removed definition confidently, first reached so (or nearer) here: the walk goes on from it.
@@ -222,7 +227,7 @@ pub fn dependents(
     }
     // Onward from the code naming a removed definition, as from any affected symbol; an ambiguous link isn't followed.
     if !truncated && depth > 1 && !onward.is_empty() {
-        let (more, cut) = trace::dependents_filtered(conn, &onward, 1, depth, max - affected.len(), seen, filter)?;
+        let (more, cut) = onward_walk(&onward, max - affected.len(), seen)?;
         affected.extend(more);
         truncated |= cut;
     }

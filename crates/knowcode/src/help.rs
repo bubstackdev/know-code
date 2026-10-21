@@ -319,8 +319,8 @@ A call made through an interface member, its base interface's (`Impl : IDerived`
 `IBase`), or the abstract or virtual base-class member an override overrides reaches the implementation (edge
 `via_protocol`). Depth goes up to 3: asked deeper, the answer says it walked 3 (`depth: {asked, walked}`). Nodes the
 tree lists without growing that lead further (at the depth, or reached only by an ambiguous edge) are its `frontier`
-({qualified, file, line, hop, reason, beyond}), with an `incomplete` entry (reason `depth`, or `policy` for ambiguous
-edges) saying how to go on."#,
+({qualified, file, line, hop, reason, beyond, next}: `next` is the exact kc_trace call going on from it), with an
+`incomplete` entry (reason `depth`, or `policy` for ambiguous edges) saying how to go on."#,
     },
     Topic {
         name: "kc_path",
@@ -339,8 +339,9 @@ By default only exact and unique_name edges (a dominant HTTP or SQL link counts 
 3, ambiguous 10, plus 1 for a type use or instantiation, or for an http or sql link that is dominant or unique_name; 1
 between a type and its member. Found by bidirectional search from both ends within `max_hops` (default 8),
 `max_nodes` (default 2000) and `max_repos` (default 16); `explored` counts the symbols whose edges were read. No path:
-`paths` is empty, meaning no confident path within `max_hops` unless `allow_ambiguous`; `truncated` says a node or repo
-budget stopped the search first. Answers as indented text by default (each step under the one before, with the
+`paths` is empty, meaning no confident path within `max_hops` unless `allow_ambiguous`, and `next` is the call
+looking further (more hops, or ambiguous edges too); `truncated` says a node or repo budget stopped the search first,
+with a `capped` entry whose hint is the call raising it. Answers as indented text by default (each step under the one before, with the
 relation reaching it); `format: json` for the envelope. `edges` limits the edge kinds a path may use; `evidence` as in
 `evidence`."#,
     },
@@ -374,8 +375,10 @@ Publish call at the site of an http or bus edge).
 
 `steps` are numbered depth first (index, parent, depth), each with repo, symbol, file:line, the edge reaching it, its
 confidence and site; each symbol appears once, unless the depth limit (`depth`, default 10, up to 16) cut it where first
-reached and it is reached again nearer the entry, where it is grown. `limit` caps the steps (default 40), `max_repos`
-the repos opened (default 16). Answers as an indented tree of text by default; `format: json` for the envelope. `edges`
+reached and it is reached again nearer the entry, where it is grown. A step at the depth limit that leads on has `stop`
+({reason, beyond, next}: `next` the exact kc_flow call going on from it), and the answer an `incomplete` entry (reason
+`depth`). `limit` caps the steps (default 40), `max_repos` the repos opened (default 16); a flow they cut has a
+`capped` entry whose hint is the call raising them. Answers as an indented tree of text by default; `format: json` for the envelope. `edges`
 limits the edge kinds followed (calls, reads, writes, uses, http, bus, sql, ngrx, dialog, child); `evidence` as in
 `evidence`."#,
     },
@@ -403,8 +406,8 @@ is "shown": the counts are of the affected symbols listed, not all.
 
 Where the walk stops: the walk goes up to 16 hops (deeper asked: `depth: {asked, walked}`), its budget the symbol
 limit. Listed symbols it didn't walk past that have dependents it doesn't list are its `frontier` ({qualified, file,
-line, hop, reason, beyond}: `depth` at the depth reached, `ambiguous` reached only by ambiguous edges; `beyond`
-counts the dependents past it, at least), each kind with an `incomplete` entry (reason `depth` or `policy`) naming
+line, hop, reason, beyond, next}: `depth` at the depth reached, `ambiguous` reached only by ambiguous edges; `beyond`
+counts the dependents past it, at least; `next` is the exact kc_impact call going on from it), each kind with an `incomplete` entry (reason `depth` or `policy`) naming
 the first and how to go on: a deeper depth, `evidence: all`, or kc_impact on one of them; a walk the limit cut
 counts its stops without checking them. Calls through a base
 interface's member or an overridden base-class member reach an implementation as calls through its own interface
