@@ -2254,6 +2254,43 @@ public class StatementRepository\n{\n    public Task Get(int id) => null;\n    p
                 put(format!("path {from} -> {to} one_way={one_way} [{policy}]"), p.env, text);
             }
         }
+        // A route two repos serve, one preferred by a heuristic (`dominant`), requested by code importing the contract
+        // (an exact reference): the confidence and evidence each walk gives the hop across the link.
+        let dom_web = repo(
+            &base,
+            "dom-web",
+            &[
+                (
+                    "src/contracts.ts",
+                    "@RequestContract({ endpoint: 'snapdom', httpMethod: HttpMethods.post })\nexport class ApiSnapDom {}\n@RequestContract({ endpoint: 'snapcart', httpMethod: HttpMethods.get })\nexport class ApiSnapCart {}\n",
+                ),
+                (
+                    "src/dom.service.ts",
+                    "import { ApiSnapDom, ApiSnapCart } from './contracts';\nexport class DomService {\n  constructor(private http: HttpService) {}\n  place(): void {\n    this.http.send(new ApiSnapDom());\n  }\n  cart(): void {\n    this.http.send(new ApiSnapCart());\n  }\n}\n",
+                ),
+            ],
+        );
+        let dom_api = repo(
+            &base,
+            "dom-api",
+            &[("src/DomController.cs", "public class DomController : Controller\n{\n    [HttpPost(\"snapdom\")]\n    public void Orders() { }\n    [HttpGet(\"snapcart\")]\n    public void Carts() { }\n}\n")],
+        );
+        let _dom_other = repo(&base, "dom-other", &[("src/OtherController.cs", "public class OtherController : Controller\n{\n    [HttpPost(\"snapdom\")]\n    public void Orders() { }\n}\n")]);
+        for policy in ["", "confirmed"] {
+            let f = crate::ops::WalkFilter { evidence: policy.to_string(), ..Default::default() };
+            let t = crate::ops::trace("DomController.Orders", "in", 2, 500, &f, &scope(&dom_api)).unwrap();
+            let text: String = t.data.found.iter().map(|(r, tr)| crate::render::trace_text(r, tr, t.data.multi)).collect();
+            put(format!("trace in DomController.Orders (dominant route) [{policy}]"), t.env, text);
+            let ip = crate::ops::ImpactParams { symbol: Some("DomController.Orders".into()), depth: 3, limit: 500, filter: f.clone(), ..Default::default() };
+            let i = crate::ops::impact(&ip, &scope(&dom_api)).unwrap();
+            let text = crate::render::impact_text(&i.data, i.data.len() > 1);
+            put(format!("impact DomController.Orders (dominant route) [{policy}]"), i.env, text);
+            let edges = crate::ops::edge_filter(&[], policy).unwrap();
+            let po = PathOptions { edges, max_nodes: 5000, ..opts(false) };
+            let p = path("DomService.place", "DomController.Orders", Some(&dom_api), &po, &scope(&dom_web)).unwrap();
+            let text = crate::render::path_text(&p.data);
+            put(format!("path DomService.place -> DomController.Orders (dominant route) [{policy}]"), p.env, text);
+        }
         // Repos are named by their canonical path, which may differ from the base's (`/var` is `/private/var`).
         let canonical = std::fs::canonicalize(&*base).unwrap_or_else(|_| base.to_path_buf());
         let got = out.replace(canonical.to_string_lossy().as_ref(), "<base>").replace(base.to_string_lossy().as_ref(), "<base>");

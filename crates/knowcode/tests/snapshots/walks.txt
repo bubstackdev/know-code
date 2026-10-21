@@ -12758,3 +12758,647 @@ path 2 of 2: 7 hops, weight 16
                 method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4
 explored 23 nodes (16 forward, 7 backward), 3 repos open
 
+=== trace in DomController.Orders (dominant route) []
+{
+  "_resume": {
+    "lists": {
+      "/items/0/nodes": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/nodes",
+        "more": false,
+        "n": 500,
+        "o0": 0
+      }
+    },
+    "q": {
+      "depth": 2,
+      "direction": "in",
+      "limit": 500,
+      "op": "trace",
+      "repos": [
+        "<base>/dom-api"
+      ],
+      "symbol": "DomController.Orders"
+    }
+  },
+  "complete": true,
+  "dirty": false,
+  "items": [
+    {
+      "nodes": [
+        {
+          "cite": {
+            "at": "src/DomController.cs:4",
+            "check": "verified",
+            "text": "public void Orders() { }"
+          },
+          "depth": 0,
+          "direction": "",
+          "file": "src/DomController.cs",
+          "id": 2,
+          "kind": "method",
+          "line": 3,
+          "qualified": "DomController.Orders"
+        },
+        {
+          "cite": {
+            "at": "src/dom.service.ts:5",
+            "check": "verified",
+            "text": "this.http.send(new ApiSnapDom());"
+          },
+          "confidence": "exact",
+          "depth": 1,
+          "direction": "in",
+          "edge": "http",
+          "evidence": {
+            "assumptions": [
+              "same_deployment"
+            ],
+            "mechanism": "name_dominant"
+          },
+          "file": "src/dom.service.ts",
+          "http": {
+            "assumptions": [
+              "same_deployment"
+            ],
+            "contract": "ApiSnapDom",
+            "link": "dominant",
+            "path": "snapdom",
+            "verb": "POST"
+          },
+          "id": 6,
+          "kind": "method",
+          "line": 4,
+          "parent": 0,
+          "qualified": "DomService.place",
+          "repo": "dom-web",
+          "site": "src/dom.service.ts:5"
+        }
+      ],
+      "repo": "dom-api",
+      "truncated": false
+    }
+  ],
+  "repo": "<base>/dom-api",
+  "total": 1,
+  "truncated": false
+}
+--- text
+method DomController.Orders  src/DomController.cs:3
+     4 | public void Orders() { }
+reached by (in):
+  requested by (http POST /snapdom dominant: new ApiSnapDom) method DomService.place  dom-web/src/dom.service.ts:4  [exact] at dom-web/src/dom.service.ts:5
+       5 | this.http.send(new ApiSnapDom());
+
+=== impact DomController.Orders (dominant route) []
+{
+  "_resume": {
+    "lists": {
+      "/items/0/affected": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/affected",
+        "more": false,
+        "n": 500,
+        "o0": 0
+      },
+      "/items/0/coupled": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/coupled",
+        "more": false,
+        "n": 20,
+        "o0": 0
+      },
+      "/items/0/cross_repo": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/cross_repo",
+        "more": false,
+        "n": 500,
+        "o0": 0
+      }
+    },
+    "q": {
+      "depth": 3,
+      "limit": 500,
+      "op": "impact",
+      "order": "rank",
+      "repos": [
+        "<base>/dom-api"
+      ],
+      "symbol": "DomController.Orders"
+    }
+  },
+  "complete": true,
+  "dirty": false,
+  "items": [
+    {
+      "affected": [
+        {
+          "cite": {
+            "at": "src/dom.service.ts:5",
+            "check": "verified",
+            "text": "this.http.send(new ApiSnapDom());"
+          },
+          "class": "direct",
+          "confidence": "exact",
+          "edge": "http",
+          "evidence": {
+            "assumptions": [
+              "same_deployment"
+            ],
+            "mechanism": "name_dominant"
+          },
+          "file": "src/dom.service.ts",
+          "hop": 1,
+          "http": {
+            "assumptions": [
+              "same_deployment"
+            ],
+            "contract": "ApiSnapDom",
+            "link": "dominant",
+            "path": "snapdom",
+            "verb": "POST"
+          },
+          "id": 6,
+          "kind": "method",
+          "line": 4,
+          "qualified": "DomService.place",
+          "repo": "dom-web",
+          "site": "src/dom.service.ts:5",
+          "via": "DomController.Orders"
+        }
+      ],
+      "changes": [],
+      "counts": {
+        "coupled": 0,
+        "cross_repo": 0,
+        "direct": 1
+      },
+      "coupled": [],
+      "cross_repo": [],
+      "low_confidence": 0,
+      "nearest": "direct",
+      "repo": "dom-api",
+      "scope": [
+        {
+          "cite": {
+            "at": "src/DomController.cs:4",
+            "check": "verified",
+            "text": "public void Orders() { }"
+          },
+          "depth": 0,
+          "direction": "",
+          "file": "src/DomController.cs",
+          "id": 2,
+          "kind": "method",
+          "line": 3,
+          "qualified": "DomController.Orders"
+        }
+      ],
+      "tables": [],
+      "truncated": false,
+      "worst": "critical"
+    }
+  ],
+  "repo": "<base>/dom-api",
+  "total": 1,
+  "truncated": false
+}
+--- text
+by proximity: direct 1; low-confidence 0
+method DomController.Orders  src/DomController.cs:3
+     4 | public void Orders() { }
+  requested by (http POST /snapdom dominant: new ApiSnapDom) method DomService.place  dom-web/src/dom.service.ts:4  [exact] direct at dom-web/src/dom.service.ts:5
+       5 | this.http.send(new ApiSnapDom());
+
+=== path DomService.place -> DomController.Orders (dominant route) []
+{
+  "_resume": {
+    "lists": {
+      "/items/0/from_candidates": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/from_candidates",
+        "more": false,
+        "n": 16,
+        "o0": 0
+      },
+      "/items/0/paths": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/paths",
+        "more": false,
+        "n": 3,
+        "o0": 0
+      },
+      "/items/0/to_candidates": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/to_candidates",
+        "more": false,
+        "n": 16,
+        "o0": 0
+      }
+    },
+    "q": {
+      "allow_ambiguous": false,
+      "from": "DomService.place",
+      "from_skip": 0,
+      "max_hops": 8,
+      "max_nodes": 5000,
+      "max_repos": 16,
+      "one_way": false,
+      "op": "path",
+      "paths": 3,
+      "repos": [
+        "<base>/dom-web"
+      ],
+      "to": "DomController.Orders",
+      "to_repo": "<base>/dom-api",
+      "to_skip": 0
+    }
+  },
+  "complete": true,
+  "dirty": false,
+  "items": [
+    {
+      "allow_ambiguous": false,
+      "explored": 5,
+      "explored_backward": 2,
+      "explored_forward": 3,
+      "from": {
+        "cite": {
+          "at": "src/dom.service.ts:4",
+          "check": "verified",
+          "text": "place(): void {"
+        },
+        "file": "src/dom.service.ts",
+        "kind": "method",
+        "line": 4,
+        "qualified": "DomService.place",
+        "repo": "dom-web"
+      },
+      "max_hops": 8,
+      "paths": [
+        {
+          "hops": 1,
+          "steps": [
+            {
+              "cite": {
+                "at": "src/dom.service.ts:4",
+                "check": "verified",
+                "text": "place(): void {"
+              },
+              "file": "src/dom.service.ts",
+              "kind": "method",
+              "line": 4,
+              "qualified": "DomService.place",
+              "repo": "dom-web"
+            },
+            {
+              "cite": {
+                "at": "src/dom.service.ts:5",
+                "check": "verified",
+                "repo": "dom-web",
+                "text": "this.http.send(new ApiSnapDom());"
+              },
+              "confidence": "unique_name",
+              "edge": "http",
+              "evidence": {
+                "assumptions": [
+                  "same_deployment"
+                ],
+                "mechanism": "name_dominant"
+              },
+              "file": "src/DomController.cs",
+              "http": {
+                "assumptions": [
+                  "same_deployment"
+                ],
+                "contract": "ApiSnapDom",
+                "link": "dominant",
+                "path": "snapdom",
+                "verb": "POST"
+              },
+              "kind": "method",
+              "line": 3,
+              "qualified": "DomController.Orders",
+              "repo": "dom-api",
+              "site": "src/dom.service.ts:5"
+            }
+          ],
+          "weight": 4
+        }
+      ],
+      "repos_opened": 3,
+      "to": {
+        "cite": {
+          "at": "src/DomController.cs:4",
+          "check": "verified",
+          "text": "public void Orders() { }"
+        },
+        "file": "src/DomController.cs",
+        "kind": "method",
+        "line": 3,
+        "qualified": "DomController.Orders",
+        "repo": "dom-api"
+      },
+      "truncated": false
+    }
+  ],
+  "repo": "<base>/dom-web",
+  "total": 1,
+  "truncated": false
+}
+--- text
+path 1 of 1: 1 hops, weight 4
+  [dom-web] method DomService.place  src/dom.service.ts:4
+       4 | place(): void {
+    ↳ requests (http POST /snapdom dominant: new ApiSnapDom) [unique_name] at dom-web/src/dom.service.ts:5
+         5 | this.http.send(new ApiSnapDom());
+    [dom-api] method DomController.Orders  src/DomController.cs:3
+explored 5 nodes (3 forward, 2 backward), 3 repos open
+
+=== trace in DomController.Orders (dominant route) [confirmed]
+{
+  "_resume": {
+    "lists": {
+      "/items/0/nodes": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/nodes",
+        "more": false,
+        "n": 500,
+        "o0": 0
+      }
+    },
+    "q": {
+      "depth": 2,
+      "direction": "in",
+      "evidence": "confirmed",
+      "limit": 500,
+      "op": "trace",
+      "repos": [
+        "<base>/dom-api"
+      ],
+      "symbol": "DomController.Orders"
+    }
+  },
+  "complete": false,
+  "dirty": false,
+  "incomplete": [
+    {
+      "detail": "evidence confirmed: 1 edge left out (name_dominant 1); what lies past them was not read",
+      "hint": "the default policy (--evidence default; MCP evidence: \"default\") lists them",
+      "reason": "policy"
+    }
+  ],
+  "items": [
+    {
+      "nodes": [
+        {
+          "cite": {
+            "at": "src/DomController.cs:4",
+            "check": "verified",
+            "text": "public void Orders() { }"
+          },
+          "depth": 0,
+          "direction": "",
+          "file": "src/DomController.cs",
+          "id": 2,
+          "kind": "method",
+          "line": 3,
+          "qualified": "DomController.Orders"
+        }
+      ],
+      "repo": "dom-api",
+      "truncated": false
+    }
+  ],
+  "policy": {
+    "evidence": "confirmed",
+    "excluded": 1,
+    "excluded_by": {
+      "name_dominant": 1
+    }
+  },
+  "repo": "<base>/dom-api",
+  "total": 1,
+  "truncated": false
+}
+--- text
+method DomController.Orders  src/DomController.cs:3
+     4 | public void Orders() { }
+nothing reaches it or is reached from it within the depth, direction and filters asked for
+
+=== impact DomController.Orders (dominant route) [confirmed]
+{
+  "_resume": {
+    "lists": {
+      "/items/0/affected": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/affected",
+        "more": false,
+        "n": 500,
+        "o0": 0
+      },
+      "/items/0/coupled": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/coupled",
+        "more": false,
+        "n": 20,
+        "o0": 0
+      },
+      "/items/0/cross_repo": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/cross_repo",
+        "more": false,
+        "n": 500,
+        "o0": 0
+      }
+    },
+    "q": {
+      "depth": 3,
+      "evidence": "confirmed",
+      "limit": 500,
+      "op": "impact",
+      "order": "rank",
+      "repos": [
+        "<base>/dom-api"
+      ],
+      "symbol": "DomController.Orders"
+    }
+  },
+  "complete": false,
+  "dirty": false,
+  "incomplete": [
+    {
+      "detail": "evidence confirmed: 1 edge left out (name_dominant 1); what lies past them was not read",
+      "hint": "the default policy (--evidence default; MCP evidence: \"default\") lists them",
+      "reason": "policy"
+    }
+  ],
+  "items": [
+    {
+      "affected": [],
+      "changes": [],
+      "counts": {
+        "coupled": 0,
+        "cross_repo": 0
+      },
+      "coupled": [],
+      "cross_repo": [],
+      "low_confidence": 0,
+      "nearest": "none",
+      "repo": "dom-api",
+      "scope": [
+        {
+          "cite": {
+            "at": "src/DomController.cs:4",
+            "check": "verified",
+            "text": "public void Orders() { }"
+          },
+          "depth": 0,
+          "direction": "",
+          "file": "src/DomController.cs",
+          "id": 2,
+          "kind": "method",
+          "line": 3,
+          "qualified": "DomController.Orders"
+        }
+      ],
+      "tables": [],
+      "truncated": false,
+      "worst": "none"
+    }
+  ],
+  "policy": {
+    "evidence": "confirmed",
+    "excluded": 1,
+    "excluded_by": {
+      "name_dominant": 1
+    }
+  },
+  "repo": "<base>/dom-api",
+  "total": 1,
+  "truncated": false
+}
+--- text
+by proximity: nothing affected; low-confidence 0
+method DomController.Orders  src/DomController.cs:3
+     4 | public void Orders() { }
+
+=== path DomService.place -> DomController.Orders (dominant route) [confirmed]
+{
+  "_resume": {
+    "lists": {
+      "/items/0/from_candidates": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/from_candidates",
+        "more": false,
+        "n": 16,
+        "o0": 0
+      },
+      "/items/0/paths": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/paths",
+        "more": false,
+        "n": 3,
+        "o0": 0
+      },
+      "/items/0/to_candidates": {
+        "b": 0,
+        "h0": 14695981039346656037,
+        "l": "/items/0/to_candidates",
+        "more": false,
+        "n": 16,
+        "o0": 0
+      }
+    },
+    "q": {
+      "allow_ambiguous": false,
+      "evidence": "confirmed",
+      "from": "DomService.place",
+      "from_skip": 0,
+      "max_hops": 8,
+      "max_nodes": 5000,
+      "max_repos": 16,
+      "one_way": false,
+      "op": "path",
+      "paths": 3,
+      "repos": [
+        "<base>/dom-web"
+      ],
+      "to": "DomController.Orders",
+      "to_repo": "<base>/dom-api",
+      "to_skip": 0
+    }
+  },
+  "complete": false,
+  "dirty": false,
+  "incomplete": [
+    {
+      "detail": "evidence confirmed: 2 edges left out (ambiguous 1, name_dominant 1); what lies past them was not read",
+      "hint": "the default policy (--evidence default; MCP evidence: \"default\") lists them",
+      "reason": "policy"
+    }
+  ],
+  "items": [
+    {
+      "allow_ambiguous": false,
+      "explored": 3,
+      "explored_backward": 1,
+      "explored_forward": 2,
+      "from": {
+        "cite": {
+          "at": "src/dom.service.ts:4",
+          "check": "verified",
+          "text": "place(): void {"
+        },
+        "file": "src/dom.service.ts",
+        "kind": "method",
+        "line": 4,
+        "qualified": "DomService.place",
+        "repo": "dom-web"
+      },
+      "max_hops": 8,
+      "paths": [],
+      "repos_opened": 3,
+      "to": {
+        "cite": {
+          "at": "src/DomController.cs:4",
+          "check": "verified",
+          "text": "public void Orders() { }"
+        },
+        "file": "src/DomController.cs",
+        "kind": "method",
+        "line": 3,
+        "qualified": "DomController.Orders",
+        "repo": "dom-api"
+      },
+      "truncated": false
+    }
+  ],
+  "policy": {
+    "evidence": "confirmed",
+    "excluded": 2,
+    "excluded_by": {
+      "ambiguous": 1,
+      "name_dominant": 1
+    }
+  },
+  "repo": "<base>/dom-web",
+  "total": 1,
+  "truncated": false
+}
+--- text
+no confident path from DomService.place to DomController.Orders within 8 hops (explored 3 nodes, 3 repos open); --allow-ambiguous also follows ambiguous edges
+
