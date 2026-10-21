@@ -1594,15 +1594,22 @@ pub fn symbol_tables(t: &kc_store::db::SymbolTables, sql: &crate::ops::SqlFacts)
 pub fn http(entries: &[crate::ops::HttpOut]) {
     for e in entries {
         let path = e.path.as_deref().unwrap_or("?");
-        match e.role {
-            "requests" => match &e.service {
+        match (e.role, &e.operation) {
+            ("requests", Some(op)) => match &e.service {
+                Some(tag) => println!("http: {} calls operation {op} of a generated {tag} client", e.symbol),
+                None => println!("http: {} calls operation {op} of a generated client", e.symbol),
+            },
+            ("requests", None) => match &e.service {
                 Some(svc) => println!("http: {} sends {} /{path} to {svc}", e.symbol, e.verb),
                 None => println!("http: {} sends {} /{path}", e.symbol, e.verb),
             },
             _ => println!("http: {} serves {} /{path}", e.symbol, e.verb),
         }
         if e.links.is_empty() {
-            println!("  (no {} found in indexed repos)", if e.role == "requests" { "handler" } else { "caller" });
+            match &e.note {
+                Some(n) => println!("  (no {} found: {n})", if e.role == "requests" { "handler" } else { "caller" }),
+                None => println!("  (no {} found in indexed repos)", if e.role == "requests" { "handler" } else { "caller" }),
+            }
         }
         for l in &e.links {
             println!("  {:<9} {}  {}  {}:{}-{}", l.confidence, l.symbol, l.repo, l.file, l.start_line, l.end_line);

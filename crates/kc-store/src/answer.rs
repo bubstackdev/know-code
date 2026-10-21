@@ -178,6 +178,9 @@ pub enum Assumption {
     /// proxy configuration maps to that repo: which environment's configuration applies (and, for settings, which key
     /// the request reads) was not checked.
     ConfiguredHost,
+    /// A generated API client's operation is the controller action of that name (under the controller named like
+    /// the client's tag): the API description the client was generated from was not read.
+    OperationName,
 }
 
 /// What an edge rests on: how its target was found, and what that did not check.
@@ -429,6 +432,7 @@ pub const ASSUMPTIONS: &[Assumption] = &[
     Assumption::DirectoryConvention,
     Assumption::ProjectUnverified,
     Assumption::ConfiguredHost,
+    Assumption::OperationName,
 ];
 
 impl Default for EvidencePolicy {

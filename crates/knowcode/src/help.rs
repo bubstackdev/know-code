@@ -157,18 +157,23 @@ bus), `kc_context.sql` (SQL objects), `kc_context.ansible`, `kc_context.deploy` 
         summary: "kc_context: HTTP links across repos",
         text: r#"`http` (when present) links across repos: for a request contract (a class attribute with a path and a
 verb, or a request attribute or decorator the config names), code that creates one, or a method calling a service
-gateway by service and path (a gateway call the config names) or an HTTP client with a URL, the route it requests and
-the controller actions serving it, with their source; for a controller action, the contracts and calls requesting it. A contract that looks
+gateway by service and path (a gateway call the config names) or an HTTP client with a URL (fetch, axios, $.ajax,
+Angular and C# HttpClient, wrappers named for HTTP or API clients; base + path composed), the route it requests and
+the controller actions serving it, with their source; a call to a generated API client (`getItemsApi(api).getItems()`)
+links by operation name (assumption operation_name); for a controller action, the contracts and calls requesting it.
+With no links, `note` says what was searched and what is left: requests whose URL is known only at run time, and the
+nearest routes by path. A contract that looks
 left over is marked: `unsent` (no code in the indexed repos creates it) and `commented_out` (nothing serves its route,
 but a controller has a commented-out [Http*] attribute for it, with file:line). Each link has a confidence: exact (one
 repo serves the route), dominant (the frontend's main backend among several), ambiguous.
 
-Served: controller actions and minimal API endpoints (MapGet/MapPost/MapPut/MapDelete/MapPatch/MapMethods, Map for
+Served: controller actions (prefix from the class or the nearest base class's [Route], [controller] and [action]
+filled; conventional routes with a literal template) and minimal API endpoints (MapGet/MapPost/MapPut/MapDelete/MapPatch/MapMethods, Map for
 every verb, under MapGroup prefixes, through helper methods); the handler owns the route when it is a method group.
 Requested: also request classes with a path and verb in an attribute ([Endpoint("/orders", HttpMethod.Get)]). A link
 with `host` rests on a host: the client's URL, base address or settings name it, and launch profiles, compose,
 Aspire, ingress or proxy configuration map it to the repo (assumption configured_host). A registration KnowCode can't
-place (a template that isn't a constant, MapControllerRoute) makes the answer incomplete with reason `unsupported`."#,
+place (a template that isn't a constant) makes the answer incomplete with reason `unsupported`."#,
     },
     Topic {
         name: "kc_context.angular",
@@ -806,7 +811,8 @@ layout stands in for configuration), `same_deployment` (an HTTP route matched by
 it, unchecked), `same_destination` (a message reaches the consumer on its virtual host or queue, unchecked),
 `same_database` (a SQL object matched by name is in the database the code uses, unchecked), `revision_unverified` (the
 dependency's checkout is the revision asked for, unchecked), `configured_host` (an HTTP client reaches the repo through a
-host configuration maps to it; which environment's applies, unchecked).
+host configuration maps to it; which environment's applies, unchecked), `operation_name` (a generated client's operation
+is the action of that name; the API description wasn't read).
 
 Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which edges to follow:
 - `default`: exact and unique_name edges followed, ambiguous ones listed, not followed;

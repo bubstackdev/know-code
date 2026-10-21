@@ -2588,6 +2588,15 @@ pub struct RouteRow {
     pub detail: Option<String>,
 }
 
+/// An `http_routes` row as [`http_routes`] reads it: (side, verb, path, path_ref), (service, service_ref), (symbol
+/// name, container, kind, file), (start line, end line, line).
+type RawRoute = (
+    (String, String, String, Option<String>),
+    (Option<String>, Option<String>),
+    (Option<String>, Option<String>, Option<String>, String),
+    (Option<u32>, Option<u32>, u32),
+);
+
 /// How many helpers deep a route group is followed (`{@Helper#i}` in a group passed on).
 const GROUP_DEPTH: u32 = 4;
 
@@ -2601,12 +2610,6 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
          ORDER BY f.path, r.line",
     )?;
     let mut consts = Constants::new(conn)?;
-    type Raw = (
-        (String, String, String, Option<String>),
-        (Option<String>, Option<String>),
-        (Option<String>, Option<String>, Option<String>, String),
-        (Option<u32>, Option<u32>, u32),
-    );
     let rows = stmt.query_map([], |r| {
         Ok((
             (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?),
@@ -2615,7 +2618,7 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
             (r.get::<_, Option<u32>>(10)?, r.get::<_, Option<u32>>(11)?, r.get::<_, u32>(12)?),
         ))
     })?;
-    let rows: Vec<Raw> = rows.collect::<rusqlite::Result<_>>()?;
+    let rows: Vec<RawRoute> = rows.collect::<rusqlite::Result<_>>()?;
     // The prefixes each helper parameter is passed (`MapOrders#0`), or why one can't be known.
     let mut groups: HashMap<String, Vec<std::result::Result<String, String>>> = HashMap::new();
     for ((side, verb, path, _), (service, _), _, _) in &rows {
@@ -2635,9 +2638,10 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         let (target, host, file, line) = row?;
         clients.entry(target).or_insert((host, format!("{file}:{line}")));
     }
+    let controllers = if rows.iter().any(|((side, _, path, _), ..)| side == "server" && path.starts_with("{^")) { Some(Controllers::new(conn, &rows)?) } else { None };
     let mut out: Vec<RouteRow> = Vec::with_capacity(rows.len());
     for ((side, verb, path, path_ref), (service, service_ref), (name, container, kind, file), (start_line, end_line, line)) in rows {
-        if side == "group" {
+        if matches!(side.as_str(), "group" | "prefix" | "conventional") {
             continue;
         }
         // Top-level statements: the file stands for the symbol.
@@ -2666,6 +2670,20 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
             out.push(row(side, verb, None, Some(path)));
             continue;
         }
+        // A controller action whose prefix comes from its class's bases, or from conventional routes.
+        if side == "server"
+            && let Some(ctl) = &controllers
+            && path.starts_with("{^")
+        {
+            let class = container.as_deref().map(|c| c.rsplit('.').next().unwrap_or(c)).unwrap_or_default();
+            for p in ctl.paths(&mut consts, class, &path)? {
+                let r = row(side.clone(), verb.clone(), Some(p), None);
+                if !out.contains(&r) {
+                    out.push(r);
+                }
+            }
+            continue;
+        }
         // A minimal API endpoint: under each prefix its helper is passed, its constants resolved.
         if side == "server" && path_ref.is_none() && (path.contains("{@") || path.contains("{=")) {
             for p in under_groups(&path, &groups, 0) {
@@ -2692,8 +2710,10 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
                 let url = consts.expand(&path, 0)?;
                 host = kc_extract::urls::host_of(&url);
                 let p = client_path(&url);
-                // A request a method makes (a gateway or HTTP client call) to a URL that can't be known says nothing.
+                // A request a method makes (a gateway or HTTP client call) to a URL that can't be known links nothing:
+                // it is kept as `unresolved`, so an answer finding no caller can say where requests weren't read.
                 if p.is_none() && !matches!(kind.as_str(), "class" | "struct" | "protocol" | "enum") {
+                    out.push(row("unresolved".to_string(), verb, None, None));
                     continue;
                 }
                 p
@@ -2722,7 +2742,147 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         }
         out.push(r);
     }
+    // An operation of a client the repo itself declares (a generated client checked in) is requested by the client's
+    // own method, with its URL: the operation adds nothing.
+    let declared: std::collections::HashSet<String> =
+        out.iter().filter(|r| r.side == "client" && r.kind == "method").filter_map(|r| r.symbol.rsplit('.').next().map(str::to_ascii_lowercase)).collect();
+    out.retain(|r| r.side != "operation" || r.path.as_deref().is_some_and(|op| !declared.contains(&op.to_ascii_lowercase())));
     Ok(out)
+}
+
+/// What places a controller action whose class writes no `[Route]` out (`{^Action}/rest`, `{^*Action}` for a public
+/// method with no route attribute; see `kc_extract::csharp`): the classes' `[Route]` templates, their bases, and
+/// the repo's conventional route templates.
+struct Controllers {
+    /// Class name → its `[Route]` template, or the constant naming it.
+    prefixes: HashMap<String, (String, Option<String>)>,
+    /// Class name → the names of its bases.
+    bases: HashMap<String, Vec<String>>,
+    conventional: Vec<String>,
+}
+
+/// How many bases up a class's route prefix is looked for.
+const BASE_DEPTH: u32 = 8;
+
+impl Controllers {
+    fn new(conn: &Connection, rows: &[RawRoute]) -> Result<Self> {
+        let mut prefixes = HashMap::new();
+        let mut conventional = Vec::new();
+        for ((side, _, path, path_ref), _, (name, ..), _) in rows {
+            match side.as_str() {
+                "prefix" => {
+                    if let Some(n) = name {
+                        prefixes.entry(n.clone()).or_insert((path.clone(), path_ref.clone()));
+                    }
+                }
+                "conventional" if !conventional.contains(path) => conventional.push(path.clone()),
+                _ => {}
+            }
+        }
+        let mut bases: HashMap<String, Vec<String>> = HashMap::new();
+        let mut stmt = conn.prepare_cached(
+            "SELECT DISTINCT s.name, r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id WHERE s.kind = 'class' ORDER BY s.name, r.line",
+        )?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (class, base) = row?;
+            bases.entry(class).or_default().push(base);
+        }
+        Ok(Controllers { prefixes, bases, conventional })
+    }
+
+    /// The `[Route]` template nearest `class` up its bases (its own first), as ASP.NET takes it.
+    fn prefix(&self, class: &str) -> Option<&(String, Option<String>)> {
+        let mut level = vec![class.to_string()];
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..=BASE_DEPTH {
+            let mut next = Vec::new();
+            for c in &level {
+                if let Some(p) = self.prefixes.get(c) {
+                    return Some(p);
+                }
+                if seen.insert(c.clone()) {
+                    next.extend(self.bases.get(c).into_iter().flatten().cloned());
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            level = next;
+        }
+        None
+    }
+
+    /// The paths of an action of `class` encoded `{^Action}rest` (see [`Controllers`]): under the inherited prefix,
+    /// else, for an action without a template, each conventional route's, else the action's own template. None for a
+    /// method no route serves.
+    fn paths(&self, consts: &mut Constants, class: &str, encoded: &str) -> Result<Vec<String>> {
+        let Some((marker, rest)) = encoded.strip_prefix("{^").and_then(|e| e.split_once('}')) else { return Ok(vec![encoded.to_string()]) };
+        let (implicit, action) = match marker.strip_prefix('*') {
+            Some(a) => (true, a),
+            None => (false, marker),
+        };
+        let rest = rest.trim_matches('/');
+        let controller = class.strip_suffix("Controller").unwrap_or(class);
+        let fill = |t: &str| -> String {
+            let t = t.replace("[controller]", controller).replace("[action]", action);
+            // Any other token (`[area]` from a base) stands for whatever it is.
+            t.split('/')
+                .filter(|s| !s.is_empty())
+                .map(|s| if s.starts_with('[') && s.ends_with(']') { "{}" } else { s })
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        if let Some((template, r)) = self.prefix(class) {
+            // An inherited prefix routes the actions written with attributes only.
+            if implicit {
+                return Ok(Vec::new());
+            }
+            let template = match r {
+                Some(r) => match consts.resolve(r)? {
+                    Some(v) => v,
+                    None => return Ok(vec![rest.to_string()]),
+                },
+                None => template.clone(),
+            };
+            let joined = [fill(&template), rest.to_string()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
+            return Ok(vec![joined]);
+        }
+        if rest.is_empty() && !self.conventional.is_empty() {
+            let mut out: Vec<String> = Vec::new();
+            for t in &self.conventional {
+                for p in conventional_paths(t, controller, action) {
+                    if !out.contains(&p) {
+                        out.push(p);
+                    }
+                }
+            }
+            return Ok(out);
+        }
+        Ok(if implicit { Vec::new() } else { vec![rest.to_string()] })
+    }
+}
+
+/// A conventional route template filled for one action: `{controller=Home}/{action=Index}/{id?}` is `Orders/List`
+/// and `Orders/List/{id}` (trailing parameters may be left out). A template without `{action}` (Web API's
+/// `api/{controller}/{id}`) picks the action by verb: `api/Orders`, `api/Orders/{id}`.
+fn conventional_paths(template: &str, controller: &str, action: &str) -> Vec<String> {
+    let mut segs: Vec<(String, bool)> = Vec::new();
+    for s in template.split('/').filter(|s| !s.is_empty()) {
+        let inner = s.strip_prefix('{').and_then(|s| s.strip_suffix('}'));
+        let name = inner.map(|i| i.trim_start_matches('*').split(['=', ':', '?']).next().unwrap_or_default());
+        segs.push(match name {
+            Some("controller") => (controller.to_string(), false),
+            Some("action") => (action.to_string(), false),
+            Some(n) => (format!("{{{n}}}"), true),
+            None => (s.to_string(), false),
+        });
+    }
+    let fixed = segs.iter().rposition(|(_, p)| !p).map_or(0, |i| i + 1);
+    let mut out = Vec::new();
+    for end in fixed..=segs.len() {
+        out.push(segs[..end].iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join("/"));
+    }
+    out
 }
 
 /// An endpoint's encoded path under the prefixes its helper is passed (see [`http_routes`]): `{@MapOrders#0}/{id}`
@@ -5843,6 +6003,45 @@ mod tests {
         let hint = &selector_parts("ui-hint:not([validationFor])")[0];
         assert!(hint.matches("ui-hint", &[]) && !hint.matches("ui-hint", &attrs(&["validationFor"])));
         assert_eq!(selector_parts("a[uiTab][routerLink]")[0].key(), Some(("attr", "uiTab")));
+    }
+
+    /// An action's prefix is the nearest `[Route]` up its class's bases (a constant resolved, `[controller]` its own
+    /// class); with none, conventional routes place an action without a template, and a public method with no
+    /// route attribute only then.
+    #[test]
+    fn controller_actions_take_inherited_and_conventional_prefixes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE constants (file_id INTEGER, qualified TEXT, value TEXT, line INTEGER);
+             INSERT INTO constants VALUES (1, 'Routes.Admin', 'admin/[controller]', 1);
+             CREATE TABLE symbols (id INTEGER, name TEXT, kind TEXT);
+             CREATE TABLE relations (file_id INTEGER, from_id INTEGER, target TEXT, target_name TEXT, kind TEXT, line INTEGER);
+             INSERT INTO symbols VALUES (1, 'ItemsController', 'class'), (2, 'VersionedController', 'class'), (3, 'UsersController', 'class');
+             INSERT INTO relations VALUES (1, 1, 'Api.VersionedController', 'VersionedController', 'inherits', 1),
+               (1, 2, 'ApiControllerBase', 'ApiControllerBase', 'inherits', 1), (1, 3, 'AdminBase', 'AdminBase', 'inherits', 1);",
+        )
+        .unwrap();
+        let row = |side: &str, path: &str, path_ref: Option<&str>, name: &str| {
+            ((side.to_string(), String::new(), path.to_string(), path_ref.map(str::to_string)), (None, None), (Some(name.to_string()), None, None, String::new()), (None, None, 1))
+        };
+        let rows = [
+            row("prefix", "api/v{version}/[controller]", None, "ApiControllerBase"),
+            row("prefix", "", Some("Routes.Admin"), "AdminBase"),
+            row("conventional", "{controller=Home}/{action=Index}/{id?}", None, "Configure"),
+        ];
+        let ctl = Controllers::new(&conn, &rows).unwrap();
+        let mut c = Constants::new(&conn).unwrap();
+        let mut paths = |class: &str, encoded: &str| ctl.paths(&mut c, class, encoded).unwrap();
+        // Two bases up; `[controller]` is the subclass.
+        assert_eq!(paths("ItemsController", "{^Latest}/Latest"), ["api/v{version}/Items/Latest"]);
+        assert_eq!(paths("UsersController", "{^List}"), ["admin/Users"]);
+        // Under an inherited prefix, a method with no route attribute isn't an action.
+        assert!(paths("ItemsController", "{^*Helper}").is_empty());
+        // No prefix up the bases: conventional routes, for actions without a template.
+        assert_eq!(paths("HomeController", "{^*Privacy}"), ["Home/Privacy", "Home/Privacy/{id}"]);
+        assert_eq!(paths("HomeController", "{^Save}"), ["Home/Save", "Home/Save/{id}"]);
+        assert_eq!(paths("HomeController", "{^About}/about"), ["about"]);
+        assert_eq!(conventional_paths("api/{controller}/{id}", "Orders", "Get"), ["api/Orders", "api/Orders/{id}"]);
     }
 
     #[test]

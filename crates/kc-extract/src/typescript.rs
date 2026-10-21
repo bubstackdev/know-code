@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 19;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -1197,28 +1197,125 @@ impl<'a> Cx<'a> {
     }
 }
 
-/// Requests a method makes with Angular's `HttpClient` and a URL.
+/// Requests a method makes with an HTTP client and a URL: Angular's `HttpClient`, `fetch`, axios (and instances of it),
+/// jQuery's `$.ajax`, superagent and wrappers named like them; and operations of generated API clients.
 impl Cx<'_> {
-    /// `this.http.get<T>(`${API}/orders/${id}`)`, `http.request('POST', url)`: a client route of the enclosing method,
-    /// when the receiver is named for HTTP and the URL is a string built from literals and constants.
+    /// `this.http.get<T>(`${API}/orders/${id}`)`, `http.request('POST', url)`, `fetch(url, { method: 'POST' })`,
+    /// `axios.post(url)`, `axios({ url, method })`, `api.get('/orders')`, `$.ajax({ url, type: 'POST' })`: a client
+    /// route of the enclosing method, when the receiver is named for HTTP (or an API client) and the URL is a string
+    /// built from literals and constants. A call that isn't one of those may be an operation of a generated client
+    /// (see [`Self::operation_call`]).
     fn http_call(&mut self, node: Node) {
-        let Some(f) = node.child_by_field_name("function").filter(|f| f.kind() == "member_expression") else { return };
-        let (Some(o), Some(p)) = (f.child_by_field_name("object"), f.child_by_field_name("property")) else { return };
-        let receiver = self.text(o).rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
-        if !receiver.contains("http") {
+        let Some(f) = node.child_by_field_name("function") else { return };
+        let args: Vec<Node> = node.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named() && c.kind() != "comment").collect()).unwrap_or_default();
+        let (receiver, method) = match f.kind() {
+            "member_expression" => {
+                let (Some(o), Some(p)) = (f.child_by_field_name("object"), f.child_by_field_name("property")) else { return };
+                (Some(o), self.text(p).to_string())
+            }
+            "identifier" => (None, self.text(f).to_string()),
+            _ => return,
+        };
+        let recv = receiver.map(|o| self.text(o).rsplit('.').next().unwrap_or_default().to_ascii_lowercase());
+        let named = |r: &str, words: &[&str]| words.iter().any(|w| r.contains(w));
+        // `fetch(…)`, `window.fetch(…)`, `axios(…)`, `$.ajax(…)`: always HTTP. Otherwise the receiver says so.
+        let fetch = method == "fetch" && recv.as_deref().is_none_or(|r| matches!(r, "window" | "globalthis" | "self" | "this"));
+        let direct = recv.is_none() && matches!(method.as_str(), "axios" | "ajax" | "superagent" | "ky");
+        let strong = recv.as_deref().is_some_and(|r| r == "$" || r == "jquery" || named(r, &["http", "axios", "ajax", "superagent"]));
+        let weak = recv.as_deref().is_some_and(|r| named(r, &["api", "client", "request", "fetch", "rest"]));
+        if !(fetch || direct || strong || weak) {
+            if let Some(o) = receiver {
+                self.operation_call(node, o, &method);
+            }
             return;
         }
-        let args: Vec<Node> = node.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named() && c.kind() != "comment").collect()).unwrap_or_default();
-        let (verb, url) = match (self.text(p), args.as_slice()) {
-            ("request", [m, url, ..]) => (string_literal(self.src, *m).and_then(|m| urls::verb(&m)), *url),
-            (m @ ("get" | "post" | "put" | "delete" | "patch" | "head"), [url, ..]) => (urls::verb(m), *url),
-            _ => return,
+        let verb_of = |m: &str| urls::verb(m);
+        // The verb of `fetch(url, init)`: `init.method`, GET without one.
+        let init_verb = |cx: &Self, init: Option<&Node>| -> Option<String> {
+            match init.filter(|i| i.kind() == "object").and_then(|i| object_pairs(cx.src, *i).into_iter().find(|(k, _)| k == "method")) {
+                Some((_, v)) => string_literal(cx.src, v).and_then(|m| verb_of(&m)),
+                None => Some("GET".to_string()),
+            }
+        };
+        let (verb, url) = match (method.as_str(), args.as_slice()) {
+            ("fetch", [url, rest @ ..]) if fetch || strong || weak => (init_verb(self, rest.first()), *url),
+            ("request" | "ajax" | "axios" | "superagent" | "ky", [obj, ..]) if obj.kind() == "object" => match request_config(self.src, *obj) {
+                Some(c) => c,
+                None => return,
+            },
+            ("request" | "send", [m, url, ..]) if string_literal(self.src, *m).is_some_and(|m| verb_of(&m).is_some()) => {
+                (string_literal(self.src, *m).and_then(|m| verb_of(&m)), *url)
+            }
+            ("axios" | "ajax" | "request" | "ky", [url, rest @ ..]) => match rest.first().filter(|o| o.kind() == "object").and_then(|o| config_verb(self.src, *o)) {
+                Some(v) => (Some(v), *url),
+                None => (Some("GET".to_string()), *url),
+            },
+            (m @ ("get" | "post" | "put" | "delete" | "patch" | "head"), [url, ..]) => (verb_of(m), *url),
+            ("getJSON", [url, ..]) => (Some("GET".to_string()), *url),
+            ("del", [url, ..]) => (Some("DELETE".to_string()), *url),
+            _ => {
+                if let Some(o) = receiver {
+                    self.operation_call(node, o, &method);
+                }
+                return;
+            }
         };
         let Some(verb) = verb else { return };
         let Some(sym) = self.current() else { return };
-        if let Some(path) = urls::encode(&self.url_pieces(url), true).filter(|p| urls::looks_like_path(p)) {
+        let surely = fetch || direct || strong;
+        let pieces = self.url_pieces(url);
+        // A client named for an API passed no literal text (`this.ordersClient.delete(id)`): an operation, not a URL.
+        let named = |p: &Piece| matches!(p, Piece::Text(t) if !t.is_empty()) || matches!(p, Piece::Ref(r) if starts_upper(r));
+        if !surely && !pieces.iter().any(named) {
+            return self.operation_call(node, receiver.unwrap_or(f), &method);
+        }
+        let Some(path) = urls::encode(&pieces, true) else {
+            // A request whose URL is only known at run time: kept with no path, so an answer can say it wasn't read.
+            if surely {
+                self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "client", verb, path: String::new(), path_ref: None, service: None, service_ref: None, line: line(node) });
+            }
+            return;
+        };
+        // A bare word (`api.get('orders')`) is a path only from a client that is surely HTTP.
+        let bare = !path.contains(['/', '?', '{']) && surely && path.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if urls::looks_like_path(&path) || bare {
             self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "client", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) });
         }
+    }
+
+    /// `getItemsApi(api).getItems(…)`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`, `apiClient.getItems()`:
+    /// an operation of a generated API client (its code is a package, not indexed), recorded as an `operation` route
+    /// of the enclosing method: `path` is the operation, `service` the tag the client is named for (`Items`), when it
+    /// names one. The linker matches it to the action of that name, under the controller named like the tag.
+    fn operation_call(&mut self, node: Node, receiver: Node, method: &str) {
+        const NOT_OPERATIONS: &[&str] = &[
+            "then", "catch", "finally", "subscribe", "send", "request", "ajax", "fetch", "getJSON", "pipe", "toPromise", "bind", "call", "apply", "toString", "valueOf", "on", "off", "emit",
+            "next", "complete", "use", "interceptors", "defaults", "setHeader", "setHeaders", "getUri", "getUrl", "buildUrl",
+            "setConfiguration", "getConfiguration", "configure", "init", "initialize", "dispose", "destroy", "close", "open",
+        ];
+        if NOT_OPERATIONS.contains(&method) || !method.starts_with(|c: char| c.is_ascii_lowercase()) || method.len() < 4 {
+            return;
+        }
+        let client = match receiver.kind() {
+            // `getItemsApi(api)`, `ItemsApiFactory(config)`.
+            "call_expression" => receiver.child_by_field_name("function").map(|f| self.text(f).rsplit('.').next().unwrap_or_default().to_string()),
+            "new_expression" => receiver.child_by_field_name("constructor").map(|c| self.text(c).rsplit('.').next().unwrap_or_default().to_string()),
+            "identifier" | "member_expression" => Some(self.text(receiver).rsplit('.').next().unwrap_or_default().to_string()),
+            _ => None,
+        };
+        let Some(client) = client else { return };
+        let Some(tag) = api_tag(&client) else { return };
+        let Some(sym) = self.current() else { return };
+        self.facts.http_routes.push(HttpRoute {
+            sym: Some(sym),
+            side: "operation",
+            verb: String::new(),
+            path: method.to_string(),
+            path_ref: None,
+            service: (!tag.is_empty()).then_some(tag),
+            service_ref: None,
+            line: line(node),
+        });
     }
 
     /// A URL expression as pieces: literal text, constants (`Api.orders`, `API`, `this.BASE`, a local `const` holding
@@ -1269,7 +1366,26 @@ impl Cx<'_> {
                     None => out.push(Piece::Unknown),
                 }
             }
-            "call_expression" => out.push(Piece::Call),
+            // `apiClient.getUrl('Items/Latest', query)`, `buildUrl(`orders/${id}`)`: a base address and the path given.
+            "call_expression" => match self.url_builder_arg(e) {
+                Some(path) => {
+                    out.push(Piece::Unknown);
+                    out.push(Piece::Text("/".to_string()));
+                    self.push_pieces(path, out);
+                }
+                None => out.push(Piece::Call),
+            },
+            // `new URL('orders', base)`: the path.
+            "new_expression" if e.child_by_field_name("constructor").is_some_and(|c| self.text(c) == "URL") => {
+                match e.child_by_field_name("arguments").and_then(|a| children(a).find(|c| c.is_named())) {
+                    Some(u) => {
+                        out.push(Piece::Unknown);
+                        out.push(Piece::Text("/".to_string()));
+                        self.push_pieces(u, out);
+                    }
+                    None => out.push(Piece::Unknown),
+                }
+            }
             "member_expression" if self.text(e).chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$') => {
                 out.push(Piece::Ref(self.text(e).trim_start_matches("this.").to_string()))
             }
@@ -1277,9 +1393,30 @@ impl Cx<'_> {
         }
     }
 
+    /// The path argument of a call building a URL from a base address: a function named for a URL (`getUrl`,
+    /// `buildUrl`, `apiUrl`, `endpoint`) given a string first.
+    fn url_builder_arg<'t>(&self, call: Node<'t>) -> Option<Node<'t>> {
+        let f = call.child_by_field_name("function")?;
+        let name = self.text(f).rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
+        let builds = ["url", "uri", "endpoint"].iter().any(|w| name.contains(w))
+            && !name.starts_with("encode")
+            && !name.starts_with("decode")
+            && !name.contains("objecturl");
+        if !builds {
+            return None;
+        }
+        let first = call.child_by_field_name("arguments").and_then(|a| children(a).find(|c| c.is_named() && c.kind() != "comment"))?;
+        matches!(first.kind(), "string" | "template_string" | "binary_expression").then_some(first)
+    }
+
     /// `const endpoint = Api.payouts;` in a function: remembered, for a URL built from it later in that function.
     fn url_local(&mut self, name: &str, value: Node) {
-        if matches!(value.kind(), "string" | "template_string" | "member_expression" | "binary_expression") {
+        let builder = |v: Node| match v.kind() {
+            "call_expression" => self.url_builder_arg(v).is_some(),
+            "new_expression" => v.child_by_field_name("constructor").is_some_and(|c| self.text(c) == "URL"),
+            _ => false,
+        };
+        if matches!(value.kind(), "string" | "template_string" | "member_expression" | "binary_expression") || builder(value) {
             let pieces = self.url_pieces(value);
             if pieces.iter().any(|p| !matches!(p, Piece::Unknown)) {
                 self.url_locals.insert((self.current(), name.to_string()), pieces);
@@ -1560,6 +1697,44 @@ fn payload_tokens(src: &str, n: Node, out: &mut Vec<String>) {
             payload_tokens(src, c, out);
         }
     }
+}
+
+/// A request's options object (`{ url, method }`, jQuery's `{ url, type }`): its verb (GET without one; `None` when not
+/// a literal) and URL.
+fn request_config<'t>(src: &str, obj: Node<'t>) -> Option<(Option<String>, Node<'t>)> {
+    let pairs = object_pairs(src, obj);
+    let url = pairs.iter().find(|(k, _)| k == "url").map(|(_, v)| *v)?;
+    let verb = match pairs.iter().find(|(k, _)| k == "method" || k == "type") {
+        Some(_) => config_verb(src, obj),
+        None => Some("GET".to_string()),
+    };
+    Some((verb, url))
+}
+
+/// The verb a request's options name (`{ method: 'POST' }`, jQuery's `{ type: 'POST' }`).
+fn config_verb(src: &str, obj: Node) -> Option<String> {
+    let (_, v) = object_pairs(src, obj).into_iter().find(|(k, _)| k == "method" || k == "type")?;
+    urls::verb(&string_literal(src, v)?)
+}
+
+/// The tag a generated API client is named for: `getItemsApi` and `ItemsApi` are `Items`, `OrdersClient` is
+/// `Orders`, `apiClient` and `api` name none (`""`). `None` for a name that isn't an API client's.
+fn api_tag(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    let lower = lower.strip_suffix("factory").unwrap_or(&lower);
+    let suffix = ["apiclient", "api", "client"].iter().find(|s| lower.ends_with(*s))?;
+    let mut stem = &name[..lower.len() - suffix.len()];
+    for p in ["get", "create", "use", "new"] {
+        if let Some(rest) = stem.strip_prefix(p).filter(|r| r.starts_with(|c: char| c.is_ascii_uppercase())) {
+            stem = rest;
+        }
+    }
+    let stem = stem.trim_matches(['_', '$']);
+    if matches!(stem.to_ascii_lowercase().as_str(), "" | "http" | "rest" | "the" | "my" | "this" | "base" | "default" | "web" | "app" | "graphql") {
+        return Some(String::new());
+    }
+    let mut c = stem.chars();
+    Some(c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default())
 }
 
 /// An object literal's `key: value` pairs, keys unquoted.
@@ -2171,6 +2346,8 @@ export class FlexDirective {}
                 ("one", "DELETE", "{=API}/orders/{}"),
                 ("download", "GET", "{=config.apiUrl}/{=Api.download}"),
                 ("raw", "PUT", "https://h.example/api/x?y=1"),
+                // A URL (here a contract) known only at run time: kept without a path.
+                ("send", "GET", ""),
                 ("computed", "POST", "{}/health"),
             ]
         );
@@ -2179,6 +2356,67 @@ export class FlexDirective {}
         assert_eq!(consts, [("API", "{=environment.apiUrl}"), ("BASE", "{=environment.apiUrl}/v2")]);
         // A selector held in an imported constant names the constant's exported name.
         assert!(f.ng.iter().any(|n| n.kind == "selector" && n.value == "{=flexSelectors}"));
+    }
+
+    /// fetch, axios (and instances), jQuery, superagent-style wrappers and URL builders, with composed URLs; a request
+    /// whose URL is known only at run time is kept without a path; calls to generated API clients are operations.
+    #[test]
+    fn fetch_axios_jquery_wrappers_and_generated_clients_are_requests() {
+        let f = extract(
+            r#"
+const API_ROOT = 'https://api.example.test/api';
+export class Library {
+  latest(userId: string) { return fetch(`${API_ROOT}/Users/${userId}/Items/Latest`); }
+  remove(id: string) { return fetch(API_ROOT + '/Items/' + id, { method: 'DELETE' }); }
+  post() { return axios.post(`/api/orders`, {}); }
+  config() { return axios({ url: '/api/orders/export', method: 'post' }); }
+  instance() { return this.api.get('/orders/' + this.id); }
+  jquery() { return $.ajax({ url: apiClient.getUrl('Sessions/Playing'), type: 'POST' }); }
+  wrapper() { return this.apiService.send('GET', '/accounts/profile', null, true); }
+  helper() { return this.apiClient.getJSON(this.apiClient.getUrl(`Shows/${id}/Episodes`)); }
+  local() {
+    const url = new URL('Videos/Merge', base);
+    return fetch(url, { method: 'POST' });
+  }
+  unknown(url: string) { return fetch(url); }
+  generated(api: Api) { return getItemsApi(api).getItems({ userId }); }
+  constructed() { return new OrdersClient(base).listOrders(); }
+  injected() { return this.userLibraryApi.getLatestMedia(); }
+  untagged() { return this.apiClient.getPublicUsers(); }
+  byConst() { return this.api.get(Api.orders); }
+  listDelete() { return this.listsClient.delete(this.selectedList.id); }
+  // Not requests: a map lookup, a promise, encoding.
+  other() { return this.cache.get('a/b').then(x => encodeURIComponent(x)); }
+}
+"#,
+            false,
+        );
+        let routes: Vec<(&str, &str, &str, &str, Option<&str>)> = f
+            .http_routes
+            .iter()
+            .map(|r| (f.symbols[r.sym.unwrap()].name.as_str(), r.side, r.verb.as_str(), r.path.as_str(), r.service.as_deref()))
+            .collect();
+        assert_eq!(
+            routes,
+            [
+                ("latest", "client", "GET", "{=API_ROOT}/Users/{}/Items/Latest", None),
+                ("remove", "client", "DELETE", "{=API_ROOT}/Items/{}", None),
+                ("post", "client", "POST", "/api/orders", None),
+                ("config", "client", "POST", "/api/orders/export", None),
+                ("instance", "client", "GET", "/orders/{=id}", None),
+                ("jquery", "client", "POST", "/Sessions/Playing", None),
+                ("wrapper", "client", "GET", "/accounts/profile", None),
+                ("helper", "client", "GET", "/Shows/{}/Episodes", None),
+                ("local", "client", "POST", "/Videos/Merge", None),
+                ("unknown", "client", "GET", "", None),
+                ("generated", "operation", "", "getItems", Some("Items")),
+                ("constructed", "operation", "", "listOrders", Some("Orders")),
+                ("injected", "operation", "", "getLatestMedia", Some("UserLibrary")),
+                ("untagged", "operation", "", "getPublicUsers", None),
+                ("byConst", "client", "GET", "{=Api.orders}", None),
+                ("listDelete", "operation", "", "delete", Some("Lists")),
+            ]
+        );
     }
 
     #[test]
