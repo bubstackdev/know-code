@@ -46,10 +46,20 @@ EXTENSIONS = ('cs|csx|cshtml|razor|csproj|props|targets|sln|ts|tsx|js|jsx|mjs|cj
               'swift|rs|rb|php|c|h|cc|cpp|hpp|m|mm|gradle|proto|graphql|gql|resx|cfm|cfc|tf|hcl|j2|env')
 FILE_TEXT = re.compile(r'(?<![\w@./-])((?:[\w@.+-]+/)*[\w@+-][\w@.+-]*\.(?:' + EXTENSIONS + r'))(?::(\d+))?(?![\w/.])')
 IDENT = re.compile(r'[A-Za-z_$][A-Za-z0-9_$]*')
+# 0.2 compact answers (see the knowcode crate's compact.rs and whole.rs). A search hit row: the location, then its
+# kind, then the declared symbol for a def or decl (`in Name` is a container and is not taken).
+HIT_ROW = re.compile(r':\d+(?::\d+)?(?:-\d+)? (?:def|decl) (?!in )([A-Za-z_$][\w$.<>,]*)')
+# Keys holding 0.2 summary strings that name symbols beside their declarations.
+SUMMARY_KEYS = ('declared', 'overloads', 'hierarchy')
 # Tree answers (kc_trace, kc_impact, kc_path, kc_flow) name symbols after their kind: `method Foo.Bar  path:line`.
 KIND_NAME = re.compile(r'\b(?:class|interface|method|function|property|field|constructor|record|struct|enum|type|'
                        r'variable|const|module|controller|action|component|service|protocol|extension)\s+'
                        r'([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)')
+# In a summary string: `Name at file:line`, `Name(int a) at file:line`, `Ns.Type file:line` or `Ns.Type repo:file:line`.
+LOCATED_NAME = re.compile(r'([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?:<[^>]*>)?(?:\([^)]*\))?(?:\s+at)?\s+'
+                          r'(?=(?:[\w.-]+:)?(?:[\w@.+-]+/)*[\w@+-][\w@.+-]*\.(?:' + EXTENSIONS + r'):\d)')
+# A file named with several lines: `Cart.cs:12,40`.
+FILE_LINES = re.compile(r'(?<![\w@./-])((?:[\w@.+-]+/)*[\w@+-][\w@.+-]*\.(?:' + EXTENSIONS + r')):(\d+(?:,\d+)+)')
 READERS = {'cat', 'head', 'tail', 'less', 'more', 'awk', 'nl', 'bat'}
 SEARCHERS = {'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack'}
 SEPARATORS = {'|', '||', '&&', ';', '&'}
@@ -100,26 +110,42 @@ def claims_of(tool_input, text):
     """Locations {path: {line or None}} and symbols a KnowCode answer states."""
     locations, symbols = {}, set()
 
-    def walk(value):
+    def walk(value, context=''):
         if isinstance(value, dict):
             for key in LOCATION_KEYS:
                 if isinstance(value.get(key), str):
                     add_location(locations, value[key], value.get('line'))
             for key in SYMBOL_KEYS:
                 symbols.update(symbol_names(value.get(key)))
-            for child in value.values():
-                walk(child)
+            for key, child in value.items():
+                # Compact (0.2) forms: a row's enclosing symbol as one string (`from`), and what every row of a list
+                # shares said once beside it (`from`, `<list>_from`, `<list>_name`).
+                if isinstance(child, str) and (key == 'from' or key.endswith('_from') or key.endswith('_name')):
+                    symbols.update(symbol_names(child))
+                walk(child, key if key in SUMMARY_KEYS else context)
         elif isinstance(value, list):
             for child in value:
-                walk(child)
+                walk(child, context)
         elif isinstance(value, str):
-            scan(value)
+            scan(value, context)
 
-    def scan(value):
+    def scan(value, context=''):
         for match in FILE_TEXT.finditer(value):
             add_location(locations, match.group(1), int(match.group(2)) if match.group(2) else None)
         for match in KIND_NAME.finditer(value):
             symbols.update(symbol_names(match.group(1)))
+        # A search hit as a text row: `file:line def Name | text` (the symbol a def or decl names; `in Name`, the
+        # container of a code line, is not a claim, as the JSON form's `in` field never was).
+        for match in HIT_ROW.finditer(value):
+            symbols.update(symbol_names(match.group(1)))
+        if context:
+            # `declared`, `overloads` and `hierarchy` (0.2): a name followed by the place it is declared, and a
+            # file's further lines (`a.cs:12,40`).
+            for match in LOCATED_NAME.finditer(value):
+                symbols.update(symbol_names(match.group(1)))
+            for match in FILE_LINES.finditer(value):
+                for line in match.group(2).split(','):
+                    add_location(locations, match.group(1), int(line))
 
     try:
         walk(json.loads(text))

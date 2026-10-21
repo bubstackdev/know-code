@@ -31,7 +31,7 @@
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "a678c995d9e4ca2cc7737c7aff4d602b2b9ed8a1908738985ae0014b83ac6c8d"
+      "sha256": "6c707b70aa82e266ea3989fe1f061f3477d2dcf80913b3030990ffd6dd71d964"
     },
     "provisional": {
       "path": "provisional.json",
@@ -83,12 +83,12 @@
     "scripts/eval/neutral/score.py": "4153528baccbbe7ab920dfd7cd68ae8b31da8d36717d2e368eadadf72321e758",
     "scripts/eval/owned_process.py": "762d4ffc07f3da67b076feddc212cad333fb7cfa14338f3ab8e2cc61d67e1b87",
     "scripts/eval/public_transcript.py": "e04b3c08708e1744e8ddb09cc49b7c25125633f2baf544e9995cff5200a6d632",
-    "scripts/eval/recheck.py": "04bd2a178b2f1e2900fbbc0be7775a82ec9af0df82b89ae96899ad175a57f95e",
-    "scripts/eval/score_public_study.py": "b778c89b2ac8b19418c5b6a5764f9c02734c1c5e938f5a304099a2bea67b5b55",
+    "scripts/eval/recheck.py": "c15fe754a7af2ee6ca79f596867de31038bd0420ff4b6c1d80a1dbf454f1b692",
+    "scripts/eval/score_public_study.py": "0f048abacbf45b2a97b4c62b28a8ac41ec23798830b68d92a5ebe0fd86dc21c7",
     "scripts/eval/session_runner.py": "1041737fdb038a400de876d68a7e051a1dc532237aa4f52df598856f9fdf878c",
     "scripts/plan-public-eval.py": "11d2f4eb758a83210e04d05cd7e81aa1ef7210e8005fb8ba731a1141d2ebea6b",
     "scripts/prepare-public-eval-index.py": "d48844a6199399367e32fc41ea9ba9603adc33397bef3b47be83e6ece29f99e0",
     "scripts/prepare-public-eval-session.py": "aa4881a3e5137d971a624106c6e7f4665a7c6bce9ba96b8791cfd96fa5efca3e"
   },
-  "revision": "Fourth freeze (2026-10-21), for a rerun on the 702da21 build. Changed from the third freeze (0141cee5): config.knowcode_sha256 (0.2.0 at 00aae5b, f7a15757..., to 0.2.0 at 702da21, 5323abc9...), plan.json (re-planned with that configuration; order unchanged) and protocol.md (rerun note; offer to share transcripts removed). Everything else, including every runner and scorer implementation, is byte-identical."
+  "revision": "Fourth freeze (2026-10-21), for a rerun on the 702da21 build. Changed from the third freeze (0141cee5): config.knowcode_sha256 (0.2.0 at 00aae5b, f7a15757..., to 0.2.0 at 702da21, 5323abc9...); plan.json (re-planned, order unchanged); protocol.md (rerun note, detector format adaptation, stale-index measure, offer to share transcripts removed); scripts/eval/recheck.py (reads 0.2 compact forms: search hit rows, files_only and structural rows, from strings and shared list fields, declared/overloads/hierarchy strings); scripts/eval/score_public_study.py (adds the descriptive stale-index measure). Equivalence on the published runs: criterion-1 counts identical (baseline 27/81 named, 23/95 unprompted; final 33/123, 30/107) and no answer changed re-checked status; the published criterion numbers are unchanged. Two final-run sessions attribute more plain calls to re-checks (knowcode impact 001: 3 to 4; knowcode-unprompted impact 001: 2 to 4), because the 0.2.0 final binary had already emitted compact from strings that the earlier detector did not read. Criteria and thresholds unchanged."
 }

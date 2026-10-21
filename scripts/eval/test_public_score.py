@@ -32,6 +32,16 @@ class SessionScoreTests(unittest.TestCase):
         row = study.score_session(scorer, Q, label(['lib/a.cs:1', 'lib/b.cs:2'], 'lower_bound'), {'status': 'answered', 'items': ['lib/a.cs:1', 'lib/z.cs:9']})
         self.assertEqual((row['f1'], row['recall'], row['precision']), (None, 0.5, None))
 
+    def test_stale_index_answers_are_counted(self):
+        def kc(call_id, text, error=False):
+            result = dict(type='tool_result', tool_use_id=call_id, content=[dict(type='text', text=text)])
+            if error:
+                result['is_error'] = True
+            return [dict(type='assistant', message=dict(content=[dict(type='tool_use', id=call_id, name='mcp__knowcode__kc_refs', input={})])),
+                    dict(type='user', message=dict(content=[result]))]
+        events = kc('a', '{"incomplete":[{"reason":"stale","detail":"x: indexing is queued or running; ..."}]}') + kc('b', '{}') + kc('c', 'indexing is queued or running', error=True)
+        self.assertEqual(study.stale_answers(events), {'answers': 2, 'stale': 1})
+
     def test_tokens_include_every_processed_context_and_output(self):
         self.assertEqual(study.tokens({'processed_context_tokens': 1000, 'terminal_output_tokens': 50}), 1050)
         self.assertIsNone(study.tokens({'processed_context_tokens': None, 'terminal_output_tokens': 50}))

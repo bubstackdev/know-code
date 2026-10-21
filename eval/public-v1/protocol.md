@@ -18,10 +18,15 @@ differs from the second in two ways only:
 Questions, labels, arms, model, client, profile, metrics, criteria, detector and intervals are unchanged.
 
 After the final run's results were published, a fix round landed on main (still version 0.2.0, at 702da21), and the
-study is run once more as a **rerun** under a fourth freeze. The fourth freeze differs from the third only in
-`knowcode_sha256`, which names the 702da21 build, and in the hash of this document. Questions, labels, arms, model,
-client, profile, metrics, criteria, detector, intervals and the transport rule are unchanged. The rerun's results are
-reported next to the baseline and the final run; they do not replace them.
+study is run once more as a **rerun** under a fourth freeze. The fourth freeze differs from the third in three ways:
+
+- `knowcode_sha256` names the 702da21 build.
+- The re-check detector reads 0.2's compact answer forms, a format adaptation fixed before the rerun (see
+  [Re-check detector](#re-check-detector)).
+- The scorer reports one more descriptive measure, stale-index answers (see [Metrics](#metrics)).
+
+Questions, labels, arms, model, client, profile, criteria, thresholds, intervals and the transport rule are unchanged.
+The rerun's results are reported next to the baseline and the final run; they do not replace them.
 
 ## Cohort and questions
 
@@ -156,6 +161,10 @@ Per session, from the runner's `result.json` and transcript:
   (fixed overhead, mostly schemas), context at answer, output tokens and the client's reported cost.
 - **Calls:** research calls, KnowCode calls and budget overruns.
 - **Re-checks:** see the detector below, applied to both KnowCode arms.
+- **Stale-index answers** (descriptive, added before the rerun; not a criterion): in each KnowCode arm, the number of
+  successful KnowCode answers that say the index was still being built ("indexing is queued or running"), out of all
+  successful KnowCode answers, and the sessions with at least one. Re-scored, the published runs give baseline 9 of
+  186 (8 sessions) and final 41 of 238 (33 sessions). Counting failed calls as well, they are 9 of 189 and 41 of 242.
 
 ## Criteria
 
@@ -241,6 +250,31 @@ detector matches paths by suffix and ignores the repository. Its ambiguous cases
 - `tail` of a long file;
 - `find` for a generic file name;
 - a case-insensitive grep.
+
+**Format adaptation (2026-10-21, before the rerun).** 0.2's compact answers say some claims as text, where earlier
+answers used JSON fields. The detector now also reads these forms, enumerated from the server's compact and summary
+formats:
+
+- search hit rows (`file:line def|decl Name | text`): the declared symbol. A row's `in Name` names the line's container
+  and is not taken, as the JSON form's `in` field never was.
+- `files_only` and structural-search rows: their locations.
+- a row's enclosing symbol as one string (`from`), and fields said once beside a list (`<list>_from`, `<list>_name`).
+- `declared`, `overloads` and `hierarchy` strings: `Name at file:line`, `Ns.Type [repo:]file:line` and `file:12,40` line
+  lists. These are read only under those keys.
+
+The criteria and thresholds are unchanged. The checks run before the rerun:
+
+- **Equivalence.** Re-scoring the published baseline and final runs gives identical criterion-1 counts (baseline 27 of
+  81 named, 23 of 95 unprompted; final 33 of 123 named, 30 of 107 unprompted) and an identical re-checked status for
+  every answer. No published criterion number changes. One secondary count changed: in 2 final-run sessions the
+  number of plain calls attributed to re-checks rose (`knowcode` impact 001 from 3 to 4; `knowcode-unprompted` impact
+  001 from 2 to 4). The 0.2.0 final binary had already emitted compact `from` strings, which the earlier detector did
+  not read. Those answers were already counted as re-checked.
+- **Parity.** On 10 real queries (search, regex and `files_only` search, structural search, refs, find, context),
+  nothing the JSON form of 00aae5b claimed is lost in the 702da21 text form. Where the hits are the same, the claims
+  are identical.
+- **Hand labels.** Precision and recall are unchanged: held out 0.84 and 0.89 (0.94 and 1.00 without the ambiguous
+  cases); development 1.00 and 1.00.
 
 ## Scoring script
 
@@ -334,3 +368,5 @@ baseline budget.
   retries"; the baseline is also re-scored under it.
 - **2026-10-21:** fourth freeze for a rerun on the 702da21 build (see the introduction). On the user's request, the
   offer to share raw transcripts on request was removed from "Scoring script".
+- **2026-10-21:** before the rerun, the re-check detector was adapted to 0.2's compact answer forms, and a descriptive
+  stale-index measure was added. See "Re-check detector" and "Metrics"; no criterion or threshold changed.

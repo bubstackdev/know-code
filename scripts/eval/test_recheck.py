@@ -92,6 +92,54 @@ class RecheckUnitTests(unittest.TestCase):
         self.assertIn('Main', symbols)
 
 
+class CompactFormTests(unittest.TestCase):
+    """0.2 compact answers state the same claims as the JSON rows they replace."""
+
+    def claims(self, answer, inp=None):
+        # As the rule reads them: a file named without a line counts only when no line is given for it.
+        locations, symbols = recheck.claims_of(inp or {}, json.dumps(answer))
+        return {f: ({l for l in ls if l is not None} or {None}) for f, ls in locations.items()}, symbols
+
+    def test_search_rows_match_their_json_rows(self):
+        rows = {'items': ['src/Lib/Factory.cs:40 def Factory.Build | public X Build()',
+                          'app/src/Lib/Use.cs:7 decl UseCase | class UseCase',
+                          'src/Lib/Use.cs:12 code in UseCase.Run | var x = Build();',
+                          'test/FactoryTests.cs:3 test in FactoryTests.Builds | Build();\n  2- // before']}
+        json_rows = {'items': [{'file': 'src/Lib/Factory.cs', 'line': 40, 'kind': 'def', 'symbol': 'Factory.Build', 'text': 'public X Build()'},
+                               {'file': 'app/src/Lib/Use.cs', 'line': 7, 'kind': 'decl', 'symbol': 'UseCase', 'text': 'class UseCase'},
+                               {'file': 'src/Lib/Use.cs', 'line': 12, 'kind': 'code', 'in': 'UseCase.Run', 'text': 'var x = Build();'},
+                               {'file': 'test/FactoryTests.cs', 'line': 3, 'kind': 'test', 'in': 'FactoryTests.Builds', 'text': 'Build();'}]}
+        self.assertEqual(self.claims(rows), self.claims(json_rows))
+        locations, symbols = self.claims(rows)
+        self.assertEqual(symbols, {'Factory', 'Build', 'UseCase'})  # `in X` is a container, never a claim
+        self.assertEqual(locations['src/Lib/Use.cs'], {12})
+
+    def test_files_only_and_structural_rows(self):
+        locations, _ = self.claims({'items': ['src/Lib/Factory.cs:40 def (3 matches)', 'src/Lib/Use.cs:7:5-9 [$X=Build] | Build()']})
+        self.assertEqual((locations['src/Lib/Factory.cs'], locations['src/Lib/Use.cs']), ({40}, {7}))
+
+    def test_from_strings_and_shared_fields_name_symbols(self):
+        _, symbols = self.claims({'items': [{'file': 'a.cs', 'line': 3, 'from': 'Checkout.Submit'}], 'targets_from': 'Basket.Append',
+                                  'callers_name': 'Totals'})
+        self.assertTrue({'Checkout', 'Submit', 'Basket', 'Append', 'Totals'} <= symbols)
+
+    def test_declared_overloads_and_hierarchy_name_symbols_and_lines(self):
+        answer = {'declared': 'the only 2 class declarations of Cart in shop: class Cart, partial in 2 parts in src/ (Cart.cs:12,40, CartTotals.cs:5)',
+                  'overloads': ['1: Append(int qty) at src/Cart.cs:20 (2 sites)', '2: Append<T>(T item) at src/Cart.cs:31'],
+                  'hierarchy': {'implementations': ['Shop.SqlStore src/SqlStore.cs:8', 'Shop.MemStore other:src/MemStore.cs:4'],
+                                'none_found': ['subclasses: none found (searched: every type base list in shop)']}}
+        locations, symbols = self.claims(answer)
+        self.assertEqual(locations['Cart.cs'], {12, 40})
+        self.assertEqual(locations['src/Cart.cs'], {20, 31})
+        self.assertTrue({'Cart', 'Append', 'Shop', 'SqlStore', 'MemStore'} <= symbols)
+        self.assertNotIn('subclasses', symbols)
+
+    def test_summary_patterns_stay_out_of_other_text(self):
+        # Outside declared/overloads/hierarchy, "word at path:line" is not read as a name.
+        _, symbols = self.claims({'items': [{'file': 'a.cs', 'line': 1, 'note': 'direct at src/a.cs:1'}]})
+        self.assertNotIn('direct', symbols)
+
+
 class RecheckFixtureTests(unittest.TestCase):
     def test_agreement_with_hand_labels(self):
         everything, unambiguous = measure(), measure(AMBIGUOUS)
