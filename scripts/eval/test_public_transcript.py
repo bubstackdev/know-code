@@ -245,6 +245,37 @@ class TranscriptTests(unittest.TestCase):
         self.assertEqual(out['answer']['status'],'answered')
         self.assertFalse(out['runtime_confinement_verified'])
 
+    def test_abandoned_attempts_are_reported_not_failed(self):
+        # The transport-retry rule (protocol.md): a broken or statusless response no client message came from.
+        events,measured,records=self.transport_fixture()
+        broken=dict(endpoint='/v1/messages',model='example-model',completed=False,response_status=200,
+                    response_message_id='message_abandoned',error_type='BrokenPipeError')
+        reset=dict(endpoint='/v1/messages',model='example-model',completed=False,response_status=None,
+                   response_message_id=None,error_type='ConnectionResetError')
+        out=self.bind(events,measured,[records[0],broken,reset,records[1]])
+        self.assertTrue(out['transport_integrity'],out['transport_issues'])
+        self.assertEqual([a['ordinal'] for a in out['abandoned_attempts']],[2,3])
+        self.assertEqual(out['answer']['status'],'answered')
+
+    def test_transport_rule_failures(self):
+        events,measured,records=self.transport_fixture()
+        abandoned=dict(endpoint='/v1/messages',model='example-model',completed=False,response_status=None,response_message_id=None)
+        cases={
+            'missing response':[records[0],abandoned],
+            'client message only partly received':[records[0],dict(records[1],completed=False)],
+            'reordered':[records[1],abandoned,records[0]],
+            'repeated':[records[0],records[1],records[1]],
+            'model differs, even on an abandoned attempt':records+[dict(abandoned,model='other-model')],
+        }
+        for name,candidate in cases.items():
+            with self.subTest(name):
+                out=self.bind(events,measured,candidate)
+                self.assertFalse(out['transport_integrity'])
+                self.assertEqual(out['answer']['status'],'error')
+        changed=copy.deepcopy(events);changed[0]['permissionMode']='default'
+        self.assertFalse(self.bind(changed,measured,records+[abandoned])['transport_integrity'])
+        self.assertFalse(self.bind(events,measured,records+[abandoned],relay_cleanup_complete=False)['transport_integrity'])
+
     def test_unmatched_reordered_and_duplicate_responses_cannot_silently_score(self):
         events,measured,records=self.transport_fixture()
         variants=[records[:1],records+[dict(records[0],response_message_id='hidden_message')],

@@ -7,10 +7,15 @@ in [method.md](method.md) and the sampling plan in [sampling.md](sampling.md). T
 open: arms, model, metrics, the four success criteria from the 0.2 plan, the re-check detector, and the scoring
 script. A deviation from it is recorded here, dated, before the run it affects. Results go on a separate page.
 
-The study runs twice on the same freeze. The **baseline** runs on the 0.1.1 code (main at 36eec45). The **final**
-run uses the 0.2 release candidate. Only the KnowCode binary differs, and its hash is recorded with each run. The
-final run needs a new `knowcode_sha256` in the configuration, so it gets a re-hashed freeze that differs from this
-one only in that field. That change is recorded here as a deviation before the run.
+The study runs twice. The **baseline** ran on the 0.1.1 code (main at 36eec45), under the second freeze
+(`9bc06141`). The **final** run uses the 0.2 release candidate, under a third freeze made before it starts. That freeze
+differs from the second in two ways only:
+
+- `knowcode_sha256` names the release candidate.
+- The transport check follows the rule in [Transport retries](#transport-retries-adopted-2026-10-21), which was adopted
+  after the baseline and is applied to both runs.
+
+Questions, labels, arms, model, client, profile, metrics, criteria, detector and intervals are unchanged.
 
 ## Cohort and questions
 
@@ -247,6 +252,41 @@ Publication follows method.md. The committed results are the summary and per-ses
 outside the repository, because they contain the build machine's paths. They are available on request, with those
 paths removed.
 
+## Transport retries (adopted 2026-10-21)
+
+The baseline found a case the protocol had no rule for. In 7 of its 72 sessions, a model response stream between
+the client and the owned relay broke mid-response: a broken pipe, a connection reset, or no status. In each case the
+client retried and finished normally, with an answer and with clean transcript integrity. The strict transport check
+rejected the session anyway, because the abandoned attempt has no matching client message, and it scored the session
+as an error.
+
+| Arm | Sessions affected |
+| --- | ---: |
+| `plain` | 3 |
+| `knowcode` | 2 |
+| `knowcode-unprompted` | 2 |
+
+The rule below was proposed after the baseline (recorded first in deviations.md) and adopted for the final run. It
+is implemented in [public_transcript.py](../../scripts/eval/public_transcript.py):
+
+- **What counts as an abandoned attempt.** A model response that is incomplete, or has no valid status, and whose
+  message id (if any) belongs to no client message. It is reported with its count and does not fail the transport
+  check.
+- **What still fails the check:**
+  - any client message without a matching complete, successful provider response, including one the client took
+    from a partial response;
+  - responses that are reordered or repeated;
+  - a model that differs from the configuration, on any attempt;
+  - a permission mode that differs;
+  - relay cleanup that isn't verified.
+
+The baseline's results are published twice:
+
+- under its frozen strict check (the primary baseline numbers);
+- re-scored under this rule, which makes it comparable with the final run.
+
+No baseline session was rerun.
+
 ## Pilot and correction (2026-10-20)
 
 The first freeze's baseline was stopped after 23 of its 72 sessions. In 12 of them the agent's answer failed the
@@ -285,3 +325,5 @@ baseline budget.
 - **2026-10-20:** labels, review and adjudication were done by AI agent sessions, as described above.
 - **2026-10-20:** the answer contract was corrected after a pilot, as described in "Pilot and correction". The six DI
   questions were reworded for answer format only, after their labels and independent review.
+- **2026-10-21:** after the baseline, a rule for transport retries was adopted for the final run. See "Transport
+  retries"; the baseline is also re-scored under it.
