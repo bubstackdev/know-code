@@ -18,10 +18,15 @@ import time
 
 
 API = "https://api.github.com/repos/bubstackdev/knowcode/releases/latest"
-DOWNLOAD = "https://github.com/bubstackdev/knowcode/releases/download/v0.2.0/knowcode-installer.sh"
+RELEASES = "https://github.com/bubstackdev/knowcode/releases/download"
 
 
 def check(binary: Path) -> None:
+    # The fixture release is one minor version past the binary under test, so the check holds at every release.
+    major, minor, _ = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
+                                     check=True).stdout.split()[-1].split(".")
+    new = f"{major}.{int(minor) + 1}.0"
+    download = f"{RELEASES}/v{new}/knowcode-installer.sh"
     with tempfile.TemporaryDirectory(prefix="knowcode-update-check-") as temp:
         root = Path(temp).resolve()
         subprocess.run(["git", "init", "--quiet", str(root)], check=True)
@@ -42,12 +47,12 @@ if os.environ.get("MOCK_CURL_SLEEP"):
     time.sleep(float(os.environ["MOCK_CURL_SLEEP"]))
 if url == "https://api.github.com/repos/bubstackdev/knowcode/releases/latest":
     source = base / "release.json"
-elif url == "https://github.com/bubstackdev/knowcode/releases/download/v0.2.0/knowcode-installer.sh":
+elif url == "@DOWNLOAD@":
     source = base / "installer.sh"
 else:
     raise SystemExit("unexpected URL: " + url)
 pathlib.Path(args[args.index("--output") + 1]).write_bytes(source.read_bytes())
-''')
+'''.replace("@DOWNLOAD@", download))
         curl.chmod(0o700)
         env = dict(os.environ)
         env.update(PATH=str(tools) + os.pathsep + env["PATH"], UPDATE_FIXTURE=str(root),
@@ -65,8 +70,8 @@ pathlib.Path(args[args.index("--output") + 1]).write_bytes(source.read_bytes())
         installer = root / "installer.sh"
         def release(script: str, **changes: object) -> dict:
             installer.write_text(script)
-            data = {"tag_name": "v0.2.0", "draft": False, "prerelease": False, "assets": [{
-                "name": "knowcode-installer.sh", "browser_download_url": DOWNLOAD,
+            data = {"tag_name": f"v{new}", "draft": False, "prerelease": False, "assets": [{
+                "name": "knowcode-installer.sh", "browser_download_url": download,
                 "digest": "sha256:" + hashlib.sha256(installer.read_bytes()).hexdigest()}]}
             data.update(changes)
             (root / "release.json").write_text(json.dumps(data))
@@ -76,10 +81,10 @@ set -eu
 test "$KNOWCODE_NO_MODIFY_PATH" = 1
 test "$KNOWCODE_DISABLE_UPDATE" = 1
 test -z "${KNOWCODE_DOWNLOAD_URL:-}"
-printf '#!/bin/sh\\necho "${1:-}" >> "$UPDATE_FIXTURE/invoked"\\nprintf "knowcode 0.2.0\\\\n"\\n' > "$KNOWCODE_INSTALL_DIR/.new"
+printf '#!/bin/sh\\necho "${1:-}" >> "$UPDATE_FIXTURE/invoked"\\nprintf "knowcode @NEW@\\\\n"\\n' > "$KNOWCODE_INSTALL_DIR/.new"
 chmod 700 "$KNOWCODE_INSTALL_DIR/.new"
 mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
-'''
+'''.replace("@NEW@", new)
         release(good_script)
 
         # Opt-out and unmanaged binaries do not initiate requests. Explicit --check remains available.
@@ -88,7 +93,7 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         denied = run("self-update", ok=False)
         assert "receipt" in denied.stderr and not calls()
         checked = run("self-update", "--check")
-        assert "0.2.0" in checked.stdout and [c["url"] for c in calls()] == [API]
+        assert new in checked.stdout and [c["url"] for c in calls()] == [API]
         requests.unlink()
 
         # Multiple simultaneous clients reserve one daily check. Notifications stay off protocol/stdout.
@@ -105,7 +110,7 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
             if state.get("last_success"):
                 break
             time.sleep(0.02)
-        assert state.get("latest") == "v0.2.0", state
+        assert state.get("latest") == f"v{new}", state
         assert [c["url"] for c in calls()] == [API], calls()
         notices = [run("status", extra={"KNOWCODE_UPDATE_CHECK": "1"}) for _ in range(2)]
         assert sum("is available" in n.stderr for n in notices) <= 1
@@ -141,8 +146,8 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         run("self-update", executable=installed, extra={"KNOWCODE_DOWNLOAD_URL": "https://invalid.example"})
         # The installed binary, which carries the new plugin bundle, refreshes it after the version check.
         assert (root / "invoked").read_text().split() == ["--version", "_refresh-plugin"]
-        assert run("--version", executable=installed).stdout.strip() == "knowcode 0.2.0"
-        assert [c["url"] for c in calls()] == [API, DOWNLOAD]
+        assert run("--version", executable=installed).stdout.strip() == f"knowcode {new}"
+        assert [c["url"] for c in calls()] == [API, download]
 
         reset()
         release(good_script, tag_name="v0.1.0")
@@ -150,7 +155,7 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         bad = run("self-update", executable=installed, ok=False)
         assert "URL" in bad.stderr and installed.read_bytes() == original
         data = release(good_script, tag_name="v0.1.0")
-        data["assets"][0]["browser_download_url"] = DOWNLOAD.replace("v0.2.0", "v0.1.0")
+        data["assets"][0]["browser_download_url"] = download.replace(f"v{new}", "v0.1.0")
         (root / "release.json").write_text(json.dumps(data))
         requests.unlink()
         current = run("self-update", executable=installed)
@@ -162,7 +167,7 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         bad = run("self-update", executable=installed, ok=False)
         assert "checksum mismatch" in bad.stderr and installed.read_bytes() == original
 
-        for script in (good_script.replace("0.2.0", "0.9.0"),
+        for script in (good_script.replace(f"knowcode {new}", "knowcode 0.99.0"),
                        good_script + 'printf changed > "$XDG_CONFIG_HOME/knowcode/knowcode-receipt.json"\nexit 1\n'):
             reset()
             release(script)
@@ -211,13 +216,13 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         checked = run("self-update", "--check", executable=brewed)
         assert f"run `{brew}`." in checked.stdout and "self-update" not in checked.stdout, checked.stdout
         clock = int(time.time())
-        known = json.dumps({"format": 1, "last_attempt": clock, "last_success": clock, "latest": "v0.2.0"})
+        known = json.dumps({"format": 1, "last_attempt": clock, "last_success": clock, "latest": f"v{new}"})
         state_path.write_text(known)
         notice = run("status", executable=brewed, extra={"KNOWCODE_UPDATE_CHECK": "1"})
-        assert f"v0.2.0 is available; run `{brew}`." in notice.stderr, notice.stderr
+        assert f"v{new} is available; run `{brew}`." in notice.stderr, notice.stderr
         state_path.write_text(known)
         notice = run("status", extra={"KNOWCODE_UPDATE_CHECK": "1"})
-        assert "v0.2.0 is available; run `knowcode self-update`." in notice.stderr, notice.stderr
+        assert f"v{new} is available; run `knowcode self-update`." in notice.stderr, notice.stderr
     print("update checks passed: isolated metadata, opt-out, daily coordination, receipt ownership, checksum rejection, rollback, deadlines, Homebrew installs")
 
 
