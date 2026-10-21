@@ -22,8 +22,11 @@ pub const TOPICS: &[Topic] = &[
 first; also packages and targets from manifests. Each item has file:line and signature; a name qualified by a
 namespace or module (`B.Worker.Run`, `src/worker.Worker.run`) finds that one, and items sharing a qualified name carry
 their `namespace`. When more than 2,000 definitions match one way, `capped` and `truncated` are set and `total` is a
-lower bound: narrow with Outer.name, a longer name or kind. Use kc_locate when you know what the code does but not its
-name, kc_search for exact text."#,
+lower bound: narrow with Outer.name, a longer name or kind. A query naming something exactly adds `declared`, one line
+per repo saying it has every declaration of the name there: a C# `partial` type's parts (each part's file:line), a
+type's constructors (a record's primary one too), a method's overloads, and how many references in code name it (the
+other mentions: uses, which kc_refs resolves). Use kc_locate when you know what the code does but not its name,
+kc_search for exact text."#,
     },
     Topic {
         name: "kc_locate",
@@ -68,6 +71,17 @@ Aspire.AppHost.Sdk) when ImplicitUsings is enabled; where those can't be read (a
 A constructor's callers are the creations its arguments pick (count, named and optional arguments, `params`, the
 argument types the site tells) and the constructors chaining to it (`: base(…)`, `: this(…)`, a primary
 constructor's base): a creation more than one overload fits is `ambiguous` to each, never confident.
+
+References come grouped by caller (each caller's together, at the place of its first; code before tests), a row in a
+test file marked `test`. `callers` tallies the callers and sites over every reference found, tests apart, and names the
+definitions a name-wide query resolves to when there are several. When the references resolve to overloads (methods or
+constructors sharing a qualified name), `overloads` numbers them with their signatures and the sites reaching each
+alone, and each row's `overload` says which it calls, or which it may call when its arguments don't decide it.
+
+For an interface or base class, `hierarchy` lists its `implementers` (or `subclasses`, with those in indexed repos
+depending on it), those reaching it `through` another type (a subclass of an implementation, `via` the type between),
+`derived` interfaces, and `di`: its registrations and those of its derived interfaces and implementations (C#); each
+list empty is said in `none_found` with what was searched. An assembly scan that may register it is in `incomplete`.
 
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,
 member; SQL read, write) or `edges` (the same filter named as kc_trace names edges: calls, instantiates, uses, member,
@@ -122,8 +136,12 @@ For a method implementing an interface member, or an `override`, calls through t
 `through` naming the interface or base type (ambiguous when the call may reach another implementation; test doubles
 beside one real implementation don't count). An override of a base class in an indexed dependency also lists the
 base's calls of it, with `repo` naming that repo. For an interface or base class, `conformers_elsewhere` lists its
-implementations and subclasses in the indexed repos depending on its repo, matched by its namespace, each with `repo`.
-When no reference resolves to a method, `note` says so and counts the references by its name that resolve elsewhere or
+implementations and subclasses in the indexed repos depending on its repo, matched by its namespace, each with `repo`;
+`conformers_indirect` the types reaching it through another (`Name file:line via Base`: a subclass of an
+implementation, an interface deriving from a derived interface and its implementations), and `di_implementers` the
+DI registrations of its derived interfaces and implementations; `none_found` says each of its lists that came back
+empty (implementations, derived interfaces, subclasses, DI registrations) with what was searched. A C# `partial` type
+lists its `parts` (file:line each); members list constructors first. When no reference resolves to a method, `note` says so and counts the references by its name that resolve elsewhere or
 not at all (kc_refs lists them). `hints` say which lists were cut and how to get the rest. Several symbols at once:
 `symbols` (at most 20), one bundle each, sharing the budget.
 

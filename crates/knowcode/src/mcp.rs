@@ -1322,7 +1322,9 @@ fn refuse_partial_rename(env: &mut Value, path: &str) {
 /// (a cut cursor continues nothing), and what the answer says about itself (`incomplete`, `provenance`, and a deploy
 /// answer's `ci_unread` and `ci_cut`, which its `incomplete` entries are made from).
 fn untouchable(key: &str) -> bool {
-    matches!(key, "group" | "steps" | "cursor" | "incomplete" | "provenance" | "omitted" | "ci_unread" | "ci_cut") || key.ends_with("_cursor")
+    // `none_found` says what is missing; `overloads` is what rows' `overload` numbers point at.
+    matches!(key, "group" | "steps" | "cursor" | "incomplete" | "provenance" | "omitted" | "ci_unread" | "ci_cut" | "none_found" | "overloads")
+        || key.ends_with("_cursor")
 }
 
 /// Lists whose rows the size cap cuts whole, never inside: a deploy chain or a CI include cut short would mislead,

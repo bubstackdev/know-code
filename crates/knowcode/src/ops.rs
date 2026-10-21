@@ -564,6 +564,8 @@ pub struct FindData {
     pub capped: bool,
     pub multi: bool,
     pub manifests: Vec<ManifestHit>,
+    /// Per repo, its declarations of the name (see [`crate::whole::declared`]).
+    pub declared: Vec<String>,
 }
 
 /// Every client route (request contract) in the selected repos, with the actions serving it. Reads the workspace
@@ -1141,6 +1143,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     let mut manifest_hits = Vec::new();
     let want_manifests = kind.is_none_or(|k| matches!(k, "package" | "target" | "product"));
     let mut manifests_total = 0;
+    let mut declared = Vec::new();
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if kind.is_none_or(|k| !matches!(k, "package" | "target" | "product")) {
@@ -1150,6 +1153,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
             total += found.total;
             capped |= found.capped;
             items.extend(found.hits.into_iter().map(|h| (o.root.clone(), h)));
+            declared.extend(crate::whole::declared(&o, q, kind)?);
         }
         if want_manifests {
             let (hits, n) = manifests::find(o.store.conn(), q, 10)?;
@@ -1180,6 +1184,10 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
             query::FIND_CANDIDATES
         ));
     }
+    // Every declaration of the name, said in one line per repo: so the answer is known to be whole.
+    if !declared.is_empty() {
+        env["declared"] = json!(declared.join(" "));
+    }
     if !manifest_hits.is_empty() {
         env["manifests"] = json!(manifest_hits);
     }
@@ -1187,7 +1195,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         env["manifests_total"] = json!(manifests_total);
     }
     finish(&mut env);
-    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits } })
+    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared } })
 }
 
 pub struct LocateData {
@@ -1258,6 +1266,12 @@ pub struct RefsData {
     pub total: usize,
     pub by_confidence: BTreeMap<&'static str, usize>,
     pub multi: bool,
+    /// The tally of callers and sites (see [`crate::whole::Callers`]).
+    pub callers: Option<String>,
+    /// The overloads the references resolve to, numbered.
+    pub overloads: Vec<String>,
+    /// For an interface or base type (see [`crate::whole::hierarchy`]).
+    pub hierarchy: Option<Value>,
 }
 
 pub fn refs(name: &str, kinds: &[String], limit: usize, args: &Scope) -> Result<Out<RefsData>> {
@@ -1287,6 +1301,9 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     let (mut precise, mut corrected) = (0, 0);
     let mut stale_rank: Vec<Incomplete> = Vec::new();
     let mut unread_imports: Vec<Incomplete> = Vec::new();
+    let mut callers = crate::whole::Callers::default();
+    let mut overloads = crate::whole::Overloads::default();
+    let mut hierarchy = None;
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let (_, bare) = query::split_dotted(name.trim());
@@ -1328,6 +1345,18 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         if let Some(g) = order_refs(&o.store, name, &mut hits)? {
             stale_rank.push(kc_store::answer::stale_derived(&format!("order of references ({}): file ranking", repo_name(&o.root)), &g, &o.generation));
         }
+        // Each caller's references together, code before tests; the tally and the overloads over all of them.
+        crate::whole::group_by_caller(&mut hits);
+        callers.add(&o.root, &hits);
+        overloads.add(o.store.conn(), &o.root, &hits)?;
+        // An interface or base type: what reaches it through other types, its DI registrations, and what is empty.
+        if hierarchy.is_none() && (kinds.is_empty() || kinds.iter().any(|k| matches!(*k, "type_ref" | "instantiate"))) {
+            hierarchy = crate::whole::hierarchy(&o, name.trim(), args.no_sync)?;
+            if hierarchy.is_some() && let Some(ty) = query::definitions(o.store.conn(), name.trim())?.into_iter().find(|d| matches!(d.kind.as_str(), "class" | "protocol")) {
+                let label = multi.then(|| repo_name(&o.root));
+                unread_imports.extend(kc_store::unsupported::incomplete(&di_unread(o.store.conn(), &ty)?, label.as_deref()));
+            }
+        }
         if !multi {
             hits.truncate(limit);
         }
@@ -1361,6 +1390,10 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         for (_, h) in &items {
             *by_conf.entry(h.confidence).or_insert(0) += 1;
         }
+        callers = crate::whole::Callers::default();
+        for (root, h) in &items {
+            callers.add(root, std::iter::once(h));
+        }
     }
     items.truncate(limit);
     let mut citer = crate::cite::Citer::new([]).with_stores(opened.iter().map(|o: &Opened| (o.root.clone(), &o.store)));
@@ -1376,10 +1409,24 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
             if let Some(r) = &h.repo {
                 v["repo"] = json!(r);
             }
+            if kc_store::is_test_path(&h.file) {
+                v["test"] = json!(true);
+            }
+            overloads.mark(root, h, &mut v);
             v
         })
         .collect();
     let mut env = workspace_envelope(&opened, workspace, json!(list), total, items.len());
+    let said = callers.statement(name.trim());
+    if let Some(s) = &said {
+        env["callers"] = json!(s);
+    }
+    if !overloads.list.is_empty() {
+        env["overloads"] = json!(overloads.list);
+    }
+    if let Some(h) = &hierarchy {
+        env["hierarchy"] = h.clone();
+    }
     for i in cite_notes {
         push_incomplete(&mut env, i);
     }
@@ -1396,7 +1443,7 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         env["corrected"] = json!(corrected);
     }
     finish(&mut env);
-    Ok(Out { env, data: RefsData { items, total, by_confidence: by_conf, multi } })
+    Ok(Out { env, data: RefsData { items, total, by_confidence: by_conf, multi, callers: said, overloads: overloads.list, hierarchy } })
 }
 
 /// References found from several repos, each reference site once: the same site (repo, file, line, name) is found
@@ -2293,29 +2340,38 @@ fn unread_for(o: &Opened, s: &kc_store::query::SymbolRow, bus: Vec<kc_store::uns
             }
         }
     }
-    if matches!(s.kind.as_str(), "class" | "protocol") && s.file.ends_with(".cs") {
-        let word = |c: &str| c.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == s.name);
-        for u in unsupported::in_area(conn, "di")? {
-            let applies = match u.construct.strip_prefix("assembly scan ") {
-                // A scan registers what its name filter lets through (`[*Service]`), every type without one.
-                Some(rest) => match rest.rsplit_once('[').map(|(_, f)| f.trim_end_matches(']')) {
-                    Some(f) if s.kind == "class" => match (f.strip_prefix('*'), f.strip_suffix('*')) {
-                        (Some(end), _) => s.name.ends_with(end),
-                        (_, Some(start)) => s.name.starts_with(start),
-                        _ => s.name == f,
-                    },
-                    _ => true,
-                },
-                None => word(&u.construct),
-            };
-            if applies {
-                sites.push(u);
-            }
-        }
-    }
+    sites.extend(di_unread(conn, s)?);
     sites.sort_by(|a, b| (&a.area, &a.file, a.line).cmp(&(&b.area, &b.file, b.line)));
     sites.dedup_by(|a, b| a.area == b.area && a.file == b.file && a.line == b.line && a.construct == b.construct);
     Ok(unsupported::incomplete(&sites, None))
+}
+
+/// The DI registrations the C# extractor met but couldn't read that may register the class or interface `s`: an
+/// assembly scan whose name filter lets it through (every type, without one), another construct naming it.
+fn di_unread(conn: &rusqlite::Connection, s: &kc_store::query::SymbolRow) -> Result<Vec<kc_store::unsupported::Site>> {
+    let mut sites = Vec::new();
+    if !(matches!(s.kind.as_str(), "class" | "protocol") && s.file.ends_with(".cs")) {
+        return Ok(sites);
+    }
+    let word = |c: &str| c.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == s.name);
+    for u in kc_store::unsupported::in_area(conn, "di")? {
+        let applies = match u.construct.strip_prefix("assembly scan ") {
+            // A scan registers what its name filter lets through (`[*Service]`), every type without one.
+            Some(rest) => match rest.rsplit_once('[').map(|(_, f)| f.trim_end_matches(']')) {
+                Some(f) if s.kind == "class" => match (f.strip_prefix('*'), f.strip_suffix('*')) {
+                    (Some(end), _) => s.name.ends_with(end),
+                    (_, Some(start)) => s.name.starts_with(start),
+                    _ => s.name == f,
+                },
+                _ => true,
+            },
+            None => word(&u.construct),
+        };
+        if applies {
+            sites.push(u);
+        }
+    }
+    Ok(sites)
 }
 
 /// Every message the selected repos publish or consume, outside tests, with the code on the other side across indexed
@@ -2513,6 +2569,22 @@ pub fn context_raised(
             let n = ctx.conformers_elsewhere.len();
             ctx.conformers_elsewhere_total = (n > elsewhere_max).then_some(n);
             ctx.conformers_elsewhere.truncate(elsewhere_max);
+            // An interface or base type: each of its lists that came back empty, said with what was searched.
+            let subtypes = !ctx.conformers.is_empty() || !ctx.conformers_elsewhere.is_empty();
+            if crate::whole::is_base(&ctx.symbol, subtypes) {
+                let protocol = |k: &str| k == "protocol";
+                let found = crate::whole::Found {
+                    implementers: ctx.conformers.iter().filter(|c| !protocol(&c.kind)).count()
+                        + ctx.conformers_indirect.iter().filter(|c| !protocol(&c.kind)).count()
+                        + ctx.conformers_elsewhere.iter().filter(|c| !protocol(&c.symbol.kind)).count(),
+                    derived: ctx.conformers.iter().filter(|c| protocol(&c.kind)).count()
+                        + ctx.conformers_indirect.iter().filter(|c| protocol(&c.kind)).count()
+                        + ctx.conformers_elsewhere.iter().filter(|c| protocol(&c.symbol.kind)).count(),
+                    registrations: ctx.di.as_ref().map_or(0, |d| d.registrations.len()) + ctx.di_implementers.len(),
+                    cut: ctx.conformers_total.is_some() || ctx.conformers_indirect_total.is_some() || ctx.conformers_elsewhere_total.is_some(),
+                };
+                ctx.none_found = crate::whole::none_found(o.store.conn(), &ctx.symbol, &repo_name(&o.root), &found)?;
+            }
             // Each caller and callee quotes its line; without cites, callers show it as `code`.
             let mut citer = crate::cite::Citer::new([])
                 .with_stores(std::iter::once((o.root.clone(), &o.store)).chain(deps.iter().map(|d| (d.root.clone(), &d.store))));
@@ -2729,6 +2801,7 @@ pub fn context_raised(
         lists.push(cursor::List::new(format!("{at}/callees"), limits.callees, c.callees_total > c.callees.len()));
         lists.push(cursor::List::new(format!("{at}/members"), limits.members, c.members_total > c.members.len()));
         lists.push(cursor::List::new(format!("{at}/conformers"), limits.conformers, c.conformers_total.is_some()));
+        lists.push(cursor::List::new(format!("{at}/conformers_indirect"), limits.conformers, c.conformers_indirect_total.is_some()));
         lists.push(cursor::List::new(format!("{at}/conformers_elsewhere"), elsewhere_max, c.conformers_elsewhere_total.is_some()));
         for (j, t) in tables[i].tables.iter().enumerate() {
             let cut = t.accessors_total.is_some_and(|n| n > t.accessors.len());

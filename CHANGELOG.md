@@ -15,6 +15,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `kc_help <tool>`), and instructions that no longer repeat the descriptions. The instructions and the `kc_refs` and
   `kc_find` descriptions now send "what calls X" and "what breaks if X changes" to `kc_impact` (or `kc_trace`, depth
   2) with a `file:line` selector. The CLI's output and `--json` are unchanged.
+- Answers whole enough to stop on. `find` on an exact name adds `declared`: one line per repo saying it has every
+  declaration of the name there, with a C# `partial` type's parts (file:line each), a type's constructors (a record's
+  primary one too), a method's overloads, and how many references in code name it (the other mentions are uses, for
+  `refs`). `refs` groups references by caller (code before tests), marks rows in test files `test`, tallies callers
+  and sites in `callers`, numbers the overloads the references resolve to (`overloads`, with signatures and the sites
+  reaching each) and says which one each row calls (`overload`, in place of its `targets`). For an interface or base
+  class, `refs` adds `hierarchy` (implementers or subclasses, those reaching it through another type, derived
+  interfaces, DI registrations of it and of them) and `context` adds `conformers_indirect` and `di_implementers`; both
+  say each empty list as "none found" with what was searched (`none_found`). A `context` on a partial type lists its
+  `parts` instead of calling them other definitions, and lists constructors first among members.
 - `knowcode fetch-deps --into DIR` clones the git repos a repo depends on (manifest dependencies written as git
   URLs, Terraform git module sources, GitLab CI includes of other projects, and repos whose checkout was deleted),
   shallow, one directory each, so cross-repo answers can reach them. `--dry-run` prints the plan. DIR must be outside
