@@ -74,11 +74,29 @@ Resolved:
   they chain to. A creation more than one constructor fits is `ambiguous` to each, never a confident pick.
 - **HTTP.** ASP.NET controller actions (`[Route]` and `[Http*]` attributes, `nameof` and constants resolved) and
   minimal API endpoints are linked to the requests that reach them: C# `HttpClient` calls with a URL (base addresses
-  dropped, constants resolved, interpolated values as route parameters; a base path in a `readonly string` field
-  and a URL built in a local are read), request classes declaring a path and a verb in an attribute, Angular
-  `HttpClient` calls, ColdFusion `<cfhttp>`, and a code base's own request-contract and gateway conventions (see
-  [configurable conventions](#configurable-conventions)). Links match verb and path and assume `same_deployment`
-  unless the code names the service, or a host decides (below).
+  dropped, constants resolved, interpolated values as route parameters; a base path in a `readonly string` field,
+  a URL built in a local and `new Uri(base, path)` are read), RestSharp's `RestRequest`, request classes declaring a
+  path and a verb in an attribute, TypeScript and JavaScript requests (below), ColdFusion `<cfhttp>`, and a code
+  base's own request-contract and gateway conventions (see [configurable conventions](#configurable-conventions)).
+  Links match verb and path and assume `same_deployment` unless the code names the service, or a host decides
+  (below). A request whose URL is known only at run time is counted, with where, in the `note` of an action nothing
+  is found to request; the note also names the requests nearest by path.
+- **Controller prefixes.** A controller with no `[Route]` (or `[RoutePrefix]`) of its own takes the nearest one up
+  its base classes, in any file of the repo, as ASP.NET does, with `[controller]` its own name and `[action]` the
+  action's (`[ActionName]` read); `[area]` is the class's `[Area]`. A method's lone `[Route]` serves every verb;
+  `[NonAction]` methods serve nothing. Conventional routes with a literal template (`MapControllerRoute`,
+  `MapDefaultControllerRoute`, `MapRoute`, `MapHttpRoute`, areas aside) place the actions of controllers with no
+  attribute route: those with an `[Http*]` attribute and no template, and public methods with no route attribute,
+  each with and without the template's trailing parameters.
+- **TypeScript and JavaScript requests.** Angular `HttpClient`, `fetch` (its `method`), axios (`axios.get`,
+  `axios({ url, method })`, instances), jQuery (`$.ajax({ url, type })`, `$.get`, `$.getJSON`), superagent, and
+  wrappers named for HTTP or API clients (`api.get('/orders')`). URLs are literals, template literals and
+  concatenations, with constants resolved, a URL builder's path (`apiClient.getUrl('Items')`, `buildUrl(…)`) and
+  `new URL(path, base)` after a base address, and locals holding any of them. A call to a generated API client whose
+  code isn't indexed (`getItemsApi(api).getItems()`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`)
+  is an operation, linked to the action of that name under the controller named like the client (`Items`), else
+  under any controller, assuming `operation_name`; a client the repo declares itself is read through its own
+  requests instead.
 - **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
   are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
   methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may
@@ -290,7 +308,7 @@ on them is incomplete with reason `unsupported`, naming the first few with `file
 | GitLab CI | an include or trigger in a form not read (kind `unknown` in `ci_includes`) | the jobs and includes it brings |
 | Angular | a lazy route in a form not read (a default export, a module string) | the routes it loads |
 | Razor | `.razor` and `.cshtml` files, which aren't read at all: a C# `refs` or `impact` answer from a repo holding any says so, naming one | uses of C# code in their markup and `@code` blocks |
-| HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes (`MapControllerRoute`, `MapDefaultControllerRoute`, `MapRoute`, `MapHttpRoute`), an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
+| HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes whose template isn't a literal or names an area, an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
 
 Constructs not in this table and not listed as gaps above are simply not seen, and an answer can be `complete`
 without them.

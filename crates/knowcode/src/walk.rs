@@ -862,7 +862,7 @@ impl<'a> Graph<'a> {
             return b;
         }
         let root = &self.roots[repo];
-        let client = |s: &RepoSummary| s.routes.iter().any(|r| r.side == "client");
+        let client = |s: &RepoSummary| s.routes.iter().any(|r| matches!(r.side.as_str(), "client" | "operation"));
         let mine = self.summaries.iter().find(|s| &s.root == root).is_some_and(client);
         let b = mine || kc_index::workspace::neighbours(root, self.summaries).0.into_iter().any(client);
         self.requests.insert(repo, b);
@@ -910,7 +910,7 @@ impl<'a> Graph<'a> {
     /// Where a method requests a route itself: the client route's line.
     fn request_line(&self, root: &Path, symbol: &str, file: &str) -> Option<String> {
         let s = self.summaries.iter().find(|s| s.root == root)?;
-        let r = s.routes.iter().find(|r| r.side == "client" && r.symbol == symbol && r.file == file && r.line > 0)?;
+        let r = s.routes.iter().find(|r| matches!(r.side.as_str(), "client" | "operation") && r.symbol == symbol && r.file == file && r.line > 0)?;
         site(&r.file, r.line)
     }
 

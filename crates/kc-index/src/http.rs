@@ -262,6 +262,9 @@ fn may_host(repo: &Path, service: &str, summaries: &[RepoSummary]) -> bool {
 /// hosts is looked up only there; one naming a service no indexed repo hosts is never linked to a repo hosting
 /// other services.
 pub fn handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
+    if client.side == "operation" {
+        return operation_handlers(client, summaries);
+    }
     let Some(k) = key(client) else { return Vec::new() };
     // A gone repo serving the route would have been a candidate.
     crate::workspace::note_missing_if(crate::workspace::gone(summaries), |g| {
@@ -356,6 +359,48 @@ fn by_hosts(mut links: Vec<RouteLink>, client: &RouteRow, client_repo: &Path, su
     links
 }
 
+/// A server route's action and controller: `ItemsController.GetItems` is (`GetItems`, `Items`).
+fn action_of(r: &RouteRow) -> (&str, &str) {
+    let mut parts = r.symbol.rsplit('.');
+    let action = parts.next().unwrap_or_default();
+    let class = parts.next().unwrap_or_default();
+    (action, class.strip_suffix("Controller").unwrap_or(class))
+}
+
+/// The actions an operation of a generated client may be (see `kc_extract::typescript`): those named like the
+/// operation, under the controller named like the client's tag when one is, else under any controller. The link
+/// rests on names (`operation_name`): `exact` when one action fits, `ambiguous` when several do.
+fn operation_handlers(client: &RouteRow, summaries: &[RepoSummary]) -> Vec<RouteLink> {
+    let Some(op) = client.path.as_deref() else { return Vec::new() };
+    let mut named: Vec<(&Path, &RouteRow)> = Vec::new();
+    for s in distinct(summaries) {
+        for r in s.routes.iter().filter(|r| r.side == "server" && action_of(r).0.eq_ignore_ascii_case(op)) {
+            // An action routed under several paths is one action.
+            if !named.iter().any(|(p, x)| *p == s.root.as_path() && x.symbol == r.symbol && x.file == r.file && x.start_line == r.start_line) {
+                named.push((s.root.as_path(), r));
+            }
+        }
+    }
+    let tagged: Vec<(&Path, &RouteRow)> = match client.service.as_deref() {
+        Some(tag) => named.iter().filter(|(_, r)| squash(action_of(r).1) == squash(tag)).copied().collect(),
+        None => Vec::new(),
+    };
+    let cands = if tagged.is_empty() { named } else { tagged };
+    let confidence = if cands.len() == 1 { "exact" } else { "ambiguous" };
+    let mut links: Vec<RouteLink> = cands
+        .into_iter()
+        .map(|(repo, route)| RouteLink {
+            repo: repo.to_path_buf(),
+            route: route.clone(),
+            confidence,
+            assumptions: vec![Assumption::SameDeployment, Assumption::OperationName],
+            host: None,
+        })
+        .collect();
+    links.sort_by(|a, b| (&a.repo, &a.route.symbol).cmp(&(&b.repo, &b.route.symbol)));
+    links
+}
+
 /// Candidate actions with how sure each link is, most likely first.
 fn rank<'a>(
     cands: Vec<(&'a Path, &'a RouteRow)>,
@@ -391,8 +436,14 @@ pub fn callers(server: &RouteRow, server_repo: &Path, summaries: &[RepoSummary])
     let me = identity_of(server_repo, summaries);
     crate::workspace::note_missing_if(crate::workspace::gone(summaries), |g| has_route(g, "client", &k));
     let mut out = Vec::new();
+    let (action, _) = action_of(server);
     for s in distinct(summaries) {
-        for c in s.routes.iter().filter(|r| r.side == "client" && key(r).is_some_and(|ck| serves_key(&k, &ck))) {
+        let requests = |r: &&RouteRow| match r.side.as_str() {
+            "client" => key(r).is_some_and(|ck| serves_key(&k, &ck)),
+            "operation" => r.path.as_deref().is_some_and(|op| op.eq_ignore_ascii_case(action)),
+            _ => false,
+        };
+        for c in s.routes.iter().filter(requests) {
             // The serving checkout may be another checkout of this repo; the route is matched by symbol, file and first
             // line (overloads share a name), and verb and path (an endpoint registered under several groups).
             if let Some(l) = handlers(c, &s.root, summaries).into_iter().find(|l| {
@@ -400,7 +451,7 @@ pub fn callers(server: &RouteRow, server_repo: &Path, summaries: &[RepoSummary])
                     && l.route.symbol == server.symbol
                     && l.route.file == server.file
                     && l.route.start_line == server.start_line
-                    && key(&l.route) == key(server)
+                    && (c.side == "operation" || key(&l.route) == key(server))
             }) {
                 out.push(RouteLink { repo: s.root.clone(), route: c.clone(), confidence: l.confidence, assumptions: l.assumptions, host: l.host });
             }
@@ -455,6 +506,121 @@ pub fn requested_elsewhere(client: &RouteRow, repo: &Path, summaries: &[RepoSumm
     elsewhere
 }
 
+/// Normalized path segments, route parameters as `{}`.
+fn segments(r: &RouteRow) -> Option<Vec<String>> {
+    key(r).map(|(_, p)| p.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect())
+}
+
+/// Whether `short` is a proper tail of `long`, segment by segment (`{}` matching anything), sharing a named segment:
+/// a route whose prefix one side doesn't know (a base address, a base controller's `[Route]`, a path base).
+fn tail_of(short: &[String], long: &[String]) -> bool {
+    let tail = || short.iter().zip(&long[long.len() - short.len()..]);
+    short.len() < long.len() && tail().all(|(a, b)| a == b || a == "{}" || b == "{}") && tail().any(|(a, b)| a == b && a != "{}")
+}
+
+/// Routes of `side` whose path is the other's with a prefix more or less (see [`tail_of`]), verbs compatible: the
+/// nearest candidates when nothing matches exactly. At most three.
+fn nearest<'a>(r: &RouteRow, side: &str, summaries: &'a [RepoSummary]) -> Vec<(&'a Path, &'a RouteRow)> {
+    let (Some(k), Some(mine)) = (key(r), segments(r)) else { return Vec::new() };
+    let mut out: Vec<(usize, &Path, &RouteRow)> = Vec::new();
+    for s in distinct(summaries) {
+        for x in s.routes.iter().filter(|x| x.side == side) {
+            let (Some(xk), Some(theirs)) = (key(x), segments(x)) else { continue };
+            let verbs = xk.0 == k.0 || xk.0 == "*" || k.0 == "*";
+            if verbs && (tail_of(&mine, &theirs) || tail_of(&theirs, &mine)) {
+                // Most named segments in common first.
+                let named = mine.iter().rev().zip(theirs.iter().rev()).filter(|(a, b)| a == b && *a != "{}").count();
+                out.push((named, s.root.as_path(), x));
+            }
+        }
+    }
+    out.sort_by_key(|(n, ..)| std::cmp::Reverse(*n));
+    out.into_iter().take(3).map(|(_, p, x)| (p, x)).collect()
+}
+
+/// What an HTTP entry with no links leaves to check, in one line: the repos searched and how, the requests whose
+/// URL is known only at run time, and the nearest routes by path (another prefix). `route` is the entry's own route
+/// (`server` for `serves`, else a client or operation route). `brief` (one of many in a list): the nearest routes
+/// only.
+pub fn unlinked_note(route: &RouteRow, summaries: &[RepoSummary], brief: bool) -> Option<String> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let listed = |names: Vec<String>| -> String {
+        let n = names.len();
+        let mut shown: Vec<String> = names.into_iter().take(4).collect();
+        if n > 4 {
+            shown.push(format!("+{}", n - 4));
+        }
+        shown.join(", ")
+    };
+    let site = |p: &Path, r: &RouteRow| format!("{} {}:{}", name(p), r.file, r.line);
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut parts = Vec::new();
+    let server = route.side == "server";
+    if server && !brief {
+        let clients: Vec<&RepoSummary> =
+            distinct(summaries).into_iter().filter(|s| s.routes.iter().any(|r| matches!(r.side.as_str(), "client" | "operation" | "unresolved"))).collect();
+        if clients.is_empty() {
+            parts.push("no indexed repo makes an HTTP request KnowCode reads (fetch, axios, $.ajax, HttpClient, generated clients)".to_string());
+        } else {
+            parts.push(format!(
+                "searched {} repo{} with requests ({}) for URL literals and templates, base + path (fetch, axios, $.ajax, HttpClient, API wrappers)",
+                clients.len(),
+                plural(clients.len()),
+                listed(clients.iter().map(|s| name(&s.root)).collect()),
+            ));
+            // Generated clients: their calls name an operation, matched to the action by name.
+            let mut tags: Vec<String> = Vec::new();
+            for r in clients.iter().flat_map(|s| s.routes.iter().filter(|r| r.side == "operation")) {
+                let t = r.service.clone().unwrap_or_else(|| "untagged".to_string());
+                if !tags.contains(&t) {
+                    tags.push(t);
+                }
+            }
+            parts.push(if tags.is_empty() {
+                "no generated-client calls".to_string()
+            } else {
+                format!("generated clients ({}) by operation `{}`", listed(tags), action_of(route).0)
+            });
+            let unresolved: Vec<(&Path, &RouteRow)> =
+                clients.iter().flat_map(|s| s.routes.iter().filter(|r| r.side == "unresolved").map(move |r| (s.root.as_path(), r))).collect();
+            if !unresolved.is_empty() {
+                let first: Vec<String> = unresolved.iter().take(2).map(|(p, r)| site(p, r)).collect();
+                parts.push(format!(
+                    "{} run-time URL{} unread ({}{})",
+                    unresolved.len(),
+                    plural(unresolved.len()),
+                    first.join(", "),
+                    if unresolved.len() > 2 { ", …" } else { "" }
+                ));
+            }
+        }
+    } else if !brief {
+        let servers: Vec<&RepoSummary> = distinct(summaries).into_iter().filter(|s| s.routes.iter().any(|r| r.side == "server")).collect();
+        let names = listed(servers.iter().map(|s| name(&s.root)).collect());
+        parts.push(match (servers.len(), route.side.as_str()) {
+            (0, _) => "no indexed repo serves HTTP routes KnowCode reads".to_string(),
+            (n, "operation") => format!("no action named `{}` in {n} repo{} serving routes ({names})", route.path.as_deref().unwrap_or_default(), plural(n)),
+            (n, _) => format!("searched {n} repo{} serving routes ({names})", plural(n)),
+        });
+        let unplaced = distinct(summaries).into_iter().filter(|s| s.routes.iter().any(|r| r.side == "unsupported")).count();
+        if unplaced > 0 {
+            parts.push(format!("{unplaced} repo{} routes KnowCode can't place", if unplaced == 1 { " registers" } else { "s register" }));
+        }
+    }
+    let near = nearest(route, if server { "client" } else { "server" }, summaries);
+    if !near.is_empty() {
+        let shown: Vec<String> = near
+            .iter()
+            .map(|(p, r)| {
+                let at = if server { site(p, r) } else { format!("{} {}", name(p), r.symbol) };
+                format!("{} /{} ({at})", r.verb, r.path.as_deref().unwrap_or_default())
+            })
+            .collect();
+        parts.push(format!("nearest by path: {}", shown.join("; ")));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 fn is_type_kind(kind: &str) -> bool {
     matches!(kind, "class" | "struct" | "enum" | "protocol")
 }
@@ -476,6 +642,8 @@ pub struct HttpEntry {
     /// For a contract no action serves: the commented-out `[Http*]` attributes that served its route (see
     /// [`commented`]).
     pub commented_out: Vec<RouteLink>,
+    /// The route itself, for [`unlinked_note`] when there are no links.
+    pub route: RouteRow,
 }
 
 /// The HTTP facts about a symbol of the repo at `root`: the contract it is or creates (`requests`), or the action
@@ -522,15 +690,20 @@ pub fn for_symbol(
     for r in &mine.routes {
         match r.side.as_str() {
             "client" if own(r) || created_contract(r) => out.push(requests(r, root, summaries)),
-            "server" if own(r) => out.push(HttpEntry {
-                role: "serves",
-                symbol: r.symbol.clone(),
-                verb: r.verb.clone(),
-                path: r.path.clone(),
-                service: r.service.clone(),
-                links: callers(r, root, summaries),
-                commented_out: Vec::new(),
-            }),
+            "operation" if own(r) => out.push(requests(r, root, summaries)),
+            "server" if own(r) => {
+                let links = callers(r, root, summaries);
+                out.push(HttpEntry {
+                    role: "serves",
+                    symbol: r.symbol.clone(),
+                    verb: r.verb.clone(),
+                    path: r.path.clone(),
+                    service: r.service.clone(),
+                    route: r.clone(),
+                    links,
+                    commented_out: Vec::new(),
+                })
+            }
             _ => {}
         }
     }
@@ -547,6 +720,7 @@ fn requests(r: &RouteRow, repo: &Path, summaries: &[RepoSummary]) -> HttpEntry {
         verb: r.verb.clone(),
         path: r.path.clone(),
         service: r.service.clone(),
+        route: r.clone(),
         links,
         commented_out,
     }

@@ -445,6 +445,98 @@ fn service_dtos_link_backends_through_the_named_service() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A backend whose controllers take their prefix from a base controller in another file (`[controller]` filled with
+/// each subclass's name) and from conventional routes; clients requesting it with fetch, axios, jQuery through a URL
+/// builder, a generated client's operation, and C# `HttpClient` with a composed `Uri`. An action nothing requests
+/// says what was searched, what wasn't read, and the nearest request by path.
+#[test]
+fn inherited_prefixes_and_client_forms_link_across_repos() {
+    let turn = turn();
+    let base = turn.dir("prefixes");
+    let api = scratch(&base, "api");
+    write(&api, "src/ApiControllerBase.cs", "[ApiController]\n[Route(\"api/v1/[controller]\")]\npublic abstract class ApiControllerBase : ControllerBase { }\n");
+    write(
+        &api,
+        "src/ItemsController.cs",
+        "public class ItemsController : ApiControllerBase\n{\n    [HttpGet(\"Latest\")]\n    public Task Latest() => null;\n    [HttpGet(\"{id}\")]\n    public Task GetItem(string id) => null;\n    [HttpDelete(\"{id}\")]\n    public Task Remove(string id) => null;\n    [HttpGet(\"Oldest\")]\n    public Task Oldest() => null;\n}\n",
+    );
+    write(
+        &api,
+        "src/UserLibraryController.cs",
+        "public class UserLibraryController : ApiControllerBase\n{\n    [HttpGet(\"Users/{userId}/Items/Latest\")]\n    public Task GetLatestMedia(string userId) => null;\n}\n",
+    );
+    write(&api, "src/HomeController.cs", "public class HomeController : Controller\n{\n    public IActionResult Privacy() => null;\n    private void Hidden() { }\n}\n");
+    write(&api, "src/Program.cs", "var app = builder.Build();\napp.MapControllerRoute(\"default\", \"{controller=Home}/{action=Index}/{id?}\");\n");
+    let web = scratch(&base, "web");
+    write(
+        &web,
+        "src/library.ts",
+        "const API = 'https://api.example.test/api/v1';\nexport class Library {\n  latest() { return fetch(`${API}/Items/Latest`); }\n  remove(id: string) { return axios.delete(API + '/Items/' + id); }\n  media(api: Api) { return getUserLibraryApi(api).getLatestMedia({ userId }); }\n  privacy() { return $.ajax({ url: apiClient.getUrl('Home/Privacy'), type: 'GET' }); }\n  oldest() { return fetch('/Items/Oldest'); }\n  dynamic(url: string) { return fetch(url); }\n}\n",
+    );
+    let admin = scratch(&base, "admin");
+    write(&admin, "src/ItemsClient.cs", "public class ItemsClient(HttpClient http)\n{\n    public Task One(string id) => http.GetAsync(new Uri(_base, $\"api/v1/Items/{id}\"));\n}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web, &admin].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    // The base controller's prefix, `[controller]` the subclass; conventional routes for the controller with none.
+    let served: Vec<(String, String, String)> =
+        routes(0).into_iter().filter(|r| r.side == "server").map(|r| (r.symbol, r.verb, r.path.unwrap_or_default())).collect();
+    let s = |sym: &str, verb: &str, path: &str| (sym.to_string(), verb.to_string(), path.to_string());
+    assert_eq!(
+        served,
+        [
+            s("HomeController.Privacy", "*", "Home/Privacy"),
+            s("HomeController.Privacy", "*", "Home/Privacy/{id}"),
+            s("ItemsController.Latest", "GET", "api/v1/Items/Latest"),
+            s("ItemsController.GetItem", "GET", "api/v1/Items/{id}"),
+            s("ItemsController.Remove", "DELETE", "api/v1/Items/{id}"),
+            s("ItemsController.Oldest", "GET", "api/v1/Items/Oldest"),
+            s("UserLibraryController.GetLatestMedia", "GET", "api/v1/UserLibrary/Users/{userId}/Items/Latest"),
+        ]
+    );
+    let link = |i: usize, symbol: &str| -> Vec<(String, &'static str, Vec<kc_store::answer::Assumption>)> {
+        let r = routes(i).into_iter().find(|r| r.symbol == symbol).unwrap_or_else(|| panic!("{symbol}"));
+        kc_index::http::handlers(&r, &roots[i], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence, l.assumptions)).collect()
+    };
+    use kc_store::answer::Assumption::{OperationName, SameDeployment};
+    let one = |sym: &str| vec![(sym.to_string(), "exact", vec![SameDeployment])];
+    assert_eq!(link(1, "Library.latest"), one("ItemsController.Latest"));
+    assert_eq!(link(1, "Library.remove"), one("ItemsController.Remove"));
+    assert_eq!(link(1, "Library.privacy"), one("HomeController.Privacy"));
+    assert_eq!(link(2, "ItemsClient.One"), one("ItemsController.GetItem"));
+    // A generated client's operation: the action of that name under the controller named like its tag.
+    assert_eq!(link(1, "Library.media"), [("UserLibraryController.GetLatestMedia".to_string(), "exact", vec![SameDeployment, OperationName])]);
+
+    // From the action's side.
+    let server = |symbol: &str| routes(0).into_iter().find(|r| r.symbol == symbol).unwrap();
+    let callers = |symbol: &str| -> Vec<String> { kc_index::http::callers(&server(symbol), &roots[0], &summaries).into_iter().map(|l| l.route.symbol).collect() };
+    assert_eq!(callers("ItemsController.Latest"), ["Library.latest"]);
+    assert_eq!(callers("UserLibraryController.GetLatestMedia"), ["Library.media"]);
+
+    // Nothing requests `Oldest` under its prefix: the note says where requests were looked for and what is left.
+    assert!(callers("ItemsController.Oldest").is_empty());
+    let note = kc_index::http::unlinked_note(&server("ItemsController.Oldest"), &summaries, false).unwrap();
+    for part in [
+        "searched 2 repos with requests (",
+        "generated clients (UserLibrary) by operation `Oldest`",
+        "1 run-time URL unread (web src/library.ts:8)",
+        "nearest by path: GET /Items/Oldest (web src/library.ts:7)",
+    ] {
+        assert!(note.contains(part), "{part:?} in {note}");
+    }
+    // And from the request's side, in a list: the nearest action only.
+    let oldest = routes(1).into_iter().find(|r| r.symbol == "Library.oldest").unwrap();
+    assert_eq!(
+        kc_index::http::unlinked_note(&oldest, &summaries, true).as_deref(),
+        Some("nearest by path: GET /api/v1/Items/Oldest (api ItemsController.Oldest); GET /api/v1/Items/{id} (api ItemsController.GetItem)")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 #[test]
 fn angular_elements_resolve_into_library_repos_and_back() {
     let turn = turn();

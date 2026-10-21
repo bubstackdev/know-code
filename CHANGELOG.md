@@ -15,6 +15,21 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `kc_help <tool>`), and instructions that no longer repeat the descriptions. The instructions and the `kc_refs` and
   `kc_find` descriptions now send "what calls X" and "what breaks if X changes" to `kc_impact` (or `kc_trace`, depth
   2) with a `file:line` selector. The CLI's output and `--json` are unchanged.
+- HTTP routes across repos find more of their callers. A controller with no `[Route]` of its own takes the nearest
+  one up its base classes, in any file of the repo, with `[controller]` its own name, as ASP.NET does; `[Area]`,
+  `[ActionName]`, `[NonAction]`, `[RoutePrefix]` and a method's lone `[Route]` (every verb) are read. Conventional
+  routes with a literal template (`MapControllerRoute`, `MapDefaultControllerRoute`, `MapRoute`, `MapHttpRoute`) now
+  place the actions they serve instead of making answers incomplete. Requests are read from `fetch`, axios (and
+  instances of it), jQuery's `$.ajax`, `$.get` and `$.getJSON`, superagent, and wrappers named for HTTP or API
+  clients, with URLs built from a base and a path (`getUrl('Items')`, `new URL(path, base)`, C#
+  `new Uri(base, path)`) and RestSharp's `RestRequest`. A call to a generated API client
+  (`getItemsApi(api).getItems()`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`) links to the
+  action of that name, under the controller named like the client, assuming `operation_name`. Each extractor's
+  version is bumped, so C# and TypeScript files are read again on the next query.
+- An HTTP fact with no links says what is left to check (`note`): for an action, the repos making requests that
+  were searched and how, the generated clients seen, the requests whose URL is known only at run time (with where),
+  and the requests nearest by path (another prefix); for a request, the repos serving routes and the nearest actions.
+  `routes` lists, per unlinked request, the nearest actions only.
 - `knowcode fetch-deps --into DIR` clones the git repos a repo depends on (manifest dependencies written as git
   URLs, Terraform git module sources, GitLab CI includes of other projects, and repos whose checkout was deleted),
   shallow, one directory each, so cross-repo answers can reach them. `--dry-run` prints the plan. DIR must be outside

@@ -591,21 +591,24 @@ pub fn routes(args: &Scope) -> Result<Out<Vec<(PathBuf, HttpOut)>>> {
             source: None,
             source_truncated: false,
         };
-        for r in s.routes.iter().filter(|r| r.side == "client") {
+        for r in s.routes.iter().filter(|r| matches!(r.side.as_str(), "client" | "operation")) {
             let links: Vec<HttpLinkOut> = kc_index::http::handlers(r, &s.root, &summaries).into_iter().map(link_out).collect();
-            let commented_out = if links.is_empty() && matches!(r.kind.as_str(), "class" | "struct") {
+            let commented_out: Vec<HttpLinkOut> = if links.is_empty() && matches!(r.kind.as_str(), "class" | "struct") {
                 kc_index::http::commented(r, &summaries).into_iter().map(link_out).collect()
             } else {
                 Vec::new()
             };
+            let operation = r.side == "operation";
             out.push((
                 s.root.clone(),
                 HttpOut {
                     role: "requests",
                     symbol: r.symbol.clone(),
                     verb: r.verb.clone(),
-                    path: r.path.clone(),
+                    path: if operation { None } else { r.path.clone() },
+                    operation: if operation { r.path.clone() } else { None },
                     service: r.service.clone(),
+                    note: if links.is_empty() && commented_out.is_empty() { kc_index::http::unlinked_note(r, &summaries, true) } else { None },
                     links,
                     unsent: false,
                     commented_out,
@@ -2009,8 +2012,13 @@ fn refs_named_like(conn: &rusqlite::Connection, s: &query::SymbolRow) -> Result<
 pub struct HttpOut {
     pub role: &'static str,
     pub symbol: String,
+    /// Empty for a generated client's operation, which names no verb or path.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub verb: String,
     pub path: Option<String>,
+    /// A generated API client's operation the symbol calls (`getItems`), linked by name to the action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
     /// The service a gateway contract is sent to (`[ShopRequest]`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
@@ -2022,6 +2030,9 @@ pub struct HttpOut {
     /// For a contract no action serves: commented-out `[Http*]` attributes that served its route.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub commented_out: Vec<HttpLinkOut>,
+    /// No links: what was searched and what is left to check (see `kc_index::http::unlinked_note`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -2137,15 +2148,20 @@ fn http_for(o: &Opened, ctx: &Context, no_sync: bool) -> Result<Vec<HttpOut>> {
     };
     Ok(entries
         .into_iter()
-        .map(|e| HttpOut {
-            unsent: unsent && e.role == "requests" && e.symbol == qualified,
-            commented_out: e.commented_out.into_iter().map(|l| link_out(l, false)).collect(),
-            role: e.role,
-            links: e.links.into_iter().map(|l| link_out(l, e.role == "requests")).collect(),
-            symbol: e.symbol,
-            verb: e.verb,
-            path: e.path,
-            service: e.service,
+        .map(|e| {
+            let no_links = e.links.is_empty() && e.commented_out.is_empty();
+            HttpOut {
+                unsent: unsent && e.role == "requests" && e.symbol == qualified,
+                commented_out: e.commented_out.into_iter().map(|l| link_out(l, false)).collect(),
+                role: e.role,
+                links: e.links.into_iter().map(|l| link_out(l, e.role == "requests")).collect(),
+                symbol: e.symbol,
+                operation: e.verb.is_empty().then(|| e.path.clone()).flatten(),
+                path: if e.verb.is_empty() { None } else { e.path },
+                verb: e.verb,
+                service: e.service,
+                note: if no_links { kc_index::http::unlinked_note(&e.route, &summaries, false) } else { None },
+            }
         })
         .collect())
 }
@@ -10514,7 +10530,8 @@ public class CatalogService(HttpClient httpClient)
     }
 
     /// Registrations KnowCode recognises but can't place make the answers that depend on them say `unsupported`:
-    /// `routes` for the repo, `context` on the handler, and `context` on an action conventional routes may serve.
+    /// `routes` for the repo, `context` on the handler, and `context` on an action conventional routes may serve (a
+    /// template that isn't a literal; a literal one places the actions).
     #[test]
     fn unplaced_endpoint_registrations_are_unsupported_not_complete() {
         let cache = test_cache();
@@ -10525,7 +10542,7 @@ public class CatalogService(HttpClient httpClient)
             &[
                 (
                     "src/Startup.cs",
-                    "public class Startup\n{\n    public void Configure(IApplicationBuilder app, string prefix)\n    {\n        app.UseEndpoints(e =>\n        {\n            e.MapControllerRoute(\"default\", \"{controller=Home}/{action=Index}/{id?}\");\n            e.MapGet(prefix + \"/ping\", Ping);\n        });\n    }\n    static string Ping() => \"pong\";\n}\n",
+                    "public class Startup\n{\n    public void Configure(IApplicationBuilder app, string prefix)\n    {\n        app.UseEndpoints(e =>\n        {\n            e.MapControllerRoute(\"default\", prefix + \"/{controller}/{action}\");\n            e.MapGet(prefix + \"/ping\", Ping);\n        });\n    }\n    static string Ping() => \"pong\";\n}\n",
                 ),
                 ("src/HomeController.cs", "public class HomeController : Controller\n{\n    public IActionResult Index() => View();\n}\n"),
             ],

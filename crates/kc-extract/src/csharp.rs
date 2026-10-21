@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 26;
+pub const VERSION: u32 = 27;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -107,6 +107,7 @@ pub fn extract(source: &str) -> FileFacts {
         scopes: Vec::new(),
         seen: HashMap::new(),
         routes: Vec::new(),
+        controllers: Vec::new(),
         builders: Vec::new(),
         configured: Vec::new(),
         validated: Vec::new(),
@@ -157,6 +158,24 @@ struct BareMember {
     assigned: bool,
 }
 
+/// How a type's actions are routed, for [`Cx::action_route`].
+#[derive(Debug, Clone, Default)]
+struct ControllerScope {
+    /// The prefix is left to the query: the type derives from a base that may give one, names its own `[Route]` by
+    /// a constant, or is partial (another part may have the attribute).
+    routed: bool,
+    /// A concrete `…Controller` with no `[Route]` of its own: conventional routes may serve its public methods.
+    conventional: bool,
+    /// `[Area("x")]`, for `[area]`.
+    area: Option<String>,
+}
+
+/// `IOrders`: named like an interface, which gives no route prefix.
+fn is_interface_name(n: &str) -> bool {
+    let mut c = n.chars();
+    c.next() == Some('I') && c.next().is_some_and(|x| x.is_ascii_uppercase())
+}
+
 struct Cx<'a> {
     src: &'a str,
     /// The conventions recognised by name (see [`crate::conventions`]).
@@ -168,6 +187,8 @@ struct Cx<'a> {
     seen: HashMap<(Option<usize>, String, RefKind, u32, u32), usize>,
     /// Enclosing types' names and `[Route]` templates, innermost last, for controller actions' routes.
     routes: Vec<(String, Option<String>, Option<usize>)>,
+    /// Per enclosing type, beside `routes`: how its actions' routes are placed (see [`ControllerScope`]).
+    controllers: Vec<ControllerScope>,
     /// Identifiers bound to an EF entity builder, with the entity: a lambda parameter of `Entity<T>(b => …)`, an
     /// `EntityTypeBuilder<T>` parameter, or a local holding `modelBuilder.Entity<T>()`. Innermost last.
     builders: Vec<(String, String)>,
@@ -778,9 +799,29 @@ impl<'a> Cx<'a> {
             }
         }
         let class_name = self.facts.symbols[sym].name.clone();
-        let route = attribute_args(self.src, node, &["Route"])
+        // `[Route("api/[controller]")]` (`[RoutePrefix]` in Web API 2): the prefix of the class's actions, and of its
+        // subclasses' when they have none of their own, recorded as a `prefix` row for those (see `action_route`).
+        let area = attribute_args(self.src, node, &["Area"]).into_iter().find_map(|(_, a)| a.first().and_then(|a| self.const_value(*a)));
+        let template = attribute_args(self.src, node, &["Route", "RoutePrefix"])
             .into_iter()
-            .find_map(|(_, args)| args.first().and_then(|a| self.route_template(*a)).map(|t| t.0).filter(|t| !t.is_empty()));
+            .find_map(|(_, args)| args.first().and_then(|a| self.route_template(*a)))
+            .map(|(t, r)| (area.as_ref().map_or_else(|| t.clone(), |a| t.replace("[area]", a)), r));
+        let own_route = template.as_ref().is_some_and(|(t, r)| !t.is_empty() || r.is_some());
+        if let Some((t, r)) = template.clone().filter(|_| own_route) {
+            self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "prefix", verb: String::new(), path: t, path_ref: r, service: None, service_ref: None, line: line(node) });
+        }
+        let route = template.filter(|(t, r)| r.is_none() && !t.is_empty()).map(|(t, _)| t);
+        // Whether a base class may give the actions a prefix: any base but the framework's own.
+        let custom_base = children(node).filter(|c| c.kind() == "base_list").flat_map(children).filter(|b| b.is_named()).any(|b| {
+            let t = if b.kind() == "primary_constructor_base_type" { b.child_by_field_name("type").unwrap_or(b) } else { b };
+            let n = base_type_name(self.src, t);
+            !n.is_empty() && !matches!(n.as_str(), "Controller" | "ControllerBase" | "ApiController") && !is_interface_name(&n)
+        });
+        let controller = ControllerScope {
+            routed: own_route || custom_base || has_modifier(self.src, node, "partial"),
+            conventional: class_name.ends_with("Controller") && !own_route && !has_modifier(self.src, node, "abstract"),
+            area,
+        };
         self.service_dto(sym, node);
         self.attribute_contract(sym, node);
         self.bus_type(sym, node, &qualified);
@@ -808,6 +849,7 @@ impl<'a> Cx<'a> {
             self.register_service(sym, first);
         }
         self.routes.push((class_name, route, startup.then_some(sym)));
+        self.controllers.push(controller);
         self.configured.push(configured);
         let validated = children(node)
             .filter(|c| c.kind() == "base_list")
@@ -853,6 +895,7 @@ impl<'a> Cx<'a> {
         self.configured.pop();
         self.validated.pop();
         self.routes.pop();
+        self.controllers.pop();
     }
 
     fn function(&mut self, node: Node) {
@@ -1219,13 +1262,38 @@ impl<'a> Cx<'a> {
     /// `[HttpPost(nameof(Filters))]`, `[HttpGet("{id}")]`, `[HttpPut] [Route("x")]`: the method serves a route, under
     /// its controller's `[Route]` prefix unless the template starts with `/`. `[controller]` and `[action]` are
     /// replaced.
+    ///
+    /// A controller with no `[Route]` written out (one deriving from a base controller, naming its prefix by a
+    /// constant, or partial) leaves the prefix to the query, which takes the nearest `[Route]` up the class's bases,
+    /// as ASP.NET does, with `[controller]` the class's own name: the path starts `{^Action}`. With none there, an
+    /// action without a template is conventionally routed, and so is a public method with no route attribute in a
+    /// controller with no `[Route]` (`{^*Action}`, any verb), when the repo maps conventional routes.
     fn action_route(&mut self, sym: usize, node: Node) {
-        const VERBS: &[&str] = &["HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch"];
-        let attrs = attribute_args(self.src, node, &["HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch", "Route"]);
-        let Some((verb_attr, verb_args)) = attrs.iter().find(|(n, _)| VERBS.contains(&n.as_str())) else { return };
-        let verb = verb_attr.trim_start_matches("Http").to_ascii_uppercase();
-        let template_arg =
-            verb_args.first().copied().or_else(|| attrs.iter().find(|(n, _)| n == "Route").and_then(|(_, a)| a.first().copied()));
+        const VERBS: &[&str] = &["HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch", "HttpHead", "HttpOptions"];
+        let attrs = attribute_args(self.src, node, &[VERBS, &["Route", "NonAction", "ActionName"]].concat());
+        if attrs.iter().any(|(n, _)| n == "NonAction") {
+            return;
+        }
+        let scope = self.controllers.last().cloned().unwrap_or_default();
+        let action = attrs
+            .iter()
+            .find(|(n, _)| n == "ActionName")
+            .and_then(|(_, a)| a.first().and_then(|a| self.const_value(*a)))
+            .unwrap_or_else(|| self.facts.symbols[sym].name.clone());
+        let route_args = attrs.iter().find(|(n, _)| n == "Route").map(|(_, a)| a.first().copied());
+        let (verb, template_arg) = match (attrs.iter().find(|(n, _)| VERBS.contains(&n.as_str())), route_args) {
+            (Some((v, args)), r) => (v.trim_start_matches("Http").to_ascii_uppercase(), args.first().copied().or(r.flatten())),
+            // `[Route("x")]` alone: every verb.
+            (None, Some(r)) => ("*".to_string(), r),
+            (None, None) => {
+                // A public method of a conventionally routed controller is an action.
+                if scope.conventional && has_modifier(self.src, node, "public") && !has_modifier(self.src, node, "static") && !has_modifier(self.src, node, "override") {
+                    let path = format!("{{^*{action}}}");
+                    self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb: "*".to_string(), path, path_ref: None, service: None, service_ref: None, line: line(node) });
+                }
+                return;
+            }
+        };
         let (template, path_ref) = match template_arg {
             Some(a) => match self.route_template(a) {
                 Some(t) => t,
@@ -1235,13 +1303,18 @@ impl<'a> Cx<'a> {
         };
         let (class, prefix, _) = self.routes.last().cloned().unwrap_or_default();
         let controller = class.strip_suffix("Controller").unwrap_or(&class).to_string();
-        let action = self.facts.symbols[sym].name.clone();
-        let joined = if template.starts_with('/') || template.starts_with("~/") {
+        let template = scope.area.as_ref().map_or(template.clone(), |a| template.replace("[area]", a));
+        let absolute = template.starts_with('/') || template.starts_with("~/");
+        let joined = if absolute {
             template.trim_start_matches('~').to_string()
         } else {
-            [prefix.unwrap_or_default(), template].iter().map(|s| s.trim_matches('/')).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/")
+            [prefix.clone().unwrap_or_default(), template.clone()].iter().map(|s| s.trim_matches('/')).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/")
         };
-        let path = joined.replace("[controller]", &controller).replace("[action]", &action).trim_matches('/').to_string();
+        let mut path = joined.replace("[controller]", &controller).replace("[action]", &action).trim_matches('/').to_string();
+        // No prefix written on the class: the query places it (see above), unless a constant names the template.
+        if !absolute && prefix.is_none() && path_ref.is_none() && (scope.routed || scope.conventional && template.is_empty()) {
+            path = format!("{{^{action}}}{}{path}", if path.is_empty() { "" } else { "/" });
+        }
         self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref, service: None, service_ref: None, line: line(node) });
     }
 
@@ -3604,12 +3677,25 @@ impl Cx<'_> {
         }
     }
 
-    /// `new HttpRequestMessage(HttpMethod.Post, $"{base}/orders")`.
+    /// `new HttpRequestMessage(HttpMethod.Post, $"{base}/orders")`; RestSharp's `new RestRequest("orders/{id}",
+    /// Method.Get)` (a GET without a method).
     fn request_message(&mut self, node: Node) {
-        if node.child_by_field_name("type").is_none_or(|t| base_type_name(self.src, t) != "HttpRequestMessage") {
+        let ty = node.child_by_field_name("type").map(|t| base_type_name(self.src, t)).unwrap_or_default();
+        let args: Vec<Node> = node.child_by_field_name("arguments").map(argument_exprs).unwrap_or_default();
+        if ty == "RestRequest" {
+            let verb = match args.get(1) {
+                Some(m) if m.kind() == "member_access_expression" => m.child_by_field_name("name").and_then(|n| urls::verb(self.text(n))),
+                Some(_) => None,
+                None => Some("GET".to_string()),
+            };
+            if let (Some(url), Some(verb)) = (args.first(), verb) {
+                self.client_url(verb, *url, node);
+            }
             return;
         }
-        let args: Vec<Node> = node.child_by_field_name("arguments").map(argument_exprs).unwrap_or_default();
+        if ty != "HttpRequestMessage" {
+            return;
+        }
         if let [verb, url, ..] = args.as_slice()
             && let Some(verb) = self.http_verb(*verb)
         {
@@ -3623,8 +3709,11 @@ impl Cx<'_> {
             "identifier" if self.constant_name(url).is_none() => local_value(self.src, at, self.text(url)).unwrap_or(url),
             _ => url,
         };
-        if let Some(path) = urls::encode(&self.url_pieces(url), true).filter(|p| urls::looks_like_path(p)) {
-            self.request_route(verb, path, None, None, at);
+        match urls::encode(&self.url_pieces(url), true) {
+            Some(path) if urls::looks_like_path(&path) => self.request_route(verb, path, None, None, at),
+            // A URL known only at run time: kept with no path, so an answer can say the request wasn't read.
+            None => self.request_route(verb, String::new(), None, None, at),
+            Some(_) => {}
         }
     }
 
@@ -3692,6 +3781,19 @@ impl Cx<'_> {
                 Some((name, None)) => out.push(Piece::Text(name)),
                 _ => out.push(Piece::Call),
             },
+            // `new Uri(baseUri, "api/orders")`: a base address and a path relative to it; `new Uri(url)`: the URL.
+            "object_creation_expression" if e.child_by_field_name("type").is_some_and(|t| base_type_name(self.src, t) == "Uri") => {
+                match e.child_by_field_name("arguments").map(argument_exprs).unwrap_or_default().as_slice() {
+                    [url] => self.push_pieces(*url, out),
+                    [_, kind] if self.text(*kind).starts_with("UriKind") => out.push(Piece::Unknown),
+                    [base, rel, ..] => {
+                        self.push_pieces(*base, out);
+                        out.push(Piece::Text("/".to_string()));
+                        self.push_pieces(*rel, out);
+                    }
+                    _ => out.push(Piece::Unknown),
+                }
+            }
             _ => out.push(self.constant_name(e).or_else(|| self.string_field(e)).map_or(Piece::Unknown, Piece::Ref)),
         }
     }
@@ -3730,7 +3832,8 @@ impl Cx<'_> {
 const MAP_VERBS: &[(&str, &str)] =
     &[("MapGet", "GET"), ("MapPost", "POST"), ("MapPut", "PUT"), ("MapDelete", "DELETE"), ("MapPatch", "PATCH"), ("MapMethods", ""), ("Map", "*")];
 
-/// Conventional routing: routes a template makes from controller and action names, which KnowCode doesn't expand.
+/// Conventional routing: routes a template makes from controller and action names. A literal template naming the
+/// controller is a `conventional` fact, filled at query time; any other is `unsupported`.
 const CONVENTIONAL_ROUTES: &[&str] = &[
     "MapControllerRoute", "MapDefaultControllerRoute", "MapAreaControllerRoute", "MapRoute", "MapHttpRoute", "MapFallbackToController",
     "MapFallbackToAreaController",
@@ -3758,6 +3861,32 @@ impl Cx<'_> {
                 return self.map_endpoint(n, method, verb, recv, &args);
             }
             if CONVENTIONAL_ROUTES.contains(&method) {
+                // `MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}")`: a template the query fills
+                // with each conventionally routed action's controller and name.
+                let named = |k: &str| args.iter().find(|(n, _)| n.as_deref() == Some(k)).map(|(_, e)| *e);
+                let positional: Vec<Node> = args.iter().filter(|(n, _)| n.is_none()).map(|(_, e)| *e).collect();
+                let template = match method {
+                    "MapDefaultControllerRoute" => Some("{controller=Home}/{action=Index}/{id?}".to_string()),
+                    "MapControllerRoute" | "MapRoute" | "MapHttpRoute" => ["pattern", "template", "url", "routeTemplate"]
+                        .iter()
+                        .find_map(|k| named(k))
+                        .or_else(|| positional.get(1).copied())
+                        .and_then(|t| string_value(self.src, t)),
+                    _ => None,
+                };
+                if let Some(t) = template.filter(|t| t.contains("{controller") && !t.contains("{area")) {
+                    self.facts.http_routes.push(HttpRoute {
+                        sym: self.current(),
+                        side: "conventional",
+                        verb: method.to_string(),
+                        path: t.trim_matches('/').to_string(),
+                        path_ref: None,
+                        service: None,
+                        service_ref: None,
+                        line: line(n),
+                    });
+                    return;
+                }
                 let why = "conventional routes: a template filled from controller and action names, which KnowCode doesn't expand";
                 self.facts.http_routes.push(HttpRoute {
                     sym: self.current(),
@@ -5416,18 +5545,122 @@ public class GroupController : Controller
                 ("Filters", "server", "POST", "Filters", None),
                 ("GetDomainHistory", "server", "GET", "GetDomainHistory", None),
                 ("Search", "server", "POST", "Search", None),
-                ("Index", "server", "GET", "", None),
+                // No template and no prefix: conventional routes may place it (see `kc_store::query`).
+                ("Index", "server", "GET", "{^Index}", None),
                 ("Legacy", "server", "GET", "", Some("Routes.Legacy")),
+                // A public method with no route attribute: an action only under conventional routes.
+                ("NotAnAction", "server", "*", "{^*NotAnAction}", None),
+                ("OrdersController", "prefix", "", "api/[controller]", None),
                 ("Delete", "server", "DELETE", "api/Orders/{id}", None),
                 ("Refresh", "server", "PUT", "api/Orders/Refresh/all", None),
                 // A template starting with `/` ignores the controller's prefix.
                 ("Health", "server", "GET", "health", None),
+                ("AccountController", "prefix", "", "Waitlist", None),
                 ("ConfirmIdentity", "server", "POST", "Waitlist/ConfirmIdentity", None),
+                ("GroupController", "prefix", "", "Infra/Group", None),
                 ("AddRolesToGroup", "server", "POST", "Infra/Group/AddRolesToGroup", None),
                 // `Find`'s template interpolates something other than `nameof`: unknown, so no route.
             ]
         );
         assert_eq!(f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect::<Vec<_>>(), [("Routes.Legacy", "legacy/find")]);
+    }
+
+    /// A controller with no `[Route]` of its own leaves its prefix to the query (`{^Action}`): a base controller's
+    /// `[Route]` (recorded as a `prefix`), or conventional routes (`conventional`), which also serve public methods
+    /// with no route attribute (`{^*Action}`). `[Area]`, `[ActionName]` and `[NonAction]` are read.
+    #[test]
+    fn inherited_and_conventional_routes_are_left_to_the_query() {
+        let f = extract(
+            r#"
+[ApiController]
+[Route("api/[controller]")]
+public abstract class ApiControllerBase : ControllerBase { }
+
+public class ItemsController : ApiControllerBase
+{
+    [HttpGet("Latest")]
+    public Task Latest() => null;
+    [HttpGet]
+    public Task List() => null;
+    [ActionName("Find")]
+    [HttpGet("[action]/{id}")]
+    public Task Lookup(int id) => null;
+    [NonAction]
+    [HttpGet("x")]
+    public void Helper() { }
+}
+
+[Area("Admin")]
+[Route("[area]/[controller]")]
+public class UsersController : Controller
+{
+    [HttpGet]
+    public Task Get() => null;
+}
+
+public class HomeController : Controller
+{
+    public IActionResult Index() => null;
+    [HttpPost]
+    public IActionResult Save() => null;
+    [Route("about")]
+    public IActionResult About() => null;
+    private void Hidden() { }
+    public static void Util() { }
+}
+
+public static class Startup
+{
+    public static void Configure(WebApplication app)
+    {
+        app.MapControllerRoute(name: "default", pattern: "{controller=Home}/{action=Index}/{id?}");
+        app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}");
+    }
+}
+"#,
+        );
+        let routes: Vec<(&str, &str, &str, &str)> =
+            f.http_routes.iter().map(|r| (r.sym.map_or("-", |s| f.symbols[s].name.as_str()), r.side, r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("ApiControllerBase", "prefix", "", "api/[controller]"),
+                ("Latest", "server", "GET", "{^Latest}/Latest"),
+                ("List", "server", "GET", "{^List}"),
+                ("Lookup", "server", "GET", "{^Find}/Find/{id}"),
+                ("UsersController", "prefix", "", "Admin/[controller]"),
+                ("Get", "server", "GET", "Admin/Users"),
+                ("Index", "server", "*", "{^*Index}"),
+                ("Save", "server", "POST", "{^Save}"),
+                ("About", "server", "*", "about"),
+                ("Configure", "conventional", "MapControllerRoute", "{controller=Home}/{action=Index}/{id?}"),
+                // An area template needs the area: not placed.
+                ("Configure", "unsupported", "MapControllerRoute", "conventional routes: a template filled from controller and action names, which KnowCode doesn't expand"),
+            ]
+        );
+    }
+
+    /// `new Uri(base, "path")` composes a URL; RestSharp's `RestRequest` names a path and a verb; a URL known only at
+    /// run time is kept with no path.
+    #[test]
+    fn uri_composition_and_rest_requests_are_client_routes() {
+        let f = extract(
+            r#"
+public class CatalogClient(HttpClient http, RestClient rest)
+{
+    public Task Items() => http.GetAsync(new Uri(_baseUri, "api/catalog/items"));
+    public Task Brand(int id) => rest.ExecuteAsync(new RestRequest($"api/catalog/brands/{id}", Method.Delete));
+    public Task Plain() => rest.ExecuteAsync(new RestRequest("api/catalog/types"));
+    public Task Anywhere(string url) => http.GetAsync(url);
+}
+"#,
+        );
+        let routes: Vec<(&str, &str, &str)> =
+            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.as_str(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [("Items", "GET", "/api/catalog/items"), ("Brand", "DELETE", "api/catalog/brands/{}"), ("Plain", "GET", "api/catalog/types"), ("Anywhere", "GET", "")]
+        );
     }
 
     #[test]
@@ -6567,7 +6800,7 @@ public class Startup
     {
         app.UseEndpoints(e =>
         {
-            e.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
+            e.MapControllerRoute("default", prefix + "/{controller}/{action}");
             e.MapGet(prefix + "/x", Handle);
             e.MapGroup(prefix).MapGet("/y", () => 1);
             e.MapMethods("/z", verbs, Handle);
@@ -6696,7 +6929,11 @@ public class CatalogService(HttpClient httpClient)
 }
 "#;
         let f = extract(src);
-        assert_eq!(endpoints(&f), [e("client", "GET", "{=CatalogService.remoteServiceBaseUrl}items/{}", "GetCatalogItem", 8)]);
+        // A local assigned again holds a URL known only at run time: kept with no path.
+        assert_eq!(
+            endpoints(&f),
+            [e("client", "GET", "{=CatalogService.remoteServiceBaseUrl}items/{}", "GetCatalogItem", 8), e("client", "GET", "", "Reassigned", 14)]
+        );
         assert!(f.constants.iter().any(|c| c.qualified == "CatalogService.remoteServiceBaseUrl" && c.value == "api/catalog/"));
     }
 

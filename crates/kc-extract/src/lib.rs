@@ -568,7 +568,12 @@ pub struct HttpRoute {
     /// controller: a route it served once, a sign its contract is left over), `group` (a minimal API route group
     /// passed to a helper method: `path` is its prefix, `service` the helper and parameter, `MapOrders#0`) or
     /// `unsupported` (an endpoint registration KnowCode recognises but can't place: `verb` names its style,
-    /// `MapGet` or `MapControllerRoute`, and `path` says why).
+    /// `MapGet` or `MapControllerRoute`, and `path` says why), `prefix` (a class's `[Route]` template, for the actions
+    /// of classes deriving from it: `path`, or the constant `path_ref`), `conventional` (a conventional route
+    /// template, `verb` the call) or `operation` (a call to a generated API client: `path` is the operation,
+    /// `service` the tag the client is named for). A controller action whose prefix the query places starts its path
+    /// with `{^Action}` (`{^*Action}` for a public method with no route attribute); a client request whose URL is
+    /// known only at run time has an empty path.
     pub side: &'static str,
     /// Upper-case HTTP verb; `*` for an endpoint answering every verb (`Map`).
     pub verb: String,

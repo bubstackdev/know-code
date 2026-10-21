@@ -192,7 +192,9 @@ CREATE INDEX IF NOT EXISTS ts_configs_file ON ts_configs(file_id);
 -- `{@Helper#i}`); the service is `service`, or the value of the constant `service_ref`. `group` rows are route groups
 -- passed to helpers (`service` names the helper and parameter, `path` the prefix; `verb` is `?` when the prefix can't
 -- be known and `path` says why); `unsupported` rows are registrations whose routes can't be placed (`verb` the
--- style, `path` why). symbol_id is NULL in top-level statements. See `kc_extract::HttpRoute`.
+-- style, `path` why); `prefix` rows are classes' `[Route]` templates and `conventional` rows conventional route
+-- templates, placing actions whose path starts `{^Action}`; `operation` rows are calls to generated API clients
+-- (`path` the operation, `service` the tag). symbol_id is NULL in top-level statements. See `kc_extract::HttpRoute`.
 CREATE TABLE IF NOT EXISTS http_routes (
     file_id     INTEGER NOT NULL,
     symbol_id   INTEGER,
