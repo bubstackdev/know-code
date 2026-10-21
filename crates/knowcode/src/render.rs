@@ -118,7 +118,7 @@ pub fn at(chain: &[kc_store::query::SymbolAt], indexed: bool) {
 }
 
 /// `capped`: more definitions matched than were read, so `total` is a lower bound and a match may be missing.
-pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: bool) {
+pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: bool, declared: &[String]) {
     let cap = || {
         if capped {
             println!(
@@ -143,6 +143,9 @@ pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: boo
         println!("… {more}{} more (raise --limit or narrow with --kind)", total - items.len());
     }
     cap();
+    for d in declared {
+        println!("{d}");
+    }
 }
 
 pub fn locate(d: &crate::ops::LocateData) {
@@ -259,14 +262,33 @@ fn ref_line(root: Option<&Path>, h: &RefHit) -> String {
     format!("{at}  {kind} {recv}{}  {from}{through}  [{}{precise}{target}{bound}]{basis}", h.name, h.confidence)
 }
 
-pub fn refs(name: &str, items: &[(PathBuf, RefHit)], total: usize, by_conf: &BTreeMap<&'static str, usize>, multi: bool) {
-    println!("{total} references to {name} ({})", confidence_line(by_conf));
+pub fn refs(name: &str, d: &crate::ops::RefsData) {
+    let (items, total, multi) = (&d.items, d.total, d.multi);
+    println!("{total} references to {name} ({})", confidence_line(&d.by_confidence));
+    if let Some(c) = &d.callers {
+        println!("{c}");
+    }
+    if !d.overloads.is_empty() {
+        println!("overloads:");
+        for o in &d.overloads {
+            println!("  {o}");
+        }
+    }
     for (root, h) in items {
-        println!("{}", ref_line(multi.then_some(root.as_path()), h));
+        let test = if kc_store::is_test_path(&h.file) { "  (test)" } else { "" };
+        println!("{}{test}", ref_line(multi.then_some(root.as_path()), h));
         print_cite("", h.cite.as_ref());
     }
     if total > items.len() {
         println!("… {} more (raise --limit)", total - items.len());
+    }
+    if let Some(serde_json::Value::Object(h)) = &d.hierarchy {
+        for (k, rows) in h {
+            println!("{}:", k.replace('_', " "));
+            for r in rows.as_array().into_iter().flatten() {
+                println!("  {}", r.as_str().unwrap_or(""));
+            }
+        }
     }
 }
 
@@ -306,6 +328,9 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
             println!("---");
         }
     }
+    if !c.parts.is_empty() {
+        println!("partial, in {} parts: {}", c.parts.len(), c.parts.join(", "));
+    }
     if !c.extensions.is_empty() {
         println!("extensions ({}):", c.extensions.len());
         for e in &c.extensions {
@@ -325,6 +350,12 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
         println!("conformers and subclasses ({}):", c.conformers.len());
         for m in &c.conformers {
             println!("  {:<9} {}  {}", kw(&m.kind, &m.file), qualified(m), loc(r, &m.file, m.line));
+        }
+    }
+    if !c.conformers_indirect.is_empty() {
+        println!("through other types ({}):", c.conformers_indirect_total.unwrap_or(c.conformers_indirect.len()));
+        for m in &c.conformers_indirect {
+            println!("  {:<9} {}  {}  via {}", kw(&m.kind, &m.file), m.name, loc(r, &m.file, m.line), m.via);
         }
     }
     if !c.conformers_elsewhere.is_empty() {
@@ -384,6 +415,15 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
         for f in &di.flags {
             println!("  ! {f}");
         }
+    }
+    if !c.di_implementers.is_empty() {
+        println!("registered through its hierarchy:");
+        for d in &c.di_implementers {
+            println!("  {d}");
+        }
+    }
+    for n in &c.none_found {
+        println!("{n}");
     }
     if !c.alternatives.is_empty() {
         println!("other definitions named {} (pick one with <file>#{}, <file>:<line> or <namespace>.{}):", s.name, s.name, s.qualified());

@@ -487,6 +487,55 @@ pub struct DiSection {
     pub flags: Vec<String>,
 }
 
+/// The registrations reaching the type named `ty` through its hierarchy, at most `limit`: those of its derived
+/// interfaces as services, and those of its implementations and subclasses (direct or through another type) as
+/// implementations; not those naming `ty` as the service (the type's own, in [`section`]). Each as
+/// `file:line service → implementation (lifetime[, test])`, in file order; a last entry says how many more.
+pub fn through_hierarchy(conn: &Connection, ty: &str, limit: usize) -> Result<Vec<String>> {
+    if !any(conn)? {
+        return Ok(Vec::new());
+    }
+    let direct: Vec<(String, String)> = conn
+        .prepare_cached(
+            "SELECT DISTINCT s.name, s.kind FROM relations r JOIN symbols s ON s.id = r.from_id
+             WHERE r.target_name = ?1 COLLATE BINARY AND s.kind IN ('class', 'struct', 'protocol') ORDER BY s.name",
+        )?
+        .query_map([ty], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let (indirect, _) = crate::query::indirect_conformers(conn, ty, crate::query::INDIRECT_READ)?;
+    let mut regs: Vec<Registration> = Vec::new();
+    let mut names: Vec<(String, bool)> = direct.into_iter().map(|(n, k)| (n, k == "protocol")).collect();
+    names.extend(indirect.iter().map(|i| (bare_name(&i.name), i.kind == "protocol")));
+    let mut seen = std::collections::HashSet::new();
+    for (n, interface) in names {
+        if !seen.insert(n.clone()) {
+            continue;
+        }
+        if interface {
+            regs.extend(registrations_of(conn, &n)?);
+        }
+        regs.extend(registered_as(conn, &n)?);
+    }
+    regs.retain(|r| r.service.as_deref().map(bare_name).as_deref() != Some(ty));
+    regs.sort_by(|a, b| (&a.file, a.line, &a.service).cmp(&(&b.file, b.line, &b.service)));
+    regs.dedup_by(|a, b| a.file == b.file && a.line == b.line && a.service == b.service);
+    let total = regs.len();
+    let mut out: Vec<String> = regs
+        .iter()
+        .take(limit)
+        .map(|r| {
+            let service = r.service.as_deref().unwrap_or("(scanned)");
+            let made = r.implementation.as_deref().unwrap_or("(factory)");
+            let what = if bare_name(service) == made { made.to_string() } else { format!("{service} → {made}") };
+            format!("{}:{} {what} ({}{})", r.file, r.line, r.lifetime, if r.test { ", test" } else { "" })
+        })
+        .collect();
+    if total > out.len() {
+        out.push(format!("… {} more", total - out.len()));
+    }
+    Ok(out)
+}
+
 /// The DI section for a type, or `None` when the repo registers nothing, or nothing about this type.
 pub fn section(conn: &Connection, symbol: &SymbolRow) -> Result<Option<DiSection>> {
     if !matches!(symbol.kind.as_str(), "class" | "struct" | "protocol") || !symbol.file.ends_with(".cs") {

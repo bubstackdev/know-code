@@ -26,6 +26,7 @@ mod update;
 mod tf;
 mod tree;
 mod walk;
+mod whole;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -897,7 +898,7 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || {
                 let d = &out.data;
                 if !d.items.is_empty() || d.manifests.is_empty() {
-                    render::find(&d.items, d.total, d.multi, d.capped);
+                    render::find(&d.items, d.total, d.multi, d.capped, &d.declared);
                 }
                 render::manifest_hits(&d.manifests);
             })
@@ -910,7 +911,7 @@ fn run(cli: Cli) -> Result<()> {
             cite.enter();
             let out = ops::refs(&name, &kind, limit, &repo.scope())?;
             let d = &out.data;
-            emit(&repo, &out.env, || render::refs(&name, &d.items, d.total, &d.by_confidence, d.multi))
+            emit(&repo, &out.env, || render::refs(&name, d))
         }
         Cmd::Context { symbol, budget, source, limit, cite, repo } => {
             cite.enter();

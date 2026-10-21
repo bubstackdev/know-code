@@ -4810,6 +4810,10 @@ pub struct Context {
     pub relations: Vec<RelationHit>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<SymbolRow>,
+    /// For a C# `partial` type declared in several parts: every part, `file:line`, this one among them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<String>,
+    /// Members, constructors first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<SymbolRow>,
     pub members_total: usize,
@@ -4818,6 +4822,20 @@ pub struct Context {
     /// How many conformers there are, when more than are listed ([`CONFORMERS_SHOWN`] by default).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conformers_total: Option<usize>,
+    /// Types reaching this one through another (see [`indirect_conformers`]): a class implementing the interface
+    /// through its base class, an interface deriving from a derived interface, and their implementations.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub conformers_indirect: Vec<Indirect>,
+    /// How many there are, when more than are listed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conformers_indirect_total: Option<usize>,
+    /// DI registrations of the type's implementations and derived interfaces (those of the type itself are in `di`),
+    /// `file:line service → implementation (lifetime)`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub di_implementers: Vec<String>,
+    /// The lists of an interface or base type that came back empty, each saying what was searched.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub none_found: Vec<String>,
     /// Conformers and subclasses in repos depending on this one (a library's interface implemented by its users).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub conformers_elsewhere: Vec<Elsewhere>,
@@ -4839,6 +4857,121 @@ pub struct Context {
     /// The symbol's lines checked against the index (see [`crate::answer::Cite`]); `source` quotes them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cite: Option<crate::answer::Cite>,
+}
+
+/// A type reaching another only through a type between them. Said as one string: `Name file:line via Base`, with
+/// ` (interface)` for an interface and ` (test)` in a test file.
+#[derive(Debug, Clone, Serialize)]
+#[serde(into = "String")]
+pub struct Indirect {
+    /// Its qualified name.
+    pub name: String,
+    pub kind: String,
+    pub file: String,
+    pub line: u32,
+    /// The type between: the base class or derived interface it names.
+    pub via: String,
+}
+
+impl From<Indirect> for String {
+    fn from(i: Indirect) -> String {
+        let interface = if i.kind == "protocol" { " (interface)" } else { "" };
+        let test = if crate::is_test_path(&i.file) { " (test)" } else { "" };
+        format!("{} {}:{} via {}{interface}{test}", i.name, i.file, i.line, i.via)
+    }
+}
+
+/// Indirect conformers [`indirect_conformers`] reads at most.
+pub const INDIRECT_READ: usize = 1000;
+
+/// The types reaching the type named `name` (a bare name) only through others, transitively: subclasses of its
+/// implementations and subclasses, interfaces deriving from its derived interfaces, and the implementations of those.
+/// The direct conformers (naming `name` themselves) are left out. Breadth first, nearest first, in file order within
+/// a hop; by name, as the direct conformers are. Returns at most `limit` of them and how many were found (at most
+/// [`INDIRECT_READ`]).
+pub fn indirect_conformers(conn: &Connection, name: &str, limit: usize) -> Result<(Vec<Indirect>, usize)> {
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM relations r JOIN symbols s ON s.id = r.from_id JOIN files f ON f.id = s.file_id
+         WHERE r.target_name = ?1 COLLATE BINARY AND s.kind IN ('class', 'struct', 'protocol', 'actor', 'enum')
+         ORDER BY f.path, s.start_line, s.id"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let mut by = |n: &str| -> Result<Vec<SymbolRow>> { Ok(stmt.query_map([n], symbol_row)?.collect::<rusqlite::Result<_>>()?) };
+    let mut seen_ids: HashSet<i64> = definitions(conn, name)?.iter().map(|d| d.id).collect();
+    let mut seen_names: HashSet<String> = HashSet::from([name.to_string()]);
+    let mut frontier: Vec<String> = Vec::new();
+    for d in by(name)? {
+        seen_ids.insert(d.id);
+        if seen_names.insert(d.name.clone()) {
+            frontier.push(d.name);
+        }
+    }
+    let mut out: Vec<Indirect> = Vec::new();
+    // Hops are few in practice; a cycle (a misread base list) stops at the names seen.
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for via in &frontier {
+            for s in by(via)? {
+                if out.len() == INDIRECT_READ {
+                    break;
+                }
+                if !seen_ids.insert(s.id) {
+                    continue;
+                }
+                if seen_names.insert(s.name.clone()) {
+                    next.push(s.name.clone());
+                }
+                out.push(Indirect { name: s.qualified(), kind: s.kind.clone(), file: s.file.clone(), line: s.line, via: via.clone() });
+            }
+        }
+        if next.is_empty() || out.len() == INDIRECT_READ {
+            break;
+        }
+        frontier = next;
+    }
+    let total = out.len();
+    out.truncate(limit);
+    Ok((out, total))
+}
+
+/// The types naming the type `name` (a bare name) as a supertype themselves, in file order.
+pub fn direct_conformers(conn: &Connection, name: &str) -> Result<Vec<SymbolRow>> {
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM relations r JOIN symbols s ON s.id = r.from_id JOIN files f ON f.id = s.file_id
+         WHERE r.target_name = ?1 COLLATE BINARY ORDER BY f.path, s.start_line, s.id, r.line"
+    );
+    let mut rows: Vec<SymbolRow> = conn.prepare_cached(&sql)?.query_map([name], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+    rows.dedup_by_key(|s| s.id);
+    Ok(rows)
+}
+
+/// The parts of a C# `partial` type: every declaration of its qualified name and kind, in its namespace, written
+/// `partial`, in file order; `sym` among them. Empty for a type not written `partial`.
+pub fn partial_parts(conn: &Connection, sym: &SymbolRow) -> Result<Vec<SymbolRow>> {
+    let partial = |s: &SymbolRow| s.signature.split(|c: char| !c.is_alphanumeric()).any(|w| w == "partial");
+    if !TYPE_KINDS.contains(&sym.kind.as_str()) || !partial(sym) {
+        return Ok(Vec::new());
+    }
+    let ns = type_namespace(conn, sym.id)?;
+    let mut out = Vec::new();
+    for d in definitions_split(conn, &sym.name, (None, &sym.name))? {
+        if d.kind == sym.kind && d.container == sym.container && partial(&d) && type_namespace(conn, d.id)? == ns {
+            out.push(d);
+        }
+    }
+    out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    Ok(out)
+}
+
+/// The constructors of the type `ty` (a type's row): the initializers its members declare, in `files` (the type's
+/// parts, telling it from a same-named type elsewhere) when given. In file order.
+pub fn constructors(conn: &Connection, ty: &SymbolRow, files: &[&str]) -> Result<Vec<SymbolRow>> {
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE s.kind = 'init' AND s.container = ?1 ORDER BY f.path, s.start_line"
+    );
+    let rows: Vec<SymbolRow> = conn.prepare_cached(&sql)?.query_map([ty.qualified()], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows.into_iter().filter(|r| files.is_empty() || files.contains(&r.file.as_str())).collect())
 }
 
 /// At most this many of a type's conformers are listed in its context.
@@ -4921,6 +5054,10 @@ pub fn context_with(
     let mut members_total = 0;
     let mut conformers = Vec::new();
     let mut conformers_total = None;
+    let mut conformers_indirect = Vec::new();
+    let mut conformers_indirect_total = None;
+    let mut parts = Vec::new();
+    let mut part_ids: HashSet<i64> = HashSet::new();
     if is_type {
         let qualified = symbol.qualified();
         let sql = format!(
@@ -4961,7 +5098,9 @@ pub fn context_with(
              WHERE s.container = ?1 AND s.kind != 'extension' ORDER BY f.path, s.start_line"
         );
         let mut stmt = conn.prepare_cached(&sql)?;
-        let all: Vec<SymbolRow> = stmt.query_map([&qualified], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+        let mut all: Vec<SymbolRow> = stmt.query_map([&qualified], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+        // Constructors first: how the type is made is what a cut list should keep.
+        all.sort_by_key(|m| m.kind != "init");
         members_total = all.len();
         members = all.into_iter().take(limits.members).collect();
 
@@ -4978,6 +5117,16 @@ pub fn context_with(
                 .prepare_cached("SELECT COUNT(*) FROM relations r JOIN symbols s ON s.id = r.from_id WHERE r.target_name = ?1 COLLATE BINARY")?
                 .query_row([&symbol.name], |r| r.get(0))?;
             conformers_total = Some(n as usize).filter(|&n| n > limits.conformers);
+        }
+        if matches!(symbol.kind.as_str(), "class" | "struct" | "protocol") {
+            let (found, n) = indirect_conformers(conn, &symbol.name, limits.conformers)?;
+            conformers_indirect_total = (n > found.len()).then_some(n);
+            conformers_indirect = found;
+        }
+        let found = partial_parts(conn, &symbol)?;
+        if found.len() > 1 {
+            parts = found.iter().map(|p| format!("{}:{}", p.file, p.line)).collect();
+            part_ids = found.iter().map(|p| p.id).collect();
         }
     }
 
@@ -5068,10 +5217,16 @@ pub fn context_with(
     }
     let (source, source_truncated, source_mode, source_lines, source_changed) = read_source(conn, root, &symbol, limits, &key_lines)?;
 
-    let others: Vec<SymbolRow> = defs.into_iter().filter(|d| !extensions.iter().any(|e| e.id == d.id)).collect();
+    // The type's other parts are the type, not other definitions of its name.
+    let others: Vec<SymbolRow> = defs.into_iter().filter(|d| !extensions.iter().any(|e| e.id == d.id) && !part_ids.contains(&d.id)).collect();
     let alternatives_total = (others.len() > ALTERNATIVES_SHOWN).then_some(others.len());
     let alternatives: Vec<SymbolRow> = others.into_iter().take(ALTERNATIVES_SHOWN).collect();
     let di = if is_type { crate::di::section(conn, &symbol)? } else { None };
+    let di_implementers = if is_type && symbol.file.ends_with(".cs") {
+        crate::di::through_hierarchy(conn, &symbol.name, limits.conformers)?
+    } else {
+        Vec::new()
+    };
 
     Ok(Some(Context {
         symbol,
@@ -5082,10 +5237,15 @@ pub fn context_with(
         source_changed,
         relations,
         extensions,
+        parts,
         members,
         members_total,
         conformers,
         conformers_total,
+        conformers_indirect,
+        conformers_indirect_total,
+        di_implementers,
+        none_found: Vec::new(),
         conformers_elsewhere: Vec::new(),
         conformers_elsewhere_total: None,
         callers,
