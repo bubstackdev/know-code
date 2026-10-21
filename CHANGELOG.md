@@ -22,6 +22,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   share (`targets`, `from`, `name`) is said once beside the list. Test files drop their ranking `signals`. Tree use
   sites in the symbol's own file are said by line. The CLI's output and `--json` are unchanged.
   `scripts/mcp_tokens.py` measures answer sizes, with `--count-tokens` and `--compare`.
+- Smaller MCP tool schemas: each tool's schema lists only its common parameters, with short lines. `repo` and
+  `max_chars`, which the server instructions state once, and the rarer parameters (`as_of`, `since`, `order`,
+  `format`, `kinds`, `evidence`, `edges`, `cite`, …) are still accepted and documented in `kc_help <tool>`. Profile
+  `all` costs about 4.5k tokens per turn for a client that loads every schema (was about 8.6k), and the four
+  always-loaded tools about 0.8k (was about 1.8k); see eval/schema-cost.md.
 - The MCP server's instructions, the descriptions of `kc_find`, `kc_locate`, `kc_refs`, `kc_context`, `kc_trace`,
   `kc_impact` and `kc_search`, and the plugin's skill descriptions now lead with the questions they answer ("who calls
   or uses", "where is", "what breaks if"). None is longer than before.

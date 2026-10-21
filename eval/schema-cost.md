@@ -5,8 +5,7 @@ advertises and its instructions. Schemas and instructions are in every turn's co
 every turn.
 
 Measured by [`scripts/eval/schema_cost.py`](../scripts/eval/schema_cost.py) with the Anthropic token-counting
-endpoint (`/v1/messages/count_tokens`, which runs no model), from the schemas `knowcode serve` emits at commit
-e894cb8. To reproduce:
+endpoint (`/v1/messages/count_tokens`, which runs no model), from the schemas `knowcode serve` emits. To reproduce:
 
 ```sh
 cargo build --release
@@ -28,54 +27,59 @@ Counts are for one model's tokenizer and move with any schema or instruction edi
 
 ## Results
 
+Each tool's schema advertises only its common parameters (`ADVERTISED` in `crates/knowcode/src/mcp.rs`), with
+short lines; `repo` and `max_chars`, which the server instructions state once, and the rarer parameters are accepted
+all the same and documented in `kc_help <tool>`. Tool descriptions are unchanged. Before is main at cbe7d4e, after is
+the same code with that change.
+
 Model `claude-opus-5-5`. Tokens are added to a base request of 398 tokens (short system prompt, one user message,
 one client tool).
 
-| Profile | Tools | Always loaded | Deferred | Schema bytes | Tool search off | Tool search on |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `all` | 25 | 4 | 21 | 19,842 | 8,212 | 2,282 |
-| `core` | 9 | 4 | 5 | 8,126 | 3,527 | 2,028 |
+| Profile | Tools | Schema bytes, before → after | Tool search off, before → after | Tool search on, before → after |
+| --- | ---: | ---: | ---: | ---: |
+| `all` | 25 | 20,750 → 10,233 | 8,578 → 4,500 | 2,464 → 1,511 |
+| `core` | 9 | 8,722 → 4,289 | 3,773 → 2,062 | 2,210 → 1,257 |
 
-Of which: server instructions 325 tokens; the always-loaded tools' schemas (`kc_context`, `kc_impact`, `kc_locate`,
-`kc_refs`) 1,607 tokens.
+Of which: server instructions 333 tokens (unchanged); the always-loaded tools' schemas
+(`kc_context`, `kc_impact`, `kc_locate`, `kc_refs`) 1,781 → 828 tokens.
 
-| Tool | Always loaded | Schema bytes | Tokens on its own |
+| Tool | Always loaded | Schema bytes, before → after | Tokens on its own, before → after |
 | --- | --- | ---: | ---: |
-| `kc_grep_ast` |  | 1,705 | 660 |
-| `kc_impact` | yes | 1,544 | 595 |
-| `kc_search` |  | 1,505 | 576 |
-| `kc_path` |  | 1,394 | 570 |
-| `kc_trace` |  | 1,058 | 438 |
-| `kc_flow` |  | 1,106 | 431 |
-| `kc_context` | yes | 962 | 378 |
-| `kc_refs` | yes | 950 | 359 |
-| `kc_tests` |  | 792 | 313 |
-| `kc_coupled` |  | 761 | 286 |
-| `kc_ownership` |  | 757 | 283 |
-| `kc_locate` | yes | 745 | 275 |
-| `kc_hotspots` |  | 637 | 268 |
-| `kc_rename_preview` |  | 660 | 267 |
-| `kc_note_add` |  | 587 | 251 |
-| `kc_unused` |  | 571 | 239 |
-| `kc_overview` |  | 580 | 235 |
-| `kc_find` |  | 575 | 234 |
-| `kc_reviewers` |  | 561 | 223 |
-| `kc_symbol_at` |  | 487 | 200 |
-| `kc_help` |  | 444 | 193 |
-| `kc_notes` |  | 382 | 165 |
-| `kc_more` |  | 325 | 154 |
-| `kc_status` |  | 342 | 149 |
-| `kc_areas` |  | 362 | 145 |
+| `kc_grep_ast` |  | 1,705 → 568 | 660 → 250 |
+| `kc_impact` | yes | 1,696 → 652 | 651 → 246 |
+| `kc_path` |  | 1,550 → 427 | 630 → 177 |
+| `kc_search` |  | 1,505 → 466 | 579 → 195 |
+| `kc_trace` |  | 1,210 → 518 | 498 → 225 |
+| `kc_flow` |  | 1,262 → 481 | 491 → 195 |
+| `kc_context` | yes | 1,118 → 582 | 438 → 228 |
+| `kc_refs` | yes | 1,094 → 460 | 419 → 177 |
+| `kc_tests` |  | 792 → 456 | 313 → 180 |
+| `kc_coupled` |  | 761 → 389 | 286 → 146 |
+| `kc_ownership` |  | 757 → 394 | 283 → 144 |
+| `kc_locate` | yes | 739 → 492 | 273 → 177 |
+| `kc_hotspots` |  | 637 → 304 | 268 → 130 |
+| `kc_rename_preview` |  | 660 → 429 | 267 → 178 |
+| `kc_note_add` |  | 587 → 420 | 251 → 186 |
+| `kc_unused` |  | 571 → 230 | 239 → 103 |
+| `kc_find` |  | 573 → 398 | 235 → 164 |
+| `kc_overview` |  | 580 → 239 | 235 → 103 |
+| `kc_reviewers` |  | 561 → 419 | 223 → 160 |
+| `kc_symbol_at` |  | 487 → 386 | 200 → 160 |
+| `kc_help` |  | 444 → 412 | 193 → 179 |
+| `kc_notes` |  | 382 → 294 | 165 → 127 |
+| `kc_more` |  | 325 → 291 | 154 → 138 |
+| `kc_status` |  | 342 → 195 | 149 → 88 |
+| `kc_areas` |  | 362 → 281 | 145 → 111 |
 
 Always-loaded sets, profile `all`, tool search on (instructions and deferred listing included):
 
-| Loaded up front | Tools | Tokens |
+| Loaded up front | Tools | Tokens, before → after |
 | --- | ---: | ---: |
-| none | 0 | 734 |
-| kc_context | 1 | 1,098 |
-| kc_context, kc_locate | 2 | 1,358 |
-| kc_context, kc_refs, kc_locate | 3 | 1,702 |
-| kc_context, kc_refs, kc_impact, kc_locate, kc_find | 5 | 2,502 |
-| current: kc_context, kc_impact, kc_locate, kc_refs | 4 | 2,282 |
+| none | 0 | 742 → 742 |
+| kc_context | 1 | 1,166 → 956 |
+| kc_context, kc_locate | 2 | 1,424 → 1,118 |
+| kc_context, kc_refs, kc_locate | 3 | 1,828 → 1,280 |
+| kc_context, kc_refs, kc_impact, kc_locate, kc_find | 5 | 2,685 → 1,661 |
+| current: kc_context, kc_impact, kc_locate, kc_refs | 4 | 2,464 → 1,511 |
 
-These are costs only. Whether a smaller set changes what agents do is for the study to measure.
+These are costs only. Whether they change what agents do is for the study to measure.
