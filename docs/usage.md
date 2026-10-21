@@ -211,17 +211,27 @@ uninstaller; for an installation it made, an `uninstall` that completes ends wit
 
 KnowCode's own configuration directory is a different one; `--delete-config` removes the files KnowCode wrote there.
 
-`serve --tools core` (or `KNOWCODE_TOOLS=core`) advertises fewer tools: `kc_find`, `kc_locate`, `kc_context`,
-`kc_refs`, `kc_trace`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. A comma list adds tools by name.
+By default `serve` advertises the core tools: `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`,
+`kc_search`, `kc_more` and `kc_help`. They answer where a name is defined, every use of it, what a symbol is, where a
+concept lives, text search, and what calls a symbol or breaks if it changes. `serve --tools all` (or
+`KNOWCODE_TOOLS=all`) advertises all 25 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). A tool left
+out is still documented in `kc_help`, which says it isn't advertised, but can't be called until the server is
+started with it.
+
+The default is the small set because a client that doesn't defer tools loads every advertised schema, and the
+server's instructions, on every turn. The core tools and the instructions are about 3.5k characters; `all` is about
+7.4k. kc_trace is not in the core set: kc_impact answers callers by hop, kc_context a symbol's callers and callees, and
+kc_trace's schema is one of the largest.
 
 Each tool's schema lists only the parameters most calls need. Every other parameter, `repo` and `max_chars` among
 them, is accepted all the same and documented in `kc_help <tool>`, so a client that loads every schema on every turn
 carries less.
 
-In Claude Code, `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` are marked always loaded (`_meta`
-`anthropic/alwaysLoad`), so they are in context from the start instead of waiting behind tool search; their schemas
-cost about 0.8k tokens up front (measured in [schema cost](../eval/schema-cost.md)). The other tools stay deferred.
-A server-level `alwaysLoad` setting overrides the mark, and a profile that leaves one of the four out doesn't list it.
+In Claude Code, the core tools are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from
+the start instead of waiting behind tool search; with `all`, the other tools stay deferred. A server-level
+`alwaysLoad` setting overrides the mark, and a profile that leaves a core tool out doesn't list it. The Claude Code
+plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=all` (unless you set it): Claude Code defers the
+non-core tools, and the plugin's skills use them.
 
 ## MCP tools
 

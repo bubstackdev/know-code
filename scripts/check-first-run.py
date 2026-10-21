@@ -88,9 +88,9 @@ def check(binary: Path) -> None:
                 })
                 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
                 cold = context("apiHandler")
-                # MCP says `complete` only when false, and leaves out a clean, current answer's provenance; stale
-                # entries remain strings.
-                assert "complete" not in cold and "incomplete" not in cold, cold
+                # MCP always says `complete`, and leaves out a clean, current answer's provenance; stale entries
+                # remain strings.
+                assert cold["complete"] is True and "incomplete" not in cold, cold
                 assert "apiHandler" in json.dumps(cold["items"]), cold
                 assert not any("from its last sync" in p for p in cold.get("provenance", [])), cold
 
@@ -111,7 +111,7 @@ def check(binary: Path) -> None:
                 deadline = time.monotonic() + 15
                 while True:
                     fresh = context("changedApiHandler")
-                    if fresh.get("complete", True):
+                    if fresh["complete"]:
                         assert "changedApiHandler" in json.dumps(fresh["items"]), fresh
                         assert not any("from its last sync" in p for p in fresh.get("provenance", [])), fresh
                         break
@@ -135,7 +135,7 @@ def check(binary: Path) -> None:
                     assert time.monotonic() < deadline, "MCP did not refresh the edited checkout while idle"
                     time.sleep(0.1)
                 warm = context("warmedApiHandler")
-                assert warm.get("complete", True) is True and "warmedApiHandler" in json.dumps(warm["items"]), warm
+                assert warm["complete"] is True and "warmedApiHandler" in json.dumps(warm["items"]), warm
             except Exception:
                 stderr.flush()
                 stderr.seek(0)

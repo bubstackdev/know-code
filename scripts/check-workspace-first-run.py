@@ -92,8 +92,8 @@ def check(binary: Path) -> None:
                 assert status["index"]["exists"] is False and status["discovery"] == "light", status
                 assert not list((base / "cache/repos").glob("*.sqlite")), "status created a full index"
                 found = tool("kc_find", {"query": "OrderService"})
-                # MCP says `complete` only when it is false.
-                assert found.get("complete", True) is True and "OrderService" in json.dumps(found["items"]), found
+                # MCP always says `complete`.
+                assert found["complete"] is True and "OrderService" in json.dumps(found["items"]), found
                 assert not list((base / "cache/repos").glob("backend-*.sqlite")), "a local name lookup indexed the unrelated backend"
                 assert not list((base / "cache/repos").glob("unused-*.sqlite")), "a local name lookup indexed the unrelated checkout"
                 snapshot = subprocess.run([str(binary), "context", "OrderService.load", "--repo", str(web), "--no-sync", "--json"], env=env, cwd=base, check=True, capture_output=True, text=True)
@@ -103,7 +103,7 @@ def check(binary: Path) -> None:
                 deadline = time.monotonic() + 20
                 while True:
                     context = tool("kc_context", {"symbol": "OrderService.load", "max_chars": 20000})
-                    if context.get("complete", True):
+                    if context["complete"]:
                         assert "OrdersController.Orders" in json.dumps(context["items"]), context
                         break
                     assert time.monotonic() < deadline, context

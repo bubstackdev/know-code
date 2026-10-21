@@ -93,7 +93,7 @@ def cli(binary, env):
 def mcp(binary, env, cwd):
     """{tool: set of parameters}, and the help topics. A tool's parameters are the ones its help topic lists: its
     schema advertises only the common ones, and takes every one the topic lists."""
-    p = subprocess.Popen([binary, "serve"], cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    p = subprocess.Popen([binary, "serve", "--tools", "all"], cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, text=True)
 
     def send(msgs, want):

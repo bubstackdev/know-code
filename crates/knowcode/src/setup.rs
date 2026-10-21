@@ -247,7 +247,13 @@ fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
                 manifest = Some((plugin.join(name), format!("{}\n", serde_json::to_string_pretty(&value)?)));
                 continue;
             }
-            ".mcp.json" => format!("{}\n", serde_json::to_string_pretty(&json!({"mcpServers": {"knowcode": server(command, env)}}))?),
+            // Claude Code defers the tools not marked always loaded (the core set) to tool search, and the plugin's
+            // skills use the others, so its server advertises every tool unless the user picked a profile.
+            ".mcp.json" => {
+                let mut env = env.clone();
+                env.entry("KNOWCODE_TOOLS".into()).or_insert_with(|| "all".into());
+                format!("{}\n", serde_json::to_string_pretty(&json!({"mcpServers": {"knowcode": server(command, &env)}}))?)
+            }
             "hooks/knowcode-grep-hint.sh" => {
                 let mut prefix = format!("#!/bin/sh\nexport KNOWCODE_BIN={}\n", shell_quote(&command.to_string_lossy()));
                 for (key, value) in env { prefix.push_str(&format!("export {key}={}\n", shell_quote(value))); }

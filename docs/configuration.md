@@ -85,7 +85,7 @@ or `[ignore]`. `knowcode config migrate` folds them into `config.toml` and renam
 | `KNOWCODE_CACHE_DIR` | The cache directory (overrides `cache.dir`). |
 | `KNOWCODE_DATA_DIR` | The data directory holding `notes.sqlite` (overrides `notes.path`). |
 | `KNOWCODE_UPDATE_CHECK` | `0` turns the update check off (overrides `update.check`). |
-| `KNOWCODE_TOOLS` | Which MCP tools `serve` advertises: `all` (default), `core`, or a comma list such as `core,kc_tests`. Same as `serve --tools`. See `kc_help profiles`. |
+| `KNOWCODE_TOOLS` | Which MCP tools `serve` advertises: `core` (default), `all`, or a comma list such as `core,kc_tests`. Same as `serve --tools`. See `kc_help profiles`. |
 | `KNOWCODE_VERIFY` | `1` hashes every file on every command instead of trusting unchanged mtime and size. Same as `--verify`. |
 | `KNOWCODE_NOW` | Where `hotspots` windows end: a `YYYY-MM-DD` date, unix seconds, or `head`. Same as `--as-of`. |
 | `KNOWCODE_GIT_DEADLINE` | Seconds a `git` child process may run (default 60; `0` for none). |

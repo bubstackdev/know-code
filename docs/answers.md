@@ -10,8 +10,8 @@ Agents get the same material through `kc_help contract`, `kc_help evidence` and 
 ## complete and incomplete
 
 - `complete` is `true` only when nothing makes the answer partial, and it is always the same as `incomplete` being
-  absent. The CLI's `--json` always has it; an MCP answer says it only when it is `false` (see
-  [MCP answers](#mcp-answers)).
+  absent. Every answer says it, the CLI's `--json` and MCP answers alike; an MCP answer said as a text tree ends its
+  first line with `; complete` when it is (see [MCP answers](#mcp-answers)).
 - `incomplete` lists why the answer is partial, one entry per reason: `{reason, detail, hint}`. `detail` names what
   is missing (for a cut list, how many of how many were shown). `hint`, when present, says how to get the rest:
   usually the exact `kc_more` call, or a limit to raise.
@@ -252,8 +252,9 @@ implementation, lifetime, file, line, hop}`), where the container makes or hands
 MCP answers are compact, so that rows rather than bookkeeping fill the size cap:
 
 - repos are named by their short name (the full path only when two indexed repos share a name);
-- what goes without saying is left out: `complete: true` (an answer with no `incomplete` is complete; a partial one
-  always says `complete: false`), `false` flags (`dirty`, `truncated`, `capped`), null fields, a first page's
+- `complete` is always said, `true` included, so a complete answer says it is complete; a text tree (kc_trace,
+  kc_impact, kc_path, kc_flow) says it at the end of its first line (`repo shop @ 0123456; complete`);
+- what goes without saying is left out: `false` flags (`dirty`, `truncated`, `capped`), null fields, a first page's
   `offset: 0`, a search's `stats`, and its `matches` when `total` says the same;
 - a clean, current answer leaves out `repos` and `provenance`: no repo it read is dirty or was answered from its last
   sync, and nothing is `stale`, `failed` or `missing_repo`. Otherwise `provenance` stays: commits are 12 hex digits,
@@ -297,8 +298,8 @@ The CLI's `--json` output is the full envelope.
 
 ## How to use an answer
 
-- Check `complete` (over MCP, present only when `false`). If it is `false`, read each `incomplete` entry before drawing
-  a conclusion.
+- Check `complete`. If it is `false`, read each `incomplete` entry before drawing a conclusion; if it is `true`, the
+  answer is the whole of what was asked within the stated scope.
 - Follow `hint`s and cursors when the rest of a list matters to the question. A first page is not the whole list.
 - Treat `ambiguous` and `unique_name` edges as leads to confirm in the source, and read the assumptions on `exact`
   ones that cross repos.
