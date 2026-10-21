@@ -136,10 +136,10 @@ fn primary_constructor(s: &SymbolRow) -> Option<String> {
     rest.starts_with('(').then(|| parameters(rest).to_string())
 }
 
-/// The statement a definition lookup of `q` adds for one repo: every declaration of the name there, grouped (a partial
-/// type's parts, overloads), a type's constructors, and how many references in code name it. `None` when the query
-/// isn't a name or nothing there declares it exactly.
-pub fn declared(o: &Opened, q: &str, kind: Option<&str>) -> Result<Option<String>> {
+/// What a definition lookup of `q` says of one repo: every declaration of the name there, grouped (a partial type's
+/// parts, overloads), with a type's constructors (see [`statement`]). `None` when the query isn't a name or nothing
+/// there declares it exactly.
+pub fn declared(o: &Opened, q: &str, kind: Option<&str>) -> Result<Option<Declared>> {
     let q = q.trim();
     let (_, bare) = query::split_dotted(q);
     if bare.is_empty() || q.contains(['#', ':', '/', ' ']) {
@@ -215,17 +215,88 @@ pub fn declared(o: &Opened, q: &str, kind: Option<&str>) -> Result<Option<String
     if groups.len() > GROUPS_NAMED {
         descs.push(format!("{} more (in items)", groups.len() - GROUPS_NAMED));
     }
-    let repo = repo_name(&o.root);
+    Ok(Some(Declared { repo: repo_name(&o.root), count: defs.len(), said: descs.join("; ") }))
+}
+
+/// One repo's declarations of a name, said (see [`declared`]).
+#[derive(Debug, Clone)]
+pub struct Declared {
+    pub repo: String,
+    pub count: usize,
+    pub said: String,
+}
+
+/// What a repo's code says of a name besides declaring it: references by the name, and lines naming it in files KnowCode
+/// doesn't read as code (see [`crate::unread`]).
+#[derive(Debug, Default, Clone)]
+pub struct Uses {
+    pub references: i64,
+    /// `repo` prefix when the answer spans repos, then `path:line`.
+    pub unread: Vec<String>,
+    /// More unread lines than were read.
+    pub unread_capped: bool,
+}
+
+impl Uses {
+    /// Adds the repo `o`'s references to `name` and the lines naming it in files not read as code (`repo` names it, when
+    /// the answer spans repos).
+    pub fn add(&mut self, o: &Opened, name: &str, repo: Option<&str>) -> Result<()> {
+        let conn = o.store.conn();
+        self.references += conn.prepare_cached("SELECT COUNT(*) FROM refs WHERE name = ?1 AND name = ?1 COLLATE BINARY")?.query_row([name], |r| r.get::<_, i64>(0))?;
+        let m = crate::unread::mentions(o, &[name], crate::unread::Files::NotCode)?;
+        let at = |(f, l): &(String, u32)| match repo {
+            Some(r) => format!("{r}:{f}:{l}"),
+            None => format!("{f}:{l}"),
+        };
+        self.unread.extend(m.lines.iter().map(at));
+        self.unread_capped |= m.capped;
+        Ok(())
+    }
+}
+
+/// The `declared` statement of a definition lookup of `q` (`kind`, when filtered) from each repo's declarations, over
+/// `repos` repos (the workspace when more than one), with how many references in code name it there: an exact count,
+/// or, when files KnowCode doesn't read as code name it too, a lower bound with those lines.
+pub fn statement(q: &str, kind: Option<&str>, decls: &[Declared], uses: &Uses, repos: usize) -> Option<String> {
+    let q = q.trim();
+    let (_, bare) = query::split_dotted(q);
+    let n: usize = decls.iter().map(|d| d.count).sum();
+    if n == 0 {
+        return None;
+    }
     let what = kind.map_or("declaration".to_string(), |k| format!("{k} declaration"));
-    let n = defs.len();
-    let head = if n == 1 { format!("the only {what} of {q} in {repo}") } else { format!("the only {n} {what}s of {q} in {repo}") };
-    let mentions: i64 = conn.prepare_cached("SELECT COUNT(*) FROM refs WHERE name = ?1 AND name = ?1 COLLATE BINARY")?.query_row([bare], |r| r.get(0))?;
-    let uses = match mentions {
-        0 => format!("nothing in code references {bare}"),
-        1 => format!("every other mention in code is a use: 1 reference (kc_refs {q})"),
-        m => format!("every other mention in code is a use: {m} references (kc_refs {q})"),
+    let what = if n == 1 { format!("the only {what} of {q}") } else { format!("the only {n} {what}s of {q}") };
+    let head = match (repos, decls) {
+        (0 | 1, [one]) => format!("{what} in {}: {}", one.repo, one.said),
+        (_, [one]) => format!("{what} in the workspace ({repos} repos) {} in {}: {}", if n == 1 { "is" } else { "are all" }, one.repo, one.said),
+        _ => {
+            let each: Vec<String> = decls.iter().map(|d| format!("in {}: {}", d.repo, d.said)).collect();
+            format!("{what} in the workspace ({repos} repos), in {} of them: {}", decls.len(), each.join("; "))
+        }
     };
-    Ok(Some(format!("{head}: {}. {}{}", descs.join("; "), uses[..1].to_uppercase(), &uses[1..])))
+    let m = uses.references;
+    let refs = if m == 1 { "1 reference".to_string() } else { format!("{m} references") };
+    let tail = if uses.unread.is_empty() {
+        match m {
+            0 => format!("Nothing in code references {bare}"),
+            _ => format!("Every other mention in code is a use: {refs} (kc_refs {q})"),
+        }
+    } else {
+        let lines = uses.unread.len();
+        let more = lines.saturating_sub(crate::unread::LINES_NAMED);
+        let mut named: Vec<&str> = uses.unread.iter().take(crate::unread::LINES_NAMED).map(String::as_str).collect();
+        let rest = if more > 0 || uses.unread_capped { format!("{more}{} more", if uses.unread_capped { "+" } else { "" }) } else { String::new() };
+        if !rest.is_empty() {
+            named.push(&rest);
+        }
+        format!(
+            "Every other mention in code is a use: at least {refs} (kc_refs {q}), and {lines}{} line{} naming it in files KnowCode doesn't read as code: {}",
+            if uses.unread_capped { "+" } else { "" },
+            if lines == 1 && !uses.unread_capped { "" } else { "s" },
+            named.join(", ")
+        )
+    };
+    Some(format!("{head}. {tail}"))
 }
 
 /// Who makes a reference, for grouping: its repo, file and enclosing symbol.
@@ -559,6 +630,143 @@ mod tests {
 
         // A prefix or a name nothing declares exactly: no statement.
         assert!(ops::find("Car", None, 10, &scope(&root)).unwrap().env.get("declared").is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    const MEDIA_HELPER: &str = "export function isValidLength(length) {\n    return length && !isNaN(length);\n}\n\nexport function bufferedRanges(start, end) {\n    if (!isValidLength(start)) {\n        return null;\n    }\n    return isValidLength(end) ? [start, end] : null;\n}\n";
+    const VIDEO_PLUGIN: &str = "import {\n    bufferedRanges,\n    isValidLength\n} from '../../components/mediaHelper';\n\nexport class VideoPlayer {\n    duration(length) {\n        if (isValidLength(length)) {\n            return length;\n        }\n        return bufferedRanges(0, length);\n    }\n}\n";
+    const AUDIO_PLUGIN: &str = "import * as mediaHelper from '../../components/mediaHelper';\n\nexport class AudioPlayer {\n    duration(length) {\n        if (mediaHelper.isValidLength(length)) {\n            return length;\n        }\n        return null;\n    }\n}\n";
+
+    /// A JavaScript function used in its own file, through a named import and through a namespace import (`import * as
+    /// ns`, `ns.fn(…)`), from an app's own `src/plugins/`: every use is found and resolved, and counted in `declared`.
+    #[test]
+    fn javascript_uses_through_named_and_namespace_imports_are_references() {
+        let cache = test_cache();
+        let base = cache.dir("whole-js-imports");
+        let root = repo(
+            &base,
+            "web",
+            &[
+                ("src/components/mediaHelper.js", MEDIA_HELPER),
+                ("src/plugins/video/plugin.js", VIDEO_PLUGIN),
+                ("src/plugins/audio/plugin.js", AUDIO_PLUGIN),
+            ],
+        );
+        let env = ops::refs("isValidLength", &[], 20, &scope(&root)).unwrap().env;
+        let rows: Vec<(String, u64, String)> = env["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["file"].as_str().unwrap().to_string(), r["line"].as_u64().unwrap(), r["confidence"].as_str().unwrap().to_string()))
+            .collect();
+        let mut sites: Vec<(&str, u64)> = rows.iter().map(|(f, l, _)| (f.as_str(), *l)).collect();
+        sites.sort();
+        assert_eq!(
+            sites,
+            [("src/components/mediaHelper.js", 6), ("src/components/mediaHelper.js", 9), ("src/plugins/audio/plugin.js", 5), ("src/plugins/video/plugin.js", 8)],
+            "{env}"
+        );
+        assert!(rows.iter().all(|(_, _, c)| c == "exact"), "{env}");
+        let said = ops::find("isValidLength", None, 10, &scope(&root)).unwrap().env["declared"].as_str().unwrap().to_string();
+        assert!(said.contains("function isValidLength at src/components/mediaHelper.js:1"), "{said}");
+        assert!(said.ends_with("4 references (kc_refs isValidLength)"), "{said}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The `declared` statement speaks for the whole workspace, whichever repo the lookup is scoped to: where the name is
+    /// declared, and the references to it in every repo.
+    #[test]
+    fn find_says_where_in_the_workspace_a_name_is_declared() {
+        let cache = test_cache();
+        let base = cache.dir("whole-find-workspace");
+        let lib = repo(&base, "lib", &[PROJECT, ("src/Widget.cs", "namespace Lib;\npublic class Widget\n{\n    public static Widget Make() => new Widget();\n}\n")]);
+        let app = repo(&base, "app", &[PROJECT, ("src/Shop.cs", "namespace App;\npublic class Shop\n{\n    public Lib.Widget W = new Lib.Widget();\n}\n")]);
+        let other = repo(&base, "other", &[PROJECT, ("src/Gadget.cs", "namespace Other;\npublic class Gadget { }\n")]);
+        for root in [&lib, &app, &other] {
+            let said = ops::find("Widget", None, 10, &scope(root)).unwrap().env["declared"].as_str().unwrap().to_string();
+            assert!(said.starts_with("the only declaration of Widget in the workspace (3 repos) is in lib: class Widget at src/Widget.cs:2"), "{said}");
+            assert!(said.ends_with("Every other mention in code is a use: 4 references (kc_refs Widget)"), "{said}");
+        }
+        // Declared in two repos: each named.
+        std::fs::write(other.join("src/Widget.cs"), "namespace Other;\npublic class Widget { }\n").unwrap();
+        let said = ops::find("Widget", None, 10, &scope(&app)).unwrap().env["declared"].as_str().unwrap().to_string();
+        assert!(said.starts_with("the only 2 declarations of Widget in the workspace (3 repos), in 2 of them: in "), "{said}");
+        assert!(said.contains("in lib: class Widget at src/Widget.cs:2") && said.contains("in other: class Widget at src/Widget.cs:2"), "{said}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Lines naming the name in files KnowCode doesn't read as code (vendored JavaScript here) make the reference count
+    /// a lower bound, said with those lines; `refs` names them too.
+    #[test]
+    fn a_name_in_files_not_read_as_code_makes_the_count_a_lower_bound() {
+        let cache = test_cache();
+        let base = cache.dir("whole-find-unread");
+        let root = repo(
+            &base,
+            "web",
+            &[
+                ("src/components/mediaHelper.js", MEDIA_HELPER),
+                ("web/plugins/slider.js", "// isValidLength is checked below\nif (window.isValidLength(3)) { slide(); }\n"),
+            ],
+        );
+        let said = ops::find("isValidLength", None, 10, &scope(&root)).unwrap().env["declared"].as_str().unwrap().to_string();
+        assert!(
+            said.ends_with(
+                "Every other mention in code is a use: at least 2 references (kc_refs isValidLength), and 1 line naming it in files KnowCode doesn't read as code: web/plugins/slider.js:2"
+            ),
+            "{said}"
+        );
+        let env = ops::refs("isValidLength", &[], 20, &scope(&root)).unwrap().env;
+        let notes: Vec<String> = crate::contract::incomplete_of(&env).into_iter().map(|i| i.detail).collect();
+        assert!(notes.iter().any(|d| d == "isValidLength is named on 1 line of files KnowCode doesn't read as code: web/plugins/slider.js:2; uses there are not listed"), "{notes:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// DI registrations KnowCode doesn't read (assembly scans) bear on a type's answer only when they can register it:
+    /// a scan of another project's assembly (`typeof(T).Assembly`) is left out; a scan of an assembly the code doesn't
+    /// name is said in the "DI registrations: none found" line of a type nothing registers or injects, not as an
+    /// `unsupported` entry, and as one for a type the container knows.
+    #[test]
+    fn assembly_scans_are_said_only_where_they_can_register_the_type() {
+        let cache = test_cache();
+        let base = cache.dir("whole-di-scans");
+        let root = repo(
+            &base,
+            "shop",
+            &[
+                ("src/Shop/Shop.csproj", PROJECT.1),
+                ("src/Shop/Stores.cs", "namespace Shop;\npublic interface IStore { }\npublic class SqlStore : IStore { }\npublic interface IClock { }\npublic class Clock : IClock { }\npublic class Checkout\n{\n    public Checkout(IClock clock) { }\n}\n"),
+                ("test/Scenarios/Scenarios.csproj", PROJECT.1),
+                ("test/Scenarios/Thing.cs", "namespace Scenarios;\npublic class Thing { }\n"),
+                (
+                    "test/Scenarios/ScanTests.cs",
+                    "namespace Scenarios;\npublic class ScanTests\n{\n    public void Scan(ContainerBuilder cb)\n    {\n        cb.RegisterAssemblyTypes(typeof(Thing).Assembly)\n            .AsImplementedInterfaces();\n    }\n}\n",
+                ),
+                (
+                    "src/Shop/Modules.cs",
+                    "namespace Shop;\npublic static class Modules\n{\n    public static void Load(ContainerBuilder cb, System.Reflection.Assembly[] assemblies)\n    {\n        cb.RegisterAssemblyTypes(assemblies).AsImplementedInterfaces();\n    }\n}\n",
+                ),
+            ],
+        );
+        let unsupported = |sym: &str| -> (Value, Vec<String>) {
+            let env = ops::context(sym, 4000, kc_store::skeleton::SourceMode::None, &scope(&root)).unwrap().env;
+            let list = crate::contract::incomplete_of(&env).into_iter().filter(|i| i.detail.starts_with("di: ")).map(|i| i.detail).collect();
+            (env, list)
+        };
+        // Nothing registers or injects IStore: the unnamed scan goes into its none-found line; the test scenario scan
+        // reads another project.
+        let (env, di) = unsupported("IStore");
+        assert!(di.is_empty(), "{di:?}");
+        assert_eq!(env["complete"], true, "{env}");
+        let none: Vec<&str> = env["items"][0]["none_found"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(
+            none.iter().any(|l| l.starts_with("DI registrations: none found") && l.ends_with("; 1 assembly scan not read (its assembly isn't named) may add one: src/Shop/Modules.cs:6")),
+            "{none:?}"
+        );
+        // IClock is injected: the unnamed scan bears on it.
+        let (_, di) = unsupported("IClock");
+        assert_eq!(di.len(), 1, "{di:?}");
+        assert!(di[0].contains("(src/Shop/Modules.cs:6)") && !di[0].contains("ScanTests.cs"), "{di:?}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

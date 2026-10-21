@@ -23,9 +23,11 @@ first; also packages and targets from manifests. Each item has file:line and sig
 namespace or module (`B.Worker.Run`, `src/worker.Worker.run`) finds that one, and items sharing a qualified name carry
 their `namespace`. When more than 2,000 definitions match one way, `capped` and `truncated` are set and `total` is a
 lower bound: narrow with Outer.name, a longer name or kind. A query naming something exactly adds `declared`, one line
-per repo saying it has every declaration of the name there: a C# `partial` type's parts (each part's file:line), a
-type's constructors (a record's primary one too), a method's overloads, and how many references in code name it (the
-other mentions: uses, which kc_refs resolves). Use kc_locate when you know what the code does but not its name,
+saying it has every declaration of the name in the workspace (whichever repo was asked), and in which repos: a C#
+`partial` type's parts (each part's file:line), a type's constructors (a record's primary one too), a method's
+overloads, and how many references in code name it across the workspace (the other mentions: uses, which kc_refs
+resolves). When files KnowCode doesn't read as code (Razor, vendored JavaScript) name it too, the count is "at least",
+with those lines. Use kc_locate when you know what the code does but not its name,
 kc_search for exact text."#,
     },
     Topic {
@@ -83,7 +85,10 @@ alone, and each row's `overload` says which it calls, or which it may call when 
 For an interface or base class, `hierarchy` lists its `implementers` (or `subclasses`, with those in indexed repos
 depending on it), those reaching it `through` another type (a subclass of an implementation, `via` the type between),
 `derived` interfaces, and `di`: its registrations and those of its derived interfaces and implementations (C#); each
-list empty is said in `none_found` with what was searched. An assembly scan that may register it is in `incomplete`.
+list empty is said in `none_found` with what was searched. An assembly scan that may register it is in `incomplete`
+(when nothing registers or injects the type, a scan of an assembly the code doesn't name is in its `none_found` line
+instead). Razor and other files KnowCode doesn't read as code are checked as text for the name: the lines naming it
+are in `incomplete`; when none does, `checked` says so.
 
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,
 member; SQL read, write) or `edges` (the same filter named as kc_trace names edges: calls, instantiates, uses, member,

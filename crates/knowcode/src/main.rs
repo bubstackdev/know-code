@@ -26,6 +26,7 @@ mod update;
 mod tf;
 mod tree;
 mod walk;
+mod unread;
 mod whole;
 
 use std::path::PathBuf;

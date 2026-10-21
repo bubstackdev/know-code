@@ -16,6 +16,22 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   reading files", and say every answer states `complete`.
 - MCP answers say `complete: true` again when they are complete (0.2.0's leaner answers said it only when false). A
   text tree ends its first line with `; complete`.
+- `find`'s `declared` speaks for the workspace: "the only declaration of X in the workspace (6 repos) is in autofac",
+  or each repo when several declare it, whichever repo the lookup was scoped to (the other repos are ruled out by their
+  summaries, or opened when they may declare or name it; a repo without a full index is never indexed for it and is
+  said not checked, and other checkouts of the repo asked are left out). Its reference count covers every repo. When files KnowCode
+  doesn't read as code name the symbol too, the count is "at least N" and those lines are named.
+- JavaScript under an app's own `src/.../plugins/` is indexed. It was taken for vendored jQuery plugins and left out,
+  so uses through named imports and namespace imports (`import * as m`, `m.f()`) there were missing from `refs` and
+  `declared` counted too few (2 references instead of 8 on a public web client). A `plugins/` directory outside `src`,
+  or under a web root within it, is still vendored.
+- Notes about files and constructs KnowCode doesn't read are checked before they are made. Razor files (`.razor`,
+  `.cshtml`) are searched as text for the symbol: `refs` and `impact` name the lines that name it, and when none does,
+  `refs` says so in `checked` and stays `complete`, instead of a note that the files exist. `refs` also names lines in
+  other files not read as code (vendored JavaScript) that name it. An assembly scan bears on a type only when its
+  argument's assembly (`typeof(T).Assembly`, `GetExecutingAssembly()`) is a project holding the type or an
+  implementation of it; a scan of an assembly the code doesn't name is an `unsupported` entry only for a type the
+  container knows (registered or injected), and otherwise a clause of its "DI registrations: none found" line.
 - Lower memory in search and indexing, with answers unchanged. Trigram lists are intersected one at a time, in place, starting from the smallest; indexing workers allocate the trigram set only for files they index; a file read reserves its own size instead of growing twice. Path globs can no longer take exponential time: a bounded matcher takes over after a fixed amount of backtracking. The revision and manifest-version caches keep at most 1,024 entries each, so a long-running server no longer grows with every checkout state it has seen.
 - Leaner MCP answers and tool list. A clean, current answer no longer lists its repos: `repos` and `provenance` are
   left out unless a repo is dirty or was answered from its last sync, or something is `stale`, `failed` or

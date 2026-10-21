@@ -150,7 +150,10 @@ Known gaps:
 
 Extracted: classes, interfaces, functions, methods, properties, type aliases, enums, imports and exports; calls,
 instantiations and member uses. Plain JavaScript goes through the TypeScript extractor with the TSX grammar.
-Minified and built files are left out.
+Minified, built and vendored files are left out (`dist/`, `bundles/`, `plugins/` outside a `src` directory, a library
+by name such as `jquery.form.js`). A function used through a named import (`import { f } from './m'`) or a namespace
+import (`import * as m from './m'`, then `m.f()`) resolves to its declaration. Answers that count uses (`find`'s
+`declared`, `refs`) check the files left out as text for the name and name the lines that do.
 
 Resolved:
 
@@ -300,14 +303,14 @@ on them is incomplete with reason `unsupported`, naming the first few with `file
 
 | Area | Constructs | What the answer may lack |
 | --- | --- | --- |
-| C# DI | assembly-scan registrations (`RegisterAssemblyTypes`, for the types its name filter lets through), typed HTTP clients (`AddHttpClient<T>`), keyed services (`AddKeyedScoped<…>`) | registrations made through them; a service may be said unregistered |
+| C# DI | assembly-scan registrations (`RegisterAssemblyTypes`, for the types its name filter lets through, from the project its argument names: `typeof(T).Assembly`, `GetExecutingAssembly()`), typed HTTP clients (`AddHttpClient<T>`), keyed services (`AddKeyedScoped<…>`). A scan of an assembly the code doesn't name, for a type nothing registers or injects, is said in the type's "DI registrations: none found" line instead | registrations made through them; a service may be said unregistered |
 | SQL | SQL text naming its table at run time; dynamic SQL in a procedure (`EXEC (@sql)`, `EXEC @sql`, `sp_executesql`, `PREPARE … FROM`) | the tables they name |
 | Message bus | a publish of a message whose type isn't known | links from it to consumers |
 | Ansible | includes, templates and handlers named by Jinja | the files they include or render |
 | Terraform | `moved`, `import`, `removed` and `check` blocks | the addresses they name, as uses |
 | GitLab CI | an include or trigger in a form not read (kind `unknown` in `ci_includes`) | the jobs and includes it brings |
 | Angular | a lazy route in a form not read (a default export, a module string) | the routes it loads |
-| Razor | `.razor` and `.cshtml` files, which aren't read at all: a C# `refs` or `impact` answer from a repo holding any says so, naming one | uses of C# code in their markup and `@code` blocks |
+| Razor | `.razor` and `.cshtml` files, which aren't parsed: a C# `refs` or `impact` answer from a repo holding any checks them as text for the name and names the lines that name it (`refs` says in `checked` when none does); with more than 20 names to check, it says the files exist, naming one | uses of C# code in their markup and `@code` blocks |
 | HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes whose template isn't a literal or names an area, an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
 
 Constructs not in this table and not listed as gaps above are simply not seen, and an answer can be `complete`

@@ -17,4 +17,6 @@
 # Answers agents don't re-check: cited source with its check against the index, trace and impact on the walk graph,
 # and every stop's continuation call (0.2 items 2.1-2.3): 35850208, up 115648 from main before them (35734560) and
 # 347136 from the last budget.
-35850208
+# The 0.2 fix round: leaner answers, complete answers, HTTP routes and client links, workspace-wide declared
+# statements and checked notes for files read only as text (36213984, up 363776; measured on PR #39's dist build).
+36213984
