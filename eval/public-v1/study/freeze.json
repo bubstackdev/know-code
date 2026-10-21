@@ -7,7 +7,7 @@
     },
     "config": {
       "path": "config.json",
-      "sha256": "2160ddf54b77b6bd3a6afe776e4fd0c12adba6a1459a6b5b6f4d35ba7ede2ad6"
+      "sha256": "31c930d589c3ca6c666dbefd0c5fd382bd5967e1427ee60da6ac6357eaafa0bb"
     },
     "labels": {
       "path": "labels.jsonl",
@@ -27,11 +27,11 @@
     },
     "plan": {
       "path": "plan.json",
-      "sha256": "1c4093318c0a655797f10ad479aad6c4085cfe164e47e1aa331853c90fa33214"
+      "sha256": "5b8fbe1c097285d74197f222b33355609c23c6609e85b035238ebb469564242d"
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "6c707b70aa82e266ea3989fe1f061f3477d2dcf80913b3030990ffd6dd71d964"
+      "sha256": "1f796e6407da17158036021251fef28d7205d7c5ab8177fa848ee985c7ce88ff"
     },
     "provisional": {
       "path": "provisional.json",
@@ -90,5 +90,5 @@
     "scripts/prepare-public-eval-index.py": "d48844a6199399367e32fc41ea9ba9603adc33397bef3b47be83e6ece29f99e0",
     "scripts/prepare-public-eval-session.py": "aa4881a3e5137d971a624106c6e7f4665a7c6bce9ba96b8791cfd96fa5efca3e"
   },
-  "revision": "Fourth freeze (2026-10-21), for a rerun on the 702da21 build. Changed from the third freeze (0141cee5): config.knowcode_sha256 (0.2.0 at 00aae5b, f7a15757..., to 0.2.0 at 702da21, 5323abc9...); plan.json (re-planned, order unchanged); protocol.md (rerun note, detector format adaptation, stale-index measure, offer to share transcripts removed); scripts/eval/recheck.py (reads 0.2 compact forms: search hit rows, files_only and structural rows, from strings and shared list fields, declared/overloads/hierarchy strings); scripts/eval/score_public_study.py (adds the descriptive stale-index measure). Equivalence on the published runs: criterion-1 counts identical (baseline 27/81 named, 23/95 unprompted; final 33/123, 30/107) and no answer changed re-checked status; the published criterion numbers are unchanged. Two final-run sessions attribute more plain calls to re-checks (knowcode impact 001: 3 to 4; knowcode-unprompted impact 001: 2 to 4), because the 0.2.0 final binary had already emitted compact from strings that the earlier detector did not read. Criteria and thresholds unchanged."
+  "revision": "Fourth freeze, revised 2026-10-21. The user stopped the rerun on the 702da21 build after 6 of 72 sessions; those sessions are discarded and not scored. config.knowcode_sha256 moves from 702da21 (5323abc9...) to b0a3564 (e55fdc31..., memory fixes in search and indexing, answers unchanged); plan.json is re-planned (order unchanged) and protocol.md records the stop. Nothing else changed. Earlier in this freeze (from the third, 0141cee5): the re-check detector reads 0.2 compact forms and the scorer adds the descriptive stale-index measure; on the published runs the criterion-1 counts are identical and no answer changed re-checked status (two final-run sessions attribute more plain calls to re-checks: knowcode impact 001 3 to 4, knowcode-unprompted impact 001 2 to 4, because the 0.2.0 binary already emitted compact from strings). Criteria and thresholds unchanged."
 }

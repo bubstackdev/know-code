@@ -11,13 +11,13 @@
   "questions_input_sha256": "1a05b2b3631a7574f5ac5a7bbe13d3aa258ea96b48338ebd7545b620b09bd79e",
   "operator_questions_sha256": "14104b286f6ad06dbed11ea3d955a19eb1dd500eac1ff9885759fbbc2317cdb3",
   "order_sha256": "adf101f79b785f7866794b90d69be76be4bc9fd8d0d25faa6d2f82996b71c9ef",
-  "config_sha256": "2160ddf54b77b6bd3a6afe776e4fd0c12adba6a1459a6b5b6f4d35ba7ede2ad6",
+  "config_sha256": "31c930d589c3ca6c666dbefd0c5fd382bd5967e1427ee60da6ac6357eaafa0bb",
   "config": {
     "client": "claude-code",
     "client_version": "2.1.304",
     "effort": "medium",
     "knowcode_profile": "all",
-    "knowcode_sha256": "5323abc9a009f11b07e0fc5a2c5647fa28d8c62efaba2f876d0941de58bc4333",
+    "knowcode_sha256": "e55fdc317f5a35ad178929dc82964d9d3dbbb0a913f6c1d987387572967e728a",
     "model": "claude-opus-5-5",
     "research_call_budget": 40
   },
