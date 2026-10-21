@@ -296,7 +296,8 @@ def audit_transport(measured, events, records, *, expected_model, relay_cleanup_
     """Join provider message IDs to unique client messages, retaining failed retries.
 
     A completed HTTP error can precede a successful retry. It remains visible but
-    supplies no model message. A partial response, missing/extra/duplicate model
+    supplies no model message. So does an abandoned attempt: a broken or statusless
+    response that no client message came from (protocol.md, transport retries). A partial response, missing/extra/duplicate model
     message or changed interface requires review instead of silently being scored.
     This checks correspondence; it does not prove runtime confinement or a freeze.
     """
@@ -314,6 +315,8 @@ def audit_transport(measured, events, records, *, expected_model, relay_cleanup_
         issues.append('relay records must be a list')
         records = []
     attempts, counts = 0, 0
+    client_ids = [row['id'] for row in measured.get('observed_turns', [])]
+    abandoned = []
     for ordinal, row in enumerate(records, 1):
         if not isinstance(row, dict) or row.get('endpoint') not in ('/v1/messages', '/v1/messages/count_tokens'):
             issues.append('invalid relay record or endpoint')
@@ -323,22 +326,29 @@ def audit_transport(measured, events, records, *, expected_model, relay_cleanup_
         counts += int(not is_message)
         if row.get('model') != expected_model:
             issues.append('relay request model differs from configuration')
-        if row.get('completed') is not True:
-            issues.append('relay response interrupted or incomplete')
         status = row.get('response_status')
-        if type(status) is not int or not 100 <= status <= 599:
-            issues.append('relay response lacks a valid HTTP status')
-            continue
+        valid_status = type(status) is int and 100 <= status <= 599
+        message_id = row.get('response_message_id')
+        if row.get('completed') is not True or not valid_status:
+            # An abandoned attempt: a broken or statusless response that no client message came from (the client
+            # retried). It is reported, not failed. A partial response that a client message did come from fails.
+            if is_message and not (isinstance(message_id, str) and message_id in client_ids):
+                abandoned.append({'ordinal':ordinal, 'status':status if valid_status else None,
+                                  'error_type':row.get('error_type')})
+                continue
+            if row.get('completed') is not True:
+                issues.append('relay response interrupted or incomplete')
+            if not valid_status:
+                issues.append('relay response lacks a valid HTTP status')
+                continue
         if not 200 <= status < 300:
             failures.append({'ordinal':ordinal, 'endpoint':row['endpoint'], 'status':status})
             continue
         if is_message:
-            message_id = row.get('response_message_id')
             if not isinstance(message_id, str) or not message_id:
                 issues.append('successful model response lacks its message id')
             else:
                 successful.append(message_id)
-    client_ids = [row['id'] for row in measured.get('observed_turns', [])]
     if len(set(successful)) != len(successful):
         issues.append('repeated provider message id')
     missing = sorted(set(client_ids)-set(successful))
@@ -355,7 +365,7 @@ def audit_transport(measured, events, records, *, expected_model, relay_cleanup_
                   'notes':'Transport/transcript correspondence failed; retain and review the raw evidence.'}
     return dict(format=1, transport_integrity=not issues, transport_issues=sorted(set(issues)),
                 actual_permission_modes=modes, model_request_attempts=attempts, token_count_attempts=counts,
-                non_success_responses=failures, provider_message_ids=successful, client_message_ids=client_ids,
+                non_success_responses=failures, abandoned_attempts=abandoned, provider_message_ids=successful, client_message_ids=client_ids,
                 missing_provider_ids=missing, extra_provider_ids=extra, answer=answer,
                 runtime_confinement_verified=False, ready_to_run=False)
 
