@@ -73,7 +73,8 @@ work), then:
 6. Asks the operator for two real Claude Code sessions per case, each in a new terminal: unprompted (the manifest's
    question) and named ("Use the KnowCode kc_context tool to answer: …"). From the client's transcripts it reports,
    per session, the prompt, `used_knowcode`, KnowCode calls, other tool calls and seconds to the final answer. These
-   numbers are recorded, not gated.
+   numbers are recorded, not gated. `report/knowcode-use.json` holds the same counts in machine-readable form: one row
+   per case and session with KnowCode calls by tool, and a total for the unprompted sessions.
 7. Snapshots Claude Code's settings right before uninstall, runs `knowcode uninstall --delete-config
    --delete-notes`, and checks the exit code, that the plugin and marketplace are gone, that no index and no KnowCode
    cache, configuration or data directory is left, and
@@ -93,3 +94,22 @@ script's own. Do not mark clean-machine acceptance complete from the runner's re
 Public download hosting and public CI require separate verification after the audited snapshot is approved and
 published. Keep comparative claims and evaluation numbers out of public materials until their supporting public
 evaluation is published.
+
+## Tuning unprompted use
+
+[adoption_tune.py](../scripts/acceptance/adoption_tune.py) is a small loop for tuning the server instructions, tool
+descriptions and skill descriptions against unprompted use. It is separate from the frozen public study: its
+questions ([adoption-questions.jsonl](../scripts/acceptance/adoption-questions.jsonl)) are not the study's and use
+other public repos. Each session is a headless `claude --bare --print` run in a clone, with KnowCode served but not
+named, in an isolated home, client configuration and KnowCode cache; it counts KnowCode calls and other tool calls.
+Two configurations: the MCP server alone (`mcp`), and the server with the plugin's skills (`plugin`). Bare mode skips
+hooks and offers no tool search, so the Bash hint hook and the always-loaded set play no part; `--full-client` turns
+bare mode off, so both do, as in an interactive session. The API key is read from `ANTHROPIC_API_KEY`; each session's
+spend goes to a ledger, and no session starts past `--budget-usd`.
+
+```sh
+python3 scripts/acceptance/adoption_tune.py run --repos <clones> --knowcode <binary> --work <dir> --label before --budget-usd 5
+python3 scripts/acceptance/adoption_tune.py summary --work <dir>
+```
+
+Its counts are a small sample for tuning, not a result.

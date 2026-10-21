@@ -1,6 +1,6 @@
 ---
 name: knowcode-explore
-description: Get oriented in an unfamiliar repo or feature with the KnowCode index - what the repo is, where a concept lives, what a symbol does and who calls it, and what happens end to end from an entry point. Use when starting work in code you haven't read, or when asked "how does X work" or "where is X".
+description: Where is X, how does X work, who calls or uses X - answer from the KnowCode index - what a repo is, where a concept lives, what a symbol does and who calls it, and what happens end to end from an entry point. Use in code you haven't read yet.
 ---
 
 # Explore unfamiliar code

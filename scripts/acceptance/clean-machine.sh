@@ -5,7 +5,8 @@
 # installed and signed in. It installs KnowCode into the real home directory with the single shell command, sets up
 # Claude Code in a clone of each pinned public case, asks the operator to run two real client sessions per case,
 # uninstalls, and checks that what remains is only what the operator had before. Every step is recorded in a report
-# directory, which is archived at the end. Session numbers are recorded, never gated.
+# directory, which is archived at the end. Session numbers are recorded, never gated; knowcode-use.json holds the
+# KnowCode calls per case and session (unprompted and named) in machine-readable form.
 #
 #   scripts/acceptance/clean-machine.sh --commit SHA [--artifacts DIR] [options]
 #   scripts/acceptance/clean-machine.sh --dry-run --commit SHA   # read-only checks, then the planned commands
@@ -453,6 +454,7 @@ done
 
 # --------------------------------------------------------------------------------------------------- report
 helper summary "$REPORT" > "$REPORT/summary.md"
+helper use "$REPORT" > "$REPORT/knowcode-use.json"
 printf 'elapsed_seconds\t%s\n' "$(( $(date +%s) - STARTED ))" > "$REPORT/elapsed.tsv"
 ARCHIVE="$WORK/clean-machine-report.tar.gz"
 tar -czf "$ARCHIVE" -C "$WORK" report

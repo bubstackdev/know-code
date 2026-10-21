@@ -1,6 +1,6 @@
 ---
 name: knowcode-debug-stack-trace
-description: Debug from a stack trace or error log with the KnowCode index - map each frame's file and line to its symbol, read the failing code with its callers, walk inward to the entry points that reach it, and check whether the files involved are known trouble spots. Use when given an exception, a stack trace, or a "fails at file:line" report.
+description: Stack trace, exception or "fails at file:line" - debug it with the KnowCode index - map each frame's file and line to its symbol, read the failing code with its callers, walk inward to the entry points that reach it, and check whether the files involved are known trouble spots.
 ---
 
 # Debug from a stack trace
