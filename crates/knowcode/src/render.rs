@@ -16,6 +16,30 @@ macro_rules! w {
     }};
 }
 
+/// A row's cited lines under it, each numbered (`    4 | this.log.info('placing');`), then what the cap left out.
+///
+/// Lines quoted already in this answer (`seen`) aren't printed again: the row's own location says where they are.
+fn cite_text(out: &mut String, indent: &str, cite: Option<&kc_store::answer::Cite>, seen: &mut std::collections::HashSet<String>) {
+    let Some(c) = cite else { return };
+    if c.text.is_some() && !seen.insert(format!("{}|{}", c.repo.as_deref().unwrap_or(""), c.at)) {
+        return;
+    }
+    let first: u32 = c.at.rsplit_once(':').and_then(|(_, l)| l.split('-').next()).and_then(|l| l.parse().ok()).unwrap_or(0);
+    for (i, line) in c.text.as_deref().unwrap_or("").lines().enumerate() {
+        w!(out, "{indent}  {:>4} | {line}", first as usize + i);
+    }
+    if let Some(cut) = &c.cut {
+        w!(out, "{indent}       … {cut}");
+    }
+}
+
+/// [`cite_text`], printed.
+fn print_cite(indent: &str, cite: Option<&kc_store::answer::Cite>) {
+    let mut out = String::new();
+    cite_text(&mut out, indent, cite, &mut std::collections::HashSet::new());
+    print!("{out}");
+}
+
 fn loc(root: Option<&Path>, file: &str, line: u32) -> String {
     match root {
         Some(r) => format!("{}/{file}:{line}", repo_name(r)),
@@ -235,6 +259,7 @@ pub fn refs(name: &str, items: &[(PathBuf, RefHit)], total: usize, by_conf: &BTr
     println!("{total} references to {name} ({})", confidence_line(by_conf));
     for (root, h) in items {
         println!("{}", ref_line(multi.then_some(root.as_path()), h));
+        print_cite("", h.cite.as_ref());
     }
     if total > items.len() {
         println!("… {} more (raise --limit)", total - items.len());
@@ -316,6 +341,7 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
         if let Some(code) = &h.code {
             println!("      {code}");
         }
+        print_cite("  ", h.cite.as_ref());
     }
     if summary.total > c.callers.len() {
         println!("  … {} more (knowcode refs {})", summary.total - c.callers.len(), s.name);
@@ -324,6 +350,7 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
         println!("callees ({}):", c.callees_total);
         for h in &c.callees {
             println!("  {}", ref_line(r, h));
+            print_cite("  ", h.cite.as_ref());
         }
         if c.callees_total > c.callees.len() {
             println!("  … {} more", c.callees_total - c.callees.len());
@@ -576,6 +603,7 @@ pub fn manifest_hits(hits: &[ManifestHit]) {
 pub fn trace_text(root: &Path, t: &kc_store::trace::Trace, multi: bool) -> String {
     let r = multi.then_some(root);
     let mut out = String::new();
+    let mut seen = std::collections::HashSet::new();
     for (dir, label) in [("", ""), ("out", "reaches (out):"), ("in", "reached by (in):")] {
         let nodes: Vec<&kc_store::trace::TraceNode> = t.nodes.iter().filter(|n| n.direction == dir).collect();
         if nodes.is_empty() {
@@ -607,6 +635,7 @@ pub fn trace_text(root: &Path, t: &kc_store::trace::Trace, multi: bool) -> Strin
             let site = n.site.as_deref().map(|s| format!(" at {}", in_repo(site_repo, s))).unwrap_or_default();
             let binding = n.binding.as_deref().map(|b| format!(" (bound at {b})")).unwrap_or_default();
             w!(out, "{indent}{tag}{} {}  {}{conf}{site}{binding}", kw(&n.kind, &n.file), n.qualified, loc_in(r, n.repo.as_deref(), &n.file, n.line));
+            cite_text(&mut out, &indent, n.cite.as_ref(), &mut seen);
         }
     }
     if t.nodes.len() == 1 {
@@ -690,6 +719,7 @@ fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
 /// symbol it was reached from, in the answer's order), then cross-repo references, coupled files and warnings.
 pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
     let mut out = String::new();
+    let mut seen = std::collections::HashSet::new();
     if repos.is_empty() {
         w!(out, "nothing to analyse: no symbol, file or change matched in the repos searched");
     }
@@ -732,7 +762,7 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
             children.entry((a.via.as_str(), a.hop.saturating_sub(1))).or_default().push(k);
         }
         let mut shown = vec![false; i.affected.len()];
-        let tree = |out: &mut String, start: &str, shown: &mut Vec<bool>| {
+        let tree = |out: &mut String, start: &str, shown: &mut Vec<bool>, seen: &mut std::collections::HashSet<String>| {
             let mut stack: Vec<(usize, usize)> = Vec::new();
             let push = |stack: &mut Vec<(usize, usize)>, key: (&str, u8), depth: usize, shown: &[bool]| {
                 if let Some(kids) = children.get(&key) {
@@ -747,6 +777,7 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
                 shown[k] = true;
                 let a = &i.affected[k];
                 w!(out, "{}{}", "  ".repeat(d), affected_line(root, a));
+                cite_text(out, &"  ".repeat(d), a.cite.as_ref(), seen);
                 push(&mut stack, (a.qualified.as_str(), a.hop), d + 1, shown);
             }
         };
@@ -756,13 +787,14 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
                 continue;
             }
             w!(out, "{} {}  {}", kw(&s.kind, &s.file), s.qualified, loc(root, &s.file, s.line));
-            tree(&mut out, &s.qualified, &mut shown);
+            cite_text(&mut out, "", s.cite.as_ref(), &mut seen);
+            tree(&mut out, &s.qualified, &mut shown, &mut seen);
         }
         // Definitions the change removed, with the code still naming them under each.
         let at = r.base.as_deref().map(|b| &b[..b.len().min(10)]).unwrap_or("base");
         for g in &r.removed {
             w!(out, "removed {} {}  {} at {at}  [{} still name it]", g.kind, g.qualified, loc(root, &g.file, g.line), g.named_by.len());
-            tree(&mut out, &g.qualified, &mut shown);
+            tree(&mut out, &g.qualified, &mut shown, &mut seen);
             // Reached from a changed symbol first, so listed under it; named here too.
             for n in g.named_by.iter().filter(|n| !i.affected.iter().any(|a| a.via_removed && a.via == g.qualified && a.qualified == n.qualified)) {
                 w!(out, "  names it {}  {}  [{}] at {} (also listed above)", n.qualified, loc(root, &n.file, n.line), n.confidence, n.site);
@@ -779,11 +811,13 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         for (k, a) in i.affected.iter().enumerate() {
             if !shown[k] {
                 w!(out, "  {}  (via {})", affected_line(root, a), a.via);
+                cite_text(&mut out, "  ", a.cite.as_ref(), &mut seen);
             }
         }
         for h in &r.cross_repo {
             let class = if kc_store::is_test_path(&h.file) { "test" } else { "direct" };
             w!(out, "  {class:<8} cross-repo {}", ref_line(root, h));
+            cite_text(&mut out, "  ", h.cite.as_ref(), &mut seen);
         }
         for c in &r.coupled {
             w!(
@@ -1823,6 +1857,7 @@ fn kw<'a>(kind: &'a str, file: &str) -> &'a str {
 /// Paths as indented chains: each step under the one before, with the relation reaching it.
 pub fn path_text(a: &crate::walk::PathAnswer) -> String {
     let mut out = String::new();
+    let mut seen = std::collections::HashSet::new();
     // A name meaning several definitions: say which were tried, never pick one silently.
     for (side, c) in [("from", &a.from_candidates), ("to", &a.to_candidates)] {
         if !c.is_empty() {
@@ -1854,8 +1889,13 @@ pub fn path_text(a: &crate::walk::PathAnswer) -> String {
             let indent = "  ".repeat(j + 1);
             if j > 0 {
                 w!(out, "{indent}↳ {}", step_edge(s, &p.steps[j - 1].repo));
+                // The edge's site, under the edge.
+                cite_text(&mut out, &indent, s.cite.as_ref(), &mut seen);
             }
             w!(out, "{indent}{}", step_line(s, s.repo != repo));
+            if j == 0 {
+                cite_text(&mut out, &indent, s.cite.as_ref(), &mut seen);
+            }
             repo = &s.repo;
         }
     }
@@ -1877,12 +1917,14 @@ pub fn path(a: &crate::walk::PathAnswer) {
 /// A flow as a tree of numbered steps grouped by repo, each with the relation reaching it.
 pub fn flow_text(entry: &str, f: Option<&crate::flow::Flow>) -> String {
     let mut out = String::new();
+    let mut seen = std::collections::HashSet::new();
     let Some(f) = f else {
         w!(out, "no Angular route, component or definition named {entry} in the repos searched");
         return out;
     };
     let route = f.route.as_ref().map(|r| format!("route {} → ", r.path)).unwrap_or_default();
     w!(out, "flow from {route}{}", step_line(&f.start, true));
+    cite_text(&mut out, "", f.start.cite.as_ref(), &mut seen);
     let left: Vec<String> = f.left_out.iter().map(|(k, n)| format!("{n} {k}")).collect();
     let left = if left.is_empty() { String::new() } else { format!("; left out: {}", left.join(", ")) };
     let hidden: Vec<String> = f.hidden.iter().map(|(k, n)| format!("{n} {k}")).collect();
@@ -1902,6 +1944,7 @@ pub fn flow_text(entry: &str, f: Option<&crate::flow::Flow>) -> String {
         w!(out, "{indent}step {} of {n}  {} {}  {}:{}", s.index, kw(&s.step.kind, &s.step.file), s.step.qualified, s.step.file, s.step.line);
         let from = s.parent.and_then(|i| f.steps.get(i - 1)).map_or(f.start.repo.as_str(), |p| p.step.repo.as_str());
         w!(out, "{indent}  ↳ {}", step_edge(&s.step, from));
+        cite_text(&mut out, &indent, s.step.cite.as_ref(), &mut seen);
     }
     if f.truncated {
         w!(out, "… truncated at the step limit (raise --limit or --max-repos, or lower --depth)");
@@ -2109,6 +2152,7 @@ mod tests {
             via_di_any: Vec::new(),
             usage: None,
             ctors: None,
+            cite: None,
             args: None,
             arg_types: None,
             assigns: false,

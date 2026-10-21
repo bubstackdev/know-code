@@ -105,6 +105,9 @@ pub struct Flow {
     /// what a deeper flow would grow.
     #[serde(skip_serializing_if = "is_zero")]
     pub at_depth_limit: usize,
+    /// What the answer's `incomplete` says about its cites (see [`crate::cite::Citer::incomplete`]).
+    #[serde(skip)]
+    pub cite_notes: Vec<kc_store::answer::Incomplete>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -496,14 +499,18 @@ pub fn flow_in(g: &mut Graph, entry: &str, opts: &FlowOptions) -> Result<Option<
     w.grow(None, 0, sources, owners, kids, 0)?;
     let at_depth_limit = w.cuts;
     let (steps, left_out, hidden, truncated) = (w.steps, w.left_out, w.hidden, w.truncated || g.repo_limit());
-    let start = Step::at(g, 0, &start);
+    let mut start = Step::at(g, 0, &start);
+    let mut steps = steps;
+    let mut citer = crate::cite::Citer::new(g.roots().to_vec());
+    citer.flow(&mut start, &mut steps);
+    let cite_notes = citer.incomplete();
     let mut repos = vec![start.repo.clone()];
     for s in &steps {
         if !repos.contains(&s.step.repo) {
             repos.push(s.step.repo.clone());
         }
     }
-    Ok(Some(Flow { entry: entry.to_string(), route, start, steps, repos, left_out, hidden, truncated, at_depth_limit }))
+    Ok(Some(Flow { entry: entry.to_string(), route, start, steps, repos, left_out, hidden, truncated, at_depth_limit, cite_notes }))
 }
 
 /// `knowcode flow`: what happens end to end from `entry` in the queried repo.
@@ -526,6 +533,9 @@ pub fn flow(entry: &str, opts: &FlowOptions, args: &Scope) -> Result<Out<Option<
         env["truncated"] = serde_json::json!(true);
     }
     ops::report_policy(&mut env, &opts.edges);
+    for i in found.iter().flat_map(|f| f.cite_notes.clone()) {
+        ops::push_incomplete(&mut env, i);
+    }
     ops::finish(&mut env);
     Ok(Out { env, data: found })
 }

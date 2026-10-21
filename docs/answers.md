@@ -140,6 +140,36 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 `exact` is a statement about how a name was resolved, not a measured probability. A syntactic `exact` still rests on
 the assumptions listed beside it.
 
+## Cited source
+
+Every row that gives a location quotes the source lines it rests on, read from the working tree when the answer is
+built, in `cite`. That covers `trace` nodes, `impact` rows (and its changed symbols and cross-repo references),
+`path` and `flow` steps, `refs` items, and a `context`'s callers and callees.
+
+- For a row reached by an edge, `cite` quotes the edge's site: the call, the request, the publish (1 line).
+- For a row reached without one (a walk's start, a path's ends, an impact's changed symbols), it quotes the
+  declaration: the line naming it, or under `cite: lines` from its first line (an attribute or decorator) through
+  that line (at most 3 lines).
+- `cite` is `{at, text, cut, repo}`. `at` is `file:line` or `file:start-end` for the lines quoted. `text` is those
+  lines with their common indentation removed. `repo` is present when the lines are in another repo than the row's,
+  such as a bus hop's publish in the publisher's repo.
+- By default (`cite: brief`) the first 12 cites, in the answer's order, quote one line each, up to 120 characters.
+  The rest give `at` only, and the answer is incomplete with reason `capped`: `cite text: 12 of 30 cites quote their
+  line; the other 18 give only where it is`. `cite: lines` quotes every row, each line up to 160 characters.
+- When a cap leaves something out, `cut` says what: `line 12 cut at 120 of 412 characters`, or (under `cite: lines`)
+  `the declaration goes on past line 9`. When nothing could be quoted, `text` is absent and `cut`
+  says why: the file is gone from the working tree, the line is past its end, it couldn't be read, or an [AI privacy
+  file](configuration.md#privacy-file) blocks it.
+
+The text trees of `kc_trace`, `kc_impact`, `kc_path` and `kc_flow`, and the CLI's text, print the quoted lines under
+each row, numbered (`   4 | this.log.info('placing');`). A `context`'s callers used to carry their line as `code`;
+they now quote it in `cite`, and `code` remains only under `cite: none`.
+
+Over MCP, a cite leaves out `at` when it is the place the row already gives (its `site`, else its own `file` and
+`line`). `--cite lines` (MCP `cite: "lines"`) quotes every row in full. `--cite none` (MCP `cite: "none"`) leaves `cite`
+out: locations only. A cursor's pages quote their rows the way the
+first answer did.
+
 ## Evidence policy
 
 `trace`, `impact`, `path`, `flow` and `tests` take `--evidence` (MCP `evidence`): which edges to follow, by what

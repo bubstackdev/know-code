@@ -268,12 +268,12 @@ Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not re
 | `find` | `-k/--kind`, `-n/--limit` |
 | `locate` | `-n/--limit` |
 | `at` | |
-| `refs` | `-k/--kind` (alias `--edges`), `-n/--limit` |
-| `context` | `--budget`, `--source full\|skeleton\|none\|auto`, `--limit` (rows per list of a repo's deploy answer) |
-| `trace` | `-d/--direction in\|out\|both`, `--depth`, `-n/--limit`, `--edges`, `--kinds`, `--evidence` |
-| `path` | `--to-repo`, `--max-hops`, `-n/--paths`, `--max-nodes`, `--max-repos`, `--allow-ambiguous`, `--edges`, `--evidence` |
-| `flow` | `--depth`, `-n/--limit`, `--max-repos`, `--edges`, `--children`, `--evidence` |
-| `impact` | `--file`, `--diff`, `--depth`, `-n/--limit`, `--order rank\|hop`, `--as-of`, `--since`, `--edges`, `--kinds`, `--evidence` |
+| `refs` | `-k/--kind` (alias `--edges`), `-n/--limit`, `--cite brief\|lines\|none` |
+| `context` | `--budget`, `--source full\|skeleton\|none\|auto`, `--limit` (rows per list of a repo's deploy answer), `--cite brief\|lines\|none` |
+| `trace` | `-d/--direction in\|out\|both`, `--depth`, `-n/--limit`, `--edges`, `--kinds`, `--evidence`, `--cite brief\|lines\|none` |
+| `path` | `--to-repo`, `--max-hops`, `-n/--paths`, `--max-nodes`, `--max-repos`, `--allow-ambiguous`, `--edges`, `--evidence`, `--cite brief\|lines\|none` |
+| `flow` | `--depth`, `-n/--limit`, `--max-repos`, `--edges`, `--children`, `--evidence`, `--cite brief\|lines\|none` |
+| `impact` | `--file`, `--diff`, `--depth`, `-n/--limit`, `--order rank\|hop`, `--as-of`, `--since`, `--edges`, `--kinds`, `--evidence`, `--cite brief\|lines\|none` |
 | `unused` | `-k/--kind`, `--tier unused\|possibly\|all`, `-n/--limit` |
 | `rename` | `--allow-ambiguous` |
 | `coupled` | `-n/--limit`, `--as-of`, `--since` |
@@ -299,7 +299,8 @@ Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not re
 | `uninstall` | `--delete-config`, `--delete-notes` |
 | `self-update` | `--check` |
 
-The `--evidence` flag is also accepted as `--min-evidence`. `--as-of` takes a commit or date for `coupled` and
+`--cite` (MCP `cite`) says how much rows quote of the source lines they rest on ([cited
+source](answers.md#cited-source)): `brief` (the default), `lines` or `none`. The `--evidence` flag is also accepted as `--min-evidence`. `--as-of` takes a commit or date for `coupled` and
 `impact`, and unix seconds, `YYYY-MM-DD` or `head` for `hotspots`, `ownership` and `reviewers`.
 
 ## Precise references from SCIP

@@ -1340,6 +1340,11 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         }
     }
     items.truncate(limit);
+    let mut citer = crate::cite::Citer::new(opened.iter().map(|o: &Opened| o.root.clone()));
+    for (root, h) in &mut items {
+        citer.refs(root, std::iter::once(h));
+    }
+    let cite_notes = citer.incomplete();
     // A hit from another repo (a dependent, a play using a role, a module call) keeps that repo.
     let list: Vec<_> = items
         .iter()
@@ -1352,6 +1357,9 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
         })
         .collect();
     let mut env = workspace_envelope(&opened, workspace, json!(list), total, items.len());
+    for i in cite_notes {
+        push_incomplete(&mut env, i);
+    }
     for i in unread_imports {
         push_incomplete(&mut env, i);
     }
@@ -2482,7 +2490,17 @@ pub fn context_raised(
             let n = ctx.conformers_elsewhere.len();
             ctx.conformers_elsewhere_total = (n > elsewhere_max).then_some(n);
             ctx.conformers_elsewhere.truncate(elsewhere_max);
-            if source != kc_store::skeleton::SourceMode::None {
+            // Each caller and callee quotes its line; without cites, callers show it as `code`.
+            let mut citer = crate::cite::Citer::new(std::iter::once(o.root.clone()).chain(deps.iter().map(|d| d.root.clone())));
+            if citer.on() {
+                citer.refs(&o.root, ctx.callers.iter_mut().chain(ctx.callees.iter_mut()));
+                unread.extend(citer.incomplete());
+                for h in &mut ctx.callers {
+                    if h.cite.as_ref().is_some_and(|c| c.text.is_some()) {
+                        h.code = None;
+                    }
+                }
+            } else if source != kc_store::skeleton::SourceMode::None {
                 fill_call_lines(&o.root, &mut ctx.callers);
             }
             // No resolved caller of a callable: say so, and how many references by its name resolve elsewhere.
@@ -2869,6 +2887,7 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
     let mut hidden = Vec::new();
     let mut ci_cuts: Vec<Vec<String>> = Vec::new();
     let mut frontiers: Vec<(Vec<trace::Frontier>, usize)> = Vec::new();
+    let mut cite_notes: Vec<Incomplete> = Vec::new();
     for root in &roots {
         let Some(mut o) = open_member(&roots, root, args.no_sync)? else { continue };
         let mut t = trace::trace_filtered(o.store.conn(), symbol, &opts, &edges)?;
@@ -2892,6 +2911,9 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
             let budget = if t.truncated { 0 } else { FRONTIER_CHECKS };
             frontiers.push(crossing.frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?);
             ci_cuts.push(std::mem::take(&mut crossing.ci_cut));
+            let mut citer = crate::cite::Citer::new(crossing.roots());
+            citer.trace(&o.root, &mut t);
+            cite_notes.extend(citer.incomplete());
             drop(crossing);
             hidden.push(if kinds.is_empty() { 0 } else { t.retain_kinds(|k| WalkFilter::keeps(&kinds, k)) });
             found.push((o.root.clone(), t));
@@ -2930,6 +2952,9 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
         env["truncated"] = json!(true);
     }
     report_policy(&mut env, &edges);
+    for i in cite_notes {
+        push_incomplete(&mut env, i);
+    }
     let walked = depth.clamp(1, trace::MAX_TRACE_DEPTH);
     if depth > trace::MAX_TRACE_DEPTH {
         // The tree is cut at its deepest: said, and its frontier named below.
@@ -3205,6 +3230,7 @@ fn conformer_hits(target: &query::SymbolRow, target_repo: &str, found: Vec<query
                 via_di_any: Vec::new(),
                 usage: None,
                 ctors: None,
+                cite: None,
                 args: None,
                 arg_types: None,
                 assigns: false,
@@ -3263,6 +3289,7 @@ fn role_refs_elsewhere(o: &Opened, name: &str, no_sync: bool) -> Result<Vec<quer
                 via_di_any: Vec::new(),
                 usage: None,
                 ctors: None,
+                cite: None,
                 args: None,
                 arg_types: None,
                 assigns: false,
@@ -3500,6 +3527,11 @@ impl<'a> HttpCrossing<'a> {
     /// Repos open, the home repo included.
     pub(crate) fn opened(&self) -> usize {
         self.stores.len() + 1
+    }
+
+    /// The roots of the repos open, the home repo first.
+    pub(crate) fn roots(&self) -> Vec<PathBuf> {
+        std::iter::once(self.home.root.clone()).chain(self.stores.iter().map(|(r, _)| r.clone())).collect()
     }
 
     /// The crossings from `qualified` (symbol `id`, defined in `file` of the repo at `root`, which is open) of the edge
@@ -3947,6 +3979,7 @@ impl<'a> HttpCrossing<'a> {
                         copies: Vec::new(),
                         via_removed: false,
                         evidence: arrival.evidence.clone(),
+                        cite: None,
                     };
                     if grow {
                         // At the depth asked for, it is where the walk stops.
@@ -4759,6 +4792,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         bail!("give exactly one of symbol, file or diff");
     }
     let mut stale_rank: Vec<Incomplete> = Vec::new();
+    let mut cite_notes: Vec<Incomplete> = Vec::new();
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
     let mut found = Vec::new();
@@ -4872,6 +4906,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         let (frontier, frontier_unchecked) =
             crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
+        let cite_roots = crossing.roots();
         drop(crossing);
         let registrations = registrations_on_path(conn, &impact)?;
         if impact.affected.iter().any(|a| kc_store::sql::is_sql_path(&a.file)) {
@@ -4975,6 +5010,10 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         } else {
             Vec::new()
         };
+        let mut citer = crate::cite::Citer::new(cite_roots);
+        citer.impact(&o.root, &mut impact);
+        citer.refs(&o.root, cross_repo.iter_mut());
+        cite_notes.extend(citer.incomplete());
         found.push(ImpactRepo {
             root: o.root.clone(),
             impact,
@@ -5058,7 +5097,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
     if let Some(f) = p.filter.describe() {
         env["filter"] = f;
     }
-    for i in stale_rank {
+    for i in stale_rank.into_iter().chain(cite_notes) {
         push_incomplete(&mut env, i);
     }
     for r in found.iter().filter(|r| r.cross_repo_unchecked > 0) {
@@ -9786,8 +9825,14 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         assert!(src.contains("var saved = _s.Save();") && src.contains("return saved;") && src.contains("throw new System.Exception"), "{src}");
         assert!(!src.contains("var v7 = n * 7;") && src.contains('…'), "{src}");
         assert!(item["source_lines"].as_str().unwrap().starts_with("9-10,"), "{}", item["source_lines"]);
-        // Callers carry their line.
-        assert_eq!(item["callers"][0]["code"], "public void Run() { _w.Work(2); }");
+        // Callers quote their line, cited; without cites, as `code`.
+        assert_eq!(item["callers"][0]["cite"]["text"], "public void Run() { _w.Work(2); }");
+        assert!(item["callers"][0].get("code").is_none(), "{}", item["callers"][0]);
+        kc_store::limits::current().set_cite(kc_store::answer::CiteMode::None);
+        let c = context("Worker.Work", 2000, SourceMode::Skeleton, &scope).unwrap();
+        kc_store::limits::current().set_cite(kc_store::answer::CiteMode::default());
+        assert_eq!(c.env["items"][0]["callers"][0]["code"], "public void Run() { _w.Work(2); }");
+        assert!(c.env["items"][0]["callers"][0].get("cite").is_none());
 
         // Auto: the long method is a skeleton, the short one full; none leaves the source out.
         let c = context("Worker.Work", 2000, SourceMode::Auto, &scope).unwrap();

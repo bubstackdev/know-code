@@ -103,6 +103,8 @@ pub struct Operation {
     left_out: Mutex<Vec<crate::answer::Incomplete>>,
     /// Gone checkouts that would have mattered to the answer.
     missing: Mutex<Vec<PathBuf>>,
+    /// Whether the answer's rows quote the lines they rest on (see [`crate::answer::Cite`]).
+    cite: Mutex<crate::answer::CiteMode>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -144,6 +146,16 @@ impl Operation {
     /// Sets [`Operation::freshness_deadline`]; returns the one it replaces.
     pub fn set_freshness_deadline(&self, deadline: Option<Instant>) -> Option<Instant> {
         std::mem::replace(&mut *lock(&self.freshness), deadline)
+    }
+
+    /// Whether the answer's rows quote the lines they rest on; [`crate::answer::CiteMode::Lines`] unless set.
+    pub fn cite(&self) -> crate::answer::CiteMode {
+        *lock(&self.cite)
+    }
+
+    /// Sets [`Operation::cite`] for the rest of the query.
+    pub fn set_cite(&self, mode: crate::answer::CiteMode) {
+        *lock(&self.cite) = mode;
     }
 
     /// Records that the answer leaves a repo out, as `entry` says.

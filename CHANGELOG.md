@@ -26,6 +26,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `kc_impact` and `kc_search`, and the plugin's skill descriptions now lead with the questions they answer ("who calls
   or uses", "where is", "what breaks if"). None is longer than before.
 - The clean-machine acceptance report adds `knowcode-use.json`: KnowCode calls per case and session, by tool.
+- Cited source: every row that gives a location (`trace` nodes, `impact` rows, `path` and `flow` steps, `refs` items,
+  a `context`'s callers and callees) carries `cite`, the source lines it rests on, read from the working tree when
+  the answer is built: an edge's site, else the line naming a declaration. By default (`cite: brief`) the first 12
+  rows quote one line each, up to 120 characters, and the rest give where it is, with a `capped` entry saying so.
+  `--cite lines` (MCP `cite: "lines"`) quotes every row, a declaration from its first line through its name (at most
+  3), each line up to 160 characters; `cut` says what a cap left out. `--cite none` leaves them out. Text trees print
+  the lines under each row. A `context`'s callers quote their line in `cite` instead of `code`, which remains under
+  `cite: none`.
 
 ## 0.1.1 (2026-10-20)
 

@@ -157,6 +157,13 @@ struct Query {
     repos: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     no_sync: bool,
+    /// Whether rows quote their lines (see `kc_store::answer::CiteMode`), when not the default.
+    #[serde(default, skip_serializing_if = "is_default")]
+    cite: kc_store::answer::CiteMode,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 /// How a list's next page is made.
@@ -256,7 +263,7 @@ pub fn offer(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, ext
         .into_iter()
         .map(|l| (l.ptr.clone(), ListState { l: l.ptr, o0: l.start, b: l.start, h0: FNV_BASIS, n: l.n, k: None, more: l.more }))
         .collect();
-    let r = Resume { q: Query { req, repos: scope.repos.clone(), no_sync: scope.no_sync }, g, lists };
+    let r = Resume { q: Query { req, repos: scope.repos.clone(), no_sync: scope.no_sync, cite: kc_store::limits::current().cite() }, g, lists };
     stamp(env, &r);
     env[FIELD] = json!(r);
 }
@@ -502,6 +509,8 @@ enum Raise {
 /// Runs the request, its limits raised as `raise` says. The envelope keeps its `_resume`.
 fn run(q: &Query, raise: Raise) -> Result<Value> {
     let scope = Scope { repos: q.repos.clone(), no_sync: q.no_sync };
+    // A page quotes its rows as the first answer did.
+    kc_store::limits::current().set_cite(q.cite);
     let up = |limit: usize| match raise {
         Raise::Upto(n) => limit.max(n),
         Raise::All => usize::MAX,
@@ -1210,7 +1219,7 @@ mod tests {
             assert_eq!(unb64(&b64(s.as_bytes())).unwrap(), s.as_bytes());
         }
         let c = Cursor {
-            q: Query { req: Request::Refs { name: "go".into(), kinds: Vec::new(), limit: 5 }, repos: vec!["/r".into()], no_sync: false },
+            q: Query { req: Request::Refs { name: "go".into(), kinds: Vec::new(), limit: 5 }, repos: vec!["/r".into()], no_sync: false, cite: Default::default() },
             g: vec!["0011aabb".into()],
             l: "/items".into(),
             o: 5,

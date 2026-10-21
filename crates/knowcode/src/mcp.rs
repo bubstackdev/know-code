@@ -99,6 +99,9 @@ pub struct RefsParams {
     /// References (default 20).
     #[serde(default)]
     pub limit: Option<usize>,
+    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    #[serde(default)]
+    pub cite: Option<String>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -120,6 +123,9 @@ pub struct ContextParams {
     /// A repo's deploy answer: rows per list (default all that fit).
     #[serde(default)]
     pub limit: Option<usize>,
+    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    #[serde(default)]
+    pub cite: Option<String>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -155,6 +161,9 @@ pub struct WalkParams {
     /// Evidence policy (kc_help evidence).
     #[serde(default)]
     pub evidence: Option<String>,
+    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    #[serde(default)]
+    pub cite: Option<String>,
     /// `tree` (default) or `json`.
     #[serde(default)]
     pub format: Option<String>,
@@ -204,6 +213,9 @@ pub struct PathParams {
     /// Evidence policy (kc_help evidence).
     #[serde(default)]
     pub evidence: Option<String>,
+    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    #[serde(default)]
+    pub cite: Option<String>,
     /// `tree` (default) or `json`.
     #[serde(default)]
     pub format: Option<String>,
@@ -233,6 +245,9 @@ pub struct FlowParams {
     /// Levels of template children to follow (default 2).
     #[serde(default)]
     pub children: Option<u8>,
+    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    #[serde(default)]
+    pub cite: Option<String>,
     /// `tree` (default) or `json`.
     #[serde(default)]
     pub format: Option<String>,
@@ -1331,6 +1346,16 @@ fn shrink(v: &mut Value) -> Option<String> {
 }
 
 
+/// The cite mode a `cite` parameter asks for (see [`kc_store::answer::CiteMode`]).
+fn cite_mode(cite: Option<&str>) -> Result<kc_store::answer::CiteMode, String> {
+    cite.unwrap_or_default().parse()
+}
+
+/// Sets the cite mode for the query the thread runs.
+fn cite(mode: kc_store::answer::CiteMode) {
+    kc_store::limits::current().set_cite(mode);
+}
+
 /// Reference kinds from `kinds` and `edges` (edge names map to reference kinds: calls → call, uses → type_ref).
 fn ref_kinds(kinds: &[String], edges: &[String]) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = kinds.iter().flat_map(|k| k.split(',')).map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect();
@@ -1460,7 +1485,9 @@ impl KnowcodeServer {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
         let kinds = ref_kinds(&p.kinds, &p.edges)?;
+        let mode = cite_mode(p.cite.as_deref())?;
         let refs = move |name: &str| -> anyhow::Result<Value> {
+            cite(mode);
             let what = format!("no reference to {name}{}", if kinds.is_empty() { String::new() } else { format!(" of kind {}", kinds.join(", ")) });
             Ok(explain(ops::refs(name, &kinds, limit, &scope)?.env, &what, "limit"))
         };
@@ -1479,7 +1506,9 @@ impl KnowcodeServer {
         // Several symbols share the budget; each still gets enough for a useful bundle.
         let budget = (p.budget.unwrap_or(1200) / n).max(600);
         let limit = p.limit;
+        let mode = cite_mode(p.cite.as_deref())?;
         let context = move |sym: &str| -> anyhow::Result<Value> {
+            cite(mode);
             let what = format!("no definition or table named {sym}");
             Ok(explain(ops::context_limited(sym, budget, source, limit, &scope)?.env, &what, ""))
         };
@@ -1505,7 +1534,11 @@ impl KnowcodeServer {
         let asked = p.depth.unwrap_or(1).max(1);
         let depth = asked.min(kc_store::trace::MAX_TRACE_DEPTH);
         let limit = p.limit.unwrap_or(25);
-        let trace = move || ops::trace(&p.symbol, &dir, asked, limit, &filter, &scope);
+        let mode = cite_mode(p.walk.cite.as_deref())?;
+        let trace = move || {
+            cite(mode);
+            ops::trace(&p.symbol, &dir, asked, limit, &filter, &scope)
+        };
         // Whether a node at the last depth leads further (a confident edge the walk would expand).
         let deeper = move |t: &kc_store::trace::Trace| t.nodes.iter().any(|n| n.depth == depth && matches!(n.confidence, "exact" | "unique_name"));
         if tree {
@@ -1556,7 +1589,9 @@ impl KnowcodeServer {
             None => None,
         };
         let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
+        let mode = cite_mode(p.cite.as_deref())?;
         let path = move || {
+            cite(mode);
             let opts = crate::walk::PathOptions {
                 max_hops: p.max_hops.unwrap_or(8),
                 max_nodes: p.max_nodes.unwrap_or(2000).max(1),
@@ -1602,7 +1637,9 @@ impl KnowcodeServer {
         let scope = self.scope(&p.common, false)?;
         let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
         let entry = p.entry.clone();
+        let mode = cite_mode(p.cite.as_deref())?;
         let flow = move || {
+            cite(mode);
             let opts = crate::flow::FlowOptions {
                 depth: p.depth.unwrap_or(10).clamp(1, 16),
                 max_steps: p.limit.unwrap_or(40),
@@ -1642,6 +1679,7 @@ impl KnowcodeServer {
         let scope = self.scope(&p.common, false)?;
         let tree = p.walk.tree()?;
         let order: ops::ImpactOrder = p.order.as_deref().unwrap_or("rank").parse().map_err(|e| format!("{e:#}"))?;
+        let mode = cite_mode(p.walk.cite.as_deref())?;
         let what = match (&p.symbol, &p.file, &p.diff) {
             (Some(s), _, _) => format!("no definition named {s}"),
             (_, Some(f), _) => format!("no indexed file {f}"),
@@ -1661,6 +1699,7 @@ impl KnowcodeServer {
         };
         if tree {
             run_text(p.common.max_chars, move || {
+                cite(mode);
                 let out = ops::impact(&params, &scope)?;
                 let mut text = crate::render::impact_text(&out.data, out.data.len() > 1);
                 if out.data.is_empty() {
@@ -1673,6 +1712,7 @@ impl KnowcodeServer {
             .await
         } else {
             run(p.common.max_chars, move || {
+                cite(mode);
                 let out = ops::impact(&params, &scope)?;
                 let mut env = explain(out.env, &what, "");
                 let mut hints = Vec::new();
@@ -2414,7 +2454,7 @@ mod tests {
         let v: Value = serde_json::from_str(&rt.block_on(s.kc_refs(p(json!({ "name": "Audit.Log" })))).unwrap()).unwrap();
         let shown = v["items"].as_array().unwrap();
         assert_eq!((shown.len(), v["total"].as_u64(), v["complete"].as_bool()), (20, Some(40), Some(false)), "{v}");
-        let capped = v["incomplete"].as_array().unwrap().iter().find(|i| i["reason"] == "capped").expect("a capped entry");
+        let capped = v["incomplete"].as_array().unwrap().iter().find(|i| i["reason"] == "capped" && i["detail"].as_str().unwrap().starts_with("items")).expect("a capped entry");
         assert!(capped["detail"].as_str().unwrap().contains("20 of 40") && capped["hint"].as_str().unwrap().contains("kc_more"), "{v}");
         assert_eq!(v["targets"][0]["qualified"], "Audit.Log", "{v}");
         assert!(shown.iter().all(|r| r["from"].as_str().is_some_and(|f| f.ends_with(".Run")) && r.get("col").is_none()), "{v}");
@@ -2457,6 +2497,46 @@ mod tests {
         // A prefix of another file's name isn't the same file.
         let prefix = "  used by method A.b  src/a.cs:10  [exact] direct at a.cs:12";
         assert_eq!(lean_site(prefix), prefix);
+    }
+
+    /// Every tool listing locations quotes the lines under them (`cite`), unless the call says `cite: none`; the mode
+    /// holds for the call's query alone.
+    #[test]
+    fn answers_quote_their_lines_unless_the_call_says_cite_none() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-cite");
+        let root = crate::ops::tests::repo(
+            &base,
+            "shop",
+            &[
+                ("src/Audit.cs", "public static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/Checkout.cs", "public class Checkout\n{\n    public void Run() { Audit.Log(); }\n}\n"),
+            ],
+        );
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("all") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let quoted = "3 | public void Run() { Audit.Log(); }";
+        let (tree, bare, refs, refs_bare, bad) = rt.block_on(async {
+            (
+                s.kc_trace(p(json!({ "symbol": "Audit.Log" }))).await.unwrap(),
+                s.kc_trace(p(json!({ "symbol": "Audit.Log", "cite": "none" }))).await.unwrap(),
+                s.kc_refs(p(json!({ "name": "Log" }))).await.unwrap(),
+                s.kc_refs(p(json!({ "name": "Log", "cite": "none" }))).await.unwrap(),
+                s.kc_flow(p(json!({ "entry": "Checkout.Run", "cite": "all" }))).await,
+            )
+        });
+        assert!(tree.contains(quoted), "{tree}");
+        assert!(!bare.contains(" | "), "{bare}");
+        let refs: Value = serde_json::from_str(&refs).unwrap();
+        assert_eq!(refs["items"][0]["cite"]["text"], "public void Run() { Audit.Log(); }", "{refs}");
+        // The row says where already: the compact cite doesn't repeat it.
+        assert!(refs["items"][0]["cite"].get("at").is_none(), "{refs}");
+        assert!(!refs_bare.contains("\"cite\""), "{refs_bare}");
+        assert_eq!(bad.unwrap_err(), "cite must be brief, lines or none, not all");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn runtime() -> tokio::runtime::Runtime {
