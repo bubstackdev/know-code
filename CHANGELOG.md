@@ -63,6 +63,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - Razor files (`.razor`, `.cshtml`) aren't read. A C# `refs` or `impact` answer from a repo holding any is now
   incomplete with reason `unsupported`, naming one and saying their markup's uses aren't listed, with a `kc_search`
   hint, instead of looking complete.
+- The pre-registered public agent study measured this release's candidate (commit 00aae5b): it missed 2 of its 4
+  criteria (re-check rate, tokens) and met 2 (answer F1 and recall, unprompted use). See
+  [eval/public-v1/results.md](eval/public-v1/results.md).
 
 ## 0.1.1 (2026-10-20)
 
