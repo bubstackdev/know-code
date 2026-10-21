@@ -177,5 +177,4 @@ project's private-vocabulary list, which every public commit is checked against.
 and every total and criterion in the two final files, was computed from the full per-session data before the rows
 were removed. The baseline files keep their per-session rows.
 
-Raw transcripts contain build-machine paths, so they aren't published; they are available on request with those
-paths removed.
+Raw transcripts contain build-machine paths, so they aren't published.
