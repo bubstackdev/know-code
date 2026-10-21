@@ -7,7 +7,7 @@
     },
     "config": {
       "path": "config.json",
-      "sha256": "1bb54c66f381b83947c8f24376048b7972a0d98afc3ec42170bf0131d9b76c7b"
+      "sha256": "5ebda8431cd6a2f04654ad5bbac14dc1894283fab059f34c4110c1b4638b94f3"
     },
     "labels": {
       "path": "labels.jsonl",
@@ -27,11 +27,11 @@
     },
     "plan": {
       "path": "plan.json",
-      "sha256": "7348e5fe248cf43a470c309da7e1dfbe17d20e204e2f6c8ec9fe6f88c7a9052c"
+      "sha256": "f5280a6bdb5955d85abdf8db436aac44a457b075799ac5aacd3db755ebf844d2"
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "7eafea90dbd7203569fd62d65bc66a13f01bced4e9914f2c2a922b937dc67827"
+      "sha256": "1df0c135c503bd3e6182bb2f6cfb7c8e2165ef09e2e467b16a7a5c3d5412c553"
     },
     "provisional": {
       "path": "provisional.json",
@@ -82,7 +82,7 @@
     "scripts/eval/neutral/schema.py": "14f88939bb8d4bd9e5138adac79ec8486e715ca82e0d93e62e5ddf3875a50a87",
     "scripts/eval/neutral/score.py": "4153528baccbbe7ab920dfd7cd68ae8b31da8d36717d2e368eadadf72321e758",
     "scripts/eval/owned_process.py": "762d4ffc07f3da67b076feddc212cad333fb7cfa14338f3ab8e2cc61d67e1b87",
-    "scripts/eval/public_transcript.py": "dfd4e58b978ea1ad4f66933b373293fa479f970b26dd957a1c53d0fe1a9fc6f6",
+    "scripts/eval/public_transcript.py": "e04b3c08708e1744e8ddb09cc49b7c25125633f2baf544e9995cff5200a6d632",
     "scripts/eval/recheck.py": "04bd2a178b2f1e2900fbbc0be7775a82ec9af0df82b89ae96899ad175a57f95e",
     "scripts/eval/score_public_study.py": "b778c89b2ac8b19418c5b6a5764f9c02734c1c5e938f5a304099a2bea67b5b55",
     "scripts/eval/session_runner.py": "1041737fdb038a400de876d68a7e051a1dc532237aa4f52df598856f9fdf878c",
