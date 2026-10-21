@@ -99,7 +99,7 @@ pub struct RefsParams {
     /// References (default 20).
     #[serde(default)]
     pub limit: Option<usize>,
-    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
     #[serde(flatten)]
@@ -123,7 +123,7 @@ pub struct ContextParams {
     /// A repo's deploy answer: rows per list (default all that fit).
     #[serde(default)]
     pub limit: Option<usize>,
-    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
     #[serde(flatten)]
@@ -161,7 +161,7 @@ pub struct WalkParams {
     /// Evidence policy (kc_help evidence).
     #[serde(default)]
     pub evidence: Option<String>,
-    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
     /// `tree` (default) or `json`.
@@ -213,7 +213,7 @@ pub struct PathParams {
     /// Evidence policy (kc_help evidence).
     #[serde(default)]
     pub evidence: Option<String>,
-    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
     /// `tree` (default) or `json`.
@@ -245,7 +245,7 @@ pub struct FlowParams {
     /// Levels of template children to follow (default 2).
     #[serde(default)]
     pub children: Option<u8>,
-    /// `brief` (default): the first 12 rows quote their line; `lines`: every row, declarations in full; `none`.
+    /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
     /// `tree` (default) or `json`.
@@ -2535,7 +2535,7 @@ mod tests {
         // The row says where already: the compact cite doesn't repeat it.
         assert!(refs["items"][0]["cite"].get("at").is_none(), "{refs}");
         assert!(!refs_bare.contains("\"cite\""), "{refs_bare}");
-        assert_eq!(bad.unwrap_err(), "cite must be brief, lines or none, not all");
+        assert_eq!(bad.unwrap_err(), "cite must be brief, lines, check or none, not all");
         let _ = std::fs::remove_dir_all(&base);
     }
 

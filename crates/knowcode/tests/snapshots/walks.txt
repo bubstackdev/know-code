@@ -30,6 +30,7 @@
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -86,6 +87,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -99,6 +101,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "confidence": "exact",
@@ -119,6 +122,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -186,6 +190,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -199,6 +204,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "confidence": "exact",
@@ -219,6 +225,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -313,6 +320,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -370,6 +378,7 @@ method OrderPage.submit  src/order.page.ts:4
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -383,6 +392,7 @@ method OrderPage.submit  src/order.page.ts:4
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -448,6 +458,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -461,6 +472,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:4",
+            "check": "verified",
             "text": "this.log.info('placing');"
           },
           "confidence": "exact",
@@ -481,6 +493,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -548,6 +561,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -561,6 +575,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:4",
+            "check": "verified",
             "text": "this.log.info('placing');"
           },
           "confidence": "exact",
@@ -581,6 +596,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -601,6 +617,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -687,6 +704,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "direct",
@@ -707,6 +725,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "near",
@@ -727,6 +746,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "class": "far",
@@ -762,6 +782,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -844,6 +865,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -857,6 +879,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -877,6 +900,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -910,6 +934,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -980,6 +1005,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -993,6 +1019,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -1013,6 +1040,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -1038,6 +1066,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -1125,6 +1154,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -1138,6 +1168,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -1158,6 +1189,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -1178,6 +1210,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -1203,6 +1236,7 @@ reaches (out):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -1223,6 +1257,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -1256,6 +1291,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -1348,6 +1384,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "class": "direct",
@@ -1373,6 +1410,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/OrderPlacedConsumer.cs:4",
+            "check": "verified",
             "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
           },
           "class": "direct",
@@ -1393,6 +1431,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "near",
@@ -1426,6 +1465,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "far",
@@ -1447,6 +1487,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "far",
@@ -1468,6 +1509,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "class": "far",
@@ -1516,6 +1558,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -1586,6 +1629,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -1599,6 +1643,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -1632,6 +1677,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -1700,6 +1746,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -1714,6 +1761,7 @@ reached by (in):
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -1734,6 +1782,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -1754,6 +1803,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -1779,6 +1829,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -1848,6 +1899,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -1862,6 +1914,7 @@ reaches (out):
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -1882,6 +1935,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -1902,6 +1956,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -1922,6 +1977,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -1955,6 +2011,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -1981,6 +2038,7 @@ reaches (out):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -2071,6 +2129,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "direct",
@@ -2104,6 +2163,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "near",
@@ -2125,6 +2185,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "far",
@@ -2146,6 +2207,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "class": "far",
@@ -2182,6 +2244,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -2266,6 +2329,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -2279,6 +2343,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -2299,6 +2364,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -2319,6 +2385,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
           "confidence": "unique_name",
@@ -2339,6 +2406,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/CheckoutService.cs:5",
+            "check": "verified",
             "text": "private readonly ShopContext _db;"
           },
           "confidence": "unique_name",
@@ -2359,6 +2427,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Startup.cs:5",
+            "check": "verified",
             "text": "services.AddScoped<IOrderService, CheckoutService>();"
           },
           "confidence": "unique_name",
@@ -2379,6 +2448,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -2467,6 +2537,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -2542,6 +2613,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -2555,6 +2627,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -2575,6 +2648,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -2595,6 +2669,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
           "confidence": "unique_name",
@@ -2615,6 +2690,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/CheckoutService.cs:5",
+            "check": "verified",
             "text": "private readonly ShopContext _db;"
           },
           "confidence": "unique_name",
@@ -2635,6 +2711,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Startup.cs:5",
+            "check": "verified",
             "text": "services.AddScoped<IOrderService, CheckoutService>();"
           },
           "confidence": "unique_name",
@@ -2655,6 +2732,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -2766,6 +2844,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "class": "direct",
@@ -2786,6 +2865,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
           "class": "direct",
@@ -2806,6 +2886,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "class": "near",
@@ -2831,6 +2912,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/OrderPlacedConsumer.cs:4",
+            "check": "verified",
             "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
           },
           "class": "near",
@@ -2851,6 +2933,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "far",
@@ -2884,6 +2967,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "far",
@@ -2905,6 +2989,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "far",
@@ -2965,6 +3050,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -3067,6 +3153,7 @@ table orders_snap (Order) is read and written by:
       "start": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -3079,6 +3166,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -3099,6 +3187,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -3119,6 +3208,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -3153,6 +3243,7 @@ table orders_snap (Order) is read and written by:
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -3173,6 +3264,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -3193,6 +3285,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "repo": "api",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
@@ -3231,6 +3324,7 @@ table orders_snap (Order) is read and written by:
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -3310,6 +3404,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
       "start": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -3322,6 +3417,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -3342,6 +3438,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -3362,6 +3459,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -3396,6 +3494,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -3416,6 +3515,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -3436,6 +3536,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "repo": "api",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
@@ -3474,6 +3575,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -3547,6 +3649,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
       "start": {
         "cite": {
           "at": "src/order.service.ts:3",
+          "check": "verified",
           "text": "place(): void {"
         },
         "file": "src/order.service.ts",
@@ -3559,6 +3662,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -3592,6 +3696,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -3612,6 +3717,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -3632,6 +3738,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "repo": "api",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
@@ -3670,6 +3777,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -3776,6 +3884,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "from": {
         "cite": {
           "at": "src/order.page.ts:4",
+          "check": "verified",
           "text": "submit(): void {"
         },
         "file": "src/order.page.ts",
@@ -3792,6 +3901,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.page.ts:4",
+                "check": "verified",
                 "text": "submit(): void {"
               },
               "file": "src/order.page.ts",
@@ -3803,6 +3913,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.page.ts:5",
+                "check": "verified",
                 "text": "this.check();"
               },
               "confidence": "exact",
@@ -3820,6 +3931,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -3838,6 +3950,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -3855,6 +3968,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -3886,6 +4000,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -3903,6 +4018,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/CheckoutService.cs:9",
+                "check": "verified",
                 "text": "_db.Orders.Add(new Order());"
               },
               "confidence": "unique_name",
@@ -3920,6 +4036,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/Shop.cs:6",
+                "check": "verified",
                 "repo": "api",
                 "text": "public DbSet<Order> Orders { get; set; }"
               },
@@ -3955,6 +4072,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "to": {
         "cite": {
           "at": "src/shop.sql:2",
+          "check": "verified",
           "text": "CREATE TABLE `orders_snap` ("
         },
         "file": "src/shop.sql",
@@ -4055,6 +4173,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       "from": {
         "cite": {
           "at": "src/order.page.ts:4",
+          "check": "verified",
           "text": "submit(): void {"
         },
         "file": "src/order.page.ts",
@@ -4071,6 +4190,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:4",
+                "check": "verified",
                 "text": "submit(): void {"
               },
               "file": "src/order.page.ts",
@@ -4082,6 +4202,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:5",
+                "check": "verified",
                 "text": "this.check();"
               },
               "confidence": "exact",
@@ -4099,6 +4220,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -4117,6 +4239,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -4134,6 +4257,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -4165,6 +4289,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -4182,6 +4307,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/CheckoutService.cs:9",
+                "check": "verified",
                 "text": "_db.Orders.Add(new Order());"
               },
               "confidence": "unique_name",
@@ -4199,6 +4325,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/Shop.cs:6",
+                "check": "verified",
                 "repo": "api",
                 "text": "public DbSet<Order> Orders { get; set; }"
               },
@@ -4234,6 +4361,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       "to": {
         "cite": {
           "at": "src/shop.sql:2",
+          "check": "verified",
           "text": "CREATE TABLE `orders_snap` ("
         },
         "file": "src/shop.sql",
@@ -4334,6 +4462,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       "from": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -4350,6 +4479,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:2",
+                "check": "verified",
                 "text": "export class OrderPage {"
               },
               "file": "src/order.page.ts",
@@ -4361,6 +4491,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:7",
+                "check": "verified",
                 "text": "private check(): void {"
               },
               "confidence": "exact",
@@ -4377,6 +4508,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -4395,6 +4527,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -4412,6 +4545,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -4443,6 +4577,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -4465,6 +4600,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               },
               "cite": {
                 "at": "src/CheckoutService.cs:11",
+                "check": "verified",
                 "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
@@ -4488,6 +4624,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:2",
+                "check": "verified",
                 "text": "export class OrderPage {"
               },
               "file": "src/order.page.ts",
@@ -4499,6 +4636,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:4",
+                "check": "verified",
                 "text": "submit(): void {"
               },
               "confidence": "exact",
@@ -4515,6 +4653,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:5",
+                "check": "verified",
                 "text": "this.check();"
               },
               "confidence": "exact",
@@ -4532,6 +4671,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -4550,6 +4690,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -4567,6 +4708,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -4598,6 +4740,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -4620,6 +4763,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               },
               "cite": {
                 "at": "src/CheckoutService.cs:11",
+                "check": "verified",
                 "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
@@ -4642,6 +4786,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       "to": {
         "cite": {
           "at": "src/OrderPlacedConsumer.cs:4",
+          "check": "verified",
           "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
         },
         "file": "src/OrderPlacedConsumer.cs",
@@ -4732,6 +4877,7 @@ explored 23 nodes (16 forward, 7 backward), 3 repos open
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -4800,6 +4946,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -4813,6 +4960,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "confidence": "exact",
@@ -4893,6 +5041,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -4906,6 +5055,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "confidence": "exact",
@@ -5006,6 +5156,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -5068,6 +5219,7 @@ method OrderPage.submit  src/order.page.ts:4
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -5081,6 +5233,7 @@ method OrderPage.submit  src/order.page.ts:4
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -5158,6 +5311,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -5171,6 +5325,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:4",
+            "check": "verified",
             "text": "this.log.info('placing');"
           },
           "confidence": "exact",
@@ -5251,6 +5406,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -5264,6 +5420,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:4",
+            "check": "verified",
             "text": "this.log.info('placing');"
           },
           "confidence": "exact",
@@ -5284,6 +5441,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -5383,6 +5541,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "direct",
@@ -5416,6 +5575,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -5483,6 +5643,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -5496,6 +5657,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -5516,6 +5678,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -5549,6 +5712,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -5631,6 +5795,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -5649,6 +5814,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -5729,6 +5895,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -5742,6 +5909,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -5767,6 +5935,7 @@ reaches (out):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -5787,6 +5956,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -5820,6 +5990,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -5924,6 +6095,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "class": "direct",
@@ -5949,6 +6121,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/OrderPlacedConsumer.cs:4",
+            "check": "verified",
             "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
           },
           "class": "direct",
@@ -5969,6 +6142,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "near",
@@ -6002,6 +6176,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "far",
@@ -6050,6 +6225,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -6124,6 +6300,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -6137,6 +6314,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -6170,6 +6348,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -6250,6 +6429,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -6264,6 +6444,7 @@ reached by (in):
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -6289,6 +6470,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -6370,6 +6552,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -6384,6 +6567,7 @@ reaches (out):
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -6404,6 +6588,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -6437,6 +6622,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -6463,6 +6649,7 @@ reaches (out):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -6565,6 +6752,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "direct",
@@ -6598,6 +6786,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "near",
@@ -6633,6 +6822,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -6709,6 +6899,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -6773,6 +6964,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -6841,6 +7033,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -6939,6 +7132,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -7034,6 +7228,7 @@ table orders_snap (Order) is read and written by:
       "start": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -7090,6 +7285,7 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
       "start": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -7144,6 +7340,7 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
       "start": {
         "cite": {
           "at": "src/order.service.ts:3",
+          "check": "verified",
           "text": "place(): void {"
         },
         "file": "src/order.service.ts",
@@ -7156,6 +7353,7 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -7189,6 +7387,7 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -7214,6 +7413,7 @@ nothing followed: no edge leaves it, or every one was left out (see left out)
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -7327,6 +7527,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "from": {
         "cite": {
           "at": "src/order.page.ts:4",
+          "check": "verified",
           "text": "submit(): void {"
         },
         "file": "src/order.page.ts",
@@ -7341,6 +7542,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "to": {
         "cite": {
           "at": "src/shop.sql:2",
+          "check": "verified",
           "text": "CREATE TABLE `orders_snap` ("
         },
         "file": "src/shop.sql",
@@ -7433,6 +7635,7 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "from": {
         "cite": {
           "at": "src/order.page.ts:4",
+          "check": "verified",
           "text": "submit(): void {"
         },
         "file": "src/order.page.ts",
@@ -7447,6 +7650,7 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "to": {
         "cite": {
           "at": "src/shop.sql:2",
+          "check": "verified",
           "text": "CREATE TABLE `orders_snap` ("
         },
         "file": "src/shop.sql",
@@ -7539,6 +7743,7 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "from": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -7553,6 +7758,7 @@ no confident path from OrderPage.submit to shop.orders_snap within 8 hops (explo
       "to": {
         "cite": {
           "at": "src/OrderPlacedConsumer.cs:4",
+          "check": "verified",
           "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
         },
         "file": "src/OrderPlacedConsumer.cs",
@@ -7612,6 +7818,7 @@ no confident path from OrderPage to OrderPlacedConsumer.Consume within 8 hops (e
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -7673,6 +7880,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -7686,6 +7894,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "confidence": "exact",
@@ -7706,6 +7915,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -7778,6 +7988,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -7791,6 +8002,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "confidence": "exact",
@@ -7811,6 +8023,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -7910,6 +8123,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.page.ts:4",
+            "check": "verified",
             "text": "submit(): void {"
           },
           "depth": 0,
@@ -7972,6 +8186,7 @@ method OrderPage.submit  src/order.page.ts:4
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -7985,6 +8200,7 @@ method OrderPage.submit  src/order.page.ts:4
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -8055,6 +8271,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -8068,6 +8285,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:4",
+            "check": "verified",
             "text": "this.log.info('placing');"
           },
           "confidence": "exact",
@@ -8088,6 +8306,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -8160,6 +8379,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -8173,6 +8393,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:4",
+            "check": "verified",
             "text": "this.log.info('placing');"
           },
           "confidence": "exact",
@@ -8193,6 +8414,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -8213,6 +8435,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -8304,6 +8527,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "direct",
@@ -8324,6 +8548,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "near",
@@ -8344,6 +8569,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "class": "far",
@@ -8379,6 +8605,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:3",
+            "check": "verified",
             "text": "place(): void {"
           },
           "depth": 0,
@@ -8466,6 +8693,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -8479,6 +8707,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -8499,6 +8728,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -8532,6 +8762,7 @@ method OrderService.place  src/order.service.ts:3
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -8607,6 +8838,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -8620,6 +8852,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -8640,6 +8873,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -8665,6 +8899,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -8757,6 +8992,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -8770,6 +9006,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -8790,6 +9027,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -8810,6 +9048,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -8835,6 +9074,7 @@ reaches (out):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -8855,6 +9095,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -8888,6 +9129,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -8985,6 +9227,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "class": "direct",
@@ -9010,6 +9253,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/OrderPlacedConsumer.cs:4",
+            "check": "verified",
             "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
           },
           "class": "direct",
@@ -9030,6 +9274,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "near",
@@ -9063,6 +9308,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "far",
@@ -9084,6 +9330,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "far",
@@ -9105,6 +9352,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "class": "far",
@@ -9153,6 +9401,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:7",
+            "check": "verified",
             "text": "public void Place()"
           },
           "depth": 0,
@@ -9228,6 +9477,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -9241,6 +9491,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -9274,6 +9525,7 @@ method CheckoutService.Place  src/CheckoutService.cs:7
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -9347,6 +9599,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -9361,6 +9614,7 @@ reached by (in):
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -9381,6 +9635,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -9401,6 +9656,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -9426,6 +9682,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -9500,6 +9757,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -9514,6 +9772,7 @@ reaches (out):
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -9534,6 +9793,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -9554,6 +9814,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "unique_name",
@@ -9574,6 +9835,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -9607,6 +9869,7 @@ reaches (out):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -9633,6 +9896,7 @@ reaches (out):
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -9728,6 +9992,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "direct",
@@ -9761,6 +10026,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "near",
@@ -9782,6 +10048,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "far",
@@ -9803,6 +10070,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:5",
+            "check": "verified",
             "text": "this.check();"
           },
           "class": "far",
@@ -9839,6 +10107,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "depth": 0,
@@ -9928,6 +10197,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -9941,6 +10211,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -9961,6 +10232,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -9981,6 +10253,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
           "confidence": "unique_name",
@@ -10001,6 +10274,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/CheckoutService.cs:5",
+            "check": "verified",
             "text": "private readonly ShopContext _db;"
           },
           "confidence": "unique_name",
@@ -10021,6 +10295,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/Startup.cs:5",
+            "check": "verified",
             "text": "services.AddScoped<IOrderService, CheckoutService>();"
           },
           "confidence": "unique_name",
@@ -10041,6 +10316,7 @@ method OrdersController.Orders  src/OrdersController.cs:4
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -10134,6 +10410,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -10214,6 +10491,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -10227,6 +10505,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -10247,6 +10526,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -10267,6 +10547,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
           "confidence": "unique_name",
@@ -10287,6 +10568,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/CheckoutService.cs:5",
+            "check": "verified",
             "text": "private readonly ShopContext _db;"
           },
           "confidence": "unique_name",
@@ -10307,6 +10589,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/Startup.cs:5",
+            "check": "verified",
             "text": "services.AddScoped<IOrderService, CheckoutService>();"
           },
           "confidence": "unique_name",
@@ -10327,6 +10610,7 @@ nothing reaches it or is reached from it within the depth, direction and filters
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "confidence": "unique_name",
@@ -10443,6 +10727,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "class": "direct",
@@ -10463,6 +10748,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
           "class": "direct",
@@ -10483,6 +10769,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "class": "near",
@@ -10508,6 +10795,7 @@ reached by (in):
           },
           "cite": {
             "at": "src/OrderPlacedConsumer.cs:4",
+            "check": "verified",
             "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
           },
           "class": "near",
@@ -10528,6 +10816,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
           "class": "far",
@@ -10561,6 +10850,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "class": "far",
@@ -10582,6 +10872,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "class": "far",
@@ -10642,6 +10933,7 @@ reached by (in):
         {
           "cite": {
             "at": "src/Shop.cs:3",
+            "check": "verified",
             "text": "public class Order { }"
           },
           "depth": 0,
@@ -10748,6 +11040,7 @@ table orders_snap (Order) is read and written by:
       "start": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -10760,6 +11053,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -10780,6 +11074,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -10800,6 +11095,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -10834,6 +11130,7 @@ table orders_snap (Order) is read and written by:
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -10854,6 +11151,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -10874,6 +11172,7 @@ table orders_snap (Order) is read and written by:
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "repo": "api",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
@@ -10912,6 +11211,7 @@ table orders_snap (Order) is read and written by:
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -10995,6 +11295,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
       "start": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -11007,6 +11308,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.page.ts:8",
+            "check": "verified",
             "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
           },
           "confidence": "unique_name",
@@ -11027,6 +11329,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.effects.ts:3",
+            "check": "verified",
             "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
           },
           "confidence": "exact",
@@ -11047,6 +11350,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -11081,6 +11385,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -11101,6 +11406,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -11121,6 +11427,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "repo": "api",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
@@ -11159,6 +11466,7 @@ flow from [web] class OrderPage  src/order.page.ts:1
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -11236,6 +11544,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
       "start": {
         "cite": {
           "at": "src/order.service.ts:3",
+          "check": "verified",
           "text": "place(): void {"
         },
         "file": "src/order.service.ts",
@@ -11248,6 +11557,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/order.service.ts:5",
+            "check": "verified",
             "repo": "web",
             "text": "this.http.send(new ApiPlaceOrder());"
           },
@@ -11281,6 +11591,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           "binding": "src/Startup.cs:5, scoped",
           "cite": {
             "at": "src/OrdersController.cs:5",
+            "check": "verified",
             "text": "public void Orders() => _svc.Place();"
           },
           "confidence": "unique_name",
@@ -11301,6 +11612,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/CheckoutService.cs:9",
+            "check": "verified",
             "text": "_db.Orders.Add(new Order());"
           },
           "confidence": "unique_name",
@@ -11321,6 +11633,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
         {
           "cite": {
             "at": "src/Shop.cs:6",
+            "check": "verified",
             "repo": "api",
             "text": "public DbSet<Order> Orders { get; set; }"
           },
@@ -11359,6 +11672,7 @@ flow from route orders/new → [web] class OrderPage  src/order.page.ts:1
           },
           "cite": {
             "at": "src/CheckoutService.cs:11",
+            "check": "verified",
             "text": "_bus.Publish(new OrderPlaced());"
           },
           "confidence": "exact",
@@ -11470,6 +11784,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "from": {
         "cite": {
           "at": "src/order.page.ts:4",
+          "check": "verified",
           "text": "submit(): void {"
         },
         "file": "src/order.page.ts",
@@ -11486,6 +11801,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.page.ts:4",
+                "check": "verified",
                 "text": "submit(): void {"
               },
               "file": "src/order.page.ts",
@@ -11497,6 +11813,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.page.ts:5",
+                "check": "verified",
                 "text": "this.check();"
               },
               "confidence": "exact",
@@ -11514,6 +11831,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -11532,6 +11850,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -11549,6 +11868,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -11580,6 +11900,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -11597,6 +11918,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/CheckoutService.cs:9",
+                "check": "verified",
                 "text": "_db.Orders.Add(new Order());"
               },
               "confidence": "unique_name",
@@ -11614,6 +11936,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
             {
               "cite": {
                 "at": "src/Shop.cs:6",
+                "check": "verified",
                 "repo": "api",
                 "text": "public DbSet<Order> Orders { get; set; }"
               },
@@ -11649,6 +11972,7 @@ flow from [web] method OrderService.place  src/order.service.ts:3
       "to": {
         "cite": {
           "at": "src/shop.sql:2",
+          "check": "verified",
           "text": "CREATE TABLE `orders_snap` ("
         },
         "file": "src/shop.sql",
@@ -11754,6 +12078,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       "from": {
         "cite": {
           "at": "src/order.page.ts:4",
+          "check": "verified",
           "text": "submit(): void {"
         },
         "file": "src/order.page.ts",
@@ -11770,6 +12095,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:4",
+                "check": "verified",
                 "text": "submit(): void {"
               },
               "file": "src/order.page.ts",
@@ -11781,6 +12107,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:5",
+                "check": "verified",
                 "text": "this.check();"
               },
               "confidence": "exact",
@@ -11798,6 +12125,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -11816,6 +12144,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -11833,6 +12162,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -11864,6 +12194,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -11881,6 +12212,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/CheckoutService.cs:9",
+                "check": "verified",
                 "text": "_db.Orders.Add(new Order());"
               },
               "confidence": "unique_name",
@@ -11898,6 +12230,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
             {
               "cite": {
                 "at": "src/Shop.cs:6",
+                "check": "verified",
                 "repo": "api",
                 "text": "public DbSet<Order> Orders { get; set; }"
               },
@@ -11933,6 +12266,7 @@ explored 16 nodes (13 forward, 3 backward), 3 repos open
       "to": {
         "cite": {
           "at": "src/shop.sql:2",
+          "check": "verified",
           "text": "CREATE TABLE `orders_snap` ("
         },
         "file": "src/shop.sql",
@@ -12038,6 +12372,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       "from": {
         "cite": {
           "at": "src/order.page.ts:2",
+          "check": "verified",
           "text": "export class OrderPage {"
         },
         "file": "src/order.page.ts",
@@ -12054,6 +12389,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:2",
+                "check": "verified",
                 "text": "export class OrderPage {"
               },
               "file": "src/order.page.ts",
@@ -12065,6 +12401,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:7",
+                "check": "verified",
                 "text": "private check(): void {"
               },
               "confidence": "exact",
@@ -12081,6 +12418,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -12099,6 +12437,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -12116,6 +12455,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -12147,6 +12487,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -12169,6 +12510,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               },
               "cite": {
                 "at": "src/CheckoutService.cs:11",
+                "check": "verified",
                 "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
@@ -12192,6 +12534,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:2",
+                "check": "verified",
                 "text": "export class OrderPage {"
               },
               "file": "src/order.page.ts",
@@ -12203,6 +12546,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:4",
+                "check": "verified",
                 "text": "submit(): void {"
               },
               "confidence": "exact",
@@ -12219,6 +12563,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:5",
+                "check": "verified",
                 "text": "this.check();"
               },
               "confidence": "exact",
@@ -12236,6 +12581,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.page.ts:8",
+                "check": "verified",
                 "text": "this.store.dispatch(PlaceOrder({ id: 1 }));"
               },
               "confidence": "unique_name",
@@ -12254,6 +12600,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.effects.ts:3",
+                "check": "verified",
                 "text": "place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));"
               },
               "confidence": "exact",
@@ -12271,6 +12618,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
             {
               "cite": {
                 "at": "src/order.service.ts:5",
+                "check": "verified",
                 "repo": "web",
                 "text": "this.http.send(new ApiPlaceOrder());"
               },
@@ -12302,6 +12650,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               "binding": "src/Startup.cs:5, scoped",
               "cite": {
                 "at": "src/OrdersController.cs:5",
+                "check": "verified",
                 "text": "public void Orders() => _svc.Place();"
               },
               "confidence": "unique_name",
@@ -12324,6 +12673,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
               },
               "cite": {
                 "at": "src/CheckoutService.cs:11",
+                "check": "verified",
                 "text": "_bus.Publish(new OrderPlaced());"
               },
               "confidence": "exact",
@@ -12346,6 +12696,7 @@ explored 14 nodes (14 forward, 0 backward), 3 repos open
       "to": {
         "cite": {
           "at": "src/OrderPlacedConsumer.cs:4",
+          "check": "verified",
           "text": "public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;"
         },
         "file": "src/OrderPlacedConsumer.cs",

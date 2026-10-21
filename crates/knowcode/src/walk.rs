@@ -133,9 +133,9 @@ impl<'a> Graph<'a> {
         repo_name(&self.roots[repo])
     }
 
-    /// The roots of the repos the walk opened, the home repo first.
-    pub fn roots(&self) -> &[PathBuf] {
-        &self.roots
+    /// The indexes the walk opened, the home repo's first: what it read, for checking its cites.
+    pub fn stores(&self) -> Vec<(PathBuf, &kc_store::Store)> {
+        self.roots.iter().filter(|r| self.crossing.opened_root(r)).map(|r| (r.clone(), self.crossing.store(r))).collect()
     }
 
     /// What hop `h` rests on: its crossing's link, else the evidence of the reference it came from.
@@ -1747,7 +1747,7 @@ pub fn path(from: &str, to: &str, to_repo: Option<&Path>, opts: &PathOptions, ar
         let mut answer = search(&mut g, a, b, opts)?;
         answer.from_candidates_truncated = from_cut;
         answer.to_candidates_truncated = to_cut;
-        let mut citer = crate::cite::Citer::new(g.roots().to_vec());
+        let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
         citer.path(&mut answer);
         (answer, citer.incomplete())
     };

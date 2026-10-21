@@ -501,7 +501,7 @@ pub fn flow_in(g: &mut Graph, entry: &str, opts: &FlowOptions) -> Result<Option<
     let (steps, left_out, hidden, truncated) = (w.steps, w.left_out, w.hidden, w.truncated || g.repo_limit());
     let mut start = Step::at(g, 0, &start);
     let mut steps = steps;
-    let mut citer = crate::cite::Citer::new(g.roots().to_vec());
+    let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
     citer.flow(&mut start, &mut steps);
     let cite_notes = citer.incomplete();
     let mut repos = vec![start.repo.clone()];

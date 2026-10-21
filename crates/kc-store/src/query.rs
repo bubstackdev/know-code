@@ -4835,6 +4835,9 @@ pub struct Context {
     /// For a C# type: its dependency-injection registrations and, for a service, the implementations bound to it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub di: Option<crate::di::DiSection>,
+    /// The symbol's lines checked against the index (see [`crate::answer::Cite`]); `source` quotes them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cite: Option<crate::answer::Cite>,
 }
 
 /// At most this many of a type's conformers are listed in its context.
@@ -5091,6 +5094,7 @@ pub fn context_with(
         alternatives,
         alternatives_total,
         di,
+        cite: None,
     }))
 }
 

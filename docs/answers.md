@@ -150,9 +150,10 @@ built, in `cite`. That covers `trace` nodes, `impact` rows (and its changed symb
 - For a row reached without one (a walk's start, a path's ends, an impact's changed symbols), it quotes the
   declaration: the line naming it, or under `cite: lines` from its first line (an attribute or decorator) through
   that line (at most 3 lines).
-- `cite` is `{at, text, cut, repo}`. `at` is `file:line` or `file:start-end` for the lines quoted. `text` is those
-  lines with their common indentation removed. `repo` is present when the lines are in another repo than the row's,
-  such as a bus hop's publish in the publisher's repo.
+- `cite` is `{at, check, drift, was, text, cut, repo}`. `at` is `file:line` or `file:start-end` for the lines quoted.
+  `text` is those lines with their common indentation removed. `repo` is present when the lines are in another repo
+  than the row's, such as a bus hop's publish in the publisher's repo. `check`, `drift` and `was` are described under
+  [Checked against the index](#checked-against-the-index).
 - By default (`cite: brief`) the first 12 cites, in the answer's order, quote one line each, up to 120 characters.
   The rest give `at` only, and the answer is incomplete with reason `capped`: `cite text: 12 of 30 cites quote their
   line; the other 18 give only where it is`. `cite: lines` quotes every row, each line up to 160 characters.
@@ -161,12 +162,33 @@ built, in `cite`. That covers `trace` nodes, `impact` rows (and its changed symb
   says why: the file is gone from the working tree, the line is past its end, it couldn't be read, or an [AI privacy
   file](configuration.md#privacy-file) blocks it.
 
+### Checked against the index
+
+Every cite is checked when the answer is built, whether or not it quotes text. The cited file is read from the working
+tree and compared with the index the answer read. `check` says the result, and for anything but `verified`, `drift`
+says what moved.
+
+| check | meaning |
+| --- | --- |
+| `verified` | the file is byte for byte what the index read: the quoted lines are the ones the answer's facts come from |
+| `changed` | the file changed since it was indexed, and the cited line still names what the row cites (the symbol a declaration declares, the name a call or reference uses), or the edge's site names nothing to look for (a request, a publish, a mapping): the place holds, but what the index drew from the file may not |
+| `moved` | the file changed, and what the row cites is on another line now: `at` and `text` give the nearest line naming it, `was` where the index had it |
+| `gone` | the file is gone from the working tree, or no longer names what the row cites |
+| `unchecked` | the lines could not be checked: the file isn't in the index the answer read, can't be read, or an AI privacy file blocks it |
+
+Any `changed`, `moved` or `gone` cite makes the answer incomplete with reason `stale`. The entry names up to five of
+them with their check and counts the rest. A query that syncs first, as every CLI query does unless `--no-sync`,
+answers with every cite `verified` unless a file changes while it runs. Drift shows up under `--no-sync`, in an MCP
+answer given from the committed snapshot while indexing finishes, and in repos read from their last sync.
+
 The text trees of `kc_trace`, `kc_impact`, `kc_path` and `kc_flow`, and the CLI's text, print the quoted lines under
-each row, numbered (`   4 | this.log.info('placing');`). A `context`'s callers used to carry their line as `code`;
+each row, numbered (`   4 | this.log.info('placing');`), and a `! moved: …` line under any that drifted. A `context`'s callers used to carry their line as `code`;
 they now quote it in `cite`, and `code` remains only under `cite: none`.
 
 Over MCP, a cite leaves out `at` when it is the place the row already gives (its `site`, else its own `file` and
-`line`). `--cite lines` (MCP `cite: "lines"`) quotes every row in full. `--cite none` (MCP `cite: "none"`) leaves `cite`
+`line`). `--cite lines` (MCP `cite: "lines"`) quotes every row in full. `--cite check` (MCP `cite: "check"`) keeps `at`,
+`check`, `drift` and `was` without the text. A `context`'s own symbol gets a check-only `cite`, since `source` quotes
+it. `--cite none` (MCP `cite: "none"`) leaves `cite`
 out: locations only. A cursor's pages quote their rows the way the
 first answer did.
 

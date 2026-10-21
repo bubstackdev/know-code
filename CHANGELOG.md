@@ -34,6 +34,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   3), each line up to 160 characters; `cut` says what a cap left out. `--cite none` leaves them out. Text trees print
   the lines under each row. A `context`'s callers quote their line in `cite` instead of `code`, which remains under
   `cite: none`.
+- Cites are checked at query time: each cited file is compared with the index the answer read, and `check` says
+  `verified`, or names the drift: `changed` (the line still names what it cites), `moved` (quoted where it is now,
+  with `was`), `gone`, or `unchecked`. Every cite is checked, past the brief quote cap too. Any drift makes the answer
+  `stale`, naming the cites. `--cite check` (MCP `cite: "check"`) gives the check without the lines. A `context`'s own
+  symbol carries a check-only `cite`.
 
 ## 0.1.1 (2026-10-20)
 

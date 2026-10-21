@@ -61,7 +61,8 @@ struct RepoArgs {
 struct CiteArgs {
     /// `brief`: the first 12 rows quote the line they rest on (an edge's site, else the line naming a declaration), up
     /// to 120 characters, and the rest give where it is; `lines`: every row quotes its lines (a declaration's first lines
-    /// through its name), each up to 160 characters, saying what a cap left out; `none`: locations only.
+    /// through its name), each up to 160 characters, saying what a cap left out; `check`: no lines. Each cite says
+    /// whether its lines match the index (`verified`) or how they drifted. `none`: locations only.
     #[arg(long, default_value = "brief")]
     cite: kc_store::answer::CiteMode,
 }
