@@ -516,6 +516,8 @@ mod tests {
         // Noticed, its privacy file read: the one blocked whole is never in the queue.
         assert_eq!(kc_index::unindexed_roots().unwrap(), vec![new.clone(), big.clone()]);
         assert!(kc_index::indexed_roots().unwrap().contains(&old));
+        // A workspace-wide MCP answer reads the indexed ones; the others are the background's.
+        assert_eq!(ops::workspace_repos().unwrap(), vec![old.clone()]);
 
         // A workspace-wide answer that couldn't index them within its budget says so once, naming them.
         let writers = [kc_index::writer::WriterLock::acquire(&new).unwrap(), kc_index::writer::WriterLock::acquire(&big).unwrap()];
@@ -576,6 +578,9 @@ mod tests {
         std::fs::write(&config, format!("{text}\n[cache]\nmax_size = 1\n")).unwrap();
         assert_eq!(kc_index::unindexed_roots().unwrap(), vec![new.clone()]);
         assert!(index_next_new_repo(&mut HashMap::new()).unwrap().is_none());
+        // With nothing else indexed, a workspace answer reads the smallest of those not indexed yet.
+        std::fs::remove_dir_all(roots.join("old")).unwrap();
+        assert_eq!(ops::workspace_repos().unwrap(), vec![new.clone()]);
         assert!(!kc_index::db_path(&new).unwrap().exists());
         let note = ops::unindexed_note().unwrap();
         assert!(note.hint.as_deref().unwrap().contains("cache.max_size"), "{note:?}");

@@ -120,8 +120,9 @@ Ansible and Terraform links), and what a query covers outside any repo without `
   before anything else: a repo blocked whole is never indexed. A repo is also indexed when you first query it or run
   `knowcode index`.
 - Until every repo under the roots is indexed, workspace-wide answers say how many are not yet, and name them, in
-  one `incomplete` entry (`missing_repo`: "N repositories found, not yet indexed"). `status` (`kc_status`) lists each
-  with `background: "queued"`.
+  one `incomplete` entry (`missing_repo`: "N repositories found, not yet indexed"). Over MCP they read only the repos
+  with a full index, and leave the rest to the background. `status` (`kc_status`) lists each with
+  `background: "queued"`.
 - Background indexing stops short of `cache.max_size` (at nine tenths of it), so it never makes the cache evict an
   index a query used. Repos left then are read for manifests and names only, and are listed as `cache_full`; raise
   `cache.max_size` to index them.

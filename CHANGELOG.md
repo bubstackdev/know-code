@@ -22,6 +22,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the cores, memory, load, memory pressure and power source every few seconds: idle and on power it indexes a repo
   per four cores, under load, on battery or under memory pressure one at a time on one thread, and under critical
   memory pressure it starts none. Queries still come first.
+- Workspace-wide MCP answers (`workspace: true`) read the repos with a full index and name the rest in their "not
+  yet indexed" entry, whatever form the answer takes, instead of opening every repo of the workspace: a `kc_search`
+  over a workspace of new repos indexed each one in its search child, which has no freshness budget, until the child's
+  deadline cut the answer to nothing. When no repo has a full index yet, the answer reads the smallest.
+- `scripts/workspace-gate.py` is the workspace gate: it clones a pinned public workspace (`scripts/workspace-gate/repos.txt`,
+  111 repos), runs `serve` with no `index` command, and checks that every repo becomes indexed and current, that a
+  repo added under the root is noticed and indexed, and that workspace answers name every repo not indexed yet.
 
 ## 0.2.0 (2026-10-22)
 

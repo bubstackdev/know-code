@@ -505,6 +505,16 @@ fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
     }
 }
 
+/// The repos a workspace-wide MCP answer reads: the workspace's repos with a full index. Those without one yet are a
+/// running server's to index in the background (see `refresh`), and the answer says so in one entry (see
+/// [`add_unindexed`]) rather than waiting on them, or, in a search child that has no freshness budget, indexing them
+/// all before it answers. When none has a full index yet, the smallest of them, which the answer indexes first.
+pub fn workspace_repos() -> Result<Vec<PathBuf>> {
+    let unindexed = kc_index::unindexed_roots()?;
+    let indexed: Vec<PathBuf> = kc_index::indexed_roots()?.into_iter().filter(|r| !unindexed.contains(r)).collect();
+    Ok(if indexed.is_empty() { unindexed.into_iter().take(1).collect() } else { indexed })
+}
+
 /// How many repos [`unindexed_note`] names; past that it counts them.
 const UNINDEXED_NAMED: usize = 10;
 
@@ -530,7 +540,7 @@ pub fn unindexed_note() -> Option<Incomplete> {
 
 /// Says in a workspace-wide answer which repos of the workspace have no full index yet, in one entry (see
 /// [`unindexed_note`]), in place of an entry per repo saying it is still being indexed.
-fn add_unindexed(env: &mut Value) {
+pub fn add_unindexed(env: &mut Value) {
     let Some(note) = unindexed_note() else { return };
     let prefixes: Vec<String> = kc_index::unindexed_roots().unwrap_or_default().iter().map(|r| format!("{}: ", repo_name(r))).collect();
     crate::contract::retain_incomplete(env, |i| i.reason != Reason::Stale || !prefixes.iter().any(|p| i.detail.starts_with(p.as_str())));

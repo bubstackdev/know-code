@@ -765,7 +765,7 @@ impl KnowcodeServer {
 
     fn scope(&self, common: &Common, workspace: bool) -> Result<Scope, String> {
         if workspace {
-            let roots = kc_index::indexed_roots().map_err(|e| format!("{e:#}"))?;
+            let roots = ops::workspace_repos().map_err(|e| format!("{e:#}"))?;
             return Ok(Scope { repos: roots, no_sync: false });
         }
         let Some(repo) = &common.repo else { return Ok(self.default.clone()) };
@@ -1253,6 +1253,15 @@ fn search_in_child(args: &[String]) -> anyhow::Result<Value> {
     Ok(serde_json::from_slice(&out.stdout)?)
 }
 
+/// A workspace-wide answer (`workspace`), with the workspace's repos not indexed yet said in it (see
+/// [`ops::workspace_repos`]): whatever form the answer takes, even one repo's.
+fn noted(workspace: bool, mut env: Value) -> Value {
+    if workspace {
+        ops::add_unindexed(&mut env);
+    }
+    env
+}
+
 /// Hands freed pages back to the OS after each call, so resident memory tracks what is in use rather than the
 /// high-water mark of the biggest call.
 fn release_memory() {
@@ -1667,7 +1676,7 @@ impl KnowcodeServer {
         let limit = p.limit.unwrap_or(10);
         let locate = move |q: &str| -> anyhow::Result<Value> {
             let what = format!("no file's path, symbols, docs, referenced names, text or commit subjects contain a word of {q:?} (filler words dropped)");
-            Ok(explain(ops::locate(q, limit, &scope)?.env, &what, "limit"))
+            Ok(noted(p.workspace, explain(ops::locate(q, limit, &scope)?.env, &what, "limit")))
         };
         match (p.query, p.queries) {
             (Some(q), many) if many.is_empty() => run(p.common.max_chars, move || locate(&q)).await,
@@ -1986,7 +1995,7 @@ impl KnowcodeServer {
                 Some(path) => format!("no indexed file {path} with history"),
                 None => "no file with history".to_string(),
             };
-            Ok(explain(ops::hotspots(p.path.as_deref(), p.top.unwrap_or(10), p.as_of.as_deref(), &scope)?.env, &what, "top"))
+            Ok(noted(p.workspace, explain(ops::hotspots(p.path.as_deref(), p.top.unwrap_or(10), p.as_of.as_deref(), &scope)?.env, &what, "top")))
         })
         .await
     }
@@ -2022,7 +2031,7 @@ impl KnowcodeServer {
         let budget = p.map_budget.unwrap_or(400);
         let max = p.common.max_chars.or(Some((budget * 4 + 4_000).max(DEFAULT_CHARS)));
         run(max, move || {
-            let mut env = ops::overview(&scope, p.focus.as_deref(), budget)?.env;
+            let mut env = noted(p.workspace, ops::overview(&scope, p.focus.as_deref(), budget)?.env);
             if let Some(f) = &p.focus
                 && env["items"].as_array().is_some_and(|items| items.iter().any(|i| i["map"]["focus_matched"] == Value::Bool(false)))
             {
@@ -2054,6 +2063,7 @@ impl KnowcodeServer {
     #[tool(description = "Ranked grep over every file, definitions first: for strings and keys that aren't symbol names.")]
     async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, String> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
+        let workspace = p.workspace && p.repos.is_empty();
         let mut args: Vec<String> = vec!["search".into(), "--json".into()];
         match p.case.as_deref() {
             None | Some("sensitive") => {}
@@ -2089,7 +2099,7 @@ impl KnowcodeServer {
         let what = format!("no line matches {:?}", p.pattern);
         args.extend(["--".into(), p.pattern]);
         run_child(p.common.max_chars, move || {
-            let env = search_in_child(&args)?;
+            let env = noted(workspace, search_in_child(&args)?);
             if let Some(why) = searched_nothing(&env, filtered) {
                 anyhow::bail!(why);
             }
@@ -2101,6 +2111,7 @@ impl KnowcodeServer {
     #[tool(description = "Structural search: an ast-grep pattern (`$X`, `$$$`) over one language. kc_help kc_grep_ast.")]
     async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, String> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
+        let workspace = p.workspace && p.repos.is_empty();
         let mut args: Vec<String> = vec!["grep-ast".into(), "--json".into(), "-l".into(), p.lang];
         for (flag, v) in [
             ("--selector", p.selector),
@@ -2127,7 +2138,7 @@ impl KnowcodeServer {
         }
         let what = format!("no {} code matches the pattern {:?}", args[3], p.pattern);
         args.extend(["--".into(), p.pattern]);
-        run_child(p.common.max_chars, move || Ok(explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)"))).await
+        run_child(p.common.max_chars, move || Ok(noted(workspace, explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)")))).await
     }
 
     #[tool(description = "The next page of a cut list.")]
@@ -2139,7 +2150,12 @@ impl KnowcodeServer {
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
     async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, String> {
-        let scope = self.scope(&p.common, p.workspace)?;
+        // Every repo of the workspace, those not indexed yet included.
+        let scope = if p.workspace {
+            Scope { repos: kc_index::indexed_roots().map_err(|e| format!("{e:#}"))?, no_sync: false }
+        } else {
+            self.scope(&p.common, false)?
+        };
         run(p.common.max_chars, move || {
             let env = ops::status(&scope)?.env;
             // Several repos answer as a list: wrap it so a cut says how many were left out.
