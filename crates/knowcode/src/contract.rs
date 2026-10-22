@@ -24,6 +24,12 @@ pub fn push_incomplete(env: &mut Value, i: Incomplete) {
     set(env, list);
 }
 
+/// Keeps the envelope's entries (`incomplete` and `more`) that `keep` accepts.
+pub fn retain_incomplete(env: &mut Value, keep: impl Fn(&Incomplete) -> bool) {
+    let list = entries_of(env).into_iter().filter(|i| keep(i)).collect();
+    set(env, list);
+}
+
 /// The envelope's `incomplete` entries.
 pub fn incomplete_of(env: &Value) -> Vec<Incomplete> {
     env.get("incomplete").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()

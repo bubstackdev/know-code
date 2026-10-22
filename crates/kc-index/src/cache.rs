@@ -322,6 +322,32 @@ pub fn remove_owned_state() -> Result<OwnedState> {
     Ok(out)
 }
 
+/// Whether the cache has room to index another repo in the background: below nine tenths of `cache.max_size` (any
+/// size when it is 0). Past that, indexing a new repo would only make maintenance evict another, which a query then
+/// indexes again.
+/// Read at most every few seconds per cache and budget: it reads every index's access record.
+pub fn room_for_background() -> Result<bool> {
+    type Memo = Option<(PathBuf, u64, std::time::Instant, bool)>;
+    static MEMO: std::sync::Mutex<Memo> = std::sync::Mutex::new(None);
+    let limit = config::max_cache_size()?.0;
+    if limit == 0 {
+        return Ok(true);
+    }
+    let cache = crate::cache_dir()?;
+    let mut memo = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((c, l, at, room)) = memo.as_ref()
+        && *c == cache
+        && *l == limit
+        && at.elapsed() < std::time::Duration::from_secs(5)
+    {
+        return Ok(*room);
+    }
+    let total = entries()?.iter().map(|e| e.bytes).sum::<u64>() + global_bytes()?;
+    let room = total < limit / 10 * 9;
+    *memo = Some((cache, limit, std::time::Instant::now(), room));
+    Ok(room)
+}
+
 /// Prune missing checkouts, then evict idle least-recently-used indexes until the configured budget is met.
 pub fn maintain(protect: &[PathBuf]) -> Result<Report> { run(Mode::Maintain, protect) }
 pub fn prune() -> Result<Report> { run(Mode::Prune, &[]) }

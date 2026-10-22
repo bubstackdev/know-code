@@ -489,6 +489,9 @@ pub fn add_missing(env: &mut Value) {
 
 /// [`add_missing`] for the query `query`.
 fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
+    if env["repo"] == "workspace" {
+        add_unindexed(env);
+    }
     for i in query.take_left_out() {
         push_incomplete(env, i);
     }
@@ -500,6 +503,38 @@ fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
         let detail = format!("{}: indexed, but its checkout at {path} is gone; links into it are left out", repo_name(&r));
         push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_hint("clone it there again, or `knowcode prune` to forget its index"));
     }
+}
+
+/// How many repos [`unindexed_note`] names; past that it counts them.
+const UNINDEXED_NAMED: usize = 10;
+
+/// The `incomplete` entry for the repos found under the workspace roots that have no full index yet (see
+/// [`kc_index::unindexed_roots`]): a workspace-wide answer has nothing from them. `None` when there are none.
+pub fn unindexed_note() -> Option<Incomplete> {
+    let roots = kc_index::unindexed_roots().ok()?;
+    if roots.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = roots.iter().map(|r| repo_name(r)).collect();
+    names.sort();
+    let n = names.len();
+    let listed = if n > UNINDEXED_NAMED { format!("{}, and {} more", names[..UNINDEXED_NAMED].join(", "), n - UNINDEXED_NAMED) } else { names.join(", ") };
+    let (repos, they, them) = if n == 1 { ("repository", "it is", "it") } else { ("repositories", "they are", "them") };
+    let hint = if kc_index::cache::room_for_background().unwrap_or(true) {
+        format!("a running server (`knowcode serve`) indexes {them} in the background, smallest first: ask again later (kc_status lists what is left), or ask about one by name to index it now")
+    } else {
+        format!("the cache is near cache.max_size, so {they} not indexed in the background: raise cache.max_size, or ask about one by name to index it now")
+    };
+    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_hint(hint))
+}
+
+/// Says in a workspace-wide answer which repos of the workspace have no full index yet, in one entry (see
+/// [`unindexed_note`]), in place of an entry per repo saying it is still being indexed.
+fn add_unindexed(env: &mut Value) {
+    let Some(note) = unindexed_note() else { return };
+    let prefixes: Vec<String> = kc_index::unindexed_roots().unwrap_or_default().iter().map(|r| format!("{}: ", repo_name(r))).collect();
+    crate::contract::retain_incomplete(env, |i| i.reason != Reason::Stale || !prefixes.iter().any(|p| i.detail.starts_with(p.as_str())));
+    push_incomplete(env, note);
 }
 
 /// The response envelope from the spec: repo, commit, dirty, items, truncated, cursor.
@@ -4861,6 +4896,11 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
         }
         roots.sort();
     }
+    // Repos under a workspace root without a full index: a server indexes them in the background unless the cache is
+    // full.
+    let unindexed = kc_index::unindexed_roots()?;
+    let room = unindexed.is_empty() || kc_index::cache::room_for_background().unwrap_or(true);
+    let background = |root: &Path| unindexed.contains(&root.to_path_buf()).then_some(if room { "queued" } else { "cache_full" });
     let mut out = Vec::new();
     for root in &roots {
         let privacy = kc_index::privacy::Privacy::load(root);
@@ -4873,8 +4913,16 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
                 let discovery = summaries.iter().find(|s| s.root == *root).map(|s| if s.generation().is_empty() { "pending" } else { "light" }).unwrap_or("unindexed");
                 let mut value = json!({ "repo": root, "index": { "path": db, "bytes": 0, "exists": false }, "discovery": discovery,
                     "privacy": privacy_status(&privacy), "knowcode": build_info(), "config": crate::settings::status()? });
-                push_incomplete(&mut value, withheld(root).unwrap_or_else(|| Incomplete::new(Reason::Stale, "index: this checkout has no full index; discovery contains only manifests and names")
-                    .with_hint("ask a query about this checkout to index it automatically")));
+                let hint = match background(root) {
+                    Some("queued") => "a running server (`knowcode serve`) indexes it in the background; or ask a query about this checkout to index it now",
+                    Some(_) => "the cache is near cache.max_size, so it isn't indexed in the background: raise cache.max_size, or ask a query about this checkout to index it",
+                    None => "ask a query about this checkout to index it automatically",
+                };
+                if let Some(b) = background(root) {
+                    value["background"] = json!(b);
+                }
+                push_incomplete(&mut value, withheld(root).unwrap_or_else(|| Incomplete::new(Reason::Stale, "index: this checkout has no full index yet; discovery contains only manifests and names")
+                    .with_hint(hint)));
                 finish(&mut value);
                 out.push(value);
                 continue;
@@ -4935,6 +4983,10 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
         });
         if let Some(scip) = scip_status(&store)? {
             value["scip"] = scip;
+        }
+        // Opened by a query whose budget ran out before its first sync finished.
+        if let Some(b) = background(root) {
+            value["background"] = json!(b);
         }
         // Always shown, so a privacy file that was never found (a wrong `[privacy] file`) is told from one read.
         value["privacy"] = privacy_status(&privacy);
