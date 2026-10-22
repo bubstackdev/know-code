@@ -2,6 +2,16 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- A generated API client's operation links only to actions in the servers its repo is known to call: the repo itself,
+  a repo it depends on, the one repo serving another of its requests or a host its settings name, or the one repo a
+  tagged operation of its links to. Before, an untagged operation (`this.apiClient.getUser()`) linked to a same-named
+  action in any indexed repo. With no server known, the links stay, `ambiguous`, with the new assumption
+  `server_unverified`. On a public workspace of a media server, a password manager and their web clients, 16 of the
+  media client's operations linked into the password manager's server; none do now, and its 349 links into its own
+  server are unchanged.
+
 ## 0.2.0 (2026-10-22)
 
 0.2 set out to make answers that agents use without re-checking them, at a lower cost than reading files, and to
