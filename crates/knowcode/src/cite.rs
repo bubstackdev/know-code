@@ -849,7 +849,9 @@ mod tests {
         assert!(rows[..BRIEF_CITES].iter().all(|r| r["cite"]["text"].as_str().unwrap().chars().count() == BRIEF_CHARS + 1), "{}", r.env);
         assert!(rows[..BRIEF_CITES].iter().all(|r| r["cite"]["cut"].as_str().unwrap().contains(&format!("cut at {BRIEF_CHARS} of"))));
         assert!(rows[BRIEF_CITES..].iter().all(|r| r["cite"]["at"].is_string() && r["cite"].get("text").is_none() && r["cite"].get("cut").is_none()));
-        let entry = crate::contract::incomplete_of(&r.env).into_iter().find(|i| i.detail.starts_with("cite text:")).expect("said");
+        // Said in `more`: rows without their text are still whole rows.
+        let entry = crate::contract::more_of(&r.env).into_iter().find(|i| i.detail.starts_with("cite text:")).expect("said");
+        assert_eq!(r.env["complete"], serde_json::json!(true), "{}", r.env);
         assert_eq!(entry.reason, kc_store::answer::Reason::Capped);
         assert_eq!(entry.detail, format!("cite text: {BRIEF_CITES} of 20 cites quote their line; the other 8 give only where it is"));
         // A declaration quotes the one line naming it, not its attributes.

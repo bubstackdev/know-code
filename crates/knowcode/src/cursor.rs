@@ -586,7 +586,7 @@ fn run(q: &Query, raise: Raise) -> Result<Value> {
                 globs: globs.clone(),
                 max_lines: *max_lines,
             };
-            ops::search(&ops::SearchParams { opts, limit: up(*limit), offset: 0, context: *context, files_only: *files_only }, &scope)?.env
+            ops::search(&ops::SearchParams { opts, limit: up(*limit), offset: 0, context: *context, files_only: *files_only, fit: None }, &scope)?.env
         }
         Request::GrepAst { pattern, lang, selector, inside, has, not_inside, not_has, regex, globs, max_matches, limit } => {
             let opts = kc_index::structural::AstOptions {
@@ -885,7 +885,7 @@ mod tests {
             globs: Vec::new(),
             max_lines: 50_000,
         };
-        let sp = |limit| ops::SearchParams { opts: opts.clone(), limit, offset: 0, context: 0, files_only: false };
+        let sp = |limit| ops::SearchParams { opts: opts.clone(), limit, offset: 0, context: 0, files_only: false, fit: None };
         let env = ops::search(&sp(8), &s).unwrap().env;
         capped_hints_continue(&env);
         let (rows, _) = follow(&env, "/items");

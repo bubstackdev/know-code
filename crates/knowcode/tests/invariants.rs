@@ -575,12 +575,19 @@ fn says_cut(v: &Value, sampled: &[&str]) -> bool {
 }
 
 /// The contract on one envelope: `complete` is `incomplete` being empty, each entry has a reason from the closed set
-/// and a detail, a list said cut makes it incomplete, no dummy `cursor`, and the answered repos are in `provenance`.
+/// and a detail, a list said cut makes it incomplete or is named in `more` (a list on the side, cut by a limit), no
+/// dummy `cursor`, and the answered repos are in `provenance`.
 fn contract(args: &[&str], env: &Value) {
     let complete = env["complete"].as_bool().unwrap_or_else(|| panic!("{args:?}: no `complete`: {env}"));
     let list = env["incomplete"].as_array().cloned().unwrap_or_default();
+    let more = env["more"].as_array().cloned().unwrap_or_default();
     assert_eq!(complete, list.is_empty(), "{args:?}: {env}");
     assert!(env.get("incomplete").is_none() || !list.is_empty(), "{args:?}: an empty `incomplete`");
+    assert!(env.get("more").is_none() || !more.is_empty(), "{args:?}: an empty `more`");
+    for i in &more {
+        assert!(["capped", "budget"].contains(&i["reason"].as_str().unwrap_or("")), "{args:?}: more {i}");
+        assert!(i["hint"].as_str().is_some_and(|h| !h.is_empty()), "{args:?}: more without how to get it: {i}");
+    }
     for i in &list {
         let r = i["reason"].as_str().unwrap_or("");
         assert!(["capped", "budget", "deadline", "stale", "failed", "missing_repo", "unsupported", "policy", "withheld", "depth"].contains(&r), "{args:?}: reason {r}");
@@ -593,7 +600,7 @@ fn contract(args: &[&str], env: &Value) {
         assert!(allowed.contains(s), "{args:?}: {s} sampled");
     }
     if says_cut(env, &sampled) {
-        assert!(!complete, "{args:?}: a list is cut but the answer says it is complete: {env}");
+        assert!(!complete || !more.is_empty(), "{args:?}: a list is cut but the answer says neither: {env}");
     }
     assert!(env.get("cursor").is_none_or(Value::is_string), "{args:?}: a dummy cursor");
     assert!(env.get("_resume").is_none(), "{args:?}: what cursors are made from is output");

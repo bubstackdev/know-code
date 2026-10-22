@@ -54,7 +54,10 @@ Resolved:
   (`Func<T>`, `Owned<T>`, `GetInstance<T>()`, Autofac delegate factories), mapper calls, FluentValidation child
   rules, and extension methods in scope.
 - **Dependency injection.** Autofac-style and Microsoft DI registrations (`RegisterType<Foo>().As<IFoo>()`,
-  `AddScoped<IFoo, Foo>()`, `TryAdd*`, `typeof` pairs, factories, assembly scans, open generics). A call through a
+  `AddScoped<IFoo, Foo>()`, `TryAdd*`, `typeof` pairs, factories, assembly scans, open generics), and a registration
+  built from its parts, the way a container registers itself under the services it answers for (`new
+  ComponentRegistration(…, new DelegateActivator(typeof(Scope), …), …, new TypedService(typeof(IScope)) …)`, or those
+  arguments to `base(…)` in a class deriving `ComponentRegistration`). A call through a
   service bound to one implementation carries it as `via_di`; generic services are one per type arguments. Test
   doubles beside one real implementation don't count as another implementation. `context` lists registrations and
   flags interfaces injected but never registered.

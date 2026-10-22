@@ -1361,11 +1361,11 @@ fn refuse_partial_rename(env: &mut Value, path: &str) {
 }
 
 /// What the size cap never cuts: a rename's `group` and a path's `steps` (cut short, they would mislead), cursors
-/// (a cut cursor continues nothing), and what the answer says about itself (`incomplete`, `provenance`, and a deploy
-/// answer's `ci_unread` and `ci_cut`, which its `incomplete` entries are made from).
+/// (a cut cursor continues nothing), and what the answer says about itself (`incomplete`, `more`, `rest`, `provenance`,
+/// and a deploy answer's `ci_unread` and `ci_cut`, which its `incomplete` entries are made from).
 fn untouchable(key: &str) -> bool {
     // `none_found` says what is missing; `overloads` is what rows' `overload` numbers point at.
-    matches!(key, "group" | "steps" | "cursor" | "incomplete" | "provenance" | "omitted" | "ci_unread" | "ci_cut" | "none_found" | "overloads")
+    matches!(key, "group" | "steps" | "cursor" | "incomplete" | "more" | "rest" | "provenance" | "omitted" | "ci_unread" | "ci_cut" | "none_found" | "overloads")
         || key.ends_with("_cursor")
 }
 
@@ -2074,6 +2074,10 @@ impl KnowcodeServer {
             args.extend(["-g".into(), g]);
         }
         args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
+        // A first page at the default limit shows every hit when they all fit the answer (at most 60).
+        if p.limit.is_none() && p.offset.unwrap_or(0) == 0 && !p.files_only {
+            args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS).to_string()]);
+        }
         args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
         args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
         if let Some(n) = p.max_lines {
@@ -2219,9 +2223,9 @@ const HELP_URI: &str = "knowcode://help/";
 const INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use it instead \
 of grep and reading files: where X is defined kc_find; every use of X kc_refs; what X is kc_context; where a concept or \
 bug lives kc_locate; text kc_search; what calls X or breaks if X changes kc_impact, X as file:line or `Type.member`. \
-Rows have file:line; edges a confidence, ambiguous ones listed. Every answer says `complete`; if false, `incomplete` \
-says why; a `cursor` continues (kc_more). Tools take `repo` and `max_chars` (default 8000). `withheld`: a privacy file \
-blocks it; don't read it another way. kc_help {topic} documents every parameter, concept and tool, listed or not.";
+Rows have file:line; edges a confidence, ambiguous ones listed. `complete` is for what was asked, else `incomplete` \
+says why; `more`: side lists cut; `cursor`: kc_more. Tools take `repo` and `max_chars` (default 8000). `withheld`: a \
+privacy file blocks it; don't read it another way. kc_help {topic} documents every parameter, concept and tool, listed or not.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2529,14 +2533,21 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_to_fit_max_chars_makes_the_answer_incomplete() {
+    fn a_cut_to_fit_max_chars_is_said_and_makes_the_answer_incomplete_when_it_is_what_was_asked() {
+        // A symbol's callers, cut: more to read, the answer complete.
         let callers: Vec<Value> = (0..300).map(|i| json!({ "file": format!("Sources/F{i}.swift"), "line": i })).collect();
         let env = json!({ "repo": "r", "items": [{ "callers": callers }], "total": 1, "truncated": false, "cursor": null });
         let v: Value = serde_json::from_str(&cap(env, 2_000)).unwrap();
-        assert_eq!(v["complete"], json!(false));
-        let i = &v["incomplete"][0];
+        assert_eq!((v["complete"].clone(), v.get("incomplete")), (json!(true), None), "{v}");
+        let i = &v["more"][0];
         assert_eq!((i["reason"].as_str(), i["detail"].as_str().is_some_and(|d| d.starts_with("/items/0/callers: "))), (Some("budget"), true), "{v}");
         assert!(v.get("cursor").is_none(), "no dummy cursor: {v}");
+        // Its implementations, cut: incomplete.
+        let conformers: Vec<Value> = (0..300).map(|i| json!({ "file": format!("Sources/F{i}.swift"), "line": i })).collect();
+        let env = json!({ "repo": "r", "items": [{ "conformers": conformers }], "total": 1, "truncated": false });
+        let v: Value = serde_json::from_str(&cap(env, 2_000)).unwrap();
+        assert_eq!(v["complete"], json!(false));
+        assert!(v["incomplete"][0]["detail"].as_str().is_some_and(|d| d.starts_with("/items/0/conformers: ")), "{v}");
         // Within the cap: complete, and it says so.
         let v: Value = serde_json::from_str(&cap(json!({ "repo": "r", "items": [1], "total": 1, "truncated": false }), 2_000)).unwrap();
         assert_eq!((v.get("complete"), v.get("incomplete")), (Some(&json!(true)), None), "{v}");
@@ -2563,9 +2574,9 @@ mod tests {
         let kept = v["items"][0]["callers"].as_array().unwrap().len() as u64;
         assert_eq!(v["omitted"]["/items/0/callers"], json!(300 - kept));
         assert!(v["hint"].as_str().unwrap().contains("max_chars"));
-        // Output in the compact form: the count is in the list's `incomplete` entry, with how to get the rest.
+        // Output in the compact form: the count is in the list's `more` entry, with how to get the rest.
         let v: Value = serde_json::from_str(&cap(env, 2_000)).unwrap();
-        let i = &v["incomplete"][0];
+        let i = &v["more"][0];
         assert_eq!(i["detail"], json!(format!("/items/0/callers: {} items cut to fit max_chars", 300 - kept)), "{v}");
         assert!(i["hint"].as_str().unwrap().contains("max_chars"), "{v}");
     }
@@ -2626,7 +2637,9 @@ mod tests {
         };
         let v: Value = serde_json::from_str(&cap(env(25), 6_000)).unwrap();
         let item = &v["items"][0];
-        let cut: Vec<&str> = v["incomplete"].as_array().unwrap().iter().filter_map(|i| i["detail"].as_str()).collect();
+        // Only lists on the side were cut: more to read, the answer complete.
+        assert_eq!((v["complete"].clone(), v.get("incomplete")), (json!(true), None), "{v}");
+        let cut: Vec<&str> = v["more"].as_array().unwrap().iter().filter_map(|i| i["detail"].as_str()).collect();
         assert!(cut.iter().any(|d| d.starts_with("/items/0/callers")) && !cut.iter().any(|d| d.contains("conformers") || d.contains("links")), "{v}");
         assert!(item["callers"].as_array().is_some_and(|c| c.len() <= 1) && item["source"].as_str().is_some_and(|s| s.len() < 400), "{v}");
         // Every conformer, by name and place, without its signature and doc.
@@ -2785,7 +2798,7 @@ mod tests {
             globs: Vec::new(),
             max_lines: 50_000,
         };
-        let search = ops::search(&ops::SearchParams { opts, limit: 1, offset: 0, context: 0, files_only: false }, &scope).unwrap().env;
+        let search = ops::search(&ops::SearchParams { opts, limit: 1, offset: 0, context: 0, files_only: false, fit: None }, &scope).unwrap().env;
         let page = crate::cursor::more(search["cursor"].as_str().expect("a cut search continues")).unwrap();
         answers.push(("kc_search", Ok(cap(search, DEFAULT_CHARS))));
         answers.push(("kc_more", Ok(cap(page, DEFAULT_CHARS))));
@@ -2865,12 +2878,13 @@ mod tests {
         assert!(trace.contains("truncated at the node limit") && trace.contains("raise limit"), "{trace}");
         assert!(!trace.lines().next().unwrap().ends_with("; complete"), "{trace}");
 
-        // kc_context: within its cap; its callers list cut, with the cursor that continues it.
+        // kc_context: within its cap; its callers list cut, with the cursor that continues it: more to read, the
+        // answer about the method complete.
         let out = rt.block_on(s.kc_context(p(json!({ "symbol": "Audit.Log" })))).unwrap();
         assert!(out.len() <= CONTEXT_CHARS, "{} chars", out.len());
         let v: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["complete"], false, "{v}");
-        let callers = v["incomplete"].as_array().unwrap().iter().find(|i| i["detail"].as_str().unwrap().contains("callers")).expect("callers cut");
+        assert_eq!(v["complete"], true, "{v}");
+        let callers = v["more"].as_array().unwrap().iter().find(|i| i["detail"].as_str().unwrap().contains("callers")).expect("callers cut");
         assert!(callers["hint"].as_str().unwrap().contains("items[0].callers_cursor"), "{v}");
         assert!(crate::compact::resolve(v["items"][0]["callers_cursor"].as_str().unwrap()).is_ok(), "{v}");
         let _ = std::fs::remove_dir_all(&base);

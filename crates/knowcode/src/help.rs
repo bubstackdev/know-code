@@ -28,7 +28,8 @@ saying it has every declaration of the name in the workspace (whichever repo was
 overloads, and how many references in code name it across the workspace (the other mentions: uses, which kc_refs
 resolves). When files KnowCode doesn't read as code (Razor, vendored JavaScript) name it too, the count is "at least",
 with those lines. Each item declaring the name asked for quotes the line naming it in `cite`, read from the file now
-and checked against the index (`check: verified`). Use kc_locate when you know what the code does but not its name,
+and checked against the index (`check: verified`). Matches with the name asked for (in any case) come first: when only
+others are past the limit, the answer is `complete` and they are a `more` entry. Use kc_locate when you know what the code does but not its name,
 kc_search for exact text."#,
     },
     Topic {
@@ -681,9 +682,11 @@ rest of the hit's statement follows it, one per line (`  41- text`): the chained
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
 names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` or `**/shop/src/**` searches that repo only; an absolute
 path, the repo it is in). A filter matching no file is refused, saying so (`paths matched 0 files (…)`), never answered as
-a missing match. `context` lines around each hit (max 10). A first page cut short names the other files with a match in
+a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit when there
+are at most 60 and they all fit `max_chars`. A first page cut short names the other files with a match in
 `other_files`, by directory, with a count when more than one (`src/core/: a.cs 2, b.cs`; up to 60 files, past that
-`files` counts them and `files_only` lists them). Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
+`files` counts them and `files_only` lists them); with every file named, the answer is `complete` and the other lines
+are a `more` entry with the cursor. Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
 `max_lines` matching lines (default 50000) at the same file on every run, saying `capped`; unreadable files are an `incomplete` entry (failed). A search past its deadline
 (KNOWCODE_SEARCH_DEADLINE, 120 s) answers `complete: false` with an `incomplete` entry of reason `deadline`.
 `workspace` searches every indexed repo, `repos` the ones named. Use it for strings, config keys, error messages, TODOs
@@ -751,8 +754,15 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
         summary: "complete, incomplete, provenance: what every answer says about itself",
         text: r#"Every answer, from every tool, says how complete it is and which repos it was read from.
 
-- `complete`: true only when nothing below makes the answer partial. Every answer says it, true or false; a text
-  answer (a tree) ends its first line with `; complete` when it is.
+- `complete`: true only when nothing below makes the answer partial for what was asked. Every answer says it, true or
+  false; a text answer (a tree) ends its first line with `; complete` when it is.
+- `more`: lists on the side of what was asked that a limit or `max_chars` cut, `{reason, detail, hint}` (reason
+  `capped` or `budget`): a symbol's callers, callees and members, the tables its calls reach, one reference's candidate
+  targets, its source, cites past the first few without their line. The answer is still `complete`; `hint` is the call
+  for the rest. The lists an answer is about (its `items`, implementations and conformers, DI registrations, HTTP, bus
+  and SQL links, a walk's nodes) are `incomplete` when cut. So is a page of `items` cut, unless its `rest` says the
+  rows cut are past what was asked: kc_find's when every match with the name asked for is listed (the rest match by
+  prefix or word), kc_search's when every file with a match is named, on the page or in `other_files`.
 - `incomplete`: why it is partial, one entry per reason, `{reason, detail, hint}`: `detail` names what is missing (the
   list, with how many of how many were shown), `hint` how to get the rest. Reasons: `capped` (a limit cut a list),
   `budget` (cut to fit max_chars, or a batch leaving inputs out), `deadline` (a time or work budget ran out), `stale`
@@ -778,7 +788,7 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   and callees), the source lines it rests on, read from the working tree when the answer is built: an edge's site, else
   the line naming the declaration. `{at, text, cut, repo}`: `at` is `file:line` or `file:start-end`; `cut` says what a
   cap left out, or why nothing was quoted. By default (`cite: brief`) the first 12 rows quote one line, up to 120
-  characters, and the rest give `at` only (an `incomplete` entry, `capped`, says so); `cite: lines` quotes every row,
+  characters, and the rest give `at` only (a `more` entry, `capped`, says so); `cite: lines` quotes every row,
   a declaration from its first line through its name (at most 3), each line up to 160 characters; `cite: check` gives
   no lines; `cite: none` leaves it out. Text trees print the lines under each row. Every cite's `check` compares the
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),
@@ -796,11 +806,12 @@ commits are 12 hex digits, the queried repo's own provenance entry is left out (
 entry naming repos by name; `evidence` is a string (`"receiver_type [project_unverified]"`: mechanism, then any
 assumptions), cursors are short handles, a repo's deploy answer is given once (at `items[0]`), search hits are text
 rows (see kc_search), and internal row ids, the build stamp and timings (`ms`, `*_ms`) are left out. Answers are
-capped at `max_chars` (default 8000, up to 40000): a list cut to fit has a `budget` entry. The lists an answer is about
+capped at `max_chars` (default 8000, up to 40000): a list cut to fit has a `budget` entry (in `more` for a list on the
+side). The lists an answer is about
 (implementations and conformers, DI registrations, HTTP, bus and SQL links, a search's `other_files`) are cut last:
 every other list (callers, callees, members) down to none, the source shortened and their rows' detail (signature, doc)
 dropped first; links are text rows (`file:line kind symbol`), what they share said once (`links_repo`, …). kc_trace, kc_impact, kc_path
-and kc_flow answer as text trees by default: a header line per `incomplete` entry, with the kc_more call naming the
+and kc_flow answer as text trees by default: a header line per `incomplete` and `more` entry, with the kc_more call naming the
 cursor. kc_context, kc_refs and kc_locate take several inputs (`symbols`, `names`, `queries`, at most 20) and answer
 `{"results": [...]}`; inputs that don't fit are listed in `left_out`."#,
     },
@@ -877,7 +888,7 @@ under any profile and defers the rest to tool search."#,
 /// advertised schema short); the server's instructions say them too.
 pub const COMMON: &[(&str, &str)] = &[
     ("repo", "Repo to query: a path, or the name of an indexed repo. Default: the server's repo."),
-    ("max_chars", "Answer size cap in characters (default 8000, max 40000); a list cut to fit says so in `incomplete`."),
+    ("max_chars", "Answer size cap in characters (default 8000, max 40000); a list cut to fit says so (`incomplete`, `more`)."),
 ];
 
 /// The topic named `name`: as listed, or a tool's without its `kc_` prefix (`context`, `context.http`).
