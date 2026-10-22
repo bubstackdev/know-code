@@ -102,14 +102,19 @@ thread_local! {
     static SERVED_HOSTS: std::cell::RefCell<Option<(u64, std::rc::Rc<ServedHosts>)>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The repos each host is served by (see the module docs), with where that is said, one entry per repo.
-fn served_hosts(summaries: &[RepoSummary]) -> std::rc::Rc<ServedHosts> {
+/// A fingerprint of what the links are read from, for answers cached per thread.
+fn fingerprint(summaries: &[RepoSummary]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for s in summaries {
         (&s.root, s.indexed_at, s.gone, &s.hosts, s.routes.len()).hash(&mut h);
     }
-    let key = h.finish();
+    h.finish()
+}
+
+/// The repos each host is served by (see the module docs), with where that is said, one entry per repo.
+fn served_hosts(summaries: &[RepoSummary]) -> std::rc::Rc<ServedHosts> {
+    let key = fingerprint(summaries);
     if let Some(hit) = SERVED_HOSTS.with(|c| c.borrow().as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
         return hit;
     }
@@ -263,7 +268,7 @@ fn may_host(repo: &Path, service: &str, summaries: &[RepoSummary]) -> bool {
 /// other services.
 pub fn handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
     if client.side == "operation" {
-        return operation_handlers(client, summaries);
+        return operation_handlers(client, client_repo, summaries);
     }
     let Some(k) = key(client) else { return Vec::new() };
     // A gone repo serving the route would have been a candidate.
@@ -368,37 +373,138 @@ fn action_of(r: &RouteRow) -> (&str, &str) {
 }
 
 /// The actions an operation of a generated client may be (see `kc_extract::typescript`): those named like the
-/// operation, under the controller named like the client's tag when one is, else under any controller. The link
-/// rests on names (`operation_name`): `exact` when one action fits, `ambiguous` when several do.
-fn operation_handlers(client: &RouteRow, summaries: &[RepoSummary]) -> Vec<RouteLink> {
+/// operation, under the controller named like the client's tag when one is, else under any controller. When the
+/// client repo is known to call some server repos (see [`called`]), only theirs: an action of that name in a repo it
+/// isn't known to call is another API's. The link rests on names (`operation_name`): `exact` when one action fits,
+/// `ambiguous` when several do. When no server is known, an untagged operation links to every action of that name,
+/// `ambiguous`, assuming `server_unverified`: nothing says which server the client sends to.
+fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
     let Some(op) = client.path.as_deref() else { return Vec::new() };
+    let named = named_actions(op, summaries);
+    let tagged: Vec<(&Path, &RouteRow)> = match client.service.as_deref() {
+        Some(tag) => named.iter().filter(|(_, r)| squash(action_of(r).1) == squash(tag)).copied().collect(),
+        None => Vec::new(),
+    };
+    let by_tag = !tagged.is_empty();
+    let cands = if by_tag { tagged } else { named };
+    let known = called(client_repo, summaries);
+    // With no server known, an untagged operation's links say so; a tagged one's rest on its tag.
+    let unverified = known.is_empty() && !by_tag;
+    let cands: Vec<(&Path, &RouteRow)> =
+        if known.is_empty() { cands } else { cands.into_iter().filter(|(repo, _)| known.iter().any(|k| k == repo)).collect() };
+    let confidence = if cands.len() == 1 && !unverified { "exact" } else { "ambiguous" };
+    let mut assumptions = vec![Assumption::SameDeployment, Assumption::OperationName];
+    if unverified {
+        assumptions.push(Assumption::ServerUnverified);
+    }
+    let mut links: Vec<RouteLink> = cands
+        .into_iter()
+        .map(|(repo, route)| RouteLink { repo: repo.to_path_buf(), route: route.clone(), confidence, assumptions: assumptions.clone(), host: None })
+        .collect();
+    links.sort_by(|a, b| (&a.repo, &a.route.symbol).cmp(&(&b.repo, &b.route.symbol)));
+    links
+}
+
+/// The actions named `op` in any repo, one per action (an action routed under several paths is one action).
+fn named_actions<'a>(op: &str, summaries: &'a [RepoSummary]) -> Vec<(&'a Path, &'a RouteRow)> {
     let mut named: Vec<(&Path, &RouteRow)> = Vec::new();
     for s in distinct(summaries) {
         for r in s.routes.iter().filter(|r| r.side == "server" && action_of(r).0.eq_ignore_ascii_case(op)) {
-            // An action routed under several paths is one action.
             if !named.iter().any(|(p, x)| *p == s.root.as_path() && x.symbol == r.symbol && x.file == r.file && x.start_line == r.start_line) {
                 named.push((s.root.as_path(), r));
             }
         }
     }
-    let tagged: Vec<(&Path, &RouteRow)> = match client.service.as_deref() {
-        Some(tag) => named.iter().filter(|(_, r)| squash(action_of(r).1) == squash(tag)).copied().collect(),
-        None => Vec::new(),
+    named
+}
+
+type Called = (u64, HashMap<PathBuf, std::rc::Rc<Vec<PathBuf>>>);
+
+thread_local! {
+    /// The last [`called`] answers, by a fingerprint of the summaries they were read from and the client repo: a
+    /// `routes` answer asks once per operation.
+    static CALLED: std::cell::RefCell<Called> = std::cell::RefCell::new((0, HashMap::new()));
+}
+
+/// The server repos the repo at `client_repo` is known to send requests to: itself when it serves routes, a repo it
+/// depends on through its manifests (a client package the server publishes), the one repo serving one of its requests
+/// by path (a route with a named segment), the one repo serving a host its requests or settings name, the repo hosting
+/// a service its gateway requests name, and the one repo with the action a tagged operation of its names.
+fn called(client_repo: &Path, summaries: &[RepoSummary]) -> std::rc::Rc<Vec<PathBuf>> {
+    let key = fingerprint(summaries);
+    if let Some(hit) = CALLED.with(|c| {
+        let c = c.borrow();
+        if c.0 == key { c.1.get(client_repo).cloned() } else { None }
+    }) {
+        return hit;
+    }
+    let v = std::rc::Rc::new(called_uncached(client_repo, summaries));
+    CALLED.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.0 != key {
+            *c = (key, HashMap::new());
+        }
+        c.1.insert(client_repo.to_path_buf(), v.clone());
+    });
+    v
+}
+
+fn called_uncached(client_repo: &Path, summaries: &[RepoSummary]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut add = |p: &Path| {
+        if !out.iter().any(|o| o == p) {
+            out.push(p.to_path_buf());
+        }
     };
-    let cands = if tagged.is_empty() { named } else { tagged };
-    let confidence = if cands.len() == 1 { "exact" } else { "ambiguous" };
-    let mut links: Vec<RouteLink> = cands
-        .into_iter()
-        .map(|(repo, route)| RouteLink {
-            repo: repo.to_path_buf(),
-            route: route.clone(),
-            confidence,
-            assumptions: vec![Assumption::SameDeployment, Assumption::OperationName],
-            host: None,
-        })
-        .collect();
-    links.sort_by(|a, b| (&a.repo, &a.route.symbol).cmp(&(&b.repo, &b.route.symbol)));
-    links
+    let Some(mine) = summaries.iter().find(|s| s.root == client_repo) else { return out };
+    if mine.routes.iter().any(|r| r.side == "server") {
+        add(client_repo);
+    }
+    for d in crate::workspace::neighbours(client_repo, summaries).0 {
+        if !d.gone && d.routes.iter().any(|r| r.side == "server") {
+            add(&d.root);
+        }
+    }
+    let served = served(summaries);
+    let hosts = served_hosts(summaries);
+    for r in &mine.routes {
+        match r.side.as_str() {
+            "client" => {
+                if let Some(svc) = r.service.as_deref()
+                    && let Some(h) = host(svc, summaries)
+                {
+                    add(&h);
+                }
+                if let Some((repo, _)) = r.host.as_deref().and_then(|h| host_repo(h, &hosts)) {
+                    add(repo);
+                }
+                let Some(k) = key(r).filter(|k| k.1.split('/').any(|seg| !seg.is_empty() && seg != "{}")) else { continue };
+                let mut repos: Vec<&Path> = candidates(&served, &k).iter().map(|(p, _)| *p).collect();
+                repos.sort();
+                repos.dedup();
+                if let [one] = repos.as_slice() {
+                    add(one);
+                }
+            }
+            "operation" => {
+                let (Some(op), Some(tag)) = (r.path.as_deref(), r.service.as_deref()) else { continue };
+                let mut repos: Vec<&Path> =
+                    named_actions(op, summaries).into_iter().filter(|(_, x)| squash(action_of(x).1) == squash(tag)).map(|(p, _)| p).collect();
+                repos.sort();
+                repos.dedup();
+                if let [one] = repos.as_slice() {
+                    add(one);
+                }
+            }
+            _ => {}
+        }
+    }
+    for h in mine.hosts.iter().filter(|h| h.role == "configures" && h.kind == "config") {
+        if let Some((repo, _)) = host_repo(&h.host, &hosts) {
+            add(repo);
+        }
+    }
+    out
 }
 
 /// Candidate actions with how sure each link is, most likely first.
@@ -599,7 +705,18 @@ pub fn unlinked_note(route: &RouteRow, summaries: &[RepoSummary], brief: bool) -
         let names = listed(servers.iter().map(|s| name(&s.root)).collect());
         parts.push(match (servers.len(), route.side.as_str()) {
             (0, _) => "no indexed repo serves HTTP routes KnowCode reads".to_string(),
-            (n, "operation") => format!("no action named `{}` in {n} repo{} serving routes ({names})", route.path.as_deref().unwrap_or_default(), plural(n)),
+            (n, "operation") => {
+                let op = route.path.as_deref().unwrap_or_default();
+                // Actions of that name in repos the client isn't known to call: another API's.
+                let mut elsewhere: Vec<String> = named_actions(op, summaries).iter().map(|(p, _)| name(p)).collect();
+                elsewhere.sort();
+                elsewhere.dedup();
+                if elsewhere.is_empty() {
+                    format!("no action named `{op}` in {n} repo{} serving routes ({names})", plural(n))
+                } else {
+                    format!("actions named `{op}` only in repos it isn't known to call ({})", listed(elsewhere))
+                }
+            }
             (n, _) => format!("searched {n} repo{} serving routes ({names})", plural(n)),
         });
         let unplaced = distinct(summaries).into_iter().filter(|s| s.routes.iter().any(|r| r.side == "unsupported")).count();

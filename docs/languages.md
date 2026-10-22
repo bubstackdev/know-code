@@ -98,8 +98,11 @@ Resolved:
   `new URL(path, base)` after a base address, and locals holding any of them. A call to a generated API client whose
   code isn't indexed (`getItemsApi(api).getItems()`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`)
   is an operation, linked to the action of that name under the controller named like the client (`Items`), else
-  under any controller, assuming `operation_name`; a client the repo declares itself is read through its own
-  requests instead.
+  under any controller, assuming `operation_name`. Only actions in the servers the client's repo is known to call
+  count: the repo itself, a repo it depends on, the one repo serving another of its requests or a host its settings
+  name, the one repo a tagged operation of its links to. With none known, an untagged operation links to every
+  action of its name, `ambiguous`, assuming `server_unverified`. A client the repo declares itself is read through its
+  own requests instead.
 - **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
   are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
   methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may
