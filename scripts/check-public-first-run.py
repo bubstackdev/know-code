@@ -36,7 +36,9 @@ def assess(case: dict, answer: dict, first_seconds: float, complete_seconds: flo
         "bounded_first_answer": first_seconds < 5,
     }
     if "cross_project_file" in case:
-        links = [link for item in declarations for route in item.get("http", []) if route.get("role") == "serves"
+        # What every link of a route shares is said once on the route (`links_confidence`, `links_assumptions`).
+        links = [{"confidence": route.get("links_confidence"), "assumptions": route.get("links_assumptions"), **link}
+                 for item in declarations for route in item.get("http", []) if route.get("role") == "serves"
                  for link in route.get("links", []) if link.get("file") == case["cross_project_file"]
                  and link.get("symbol", "").endswith("." + case["cross_project_symbol"])
                  and link.get("line") == case["cross_project_line"]]
