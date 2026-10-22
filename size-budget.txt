@@ -19,4 +19,6 @@
 # 347136 from the last budget.
 # The 0.2 fix round: leaner answers, complete answers, HTTP routes and client links, workspace-wide declared
 # statements and checked notes for files read only as text (36213984, up 363776; measured on PR #39's dist build).
-36213984
+# The re-check fix round: note precision, answer lists cut last with repo-prefixed places, and search hits with their
+# statement and parameters (36296656, up 82672; measured on main 96fac0c's dist build).
+36296656
