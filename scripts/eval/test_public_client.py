@@ -179,6 +179,39 @@ class BareClientTests(unittest.TestCase):
                     server = json.loads((root/'control/mcp.json').read_text())['mcpServers']['knowcode']
                     self.assertIn(str(other.resolve()), server['args'])
 
+    def test_shell_permissions_are_the_same_in_every_arm_in_both_modes(self):
+        def bash_rules(argv):
+            start = argv.index('--allowedTools')+1
+            end = argv.index('--disallowedTools') if '--disallowedTools' in argv else len(argv)
+            return [a for a in argv[start:end] if a.startswith('Bash')]
+        for mode, expected in [(None, None), ('patterns', None), ('sandbox', ['Bash'])]:
+            with tempfile.TemporaryDirectory() as temp:
+                base, seen = Path(temp), []
+                for arm in client.ARMS:
+                    root, binary, config = self.fixture(base, arm)
+                    if mode:
+                        config['shell'] = mode
+                    kwargs = {}
+                    if arm != 'plain':
+                        index = root/'control/index/example'
+                        index.mkdir(parents=True)
+                        kwargs = {'knowcode': binary, 'index_repos': {'example': index}}
+                    result = client.prepare(root, config, binary, **kwargs)
+                    self.assertEqual(result['shell'], mode or 'patterns')
+                    self.assertIn('Read(/'+str(root.resolve()/'source')+'/**)', result['argv'])
+                    seen.append(bash_rules(result['argv']))
+                self.assertTrue(all(rules == seen[0] for rules in seen))
+                if expected:
+                    self.assertEqual(seen[0], expected)
+                else:
+                    self.assertIn('Bash(grep *)', seen[0])
+                    self.assertNotIn('Bash', seen[0])
+        with tempfile.TemporaryDirectory() as temp:
+            root, binary, config = self.fixture(Path(temp), 'plain')
+            config['shell'] = 'anything'
+            with self.assertRaisesRegex(ValueError, 'shell permission mode'):
+                client.prepare(root, config, binary)
+
 
 if __name__ == '__main__':
     unittest.main()
