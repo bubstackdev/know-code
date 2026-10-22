@@ -298,7 +298,11 @@ MCP answers are compact, so that rows rather than bookkeeping fill the size cap:
   or an include whole, never inside.
 
 Answers are capped at `max_chars` characters (default 8000, at most 40000). A list cut to fit gets a `budget`
-entry with its `kc_more` call. `kc_trace`, `kc_impact`, `kc_path` and `kc_flow` answer as indented text trees
+entry with its `kc_more` call. The lists an answer is about (implementations and conformers, DI registrations, HTTP,
+bus and SQL links, a search's `other_files`) are cut last: every other list (callers, callees, members) goes down to
+none, the source is shortened and those lists' rows lose their detail (signature, doc) first. Links are text rows
+(`file:line kind symbol`), with what all of them share said once beside the list (`links_repo`, `links_confidence`,
+`links_assumptions`). `kc_trace`, `kc_impact`, `kc_path` and `kc_flow` answer as indented text trees
 unless `format` is `json`. `kc_context`, `kc_refs` and `kc_locate` take several inputs (`symbols`, `names`,
 `queries`, at most 20) and answer `{"results": [...]}`; inputs that don't fit are listed in `left_out` with a hint.
 

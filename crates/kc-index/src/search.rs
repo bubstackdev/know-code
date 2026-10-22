@@ -135,7 +135,8 @@ impl Matcher {
 
 /// `globs` as they apply in the repo at `root`, one of the repos a search covers (named `names`): a glob written after
 /// this repo's name (`shop/src/**`) is relative to it, and one after another of the repos' names (`billing/**`) is
-/// not for this one, unless the repo has a directory of that name (then the glob as written stays too). An absolute
+/// not for this one, unless the repo has a directory of that name (then the glob as written stays too); after a
+/// leading `**/` too (`**/shop/src/**`), the way an agent scopes a glob to one repo of several. An absolute
 /// path is relative to the repo it is in, and not for the others. `None` when globs to include were given and none
 /// is for this repo: the search leaves the repo out.
 pub fn globs_in(globs: &[String], root: &Path, names: &[String]) -> Option<Vec<String>> {
@@ -157,6 +158,11 @@ pub fn globs_in(globs: &[String], root: &Path, names: &[String]) -> Option<Vec<S
             }
         } else {
             let body = body.trim_start_matches("./");
+            // `**/shop/src/**`, a repo's name after a leading `**/`, names that repo as `shop/src/**` does.
+            let body = body
+                .strip_prefix("**/")
+                .filter(|rest| rest.split('/').next().is_some_and(|first| names.iter().any(|n| n == first)))
+                .unwrap_or(body);
             let (first, rest) = body.split_once('/').unwrap_or((body, ""));
             let own_dir = root.join(first).is_dir();
             if first == name {
@@ -1129,6 +1135,10 @@ mod tests {
         assert_eq!(g(&["web/src/**"], &web), Some(vec!["src/**".to_string()]));
         assert_eq!(g(&["server/**"], &web), None);
         assert_eq!(g(&["web"], &web), Some(vec!["**".to_string()]));
+        // After `**/` too, the way an agent scopes a glob to one repo; `**/` before any other name stays as written.
+        assert_eq!(g(&["**/web/src/**"], &web), Some(vec!["src/**".to_string()]));
+        assert_eq!(g(&["**/server/src/**"], &web), None);
+        assert_eq!(g(&["**/src/**"], &web), Some(vec!["**/src/**".to_string()]));
         // A repo holding a directory named like the other repo keeps the glob as written.
         assert_eq!(g(&["web/**"], &server), Some(vec!["web/**".to_string()]));
         // Exclusions and plain globs apply everywhere; an exclusion alone leaves no repo out.

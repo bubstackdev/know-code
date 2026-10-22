@@ -131,8 +131,10 @@ name to ask how the repo is deployed (`kc_context.deploy`).
 
 When several definitions share the name (copies, template variants), the live one is shown and the others are listed in
 `alternatives` (with `namespace` where qualified names are the same); pick one with `path/to/file#name`, `file:line` or
-its namespace or module (`B.Worker.Run`). A stored procedure or table defined in another indexed repo (a schema repo)
-is found there.
+its namespace or module (`B.Worker.Run`). A place may be written after its repo's name (`shop/src/a.cs:12`), here and
+in kc_impact, kc_trace and kc_refs (which answers for the definition there); one naming no definition is refused, saying
+what didn't resolve (no such file, or the definitions nearest the line). A stored procedure or table defined in another
+indexed repo (a schema repo) is found there.
 
 `source` is `auto` by default: a long symbol comes as a skeleton (signatures, types and doc comments with bodies elided
 as `{ … }`, plus the lines making its calls into the indexed code and its return/throw lines; `source_lines` lists the
@@ -674,9 +676,11 @@ the one enclosing the line; `[stale]` for a file that could not be read; the tri
 `repo/file:line best (n matches)`. `case`: sensitive (default), insensitive, or smart (insensitive unless the
 pattern has an uppercase letter); `word` for whole words. Filter with `lang` (swift, python, rust, markdown, json, yaml,
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
-names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` searches that repo only; an absolute path, the repo it is
-in). A filter matching no file says so in `note` (`paths matched 0 files (…)`), never as a missing match. `context`
-lines around each hit (max 10). Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
+names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` or `**/shop/src/**` searches that repo only; an absolute
+path, the repo it is in). A filter matching no file is refused, saying so (`paths matched 0 files (…)`), never answered as
+a missing match. `context` lines around each hit (max 10). A first page cut short names the other files with a match in
+`other_files`, by directory, with a count when more than one (`src/core/: a.cs 2, b.cs`; up to 60 files, past that
+`files` counts them and `files_only` lists them). Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
 `max_lines` matching lines (default 50000) at the same file on every run, saying `capped`; unreadable files are an `incomplete` entry (failed). A search past its deadline
 (KNOWCODE_SEARCH_DEADLINE, 120 s) answers `complete: false` with an `incomplete` entry of reason `deadline`.
 `workspace` searches every indexed repo, `repos` the ones named. Use it for strings, config keys, error messages, TODOs
@@ -789,7 +793,10 @@ commits are 12 hex digits, the queried repo's own provenance entry is left out (
 entry naming repos by name; `evidence` is a string (`"receiver_type [project_unverified]"`: mechanism, then any
 assumptions), cursors are short handles, a repo's deploy answer is given once (at `items[0]`), search hits are text
 rows (see kc_search), and internal row ids, the build stamp and timings (`ms`, `*_ms`) are left out. Answers are
-capped at `max_chars` (default 8000, up to 40000): a list cut to fit has a `budget` entry. kc_trace, kc_impact, kc_path
+capped at `max_chars` (default 8000, up to 40000): a list cut to fit has a `budget` entry. The lists an answer is about
+(implementations and conformers, DI registrations, HTTP, bus and SQL links, a search's `other_files`) are cut last:
+every other list (callers, callees, members) down to none, the source shortened and their rows' detail (signature, doc)
+dropped first; links are text rows (`file:line kind symbol`), what they share said once (`links_repo`, …). kc_trace, kc_impact, kc_path
 and kc_flow answer as text trees by default: a header line per `incomplete` entry, with the kc_more call naming the
 cursor. kc_context, kc_refs and kc_locate take several inputs (`symbols`, `names`, `queries`, at most 20) and answer
 `{"results": [...]}`; inputs that don't fit are listed in `left_out`."#,

@@ -20,7 +20,8 @@
 //! - a repo's deploy answer is said once, at `items[0]` (the full form repeats it as `deploy`; see [`once`]);
 //! - a reference row's `from` is the enclosing symbol's qualified name, and its column is left out; a list whose rows
 //!   all have the same `targets`, `from` or `name` says it once, beside the list (see [`lean_row`],
-//!   [`shared_targets`]);
+//!   [`shared_targets`]); a list of links says once what all its rows have alike (`repo`, `confidence`,
+//!   `assumptions`), each row then a text row, `repo/file:line kind symbol` (see [`shared_link_fields`]);
 //! - a test file's ranking `signals` are left out: its `confidence` and `reasons` say them;
 //! - a clean, current answer says nothing about its repos: `repos` and `provenance` are left out when no repo is dirty,
 //!   every repo was checked against its working tree, and nothing is `stale`, `failed` or `missing_repo` (see
@@ -372,6 +373,7 @@ fn rows(v: &mut Value, cursor: &mut dyn FnMut(&str) -> String) {
             m.retain(|k, x| !(x.is_number() && (k == "ms" || k.ends_with("_ms"))));
             lean_row(m);
             shared_targets(m);
+            shared_link_fields(m);
             for (k, x) in m.iter_mut() {
                 match x {
                     Value::String(s) if (k == "cursor" || k.ends_with("_cursor")) && s.starts_with("kc1.") => *s = cursor(s),
@@ -510,6 +512,56 @@ fn shared_targets(m: &mut Map<String, Value>) {
             m.insert(key, first);
         }
     }
+}
+
+/// What every row of a list of links (`links`: the code reaching an endpoint over HTTP, the bus or SQL) says alike,
+/// said once beside it: the same `repo`, `confidence` or `assumptions`, as `links_repo`, … A row naming only its
+/// place and symbol is then a text row, `repo/file:line kind symbol [confidence; assumption, …]` (what isn't said
+/// beside the list). Forty callers of one endpoint then fit where ten did.
+fn shared_link_fields(m: &mut Map<String, Value>) {
+    let Some(Value::Array(rows)) = m.get_mut("links") else { return };
+    if rows.len() < 2 || !rows.iter().all(Value::is_object) {
+        return;
+    }
+    let mut shared = Vec::new();
+    for field in ["repo", "confidence", "assumptions"] {
+        let Some(first) = rows[0].get(field).cloned() else { continue };
+        if rows.iter().all(|r| r.get(field) == Some(&first)) {
+            rows.iter_mut().filter_map(Value::as_object_mut).for_each(|r| {
+                r.remove(field);
+            });
+            shared.push((format!("links_{field}"), first));
+        }
+    }
+    if let Some(lines) = rows.iter().map(link_row).collect::<Option<Vec<String>>>() {
+        *rows = lines.into_iter().map(Value::from).collect();
+    }
+    for (k, v) in shared {
+        m.entry(k).or_insert(v);
+    }
+}
+
+/// A link row naming only its place and symbol as one text row (see [`shared_link_fields`]); `None` for any other.
+fn link_row(v: &Value) -> Option<String> {
+    let m = v.as_object()?;
+    if !m.keys().all(|k| matches!(k.as_str(), "repo" | "file" | "line" | "kind" | "symbol" | "confidence" | "assumptions")) {
+        return None;
+    }
+    let s = |k: &str| m.get(k).and_then(Value::as_str);
+    let repo = s("repo").map(|r| format!("{r}/")).unwrap_or_default();
+    let mut row = format!("{repo}{}:{}", s("file")?, m.get("line")?.as_u64()?);
+    for k in ["kind", "symbol"] {
+        if let Some(x) = s(k) {
+            row.push(' ');
+            row.push_str(x);
+        }
+    }
+    let assumptions: Vec<&str> = m.get("assumptions").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let said: Vec<String> = s("confidence").map(str::to_string).into_iter().chain((!assumptions.is_empty()).then(|| assumptions.join(", "))).collect();
+    if !said.is_empty() {
+        row.push_str(&format!(" [{}]", said.join("; ")));
+    }
+    Some(row)
 }
 
 /// `mechanism`, or `mechanism [assumption, …]`.
