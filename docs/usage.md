@@ -280,7 +280,7 @@ Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not re
 
 | Command | Flags |
 | --- | --- |
-| `index` | `--workspace DIR`, `--threads N`, `--rebuild`, `--scip FILE`, `--verify`, `--phases` |
+| `index` | `--workspace DIR`, `--threads N`, `--jobs N`, `--rebuild`, `--scip FILE`, `--verify`, `--phases` |
 | `find` | `-k/--kind`, `-n/--limit` |
 | `locate` | `-n/--limit` |
 | `at` | |

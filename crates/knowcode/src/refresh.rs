@@ -60,7 +60,7 @@ impl Worker {
             #[cfg(not(test))]
             {
                 let queued = worker_queued.clone();
-                std::thread::Builder::new().name("knowcode-new-repos".into()).spawn(move || new_repos(&queued)).expect("starting background indexer");
+                std::thread::Builder::new().name("knowcode-new-repos".into()).spawn(move || new_repos(queued)).expect("starting background indexer");
             }
             std::thread::Builder::new().name("knowcode-index".into()).spawn(move || {
                 background_priority();
@@ -104,7 +104,7 @@ impl Worker {
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
                     eprintln!("knowcode: indexing {}", root.display());
-                    let outcome = index_in_background(&root);
+                    let outcome = index_in_background(&root, 1);
                     match &outcome {
                         Ok(_) => eprintln!("knowcode: indexed {}", root.display()),
                         Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
@@ -165,14 +165,14 @@ impl Worker {
     }
 }
 
-/// Indexes `root` as the background does: one extraction thread, under an operation of its own (separate from a
-/// query's cancellation: work continues when the query's freshness budget expires).
-fn index_in_background(root: &Path) -> Outcome {
+/// Indexes `root` as the background does, with `threads` parser threads, under an operation of its own (separate from
+/// a query's cancellation: work continues when the query's freshness budget expires).
+fn index_in_background(root: &Path, threads: usize) -> Outcome {
     let result = std::panic::catch_unwind(|| -> Result<SyncReport> {
         let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
         let mut store = kc_index::open(root)?;
-        let report = kc_index::sync(root, &mut store, &SyncOptions { threads: 1, ..Default::default() })?;
-        kc_index::content::sync_content(root, &mut store, 1)?;
+        let report = kc_index::sync(root, &mut store, &SyncOptions { threads, ..Default::default() })?;
+        kc_index::content::sync_content(root, &mut store, threads)?;
         // Context intentionally reuses old derived caches for latency. Bring existing caches up to
         // date here so repeated queries eventually become complete without a manual overview call.
         kc_index::refresh_derived(root, &store)?;
@@ -187,53 +187,107 @@ fn index_in_background(root: &Path) -> Outcome {
 /// How long a repo whose background indexing failed waits before it is tried again.
 const NEW_REPO_RETRY: Duration = Duration::from_secs(600);
 
-/// Repos found under the workspace roots without a full index (see [`kc_index::unindexed_roots`]) are indexed in the
-/// background, one at a time, on a thread of their own at background priority: a query's indexing (the worker's)
-/// never waits behind one, and this thread waits while a query's is queued. Roots are checked first thing, so a
-/// server notices repos added while it wasn't running before its first query; after that, every workspace query
-/// checks them (a `stat` of each directory the last walk read) and maintenance walks them again every minute.
+/// How often the background reads the machine's load, memory and power again.
 #[cfg(not(test))]
-fn new_repos(queries: &AtomicUsize) {
+const SNIFF_EVERY: Duration = Duration::from_secs(5);
+
+/// Repos found under the workspace roots without a full index (see [`kc_index::unindexed_roots`]) are indexed in the
+/// background, on threads of their own at background priority: a query's indexing (the worker's) never waits behind
+/// them, and none starts while a query's is queued. How many at once, and with how many threads, follows the machine
+/// (see [`kc_index::machine::plan`]): one repo on one thread under load, on battery or under memory pressure, more
+/// while it is idle and on power, none under critical memory pressure. A repo already started finishes. Roots are
+/// checked first thing, so a server notices repos added while it wasn't running before its first query; after that,
+/// every workspace query checks them (a `stat` of each directory the last walk read) and maintenance walks them again
+/// every minute.
+#[cfg(not(test))]
+fn new_repos(queries: Arc<AtomicUsize>) {
+    use kc_index::machine;
     background_priority();
     if let Err(e) = kc_index::light::discover_roots() {
         eprintln!("knowcode: root discovery: {e:#}");
     }
+    let busy: Arc<Mutex<std::collections::HashSet<PathBuf>>> = Arc::default();
     let mut tried = HashMap::new();
+    let mut sniffed: Option<(Instant, machine::Machine)> = None;
+    let mut last = None;
     loop {
+        let running = busy.lock().unwrap_or_else(|e| e.into_inner()).len();
         if queries.load(Ordering::Relaxed) == 0 {
-            match index_next_new_repo(&mut tried) {
-                Ok(Some(_)) => continue,
-                Ok(None) => {}
-                Err(e) => eprintln!("knowcode: new repos: {e:#}"),
+            let m = match sniffed {
+                Some((at, m)) if at.elapsed() < SNIFF_EVERY => m,
+                _ => {
+                    let m = machine::sniff();
+                    sniffed = Some((Instant::now(), m));
+                    m
+                }
+            };
+            let pending = match pending_new_repos(&mut tried, &busy.lock().unwrap_or_else(|e| e.into_inner())) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("knowcode: new repos: {e:#}");
+                    Vec::new()
+                }
+            };
+            let plan = machine::plan(&m, machine::Mode::Background, pending.len() + running, running);
+            if !pending.is_empty() && last != Some(plan) {
+                eprintln!("knowcode: background indexing: {} repos at once, {} thread(s) each ({} waiting; load {:.1} on {} cores, {:?}, {:?} memory pressure)", plan.repos, plan.threads, pending.len(), m.load, m.cores, m.power, m.pressure);
+                last = Some(plan);
+            }
+            for root in pending.into_iter().take(plan.repos.saturating_sub(running)) {
+                tried.insert(root.clone(), Instant::now());
+                busy.lock().unwrap_or_else(|e| e.into_inner()).insert(root.clone());
+                let busy = busy.clone();
+                let threads = plan.threads.max(1);
+                let spawned = std::thread::Builder::new().name("knowcode-new-repo".into()).spawn(move || {
+                    background_priority();
+                    eprintln!("knowcode: indexing new repo {}", root.display());
+                    match index_in_background(&root, threads) {
+                        Ok(_) => eprintln!("knowcode: indexed {}", root.display()),
+                        Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
+                    }
+                    kc_index::cache::maintain_and_report(std::slice::from_ref(&root));
+                    busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&root);
+                });
+                if let Err(e) = spawned {
+                    eprintln!("knowcode: background indexing: {e}");
+                    break;
+                }
             }
         }
         std::thread::sleep(Duration::from_secs(2));
     }
 }
 
-/// Indexes the next repo found under the workspace roots without a full index, unless one failed within
-/// [`NEW_REPO_RETRY`] (`tried`) or the cache has no room for it (see [`kc_index::cache::room_for_background`]). Its
-/// AI privacy file is read first: a repo it blocks whole is never indexed. Returns the repo indexed, if any.
-pub(crate) fn index_next_new_repo(tried: &mut HashMap<PathBuf, Instant>) -> Result<Option<PathBuf>> {
-    let Some(root) = kc_index::unindexed_roots()?.into_iter().find(|r| tried.get(r).is_none_or(|at| at.elapsed() >= NEW_REPO_RETRY)) else {
-        return Ok(None);
-    };
+/// The repos found under the workspace roots without a full index that may be indexed in the background now, smallest
+/// first: not `busy` being indexed, not failed within [`NEW_REPO_RETRY`] (`tried`), none while the cache has no room
+/// (see [`kc_index::cache::room_for_background`]). Each one's AI privacy file is read again first: a repo it now
+/// blocks whole is never indexed (and counts as tried).
+fn pending_new_repos(tried: &mut HashMap<PathBuf, Instant>, busy: &std::collections::HashSet<PathBuf>) -> Result<Vec<PathBuf>> {
     if !kc_index::cache::room_for_background()? {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    tried.insert(root.clone(), Instant::now());
-    if kc_index::privacy::Privacy::load(&root).whole() {
-        return Ok(None);
-    }
-    eprintln!("knowcode: indexing new repo {}", root.display());
-    match index_in_background(&root) {
-        Ok(_) => {
-            tried.remove(&root);
-            eprintln!("knowcode: indexed {}", root.display());
+    let mut out = Vec::new();
+    for root in kc_index::unindexed_roots()? {
+        if busy.contains(&root) || tried.get(&root).is_some_and(|at| at.elapsed() < NEW_REPO_RETRY) {
+            continue;
         }
-        Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
+        if kc_index::privacy::Privacy::load(&root).whole() {
+            tried.insert(root, Instant::now());
+            continue;
+        }
+        out.push(root);
     }
-    kc_index::cache::maintain_and_report(std::slice::from_ref(&root));
+    Ok(out)
+}
+
+/// Indexes the next repo [`pending_new_repos`] gives, on one thread, here. Returns it, if any.
+#[cfg(test)]
+pub(crate) fn index_next_new_repo(tried: &mut HashMap<PathBuf, Instant>) -> Result<Option<PathBuf>> {
+    let Some(root) = pending_new_repos(tried, &Default::default())?.into_iter().next() else { return Ok(None) };
+    tried.insert(root.clone(), Instant::now());
+    if let Err(e) = index_in_background(&root, 1) {
+        eprintln!("knowcode: indexing {} failed: {e}", root.display());
+    }
     Ok(Some(root))
 }
 

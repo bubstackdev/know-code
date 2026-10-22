@@ -28,6 +28,7 @@ pub mod grams;
 pub mod guess;
 pub mod health;
 pub mod light;
+pub mod machine;
 pub mod meter;
 pub mod http;
 pub mod notes;

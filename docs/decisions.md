@@ -36,7 +36,9 @@ produce a confidently complete empty answer. Index-version changes similarly
 require stale disclosure and background rebuilding.
 
 Background indexing runs at low priority with bounded concurrency and visible
-progress. There is no battery-specific pause. Incomplete, stale, sampled, and
+progress. It scales up only while the machine is idle and on power, and backs off
+to one repository on one thread under load, on battery or under memory pressure;
+queries come first. Incomplete, stale, sampled, and
 withheld answers retain their distinct meanings.
 
 ## Workspace and storage

@@ -111,9 +111,12 @@ enum Cmd {
         /// Index every git repo directly under this directory.
         #[arg(long)]
         workspace: Option<PathBuf>,
-        /// Parser threads (default: half the CPU cores).
+        /// Parser threads per repo (default: from the machine's cores, up to 8).
         #[arg(long)]
         threads: Option<usize>,
+        /// Repos indexed at once (default: from the machine's cores and memory).
+        #[arg(long)]
+        jobs: Option<usize>,
         /// Drop each index and rebuild it from scratch.
         #[arg(long)]
         rebuild: bool,
@@ -848,7 +851,7 @@ fn guard_privacy() -> Result<()> {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Cmd::Index { paths, workspace, threads, rebuild, scip, verify, phases, json } => index(paths, workspace, threads, rebuild, scip, verify, phases, json),
+        Cmd::Index { paths, workspace, threads, jobs, rebuild, scip, verify, phases, json } => index(paths, workspace, threads, jobs, rebuild, scip, verify, phases, json),
         Cmd::Forget { path } => {
             let root = std::fs::canonicalize(&path).unwrap_or(path);
             let removed = kc_index::forget(&root)?;
@@ -1297,6 +1300,7 @@ fn index(
     paths: Vec<PathBuf>,
     workspace: Option<PathBuf>,
     threads: Option<usize>,
+    jobs: Option<usize>,
     rebuild: bool,
     scip: Option<PathBuf>,
     verify: bool,
@@ -1322,27 +1326,33 @@ fn index(
     }
     let mut opts = SyncOptions { scip_compare: true, ..Default::default() };
     opts.verify |= verify;
-    if let Some(t) = threads {
-        opts.threads = t.max(1);
-    }
+    // Most of the machine (see `kc_index::machine`): several repos at once, within the cores and memory, unless asked
+    // otherwise. Phases are counted per process, so one repo at a time.
+    let plan = kc_index::machine::plan(&kc_index::machine::sniff(), kc_index::machine::Mode::Explicit, roots.len(), 0);
+    let jobs = if phases { 1 } else { jobs.unwrap_or(plan.repos).clamp(1, roots.len()) };
+    opts.threads = threads.unwrap_or((plan.threads * plan.repos / jobs).clamp(1, kc_index::machine::MAX_THREADS_PER_REPO)).max(1);
     let started = Instant::now();
-    let mut rows = Vec::new();
-    let mut seeds = kc_index::Seeds::default();
-    let mut changed = false;
-    for root in &roots {
+    let seeds = std::sync::Mutex::new(kc_index::Seeds::default());
+    let changed = std::sync::atomic::AtomicBool::new(false);
+    let printing = std::sync::Mutex::new(());
+    let one = |root: &PathBuf| -> Result<serde_json::Value> {
         let _writer = kc_index::writer::WriterLock::acquire(root)?;
         if rebuild {
             kc_index::forget(root)?;
         }
-        changed |= !kc_index::db_path(root)?.exists();
+        if !kc_index::db_path(root)?.exists() {
+            changed.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let mark = meter::Mark::now();
-        let mut store = seeds.open(root)?;
+        let mut store = seeds.lock().unwrap_or_else(|e| e.into_inner()).open(root)?;
         mark.record("open");
         if let Some(file) = &scip {
             kc_index::scip::set_source(&store, file)?;
         }
         let report = kc_index::sync(root, &mut store, &opts)?;
-        changed |= report.parsed + report.removed > 0;
+        if report.parsed + report.removed > 0 {
+            changed.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let content = kc_index::content::sync_content(root, &mut store, opts.threads)?;
         // Derived data earlier queries computed (areas, the file ranking), brought up to this index: left stale, the
         // first query after `index` would wait for it.
@@ -1362,6 +1372,8 @@ fn index(
         let costs = meter::take();
         let bytes = kc_index::index_bytes(root)?;
         let privacy = kc_index::privacy::Privacy::load(root);
+        // One repo's lines together, whichever finishes first.
+        let _print = printing.lock().unwrap_or_else(|e| e.into_inner());
         if !json && privacy.whole() {
             println!("{:<16} blocked: {} (its {}); not indexed", repo_name(root), privacy.detail(&repo_name(root)), kc_index::privacy::file_name());
         } else if !json {
@@ -1391,8 +1403,37 @@ fn index(
         if phases {
             row["phases"] = json!(costs);
         }
-        rows.push(row);
+        Ok(row)
+    };
+    // `jobs` threads take the repos in turn; rows keep the order the repos were named in.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<Result<serde_json::Value>>>> = roots.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(root) = roots.get(i) else { break };
+                    let result = one(root);
+                    *results[i].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+                }
+            });
+        }
+    });
+    let mut rows = Vec::new();
+    let mut failed = Vec::new();
+    for (root, result) in roots.iter().zip(results) {
+        match result.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            Some(Ok(row)) => rows.push(row),
+            Some(Err(e)) if roots.len() == 1 => return Err(e),
+            Some(Err(e)) => {
+                eprintln!("knowcode: {}: {e:#}", repo_name(root));
+                failed.push(repo_name(root));
+            }
+            None => {}
+        }
     }
+    let changed = changed.into_inner();
     let mut summary = None;
     if roots.len() > 1 && (changed || phases) {
         // Brings the workspace summary up to date once, so the first query doesn't reread every index.
@@ -1411,7 +1452,10 @@ fn index(
         }
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else if roots.len() > 1 {
-        println!("{} repos in {:.1} s", roots.len(), total_ms / 1000.0);
+        println!("{} repos in {:.1} s ({jobs} at a time, {} parser threads each)", roots.len(), total_ms / 1000.0, opts.threads);
+    }
+    if !failed.is_empty() {
+        anyhow::bail!("{} of {} repos failed to index: {}", failed.len(), roots.len(), failed.join(", "));
     }
     Ok(())
 }
