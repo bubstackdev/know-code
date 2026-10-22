@@ -172,22 +172,18 @@ fn view(full: &Arc<Vec<RepoSummary>>, key: &Option<String>, focus: &[PathBuf]) -
 /// those under the roots plus `focus`, the repos the caller answers for (see the module docs).
 pub fn summaries(focus: &[PathBuf]) -> Result<Arc<Vec<RepoSummary>>> {
     let summaries = load_private(focus)?.1;
-    CACHED_READS.with(|reads| {
-        let mut reads = reads.borrow_mut();
-        for s in summaries.iter().filter(|s| s.cached_only()) {
-            reads.entry(s.root.clone()).or_insert_with(|| s.generation().to_string());
-        }
-    });
+    let query = kc_store::limits::current();
+    for s in summaries.iter().filter(|s| s.cached_only()) {
+        query.note_cached_read(&s.root, s.generation());
+    }
     Ok(summaries)
 }
 
-thread_local! {
-    static CACHED_READS: std::cell::RefCell<HashMap<PathBuf, String>> = std::cell::RefCell::new(HashMap::new());
+/// The summary snapshots this query read, by repo, with their generations: even if a later lookup has already
+/// restored their indexes.
+pub fn cached_reads() -> HashMap<PathBuf, String> {
+    kc_store::limits::current().cached_reads()
 }
-
-/// Summary snapshots exposed during this operation, even if a later lookup has already restored their indexes.
-pub fn cached_reads() -> HashMap<PathBuf, String> { CACHED_READS.with(|r| r.borrow().clone()) }
-pub fn clear_cached_reads() { CACHED_READS.with(|r| r.borrow_mut().clear()); }
 
 /// One summary per indexed repo, in the workspace or not, sorted by root.
 pub fn all_summaries() -> Result<Arc<Vec<RepoSummary>>> {

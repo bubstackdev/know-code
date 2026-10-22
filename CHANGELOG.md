@@ -11,6 +11,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `server_unverified`. On a public workspace of a media server, a password manager and their web clients, 16 of the
   media client's operations linked into the password manager's server; none do now, and its 349 links into its own
   server are unchanged.
+- `kc_search` checks repos for freshness on worker threads; those workers now run as the call: a cancelled call stops
+  them, the call's freshness wait applies there, and what they note (gone checkouts, repos left out) reaches the
+  answer. The repos an answer read from a cached summary, and the indexes it used, are kept per query instead of per
+  thread.
 
 ## 0.2.0 (2026-10-22)
 
