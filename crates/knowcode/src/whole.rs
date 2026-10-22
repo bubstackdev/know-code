@@ -725,7 +725,8 @@ mod tests {
     /// DI registrations KnowCode doesn't read (assembly scans) bear on a type's answer only when they can register it:
     /// a scan of another project's assembly (`typeof(T).Assembly`) is left out; a scan of an assembly the code doesn't
     /// name is said in the "DI registrations: none found" line of a type nothing registers or injects, not as an
-    /// `unsupported` entry, and as one for a type the container knows.
+    /// `unsupported` entry, and as one for a type the container knows. A scan in test code (a test's own container) or
+    /// one exposing only another service (`.As<IModule>()`) is left out and counted.
     #[test]
     fn assembly_scans_are_said_only_where_they_can_register_the_type() {
         let cache = test_cache();
@@ -746,6 +747,15 @@ mod tests {
                     "src/Shop/Modules.cs",
                     "namespace Shop;\npublic static class Modules\n{\n    public static void Load(ContainerBuilder cb, System.Reflection.Assembly[] assemblies)\n    {\n        cb.RegisterAssemblyTypes(assemblies).AsImplementedInterfaces();\n    }\n}\n",
                 ),
+                // Scans that can't register IStore or IClock: one in test code, one exposing only another service.
+                (
+                    "test/Scenarios/LoadTests.cs",
+                    "namespace Scenarios;\npublic class LoadTests\n{\n    public void Load(ContainerBuilder cb, System.Reflection.Assembly[] assemblies)\n    {\n        cb.RegisterAssemblyTypes(assemblies).AsImplementedInterfaces();\n    }\n}\n",
+                ),
+                (
+                    "src/Shop/ModuleFinder.cs",
+                    "namespace Shop;\npublic static class ModuleFinder\n{\n    public static void Find(ContainerBuilder finder, System.Reflection.Assembly[] assemblies)\n    {\n        finder.RegisterAssemblyTypes(assemblies)\n            .Where(t => typeof(IModule).IsAssignableFrom(t))\n            .As<IModule>();\n    }\n}\n",
+                ),
             ],
         );
         let unsupported = |sym: &str| -> (Value, Vec<String>) {
@@ -763,10 +773,17 @@ mod tests {
             none.iter().any(|l| l.starts_with("DI registrations: none found") && l.ends_with("; 1 assembly scan not read (its assembly isn't named) may add one: src/Shop/Modules.cs:6")),
             "{none:?}"
         );
-        // IClock is injected: the unnamed scan bears on it.
-        let (_, di) = unsupported("IClock");
+        // Those that can't register it are counted there, not listed.
+        let left = "; DI constructs not read that can't register IStore: 1 in test code (a test's own container); 1 assembly scan exposing only IModule (src/Shop/ModuleFinder.cs:6);";
+        assert!(none.iter().any(|l| l.contains(left)), "{none:?}");
+        // IClock is injected: the unnamed scan bears on it, the test's and the module finder's don't.
+        let (env, di) = unsupported("IClock");
         assert_eq!(di.len(), 1, "{di:?}");
-        assert!(di[0].contains("(src/Shop/Modules.cs:6)") && !di[0].contains("ScanTests.cs"), "{di:?}");
+        assert!(di[0].contains("(src/Shop/Modules.cs:6)") && !di[0].contains("ScanTests.cs") && !di[0].contains("LoadTests.cs") && !di[0].contains("ModuleFinder.cs"), "{di:?}");
+        assert!(di[0].starts_with("di: a construct KnowCode doesn't read:"), "the count is of those listed: {di:?}");
+        let none: Vec<&str> = env["items"][0]["none_found"].as_array().map(|a| a.iter().map(|v| v.as_str().unwrap()).collect()).unwrap_or_default();
+        let left = "; DI constructs not read that can't register IClock: 1 in test code (a test's own container); 1 assembly scan exposing only IModule (src/Shop/ModuleFinder.cs:6)";
+        assert!(none.iter().any(|l| l.starts_with("DI registrations: none found") && l.ends_with(left)), "{env}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

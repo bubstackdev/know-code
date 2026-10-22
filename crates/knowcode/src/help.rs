@@ -87,7 +87,7 @@ depending on it), those reaching it `through` another type (a subclass of an imp
 `derived` interfaces, and `di`: its registrations and those of its derived interfaces and implementations (C#); each
 list empty is said in `none_found` with what was searched. An assembly scan that may register it is in `incomplete`
 (when nothing registers or injects the type, a scan of an assembly the code doesn't name is in its `none_found` line
-instead). Razor and other files KnowCode doesn't read as code are checked as text for the name: the lines naming it
+instead); one that can't (in test code, or exposing only other services) is counted in that line. Razor and other files KnowCode doesn't read as code are checked as text for the name: the lines naming it
 are in `incomplete`; when none does, `checked` says so.
 
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,

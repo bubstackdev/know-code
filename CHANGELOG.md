@@ -32,6 +32,17 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   argument's assembly (`typeof(T).Assembly`, `GetExecutingAssembly()`) is a project holding the type or an
   implementation of it; a scan of an assembly the code doesn't name is an `unsupported` entry only for a type the
   container knows (registered or injected), and otherwise a clause of its "DI registrations: none found" line.
+- A repo indexed under `GIT_CONFIG_GLOBAL=/dev/null`, as sandboxes and CI set it, is no longer said to have "changed
+  since its last index, and indexing is queued or running" on every answer. The freshness check stamped the global
+  git config by its mtime, and the mtime of `/dev/null` moves on every write to it anywhere on the machine; a device
+  or pipe is now stamped by its kind alone.
+- DI constructs KnowCode doesn't read that can't register the type asked about are left out of the `unsupported`
+  entry and counted in its "DI registrations: none found" line: those in test code (a test's own container), for a
+  type outside it, and, for an interface, an assembly scan exposing only other services (`.As<IModule>()`). On a
+  public DI library, `context IComponentContext` listed 13 assembly scans (12 in tests, 1 registering only modules);
+  it now lists none and says why. Razor files are checked as text for any number of names up to 200, in batches,
+  where more than 20 used to give the note that the files exist; a Razor file search can't read is named on its own.
+  `checked` says "none of 59 Razor files (.razor, .cshtml), checked as text, names X".
 - Lower memory in search and indexing, with answers unchanged. Trigram lists are intersected one at a time, in place, starting from the smallest; indexing workers allocate the trigram set only for files they index; a file read reserves its own size instead of growing twice. Path globs can no longer take exponential time: a bounded matcher takes over after a fixed amount of backtracking. The revision and manifest-version caches keep at most 1,024 entries each, so a long-running server no longer grows with every checkout state it has seen.
 - Leaner MCP answers and tool list. A clean, current answer no longer lists its repos: `repos` and `provenance` are
   left out unless a repo is dirty or was answered from its last sync, or something is `stale`, `failed` or
