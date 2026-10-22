@@ -5,12 +5,12 @@ This page reports the agent study pre-registered in [protocol.md](protocol.md). 
 misses. The study is small, and it compares KnowCode only with the plain tools tested here (grep, find, read). It
 says nothing about other tools, other models or other codebases.
 
-**Release status.** 0.2.0 is not yet released. The final run measured the release candidate at 00aae5b. After its
+**Release status.** 0.2.0 was released on October 22, 2026. Its code is the 6b8e4b5 build that the fifth-freeze run
+measured; the commits after it before the release changed only this evaluation and the changelog. The final run measured the release candidate at 00aae5b. After its
 results were published, a fix round landed, and the study was run once more as a **rerun** on main at b0a3564 (still
 version 0.2.0). Two more fix rounds followed, and the study was run a fourth time under a **fifth freeze**, on main at
 6b8e4b5 (still version 0.2.0) with the `core` tool profile KnowCode serves by default. Each later run is reported next
-to the earlier ones and does not replace them. If the released 0.2.0 differs from a measured build, these numbers
-describe the build measured, not the release.
+to the earlier ones and does not replace them. Each run's numbers describe the build it measured.
 
 **Summary.**
 

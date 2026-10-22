@@ -2,7 +2,14 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-22)
+
+0.2 set out to make answers that agents use without re-checking them, at a lower cost than reading files, and to
+show it in a [public, pre-registered study](eval/public-v1/results.md). On the released build the study met two of
+its four criteria: answers were as accurate as the plain-tools arm (F1 and recall equal), and agents used KnowCode
+without being told to in 24 of 24 sessions. It missed the other two: agents still re-checked about half of
+KnowCode's answers (the bar was a halving of the baseline rate), and sessions used about as many tokens as plain
+ones, not fewer. The results page reports every run and failure.
 
 - `serve` advertises the `core` tools by default: `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`,
   `kc_search`, `kc_more` and `kc_help`. A client that doesn't defer tools loads every advertised schema and the
