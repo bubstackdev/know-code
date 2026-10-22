@@ -1,0 +1,2475 @@
+{
+  "arms": {
+    "knowcode": {
+      "answers_with_claims": 60,
+      "by_tool": {
+        "kc_context": 13,
+        "kc_find": 2,
+        "kc_impact": 4,
+        "kc_refs": 4,
+        "kc_search": 8
+      },
+      "cache_read_median": 24179.5,
+      "classes": {
+        "a": 10,
+        "b1": 1,
+        "b2": 6,
+        "c": 1,
+        "d": 10,
+        "e": 2,
+        "f": 0,
+        "g": 1
+      },
+      "classes_any": {
+        "a": 16,
+        "b1": 1,
+        "b2": 7,
+        "c": 1,
+        "d": 14,
+        "e": 5,
+        "g": 1
+      },
+      "kc_answer_bytes_mean": 2759.9032258064517,
+      "kc_answer_bytes_median": 1987.5,
+      "kc_answer_bytes_per_session_median": 5491.0,
+      "mean_session_recheck_share": 0.6590277777777778,
+      "rate": 0.5166666666666667,
+      "rate_excl_same_turn": 0.5,
+      "rechecked": 31,
+      "rechecked_excl_same_turn": 30,
+      "sessions": 24,
+      "sessions_with_claims": 24,
+      "sessions_with_recheck": 20,
+      "uncached_input_median": 7225.0
+    },
+    "knowcode-unprompted": {
+      "answers_with_claims": 69,
+      "by_tool": {
+        "kc_context": 8,
+        "kc_find": 5,
+        "kc_impact": 2,
+        "kc_refs": 4,
+        "kc_search": 9
+      },
+      "cache_read_median": 21187.5,
+      "classes": {
+        "a": 10,
+        "b1": 1,
+        "b2": 4,
+        "c": 1,
+        "d": 8,
+        "e": 1,
+        "f": 0,
+        "g": 3
+      },
+      "classes_any": {
+        "a": 16,
+        "b1": 1,
+        "b2": 5,
+        "c": 1,
+        "d": 11,
+        "e": 2,
+        "g": 3
+      },
+      "kc_answer_bytes_mean": 2728.9861111111113,
+      "kc_answer_bytes_median": 1878.5,
+      "kc_answer_bytes_per_session_median": 6216.0,
+      "mean_session_recheck_share": 0.5638888888888889,
+      "rate": 0.4057971014492754,
+      "rate_excl_same_turn": 0.36231884057971014,
+      "rechecked": 28,
+      "rechecked_excl_same_turn": 25,
+      "sessions": 24,
+      "sessions_with_claims": 24,
+      "sessions_with_recheck": 18,
+      "uncached_input_median": 7370.5
+    },
+    "plain": {
+      "cache_read_median": 21848.5,
+      "sessions": 24,
+      "uncached_input_median": 6944.0
+    }
+  },
+  "format": "freeze5-diagnostics-1",
+  "note": "descriptive; not criteria; classes are AI-made",
+  "recheck_rows": [
+    {
+      "all_checks_refused": true,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-006",
+      "session": "knowcode-unprompted-public-definition-lookup-006",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-di-implementations-004",
+      "session": "knowcode-public-di-implementations-004",
+      "tool": "kc_refs",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "g",
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": true,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-di-implementations-004",
+      "session": "knowcode-public-di-implementations-004",
+      "tool": "kc_search",
+      "trigger": "g"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-definition-lookup-005",
+      "session": "knowcode-unprompted-public-definition-lookup-005",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "g",
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": true,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-definition-lookup-005",
+      "session": "knowcode-unprompted-public-definition-lookup-005",
+      "tool": "kc_search",
+      "trigger": "g"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-003",
+      "session": "knowcode-unprompted-public-di-implementations-003",
+      "tool": "kc_context",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-005",
+      "session": "knowcode-public-di-implementations-005",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-005",
+      "session": "knowcode-public-di-implementations-005",
+      "tool": "kc_refs",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b1",
+        "b2",
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-001",
+      "session": "knowcode-unprompted-public-di-implementations-001",
+      "tool": "kc_context",
+      "trigger": "b1"
+    },
+    {
+      "all_checks_refused": true,
+      "also": [
+        "b2",
+        "e",
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-006",
+      "session": "knowcode-public-http-cross-repo-006",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "c"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-006",
+      "session": "knowcode-public-http-cross-repo-006",
+      "tool": "kc_search",
+      "trigger": "c"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-006",
+      "session": "knowcode-public-http-cross-repo-006",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "e",
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-002",
+      "session": "knowcode-unprompted-public-http-cross-repo-002",
+      "tool": "kc_context",
+      "trigger": "e"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-002",
+      "session": "knowcode-unprompted-public-http-cross-repo-002",
+      "tool": "kc_refs",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "g",
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": true,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-002",
+      "session": "knowcode-unprompted-public-http-cross-repo-002",
+      "tool": "kc_search",
+      "trigger": "g"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-005",
+      "session": "knowcode-public-definition-lookup-005",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-two-hop-impact-001",
+      "session": "knowcode-unprompted-public-two-hop-impact-001",
+      "tool": "kc_impact",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "c"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "read",
+            "read",
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-two-hop-impact-001",
+      "session": "knowcode-unprompted-public-two-hop-impact-001",
+      "tool": "kc_search",
+      "trigger": "c"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "e",
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-001",
+      "session": "knowcode-public-http-cross-repo-001",
+      "tool": "kc_context",
+      "trigger": "e"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b1",
+        "b2",
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-001",
+      "session": "knowcode-public-di-implementations-001",
+      "tool": "kc_context",
+      "trigger": "b1"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-004",
+      "session": "knowcode-unprompted-public-two-hop-impact-004",
+      "tool": "kc_context",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": true,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-006",
+      "session": "knowcode-public-di-implementations-006",
+      "tool": "kc_context",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-003",
+      "session": "knowcode-unprompted-public-two-hop-impact-003",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-003",
+      "session": "knowcode-unprompted-public-two-hop-impact-003",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "read",
+            "read",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-005",
+      "session": "knowcode-public-two-hop-impact-005",
+      "tool": "kc_impact",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-di-implementations-004",
+      "session": "knowcode-unprompted-public-di-implementations-004",
+      "tool": "kc_refs",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-di-implementations-004",
+      "session": "knowcode-unprompted-public-di-implementations-004",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "e",
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-005",
+      "session": "knowcode-public-http-cross-repo-005",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-002",
+      "session": "knowcode-unprompted-public-two-hop-impact-002",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-002",
+      "session": "knowcode-unprompted-public-two-hop-impact-002",
+      "tool": "kc_impact",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-004",
+      "session": "knowcode-public-two-hop-impact-004",
+      "tool": "kc_context",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "e",
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-004",
+      "session": "knowcode-unprompted-public-http-cross-repo-004",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-two-hop-impact-003",
+      "session": "knowcode-public-two-hop-impact-003",
+      "tool": "kc_impact",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": true,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-two-hop-impact-003",
+      "session": "knowcode-public-two-hop-impact-003",
+      "tool": "kc_refs",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-002",
+      "session": "knowcode-public-di-implementations-002",
+      "tool": "kc_context",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": true,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-002",
+      "session": "knowcode-unprompted-public-definition-lookup-002",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "e",
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": true,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-004",
+      "session": "knowcode-public-http-cross-repo-004",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-004",
+      "session": "knowcode-public-http-cross-repo-004",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "read",
+            "search",
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-005",
+      "session": "knowcode-unprompted-public-di-implementations-005",
+      "tool": "kc_refs",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-003",
+      "session": "knowcode-public-di-implementations-003",
+      "tool": "kc_context",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": true,
+      "also": [
+        "g",
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "search"
+          ],
+          "same_turn": true,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-di-implementations-006",
+      "session": "knowcode-unprompted-public-di-implementations-006",
+      "tool": "kc_context",
+      "trigger": "g"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-001",
+      "session": "knowcode-public-two-hop-impact-001",
+      "tool": "kc_impact",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-001",
+      "session": "knowcode-public-two-hop-impact-001",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-001",
+      "session": "knowcode-public-two-hop-impact-001",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-005",
+      "session": "knowcode-unprompted-public-http-cross-repo-005",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-005",
+      "session": "knowcode-unprompted-public-http-cross-repo-005",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-http-cross-repo-005",
+      "session": "knowcode-unprompted-public-http-cross-repo-005",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-002",
+      "session": "knowcode-public-two-hop-impact-002",
+      "tool": "kc_impact",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        },
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-002",
+      "session": "knowcode-public-two-hop-impact-002",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-006",
+      "session": "knowcode-public-two-hop-impact-006",
+      "tool": "kc_context",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Read"
+        }
+      ],
+      "question": "public-two-hop-impact-006",
+      "session": "knowcode-public-two-hop-impact-006",
+      "tool": "kc_search",
+      "trigger": "a"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-001",
+      "session": "knowcode-unprompted-public-definition-lookup-001",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search",
+            "search",
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-001",
+      "session": "knowcode-unprompted-public-definition-lookup-001",
+      "tool": "kc_refs",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-004",
+      "session": "knowcode-public-definition-lookup-004",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-004",
+      "session": "knowcode-public-definition-lookup-004",
+      "tool": "kc_refs",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": true,
+      "also": [
+        "d"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-definition-lookup-003",
+      "session": "knowcode-unprompted-public-definition-lookup-003",
+      "tool": "kc_find",
+      "trigger": "d"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "e",
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read",
+            "read",
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        },
+        {
+          "reasons": [
+            "search"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-002",
+      "session": "knowcode-public-http-cross-repo-002",
+      "tool": "kc_context",
+      "trigger": "e"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "a"
+      ],
+      "arm": "knowcode",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-003",
+      "session": "knowcode-public-http-cross-repo-003",
+      "tool": "kc_context",
+      "trigger": "b2"
+    },
+    {
+      "all_checks_refused": false,
+      "also": [
+        "b2",
+        "a"
+      ],
+      "arm": "knowcode-unprompted",
+      "checks": [
+        {
+          "reasons": [
+            "read"
+          ],
+          "same_turn": false,
+          "tool": "Bash"
+        }
+      ],
+      "question": "public-http-cross-repo-003",
+      "session": "knowcode-unprompted-public-http-cross-repo-003",
+      "tool": "kc_context",
+      "trigger": "b2"
+    }
+  ],
+  "sessions": [
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 12005,
+      "kc_answer_bytes_total": 1928,
+      "kc_answers": 2,
+      "ordinal": 1,
+      "question_id": "public-definition-lookup-006",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-definition-lookup-006",
+      "status": "answered",
+      "uncached_input": 5201
+    },
+    {
+      "arm": "plain",
+      "cache_read": 81945,
+      "ordinal": 2,
+      "question_id": "public-di-implementations-005",
+      "session": "plain-public-di-implementations-005",
+      "status": "answered",
+      "uncached_input": 28060
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 10564,
+      "kc_answer_bytes_total": 4420,
+      "kc_answers": 2,
+      "ordinal": 3,
+      "question_id": "public-di-implementations-004",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-di-implementations-004",
+      "status": "answered",
+      "uncached_input": 4037
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 14717,
+      "kc_answer_bytes_total": 2507,
+      "kc_answers": 2,
+      "ordinal": 4,
+      "question_id": "public-definition-lookup-005",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-definition-lookup-005",
+      "status": "answered",
+      "uncached_input": 3642
+    },
+    {
+      "arm": "plain",
+      "cache_read": 17316,
+      "ordinal": 5,
+      "question_id": "public-di-implementations-003",
+      "session": "plain-public-di-implementations-003",
+      "status": "answered",
+      "uncached_input": 5804
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 10508,
+      "kc_answer_bytes_total": 2256,
+      "kc_answers": 2,
+      "ordinal": 6,
+      "question_id": "public-definition-lookup-002",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-public-definition-lookup-002",
+      "status": "answered",
+      "uncached_input": 2505
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode-unprompted",
+      "cache_read": 19085,
+      "kc_answer_bytes_total": 5595,
+      "kc_answers": 1,
+      "ordinal": 7,
+      "question_id": "public-di-implementations-003",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-di-implementations-003",
+      "status": "answered",
+      "uncached_input": 4524
+    },
+    {
+      "arm": "plain",
+      "cache_read": 34705,
+      "ordinal": 8,
+      "question_id": "public-http-cross-repo-001",
+      "session": "plain-public-http-cross-repo-001",
+      "status": "unsupported",
+      "uncached_input": 9772
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 29004,
+      "kc_answer_bytes_total": 13596,
+      "kc_answers": 2,
+      "ordinal": 9,
+      "question_id": "public-di-implementations-005",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-public-di-implementations-005",
+      "status": "answered",
+      "uncached_input": 11665
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode-unprompted",
+      "cache_read": 31321,
+      "kc_answer_bytes_total": 5894,
+      "kc_answers": 1,
+      "ordinal": 10,
+      "question_id": "public-di-implementations-001",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-di-implementations-001",
+      "status": "answered",
+      "uncached_input": 7913
+    },
+    {
+      "arm": "plain",
+      "cache_read": 35696,
+      "ordinal": 11,
+      "question_id": "public-http-cross-repo-003",
+      "session": "plain-public-http-cross-repo-003",
+      "status": "answered",
+      "uncached_input": 7079
+    },
+    {
+      "answers_with_claims": 9,
+      "arm": "knowcode",
+      "cache_read": 102547,
+      "kc_answer_bytes_total": 19237,
+      "kc_answers": 10,
+      "ordinal": 12,
+      "question_id": "public-http-cross-repo-006",
+      "rechecked": 3,
+      "rechecked_excl_same_turn": 3,
+      "session": "knowcode-public-http-cross-repo-006",
+      "status": "answered",
+      "uncached_input": 14711
+    },
+    {
+      "answers_with_claims": 5,
+      "arm": "knowcode-unprompted",
+      "cache_read": 43015,
+      "kc_answer_bytes_total": 16349,
+      "kc_answers": 5,
+      "ordinal": 13,
+      "question_id": "public-http-cross-repo-002",
+      "rechecked": 3,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-unprompted-public-http-cross-repo-002",
+      "status": "answered",
+      "uncached_input": 13521
+    },
+    {
+      "arm": "plain",
+      "cache_read": 19047,
+      "ordinal": 14,
+      "question_id": "public-di-implementations-001",
+      "session": "plain-public-di-implementations-001",
+      "status": "answered",
+      "uncached_input": 6809
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 10120,
+      "kc_answer_bytes_total": 855,
+      "kc_answers": 1,
+      "ordinal": 15,
+      "question_id": "public-definition-lookup-005",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-definition-lookup-005",
+      "status": "answered",
+      "uncached_input": 2264
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 61273,
+      "kc_answer_bytes_total": 10101,
+      "kc_answers": 2,
+      "ordinal": 16,
+      "question_id": "public-two-hop-impact-001",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-unprompted-public-two-hop-impact-001",
+      "status": "answered",
+      "uncached_input": 12895
+    },
+    {
+      "arm": "plain",
+      "cache_read": 29002,
+      "ordinal": 17,
+      "question_id": "public-http-cross-repo-002",
+      "session": "plain-public-http-cross-repo-002",
+      "status": "answered",
+      "uncached_input": 9702
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 63327,
+      "kc_answer_bytes_total": 5361,
+      "kc_answers": 1,
+      "ordinal": 18,
+      "question_id": "public-http-cross-repo-001",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-http-cross-repo-001",
+      "status": "answered",
+      "uncached_input": 9141
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode-unprompted",
+      "cache_read": 19075,
+      "kc_answer_bytes_total": 9438,
+      "kc_answers": 3,
+      "ordinal": 19,
+      "question_id": "public-di-implementations-002",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-di-implementations-002",
+      "status": "answered",
+      "uncached_input": 6030
+    },
+    {
+      "arm": "plain",
+      "cache_read": 5766,
+      "ordinal": 20,
+      "question_id": "public-two-hop-impact-004",
+      "session": "plain-public-two-hop-impact-004",
+      "status": "answered",
+      "uncached_input": 5465
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 22391,
+      "kc_answer_bytes_total": 5894,
+      "kc_answers": 1,
+      "ordinal": 21,
+      "question_id": "public-di-implementations-001",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-di-implementations-001",
+      "status": "answered",
+      "uncached_input": 7945
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode-unprompted",
+      "cache_read": 21429,
+      "kc_answer_bytes_total": 7212,
+      "kc_answers": 3,
+      "ordinal": 22,
+      "question_id": "public-two-hop-impact-004",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-two-hop-impact-004",
+      "status": "answered",
+      "uncached_input": 7666
+    },
+    {
+      "arm": "plain",
+      "cache_read": 11480,
+      "ordinal": 23,
+      "question_id": "public-di-implementations-004",
+      "session": "plain-public-di-implementations-004",
+      "status": "answered",
+      "uncached_input": 3434
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode",
+      "cache_read": 18964,
+      "kc_answer_bytes_total": 7753,
+      "kc_answers": 3,
+      "ordinal": 24,
+      "question_id": "public-di-implementations-006",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-di-implementations-006",
+      "status": "answered",
+      "uncached_input": 6084
+    },
+    {
+      "answers_with_claims": 4,
+      "arm": "knowcode-unprompted",
+      "cache_read": 60498,
+      "kc_answer_bytes_total": 17709,
+      "kc_answers": 4,
+      "ordinal": 25,
+      "question_id": "public-two-hop-impact-003",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-unprompted-public-two-hop-impact-003",
+      "status": "answered",
+      "uncached_input": 16087
+    },
+    {
+      "arm": "plain",
+      "cache_read": 6859,
+      "ordinal": 26,
+      "question_id": "public-definition-lookup-006",
+      "session": "plain-public-definition-lookup-006",
+      "status": "answered",
+      "uncached_input": 2675
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 35849,
+      "kc_answer_bytes_total": 9890,
+      "kc_answers": 2,
+      "ordinal": 27,
+      "question_id": "public-two-hop-impact-005",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-two-hop-impact-005",
+      "status": "answered",
+      "uncached_input": 14624
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 16554,
+      "kc_answer_bytes_total": 4420,
+      "kc_answers": 2,
+      "ordinal": 28,
+      "question_id": "public-di-implementations-004",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-unprompted-public-di-implementations-004",
+      "status": "answered",
+      "uncached_input": 4731
+    },
+    {
+      "arm": "plain",
+      "cache_read": 48901,
+      "ordinal": 29,
+      "question_id": "public-two-hop-impact-002",
+      "session": "plain-public-two-hop-impact-002",
+      "status": "answered",
+      "uncached_input": 11576
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 19930,
+      "kc_answer_bytes_total": 5068,
+      "kc_answers": 1,
+      "ordinal": 30,
+      "question_id": "public-http-cross-repo-005",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-http-cross-repo-005",
+      "status": "answered",
+      "uncached_input": 7129
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode-unprompted",
+      "cache_read": 60306,
+      "kc_answer_bytes_total": 5312,
+      "kc_answers": 3,
+      "ordinal": 31,
+      "question_id": "public-two-hop-impact-002",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-unprompted-public-two-hop-impact-002",
+      "status": "answered",
+      "uncached_input": 12559
+    },
+    {
+      "arm": "plain",
+      "cache_read": 13776,
+      "ordinal": 32,
+      "question_id": "public-two-hop-impact-006",
+      "session": "plain-public-two-hop-impact-006",
+      "status": "answered",
+      "uncached_input": 5450
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode",
+      "cache_read": 30748,
+      "kc_answer_bytes_total": 6487,
+      "kc_answers": 3,
+      "ordinal": 33,
+      "question_id": "public-two-hop-impact-004",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-two-hop-impact-004",
+      "status": "answered",
+      "uncached_input": 7321
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode-unprompted",
+      "cache_read": 35812,
+      "kc_answer_bytes_total": 5441,
+      "kc_answers": 1,
+      "ordinal": 34,
+      "question_id": "public-http-cross-repo-004",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-http-cross-repo-004",
+      "status": "answered",
+      "uncached_input": 7075
+    },
+    {
+      "arm": "plain",
+      "cache_read": 12551,
+      "ordinal": 35,
+      "question_id": "public-di-implementations-002",
+      "session": "plain-public-di-implementations-002",
+      "status": "answered",
+      "uncached_input": 5890
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 46011,
+      "kc_answer_bytes_total": 10222,
+      "kc_answers": 2,
+      "ordinal": 36,
+      "question_id": "public-two-hop-impact-003",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-public-two-hop-impact-003",
+      "status": "answered",
+      "uncached_input": 10520
+    },
+    {
+      "answers_with_claims": 8,
+      "arm": "knowcode-unprompted",
+      "cache_read": 74632,
+      "kc_answer_bytes_total": 16337,
+      "kc_answers": 8,
+      "ordinal": 37,
+      "question_id": "public-http-cross-repo-001",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-http-cross-repo-001",
+      "status": "answered",
+      "uncached_input": 13190
+    },
+    {
+      "arm": "plain",
+      "cache_read": 7032,
+      "ordinal": 38,
+      "question_id": "public-definition-lookup-003",
+      "session": "plain-public-definition-lookup-003",
+      "status": "answered",
+      "uncached_input": 2559
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 25968,
+      "kc_answer_bytes_total": 5015,
+      "kc_answers": 1,
+      "ordinal": 39,
+      "question_id": "public-di-implementations-002",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-di-implementations-002",
+      "status": "answered",
+      "uncached_input": 5053
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 15456,
+      "kc_answer_bytes_total": 2256,
+      "kc_answers": 2,
+      "ordinal": 40,
+      "question_id": "public-definition-lookup-002",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-definition-lookup-002",
+      "status": "answered",
+      "uncached_input": 2936
+    },
+    {
+      "arm": "plain",
+      "cache_read": 24650,
+      "ordinal": 41,
+      "question_id": "public-two-hop-impact-001",
+      "session": "plain-public-two-hop-impact-001",
+      "status": "answered",
+      "uncached_input": 10453
+    },
+    {
+      "answers_with_claims": 8,
+      "arm": "knowcode",
+      "cache_read": 52854,
+      "kc_answer_bytes_total": 12610,
+      "kc_answers": 9,
+      "ordinal": 42,
+      "question_id": "public-http-cross-repo-004",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-public-http-cross-repo-004",
+      "status": "answered",
+      "uncached_input": 10592
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode-unprompted",
+      "cache_read": 13334,
+      "kc_answer_bytes_total": 7697,
+      "kc_answers": 1,
+      "ordinal": 43,
+      "question_id": "public-di-implementations-005",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-di-implementations-005",
+      "status": "answered",
+      "uncached_input": 8410
+    },
+    {
+      "arm": "plain",
+      "cache_read": 25718,
+      "ordinal": 44,
+      "question_id": "public-two-hop-impact-003",
+      "session": "plain-public-two-hop-impact-003",
+      "status": "answered",
+      "uncached_input": 9794
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 10259,
+      "kc_answer_bytes_total": 2872,
+      "kc_answers": 2,
+      "ordinal": 45,
+      "question_id": "public-definition-lookup-001",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-public-definition-lookup-001",
+      "status": "answered",
+      "uncached_input": 2698
+    },
+    {
+      "answers_with_claims": 4,
+      "arm": "knowcode-unprompted",
+      "cache_read": 46276,
+      "kc_answer_bytes_total": 15180,
+      "kc_answers": 7,
+      "ordinal": 46,
+      "question_id": "public-http-cross-repo-006",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-http-cross-repo-006",
+      "status": "answered",
+      "uncached_input": 12266
+    },
+    {
+      "arm": "plain",
+      "cache_read": 3688,
+      "ordinal": 47,
+      "question_id": "public-definition-lookup-001",
+      "session": "plain-public-definition-lookup-001",
+      "status": "answered",
+      "uncached_input": 2529
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 19075,
+      "kc_answer_bytes_total": 5595,
+      "kc_answers": 1,
+      "ordinal": 48,
+      "question_id": "public-di-implementations-003",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-di-implementations-003",
+      "status": "answered",
+      "uncached_input": 4523
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode-unprompted",
+      "cache_read": 12759,
+      "kc_answer_bytes_total": 7753,
+      "kc_answers": 3,
+      "ordinal": 49,
+      "question_id": "public-di-implementations-006",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-di-implementations-006",
+      "status": "answered",
+      "uncached_input": 6036
+    },
+    {
+      "arm": "plain",
+      "cache_read": 38867,
+      "ordinal": 50,
+      "question_id": "public-http-cross-repo-004",
+      "session": "plain-public-http-cross-repo-004",
+      "status": "answered",
+      "uncached_input": 7405
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode",
+      "cache_read": 77730,
+      "kc_answer_bytes_total": 14300,
+      "kc_answers": 3,
+      "ordinal": 51,
+      "question_id": "public-two-hop-impact-001",
+      "rechecked": 3,
+      "rechecked_excl_same_turn": 3,
+      "session": "knowcode-public-two-hop-impact-001",
+      "status": "answered",
+      "uncached_input": 16937
+    },
+    {
+      "answers_with_claims": 5,
+      "arm": "knowcode-unprompted",
+      "cache_read": 52277,
+      "kc_answer_bytes_total": 6538,
+      "kc_answers": 5,
+      "ordinal": 52,
+      "question_id": "public-http-cross-repo-005",
+      "rechecked": 3,
+      "rechecked_excl_same_turn": 3,
+      "session": "knowcode-unprompted-public-http-cross-repo-005",
+      "status": "answered",
+      "uncached_input": 9120
+    },
+    {
+      "arm": "plain",
+      "cache_read": 109357,
+      "ordinal": 53,
+      "question_id": "public-http-cross-repo-005",
+      "session": "plain-public-http-cross-repo-005",
+      "status": "answered",
+      "uncached_input": 27372
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode",
+      "cache_read": 55185,
+      "kc_answer_bytes_total": 10030,
+      "kc_answers": 3,
+      "ordinal": 54,
+      "question_id": "public-two-hop-impact-002",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-public-two-hop-impact-002",
+      "status": "answered",
+      "uncached_input": 15887
+    },
+    {
+      "answers_with_claims": 4,
+      "arm": "knowcode-unprompted",
+      "cache_read": 20946,
+      "kc_answer_bytes_total": 9798,
+      "kc_answers": 4,
+      "ordinal": 55,
+      "question_id": "public-two-hop-impact-006",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-two-hop-impact-006",
+      "status": "answered",
+      "uncached_input": 6838
+    },
+    {
+      "arm": "plain",
+      "cache_read": 7005,
+      "ordinal": 56,
+      "question_id": "public-definition-lookup-004",
+      "session": "plain-public-definition-lookup-004",
+      "status": "answered",
+      "uncached_input": 3094
+    },
+    {
+      "answers_with_claims": 5,
+      "arm": "knowcode",
+      "cache_read": 39116,
+      "kc_answer_bytes_total": 10687,
+      "kc_answers": 5,
+      "ordinal": 57,
+      "question_id": "public-two-hop-impact-006",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-public-two-hop-impact-006",
+      "status": "answered",
+      "uncached_input": 8251
+    },
+    {
+      "answers_with_claims": 5,
+      "arm": "knowcode-unprompted",
+      "cache_read": 87659,
+      "kc_answer_bytes_total": 22372,
+      "kc_answers": 5,
+      "ordinal": 58,
+      "question_id": "public-two-hop-impact-005",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-two-hop-impact-005",
+      "status": "answered",
+      "uncached_input": 17501
+    },
+    {
+      "arm": "plain",
+      "cache_read": 34373,
+      "ordinal": 59,
+      "question_id": "public-di-implementations-006",
+      "session": "plain-public-di-implementations-006",
+      "status": "answered",
+      "uncached_input": 14515
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 9965,
+      "kc_answer_bytes_total": 1801,
+      "kc_answers": 2,
+      "ordinal": 60,
+      "question_id": "public-definition-lookup-006",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-public-definition-lookup-006",
+      "status": "answered",
+      "uncached_input": 2251
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 15391,
+      "kc_answer_bytes_total": 2872,
+      "kc_answers": 2,
+      "ordinal": 61,
+      "question_id": "public-definition-lookup-001",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-unprompted-public-definition-lookup-001",
+      "status": "answered",
+      "uncached_input": 3548
+    },
+    {
+      "arm": "plain",
+      "cache_read": 64315,
+      "ordinal": 62,
+      "question_id": "public-two-hop-impact-005",
+      "session": "plain-public-two-hop-impact-005",
+      "status": "answered",
+      "uncached_input": 15855
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 15981,
+      "kc_answer_bytes_total": 3578,
+      "kc_answers": 2,
+      "ordinal": 63,
+      "question_id": "public-definition-lookup-004",
+      "rechecked": 2,
+      "rechecked_excl_same_turn": 2,
+      "session": "knowcode-public-definition-lookup-004",
+      "status": "answered",
+      "uncached_input": 3969
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode-unprompted",
+      "cache_read": 14708,
+      "kc_answer_bytes_total": 3025,
+      "kc_answers": 2,
+      "ordinal": 64,
+      "question_id": "public-definition-lookup-003",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-definition-lookup-003",
+      "status": "answered",
+      "uncached_input": 3114
+    },
+    {
+      "arm": "plain",
+      "cache_read": 3699,
+      "ordinal": 65,
+      "question_id": "public-definition-lookup-002",
+      "session": "plain-public-definition-lookup-002",
+      "status": "answered",
+      "uncached_input": 4017
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 21289,
+      "kc_answer_bytes_total": 4409,
+      "kc_answers": 1,
+      "ordinal": 66,
+      "question_id": "public-http-cross-repo-002",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-http-cross-repo-002",
+      "status": "answered",
+      "uncached_input": 7586
+    },
+    {
+      "answers_with_claims": 3,
+      "arm": "knowcode-unprompted",
+      "cache_read": 15987,
+      "kc_answer_bytes_total": 5366,
+      "kc_answers": 3,
+      "ordinal": 67,
+      "question_id": "public-definition-lookup-004",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-unprompted-public-definition-lookup-004",
+      "status": "answered",
+      "uncached_input": 4088
+    },
+    {
+      "arm": "plain",
+      "cache_read": 5901,
+      "ordinal": 68,
+      "question_id": "public-definition-lookup-005",
+      "session": "plain-public-definition-lookup-005",
+      "status": "answered",
+      "uncached_input": 4039
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode",
+      "cache_read": 36271,
+      "kc_answer_bytes_total": 5387,
+      "kc_answers": 1,
+      "ordinal": 69,
+      "question_id": "public-http-cross-repo-003",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-public-http-cross-repo-003",
+      "status": "answered",
+      "uncached_input": 7068
+    },
+    {
+      "answers_with_claims": 1,
+      "arm": "knowcode-unprompted",
+      "cache_read": 52330,
+      "kc_answer_bytes_total": 5387,
+      "kc_answers": 1,
+      "ordinal": 70,
+      "question_id": "public-http-cross-repo-003",
+      "rechecked": 1,
+      "rechecked_excl_same_turn": 1,
+      "session": "knowcode-unprompted-public-http-cross-repo-003",
+      "status": "answered",
+      "uncached_input": 7980
+    },
+    {
+      "arm": "plain",
+      "cache_read": 208575,
+      "ordinal": 71,
+      "question_id": "public-http-cross-repo-006",
+      "session": "plain-public-http-cross-repo-006",
+      "status": "unsupported",
+      "uncached_input": 35203
+    },
+    {
+      "answers_with_claims": 2,
+      "arm": "knowcode",
+      "cache_read": 10121,
+      "kc_answer_bytes_total": 3791,
+      "kc_answers": 2,
+      "ordinal": 72,
+      "question_id": "public-definition-lookup-003",
+      "rechecked": 0,
+      "rechecked_excl_same_turn": 0,
+      "session": "knowcode-public-definition-lookup-003",
+      "status": "answered",
+      "uncached_input": 2977
+    }
+  ]
+}
