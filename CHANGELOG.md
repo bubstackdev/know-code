@@ -2,6 +2,19 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- A cited site carries its statement, not just its line. When the call, request or reference a row cites is part of a
+  statement over several lines, `cite` quotes the rest of it, at most 2 lines each side: the arguments a call's line
+  opens, the builder call a `.SingleInstance()` line continues, the condition of a `? :` branch, the `case` label a
+  line runs under. `at` is the range quoted; `cut` says where a longer statement starts or that it goes on. This
+  covers `kc_refs` items, `kc_context` callers (and callees its `source` doesn't quote), `kc_impact` rows,
+  `kc_trace` nodes and `kc_path` and `kc_flow` steps; text trees mark the statement's other lines with `-`. A line
+  that stands alone, or a member of an initializer in braces, still quotes one line. Over MCP the size cap drops
+  statement lines, from the last row up, before it cuts a row. On the 67 distinct `kc_refs`, `kc_context`,
+  `kc_impact` and `kc_trace` calls of the public study's runs, answers grow 1.7% (295,622 to 300,592 bytes) and show
+  the same 720 rows.
+
 ## 0.2.0 (2026-10-22)
 
 0.2 set out to make answers that agents use without re-checking them, at a lower cost than reading files, and to
