@@ -7,7 +7,7 @@
     },
     "config": {
       "path": "config.json",
-      "sha256": "31c930d589c3ca6c666dbefd0c5fd382bd5967e1427ee60da6ac6357eaafa0bb"
+      "sha256": "c9dc6d9425b922d0d5e934d632e33cbd3e659cf51630573b821019ffb17cf247"
     },
     "labels": {
       "path": "labels.jsonl",
@@ -27,11 +27,11 @@
     },
     "plan": {
       "path": "plan.json",
-      "sha256": "5b8fbe1c097285d74197f222b33355609c23c6609e85b035238ebb469564242d"
+      "sha256": "49fd76d915657d802e726893f7727462dc8d6024a374df8a1a021a4a5e35ad7c"
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "1f796e6407da17158036021251fef28d7205d7c5ab8177fa848ee985c7ce88ff"
+      "sha256": "420634488cbe2286bbd418f83475cca15fa253bcb297ba63e548450a23b93c09"
     },
     "provisional": {
       "path": "provisional.json",
@@ -90,5 +90,5 @@
     "scripts/prepare-public-eval-index.py": "d48844a6199399367e32fc41ea9ba9603adc33397bef3b47be83e6ece29f99e0",
     "scripts/prepare-public-eval-session.py": "aa4881a3e5137d971a624106c6e7f4665a7c6bce9ba96b8791cfd96fa5efca3e"
   },
-  "revision": "Fourth freeze, revised 2026-10-21. The user stopped the rerun on the 702da21 build after 6 of 72 sessions; those sessions are discarded and not scored. config.knowcode_sha256 moves from 702da21 (5323abc9...) to b0a3564 (e55fdc31..., memory fixes in search and indexing, answers unchanged); plan.json is re-planned (order unchanged) and protocol.md records the stop. Nothing else changed. Earlier in this freeze (from the third, 0141cee5): the re-check detector reads 0.2 compact forms and the scorer adds the descriptive stale-index measure; on the published runs the criterion-1 counts are identical and no answer changed re-checked status (two final-run sessions attribute more plain calls to re-checks: knowcode impact 001 3 to 4, knowcode-unprompted impact 001 2 to 4, because the 0.2.0 binary already emitted compact from strings). Criteria and thresholds unchanged."
+  "revision": "Fifth freeze (2026-10-22), for a run on the 6b8e4b5 build. Changed from the fourth freeze: config.knowcode_sha256 (b0a3564, e55fdc31..., to 6b8e4b5, 1bda7bbe...); config.knowcode_profile all to core (the profile KnowCode serves by default; passed as --tools core, which advertises the same tools, instructions and schemas as a plain serve); plan.json re-planned (order unchanged); protocol.md (fifth-freeze section, what core changes in criteria 3 and 4, run-to-run noise, five descriptive diagnostics, deviation entry). Questions, labels, arms, briefs, model, client, criteria, thresholds, intervals, detector, scorer, transport rule and every runner script are unchanged."
 }

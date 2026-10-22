@@ -30,6 +30,21 @@ study is run once more as a **rerun** under a fourth freeze. The fourth freeze d
 Questions, labels, arms, model, client, profile, criteria, thresholds, intervals and the transport rule are unchanged.
 The rerun's results are reported next to the baseline and the final run; they do not replace them.
 
+After the rerun was published, two fix rounds landed on main: re-check causes, then complete semantics and HTTP.
+The version is still 0.2.0, now at 6b8e4b5. The study is run once more as a **fifth-freeze run**. The fifth freeze
+differs from the fourth in three ways:
+
+- `knowcode_sha256` names the 6b8e4b5 build.
+- `knowcode_profile` changes from `all` to `core`. `core` is the profile KnowCode serves by default since 0.2.0's
+  question-to-tool map. It offers 8 tools, all loaded up front, where `all` offered 25, 4 of them loaded up front. The
+  run passes `--tools core` explicitly; before the freeze, a dry run showed that it advertises exactly the tools,
+  instructions and schemas a plain `serve` does. See [Criteria](#criteria) for what this changes in criteria 3 and 4.
+- Five more descriptive measures are reported, none of them a criterion (see [Metrics](#metrics)).
+
+Questions, labels, arms, briefs, model, client, criteria, thresholds, intervals, the detector and the transport rule
+are unchanged. The fifth-freeze run is reported next to the baseline, the final run and the rerun; it does not replace
+them.
+
 ## Cohort and questions
 
 - **Cohort:** the six public repositories pinned in [manifest.json](manifest.json), exported as described in
@@ -103,7 +118,7 @@ question order is seeded independently, and the arms rotate.
 | Arm | Tools | Brief |
 | --- | --- | --- |
 | `plain` | Read and Bash (`grep`, `find`, `cat`, `sed`, `head`, `tail`, `wc`, `ls`, `sort`, `uniq`, `xargs`) | Neutral: "use only the granted tools" |
-| `knowcode` | The same tools, plus KnowCode's MCP server (profile `all`, `kc_note_add` denied) | Names the KnowCode MCP tools |
+| `knowcode` | The same tools, plus KnowCode's MCP server (profile `all`; `core` from the fifth freeze; `kc_note_add` denied) | Names the KnowCode MCP tools |
 | `knowcode-unprompted` | Same as `knowcode` | Word-for-word the `plain` brief; KnowCode isn't mentioned |
 
 Criteria 1–3 compare `knowcode` with `plain`, and criterion 4 is measured in `knowcode-unprompted`. Every arm also
@@ -167,6 +182,18 @@ Per session, from the runner's `result.json` and transcript:
   successful KnowCode answers that say the index was still being built ("indexing is queued or running"), out of all
   successful KnowCode answers, and the sessions with at least one. Re-scored, the published runs give baseline 9 of
   186 (8 sessions) and final 41 of 238 (33 sessions). Counting failed calls as well, they are 9 of 189 and 41 of 242.
+- **Fifth-freeze diagnostics** (descriptive, added before the fifth-freeze run; none is a criterion). They are computed
+  from the same transcripts by a separate script, not by the frozen scorer, and are labelled descriptive wherever they
+  appear:
+  - re-checks per session: the sessions with at least one re-checked KnowCode answer, out of the sessions with a
+    claiming answer, and the mean re-checked share per session;
+  - the pooled re-check rate with same-turn calls excluded: a call issued in the same model turn as the answer was
+    chosen before the answer was seen, so it isn't counted as a re-check;
+  - session tokens split into cache reads and uncached input (input plus cache creation), as medians per arm;
+  - each re-checked answer's trigger class, from a rule-based classifier over the answer text and the checking calls.
+    The classes are: same-turn, stale note, unsupported note, truncated, empty or mismatched, search hit re-searched,
+    context read, and verified anyway. The classifier is AI-made and was checked by hand on samples only;
+  - answer bytes per successful KnowCode call, as mean and median, and per session.
 
 ## Criteria
 
@@ -200,6 +227,24 @@ The baseline run evaluates criteria 2–4 for 0.1.1 and sets the reference rate 
 
 Only large effects are distinguishable at this size. Criteria 2 and 3 can be met by chance when the true difference
 is near zero. The results page says so instead of treating a point estimate as a finding.
+
+**The fifth freeze uses the shipped `core` profile.** Criteria 3 and 4 measure KnowCode as it ships now. That is not
+the setup of the earlier freezes, which used `all`:
+
+- The KnowCode arms offer 8 tools instead of 25.
+- The tool schemas in every turn are smaller. In an exploratory check before the freeze, the first turn's context
+  (fixed overhead) was about 3.7k tokens with `core` and about 5.5k with `all`. Criterion 3 counts that difference on
+  every turn.
+- Criterion 4 counts calls to a smaller, fully up-front tool set.
+
+The results page states this next to criteria 3 and 4. Comparisons with the earlier runs on these two criteria compare
+builds and profiles together.
+
+**Run-to-run noise.** The rerun showed that differences between one run and the next of this size are within what
+repeated runs of one build produce. An exploratory check before the fifth freeze, on 12 held-out questions outside this
+study, confirmed it: the same binary run on two days moved the unprompted arm's pooled re-check rate by about 0.2, and
+its median session tokens by about 6k. The results page keeps the rerun's wording on noise, and doesn't read a change
+of that size between runs as an effect.
 
 ## Re-check detector
 
@@ -375,3 +420,7 @@ baseline budget.
 - **2026-10-21:** the user stopped the fourth-freeze rerun after 6 of 72 sessions; those sessions are discarded and not
   scored. The rerun's binary moved from 702da21 to b0a3564 (memory fixes in search and indexing, answers unchanged),
   and the rerun starts again from scratch. Nothing else changed.
+- **2026-10-22:** fifth freeze, for a run on the 6b8e4b5 build (see the introduction). `knowcode_profile` moves from
+  `all` to `core`, the shipped default, so criteria 3 and 4 now measure the shipped profile (see "Criteria"). Five
+  descriptive diagnostics are pre-registered in "Metrics". plan.json is re-planned, with the order unchanged. Nothing
+  else changed.
