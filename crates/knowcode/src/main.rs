@@ -125,6 +125,11 @@ enum Cmd {
         /// set by `KNOWCODE_VERIFY=1` (for every command).
         #[arg(long)]
         verify: bool,
+        /// Report what each phase cost (discovery, parse, write, text content, derived data): wall and CPU time, and
+        /// instructions retired where the OS counts them. Also computes the derived data (file ranking, areas) a
+        /// query would otherwise compute first, so its cost is counted.
+        #[arg(long)]
+        phases: bool,
         #[arg(long)]
         json: bool,
     },
@@ -843,7 +848,7 @@ fn guard_privacy() -> Result<()> {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Cmd::Index { paths, workspace, threads, rebuild, scip, verify, json } => index(paths, workspace, threads, rebuild, scip, verify, json),
+        Cmd::Index { paths, workspace, threads, rebuild, scip, verify, phases, json } => index(paths, workspace, threads, rebuild, scip, verify, phases, json),
         Cmd::Forget { path } => {
             let root = std::fs::canonicalize(&path).unwrap_or(path);
             let removed = kc_index::forget(&root)?;
@@ -1287,6 +1292,7 @@ fn emit(args: &RepoArgs, env: &serde_json::Value, text: impl FnOnce()) -> Result
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn index(
     paths: Vec<PathBuf>,
     workspace: Option<PathBuf>,
@@ -1294,8 +1300,13 @@ fn index(
     rebuild: bool,
     scip: Option<PathBuf>,
     verify: bool,
+    phases: bool,
     json: bool,
 ) -> Result<()> {
+    use kc_index::meter;
+    if phases {
+        meter::enable();
+    }
     let mut roots = Vec::new();
     if let Some(ws) = workspace {
         roots.extend(kc_index::discover_repos(&ws)?);
@@ -1324,7 +1335,9 @@ fn index(
             kc_index::forget(root)?;
         }
         changed |= !kc_index::db_path(root)?.exists();
+        let mark = meter::Mark::now();
         let mut store = seeds.open(root)?;
+        mark.record("open");
         if let Some(file) = &scip {
             kc_index::scip::set_source(&store, file)?;
         }
@@ -1334,10 +1347,19 @@ fn index(
         // Derived data earlier queries computed (areas, the file ranking), brought up to this index: left stale, the
         // first query after `index` would wait for it.
         // Not fatal: the index is complete without it, and a query brings it up to date.
-        if let Err(e) = kc_index::refresh_derived(root, &store) {
+        if phases {
+            // What a first query would compute, counted here: the file ranking (the reference graph), then the areas.
+            let mark = meter::Mark::now();
+            store.file_rank_at(&[], kc_store::rank::Flow::Uses, true)?;
+            mark.record("derived.rank");
+            let mark = meter::Mark::now();
+            kc_index::areas::areas(root, &store)?;
+            mark.record("derived.areas");
+        } else if let Err(e) = kc_index::refresh_derived(root, &store) {
             eprintln!("knowcode: {}: areas and file ranking not refreshed: {e:#}", repo_name(root));
         }
         drop(store);
+        let costs = meter::take();
         let bytes = kc_index::index_bytes(root)?;
         let privacy = kc_index::privacy::Privacy::load(root);
         if !json && privacy.whole() {
@@ -1361,20 +1383,57 @@ fn index(
             if let Some(s) = &report.scip {
                 print_scip(s);
             }
+            if phases {
+                print_phases(&costs);
+            }
         }
-        rows.push(json!({ "repo": root, "index_bytes": bytes, "report": report, "content": content }));
+        let mut row = json!({ "repo": root, "index_bytes": bytes, "report": report, "content": content });
+        if phases {
+            row["phases"] = json!(costs);
+        }
+        rows.push(row);
     }
-    if roots.len() > 1 && changed {
+    let mut summary = None;
+    if roots.len() > 1 && (changed || phases) {
         // Brings the workspace summary up to date once, so the first query doesn't reread every index.
+        let mark = meter::Mark::now();
         kc_index::workspace::all_summaries()?;
+        summary = phases.then(|| mark.cost());
+        if let (Some(c), false) = (summary, json) {
+            print_phases(&[meter::Phase { name: "workspace summary".into(), cost: c }]);
+        }
     }
     let total_ms = started.elapsed().as_secs_f64() * 1000.0;
     if json {
-        println!("{}", serde_json::to_string_pretty(&json!({ "repos": rows, "total_ms": round1(total_ms) }))?);
+        let mut out = json!({ "repos": rows, "total_ms": round1(total_ms) });
+        if let Some(c) = summary {
+            out["summary"] = json!(c);
+        }
+        println!("{}", serde_json::to_string_pretty(&out)?);
     } else if roots.len() > 1 {
         println!("{} repos in {:.1} s", roots.len(), total_ms / 1000.0);
     }
     Ok(())
+}
+
+/// `index --phases`: each phase's cost and its share of the repo's instructions (of its CPU time where they aren't
+/// counted).
+fn print_phases(costs: &[kc_index::meter::Phase]) {
+    let instr: u64 = costs.iter().filter_map(|p| p.cost.instructions).sum();
+    let cpu: f64 = costs.iter().map(|p| p.cost.cpu_ms).sum();
+    for p in costs {
+        let c = &p.cost;
+        let share = match c.instructions {
+            Some(i) if instr > 0 => 100.0 * i as f64 / instr as f64,
+            _ if cpu > 0.0 => 100.0 * c.cpu_ms / cpu,
+            _ => 0.0,
+        };
+        let gi = c.instructions.map_or_else(|| "-".to_string(), |i| format!("{:.3}", i as f64 / 1e9));
+        println!(
+            "  {:<16} {:>9} G instr  {:>5.1}%  {:>9.1} ms cpu  {:>8.1} ms child cpu  {:>9.1} ms wall",
+            p.name, gi, share, c.cpu_ms, c.child_cpu_ms, c.wall_ms
+        );
+    }
 }
 
 /// One ingest of a SCIP index, for `index`.

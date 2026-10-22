@@ -606,6 +606,7 @@ dependencies = [
  "dirs",
  "kc-extract",
  "kc-store",
+ "libc",
  "memchr",
  "regex",
  "regex-syntax",

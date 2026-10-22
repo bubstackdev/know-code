@@ -2,6 +2,14 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- `index --phases` reports what each indexing phase cost: opening the index, discovery, stat, parse, writing rows,
+  committing, SCIP, the text content index (read and write) and derived data (file ranking and areas, which it computes
+  so they are counted), each with wall and CPU time, the CPU time of child processes (git), and on macOS the
+  instructions retired and the phase's share of them. `scripts/index-phases.py` runs it cold and warm over repos and
+  prints the medians.
+
 ## 0.2.0 (2026-10-22)
 
 0.2 set out to make answers that agents use without re-checking them, at a lower cost than reading files, and to
