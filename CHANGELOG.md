@@ -19,6 +19,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   signature and doc first; links are text rows with what they share said once. On a public DI library, `kc_context` of
   an interface cut 7 of its 11 conformers to keep callers; it now shows all 11. On a public media server, a controller
   action's context showed 3 of its 39 HTTP callers; it now shows all 39 in the same 6,000 characters.
+- An ASP.NET controller marked `[Route("")]` serves its actions at the root: the empty prefix replaces a base
+  controller's `[Route("[controller]")]`, as ASP.NET takes it, where KnowCode placed them under the base's prefix
+  (`Widgets/Items/{id}` for `Items/{id}`). On a public media server 23 controllers do this; 16 requests from its web
+  client and 16 from its own tests now link to their actions, and none lost a link.
 - A `kc_search` page cut short names the other files with a match (`other_files`, by directory, with counts, up to 60
   files), so the whole set is seen without paging or searching again.
 - `complete` speaks for what was asked. A list on the side of it that a limit or `max_chars` cut (a symbol's callers,

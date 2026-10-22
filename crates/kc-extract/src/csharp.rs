@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 28;
+pub const VERSION: u32 = 29;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -820,11 +820,12 @@ impl<'a> Cx<'a> {
             .into_iter()
             .find_map(|(_, args)| args.first().and_then(|a| self.route_template(*a)))
             .map(|(t, r)| (area.as_ref().map_or_else(|| t.clone(), |a| t.replace("[area]", a)), r));
-        let own_route = template.as_ref().is_some_and(|(t, r)| !t.is_empty() || r.is_some());
-        if let Some((t, r)) = template.clone().filter(|_| own_route) {
+        // `[Route("")]` is a prefix too: an empty one, replacing a base class's `[Route]`.
+        let own_route = template.is_some();
+        if let Some((t, r)) = template.clone() {
             self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "prefix", verb: String::new(), path: t, path_ref: r, service: None, service_ref: None, line: line(node) });
         }
-        let route = template.filter(|(t, r)| r.is_none() && !t.is_empty()).map(|(t, _)| t);
+        let route = template.filter(|(_, r)| r.is_none()).map(|(t, _)| t);
         // Whether a base class may give the actions a prefix: any base but the framework's own.
         let custom_base = children(node).filter(|c| c.kind() == "base_list").flat_map(children).filter(|b| b.is_named()).any(|b| {
             let t = if b.kind() == "primary_constructor_base_type" { b.child_by_field_name("type").unwrap_or(b) } else { b };
@@ -5713,6 +5714,42 @@ public static class Startup
                 ("Configure", "conventional", "MapControllerRoute", "{controller=Home}/{action=Index}/{id?}"),
                 // An area template needs the area: not placed.
                 ("Configure", "unsupported", "MapControllerRoute", "conventional routes: a template filled from controller and action names, which KnowCode doesn't expand"),
+            ]
+        );
+    }
+
+    /// `[Route("")]` on a controller is its prefix, an empty one: its actions sit at the root, not under the base
+    /// controller's `[Route("[controller]")]`.
+    #[test]
+    fn an_empty_route_on_a_controller_replaces_the_inherited_prefix() {
+        let f = extract(
+            r#"
+[Route("[controller]")]
+public abstract class GadgetControllerBase : ControllerBase { }
+
+[Route("")]
+public class WidgetShelfController : GadgetControllerBase
+{
+    [HttpGet("Widgets/{widgetId}")]
+    public Task GetWidget(Guid widgetId) => null;
+}
+
+public class SprocketController : GadgetControllerBase
+{
+    [HttpGet("Latest")]
+    public Task Latest() => null;
+}
+"#,
+        );
+        let routes: Vec<(&str, &str, &str, &str)> =
+            f.http_routes.iter().map(|r| (r.sym.map_or("-", |s| f.symbols[s].name.as_str()), r.side, r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("GadgetControllerBase", "prefix", "", "[controller]"),
+                ("WidgetShelfController", "prefix", "", ""),
+                ("GetWidget", "server", "GET", "Widgets/{widgetId}"),
+                ("Latest", "server", "GET", "{^Latest}/Latest"),
             ]
         );
     }
