@@ -31,8 +31,8 @@ pub enum Files {
 pub struct Mentions {
     /// Files of the kind checked.
     pub files: usize,
-    /// Of them, those search can't read (binary, over 1 MB, generated): not checked.
-    pub unsearchable: usize,
+    /// Of them, those search can't read (binary, over 1 MB, generated), in path order: not checked.
+    pub unsearchable: Vec<String>,
     /// Lines naming a name as a word, outside comments: `(path, line)`, in path order.
     pub lines: Vec<(String, u32)>,
     /// More lines than were read: `lines` is a lower bound.
@@ -92,7 +92,7 @@ pub fn mentions(o: &Opened, names: &[&str], which: Files) -> Result<Mentions> {
     };
     let files: Vec<_> = o.store.cfiles()?.into_iter().filter(|f| keep(&f.path)).collect();
     out.files = files.len();
-    out.unsearchable = files.iter().filter(|f| f.state == SKIPPED).count();
+    out.unsearchable = files.iter().filter(|f| f.state == SKIPPED).map(|f| f.path.clone()).collect();
     if files.is_empty() || names.is_empty() {
         return Ok(out);
     }

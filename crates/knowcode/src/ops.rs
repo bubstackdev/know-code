@@ -62,15 +62,18 @@ fn scope_repos(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
     Ok((roots, workspace))
 }
 
+/// Names checked as text in Razor files per search (one pattern each).
+const RAZOR_BATCH: usize = 20;
 /// At most this many names are checked as text in Razor files; past it, the files are only said to exist.
-const RAZOR_NAMES: usize = 20;
+const RAZOR_NAMES: usize = 200;
 
 /// Razor files (`.razor`, `.cshtml`) in the repo `o`, which KnowCode doesn't read, checked as text for `names` (see
 /// [`crate::unread`]): an `unsupported` entry naming the lines that name one (uses there are not listed), or, when none
-/// does, a statement for `checked` saying so. The repo is named when `named`. Neither without Razor files; the
-/// unconditional entry when there are too many names to check or a Razor file can't be searched.
+/// does, a statement for `checked` saying so. The repo is named when `named`. Neither without Razor files. Razor files
+/// search can't read (binary, over 1 MB, generated) are named in an entry of their own; only past [`RAZOR_NAMES`]
+/// names is the entry unconditional.
 pub fn razor_unread(o: &Opened, named: bool, names: &[&str]) -> Result<(Option<Incomplete>, Option<String>)> {
-    use crate::unread::{Files, mentions};
+    use crate::unread::{Files, Mentions, mentions};
     let repo = if named { format!("{}: ", repo_name(&o.root)) } else { String::new() };
     let files = |n: usize| if n == 1 { "1 Razor file".to_string() } else { format!("{n} Razor files") };
     let who = match names {
@@ -78,10 +81,19 @@ pub fn razor_unread(o: &Opened, named: bool, names: &[&str]) -> Result<(Option<I
         _ => format!("any of {} names", names.len()),
     };
     if !names.is_empty() && names.len() <= RAZOR_NAMES {
-        let m = mentions(o, names, Files::Razor)?;
-        if m.files == 0 {
-            return Ok((None, None));
+        let mut m = Mentions::default();
+        for batch in names.chunks(RAZOR_BATCH) {
+            let found = mentions(o, batch, Files::Razor)?;
+            if found.files == 0 {
+                return Ok((None, None));
+            }
+            m.files = found.files;
+            m.unsearchable = found.unsearchable;
+            m.lines.extend(found.lines);
+            m.capped |= found.capped;
         }
+        m.lines.sort();
+        m.lines.dedup();
         if !m.lines.is_empty() {
             let lines = m.lines.len();
             let detail = format!(
@@ -92,9 +104,19 @@ pub fn razor_unread(o: &Opened, named: bool, names: &[&str]) -> Result<(Option<I
             );
             return Ok((Some(Incomplete::new(Reason::Unsupported, detail)), None));
         }
-        if m.unsearchable == 0 {
-            return Ok((None, Some(format!("{repo}none of {} (.razor, .cshtml), which KnowCode doesn't read, names {who}", files(m.files)))));
-        }
+        let Some(first) = m.unsearchable.first() else {
+            return Ok((None, Some(format!("{repo}none of {} (.razor, .cshtml), checked as text, names {who}", files(m.files)))));
+        };
+        // The others were checked: only those search can't read may hold a use.
+        let n = m.unsearchable.len();
+        let detail = format!(
+            "{repo}{} of {} (.razor, .cshtml) can't be searched as text (binary, over 1 MB or generated), such as {first}: uses of {who} there are not listed; the other {} name{} none",
+            files(n),
+            m.files,
+            m.files - n,
+            if m.files - n == 1 { "s" } else { "" },
+        );
+        return Ok((Some(Incomplete::new(Reason::Unsupported, detail)), None));
     }
     let mut stmt = o.store.conn().prepare_cached("SELECT path FROM cfiles WHERE path LIKE '%.razor' OR path LIKE '%.cshtml' ORDER BY path")?;
     let paths: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -2608,17 +2630,21 @@ fn unread_for(o: &Opened, s: &kc_store::query::SymbolRow, bus: Vec<kc_store::uns
 }
 
 /// The DI registrations the C# extractor met but couldn't read that may register the class or interface `s`: an
-/// assembly scan whose name filter lets it through (every type, without one) and whose assembly, when its argument
-/// says (`typeof(T).Assembly`, `GetExecutingAssembly()`), is a project holding `s` (or, for an interface, naming it);
-/// another construct naming it.
+/// assembly scan whose name filter lets it through (every type, without one), whose assembly, when its argument says
+/// (`typeof(T).Assembly`, `GetExecutingAssembly()`), is a project holding `s` (or, for an interface, naming it), and
+/// which, for an interface, doesn't expose only other services (`.As<IModule>()`); another construct naming it. Those
+/// in test code are left out (counted) for a type outside it: they build a test's own container.
 fn di_unread(o: &Opened, s: &kc_store::query::SymbolRow) -> Result<DiUnread> {
     let conn = o.store.conn();
-    let mut out = DiUnread::default();
+    let mut out = DiUnread { name: s.name.clone(), ..Default::default() };
     if !(matches!(s.kind.as_str(), "class" | "protocol") && s.file.ends_with(".cs")) {
         return Ok(out);
     }
     let word = |c: &str| c.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).any(|w| w == s.name);
+    let in_tests = kc_store::is_test_path(&s.file);
     let mut projects: Option<Vec<String>> = None;
+    // For an interface: it and the interfaces deriving from it, the services a scan must expose to register it.
+    let mut exposes: Option<Vec<String>> = None;
     for u in kc_store::unsupported::in_area(conn, "di")? {
         // A scan registers what its name filter lets through (`[*Service]`), every type without one.
         let (applies, mut named) = match u.construct.strip_prefix("assembly scan ") {
@@ -2650,6 +2676,23 @@ fn di_unread(o: &Opened, s: &kc_store::query::SymbolRow) -> Result<DiUnread> {
                 named = true;
             }
         }
+        // Left out from here on, counted: what would otherwise be listed.
+        if !in_tests && kc_store::is_test_path(&u.file) {
+            out.tests += 1;
+            continue;
+        }
+        if u.construct.starts_with("assembly scan ") && s.kind == "protocol" {
+            let exposes = match &exposes {
+                Some(e) => e,
+                None => exposes.insert(interfaces_through(conn, &s.name)?),
+            };
+            let services = scan_services(conn, &u)?;
+            // Every service named (none the scanned types themselves or each of their interfaces), and none of them it.
+            if !services.is_empty() && services.iter().all(Option::is_some) && !services.iter().flatten().any(|x| exposes.contains(x)) {
+                out.other.push((u, services.into_iter().flatten().collect()));
+                continue;
+            }
+        }
         if named { out.known.push(u) } else { out.unknown.push(u) }
     }
     Ok(out)
@@ -2658,10 +2701,36 @@ fn di_unread(o: &Opened, s: &kc_store::query::SymbolRow) -> Result<DiUnread> {
 /// The DI constructs not read that may register a type (see [`di_unread`]).
 #[derive(Default)]
 struct DiUnread {
+    /// The type's name.
+    name: String,
     /// Those known to reach it: a scan whose name filter or assembly lets it through, a construct naming it.
     known: Vec<kc_store::unsupported::Site>,
     /// Scans that may: of assemblies the code doesn't say (a variable), without a name filter.
     unknown: Vec<kc_store::unsupported::Site>,
+    /// Left out: those in test code, which build a test's own container.
+    tests: usize,
+    /// Left out: scans exposing only other services (each with them), which can't register the interface.
+    other: Vec<(kc_store::unsupported::Site, Vec<String>)>,
+}
+
+/// The services the assembly scan at `u` exposes, as its registration rows say: `None` for the scanned types
+/// themselves or each of their interfaces (`AsImplementedInterfaces`). Empty when no row matches it.
+fn scan_services(conn: &rusqlite::Connection, u: &kc_store::unsupported::Site) -> Result<Vec<Option<String>>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT d.service_name FROM di_bindings d JOIN files f ON f.id = d.file_id WHERE f.path = ?1 AND d.line = ?2 AND d.kind = 'scan'",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![u.file, u.line], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The interface `name` and the interfaces deriving from it, directly or through others, by bare name: a registration
+/// as any of them is one of its (as `hierarchy`'s `di` lists them).
+fn interfaces_through(conn: &rusqlite::Connection, name: &str) -> Result<Vec<String>> {
+    let bare = |q: &str| q.rsplit('.').next().unwrap_or(q).to_string();
+    let mut out = vec![name.to_string()];
+    out.extend(query::direct_conformers(conn, name)?.iter().filter(|c| c.kind == "protocol").map(|c| c.name.clone()));
+    out.extend(query::indirect_conformers(conn, name, query::INDIRECT_READ)?.0.iter().filter(|c| c.kind == "protocol").map(|c| bare(&c.name)));
+    Ok(out)
 }
 
 /// Which DI constructs not read that may register a type bear on an answer about it: those known to reach it always;
@@ -2669,8 +2738,25 @@ struct DiUnread {
 /// registrations or injections (`di_found`). Otherwise those go into its "DI registrations: none found" line (in
 /// `none`), not into an `unsupported` entry: nothing ties the type to the container, and an answer about its
 /// implementations or members doesn't depend on them. Returns the sites the answer's `unsupported` entries keep.
-fn di_aside(d: DiUnread, di_found: bool, none: &mut [String]) -> Vec<kc_store::unsupported::Site> {
-    let DiUnread { mut known, unknown: sites } = d;
+fn di_aside(d: DiUnread, di_found: bool, none: &mut Vec<String>) -> Vec<kc_store::unsupported::Site> {
+    let DiUnread { name, mut known, unknown: sites, tests, other } = d;
+    // What was left out, counted, so the entry's count is of those that can register the type and nothing is hidden.
+    let mut left = Vec::new();
+    if tests > 0 {
+        left.push(format!("{tests} in test code (a test's own container)"));
+    }
+    if let Some((first, services)) = other.first() {
+        let n = other.len();
+        let more = if n > 1 { format!(", {} more", n - 1) } else { String::new() };
+        left.push(format!("{n} assembly scan{} exposing only {} ({}:{}{more})", if n == 1 { "" } else { "s" }, services.join(", "), first.file, first.line));
+    }
+    if !left.is_empty() {
+        let line = format!("DI constructs not read that can't register {name}: {}", left.join("; "));
+        match none.iter_mut().find(|l| l.starts_with("DI registrations: none found")) {
+            Some(found) => found.push_str(&format!("; {line}")),
+            None => none.push(line),
+        }
+    }
     if di_found || !known.is_empty() || sites.is_empty() {
         known.extend(sites);
         known.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
@@ -10257,12 +10343,26 @@ public class Service\n{\n    private Repo _r;\n    public void Place()\n    {\n 
         assert!(razor(&refs("Total", &[], 20, &scope).unwrap().env).is_some_and(|i| i.detail.contains("src/Pages/Index.razor:3")));
         let r = refs("Show", &[], 20, &scope).unwrap();
         assert!(razor(&r.env).is_none(), "{}", r.env);
-        assert_eq!(r.env["checked"], json!(["none of 2 Razor files (.razor, .cshtml), which KnowCode doesn't read, names Show"]), "{}", r.env);
+        assert_eq!(r.env["checked"], json!(["none of 2 Razor files (.razor, .cshtml), checked as text, names Show"]), "{}", r.env);
         assert_eq!(r.env["complete"], true, "{}", r.env);
         let i = impact(&ImpactParams { symbol: Some("Home.Show".into()), depth: 1, limit: 20, ..Default::default() }, &scope).unwrap();
         assert!(razor(&i.env).is_none(), "{}", i.env);
         // TypeScript: nothing to say about Razor.
         assert!(razor(&refs("count", &[], 20, &scope).unwrap().env).is_none());
+        // More names than one search takes (a diff's or a file's symbols) are checked in batches, not only said to
+        // exist: a use past the first batch is found, and none anywhere is said checked.
+        let o = open_fresh(&root, false).unwrap();
+        let mut names: Vec<String> = (0..RAZOR_BATCH * 2).map(|i| format!("Unused{i}")).collect();
+        let (note, checked) = razor_unread(&o, false, &names.iter().map(String::as_str).collect::<Vec<_>>()).unwrap();
+        assert!(note.is_none(), "{note:?}");
+        assert_eq!(checked.as_deref(), Some("none of 2 Razor files (.razor, .cshtml), checked as text, names any of 40 names"));
+        names.push("Count".into());
+        let (note, checked) = razor_unread(&o, false, &names.iter().map(String::as_str).collect::<Vec<_>>()).unwrap();
+        assert!(checked.is_none());
+        assert_eq!(
+            note.expect("found").detail,
+            "any of 41 names is named on 2 lines of Razor files (.razor, .cshtml), which KnowCode doesn't read: src/Pages/Index.razor:2, src/Views/Home.cshtml:1; uses there are not listed"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
