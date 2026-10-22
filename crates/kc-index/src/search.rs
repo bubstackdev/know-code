@@ -761,6 +761,13 @@ pub struct PageHit {
     /// Otherwise: the innermost symbol containing the line.
     #[serde(rename = "in", skip_serializing_if = "Option::is_none")]
     pub inside: Option<String>,
+    /// With `in` a method or function: its parameter names, from its signature (`(id, data)`), on the page's first
+    /// code hit inside it (see [`add_params`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_params: Option<String>,
+    /// With `in` a method or function: its name and first line, to look its signature up.
+    #[serde(skip)]
+    pub member: Option<(String, u32)>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub before: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -904,15 +911,19 @@ pub fn rank(hits: &mut [Hit], files: &[FileData], repo_names: &[String]) {
     });
 }
 
+/// The symbol kinds whose parameters a hit inside them is given (see [`add_params`]).
+const MEMBER_KINDS: &[&str] = &["method", "function", "init", "subscript", "procedure"];
+
 /// The returned page: snippet, declared or enclosing symbol, and `context` lines around each hit (re-read from
-/// the files, which the search just read).
+/// the files, which the search just read). Without `context`, a hit in a statement that goes on over other lines
+/// gets just those (see [`add_statement`]).
 pub fn finish(roots: &[PathBuf], scanned: &Scanned, files: &[FileData], hits: &[Hit], context: usize) -> Vec<PageHit> {
     let mut page: Vec<PageHit> = hits
         .iter()
         .map(|h| {
             let f = &files[h.file as usize];
-            let (symbol, inside) = match h.declared {
-                Some(i) => (Some(qualified(&f.symbols[i as usize])), None),
+            let (symbol, inside, member) = match h.declared {
+                Some(i) => (Some(qualified(&f.symbols[i as usize])), None, None),
                 None => {
                     let l = h.line;
                     let enclosing = f
@@ -920,7 +931,8 @@ pub fn finish(roots: &[PathBuf], scanned: &Scanned, files: &[FileData], hits: &[
                         .iter()
                         .filter(|s| s.start_line <= l && l <= s.end_line)
                         .max_by_key(|s| (s.start_line, std::cmp::Reverse(s.end_line)));
-                    (None, enclosing.map(qualified))
+                    let member = enclosing.filter(|s| MEMBER_KINDS.contains(&s.kind.as_str())).map(|s| (s.name.clone(), s.start_line));
+                    (None, enclosing.map(qualified), member)
                 }
             };
             PageHit {
@@ -935,13 +947,198 @@ pub fn finish(roots: &[PathBuf], scanned: &Scanned, files: &[FileData], hits: &[
                 ),
                 symbol,
                 inside,
+                in_params: None,
+                member,
                 before: Vec::new(),
                 after: Vec::new(),
             }
         })
         .collect();
-    add_context(roots, &mut page, context);
+    if context == 0 {
+        add_statement(roots, &mut page);
+    } else {
+        add_context(roots, &mut page, context);
+    }
     page
+}
+
+/// Parameter names said at most, in characters.
+const PARAMS_CHARS: usize = 50;
+/// Lines of a statement quoted at most on each side of a hit's line.
+const STATEMENT_LINES: usize = 2;
+
+/// Gives the page's first code hit inside each method or function its parameter names (`in_params`), read from the
+/// index of the hit's repo (`stores`, by the hits' `repo`): the enclosing member's name says which member, not which
+/// overload or with what. Later hits inside the same member name it only; a test's parameters aren't given, nor
+/// those a hit's own line already shows (a line of the signature).
+pub fn add_params(stores: &[&Store], page: &mut [PageHit]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for h in page.iter_mut() {
+        let Some((name, start)) = &h.member else { continue };
+        if h.kind != "code" || h.line == *start || seen.contains(&(h.repo, h.file.clone(), *start)) {
+            continue;
+        }
+        let Some(store) = stores.get(h.repo) else { continue };
+        let Some((params, whole)) = store.symbol_signature(&h.file, *start, name)?.and_then(|sig| params_of(&sig, name)) else { continue };
+        let line = h.text.trim().trim_end_matches(',');
+        if !line.is_empty() && whole.contains(line) {
+            continue;
+        }
+        seen.insert((h.repo, h.file.clone(), *start));
+        h.in_params = Some(params);
+    }
+    Ok(())
+}
+
+/// Brackets around text that may hold commas, colons or `=`: `(`, `<`, `[`, `{` open one, their pairs close it; the
+/// `>` of an arrow (`=>`, `->`) doesn't.
+fn bracket(prev: Option<char>, c: char) -> i8 {
+    match c {
+        '(' | '<' | '[' | '{' => 1,
+        '>' if matches!(prev, Some('=' | '-')) => 0,
+        ')' | '>' | ']' | '}' => -1,
+        _ => 0,
+    }
+}
+
+/// The parameter names of a signature, `(eventName, payload)`: of the list from the `(` after `name` (else the
+/// first after any leading attributes) to its match, each parameter's name without its type, modifiers or default
+/// (`{…}` for a destructured one). `None` for no list or an empty one. Second, the whole list on one line, to tell
+/// whether a hit's line is part of it.
+fn params_of(sig: &str, name: &str) -> Option<(String, String)> {
+    let mut rest = sig.trim_start();
+    // Leading attributes (`[HttpGet("x")]`) and decorators (`@Input()`) have parentheses of their own.
+    loop {
+        if let Some(r) = rest.strip_prefix('[') {
+            rest = r.split_once(']').map(|(_, r)| r.trim_start())?;
+        } else if rest.starts_with('@') {
+            let end = rest.find(char::is_whitespace)?;
+            rest = rest[end..].trim_start();
+        } else {
+            break;
+        }
+    }
+    let open = word_spans(rest, name).into_iter().find_map(|(_, end)| rest[end..].find('(').map(|i| end + i)).or_else(|| rest.find('('))?;
+    // Each parameter, split at the commas outside brackets, up to the bracket closing the list.
+    let (mut depth, mut from, mut close, mut parts, mut prev) = (0i32, open + 1, None, Vec::new(), None);
+    for (i, c) in rest[open..].char_indices() {
+        let i = open + i;
+        depth += bracket(prev, c) as i32;
+        prev = Some(c);
+        if depth == 0 {
+            parts.push(&rest[from..i]);
+            close = Some(i);
+            break;
+        }
+        if c == ',' && depth == 1 {
+            parts.push(&rest[from..i]);
+            from = i + 1;
+        }
+    }
+    let whole = rest[open + 1..close?].split_whitespace().collect::<Vec<_>>().join(" ");
+    let names: Vec<&str> = parts.into_iter().filter_map(param_name).collect();
+    if names.is_empty() {
+        return None;
+    }
+    let list = names.join(", ");
+    let list = if list.chars().count() <= PARAMS_CHARS { list } else { format!("{}…", list.chars().take(PARAMS_CHARS).collect::<String>()) };
+    Some((format!("({list})"), whole))
+}
+
+/// A parameter's name: `string id` (C#, Java), `id: string` (TypeScript, Python, Swift, Rust), `id = 1`, `...ids`;
+/// `{…}` for a destructured one. `None` for a receiver (`self`), said by the member's container.
+fn param_name(p: &str) -> Option<&str> {
+    // After its attributes (`[FromBody]`); an array destructured is all brackets.
+    let mut p = p.trim();
+    if p.is_empty() {
+        return None;
+    }
+    while let Some(r) = p.strip_prefix('[') {
+        p = r.split_once(']').map_or("", |(_, r)| r.trim_start());
+    }
+    if p.is_empty() {
+        return Some("[…]");
+    }
+    // Up to its type annotation's `:` or its default's `=`, outside brackets.
+    let (mut depth, mut prev, mut end) = (0i32, None, p.len());
+    for (i, c) in p.char_indices() {
+        let next = p[i + c.len_utf8()..].chars().next();
+        depth += bracket(prev, c) as i32;
+        prev = Some(c);
+        if depth == 0 && (c == ':' || (c == '=' && !matches!(next, Some('>' | '=')))) {
+            end = i;
+            break;
+        }
+    }
+    let p = p[..end].trim();
+    if p.starts_with('{') {
+        return Some("{…}");
+    }
+    let word = p.split_whitespace().last()?.trim_end_matches('?').trim_start_matches("...");
+    (!word.is_empty() && !matches!(word, "self" | "&self" | "cls")).then_some(word)
+}
+
+/// A line that goes on the statement before it: a chained call (`.then(`, `?.map(`), not a spread (`...rest`).
+fn continues(line: &str) -> bool {
+    let t = line.trim_start();
+    (t.starts_with('.') && !t.starts_with("..")) || t.starts_with("?.")
+}
+
+/// A `case` or `default` label: what the line under it runs for.
+fn label(line: &str) -> bool {
+    let t = line.trim();
+    (t.starts_with("case ") || t == "default:") && t.ends_with(':')
+}
+
+/// Without `context`, the lines a hit's statement goes on over, at most [`STATEMENT_LINES`] each side: before a
+/// line continuing a chained call, the lines back to the call it continues; after a line whose next continues it,
+/// those lines; before the first line under a `case` label, the label. Only what the hit's line can't be read
+/// without: a code or test hit, never a declaration or comment, and nothing for a line that stands alone.
+fn add_statement(roots: &[PathBuf], hits: &mut [PageHit]) {
+    let mut order: Vec<usize> = (0..hits.len()).filter(|&i| matches!(hits[i].kind, "code" | "test")).collect();
+    order.sort_by(|&a, &b| (hits[a].repo, &hits[a].file).cmp(&(hits[b].repo, &hits[b].file)));
+    let (mut buf, mut starts, mut cached): (Vec<u8>, Vec<usize>, Option<(usize, String)>) = (Vec::new(), Vec::new(), None);
+    for i in order {
+        let h = &hits[i];
+        if cached.as_ref().is_none_or(|(r, f)| *r != h.repo || *f != h.file) {
+            if read_into(&roots[h.repo].join(&h.file), &mut buf).is_err() {
+                buf.clear();
+            }
+            starts.clear();
+            starts.push(0);
+            starts.extend(memchr::memchr_iter(b'\n', &buf).map(|i| i + 1));
+            cached = Some((h.repo, h.file.clone()));
+        }
+        let line = |n: usize| -> Option<String> {
+            let (a, b) = (*starts.get(n)?, starts.get(n + 1).map_or(buf.len(), |b| b - 1));
+            (a <= b).then(|| String::from_utf8_lossy(&buf[a..b]).trim().chars().take(SNIPPET).collect())
+        };
+        let at = h.line as usize - 1;
+        let Some(this) = line(at) else { continue };
+        let mut before = Vec::new();
+        if continues(&this) {
+            for n in (at.saturating_sub(STATEMENT_LINES)..at).rev() {
+                let Some(l) = line(n).filter(|l| !l.is_empty()) else { break };
+                let more = continues(&l);
+                before.insert(0, l);
+                if !more {
+                    break;
+                }
+            }
+        } else if let Some(l) = at.checked_sub(1).and_then(line).filter(|l| label(l) && !this.starts_with("case ") && !this.starts_with("default")) {
+            before.push(l);
+        }
+        let mut after = Vec::new();
+        for n in at + 1..=at + STATEMENT_LINES {
+            match line(n) {
+                Some(l) if continues(&l) => after.push(l),
+                _ => break,
+            }
+        }
+        let h = &mut hits[i];
+        h.before = before;
+        h.after = after;
+    }
 }
 
 /// The line trimmed, cut to about [`SNIPPET`] characters around the match.
@@ -1168,6 +1365,39 @@ mod tests {
         assert!(is_test_path("src/foo_test.py"));
         assert!(!is_test_path("Sources/App/Testimonial.swift"));
         assert!(!is_test_path("Sources/App/Latest.swift"));
+    }
+
+    #[test]
+    fn parameter_names_from_signatures() {
+        let names = |sig: &str, name: &str| params_of(sig, name).map(|(n, _)| n);
+        let some = |s: &str| Some(s.to_string());
+        // C#: after attributes, past an explicit interface's generics; `this`, attributes and defaults dropped.
+        assert_eq!(names("protected virtual void Emit(string eventName, object? payload)", "Emit"), some("(eventName, payload)"));
+        assert_eq!(names("[HttpPost(\"{id}\")] public async Task<IActionResult> Put(Guid id, [FromBody] Model m = null)", "Put"), some("(id, m)"));
+        assert_eq!(names("void IObserver<KeyValuePair<string, object?>>.OnError(Exception error)", "OnError"), some("(error)"));
+        assert_eq!(names("public static void Run(this Listener l, Func<int, string> f, params object[] rest)", "Run"), some("(l, f, rest)"));
+        // TypeScript and JavaScript: annotations, optional marks, defaults, arrows in types, destructuring, spreads.
+        assert_eq!(names("const loadOrder = async ( client: Client, orderId?: string, cb: (x: number) => void = noop )", "loadOrder"), some("(client, orderId, cb)"));
+        assert_eq!(names("export const OrderPanel = ({ mode = 'view' }: Props, ...rest: unknown[])", "OrderPanel"), some("({…}, rest)"));
+        assert_eq!(names("reset(clearAll = false)", "reset"), some("(clearAll)"));
+        // Python, Swift, Rust: the receiver is the container's.
+        assert_eq!(names("def load(self, path: str, *, strict: bool = True)", "load"), some("(path, *, strict)"));
+        assert_eq!(names("func load(from url: URL, _ retries: Int = 3) throws -> Data", "load"), some("(url, retries)"));
+        assert_eq!(names("pub fn scan(&self, roots: &[PathBuf], threads: usize) -> Scanned", "scan"), some("(roots, threads)"));
+        // None to give: no list, an empty one, only a receiver.
+        assert_eq!(names("refresh()", "refresh"), None);
+        assert_eq!(names("public int Count { get; }", "Count"), None);
+        assert_eq!(names("def close(self)", "close"), None);
+        // Long lists are cut; the whole list comes back too, to tell a hit on a signature line.
+        let long = names("function f(alpha, bravo, charlie, delta, echo, foxtrot, golf, hotel, india)", "f").unwrap();
+        assert!(long.ends_with("…)") && long.chars().count() == PARAMS_CHARS + 3, "{long}");
+        assert_eq!(params_of("f(a: string | number)", "f").unwrap().1, "a: string | number");
+    }
+
+    #[test]
+    fn statement_continuations_and_labels() {
+        assert!(continues("    .then(x => x)") && continues("?.map(f)") && !continues("...rest,") && !continues("a.b()"));
+        assert!(label("case 404:") && label("  default:") && label("case Keys.Start:") && !label("case 'x': {") && !label("default: break;"));
     }
 
     #[test]

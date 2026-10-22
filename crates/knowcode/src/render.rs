@@ -1377,7 +1377,7 @@ pub fn search(d: &crate::ops::SearchData) {
         }
         let at = match (&h.symbol, &h.inside) {
             (Some(s), _) => format!("  [{s}]"),
-            (None, Some(s)) => format!("  [in {s}]"),
+            (None, Some(s)) => format!("  [in {s}{}]", h.in_params.as_deref().unwrap_or_default()),
             _ => String::new(),
         };
         println!("  {:>5}: {:<7} {}{at}", h.line, h.kind, h.text);

@@ -128,6 +128,14 @@ impl Store {
         }
         Ok(out)
     }
+
+    /// The signature of the symbol `name` declared at `start_line` of `path`, for a search hit inside it.
+    pub fn symbol_signature(&self, path: &str, start_line: u32, name: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT s.signature FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.start_line = ?2 AND s.name = ?3",
+        )?;
+        Ok(stmt.query_row(params![path, start_line, name], |r| r.get(0)).optional()?)
+    }
 }
 
 #[derive(Debug, Clone)]

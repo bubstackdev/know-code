@@ -160,7 +160,9 @@ the assumptions listed beside it.
 
 Every row that gives a location quotes the source lines it rests on, read from the working tree when the answer is
 built, in `cite`. That covers `trace` nodes, `impact` rows (and its changed symbols and cross-repo references),
-`path` and `flow` steps, `refs` items, and a `context`'s callers and callees.
+`path` and `flow` steps, `refs` items, a `context`'s callers and callees, and the `find` items that declare the name
+asked for (`matched: exact`, the first 12): the one line naming the declaration, past its doc comment and
+attributes, under `cite: lines` too.
 
 - For a row reached by an edge, `cite` quotes the edge's site: the call, the request, the publish (1 line).
 - For a row reached without one (a walk's start, a path's ends, an impact's changed symbols), it quotes the
@@ -280,9 +282,13 @@ MCP answers are compact, so that rows rather than bookkeeping fill the size cap:
   objects. The location comes first (`repo/` before the file when the answer spans repos) and the line's text last,
   after the first ` | `:
   - a search hit: `repo/file:line kind symbol | text`, where kind is `def`, `decl`, `code`, `test`, `comment` or `doc`,
-    and the symbol is the one a `def` or `decl` declares, or `in X` for the one containing the line; `[stale]` before
-    the ` | ` marks a file that could not be read. With `context`, the lines around the hit follow it, one per line:
-    `  41- text`;
+    and the symbol is the one a `def` or `decl` declares, or `in X` for the one containing the line, with its
+    parameter names on the page's first code hit inside a method or function (`in Orders.Place(order, user)`, from
+    the index; a test's, and those the hit's line already shows, are left out); `[stale]` before the ` | ` marks a file
+    that could not be read. The lines the hit's statement goes on over follow it, one per line (`  41- text`), at most
+    two each side and only when there are any: before a line continuing a chained call (`.fetch(…)`), the lines
+    back to the call; after a line a chained call continues, the continuation; before the first line under a `case`
+    or `default` label, the label. With `context`, the lines around the hit instead;
   - with `files_only`: `repo/file:line best (n matches)`, the line and kind of the file's best-ranked hit;
   - a structural match: `repo/file:line:column[-end_line] [$X=captured, …] | text`.
 - `evidence` is a string, cursors are short handles, and row ids, the build stamp and timings (`ms`, `*_ms`) are left

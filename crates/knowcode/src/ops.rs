@@ -1453,7 +1453,24 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     }
     items.truncate(limit);
     let multi = roots.len() > 1;
-    let list: Vec<_> = items.iter().map(|(root, h)| tag_repo(h, root, multi)).collect();
+    // A declaration of the name asked for quotes the line naming it, read from the working tree now and checked
+    // against the index: what an agent would otherwise open the file to see. The first few only, so that none is
+    // left with its place alone under `cite: brief`.
+    let mut citer = crate::cite::Citer::new([]).with_stores(opened.iter().map(|o: &Opened| (o.root.clone(), &o.store)));
+    let mut cited = 0;
+    let list: Vec<_> = items
+        .iter()
+        .map(|(root, h)| {
+            let mut v = tag_repo(h, root, multi);
+            if h.matched == "exact" && citer.on() && cited < crate::cite::BRIEF_CITES {
+                v["cite"] = json!(citer.declaration(root, &h.symbol));
+                cited += 1;
+            }
+            v
+        })
+        .collect();
+    // A cite that drifted says so in its `check`; the answer isn't less whole for it (its items come from the index,
+    // and a repo behind its working tree is said in `stale` already), so no `incomplete` entry of its own.
     let mut env = envelope(&opened, json!(list), total, items.len());
     // Past the candidate cap, the total is a lower bound and a match may be missing: never a complete answer.
     if capped {
@@ -6942,6 +6959,7 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     } else {
         let end = (p.offset + p.limit).min(hits.len());
         page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..end], p.context);
+        search::add_params(&repos.iter().map(|o| &o.store).collect::<Vec<_>>(), &mut page)?;
         if p.offset == 0 {
             other = other_files(&files, &page, &names, multi);
         }

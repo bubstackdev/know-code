@@ -612,7 +612,7 @@ mod tests {
                 ("src/Cart.cs", "namespace Shop;\npublic partial class Cart : ICart\n{\n    public Cart(int id) { }\n    public Cart() : this(0) { }\n    public void Add(int sku) { }\n    public void Add(int sku, int qty) { }\n}\n"),
                 ("src/Cart.Pricing.cs", "namespace Shop;\npublic partial class Cart\n{\n    public decimal Total() => 0;\n}\n"),
                 ("src/ICart.cs", "namespace Shop;\npublic interface ICart { }\n"),
-                ("src/Checkout.cs", "namespace Shop;\npublic class Checkout\n{\n    public void Run() { var c = new Cart(1); c.Add(1); c.Add(1, 2); }\n}\n"),
+                ("src/Checkout.cs", "namespace Shop;\npublic class Checkout\n{\n    /// <summary>Checks out.</summary>\n    [Obsolete]\n    public void Run() { var c = new Cart(1); c.Add(1); c.Add(1, 2); }\n}\n"),
                 ("src/Order.cs", "namespace Shop;\npublic record Order(int Id);\n"),
             ],
         );
@@ -627,6 +627,18 @@ mod tests {
 
         let said = ops::find("Order", None, 10, &scope(&root)).unwrap().env["declared"].as_str().unwrap().to_string();
         assert!(said.contains("the only declaration of Order in shop") && said.contains("1 constructor: primary (int Id)"), "{said}");
+
+        // Each declaration of the name quotes the line naming it, read now and checked against the index: past its
+        // doc comment and attributes. Other matches quote nothing.
+        let cite = |q: &str, file: &str| {
+            let out = ops::find(q, None, 10, &scope(&root)).unwrap().env;
+            let item = out["items"].as_array().unwrap().iter().find(|i| i["file"] == file && i["matched"] == "exact").cloned();
+            item.unwrap_or_else(|| panic!("{out}"))["cite"].clone()
+        };
+        assert_eq!(cite("Cart", "src/Cart.cs"), json!({ "at": "src/Cart.cs:2", "check": "verified", "text": "public partial class Cart : ICart" }));
+        assert_eq!(cite("Run", "src/Checkout.cs"), json!({ "at": "src/Checkout.cs:6", "check": "verified", "text": "public void Run() { var c = new Cart(1); c.Add(1); c.Add(1, 2); }" }));
+        let prefix = ops::find("Car", None, 10, &scope(&root)).unwrap().env;
+        assert!(prefix["items"].as_array().unwrap().iter().all(|i| i.get("cite").is_none()), "{prefix}");
 
         // A prefix or a name nothing declares exactly: no statement.
         assert!(ops::find("Car", None, 10, &scope(&root)).unwrap().env.get("declared").is_none());

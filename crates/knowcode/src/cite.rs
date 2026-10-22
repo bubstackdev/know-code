@@ -33,6 +33,8 @@ use crate::walk::{PathAnswer, Step};
 pub const SITE_LINES: usize = 1;
 /// Lines quoted at most for a declaration: from its first line (an attribute, a decorator) through the one naming it.
 pub const HEAD_LINES: usize = 3;
+/// Lines looked through at most for the one naming a declaration quoted on its own (see [`Citer::declaration`]).
+const NAMING_LINES: usize = 12;
 /// Characters quoted at most per line.
 pub const LINE_CHARS: usize = 160;
 /// Under `cite: brief`: the cites that quote a line, in the answer's order.
@@ -312,6 +314,25 @@ impl<'s> Citer<'s> {
             return self.quote(root, file, at, 1, Vec::new(), Some(name));
         }
         self.quote(root, file, line, n, cut, Some(name))
+    }
+
+    /// The cite of symbol `s`'s declaration in the repo at `root`, one line whatever the mode: the first line naming
+    /// it after what comes before it (attributes, decorators, a doc comment), within the symbol's lines and at most
+    /// [`NAMING_LINES`] down; its first line when none does (a file edited since it was indexed).
+    pub fn declaration(&mut self, root: &Path, s: &kc_store::query::SymbolRow) -> Cite {
+        let qualified = s.qualified();
+        let name = declared(&qualified, Some(&s.kind));
+        let start = s.line.max(1);
+        let last = s.end_line.max(start).min(start + NAMING_LINES as u32 - 1);
+        let at = match &*self.read(root, &s.file) {
+            Now::Lines(lines, _) => (start..=last)
+                .take_while(|&n| lines.get(n as usize - 1).is_some())
+                .find(|&n| names(&lines[n as usize - 1], name))
+                .filter(|&n| (start..n).all(|p| preamble(&lines[p as usize - 1])))
+                .unwrap_or(start),
+            _ => start,
+        };
+        self.quote(root, &s.file, at, 1, Vec::new(), Some(name))
     }
 
     /// The check of the whole of symbol `s` of the repo at `root`, without its text (a context's `source` quotes it),
