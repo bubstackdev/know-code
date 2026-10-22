@@ -61,7 +61,9 @@ instead, with the same `{reason, detail, hint}` (reason `capped` or `budget`), a
 - cites past the first few that give their place without their line (`cite text: 12 of 30 cites quote their line`);
 - a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every match
   with the name asked for (in any case) is listed and the rest match by prefix or word; `search`'s when every file with
-  a match is named, on the page or in `other_files`, and the rest are their other lines. Cut further to fit
+  a match is named, on the page or in `other_files`, and the rest are their other lines (`rest` says when they are
+  all in tests, comments and prose: a first page at the default limit shows every hit in code when there are at most
+  60 hits and they fit, and leaves those a page away). Cut further to fit
   `max_chars`, the page is incomplete.
 
 The lists an answer is about stay `incomplete` when cut: the answer's `items` (references, impact rows, search hits
