@@ -17,6 +17,11 @@ PROGRAMS = {'grep': '/usr/bin/grep', 'find': '/usr/bin/find', 'cat': '/bin/cat',
 # The plain arm; KnowCode named in the brief; KnowCode served but not named (unprompted use).
 ARMS = ('plain', 'knowcode', 'knowcode-unprompted')
 KNOWCODE_ARMS = ('knowcode', 'knowcode-unprompted')
+# How the client grants shell commands, the same in every arm. `patterns` (public-v1): one allow rule per program, so
+# the client refuses any command it can't match to them (`cd x 2>/dev/null || ...`, `f=...; sed $f`, `awk`).
+# `sandbox` (public-v2): the client allows any command, and the session sandbox is the boundary: only PROGRAMS (and
+# bash builtins) can run, only the source can be read, only control/profile can be written, no network.
+SHELL_MODES = ('patterns', 'sandbox')
 
 
 def file_hash(path):
@@ -49,6 +54,9 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
         raise ValueError('explicit recorded Claude Code model, effort and client version required')
     if config['effort'] not in {'low', 'medium', 'high', 'xhigh', 'max'} or config['model'].startswith('-'):
         raise ValueError('invalid explicit model or effort')
+    shell = config.get('shell', 'patterns')
+    if shell not in SHELL_MODES:
+        raise ValueError('unknown shell permission mode')
     budget = config.get('research_call_budget')
     if type(budget) is not int or budget <= 0:
         raise ValueError('positive common research-call budget required')
@@ -127,8 +135,11 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
             json.dump(data, stream, indent=2)
             stream.write('\n')
     allowed = []
-    for name, binary in PROGRAMS.items():
-        allowed.extend([f'Bash({name} *)', f'Bash({binary} *)'])
+    if shell == 'sandbox':
+        allowed.append('Bash')
+    else:
+        for name, binary in PROGRAMS.items():
+            allowed.extend([f'Bash({name} *)', f'Bash({binary} *)'])
     allowed.append('Read(/'+str(source)+'/**)')
     if knowcode_arm:
         allowed.append('mcp__knowcode')
@@ -146,7 +157,7 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
                                       'KNOWCODE_UPDATE_CHECK': '0'},
             'client_sha256': file_hash(client), 'expected_client_version': config['client_version'],
             'settings_sha256': file_hash(settings_path), 'mcp_sha256': file_hash(mcp_path),
-            'extra_executables': additional_executables, 'research_call_budget': budget,
+            'extra_executables': additional_executables, 'research_call_budget': budget, 'shell': shell,
             'research_call_budget_enforced': False, 'ready_to_run': False, 'model_calls': 0,
             'remaining': ['hash-bound study freeze and independent label adjudication',
                           'actual client version/tool permission verification', 'model/API egress and credential separation',
