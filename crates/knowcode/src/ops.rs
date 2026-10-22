@@ -620,6 +620,50 @@ pub fn repo_name(root: &Path) -> String {
     root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// The qualified name of the definition `place` (`file:line`, `path#name`) names in the first of `roots` having it;
+/// an error saying what didn't resolve (see [`unresolved_place`]) when none does.
+fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> {
+    for root in roots {
+        let Some(o) = open_member(roots, root, no_sync)? else { continue };
+        if let Some(s) = query::definitions(o.store.conn(), place)?.into_iter().next() {
+            return Ok(s.qualified());
+        }
+    }
+    bail!("{}", unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}")))
+}
+
+/// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos
+/// of `args`: said instead of an empty answer, which would read as "nothing there". `None` when it names no place.
+pub fn unresolved_place(symbol: &str, args: &Scope) -> Result<Option<String>> {
+    unresolved_in(symbol, &target_repos(&args.repos)?, args.no_sync)
+}
+
+fn unresolved_in(symbol: &str, roots: &[PathBuf], no_sync: bool) -> Result<Option<String>> {
+    let Some((file, at)) = query::place(symbol) else { return Ok(None) };
+    let mut files = Vec::new();
+    let mut near = Vec::new();
+    for root in roots {
+        let Some(o) = open_member(roots, root, no_sync)? else { continue };
+        let Some((found, rows)) = query::place_miss(o.store.conn(), symbol)? else { continue };
+        let repo = repo_name(root);
+        if let Some(f) = found {
+            files.push(format!("{repo}/{f}"));
+            near.extend(rows.iter().map(|s| format!("{} at {repo}/{}:{}", s.qualified(), s.file, s.line)));
+        }
+    }
+    let repos: Vec<String> = roots.iter().map(|r| repo_name(r)).collect();
+    let why = match (files.first(), at) {
+        (None, _) => format!(
+            "no indexed file has the path {file} in {}: a path is relative to its repo, or written after the repo's name (`<repo>/<path>:<line>`)",
+            repos.join(", ")
+        ),
+        (Some(f), Err(name)) => format!("no definition named {name} in {f}"),
+        (Some(f), Ok(line)) if near.is_empty() => format!("no definition in {f} spans line {line}"),
+        (Some(f), Ok(line)) => format!("no definition in {f} spans line {line}; nearest: {}", near.join(", ")),
+    };
+    Ok(Some(format!("{symbol} didn't resolve: {why}")))
+}
+
 /// A repo as an item names it (its name, or its path): its name.
 fn repo_label(r: &str) -> String {
     repo_name(Path::new(r))
@@ -1510,9 +1554,19 @@ pub struct RefsData {
     pub hierarchy: Option<Value>,
 }
 
+/// References to `name`, or to the definition a place names (`file:line`, `path#name`, after its repo's name or not):
+/// that definition's qualified name, said as `name`. A place naming no definition is refused, saying why.
 pub fn refs(name: &str, kinds: &[String], limit: usize, args: &Scope) -> Result<Out<RefsData>> {
     let (roots, workspace) = scope_repos(&args.repos)?;
+    let placed = match query::place(name) {
+        Some(_) => Some(placed_name(name, &roots, args.no_sync)?),
+        None => None,
+    };
+    let name = placed.as_deref().unwrap_or(name);
     let mut out = refs_in(name, kinds, limit, roots, workspace, args.no_sync)?;
+    if placed.is_some() {
+        out.env["name"] = json!(name);
+    }
     let more = out.data.total > out.data.items.len();
     let req = cursor::Request::Refs { name: name.to_string(), kinds: kinds.to_vec(), limit };
     cursor::offer(&mut out.env, req, args, vec![cursor::List::new("/items", limit, more)], &[]);
@@ -6752,6 +6806,35 @@ fn no_files_note(globs: &[String], langs: &[String], searchable: usize, searched
     Some(format!("{what} matched 0 files ({}): {place}", filter.join("; ")))
 }
 
+/// The most files with a match a page of hits leaves out that a search names (see [`other_files`]); past it, `files`
+/// counts them and `files_only` lists them.
+const OTHER_FILES: usize = 60;
+
+/// The files with a match that a page of hits doesn't show, by directory in rank order, each with its count when more
+/// than one: `src/core/: a.cs 2, b.cs` (`repo/src/core/: …` across repos). A page cut short names the rest of the files, so
+/// the whole set is seen without paging or searching again: a file name costs a few characters, a hit a line. None
+/// past [`OTHER_FILES`].
+fn other_files(files: &[FileSummary], page: &[search::PageHit], names: &[String], multi: bool) -> Vec<String> {
+    let shown: HashSet<(usize, &str)> = page.iter().map(|h| (h.repo, h.file.as_str())).collect();
+    let rest: Vec<&FileSummary> = files.iter().filter(|f| !shown.contains(&(f.repo, f.file.as_str()))).collect();
+    if rest.len() > OTHER_FILES {
+        return Vec::new();
+    }
+    let mut dirs: Vec<(String, Vec<String>)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for f in rest {
+        let (dir, base) = f.file.rsplit_once('/').unwrap_or(("", &f.file));
+        let repo = if multi { format!("{}/", names[f.repo]) } else { String::new() };
+        let dir = if dir.is_empty() { repo } else { format!("{repo}{dir}/") };
+        let i = *at.entry(dir.clone()).or_insert_with(|| {
+            dirs.push((dir, Vec::new()));
+            dirs.len() - 1
+        });
+        dirs[i].1.push(if f.matches > 1 { format!("{base} {}", f.matches) } else { base.to_string() });
+    }
+    dirs.into_iter().map(|(d, l)| if d.is_empty() { l.join(", ") } else { format!("{d}: {}", l.join(", ")) }).collect()
+}
+
 /// Full-text or regex search over every searchable file, ranked: definitions, then declarations, then code, then
 /// tests, comments and prose. Repos are checked for freshness in parallel and candidates read on a shared pool.
 pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
@@ -6852,12 +6935,16 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     let total_files = files.len();
     let multi = roots.len() > 1;
     let mut page = Vec::new();
+    let mut other = Vec::new();
     let (count, mut list): (usize, Vec<Value>) = if p.files_only {
         files = files.into_iter().skip(p.offset).take(p.limit).collect();
         (total_files, files.iter().map(|f| tag_repo_at(f, &names[f.repo], multi)).collect())
     } else {
         let end = (p.offset + p.limit).min(hits.len());
         page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..end], p.context);
+        if p.offset == 0 {
+            other = other_files(&files, &page, &names, multi);
+        }
         files.clear();
         (total, page.iter().map(|h| tag_repo_at(h, &names[h.repo], multi)).collect())
     };
@@ -6872,6 +6959,9 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     env["next_offset"] = json!(next_offset);
     env["matches"] = json!(total);
     env["files"] = json!(total_files);
+    if !other.is_empty() {
+        env["other_files"] = json!(other);
+    }
     env["by_kind"] = json!(by_kind);
     if scan.capped {
         env["capped"] = json!(true);
@@ -11254,6 +11344,70 @@ public class CatalogService(HttpClient httpClient)
         assert!(env["note"].as_str().unwrap().starts_with("lang matched 0 files (cobol): in web, api"), "{env}");
         let env = run(&["/elsewhere/**"], &[]);
         assert!(env["note"].as_str().unwrap().starts_with("paths matched 0 files (/elsewhere/**): they name none of the repos searched (web, api)"), "{env}");
+        // After `**/` too: the way an agent scopes a glob to one repo of several.
+        assert_eq!(files(&run(&["**/web/**"], &[])), vec!["src/app.ts"]);
+        assert_eq!(run(&["**/web/**"], &[])["repo"].as_str().map(repo_label), Some("web".to_string()));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A page of hits cut short names every other file with a match, by directory, with its count when more than one:
+    /// the whole set of files without paging or searching again. A later page doesn't repeat them.
+    #[test]
+    fn a_search_cut_short_names_the_files_its_page_leaves_out() {
+        let cache = test_cache();
+        let base = cache.dir("search-other-files");
+        let web = repo(&base, "web", &[("src/a.ts", "export const retryLimit = 3;\n"), ("src/b.ts", "f(retryLimit);\ng(retryLimit);\n"), ("lib/c.ts", "h(retryLimit);\n")]);
+        let scope = Scope { repos: vec![web], no_sync: false };
+        let run = |limit, offset| {
+            let opts = search::SearchOptions {
+                pattern: "retryLimit".into(),
+                regex: false,
+                case: search::Case::Sensitive,
+                word: false,
+                langs: Vec::new(),
+                globs: Vec::new(),
+                max_lines: 1000,
+            };
+            search(&SearchParams { opts, limit, offset, context: 0, files_only: false }, &scope).unwrap().env
+        };
+        let env = run(1, 0);
+        assert_eq!(env["items"][0]["file"], "src/a.ts", "{env}");
+        let mut other: Vec<String> = serde_json::from_value(env["other_files"].clone()).unwrap();
+        other.sort();
+        assert_eq!(other, ["lib/: c.ts", "src/: b.ts 2"], "{env}");
+        assert!(run(10, 0).get("other_files").is_none());
+        assert!(run(1, 1).get("other_files").is_none());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A place written after its repo's name (`web/src/order.ts:3`, the way questions and cross-repo answers name it)
+    /// picks the definition there, as the place relative to the repo does; kc_refs takes one too, answering for that
+    /// definition's name. A place picking nothing says what didn't resolve, rather than answering "nothing there".
+    #[test]
+    fn places_after_a_repo_name_resolve_and_unresolved_ones_say_why() {
+        let cache = test_cache();
+        let base = cache.dir("repo-places");
+        let order = "export class Order {\n  save() {\n    return 1;\n  }\n}\n\nexport function run(o: Order) {\n  return o.save();\n}\n";
+        let web = repo(&base, "web", &[("src/order.ts", order)]);
+        let api = repo(&base, "api", &[("src/limits.py", "def save():\n    return 5\n")]);
+        let both = Scope { repos: vec![web, api], no_sync: false };
+        for place in ["web/src/order.ts:3", "src/order.ts:3", "web/src/order.ts#save"] {
+            let env = context(place, 4000, Default::default(), &both).unwrap().env;
+            assert_eq!((env["items"][0]["symbol"]["name"].as_str(), env["items"][0]["symbol"]["container"].as_str()), (Some("save"), Some("Order")), "{place}: {env}");
+        }
+        let r = refs("web/src/order.ts:3", &[], 20, &both).unwrap();
+        assert_eq!(r.env["name"], "Order.save");
+        assert!(r.data.items.iter().any(|(_, h)| h.file == "src/order.ts" && h.line == 8), "{}", r.env);
+        assert_eq!(unresolved_place("Order.save", &both).unwrap(), None);
+        let why = |place: &str| unresolved_place(place, &both).unwrap().unwrap();
+        assert_eq!(
+            why("web/src/nope.ts:3"),
+            "web/src/nope.ts:3 didn't resolve: no indexed file has the path web/src/nope.ts in web, api: a path is relative to its repo, or written after the repo's name (`<repo>/<path>:<line>`)"
+        );
+        assert_eq!(why("web/src/order.ts:6"), "web/src/order.ts:6 didn't resolve: no definition in web/src/order.ts spans line 6; nearest: Order at web/src/order.ts:1, run at web/src/order.ts:7");
+        assert_eq!(why("web/src/order.ts#cancel"), "web/src/order.ts#cancel didn't resolve: no definition named cancel in web/src/order.ts");
+        let err = refs("web/src/order.ts:6", &[], 20, &both).err().unwrap();
+        assert!(format!("{err:#}").contains("didn't resolve: no definition in web/src/order.ts spans line 6"), "{err:#}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

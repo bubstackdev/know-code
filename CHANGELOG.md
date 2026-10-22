@@ -14,6 +14,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the other tools. The server instructions map questions to the core tools again (where X is defined, every use of X, what X
   is, where a concept lives, text, what calls X or breaks if it changes), leading with "use it instead of grep and
   reading files", and say every answer states `complete`.
+- The size cap cuts the lists an answer is about last: implementations and conformers, DI registrations, HTTP, bus and
+  SQL links. Callers, callees and members go down to none, the source is shortened and those lists' rows drop their
+  signature and doc first; links are text rows with what they share said once. On a public DI library, `kc_context` of
+  an interface cut 7 of its 11 conformers to keep callers; it now shows all 11. On a public media server, a controller
+  action's context showed 3 of its 39 HTTP callers; it now shows all 39 in the same 6,000 characters.
+- A `kc_search` page cut short names the other files with a match (`other_files`, by directory, with counts, up to 60
+  files), so the whole set is seen without paging or searching again.
+- A `file:line` or `path#name` written after its repo's name (`shop/src/a.cs:12`, the way questions and cross-repo
+  answers name places) resolves in `kc_context`, `kc_impact`, `kc_trace` and `kc_refs` (which answers for the
+  definition there); `kc_search` takes `**/shop/src/**` as it takes `shop/src/**`. A place naming no definition, and a
+  search filter matching no file, are refused saying what didn't resolve (no such file, or the definitions nearest the
+  line), where they answered `complete: true` with no items.
 - MCP answers say `complete: true` again when they are complete (0.2.0's leaner answers said it only when false). A
   text tree ends its first line with `; complete`.
 - `find`'s `declared` speaks for the workspace: "the only declaration of X in the workspace (6 repos) is in autofac",

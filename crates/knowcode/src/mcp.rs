@@ -84,7 +84,8 @@ pub struct LocateParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RefsParams {
-    /// A name, or `Type.member` for that member's references.
+    /// A name, `Type.member` for that member's references, or `file:line` (after its repo's name too) for those of the
+    /// definition there.
     #[serde(default)]
     pub name: Option<String>,
     /// Several names instead of `name` (at most 20).
@@ -108,7 +109,7 @@ pub struct RefsParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ContextParams {
-    /// A name, or `Type.member`.
+    /// A name, `Type.member`, or `file:line` (after its repo's name too: `shop/src/a.cs:12`).
     #[serde(default)]
     pub symbol: Option<String>,
     /// Several symbols instead of `symbol` (at most 20), sharing the budget.
@@ -257,7 +258,7 @@ pub struct FlowParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ImpactParams {
-    /// A symbol (name or `Type.member`).
+    /// A symbol (name, `Type.member`, or `file:line`, after its repo's name too).
     #[serde(default)]
     pub symbol: Option<String>,
     /// A file instead of a symbol.
@@ -432,7 +433,7 @@ pub struct SearchParams {
     /// Languages to keep.
     #[serde(default)]
     pub lang: Vec<String>,
-    /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`), that repo only.
+    /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`, `**/shop/src/**`), that repo only.
     #[serde(default)]
     pub paths: Vec<String>,
     /// Lines of context around each hit (max 10).
@@ -484,7 +485,7 @@ pub struct GrepAstParams {
     /// Keep matches whose text matches this regex.
     #[serde(default)]
     pub text: Option<String>,
-    /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`), that repo only.
+    /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`, `**/shop/src/**`), that repo only.
     #[serde(default)]
     pub paths: Vec<String>,
     /// Results per page (default 20).
@@ -605,10 +606,10 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_locate", &[("query", ""), ("queries", "Several, at most 20.")]),
     ("kc_refs", &[("name", ""), ("names", "Several, at most 20.")]),
     ("kc_context", &[("symbol", ""), ("symbols", "Several, at most 20.")]),
-    ("kc_trace", &[("symbol", "A name, `Type.member` or file:line."), ("direction", "`in`, `out` or `both` (default)."), ("depth", "1 (default) to 3.")]),
+    ("kc_trace", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("direction", "`in`, `out` or `both` (default)."), ("depth", "1 (default) to 3.")]),
     ("kc_path", &[("from", ""), ("to", "")]),
     ("kc_flow", &[("entry", "")]),
-    ("kc_impact", &[("symbol", "A name, `Type.member` or file:line."), ("file", ""), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
+    ("kc_impact", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("file", ""), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
     ("kc_unused", &[]),
     ("kc_rename_preview", &[("symbol", ""), ("new_name", "")]),
     ("kc_coupled", &[("file", "")]),
@@ -1200,6 +1201,25 @@ fn explain(mut env: Value, searched: &str, limit_param: &str) -> Value {
     env
 }
 
+/// Refuses an empty answer to a place (`file:line`, `path#name`) that named no definition, saying what didn't resolve
+/// (see [`ops::unresolved_place`]): `complete` with no items would read as "nothing there".
+fn placed(symbol: Option<&str>, empty: bool, scope: &Scope) -> anyhow::Result<()> {
+    if empty
+        && let Some(s) = symbol
+        && let Some(why) = ops::unresolved_place(s, scope)?
+    {
+        anyhow::bail!(why);
+    }
+    Ok(())
+}
+
+/// Why a search with a paths or lang filter (`filtered`) searched nothing: its filter matched no file. Refused with
+/// the search's note, rather than answered `complete` with no items.
+fn searched_nothing(env: &Value, filtered: bool) -> Option<String> {
+    (filtered && env["stats"]["searchable_files"].as_u64() == Some(0))
+        .then(|| env["note"].as_str().unwrap_or("paths and lang matched 0 files: nothing was searched").to_string())
+}
+
 fn repo_label(path: &str) -> String {
     Path::new(path).file_name().map_or(path.into(), |n| n.to_string_lossy().into_owned())
 }
@@ -1277,6 +1297,8 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
     while len > max && guard < 10_000 {
         guard += 1;
         match shrink(&mut env) {
+            // Rows' detail dropped: no row lost.
+            Some(path) if path.is_empty() => {}
             Some(path) => {
                 if let Some(r) = resume.as_mut() {
                     crate::cursor::cut(&mut env, r, &path);
@@ -1287,14 +1309,18 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
             None => break,
         }
         // A workspace `kc_status` answers with an array of per-repo objects.
-        if let Some(obj) = env.as_object_mut() {
+        if let Some(obj) = env.as_object_mut()
+            && !lost.is_empty()
+        {
             obj.insert("truncated".into(), Value::Bool(true));
         }
         // Paged answers: the next page starts after the last item that survived.
         if let (Some(offset), Some(items)) = (env["offset"].as_u64(), env["items"].as_array()) {
             env["next_offset"] = Value::from(offset + items.len() as u64);
         }
-        if let Some(obj) = env.as_object_mut() {
+        if let Some(obj) = env.as_object_mut()
+            && !lost.is_empty()
+        {
             let total: u64 = lost.values().sum();
             obj.insert("omitted".into(), serde_json::json!(lost));
             let paged = if obj.contains_key("next_offset") { ", or page with offset=next_offset" } else { "" };
@@ -1349,35 +1375,75 @@ fn atomic(key: &str) -> bool {
     matches!(key, "deploy_chains" | "ci_includes" | "deployed_by")
 }
 
-/// A deploy answer's long tails (`items[0].ansible.ci_includes`, …), cut before its deploy steps (see
-/// `ops::DEPLOY_LISTS`): the rank of the list at `path` in what the cap cuts first.
-fn tier(path: &str) -> u8 {
-    let Some((parent, key)) = path.rsplit_once('/') else { return 0 };
-    let tail = matches!(key, "ci_includes" | "ci_skipped" | "ci_templates" | "own");
-    u8::from(tail && parent.ends_with("/ansible"))
+/// Lists that hold what a question about a type or an endpoint asks for: its implementations and derived types, its DI
+/// registrations, the links reaching it (HTTP, bus, SQL), a search's other files. The size cap cuts them last, after
+/// every other list and the source (see [`shrink`]): a conformer cut to fit was the one item an agent's grep found
+/// that an answer had and didn't show.
+fn answer_list(key: &str) -> bool {
+    matches!(
+        key,
+        "conformers"
+            | "conformers_indirect"
+            | "conformers_elsewhere"
+            | "di_implementers"
+            | "implementers"
+            | "derived"
+            | "through"
+            | "subclasses"
+            | "di"
+            | "registrations"
+            | "registered_as"
+            | "bound"
+            | "http"
+            | "bus"
+            | "sql"
+            | "links"
+            | "other_files"
+    )
 }
 
+/// The rank of the list at `path` in what the cap cuts first: a deploy answer's long tails
+/// (`items[0].ansible.ci_includes`, …) before its deploy steps (see `ops::DEPLOY_LISTS`), then any other list, then
+/// the lists an answer is about (see [`answer_list`]).
+fn tier(path: &str) -> u8 {
+    let Some((parent, key)) = path.rsplit_once('/') else { return 1 };
+    let tail = matches!(key, "ci_includes" | "ci_skipped" | "ci_templates" | "own");
+    if tail && parent.ends_with("/ansible") {
+        2
+    } else if answer_list(key) {
+        0
+    } else {
+        1
+    }
+}
+
+/// Detail an answer list's rows can do without, dropped before a row of one is cut: the row keeps its name, kind and
+/// `file:line`.
+const ROW_DETAIL: &[&str] = &["signature", "doc", "attrs", "start_line", "end_line", "complexity", "cite"];
+
 /// Trims one item from the longest list, returning its path (`/items`, `/items/0/callers`); or shortens a long
-/// string, returning `/…`; `None` when nothing is left to trim. A rename's `group` (the members renamed together) and
-/// a path's `steps` are never cut: a path or a group cut short would mislead; the list holding them is cut instead.
-/// A deploy answer's tails go before the rest, and its chains and includes are cut whole (see [`atomic`]), in the
-/// answer and in a page of one of those lists.
+/// string, returning `/…`; or drops the detail of answer lists' rows, returning an empty path; `None` when nothing is
+/// left to trim. A rename's `group` (the members renamed together) and a path's `steps` are never cut: a path or a
+/// group cut short would mislead; the list holding them is cut instead. A deploy answer's tails go before the rest,
+/// and its chains and includes are cut whole (see [`atomic`]), in the answer and in a page of one of those lists. The
+/// lists an answer is about (see [`answer_list`]) go last: every other list down to one row, the source shortened and
+/// their rows' detail dropped first.
 fn shrink(v: &mut Value) -> Option<String> {
     type Found<'a> = (&'a mut Vec<Value>, String, (u8, usize));
-    // Prefer trimming the longest array anywhere in the response.
-    fn longest(v: &mut Value, path: String, whole: bool) -> Option<Found<'_>> {
+    // Prefer trimming the longest array anywhere in the response; a list inside an answer list's row ranks with it.
+    fn longest(v: &mut Value, path: String, whole: bool, answer: bool) -> Option<Found<'_>> {
         let mut best: Option<Found<'_>> = None;
         match v {
             Value::Array(a) => {
                 if a.len() > 1 {
-                    let rank = (tier(&path), a.len());
+                    let rank = (if answer { 0 } else { tier(&path) }, a.len());
                     return Some((a, path, rank));
                 }
                 if whole {
                     return None;
                 }
                 for (i, x) in a.iter_mut().enumerate() {
-                    if let Some(inner) = longest(x, format!("{path}/{i}"), false)
+                    if let Some(inner) = longest(x, format!("{path}/{i}"), false, answer)
                         && inner.2 > best.as_ref().map_or((0, 1), |b| b.2)
                     {
                         best = Some(inner);
@@ -1389,7 +1455,7 @@ fn shrink(v: &mut Value) -> Option<String> {
                 let page_whole = path.is_empty() && m.get("list").and_then(Value::as_str).is_some_and(|l| atomic(l.rsplit('.').next().unwrap_or("")));
                 for (k, x) in m.iter_mut().filter(|(k, _)| !untouchable(k)) {
                     let whole = atomic(k) || (page_whole && k == "items");
-                    if let Some(inner) = longest(x, format!("{path}/{k}"), whole)
+                    if let Some(inner) = longest(x, format!("{path}/{k}"), whole, answer || answer_list(k))
                         && inner.2 > best.as_ref().map_or((0, 1), |b| b.2)
                     {
                         best = Some(inner);
@@ -1400,32 +1466,76 @@ fn shrink(v: &mut Value) -> Option<String> {
         }
         best
     }
-    match longest(v, String::new(), false) {
-        Some((a, path, _)) => {
-            a.pop();
-            Some(path)
-        }
-        None => {
-            // Last resort: shorten long strings (source spans).
-            fn trim_strings(v: &mut Value) -> bool {
-                match v {
-                    Value::String(s) if s.len() > 400 => {
-                        let mut cut = s.len() / 2;
-                        while !s.is_char_boundary(cut) {
-                            cut -= 1;
-                        }
-                        s.truncate(cut);
-                        s.push('…');
-                        true
-                    }
-                    Value::Array(a) => a.iter_mut().any(trim_strings),
-                    Value::Object(m) => m.iter_mut().filter(|(k, _)| !untouchable(k)).any(|(_, x)| trim_strings(x)),
-                    _ => false,
+    // Shortens a long string (a source span); `answers` too in the lists an answer is about.
+    fn trim_strings(v: &mut Value, answers: bool) -> bool {
+        match v {
+            Value::String(s) if s.len() > 400 => {
+                let mut cut = s.len() / 2;
+                while !s.is_char_boundary(cut) {
+                    cut -= 1;
                 }
+                s.truncate(cut);
+                s.push('…');
+                true
             }
-            trim_strings(v).then(|| "/…".to_string())
+            Value::Array(a) => a.iter_mut().any(|x| trim_strings(x, answers)),
+            Value::Object(m) => m.iter_mut().filter(|(k, _)| !untouchable(k) && (answers || !answer_list(k))).any(|(_, x)| trim_strings(x, answers)),
+            _ => false,
         }
     }
+    // Drops the detail of the rows of the lists an answer is about (see [`ROW_DETAIL`]).
+    fn slim(v: &mut Value, list: bool) -> bool {
+        match v {
+            Value::Array(a) => a.iter_mut().fold(false, |any, x| {
+                let dropped = list && x.as_object_mut().is_some_and(|row| ROW_DETAIL.iter().fold(false, |d, k| row.remove(*k).is_some() | d));
+                slim(x, false) | dropped | any
+            }),
+            Value::Object(m) => m.iter_mut().filter(|(k, _)| !untouchable(k)).fold(false, |any, (k, x)| slim(x, answer_list(k)) | any),
+            _ => false,
+        }
+    }
+    // The last row of a list an item holds (`/items/0/callers`): not of the answer's own `items`, and nothing inside a
+    // row of a list.
+    fn last_row(v: &mut Value, path: String) -> Option<String> {
+        match v {
+            Value::Array(a) if path.is_empty() || path == "/items" => a.iter_mut().enumerate().find_map(|(i, x)| last_row(x, format!("{path}/{i}"))),
+            Value::Array(a) if a.len() == 1 => {
+                a.pop();
+                Some(path)
+            }
+            Value::Array(_) => None,
+            Value::Object(m) => {
+                m.iter_mut().filter(|(k, _)| !untouchable(k) && !answer_list(k) && !atomic(k)).find_map(|(k, x)| last_row(x, format!("{path}/{k}")))
+            }
+            _ => None,
+        }
+    }
+    if let Some((a, path, (tier, _))) = longest(v, String::new(), false, false)
+        && tier > 0
+    {
+        a.pop();
+        return Some(path);
+    }
+    // Only the lists the answer is about are left to cut: the source, their rows' detail and the other lists' last
+    // rows go first.
+    if trim_strings(v, false) {
+        return Some("/…".to_string());
+    }
+    if slim(v, false) {
+        return Some(String::new());
+    }
+    // A page of one list (`kc_more`) is that list's rows only.
+    if v.get("list").is_none()
+        && let Some(path) = last_row(v, String::new())
+    {
+        return Some(path);
+    }
+    if let Some((a, path, _)) = longest(v, String::new(), false, false) {
+        a.pop();
+        return Some(path);
+    }
+    // Last resort: shorten long strings anywhere.
+    trim_strings(v, true).then(|| "/…".to_string())
 }
 
 
@@ -1595,7 +1705,9 @@ impl KnowcodeServer {
         let context = move |sym: &str| -> anyhow::Result<Value> {
             cite(mode);
             let what = format!("no definition or table named {sym}");
-            Ok(explain(ops::context_limited(sym, budget, source, limit, &scope)?.env, &what, ""))
+            let env = ops::context_limited(sym, budget, source, limit, &scope)?.env;
+            placed(Some(sym), env["items"].as_array().is_some_and(Vec::is_empty), &scope)?;
+            Ok(explain(env, &what, ""))
         };
         // The bundle's own size: five characters a budget token (source, members, callers and callees with their
         // bookkeeping), at least [`CONTEXT_CHARS`].
@@ -1622,7 +1734,9 @@ impl KnowcodeServer {
         let mode = cite_mode(p.walk.cite.as_deref())?;
         let trace = move || {
             cite(mode);
-            ops::trace(&p.symbol, &dir, asked, limit, &filter, &scope)
+            let out = ops::trace(&p.symbol, &dir, asked, limit, &filter, &scope)?;
+            placed(Some(&p.symbol), out.data.found.is_empty(), &scope)?;
+            anyhow::Ok(out)
         };
         // Whether a node at the last depth leads further (a confident edge the walk would expand).
         let deeper = move |t: &kc_store::trace::Trace| t.nodes.iter().any(|n| n.depth == depth && matches!(n.confidence, "exact" | "unique_name"));
@@ -1786,6 +1900,7 @@ impl KnowcodeServer {
             run_text(p.common.max_chars, move || {
                 cite(mode);
                 let out = ops::impact(&params, &scope)?;
+                placed(params.symbol.as_deref(), out.data.is_empty(), &scope)?;
                 let mut text = crate::render::impact_text(&out.data, out.data.len() > 1);
                 if out.data.is_empty() {
                     text = format!("{what}\n");
@@ -1799,6 +1914,7 @@ impl KnowcodeServer {
             run(p.common.max_chars, move || {
                 cite(mode);
                 let out = ops::impact(&params, &scope)?;
+                placed(params.symbol.as_deref(), out.data.is_empty(), &scope)?;
                 let mut env = explain(out.env, &what, "");
                 let mut hints = Vec::new();
                 if out.data.iter().any(|r| r.impact.truncated) {
@@ -1950,6 +2066,7 @@ impl KnowcodeServer {
                 args.push(flag.into());
             }
         }
+        let filtered = !p.lang.is_empty() || !p.paths.is_empty();
         for l in p.lang {
             args.extend(["-l".into(), l]);
         }
@@ -1967,7 +2084,14 @@ impl KnowcodeServer {
         }
         let what = format!("no line matches {:?}", p.pattern);
         args.extend(["--".into(), p.pattern]);
-        run_child(p.common.max_chars, move || Ok(explain(search_in_child(&args)?, &what, "limit (or offset=next_offset)"))).await
+        run_child(p.common.max_chars, move || {
+            let env = search_in_child(&args)?;
+            if let Some(why) = searched_nothing(&env, filtered) {
+                anyhow::bail!(why);
+            }
+            Ok(explain(env, &what, "limit (or offset=next_offset)"))
+        })
+        .await
     }
 
     #[tool(description = "Structural search: an ast-grep pattern (`$X`, `$$$`) over one language. kc_help kc_grep_ast.")]
@@ -2477,6 +2601,50 @@ mod tests {
         }
     }
 
+    /// The lists an answer is about (a type's implementations, its DI registrations, an endpoint's HTTP links) go last:
+    /// every other list down to none, the source shortened and their rows' detail dropped first. A conformer cut to
+    /// fit while callers were shown was what an agent's grep found that the answer had.
+    #[test]
+    fn the_size_cap_cuts_the_lists_an_answer_is_about_last() {
+        let conformer = |i: usize| {
+            json!({ "file": format!("src/Impl{i}.cs"), "line": 3, "end_line": 90, "kind": "class", "name": format!("Impl{i}"),
+                "signature": format!("public sealed class Impl{i} : IThing, IDisposable"), "doc": "Does the thing for one tenant." })
+        };
+        let caller = |i: usize| json!({ "file": "src/Use.cs", "line": i, "from": format!("Use.M{i}"), "kind": "type_ref", "confidence": "exact" });
+        let link = |i: usize| {
+            json!({ "repo": "web", "file": format!("src/pages/p{i}.ts"), "line": 7, "start_line": 5, "end_line": 20, "kind": "function",
+                "symbol": format!("load{i}"), "confidence": "exact", "assumptions": ["same_deployment"] })
+        };
+        let env = |n: usize| {
+            json!({ "items": [{
+                "symbol": { "name": "IThing", "kind": "protocol" }, "source": "x".repeat(1_500),
+                "conformers": (0..n).map(conformer).collect::<Vec<_>>(),
+                "callers": (0..60).map(caller).collect::<Vec<_>>(),
+                "di": { "registrations": [{ "file": "src/Startup.cs", "line": 9, "service": "IThing", "implementation": "Impl0" }], "injection_sites": 4 },
+                "http": [{ "verb": "GET", "path": "/things", "links": (0..n).map(link).collect::<Vec<_>>() }],
+            }], "total": 1, "truncated": false })
+        };
+        let v: Value = serde_json::from_str(&cap(env(25), 6_000)).unwrap();
+        let item = &v["items"][0];
+        let cut: Vec<&str> = v["incomplete"].as_array().unwrap().iter().filter_map(|i| i["detail"].as_str()).collect();
+        assert!(cut.iter().any(|d| d.starts_with("/items/0/callers")) && !cut.iter().any(|d| d.contains("conformers") || d.contains("links")), "{v}");
+        assert!(item["callers"].as_array().is_some_and(|c| c.len() <= 1) && item["source"].as_str().is_some_and(|s| s.len() < 400), "{v}");
+        // Every conformer, by name and place, without its signature and doc.
+        let rows = item["conformers"].as_array().unwrap();
+        assert_eq!(rows.len(), 25, "{v}");
+        assert!(rows.iter().all(|r| r["name"].is_string() && r["line"] == 3 && r.get("signature").is_none() && r.get("doc").is_none()), "{v}");
+        assert_eq!(item["di"]["registrations"][0]["service"], "IThing", "{v}");
+        // Links said as text rows, what they share said once.
+        let http = &item["http"][0];
+        assert_eq!(http["links"].as_array().map(Vec::len), Some(25), "{v}");
+        assert_eq!((http["links"][0].as_str(), http["links_repo"].as_str(), http["links_assumptions"].clone()), (Some("src/pages/p0.ts:7 function load0"), Some("web"), json!(["same_deployment"])), "{v}");
+        // Too many to fit even so: the answer lists are cut then, saying so.
+        let v: Value = serde_json::from_str(&cap(env(200), 6_000)).unwrap();
+        let cut: Vec<&str> = v["incomplete"].as_array().unwrap().iter().filter_map(|i| i["detail"].as_str()).collect();
+        assert!(cut.iter().any(|d| d.starts_with("/items/0/conformers") || d.starts_with("/items/0/http/0/links")), "{v}");
+        assert!(v.to_string().len() <= 6_000, "{v}");
+    }
+
     #[test]
     fn empty_answers_say_what_was_searched_and_short_lists_how_to_get_more() {
         let env = json!({ "repo": "/x/Orders", "items": [], "total": 0, "truncated": false });
@@ -2705,6 +2873,44 @@ mod tests {
         let callers = v["incomplete"].as_array().unwrap().iter().find(|i| i["detail"].as_str().unwrap().contains("callers")).expect("callers cut");
         assert!(callers["hint"].as_str().unwrap().contains("items[0].callers_cursor"), "{v}");
         assert!(crate::compact::resolve(v["items"][0]["callers_cursor"].as_str().unwrap()).is_ok(), "{v}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A place or a paths filter written after a repo's name, the way questions name them, resolves in kc_context,
+    /// kc_impact, kc_refs and kc_search; one resolving to nothing is refused, saying what didn't resolve, never
+    /// answered `complete` with no items.
+    #[test]
+    fn places_and_globs_after_a_repo_name_resolve_or_say_what_did_not() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-places");
+        let audit = "namespace Shop;\npublic static class Audit\n{\n    public static void Log() { }\n}\n\npublic class Run\n{\n    public void Go() { Audit.Log(); }\n}\n";
+        let root = crate::ops::tests::repo(&base, "shop", &[("src/Audit.cs", audit)]);
+        let s = KnowcodeServer { default: Scope { repos: vec![root], no_sync: false }, ..server("all") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let v: Value = serde_json::from_str(&rt.block_on(s.kc_context(p(json!({ "symbol": "shop/src/Audit.cs:4" })))).unwrap()).unwrap();
+        assert_eq!(v["items"][0]["symbol"]["name"], "Log", "{v}");
+        let impact = rt.block_on(s.kc_impact(p(json!({ "symbol": "shop/src/Audit.cs:4" })))).unwrap();
+        assert!(impact.contains("Run.Go"), "{impact}");
+        let v: Value = serde_json::from_str(&rt.block_on(s.kc_refs(p(json!({ "name": "shop/src/Audit.cs:4" })))).unwrap()).unwrap();
+        assert_eq!((v["name"].as_str(), v["total"].as_u64()), (Some("Audit.Log"), Some(1)), "{v}");
+        // Resolving to nothing: refused, saying so.
+        for (tool, err) in [
+            ("kc_context", rt.block_on(s.kc_context(p(json!({ "symbol": "shop/src/Gone.cs:4" }))))),
+            ("kc_impact", rt.block_on(s.kc_impact(p(json!({ "symbol": "shop/src/Audit.cs:6" }))))),
+            ("kc_refs", rt.block_on(s.kc_refs(p(json!({ "name": "shop/src/Audit.cs:6" }))))),
+            ("kc_trace", rt.block_on(s.kc_trace(p(json!({ "symbol": "shop/src/Audit.cs#Gone" }))))),
+        ] {
+            let err = err.expect_err(tool);
+            assert!(err.contains("didn't resolve"), "{tool}: {err}");
+        }
+        // A search whose filter matched no file (it runs in a child, so its envelope stands in here).
+        let note = "paths matched 0 files (**/web/src/**): in shop; nothing was searched";
+        let env = json!({ "items": [], "total": 0, "note": note, "stats": { "searchable_files": 0 } });
+        assert_eq!(searched_nothing(&env, true).as_deref(), Some(note));
+        assert_eq!(searched_nothing(&env, false), None);
         let _ = std::fs::remove_dir_all(&base);
     }
 

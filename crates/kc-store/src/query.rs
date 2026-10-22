@@ -364,37 +364,85 @@ fn definitions_split(conn: &Connection, _query: &str, (container, name): (Option
     Ok(rows)
 }
 
-/// The definitions a query naming a place picks (see [`definitions`]); `None` when the query names no place.
-fn located(conn: &Connection, query: &str) -> Result<Option<Vec<SymbolRow>>> {
-    let in_file = |path: &str, wanted: &str| {
-        let wanted = wanted.trim_start_matches("./");
-        path == wanted || path.strip_suffix(wanted).is_some_and(|head| head.ends_with('/'))
-    };
-    // `path/to/page.cfm#name`.
+/// The place a query names: `path#name` (file and name) or `file:line` (file and line). `None` for any other query.
+pub fn place(query: &str) -> Option<(&str, Result<u32, &str>)> {
+    let query = query.trim();
+    let named = |file: &str| file.contains('/') || file.contains('.');
     if let Some((file, name)) = query.rsplit_once('#')
         && !file.is_empty()
         && !name.is_empty()
-        && (file.contains('/') || file.contains('.'))
+        && named(file)
     {
-        let rows: Vec<SymbolRow> = definitions(conn, name)?.into_iter().filter(|s| in_file(&s.file, file)).collect();
-        return Ok(Some(rows));
+        return Some((file.trim_start_matches("./"), Err(name)));
     }
-    // `file:line`.
-    if let Some((file, line)) = query.rsplit_once(':')
-        && let Ok(line) = line.parse::<u32>()
-        && (file.contains('/') || file.contains('.'))
-    {
-        let file = file.trim_start_matches("./");
-        let sql = format!(
-            "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id
-             WHERE (f.path = ?1 OR f.path LIKE '%/' || ?1) AND s.start_line <= ?2 AND s.end_line >= ?2
-             ORDER BY f.path = ?1 DESC, s.end_line - s.start_line, s.start_line DESC, f.path LIMIT 1"
-        );
-        let rows: Vec<SymbolRow> = conn.prepare_cached(&sql)?.query_map(params![file, line], symbol_row)?.collect::<rusqlite::Result<_>>()?;
-        if !rows.is_empty() {
+    let (file, line) = query.rsplit_once(':')?;
+    let line = line.parse::<u32>().ok()?;
+    named(file).then(|| (file.trim_start_matches("./"), Ok(line)))
+}
+
+/// `file` without the repo's own name in front (`shop/src/cart.ts` in the repo `shop`, the way questions and
+/// cross-repo answers name a place), when the repo has no directory of that name. `None` otherwise.
+fn in_own_repo<'a>(conn: &Connection, file: &'a str) -> Option<&'a str> {
+    let (first, rest) = file.split_once('/')?;
+    let root: String = conn.query_row("SELECT value FROM meta WHERE key = 'root'", [], |r| r.get(0)).optional().ok()??;
+    let root = Path::new(&root);
+    (!rest.is_empty() && root.file_name().is_some_and(|n| n == first) && !root.join(first).is_dir()).then_some(rest)
+}
+
+/// The innermost definition spanning `line` of the file at `file` (its path, or its end).
+fn spanning(conn: &Connection, file: &str, line: u32) -> Result<Vec<SymbolRow>> {
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE (f.path = ?1 OR f.path LIKE '%/' || ?1) AND s.start_line <= ?2 AND s.end_line >= ?2
+         ORDER BY f.path = ?1 DESC, s.end_line - s.start_line, s.start_line DESC, f.path LIMIT 1"
+    );
+    Ok(conn.prepare_cached(&sql)?.query_map(params![file, line], symbol_row)?.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Why a query naming a place (see [`place`]) picks no definition here: `Ok(None)` when it names no place;
+/// otherwise the indexed file it names (`None` when no file has that path) and the definitions nearest its line,
+/// at most two. Said instead of an empty answer.
+pub fn place_miss(conn: &Connection, query: &str) -> Result<Option<(Option<String>, Vec<SymbolRow>)>> {
+    let Some((file, at)) = place(query) else { return Ok(None) };
+    let indexed = |f: &str| -> Result<Option<String>> {
+        let sql = "SELECT path FROM files WHERE path = ?1 OR path LIKE '%/' || ?1 ORDER BY path = ?1 DESC, path LIMIT 1";
+        Ok(conn.prepare_cached(sql)?.query_row([f], |r| r.get(0)).optional()?)
+    };
+    let found = match indexed(file)? {
+        Some(p) => Some(p),
+        None => in_own_repo(conn, file).map(indexed).transpose()?.flatten(),
+    };
+    let (Some(path), Ok(line)) = (&found, at) else { return Ok(Some((found, Vec::new()))) };
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.parent_id IS NULL
+         ORDER BY min(abs(s.start_line - ?2), abs(s.end_line - ?2)), s.start_line LIMIT 2"
+    );
+    let near = conn.prepare_cached(&sql)?.query_map(params![path, line], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+    Ok(Some((found, near)))
+}
+
+/// The definitions a query naming a place picks (see [`definitions`]); `None` when the query names no place. The
+/// place may be written after the repo's own name (see [`in_own_repo`]).
+fn located(conn: &Connection, query: &str) -> Result<Option<Vec<SymbolRow>>> {
+    let in_file = |path: &str, wanted: &str| path == wanted || path.strip_suffix(wanted).is_some_and(|head| head.ends_with('/'));
+    match place(query) {
+        // `path/to/page.cfm#name`.
+        Some((file, Err(name))) => {
+            let own = in_own_repo(conn, file);
+            let rows = definitions(conn, name)?.into_iter().filter(|s| in_file(&s.file, file) || own.is_some_and(|o| in_file(&s.file, o))).collect();
             return Ok(Some(rows));
         }
-        return Ok(None);
+        // `file:line`.
+        Some((file, Ok(line))) => {
+            let mut rows = spanning(conn, file, line)?;
+            if rows.is_empty()
+                && let Some(own) = in_own_repo(conn, file)
+            {
+                rows = spanning(conn, own, line)?;
+            }
+            return Ok((!rows.is_empty()).then_some(rows));
+        }
+        None => {}
     }
     // A page's path: the template it defines.
     if query.contains('.') {
