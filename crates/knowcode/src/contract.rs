@@ -1,11 +1,12 @@
 //! The answer contract on the JSON envelope (types in [`kc_store::answer`], documented in docs/answers.md, "Answer
-//! contract"): `complete`, `incomplete` and `provenance`, the same for every command and tool.
+//! contract"): `complete`, `incomplete`, `more` and `provenance`, the same for every command and tool.
 //!
 //! Operations say what they cut or couldn't read either with the fields they always had (`truncated`, `capped`,
 //! `freshness.failed`, a list's `*_total`, the MCP server's `omitted` and `left_out`), which [`finish`] reads, or by
-//! [`push_incomplete`] for what no field says. [`finish`] is idempotent: it runs when an operation's envelope is made,
-//! again after anything cuts it further (the MCP size cap), and its result always has `complete ==
-//! incomplete.is_empty()`.
+//! [`push_incomplete`] for what no field says. Each entry goes to `incomplete` when it is about what was asked, and to
+//! `more` when it is a list on the side that a limit cut (see [`side`]): `complete` speaks for what was asked.
+//! [`finish`] is idempotent: it runs when an operation's envelope is made, again after anything cuts it further (the
+//! MCP size cap), and its result always has `complete == incomplete.is_empty()`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -13,9 +14,10 @@ use std::path::{Path, PathBuf};
 use kc_store::answer::{Incomplete, PolicyReport, Provenance, Reason};
 use serde_json::{Value, json};
 
-/// Adds `i` to the envelope's `incomplete` (once) and marks it not `complete`.
+/// Adds `i` to the envelope's `incomplete` (once) and marks it not `complete`; or to `more`, when it is a list on the
+/// side that a limit cut (see [`side`]).
 pub fn push_incomplete(env: &mut Value, i: Incomplete) {
-    let mut list = incomplete_of(env);
+    let mut list = entries_of(env);
     if !list.contains(&i) {
         list.push(i);
     }
@@ -27,13 +29,55 @@ pub fn incomplete_of(env: &Value) -> Vec<Incomplete> {
     env.get("incomplete").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
 }
 
+/// The envelope's `more` entries: lists on the side of what was asked that a limit cut, each saying how to get the rest.
+pub fn more_of(env: &Value) -> Vec<Incomplete> {
+    env.get("more").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
+}
+
+/// Every entry, `incomplete` and `more`.
+fn entries_of(env: &Value) -> Vec<Incomplete> {
+    let mut list = incomplete_of(env);
+    list.extend(more_of(env));
+    list
+}
+
+/// Lists around what an answer is about rather than the answer: a symbol's callers, callees and members, the tables its
+/// calls reach, the candidate targets of one reference, its source, the repos read, and strings the size cap shortened
+/// (`…`). Cut, they leave the answer whole and the rest is a call away (`more`). The lists an answer is about (its
+/// `items`, implementations, DI registrations, links, a walk's nodes) are cut last by the size cap (`mcp::answer_list`),
+/// and cut, they make it incomplete.
+const SIDE_LISTS: &[&str] = &["callers", "callees", "members", "touches_tables", "touches", "targets", "source", "repos", "…"];
+
+/// Whether `i` says a list on the side of what was asked was cut, by a limit or to fit the size budget: one of
+/// [`SIDE_LISTS`], cites past the first few quoting only their place, or the answer's own `items` cut by their limit
+/// where `rest` says the rows cut are past what was asked (`find`: none has the name asked; `search`: every file with a
+/// match is named).
+fn side(env: &Value, i: &Incomplete) -> bool {
+    if !matches!(i.reason, Reason::Capped | Reason::Budget) {
+        return false;
+    }
+    if i.detail.starts_with("cite text: ") {
+        return true;
+    }
+    let (_, place) = subject(i);
+    let list = place.rsplit(['/', '.', '[']).map(|k| k.trim_end_matches(']')).find(|k| !k.is_empty() && !k.bytes().all(|b| b.is_ascii_digit()));
+    match list {
+        Some("items") => i.reason == Reason::Capped && place == "items" && env["rest"].is_string(),
+        Some(k) => SIDE_LISTS.contains(&k),
+        None => false,
+    }
+}
+
 fn set(env: &mut Value, list: Vec<Incomplete>) {
+    let (more, list): (Vec<Incomplete>, Vec<Incomplete>) = list.into_iter().partition(|i| side(env, i));
     let Some(obj) = env.as_object_mut() else { return };
     obj.insert("complete".into(), Value::Bool(list.is_empty()));
-    if list.is_empty() {
-        obj.remove("incomplete");
-    } else {
-        obj.insert("incomplete".into(), json!(list));
+    for (key, list) in [("incomplete", list), ("more", more)] {
+        if list.is_empty() {
+            obj.remove(key);
+        } else {
+            obj.insert(key.into(), json!(list));
+        }
     }
 }
 
@@ -62,7 +106,7 @@ pub fn finish(env: &mut Value) {
         }
     }
     let subjects: HashSet<(Reason, String)> = derived.iter().map(subject).collect();
-    let mut list: Vec<Incomplete> = incomplete_of(env).into_iter().filter(|i| !subjects.contains(&subject(i))).collect();
+    let mut list: Vec<Incomplete> = entries_of(env).into_iter().filter(|i| !subjects.contains(&subject(i))).collect();
     for d in derived {
         if !list.contains(&d) {
             list.push(d);
@@ -125,7 +169,7 @@ fn derive(env: &Value, sampled: &mut Vec<String>) -> Vec<Incomplete> {
     // the first item again (a repo's deploy answer): its cuts are the item's.
     let mut cuts = Cuts::default();
     if let Some(obj) = env.as_object() {
-        for (k, v) in obj.iter().filter(|(k, _)| !matches!(k.as_str(), "freshness" | "repos" | "knowcode" | "incomplete" | "provenance" | "omitted" | "sampled" | "policy" | "deploy")) {
+        for (k, v) in obj.iter().filter(|(k, _)| !matches!(k.as_str(), "freshness" | "repos" | "knowcode" | "incomplete" | "more" | "provenance" | "omitted" | "sampled" | "policy" | "deploy")) {
             cuts.walk(v, k);
         }
     }
@@ -150,10 +194,14 @@ fn derive(env: &Value, sampled: &mut Vec<String>) -> Vec<Incomplete> {
     // A sample flagged by a hint (the MCP server's `truncated` for a summary's areas) explains it too.
     let explained = out.iter().any(|i| matches!(i.reason, Reason::Capped | Reason::Budget | Reason::Deadline)) || !sampled.is_empty();
     if env["truncated"].as_bool() == Some(true) && (limited || !explained) {
-        let detail = match env["total"].as_u64() {
+        let mut detail = match env["total"].as_u64() {
             Some(t) if t > shown => format!("items: {shown} of {t} shown"),
             _ => "items: the list was cut short".to_string(),
         };
+        // What the rows cut are, when they are past what was asked (see [`side`]).
+        if let Some(rest) = env["rest"].as_str() {
+            detail = format!("{detail}; {rest}");
+        }
         let paged = env["next_offset"].as_u64().map(|n| format!("page with offset={n}"));
         let resume = env["cursor"].as_str().map(|_| crate::cursor::call("cursor"));
         out.push(match (hint, paged) {
@@ -350,10 +398,11 @@ fn name(path: &str) -> String {
     Path::new(path).file_name().map_or(path.to_string(), |n| n.to_string_lossy().into_owned())
 }
 
-/// What the envelope says beyond the answer itself, as lines for a text rendering: each `incomplete` entry, and the
-/// repos consulted besides the ones answered for.
+/// What the envelope says beyond the answer itself, as lines for a text rendering: each `incomplete` and `more` entry,
+/// and the repos consulted besides the ones answered for.
 pub fn notes(env: &Value) -> Vec<String> {
     let mut out: Vec<String> = incomplete_of(env).iter().map(Incomplete::line).collect();
+    out.extend(more_of(env).iter().map(more_line));
     let answered: HashSet<&str> = match env["repos"].as_array() {
         Some(list) => list.iter().filter_map(|r| r["repo"].as_str()).collect(),
         None => env["repo"].as_str().into_iter().collect(),
@@ -363,6 +412,14 @@ pub fn notes(env: &Value) -> Vec<String> {
         out.push(format!("also consulted: {}", others.join(", ")));
     }
     out
+}
+
+/// The text rendering of a `more` entry: `more (budget): items[0].callers: 8 items cut to fit max_chars; kc_more …`.
+pub fn more_line(i: &Incomplete) -> String {
+    match &i.hint {
+        Some(h) => format!("more ({}): {}; {h}", i.reason.as_str(), i.detail),
+        None => format!("more ({}): {}", i.reason.as_str(), i.detail),
+    }
 }
 
 /// The envelope's `provenance` entries.
@@ -399,7 +456,7 @@ fn summary_provenance(env: &mut Value) {
     let mut list = provenance_of(env);
     let mut names = Vec::new();
     if let Some(obj) = env.as_object() {
-        for (_, v) in obj.iter().filter(|(k, _)| !matches!(k.as_str(), "repo" | "repos" | "freshness" | "knowcode" | "incomplete" | "provenance")) {
+        for (_, v) in obj.iter().filter(|(k, _)| !matches!(k.as_str(), "repo" | "repos" | "freshness" | "knowcode" | "incomplete" | "more" | "provenance")) {
             named_repos(v, &mut names);
         }
     }
@@ -466,8 +523,14 @@ mod tests {
         env["provenance"].as_array()?.iter().find(|p| p["repo"].as_str().is_some_and(|r| r.ends_with(&format!("/{name}"))))
     }
 
+    /// Every entry, `incomplete` and `more`.
     fn reasons(env: &Value) -> Vec<String> {
-        incomplete_of(env).iter().map(|i| format!("{}: {}", i.reason.as_str(), i.detail)).collect()
+        entries_of(env).iter().map(|i| format!("{}: {}", i.reason.as_str(), i.detail)).collect()
+    }
+
+    /// The `more` entries.
+    fn more(env: &Value) -> Vec<String> {
+        more_of(env).iter().map(|i| format!("{}: {}", i.reason.as_str(), i.detail)).collect()
     }
 
     /// A library with an interface and a base class, and an app depending on it by package.
@@ -574,13 +637,18 @@ mod tests {
     }
 
     /// Every answer's `complete` is `incomplete` being empty, and any list an answer says it cut (a total beyond
-    /// the list, `truncated`, `capped`) makes it incomplete.
+    /// the list, `truncated`, `capped`) is said: in `incomplete` when it is what was asked, in `more` when it is on the
+    /// side.
     fn check(env: &Value) {
         assert_eq!(env["complete"].as_bool(), Some(incomplete_of(env).is_empty()), "{env}");
         assert!(env.get("cursor").is_none_or(Value::is_string), "a dummy cursor: {env}");
         if env["truncated"] == json!(true) || env["capped"] == json!(true) || !Cuts::of(env).0.is_empty() {
-            assert_eq!(env["complete"], json!(false), "a cut list but complete: {env}");
+            assert!(!entries_of(env).is_empty(), "a cut list not said: {env}");
         }
+        if env["truncated"] == json!(true) && env.get("rest").is_none() || env["capped"] == json!(true) {
+            assert_eq!(env["complete"], json!(false), "the answer's own list cut but complete: {env}");
+        }
+        assert!(more_of(env).iter().all(|i| matches!(i.reason, Reason::Capped | Reason::Budget)), "{env}");
     }
 
     impl Cuts {
@@ -592,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn invariant_every_list_a_limit_cuts_makes_the_answer_incomplete() {
+    fn invariant_every_list_a_limit_cuts_is_said() {
         let cache = test_cache();
         let base = cache.dir("c-limits");
         let mut files: Vec<(String, String)> = vec![("src/IThing.cs".into(), "namespace N;\npublic interface IThing { void Go(); }\n".into())];
@@ -611,15 +679,18 @@ mod tests {
         check(&env);
         assert_eq!(env["items"][0]["conformers_total"], json!(55), "{env}");
         assert!(reasons(&env).iter().any(|r| r.starts_with("capped: items[].conformers: 50 of 55 shown")), "{:?}", reasons(&env));
+        // The implementations are what a type's context is about: cut, the answer is incomplete.
+        assert_eq!(env["complete"], json!(false), "{env}");
 
         // A reference to one of many same-named methods lists the first few candidates, and says how many.
         let env = ops::refs("go", &[], 1, &s).unwrap().env;
         check(&env);
         assert_eq!(env["items"][0]["targets_total"], json!(55), "{env}");
         let r = reasons(&env);
-        assert!(r.iter().any(|r| r.starts_with("capped: items[].targets: ")), "{r:?}");
+        // One reference's candidates are on the side: more to read, not missing.
+        assert!(more(&env).iter().any(|r| r.starts_with("capped: items[].targets: ")), "{r:?}");
         // `-n 1` of two references: the list itself is cut.
-        assert!(r.iter().any(|r| r.starts_with("capped: items: 1 of")), "{r:?}");
+        assert!(incomplete_of(&env).iter().any(|i| i.detail.starts_with("items: 1 of")), "{r:?}");
 
         for env in [
             ops::find("T", None, 2, &s).unwrap().env,
@@ -647,12 +718,31 @@ mod tests {
         let once = env.clone();
         finish(&mut env);
         assert_eq!(env, once);
-        assert_eq!(reasons(&env), ["capped: items[].callers: 3 of 9 shown"]);
+        // A symbol's callers are on the side of what it is: their cut is more to read, and the answer is complete.
+        assert_eq!(more(&env), ["capped: items[].callers: 3 of 9 shown"]);
+        assert_eq!((env["complete"].clone(), env.get("incomplete")), (json!(true), None));
         // Cut further (the MCP size cap): the entry is the list as it is now, not a second one.
         env["items"][0]["callers"] = json!([1]);
         env["omitted"] = json!({ "/items/0/callers": 2 });
         finish(&mut env);
-        assert_eq!(reasons(&env), ["budget: /items/0/callers: 2 items cut to fit max_chars", "capped: items[].callers: 1 of 9 shown"]);
+        assert_eq!(more(&env), ["budget: /items/0/callers: 2 items cut to fit max_chars", "capped: items[].callers: 1 of 9 shown"]);
+        assert_eq!(env["complete"], json!(true));
+        // Its implementations are what it is about: cut, the answer is incomplete, the callers still `more`.
+        env["items"][0]["conformers"] = json!([1]);
+        env["items"][0]["conformers_total"] = json!(4);
+        finish(&mut env);
+        assert_eq!(incomplete_of(&env).iter().map(|i| i.detail.as_str()).collect::<Vec<_>>(), ["items[].conformers: 1 of 4 shown"]);
+        assert_eq!((env["complete"].clone(), more(&env).len()), (json!(false), 2));
+        // The answer's own list cut where the rest is past what was asked (`rest`): more, with what the rest is.
+        let mut env = json!({ "items": [1, 2], "total": 5, "truncated": true, "rest": "the rest match by prefix" });
+        finish(&mut env);
+        assert_eq!(more(&env), ["capped: items: 2 of 5 shown; the rest match by prefix"]);
+        assert_eq!(env["complete"], json!(true));
+        // Cut further to fit, it is incomplete.
+        env["items"] = json!([1]);
+        env["omitted"] = json!({ "/items": 1 });
+        finish(&mut env);
+        assert_eq!(reasons(&env), ["budget: /items: 1 item cut to fit max_chars", "capped: items: 1 of 5 shown; the rest match by prefix"]);
         assert_eq!(env["complete"], json!(false));
         // Nothing to report: complete, and no `incomplete` field.
         let mut env = json!({ "items": [], "total": 0, "truncated": false, "cursor": null });

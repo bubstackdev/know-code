@@ -172,18 +172,24 @@ fn compact(env: &mut Value, names: &Names, cursor: &mut dyn FnMut(&str) -> Strin
             *p = Value::from(provenance_line(p, names));
         }
     }
-    if let Some(Value::Array(list)) = obj.get_mut("incomplete") {
-        for i in list.iter_mut() {
-            if let Some(Value::String(h)) = i.get_mut("hint") {
-                *h = short_hint(h, None);
+    for key in ["incomplete", "more"] {
+        if let Some(Value::Array(list)) = obj.get_mut(key) {
+            for i in list.iter_mut() {
+                if let Some(Value::String(h)) = i.get_mut("hint") {
+                    *h = short_hint(h, None);
+                }
             }
+            one_stale(list, names);
         }
-        one_stale(list, names);
     }
-    // The size cap's own hint: each cut list's `incomplete` entry says how to get the rest.
-    if obj.get("hint").and_then(Value::as_str).is_some_and(|h| h.contains(" list items cut to fit max_chars=")) && obj.contains_key("incomplete") {
+    // The size cap's own hint: each cut list's `incomplete` or `more` entry says how to get the rest.
+    if obj.get("hint").and_then(Value::as_str).is_some_and(|h| h.contains(" list items cut to fit max_chars="))
+        && (obj.contains_key("incomplete") || obj.contains_key("more"))
+    {
         obj.remove("hint");
     }
+    // What the rows cut are: said in the entry for the cut list.
+    obj.remove("rest");
     defaults(obj);
     rows(env, cursor);
 }
@@ -614,12 +620,14 @@ fn at<'a>(env: &'a Value, field: &str) -> Option<&'a Value> {
 /// handle, so the text alone can be continued.
 pub fn text_hints(env: &mut Value) {
     let snapshot = env.clone();
-    let Some(Value::Array(list)) = env.get_mut("incomplete") else { return };
-    for i in list.iter_mut() {
-        let Some(Value::String(h)) = i.get_mut("hint") else { continue };
-        let field = h.split("<`").nth(1).and_then(|r| r.split("`>").next()).map(str::to_string);
-        let value = field.as_deref().and_then(|f| at(&snapshot, f)).and_then(Value::as_str).filter(|c| c.starts_with("kc1."));
-        *h = short_hint(h, value.map(handle).as_deref());
+    for key in ["incomplete", "more"] {
+        let Some(Value::Array(list)) = env.get_mut(key) else { continue };
+        for i in list.iter_mut() {
+            let Some(Value::String(h)) = i.get_mut("hint") else { continue };
+            let field = h.split("<`").nth(1).and_then(|r| r.split("`>").next()).map(str::to_string);
+            let value = field.as_deref().and_then(|f| at(&snapshot, f)).and_then(Value::as_str).filter(|c| c.starts_with("kc1."));
+            *h = short_hint(h, value.map(handle).as_deref());
+        }
     }
 }
 

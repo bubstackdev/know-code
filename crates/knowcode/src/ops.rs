@@ -1364,6 +1364,8 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     let mut manifests_total = 0;
     let mut declared = Vec::new();
     let mut uses = crate::whole::Uses::default();
+    // A repo's matches come best first: one cut after an exact match may have cut another.
+    let mut exact_cut = false;
     let symbols = kind.is_none_or(|k| !matches!(k, "package" | "target" | "product"));
     // The rest of the workspace, for the `declared` statement: each repo whose summary says it may declare the name, or
     // name it, is opened; the others are known not to, as last indexed.
@@ -1376,6 +1378,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
             let found = query::find_counted(o.store.conn(), q, kind, limit, &kc_store::rank::FileRank::default())?;
             total += found.total;
             capped |= found.capped;
+            exact_cut |= found.total > found.hits.len() && found.hits.last().is_some_and(|h| h.matched == "exact");
             items.extend(found.hits.into_iter().map(|h| (o.root.clone(), h)));
             declared.extend(crate::whole::declared(&o, q, kind)?);
         }
@@ -1451,6 +1454,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         };
         items.sort_by_key(|(_, h)| rank(h.matched));
     }
+    exact_cut |= items.iter().skip(limit).any(|(_, h)| h.matched == "exact");
     items.truncate(limit);
     let multi = roots.len() > 1;
     // A declaration of the name asked for quotes the line naming it, read from the working tree now and checked
@@ -1484,6 +1488,11 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     // Every declaration of the name, said in one line per repo: so the answer is known to be whole.
     if !declared.is_empty() {
         env["declared"] = json!(declared.join(" "));
+    }
+    // Every match with the name asked for is listed: the rows cut are other names (by prefix or by word), more to
+    // read rather than missing from the answer.
+    if total > items.len() && !exact_cut && !capped && items.iter().any(|(_, h)| h.matched == "exact") {
+        env["rest"] = json!(format!("every match named {bare} (in any case) is listed; the rest match by prefix or word"));
     }
     if !manifest_hits.is_empty() {
         env["manifests"] = json!(manifest_hits);
@@ -6747,6 +6756,9 @@ pub struct SearchParams {
     pub context: usize,
     /// One item per file instead of per line.
     pub files_only: bool,
+    /// A first page shows every hit, past `limit`, when there are at most [`OTHER_FILES`] and they fit this many
+    /// characters in the MCP server's compact form: the whole set of lines, with nothing to page or search for again.
+    pub fit: Option<usize>,
 }
 
 /// One file in a `files_only` answer.
@@ -6829,13 +6841,13 @@ const OTHER_FILES: usize = 60;
 
 /// The files with a match that a page of hits doesn't show, by directory in rank order, each with its count when more
 /// than one: `src/core/: a.cs 2, b.cs` (`repo/src/core/: …` across repos). A page cut short names the rest of the files, so
-/// the whole set is seen without paging or searching again: a file name costs a few characters, a hit a line. None
+/// the whole set is seen without paging or searching again: a file name costs a few characters, a hit a line. `None`
 /// past [`OTHER_FILES`].
-fn other_files(files: &[FileSummary], page: &[search::PageHit], names: &[String], multi: bool) -> Vec<String> {
+fn other_files(files: &[FileSummary], page: &[search::PageHit], names: &[String], multi: bool) -> Option<Vec<String>> {
     let shown: HashSet<(usize, &str)> = page.iter().map(|h| (h.repo, h.file.as_str())).collect();
     let rest: Vec<&FileSummary> = files.iter().filter(|f| !shown.contains(&(f.repo, f.file.as_str()))).collect();
     if rest.len() > OTHER_FILES {
-        return Vec::new();
+        return None;
     }
     let mut dirs: Vec<(String, Vec<String>)> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
@@ -6849,8 +6861,18 @@ fn other_files(files: &[FileSummary], page: &[search::PageHit], names: &[String]
         });
         dirs[i].1.push(if f.matches > 1 { format!("{base} {}", f.matches) } else { base.to_string() });
     }
-    dirs.into_iter().map(|(d, l)| if d.is_empty() { l.join(", ") } else { format!("{d}: {}", l.join(", ")) }).collect()
+    Some(dirs.into_iter().map(|(d, l)| if d.is_empty() { l.join(", ") } else { format!("{d}: {}", l.join(", ")) }).collect())
 }
+
+/// Whether search hits said as text rows fit `chars` characters with room for the rest of the answer.
+fn hits_fit(page: &[search::PageHit], names: &[String], multi: bool, chars: usize) -> bool {
+    let rows: Vec<Value> = page.iter().map(|h| tag_repo_at(h, &names[h.repo], multi)).collect();
+    crate::compact::measure(&json!({ "items": rows }), &crate::compact::Names::load()).len() + SEARCH_ENVELOPE <= chars
+}
+
+/// What a search answer says besides its hits, in the compact form, at most: its repo, counts, `by_kind`, hint and
+/// contract fields.
+const SEARCH_ENVELOPE: usize = 600;
 
 /// Full-text or regex search over every searchable file, ranked: definitions, then declarations, then code, then
 /// tests, comments and prose. Repos are checked for freshness in parallel and candidates read on a shared pool.
@@ -6952,14 +6974,19 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     let total_files = files.len();
     let multi = roots.len() > 1;
     let mut page = Vec::new();
-    let mut other = Vec::new();
+    let mut other = None;
     let (count, mut list): (usize, Vec<Value>) = if p.files_only {
         files = files.into_iter().skip(p.offset).take(p.limit).collect();
         (total_files, files.iter().map(|f| tag_repo_at(f, &names[f.repo], multi)).collect())
     } else {
         let end = (p.offset + p.limit).min(hits.len());
-        page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..end], p.context);
+        // Every hit, when there are few enough and they fit (see `fit`); else the page.
+        let whole = p.fit.is_some() && p.offset == 0 && end < hits.len() && hits.len() <= OTHER_FILES;
+        page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..if whole { hits.len() } else { end }], p.context);
         search::add_params(&repos.iter().map(|o| &o.store).collect::<Vec<_>>(), &mut page)?;
+        if whole && !p.fit.is_some_and(|chars| hits_fit(&page, &names, multi, chars)) {
+            page.truncate(end);
+        }
         if p.offset == 0 {
             other = other_files(&files, &page, &names, multi);
         }
@@ -6977,8 +7004,14 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     env["next_offset"] = json!(next_offset);
     env["matches"] = json!(total);
     env["files"] = json!(total_files);
-    if !other.is_empty() {
+    if let Some(other) = other.as_ref().filter(|o| !o.is_empty()) {
         env["other_files"] = json!(other);
+    }
+    // The hits cut are in files the answer names, on the page or in `other_files`: the whole set of places is here,
+    // their lines a page away.
+    if next_offset.is_some() && other.is_some() && !scan.capped {
+        let named = if other.as_ref().is_some_and(|o| !o.is_empty()) { "on this page or in other_files" } else { "on this page" };
+        env["rest"] = json!(format!("every file with a match is named {named}; the rest are their other matching lines"));
     }
     env["by_kind"] = json!(by_kind);
     if scan.capped {
@@ -10761,6 +10794,32 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A find cut past every match with the name asked for is complete, the other names `more`; cut among them, it
+    /// is incomplete.
+    #[test]
+    fn find_is_complete_when_only_other_names_are_cut() {
+        let cache = test_cache();
+        let base = cache.dir("find-rest");
+        let root = repo(
+            &base,
+            "app",
+            &[
+                ("a.py", "class Ledger:\n    pass\n"),
+                ("b.py", "class Ledger:\n    pass\n"),
+                ("c.py", "class LedgerRow:\n    pass\nclass LedgerTotal:\n    pass\nclass LedgerView:\n    pass\n"),
+            ],
+        );
+        let scope = Scope { repos: vec![root], no_sync: false };
+        let env = find("Ledger", None, 3, &scope).unwrap().env;
+        assert_eq!((env["complete"].clone(), env.get("incomplete")), (json!(true), None), "{env}");
+        let more = crate::contract::more_of(&env);
+        assert!(more.len() == 1 && more[0].detail.starts_with("items: 3 of 5 shown; every match named Ledger"), "{env}");
+        // One of the two named so cut: incomplete.
+        let env = find("Ledger", None, 1, &scope).unwrap().env;
+        assert_eq!((env["complete"].clone(), env.get("rest")), (json!(false), None), "{env}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn selectors_name_namespaces_and_modules_and_answers_tell_same_names_apart() {
         let cache = test_cache();
@@ -11346,7 +11405,7 @@ public class CatalogService(HttpClient httpClient)
                 globs: globs.iter().map(|g| g.to_string()).collect(),
                 max_lines: 1000,
             };
-            search(&SearchParams { opts, limit: 20, offset: 0, context: 0, files_only: false }, &both).unwrap().env
+            search(&SearchParams { opts, limit: 20, offset: 0, context: 0, files_only: false, fit: None }, &both).unwrap().env
         };
         let files = |env: &Value| -> Vec<String> { env["items"].as_array().unwrap().iter().map(|i| i["file"].as_str().unwrap().to_string()).collect() };
         // After the repo's name: that repo only, relative to it.
@@ -11369,14 +11428,15 @@ public class CatalogService(HttpClient httpClient)
     }
 
     /// A page of hits cut short names every other file with a match, by directory, with its count when more than one:
-    /// the whole set of files without paging or searching again. A later page doesn't repeat them.
+    /// the whole set of files without paging or searching again, so the answer is complete and the other lines are
+    /// `more`. A later page doesn't repeat them. A first page asked to fit a budget shows every hit when they fit.
     #[test]
     fn a_search_cut_short_names_the_files_its_page_leaves_out() {
         let cache = test_cache();
         let base = cache.dir("search-other-files");
         let web = repo(&base, "web", &[("src/a.ts", "export const retryLimit = 3;\n"), ("src/b.ts", "f(retryLimit);\ng(retryLimit);\n"), ("lib/c.ts", "h(retryLimit);\n")]);
         let scope = Scope { repos: vec![web], no_sync: false };
-        let run = |limit, offset| {
+        let fitted = |limit, offset, fit| {
             let opts = search::SearchOptions {
                 pattern: "retryLimit".into(),
                 regex: false,
@@ -11386,15 +11446,27 @@ public class CatalogService(HttpClient httpClient)
                 globs: Vec::new(),
                 max_lines: 1000,
             };
-            search(&SearchParams { opts, limit, offset, context: 0, files_only: false }, &scope).unwrap().env
+            search(&SearchParams { opts, limit, offset, context: 0, files_only: false, fit }, &scope).unwrap().env
         };
+        let run = |limit, offset| fitted(limit, offset, None);
         let env = run(1, 0);
         assert_eq!(env["items"][0]["file"], "src/a.ts", "{env}");
         let mut other: Vec<String> = serde_json::from_value(env["other_files"].clone()).unwrap();
         other.sort();
         assert_eq!(other, ["lib/: c.ts", "src/: b.ts 2"], "{env}");
+        assert_eq!((env["complete"].clone(), env.get("incomplete")), (json!(true), None), "{env}");
+        let more = crate::contract::more_of(&env);
+        assert!(more.len() == 1 && more[0].detail.starts_with("items: 1 of 4 shown; every file with a match is named"), "{env}");
         assert!(run(10, 0).get("other_files").is_none());
-        assert!(run(1, 1).get("other_files").is_none());
+        // A later page names no files: its own cut is what was asked.
+        let page = run(1, 1);
+        assert!(page.get("other_files").is_none());
+        assert_eq!(page["complete"], json!(false), "{page}");
+        // Asked to fit a budget: every hit when they fit, a page when they don't.
+        let all = fitted(1, 0, Some(8_000));
+        assert_eq!((all["items"].as_array().map(Vec::len), all["complete"].clone(), all.get("cursor")), (Some(4), json!(true), None), "{all}");
+        assert_eq!(fitted(1, 0, Some(700))["items"].as_array().map(Vec::len), Some(1));
+        assert_eq!(fitted(1, 1, Some(8_000))["items"].as_array().map(Vec::len), Some(1));
         let _ = std::fs::remove_dir_all(&base);
     }
 

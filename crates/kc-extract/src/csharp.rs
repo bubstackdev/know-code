@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 27;
+pub const VERSION: u32 = 28;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -505,6 +505,11 @@ impl<'a> Cx<'a> {
                 self.request_message(node);
                 if let Some(t) = node.child_by_field_name("type") {
                     let name = base_type_name(self.src, t);
+                    if name == COMPONENT_REGISTRATION
+                        && let Some(a) = node.child_by_field_name("arguments")
+                    {
+                        self.component_registration(a);
+                    }
                     if !name.is_empty() {
                         self.creation(name, type_qualifier(self.src, t), node.child_by_field_name("arguments"), t);
                     }
@@ -532,6 +537,12 @@ impl<'a> Cx<'a> {
                 let mut cursor = node.walk();
                 let keyword = node.children(&mut cursor).find(|c| matches!(c.kind(), "base" | "this")).unwrap_or(node);
                 self.chained(receiver, args, keyword);
+                if receiver == "base"
+                    && let Some(a) = args
+                    && self.derives_component_registration(node)
+                {
+                    self.component_registration(a);
+                }
                 self.visit_children(node);
             }
             // `where T : IHandler, new()`: the constraint names the type.
@@ -2128,6 +2139,55 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// A component registration built from its parts rather than through a builder: the way a container registers
+    /// itself, as the scope it is, under the services it answers for (`new ComponentRegistration(id, new
+    /// DelegateActivator(typeof(Scope), …), CurrentScopeLifetime.Instance, InstanceSharing.Shared, …, new Service[] {
+    /// new TypedService(typeof(IScope)) }, …)`, or the same arguments to `base(…)` in a class deriving
+    /// `ComponentRegistration`). Each typed service is registered as the activator's type, at the line naming it.
+    fn component_registration(&mut self, args: Node) {
+        let mut services = Vec::new();
+        let mut implementation = None;
+        let mut stack = vec![args];
+        while let Some(n) = stack.pop() {
+            if n.kind() == "object_creation_expression"
+                && let Some(t) = n.child_by_field_name("type")
+            {
+                let of = n.child_by_field_name("arguments").and_then(first_argument).and_then(typeof_type);
+                match base_type_name(self.src, t).as_str() {
+                    "TypedService" => services.extend(of.map(|s| (collapse(self.text(s), 120), line(n)))),
+                    // `new DelegateActivator(typeof(Scope), …)`, `new ReflectionActivator(typeof(Foo), …)`.
+                    name if name.ends_with("Activator") && implementation.is_none() => implementation = of.map(|t| base_type_name(self.src, t)),
+                    _ => {}
+                }
+            }
+            stack.extend(children(n).collect::<Vec<_>>().into_iter().rev());
+        }
+        // Shared in the scope that resolves it, or in the root scope; or one per resolve.
+        let text = self.text(args);
+        let lifetime = if text.contains("InstanceSharing.None") {
+            Some("transient")
+        } else if text.contains("RootScopeLifetime") {
+            Some("singleton")
+        } else if text.contains("CurrentScopeLifetime") {
+            Some("scoped")
+        } else {
+            None
+        };
+        for (service, line) in services {
+            self.facts.di.push(DiBinding { service: Some(service), implementation: implementation.clone(), lifetime, kind: "type", line, made: None, service_made: false });
+        }
+    }
+
+    /// Whether the class declaring the constructor `init` belongs to derives `ComponentRegistration`.
+    fn derives_component_registration(&self, init: Node) -> bool {
+        let mut n = init.parent();
+        while let Some(c) = n.filter(|c| !matches!(c.kind(), "class_declaration" | "record_declaration")) {
+            n = c.parent();
+        }
+        n.and_then(|c| children(c).find(|b| b.kind() == "base_list"))
+            .is_some_and(|b| children(b).filter(|t| t.is_named()).any(|t| base_type_name(self.src, t) == COMPONENT_REGISTRATION))
+    }
+
     /// The registration a chain link starts, if it is one.
     fn di_root(&self, link: &Link) -> Option<PendingDi> {
         let args: Vec<Node> = link.args.into_iter().flat_map(argument_exprs).collect();
@@ -3617,6 +3677,9 @@ fn chain_inner(call: Node) -> bool {
 fn argument_exprs(list: Node) -> Vec<Node> {
     children(list).filter(|c| c.kind() == "argument").filter_map(|a| children(a).filter(|c| c.is_named()).last()).collect()
 }
+
+/// The type of a container's registration built from its parts (see `component_registration`).
+const COMPONENT_REGISTRATION: &str = "ComponentRegistration";
 
 /// `typeof(Foo)` → the `Foo` type node.
 fn typeof_type(e: Node) -> Option<Node> {
@@ -6197,6 +6260,44 @@ class Startup
                 (s("ICache"), s("Cache"), None, "factory", 16),
                 (s("ISettings"), s("Settings"), None, "instance", 17),
                 (None, s("*Service"), None, "scan", 18),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_container_registering_itself_is_a_registration_of_its_services() {
+        let src = r#"
+namespace Contoso.Wiring;
+sealed class OwnScopeBinding : ComponentRegistration
+{
+    public OwnScopeBinding()
+        : base(
+            Guid.Empty,
+            new DelegateActivator(typeof(WorkScope), (c, p) => throw new InvalidOperationException()),
+            CurrentScopeLifetime.Instance,
+            InstanceSharing.Shared,
+            InstanceOwnership.ExternallyOwned,
+            new Service[] { new TypedService(typeof(IWorkScope)), new TypedService(typeof(IResolver)) },
+            new Dictionary<string, object>())
+    {
+    }
+}
+class Wiring
+{
+    void Build()
+    {
+        Add(new ComponentRegistration(Guid.Empty, new ReflectionActivator(typeof(Clock), ctors), RootScopeLifetime.Instance, InstanceSharing.Shared,
+            InstanceOwnership.OwnedByLifetimeScope, new[] { new TypedService(typeof(IClock)) }, metadata));
+        var asked = registry.IsRegistered(new TypedService(typeof(IMailer)));
+    }
+}
+"#;
+        assert_eq!(
+            di(src),
+            [
+                (s("IWorkScope"), s("WorkScope"), Some("scoped"), "type", 12),
+                (s("IResolver"), s("WorkScope"), Some("scoped"), "type", 12),
+                (s("IClock"), s("Clock"), Some("singleton"), "type", 22),
             ]
         );
     }

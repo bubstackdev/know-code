@@ -557,6 +557,10 @@ enum Cmd {
         /// Stop after this many matching lines.
         #[arg(long, default_value_t = 50_000, hide = true)]
         max_lines: usize,
+        /// Every hit past the limit, when the answer with all of them fits this many characters in the MCP server's
+        /// compact form (the MCP server's `max_chars`).
+        #[arg(long, hide = true)]
+        fit: Option<usize>,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -1113,6 +1117,7 @@ fn run(cli: Cli) -> Result<()> {
             files,
             all,
             max_lines,
+            fit,
             mut repo,
         } => {
             if all {
@@ -1126,7 +1131,7 @@ fn run(cli: Cli) -> Result<()> {
                 search::Case::Sensitive
             };
             let opts = search::SearchOptions { pattern, regex, case, word, langs: lang, globs: glob, max_lines };
-            let p = ops::SearchParams { opts, limit, offset, context, files_only: files };
+            let p = ops::SearchParams { opts, limit, offset, context, files_only: files, fit };
             let out = ops::search(&p, &repo.scope())?;
             emit(&repo, &out.env, || render::search(&out.data))
         }

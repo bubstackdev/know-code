@@ -7,10 +7,10 @@ member of any closed set below is a contract change.
 
 Agents get the same material through `kc_help contract`, `kc_help evidence` and `kc_help cursors`.
 
-## complete and incomplete
+## complete, incomplete and more
 
-- `complete` is `true` only when nothing makes the answer partial, and it is always the same as `incomplete` being
-  absent. Every answer says it, the CLI's `--json` and MCP answers alike; an MCP answer said as a text tree ends its
+- `complete` is `true` only when nothing makes the answer partial for what was asked, and it is always the same as
+  `incomplete` being absent. Every answer says it, the CLI's `--json` and MCP answers alike; an MCP answer said as a text tree ends its
   first line with `; complete` when it is (see [MCP answers](#mcp-answers)).
 - `incomplete` lists why the answer is partial, one entry per reason: `{reason, detail, hint}`. `detail` names what
   is missing (for a cut list, how many of how many were shown). `hint`, when present, says how to get the rest:
@@ -51,6 +51,25 @@ an assembly scan exposing only other services.
 The text rendering ends with one line per entry, for example
 `incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}`.
 
+### More is not incomplete
+
+`complete` speaks about what was asked. A list on the side of it that a limit or `max_chars` cut is a `more` entry
+instead, with the same `{reason, detail, hint}` (reason `capped` or `budget`), and the answer stays `complete`:
+
+- a symbol's `callers`, `callees` and `members`, the tables its calls reach (`touches_tables`), the candidate
+  `targets` of one reference, its `source`, the `repos` list, and strings the size cap shortened;
+- cites past the first few that give their place without their line (`cite text: 12 of 30 cites quote their line`);
+- a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every match
+  with the name asked for (in any case) is listed and the rest match by prefix or word; `search`'s when every file with
+  a match is named, on the page or in `other_files`, and the rest are their other lines. Cut further to fit
+  `max_chars`, the page is incomplete.
+
+The lists an answer is about stay `incomplete` when cut: the answer's `items` (references, impact rows, search hits
+beyond the files named), implementations and conformers, DI registrations, HTTP, bus and SQL links, a walk's nodes,
+path candidates and deploy chains. The size cap cuts those last (see [MCP answers](#mcp-answers)), so a `budget` entry
+for one of them means the others were already down to nothing. The `hint` of a `more` entry is the call for the rest,
+usually `kc_more` with the list's cursor.
+
 An empty answer is not a claim of absence on its own: it carries a `note` saying what was searched. Read
 `incomplete` before concluding that nothing exists. A `complete` answer is complete with respect to what KnowCode
 models; [languages.md](languages.md) lists what it does not model.
@@ -64,12 +83,12 @@ answer stays `complete`. The same holds for `tests`: its tight list is the most 
 candidates and the rest are in `left_out`, which may also fail. Nothing in a `tests` answer says a test is safe to
 skip.
 
-A list that answers the question (references, callers, conformers, impact rows, trace nodes, path candidates, deploy
-chains) is `capped` when a limit cuts it.
+A list that answers the question (references, conformers, impact rows, trace nodes, path candidates, deploy chains)
+is `capped` when a limit cuts it; a list on the side is in `more` (see [More is not incomplete](#more-is-not-incomplete)).
 
 ### Older fields
 
-These remain and agree with `incomplete`: `truncated` and `total`, `capped` (`find`, `search`), `freshness.failed`
+These remain and agree with `incomplete` and `more`: `truncated` and `total`, `capped` (`find`, `search`), `freshness.failed`
 with `freshness.status`, a list's `<list>_total` and `<list>_truncated`, and the MCP server's `left_out` and `hint`.
 
 ## Cursors
@@ -173,8 +192,8 @@ attributes, under `cite: lines` too.
   than the row's, such as a bus hop's publish in the publisher's repo. `check`, `drift` and `was` are described under
   [Checked against the index](#checked-against-the-index).
 - By default (`cite: brief`) the first 12 cites, in the answer's order, quote one line each, up to 120 characters.
-  The rest give `at` only, and the answer is incomplete with reason `capped`: `cite text: 12 of 30 cites quote their
-  line; the other 18 give only where it is`. `cite: lines` quotes every row, each line up to 160 characters.
+  The rest give `at` only, said in `more` with reason `capped`: `cite text: 12 of 30 cites quote their line; the other
+  18 give only where it is`. `cite: lines` quotes every row, each line up to 160 characters.
 - When a cap leaves something out, `cut` says what: `line 12 cut at 120 of 412 characters`, or (under `cite: lines`)
   `the declaration goes on past line 9`. When nothing could be quoted, `text` is absent and `cut`
   says why: the file is gone from the working tree, the line is past its end, it couldn't be read, or an [AI privacy
@@ -304,7 +323,7 @@ MCP answers are compact, so that rows rather than bookkeeping fill the size cap:
   or an include whole, never inside.
 
 Answers are capped at `max_chars` characters (default 8000, at most 40000). A list cut to fit gets a `budget`
-entry with its `kc_more` call. The lists an answer is about (implementations and conformers, DI registrations, HTTP,
+entry with its `kc_more` call, in `more` for a list on the side. The lists an answer is about (implementations and conformers, DI registrations, HTTP,
 bus and SQL links, a search's `other_files`) are cut last: every other list (callers, callees, members) goes down to
 none, the source is shortened and those lists' rows lose their detail (signature, doc) first. Links are text rows
 (`file:line kind symbol`), with what all of them share said once beside the list (`links_repo`, `links_confidence`,
@@ -322,7 +341,8 @@ The CLI's `--json` output is the full envelope.
 ## How to use an answer
 
 - Check `complete`. If it is `false`, read each `incomplete` entry before drawing a conclusion; if it is `true`, the
-  answer is the whole of what was asked within the stated scope.
+  answer is the whole of what was asked within the stated scope. `more` names lists beside it that were cut, with the
+  call for the rest: follow it when the question is about one of them.
 - Follow `hint`s and cursors when the rest of a list matters to the question. A first page is not the whole list.
 - Treat `ambiguous` and `unique_name` edges as leads to confirm in the source, and read the assumptions on `exact`
   ones that cross repos.

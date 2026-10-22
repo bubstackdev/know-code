@@ -21,6 +21,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   action's context showed 3 of its 39 HTTP callers; it now shows all 39 in the same 6,000 characters.
 - A `kc_search` page cut short names the other files with a match (`other_files`, by directory, with counts, up to 60
   files), so the whole set is seen without paging or searching again.
+- `complete` speaks for what was asked. A list on the side of it that a limit or `max_chars` cut (a symbol's callers,
+  callees and members, the tables its calls reach, one reference's candidate targets, its source, cites past the first
+  few without their line) is a new `more` entry, with the call for the rest, and the answer stays `complete`; the lists
+  an answer is about (its items, implementations, DI registrations, links, a walk's nodes) are still `incomplete` when
+  cut. `kc_find` cut only past every match with the name asked for, and `kc_search` cut with every file with a match
+  named, say what the rest are (`rest`) and are `complete`. In a public A/B study most re-checks after a KnowCode answer
+  followed `complete: false` from a cut side list; on the 14 such calls of one arm, all 14 now answer `complete: true`
+  (77,966 to 81,170 characters).
+- `kc_search` shows every hit on a first page at the default limit when there are at most 60 and they fit `max_chars`.
+  On the study's 64 `kc_search` calls, the 29 that were cut are now `complete`, 17 of them showing every hit; answers
+  grow from 178,576 to 206,676 characters, 26,934 of it on those 17 (the 35 uncut answers are unchanged).
+- A container registering itself is a DI registration: a registration built from its parts (`new
+  ComponentRegistration(…)` or `base(…)` in a class deriving it) registers each `TypedService(typeof(X))` it names as
+  its activator's type. On a public DI library, `kc_context` of its resolving interface now lists the registration.
 - A `file:line` or `path#name` written after its repo's name (`shop/src/a.cs:12`, the way questions and cross-repo
   answers name places) resolves in `kc_context`, `kc_impact`, `kc_trace` and `kc_refs` (which answers for the
   definition there); `kc_search` takes `**/shop/src/**` as it takes `shop/src/**`. A place naming no definition, and a
