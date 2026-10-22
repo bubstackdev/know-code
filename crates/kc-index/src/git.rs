@@ -140,9 +140,12 @@ fn is_sha(s: &str) -> bool {
     (s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// `mtime_ns:size` of a file, or `-` if it doesn't exist.
+/// `mtime_ns:size` of a file, or `-` if it doesn't exist. A device or pipe (`GIT_CONFIG_GLOBAL=/dev/null`, which
+/// sandboxes and CI set) is stamped by its kind alone: its mtime moves on every write to it anywhere on the machine,
+/// and would make every freshness check that covers it say "changed".
 pub fn stamp(path: &Path) -> String {
     match std::fs::metadata(path) {
+        Ok(m) if !m.is_file() && !m.is_dir() => "special".to_string(),
         Ok(m) => format!("{}:{}", mtime_ns(&m), m.len()),
         Err(_) => "-".to_string(),
     }
