@@ -163,3 +163,61 @@ fn invariant_a_capped_scan_is_the_same_on_every_run_and_thread_count() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A page of hits as an agent reads it: (line, kind, `in` with its parameters, lines before, lines after).
+type Row = (u32, &'static str, Option<String>, Vec<String>, Vec<String>);
+
+fn page(root: &Path, store: &mut Store, pattern: &str, context: usize) -> Vec<Row> {
+    sync(root, store, &SyncOptions { threads: 2, full_discovery: true, ..Default::default() }).unwrap();
+    let (_, files) = sync_content_files(root, store, 2).unwrap();
+    let opts = SearchOptions { pattern: pattern.into(), regex: false, case: Case::Sensitive, word: false, langs: Vec::new(), globs: Vec::new(), max_lines: 100 };
+    let m = search::compile(&opts).unwrap();
+    let (cands, _) = search::candidates(store, files, &m, 0).unwrap();
+    let roots = [root.to_path_buf()];
+    let scanned = search::scan(&roots, &cands, &m, 2, 100);
+    let (mut files, mut hits, mut scratch) = (Vec::new(), Vec::new(), search::Scratch::default());
+    for (i, fh) in scanned.files.iter().enumerate() {
+        let (fd, h) = search::classify(root, store, &scanned, fh, i as u32, &m, &mut scratch).unwrap();
+        files.push(fd);
+        hits.extend(h);
+    }
+    search::rank(&mut hits, &files, &["r".to_string()]);
+    let mut page = search::finish(&roots, &scanned, &files, &hits, context);
+    search::add_params(&[&*store], &mut page).unwrap();
+    page.into_iter().map(|h| (h.line, h.kind, h.inside.map(|i| format!("{i}{}", h.in_params.unwrap_or_default())), h.before, h.after)).collect()
+}
+
+const FETCH: &str = "export async function loadOrder(client: Client, orderId: string) {
+    const response = await ordersApi(client)
+        .fetch({ orderId });
+    switch (response.status) {
+        case 404:
+            track(response);
+            break;
+    }
+    track(response.data);
+    return response.data;
+}
+";
+
+/// Without `context`, a hit gets the lines its statement goes on over (the chained call before or after it, the
+/// `case` it runs under) and nothing else; the first code hit inside a function gets its parameter names, later ones
+/// the name only.
+#[test]
+fn a_hit_carries_the_rest_of_its_statement_and_its_functions_parameters() {
+    let root = scratch("statement");
+    write(&root, "src/fetch.ts", FETCH.as_bytes());
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    let s = |v: &[&str]| v.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+    let f = |p: &str| Some(format!("loadOrder{p}"));
+
+    // A line continuing a chained call: the call it continues. A line a chained call continues: the continuation.
+    assert_eq!(page(&root, &mut store, ".fetch(", 0), vec![(3, "code", f("(client, orderId)"), s(&["const response = await ordersApi(client)"]), vec![])]);
+    assert_eq!(page(&root, &mut store, "ordersApi", 0), vec![(2, "code", f("(client, orderId)"), vec![], s(&[".fetch({ orderId });"]))]);
+    // Under a `case`: the label. A line standing alone: nothing. The function's parameters once.
+    assert_eq!(page(&root, &mut store, "track(", 0), vec![(6, "code", f("(client, orderId)"), s(&["case 404:"]), vec![]), (9, "code", f(""), vec![], vec![])]);
+    // With `context`, the lines asked for instead.
+    let with = page(&root, &mut store, "track(response.data", 1);
+    assert_eq!((with[0].3.len(), with[0].4.len()), (1, 1), "{with:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

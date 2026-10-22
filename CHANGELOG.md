@@ -173,6 +173,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   well as by the type it extends: `find`, `context`, `trace`, `impact` and the other lookups, and `refs`, which
   answered nothing for it. A constructor initializer on the line after the colon (`… int x) :` then `base(x)`) is
   placed at `base`/`this`, not a line early. C# files are reparsed once.
+- `search` hits carry what an agent opened the file for after one matched line. The first code hit inside a method
+  or function names its parameters (`in EventSink.Emit(eventName, payload)`), once per member on a
+  page. Without `context`, a hit in a statement that spans lines gets those lines, at most two each side: the call a
+  `.fetch(…)` line continues, the `.then(…)` continuing an `ordersApi(client)` line, the `case` label a line
+  runs under. A line that stands alone gets nothing. On the 46 `kc_search` calls of a public A/B study whose answers
+  were re-checked, answers grow 6.2% (104,001 to 110,450 characters): 33 of 560 rows gain statement lines, 204 gain
+  parameter names.
+- `find` quotes the line naming each declaration of the name asked for in `cite`, read from the file now and checked
+  against the index (`check: verified`), past doc comments and attributes: `[HttpGet("{id}")]` is not the line quoted
+  for an action. One line per item, the first 12 such items.
 
 ## 0.1.1 (2026-10-20)
 

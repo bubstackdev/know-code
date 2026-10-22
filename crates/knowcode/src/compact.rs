@@ -421,8 +421,9 @@ fn lean_row(m: &mut Map<String, Value>) {
 /// answer spans repos, and the line's text last, after the first ` | `:
 ///
 /// - `kc_search`: `repo/file:line kind symbol | text`, the symbol a `def` or `decl` declares, or `in` the one
-///   containing the line; `[stale]` for a file that could not be read (as last indexed); with `context`, the lines
-///   around it follow, one per line, `  line- text`;
+///   containing the line, with its parameter names on the first code hit inside it (`in Orders.Place(o)`); `[stale]`
+///   for a file that could not be read (as last indexed); the lines around it (`context`, or the rest of its
+///   statement) follow, one per line, `  line- text`;
 /// - `kc_search` with `files_only`: `repo/file:line best (n matches)`, the line and kind of its best-ranked hit;
 /// - `kc_grep_ast`: `repo/file:line:column[-end_line] [$X=captured, …] | text`.
 pub fn hit_row(v: &Value) -> Option<String> {
@@ -439,11 +440,11 @@ pub fn hit_row(v: &Value) -> Option<String> {
     // A search hit.
     if let (Some(kind), Some(text)) = (str_of("kind"), str_of("text"))
         && matches!(kind, "def" | "decl" | "code" | "test" | "comment" | "doc")
-        && only(&["file", "line", "kind", "text", "symbol", "in", "before", "after"])
+        && only(&["file", "line", "kind", "text", "symbol", "in", "in_params", "before", "after"])
     {
         let at = match (str_of("symbol"), str_of("in")) {
             (Some(s), _) => format!(" {s}"),
-            (None, Some(s)) => format!(" in {s}"),
+            (None, Some(s)) => format!(" in {s}{}", str_of("in_params").unwrap_or_default()),
             _ => String::new(),
         };
         let mut row = format!("{repo}{file}:{line} {kind}{at}{stale} | {text}");
@@ -828,8 +829,8 @@ mod tests {
             "repo": "workspace", "total": 4, "truncated": true, "cursor": "kc1.page",
             "items": [
                 { "file": "src/Audit.cs", "line": 3, "kind": "def", "repo": "audit", "symbol": "Audit.Log", "text": "public void Log(string m) { }" },
-                { "file": "src/Orders.cs", "line": 6, "kind": "code", "repo": "shop", "in": "Orders.Place", "text": "_audit.Log(\"placed | ok\");",
-                  "before": ["// Log it"], "after": ["Validate(o);", "}"] },
+                { "file": "src/Orders.cs", "line": 6, "kind": "code", "repo": "shop", "in": "Orders.Place", "in_params": "(o)",
+                  "text": "_audit.Log(\"placed | ok\");", "before": ["// Log it"], "after": ["Validate(o);", "}"] },
                 { "file": "README.md", "line": 2, "kind": "doc", "repo": "billing", "text": "Logged through Audit.Log.", "stale": true },
                 { "file": "a.cs", "line": 1, "kind": "comment", "text": "// Log" },
             ],
@@ -839,7 +840,7 @@ mod tests {
             v["items"],
             json!([
                 "audit/src/Audit.cs:3 def Audit.Log | public void Log(string m) { }",
-                "shop/src/Orders.cs:6 code in Orders.Place | _audit.Log(\"placed | ok\");\n  5- // Log it\n  7- Validate(o);\n  8- }",
+                "shop/src/Orders.cs:6 code in Orders.Place(o) | _audit.Log(\"placed | ok\");\n  5- // Log it\n  7- Validate(o);\n  8- }",
                 "billing/README.md:2 doc [stale] | Logged through Audit.Log.",
                 "a.cs:1 comment | // Log",
             ]),

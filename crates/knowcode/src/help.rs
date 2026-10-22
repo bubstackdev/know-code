@@ -27,7 +27,8 @@ saying it has every declaration of the name in the workspace (whichever repo was
 `partial` type's parts (each part's file:line), a type's constructors (a record's primary one too), a method's
 overloads, and how many references in code name it across the workspace (the other mentions: uses, which kc_refs
 resolves). When files KnowCode doesn't read as code (Razor, vendored JavaScript) name it too, the count is "at least",
-with those lines. Use kc_locate when you know what the code does but not its name,
+with those lines. Each item declaring the name asked for quotes the line naming it in `cite`, read from the file now
+and checked against the index (`check: verified`). Use kc_locate when you know what the code does but not its name,
 kc_search for exact text."#,
     },
     Topic {
@@ -671,10 +672,12 @@ kc_context picks it. Answers the note as kc_notes does. Notes are removed with `
 like a ranked grep over an index: definitions of matching symbols first, then declarations, other code, then tests,
 comments and docs. Matches are per line. Each item is a text row, `repo/file:line kind symbol | text`: `repo/` when
 the answer spans repos; kind def, decl, code, test, comment or doc; the symbol a def or decl declares, or `in X` for
-the one enclosing the line; `[stale]` for a file that could not be read; the trimmed line after the first ` | `. With
-`context`, the lines around the hit follow it, one per line (`  41- text`); with `files_only`, a row per file,
-`repo/file:line best (n matches)`. `case`: sensitive (default), insensitive, or smart (insensitive unless the
-pattern has an uppercase letter); `word` for whole words. Filter with `lang` (swift, python, rust, markdown, json, yaml,
+the one enclosing the line, with its parameter names on the first code hit inside a method or function (`in
+Orders.Place(order, user)`); `[stale]` for a file that could not be read; the trimmed line after the first ` | `. The
+rest of the hit's statement follows it, one per line (`  41- text`): the chained call a `.then(` line continues, the
+`.map(` continuing it, the `case` label it runs under; with `context`, the lines around it instead. With
+`files_only`, a row per file, `repo/file:line best (n matches)`. `case`: sensitive (default), insensitive, or smart
+(insensitive unless the pattern has an uppercase letter); `word` for whole words. Filter with `lang` (swift, python, rust, markdown, json, yaml,
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
 names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` or `**/shop/src/**` searches that repo only; an absolute
 path, the repo it is in). A filter matching no file is refused, saying so (`paths matched 0 files (…)`), never answered as
