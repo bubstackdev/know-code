@@ -200,6 +200,10 @@ class BareClientTests(unittest.TestCase):
                     self.assertEqual(result['shell'], mode or 'patterns')
                     self.assertIn('Read(/'+str(root.resolve()/'source')+'/**)', result['argv'])
                     seen.append(bash_rules(result['argv']))
+                    argv = result['argv']
+                    denied = argv[argv.index('--disallowedTools')+1:] if '--disallowedTools' in argv else []
+                    # In sandbox mode every arm refuses Bash commands naming the KnowCode binary.
+                    self.assertEqual('Bash(*knowcode*)' in denied, mode == 'sandbox')
                 self.assertTrue(all(rules == seen[0] for rules in seen))
                 if expected:
                     self.assertEqual(seen[0], expected)
