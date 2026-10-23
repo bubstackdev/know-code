@@ -88,13 +88,9 @@ pub struct Selection {
     pub truncated: bool,
 }
 
-/// Ranks the test files for a change to the symbols `ids` in the files `changed` (repo-relative; test files among
-/// them are selected outright, as they changed themselves).
-pub fn select(root: &Path, store: &Store, ids: &[i64], changed: &[String]) -> Result<Selection> {
-    select_from(root, store, &trace::impact(store.conn(), ids, DEPTH, MAX_WALK)?, changed)
-}
-
-/// [`select`] from a reverse-edge walk the caller made: under its evidence policy, with what a diff removed.
+/// Ranks the test files for a change to the files `changed` (repo-relative; test files among them are selected
+/// outright, as they changed themselves) from a reverse-edge walk from its symbols the caller made: under its
+/// evidence policy, with what a diff removed.
 pub fn select_from(root: &Path, store: &Store, impact: &trace::Impact, changed: &[String]) -> Result<Selection> {
     let mut cands: HashMap<String, Cand> = HashMap::new();
     let sources: Vec<&str> = changed.iter().map(String::as_str).filter(|f| !is_test_path(f)).collect();

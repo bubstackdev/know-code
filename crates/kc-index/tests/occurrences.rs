@@ -199,10 +199,5 @@ fn two_calls_on_a_line_resolve_each_through_its_own_receiver() {
     let got: Vec<(u32, &str, Vec<&str>)> =
         hits.iter().map(|h| (h.col, h.confidence, h.targets.iter().map(|t| t.qualified.as_str()).collect())).collect();
     assert_eq!(got, [(85, "exact", vec!["FirstStore.Save"]), (100, "exact", vec!["SecondStore.Save"])]);
-    // The second call is a use of its own: changing `SecondStore.Save` affects `Caller.Run`.
-    let second = query::definitions(store.conn(), "SecondStore.Save").unwrap()[0].id;
-    let impact = kc_store::trace::impact(store.conn(), &[second], 1, 100).unwrap();
-    let affected: Vec<(&str, &str)> = impact.affected.iter().map(|a| (a.qualified.as_str(), a.confidence)).collect();
-    assert_eq!(affected, [("Caller.Run", "exact")]);
     let _ = std::fs::remove_dir_all(&root);
 }

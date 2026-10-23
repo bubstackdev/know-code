@@ -5969,7 +5969,8 @@ pub fn coupled(file: &str, limit: usize, span: &vitals::Span, args: &Scope) -> R
                 }
             };
             let ids = trace::symbols_in_file(o.store.conn(), &rel)?;
-            let walk = trace::impact(o.store.conn(), &ids, 3, 1000)?;
+            // In the repo, through the symbol graph and its gate, as `impact` walks.
+            let walk = crate::tree::impact(&mut crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX), &ids, 3, 1000)?;
             let reached: HashSet<&str> = walk.affected.iter().map(|a| a.file.as_str()).collect();
             let mut partners = Vec::new();
             for c in list {
@@ -6107,7 +6108,7 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
         // Under the evidence policy. A diff's removed definitions aren't walked (as `impact --diff` does): code still
         // naming them doesn't build, so it is part of the change itself, and parsing the pre-change side cost more
         // than the rest of the query on a small repo.
-        let walk = trace::impact_filtered(conn, &ids, DEPTH, MAX_WALK, &edges)?;
+        let walk = crate::tree::impact(&mut crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone()), &ids, DEPTH, MAX_WALK)?;
         let mut selection = kc_index::test_select::select_from(root, &o.store, &walk, &changed)?;
         let over_limit = selection.selected.len().saturating_sub(p.limit);
         let cut: Vec<_> = selection.selected.drain(selection.selected.len() - over_limit..).collect();

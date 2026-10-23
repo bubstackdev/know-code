@@ -158,11 +158,13 @@ fn scip_answers_win_until_the_file_changes() {
     let greet = hit(conn, "Greet", 9);
     assert_eq!((greet.confidence, greet.precise, greet.targets[0].qualified.as_str()), ("exact", true, "IGreeter.Greet"));
 
-    // Trace edges carry it too.
-    let trace_opts = kc_store::trace::TraceOptions { direction: kc_store::trace::Direction::Out, depth: 1, max_nodes: 50 };
-    let t = kc_store::trace::trace(conn, "App.Run", &trace_opts).unwrap().unwrap();
-    let other = t.nodes.iter().find(|n| n.qualified == "Other.Greet").expect("Run calls Other.Greet");
-    assert!(other.precise && other.site.as_deref() == Some("App.cs:8"));
+    // The edges walks read carry it too.
+    let run = query::definitions(conn, "App.Run").unwrap().remove(0);
+    let mut cache = kc_store::trace::EdgeCache::default();
+    let out = kc_store::trace::out_edges(conn, &mut cache, &run).unwrap();
+    let (other, _, _, site) = out.iter().find(|e| e.0.qualified() == "Other.Greet").expect("Run calls Other.Greet");
+    assert_eq!(site.as_deref(), Some("App.cs:8"));
+    assert!(cache.precise(other.id, site.as_deref()));
     // Interface dispatch: `Hidden.Greet` implements `IGreeter.Greet` through `Base`.
     let member = query::definitions(conn, "IGreeter.Greet").unwrap().into_iter().find(|s| s.kind == "method").unwrap();
     let impls: Vec<String> = kc_store::trace::implementations(conn, &member).unwrap().iter().map(|s| s.qualified()).collect();

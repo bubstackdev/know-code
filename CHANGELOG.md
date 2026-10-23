@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `coupled`'s `static_link` and `tests`' reverse walk now run on the symbol graph that `trace`, `impact`, `path` and
+  `flow` use, with the same gate, and the old in-repo walker is gone. Their answers don't change: on the 60 most-changed
+  source files of each of four public repos with history, 240 `coupled` and 240 `tests` answers are the same before
+  and after.
+
 - The file ranking (the reference graph behind `overview`'s map and entry points, `hotspots`' coupling, `areas`, and
   the order of long `refs` and `impact` lists) costs a seventh to a fortieth of what it did, with the same rankings.
   Resolving every name in turn read again, for each name, what doesn't depend on it: a C# repo's project files and
