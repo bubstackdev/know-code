@@ -8,6 +8,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `flow` use, with the same gate, and the old in-repo walker is gone. Their answers don't change: on the 60 most-changed
   source files of each of four public repos with history, 240 `coupled` and 240 `tests` answers are the same before
   and after.
+- `context`'s `touches_tables` gives the same answer however the repo was indexed. When a method reaches a table
+  several ways at one hop, the row now names the first by file and line, not the first the index happened to store.
+  A walk cut at its limit visits symbols in file and line order, so it stops at the same place every time. Before,
+  indexing with several parser threads (the default) could change the row's `via` and `site`, and which tables a cut
+  walk listed. On the public study's password manager server, all 884 controller methods now answer the same with
+  one parser thread and with the default. Against 0.2's single-thread answers, 94 of them name another `via` for
+  245 rows, each one the same table at the same hop, and no table is added or dropped.
 
 - The file ranking (the reference graph behind `overview`'s map and entry points, `hotspots`' coupling, `areas`, and
   the order of long `refs` and `impact` lists) costs a seventh to a fortieth of what it did, with the same rankings.
