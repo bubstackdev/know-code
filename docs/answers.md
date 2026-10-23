@@ -186,7 +186,14 @@ built, in `cite`. That covers `trace` nodes, `impact` rows (and its changed symb
 asked for (`matched: exact`, the first 12): the one line naming the declaration, past its doc comment and
 attributes, under `cite: lines` too.
 
-- For a row reached by an edge, `cite` quotes the edge's site: the call, the request, the publish (1 line).
+- For a row reached by an edge, `cite` quotes the edge's site: the call, the request, the publish. When that line is
+  part of a statement over several lines, the rest of the statement comes with it, at most 2 lines each side: the
+  arguments a call's line opens, the call a `.SingleInstance()` line continues, the condition a `? :` branch belongs
+  to, the `case` label a line runs under. `at` is then the range quoted, and `cut` says where a longer statement
+  starts (`the statement starts at line 33`) or that it goes on (`the statement goes on past line 70`). A line that
+  stands alone, a member of an initializer in braces, and a cite that drifted or quotes no text give the one line.
+  A `context`'s callees give their line alone when its `source` quotes them already. Over MCP, the size cap drops
+  these statement lines, from the last row up, before it cuts any row.
 - For a row reached without one (a walk's start, a path's ends, an impact's changed symbols), it quotes the
   declaration: the line naming it, or under `cite: lines` from its first line (an attribute or decorator) through
   that line (at most 3 lines).
@@ -222,7 +229,8 @@ answers with every cite `verified` unless a file changes while it runs. Drift sh
 answer given from the committed snapshot while indexing finishes, and in repos read from their last sync.
 
 The text trees of `kc_trace`, `kc_impact`, `kc_path` and `kc_flow`, and the CLI's text, print the quoted lines under
-each row, numbered (`   4 | this.log.info('placing');`), and a `! moved: …` line under any that drifted. A `context`'s callers used to carry their line as `code`;
+each row, numbered (`   4 | this.log.info('placing');`), the rest of a site's statement marked `-` (`   3 - await
+this.http`), and a `! moved: …` line under any that drifted. A `context`'s callers used to carry their line as `code`;
 they now quote it in `cite`, and `code` remains only under `cite: none`.
 
 Over MCP, a cite leaves out `at` when it is the place the row already gives (its `site`, else its own `file` and

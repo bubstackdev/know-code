@@ -787,10 +787,12 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
 - `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
-  and callees), the source lines it rests on, read from the working tree when the answer is built: an edge's site, else
-  the line naming the declaration. `{at, text, cut, repo}`: `at` is `file:line` or `file:start-end`; `cut` says what a
-  cap left out, or why nothing was quoted. By default (`cite: brief`) the first 12 rows quote one line, up to 120
-  characters, and the rest give `at` only (a `more` entry, `capped`, says so); `cite: lines` quotes every row,
+  and callees), the source lines it rests on, read from the working tree when the answer is built: an edge's site, with
+  the rest of its statement when it goes on over other lines (at most 2 each side; `at` is then the range and `cut`
+  says where a longer one starts or that it goes on), else the line naming the declaration. `{at, text, cut, repo}`:
+  `at` is `file:line` or `file:start-end`; `cut` says what a cap left out, or why nothing was quoted. By default
+  (`cite: brief`) the first 12 rows quote their line, up to 120 characters, and the rest give `at` only (a `more`
+  entry, `capped`, says so); the size cap drops statement lines before any row; `cite: lines` quotes every row,
   a declaration from its first line through its name (at most 3), each line up to 160 characters; `cite: check` gives
   no lines; `cite: none` leaves it out. Text trees print the lines under each row. Every cite's `check` compares the
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),

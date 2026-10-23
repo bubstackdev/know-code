@@ -2372,6 +2372,25 @@ fn repo_ansible(o: &Opened, query: &str) -> Result<Option<RepoAnsibleOut>> {
 }
 
 
+/// The lines of its file a context's `source` quotes: from the symbol's first line on, as many as the source has; for
+/// a skeleton, the lines it keeps.
+fn source_shows(ctx: &query::Context) -> Vec<std::ops::RangeInclusive<u32>> {
+    match ctx.source_mode {
+        "full" if !ctx.source.is_empty() => std::iter::once(ctx.symbol.line..=ctx.symbol.line + ctx.source.lines().count() as u32 - 1).collect(),
+        "skeleton" => ctx
+            .source_lines
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|r| {
+                let (a, b) = r.split_once('-').unwrap_or((r, r));
+                Some(a.trim().parse().ok()?..=b.trim().parse().ok()?)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The source line of each caller in this repo (`code`), read once per file.
 fn fill_call_lines(root: &Path, callers: &mut [RefHit]) {
     fill_lines(root, callers.iter_mut().filter(|h| h.repo.is_none()));
@@ -3169,7 +3188,10 @@ pub fn context_raised(
                 own.text = None;
                 own.cut = None;
                 ctx.cite = Some(own);
-                citer.refs(&o.root, ctx.callers.iter_mut().chain(ctx.callees.iter_mut()));
+                citer.refs(&o.root, ctx.callers.iter_mut());
+                // A callee's statement is in the symbol's source when the answer quotes those lines.
+                let shown = source_shows(&ctx);
+                citer.refs_in_source(&o.root, ctx.callees.iter_mut(), |line| shown.iter().any(|r| r.contains(&line)));
                 unread.extend(citer.incomplete());
                 for h in &mut ctx.callers {
                     if h.cite.as_ref().is_some_and(|c| c.text.is_some()) {
