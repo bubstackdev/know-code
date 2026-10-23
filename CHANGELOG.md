@@ -4,6 +4,41 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `kc_search`'s first page shown whole stops after the last hit in code. Since 0.2.0 a first page at the default limit
+  showed every hit when there were at most 60 and they fit; hits in tests, comments and prose past the first 20 now
+  stay a page away, and `rest` says that is what they are (all of them still show when a search finds nothing else).
+  In the public study's sessions agents used 47 rows past the first 20 of such answers, every one a line of code
+  outside tests; none of the 55 test or 30 comment rows there. On the 497 distinct `kc_search` calls of
+  the public-v1 runs and a held-out A/B run, answers are 1.0% smaller (901,956 to 893,090 bytes): 13.8% of what
+  showing every hit added (64,455 bytes over a 20-row page), with every row agents used still shown.
+
+- A generated API client's operation links only to actions in the servers its repo is known to call: the repo itself,
+  a repo it depends on, the one repo serving another of its requests or a host its settings name, or the one repo a
+  tagged operation of its links to. Before, an untagged operation (`this.apiClient.getUser()`) linked to a same-named
+  action in any indexed repo. With no server known, the links stay, `ambiguous`, with the new assumption
+  `server_unverified`. On a public workspace of a media server, a password manager and their web clients, 16 of the
+  media client's operations linked into the password manager's server; none do now, and its 349 links into its own
+  server are unchanged.
+- Microsoft DI service descriptors are registrations: `services.Add(new ServiceDescriptor(typeof(IFoo), typeof(Foo),
+  ServiceLifetime.Scoped))`, `ServiceDescriptor.Singleton/Scoped/Transient(…)` and `ServiceDescriptor.Describe(…)`
+  handed to `Add`, `TryAdd`, `TryAddEnumerable`, `Replace` or `Insert`, with the lifetime they state and the
+  implementation, factory or instance they name. A keyed descriptor is listed as unread. On the public study's
+  workspace this adds the 23 production registrations written this way (authorization handlers, push engines,
+  hosted services, an OpenAPI provider replaced through `Replace`); none were read before.
+- `kc_search` checks repos for freshness on worker threads; those workers now run as the call: a cancelled call stops
+  them, the call's freshness wait applies there, and what they note (gone checkouts, repos left out) reaches the
+  answer. The repos an answer read from a cached summary, and the indexes it used, are kept per query instead of per
+  thread.
+- A cited site carries its statement, not just its line. When the call, request or reference a row cites is part of a
+  statement over several lines, `cite` quotes the rest of it, at most 2 lines each side: the arguments a call's line
+  opens, the builder call a `.SingleInstance()` line continues, the condition of a `? :` branch, the `case` label a
+  line runs under. `at` is the range quoted; `cut` says where a longer statement starts or that it goes on. This
+  covers `kc_refs` items, `kc_context` callers (and callees its `source` doesn't quote), `kc_impact` rows,
+  `kc_trace` nodes and `kc_path` and `kc_flow` steps; text trees mark the statement's other lines with `-`. A line
+  that stands alone, or a member of an initializer in braces, still quotes one line. Over MCP the size cap drops
+  statement lines, from the last row up, before it cuts a row. On the 67 distinct `kc_refs`, `kc_context`,
+  `kc_impact` and `kc_trace` calls of the public study's runs, answers grow 1.7% (295,622 to 300,592 bytes) and show
+  the same 720 rows.
 - `index --phases` reports what each indexing phase cost: opening the index, discovery, stat, parse, writing rows,
   committing, SCIP, the text content index (read and write) and derived data (file ranking and areas, which it computes
   so they are counted), each with wall and CPU time, the CPU time of child processes (git), and on macOS the

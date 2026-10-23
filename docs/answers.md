@@ -61,7 +61,9 @@ instead, with the same `{reason, detail, hint}` (reason `capped` or `budget`), a
 - cites past the first few that give their place without their line (`cite text: 12 of 30 cites quote their line`);
 - a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every match
   with the name asked for (in any case) is listed and the rest match by prefix or word; `search`'s when every file with
-  a match is named, on the page or in `other_files`, and the rest are their other lines. Cut further to fit
+  a match is named, on the page or in `other_files`, and the rest are their other lines (`rest` says when they are
+  all in tests, comments and prose: a first page at the default limit shows every hit in code when there are at most
+  60 hits and they fit, and leaves those a page away). Cut further to fit
   `max_chars`, the page is incomplete.
 
 The lists an answer is about stay `incomplete` when cut: the answer's `items` (references, impact rows, search hits
@@ -168,6 +170,7 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 | `same_deployment` | an HTTP route matched by verb and path reaches the repo serving it |
 | `configured_host` | an HTTP client reaches the repo through a host its URL, base address or settings name, which deploy or proxy configuration maps to that repo (the link's `host` says where); which environment's configuration applies, and for settings which key the request reads |
 | `operation_name` | a generated API client's operation is the controller action of that name (under the controller named like the client); the API description it was generated from wasn't read |
+| `server_unverified` | nothing says which server a generated client's repo calls (no base address, configuration, client package or other request of its names one): every repo with an action of the operation's name is a candidate |
 | `same_destination` | a message reaches the consumer on its virtual host or queue |
 | `same_database` | a SQL object matched by name is in the database the code uses |
 | `revision_unverified` | the dependency's checkout is the revision asked for (a Terraform `?ref=`, a CI include `ref:`, a registry version) |
@@ -183,7 +186,14 @@ built, in `cite`. That covers `trace` nodes, `impact` rows (and its changed symb
 asked for (`matched: exact`, the first 12): the one line naming the declaration, past its doc comment and
 attributes, under `cite: lines` too.
 
-- For a row reached by an edge, `cite` quotes the edge's site: the call, the request, the publish (1 line).
+- For a row reached by an edge, `cite` quotes the edge's site: the call, the request, the publish. When that line is
+  part of a statement over several lines, the rest of the statement comes with it, at most 2 lines each side: the
+  arguments a call's line opens, the call a `.SingleInstance()` line continues, the condition a `? :` branch belongs
+  to, the `case` label a line runs under. `at` is then the range quoted, and `cut` says where a longer statement
+  starts (`the statement starts at line 33`) or that it goes on (`the statement goes on past line 70`). A line that
+  stands alone, a member of an initializer in braces, and a cite that drifted or quotes no text give the one line.
+  A `context`'s callees give their line alone when its `source` quotes them already. Over MCP, the size cap drops
+  these statement lines, from the last row up, before it cuts any row.
 - For a row reached without one (a walk's start, a path's ends, an impact's changed symbols), it quotes the
   declaration: the line naming it, or under `cite: lines` from its first line (an attribute or decorator) through
   that line (at most 3 lines).
@@ -219,7 +229,8 @@ answers with every cite `verified` unless a file changes while it runs. Drift sh
 answer given from the committed snapshot while indexing finishes, and in repos read from their last sync.
 
 The text trees of `kc_trace`, `kc_impact`, `kc_path` and `kc_flow`, and the CLI's text, print the quoted lines under
-each row, numbered (`   4 | this.log.info('placing');`), and a `! moved: …` line under any that drifted. A `context`'s callers used to carry their line as `code`;
+each row, numbered (`   4 | this.log.info('placing');`), the rest of a site's statement marked `-` (`   3 - await
+this.http`), and a `! moved: …` line under any that drifted. A `context`'s callers used to carry their line as `code`;
 they now quote it in `cite`, and `code` remains only under `cite: none`.
 
 Over MCP, a cite leaves out `at` when it is the place the row already gives (its `site`, else its own `file` and

@@ -1,10 +1,11 @@
 //! Cited source: the lines each row of an answer rests on, quoted from the working tree when the answer is built and
 //! checked against the index the answer read (see [`kc_store::answer::Cite`] and docs/answers.md#cited-source).
 //!
-//! A row reached by an edge cites the edge's site (the call, the request, the publish): [`SITE_LINES`] line. A row
-//! without one (a walk's start, a path's ends) cites its declaration: from its first line through the line naming
-//! it, at most [`HEAD_LINES`] lines. Each line is cut at [`LINE_CHARS`] characters. Whatever a cap leaves out, the
-//! cite says in `cut`.
+//! A row reached by an edge cites the edge's site (the call, the request, the publish): its line, and when that line
+//! is part of a statement over several lines, the rest of the statement, at most [`STATEMENT_LINES`] each side (see
+//! [`statement`]). A row without one (a walk's start, a path's ends) cites its declaration: from its first line
+//! through the line naming it, at most [`HEAD_LINES`] lines. Each line is cut at [`LINE_CHARS`] characters. Whatever a
+//! cap leaves out, the cite says in `cut`.
 //!
 //! The check: a file whose bytes hash to what the index holds for it is `verified`. Otherwise the cite looks for what
 //! the row names (the symbol a declaration declares, the name a site references) on the cited line: still there is
@@ -29,8 +30,12 @@ use crate::flow::FlowStep;
 use crate::ops::repo_name;
 use crate::walk::{PathAnswer, Step};
 
-/// Lines quoted for an edge's site.
+/// Lines quoted for an edge's site, besides the rest of its statement.
 pub const SITE_LINES: usize = 1;
+/// Lines of a site's statement quoted at most on each side of its line.
+pub const STATEMENT_LINES: usize = 2;
+/// Lines looked back through at most for where a site's statement starts.
+const STATEMENT_BACK: usize = 12;
 /// Lines quoted at most for a declaration: from its first line (an attribute, a decorator) through the one naming it.
 pub const HEAD_LINES: usize = 3;
 /// Lines looked through at most for the one naming a declaration quoted on its own (see [`Citer::declaration`]).
@@ -282,11 +287,45 @@ impl<'s> Citer<'s> {
         c
     }
 
-    /// The cite of an edge's site (`file:line`) in the repo at `root`, naming `name` when known.
+    /// The cite of an edge's site (`file:line`) in the repo at `root`, naming `name` when known, with the rest of its
+    /// statement (see [`Citer::statement`]).
     pub fn site(&mut self, root: &Path, site: &str, name: Option<&str>) -> Option<Cite> {
         let (file, line) = site.rsplit_once(':')?;
         let line: u32 = line.parse().ok()?;
-        Some(self.quote(root, file, line, SITE_LINES, Vec::new(), name))
+        Some(self.statement(root, file, line, name))
+    }
+
+    /// The cite of the site at `line` of `file` in the repo at `root`: the line, and the rest of the statement it is
+    /// part of (the call a `.then(` line continues, the arguments a call's line opens, the `case` it runs under), at
+    /// most [`STATEMENT_LINES`] each side, `cut` saying where a longer one starts or that it goes on. Only for a line
+    /// that is quoted and checked against the index: a file that drifted, or a cite past the brief cap, gives its line
+    /// alone.
+    fn statement(&mut self, root: &Path, file: &str, line: u32, name: Option<&str>) -> Cite {
+        let quotes = match self.mode {
+            CiteMode::Lines => true,
+            CiteMode::Brief => self.quoted < BRIEF_CITES,
+            CiteMode::Check | CiteMode::None => false,
+        };
+        let now = self.read(root, file);
+        let span = match &*now {
+            Now::Lines(lines, hash) if quotes && line >= 1 && line as usize <= lines.len() => {
+                (self.indexed(root, file).as_deref() == Some(hash.as_str())).then(|| statement(lines, line as usize - 1, file))
+            }
+            _ => None,
+        };
+        let Some(s) = span.filter(|s| s.first != s.last || s.starts.is_some() || s.goes_on) else {
+            return self.quote(root, file, line, SITE_LINES, Vec::new(), name);
+        };
+        let mut cut = Vec::new();
+        if let Some(start) = s.starts {
+            cut.push(format!("the statement starts at line {}", start + 1));
+        }
+        if s.goes_on {
+            cut.push(format!("the statement goes on past line {}", s.last + 1));
+        }
+        let mut c = self.quote(root, file, s.first as u32 + 1, s.last - s.first + 1, cut, name);
+        c.line = Some(line);
+        c
     }
 
     /// The cite of a declaration of `name` starting at `line` of `file` in the repo at `root`: through the line naming
@@ -407,7 +446,23 @@ impl<'s> Citer<'s> {
         }
         for h in hits {
             let Some(root) = self.root_of(home, h.repo.as_deref()) else { continue };
-            h.cite = Some(self.quote(&root, &h.file, h.line, SITE_LINES, Vec::new(), Some(&h.name)));
+            h.cite = Some(self.statement(&root, &h.file, h.line, Some(&h.name)));
+        }
+    }
+
+    /// Cites references inside the symbol whose source the answer quotes (a context's callees) as [`Citer::refs`]
+    /// does, but the line alone where `shown` says the source quotes the statement already.
+    pub fn refs_in_source<'h>(&mut self, home: &Path, hits: impl Iterator<Item = &'h mut RefHit>, shown: impl Fn(u32) -> bool) {
+        if !self.on() {
+            return;
+        }
+        for h in hits {
+            let Some(root) = self.root_of(home, h.repo.as_deref()) else { continue };
+            h.cite = Some(if h.repo.is_none() && shown(h.line) {
+                self.quote(&root, &h.file, h.line, SITE_LINES, Vec::new(), Some(&h.name))
+            } else {
+                self.statement(&root, &h.file, h.line, Some(&h.name))
+            });
         }
     }
 
@@ -439,7 +494,7 @@ impl<'s> Citer<'s> {
 
 /// A cite with nothing quoted.
 fn unquoted(file: &str, start: u32, n: usize, check: Check, why: &str) -> Cite {
-    Cite { at: span(file, start, n), check, drift: Some(why.to_string()), was: None, repo: None, text: None, cut: None }
+    Cite { at: span(file, start, n), check, drift: Some(why.to_string()), was: None, repo: None, text: None, cut: None, line: None }
 }
 
 /// The cite of a file that changed since it was indexed: still naming `name` on the cited lines (`changed`), on
@@ -488,7 +543,7 @@ fn drifted(file: &str, lines: &[String], start: u32, n: usize, cut: Vec<String>,
 /// A verified cite quoting lines `start..start+n` of `lines`.
 fn text(file: &str, lines: &[String], start: u32, n: usize, mut cut: Vec<String>, width: usize) -> Cite {
     let quoted: Vec<&String> = lines.iter().skip(start as usize - 1).take(n).collect();
-    let mut c = Cite { at: span(file, start, n), check: Check::Verified, drift: None, was: None, repo: None, text: None, cut: None };
+    let mut c = Cite { at: span(file, start, n), check: Check::Verified, drift: None, was: None, repo: None, text: None, cut: None, line: None };
     if quoted.is_empty() {
         c.cut = Some(format!("not quoted: line {start} is past the end of the file ({} lines)", lines.len()));
         return c;
@@ -544,6 +599,152 @@ fn mentions(line: &str, name: &str) -> bool {
             let after = line[i + name.len()..].chars().next();
             !before.is_some_and(word) && !after.is_some_and(word)
         })
+}
+
+/// The lines of a statement around a site's line, 0-based: those quoted, `first..=last`; where it starts when that is
+/// above `first`; whether it goes on past `last`.
+#[derive(Debug, PartialEq)]
+struct Statement {
+    first: usize,
+    last: usize,
+    starts: Option<usize>,
+    goes_on: bool,
+}
+
+/// A line's code as far as a statement is concerned, outside strings and comments: its brackets (`(` and `[`) opened
+/// less those closed, every bracket and brace in order, and the code without its trailing comment, trimmed. Empty for
+/// a comment or a blank line.
+struct Code<'l> {
+    depth: i32,
+    brackets: Vec<char>,
+    text: &'l str,
+}
+
+fn code<'l>(line: &'l str, file: &str) -> Code<'l> {
+    let t = line.trim();
+    let python = file.ends_with(".py");
+    if t.starts_with("//") || t.starts_with("/*") || t.starts_with('*') || (python && t.starts_with('#')) {
+        return Code { depth: 0, brackets: Vec::new(), text: "" };
+    }
+    let (mut depth, mut brackets, mut quote, mut escaped, mut end) = (0i32, Vec::new(), None::<char>, false, t.len());
+    let mut chars = t.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if let Some(q) = quote {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                _ if c == q => quote = None,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' | '`' => quote = Some(c),
+            // A character or string in quotes, not a Rust lifetime (`&'a str`): its quote closes it on the line.
+            '\'' if t[i + 1..].find('\'').is_some_and(|n| !file.ends_with(".rs") || n <= 2) => quote = Some(c),
+            '/' if chars.peek().is_some_and(|(_, n)| *n == '/') => {
+                end = i;
+                break;
+            }
+            '#' if python => {
+                end = i;
+                break;
+            }
+            '(' | '[' | ')' | ']' | '{' | '}' => {
+                depth += match c {
+                    '(' | '[' => 1,
+                    ')' | ']' => -1,
+                    _ => 0,
+                };
+                brackets.push(c);
+            }
+            _ => {}
+        }
+    }
+    Code { depth, brackets, text: t[..end].trim_end() }
+}
+
+/// Code that goes on the statement before it: a chained call (`.then(`, `?.map(`), not a range or spread (`..`); the
+/// rest of an expression (`? a`, `: b`, `&& c`, `|| d`, `?? e`, `+ f`, `=> g`); the brackets closing a list.
+fn leads(code: &str) -> bool {
+    (code.starts_with('.') && !code.starts_with(".."))
+        || ["?.", "? ", "&&", "||", "??", "+ ", "=>", ")", "]"].iter().any(|p| code.starts_with(p))
+        || (code.starts_with(':') && !code.starts_with("::") && !label(code))
+}
+
+/// Code that goes on in the line after it: it ends in an open bracket, an assignment or an operator. (A comma goes on
+/// in a list only: see [`in_list`].)
+fn trails(code: &str) -> bool {
+    ["(", "[", "=", "=>", "&&", "||", "??", "+", "?"].iter().any(|p| code.ends_with(p))
+}
+
+/// Code that ends a statement, or opens a block: `;`, `{`, `}`, or a `:` (a label; a Python block).
+fn ends(code: &str) -> bool {
+    code.ends_with([';', '{', '}', ':'])
+}
+
+/// A `case` or `default` label: what the line under it runs for.
+fn label(code: &str) -> bool {
+    (code.starts_with("case ") || code == "default:") && code.ends_with(':')
+}
+
+/// Whether line `at` of `lines` is in a list in brackets (arguments, parameters, an array) rather than in a block or
+/// an initializer in braces, whose lines are statements of their own: the nearest bracket or brace opened above it
+/// and not closed, at most [`STATEMENT_BACK`] lines up.
+fn in_list(lines: &[String], at: usize, file: &str) -> bool {
+    let mut closed = 0;
+    for n in (at.saturating_sub(STATEMENT_BACK)..at).rev() {
+        for c in code(&lines[n], file).brackets.into_iter().rev() {
+            match c {
+                ')' | ']' | '}' => closed += 1,
+                _ if closed > 0 => closed -= 1,
+                _ => return c != '{',
+            }
+        }
+    }
+    false
+}
+
+/// The statement line `at` of `lines` is part of (see [`Statement`]): back through the lines it goes on (one that a
+/// bracket still open, a trailing operator, a comma in a list, or the next line's leading `.`, `?`, `:` or operator
+/// carries on), at most [`STATEMENT_BACK`] lines, and on the same way down; a statement standing alone under a `case`
+/// label, the label. A comment, a blank line, or a line ending a statement or opening a block, ends the walk.
+fn statement(lines: &[String], at: usize, file: &str) -> Statement {
+    let line = |n: usize| code(&lines[n], file);
+    let mut first = at;
+    let mut open = 0;
+    while first > 0 && at - first < STATEMENT_BACK {
+        let prev = line(first - 1);
+        let this = line(first);
+        if prev.text.is_empty() || ends(prev.text) || !(leads(this.text) || trails(prev.text) || (prev.text.ends_with(',') && in_list(lines, first, file)) || open + prev.depth > 0) {
+            break;
+        }
+        open += prev.depth;
+        first -= 1;
+    }
+    if first == at && at > 0 && label(line(at - 1).text) && !label(line(at).text) {
+        first = at - 1;
+    }
+    // Brackets open after the site's line, counted from the statement's start.
+    let mut open = (first..=at).map(|n| line(n).depth).sum::<i32>();
+    let mut last = at;
+    while last + 1 < lines.len() && last - at <= STATEMENT_LINES {
+        let this = line(last);
+        let next = line(last + 1);
+        // A block or an initializer opened on a line of its own (`{`) isn't the statement's.
+        if this.text.is_empty()
+            || ends(this.text)
+            || next.text.is_empty()
+            || next.text == "{"
+            || !(open > 0 || trails(this.text) || (this.text.ends_with(',') && in_list(lines, last + 1, file)) || leads(next.text))
+        {
+            break;
+        }
+        open += next.depth;
+        last += 1;
+    }
+    let (from, to) = (first.max(at.saturating_sub(STATEMENT_LINES)), last.min(at + STATEMENT_LINES));
+    Statement { first: from, last: to, starts: (first < from).then_some(first), goes_on: last > to }
 }
 
 impl Citer<'_> {
@@ -865,6 +1066,109 @@ mod tests {
         kc_store::limits::current().set_cite(CiteMode::default());
         assert!(r.env["items"].as_array().unwrap().iter().all(|r| r["cite"]["text"].is_string()));
         assert!(crate::contract::incomplete_of(&r.env).iter().all(|i| !i.detail.starts_with("cite text:")));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A site's statement: the lines it goes on over around the cited one, at most two each side; where a longer one
+    /// starts, and whether it goes on; nothing for a line standing alone.
+    #[test]
+    fn a_site_carries_the_statement_it_is_part_of() {
+        let src = "\
+var rb = new RegistrationBuilder<T>(
+    new TypedService(typeof(T)),
+    new SimpleActivatorData(activator));
+
+rb.SingleInstance();
+var user = userId.IsNullOrEmpty() // the user
+    ? null
+    : _users.Get(userId.Value);
+builder.RegisterType<A>()
+    .As<IService>()
+    .SingleInstance();
+switch (code) {
+    case 404:
+        Track(code);
+        break;
+}
+public class Command(
+    IClock clock,
+    IStore store,
+    ILog log)
+    : Base<Command>(log), ICommand
+{
+var url = $\"https://example.com/{id}\"; Send(url,
+    '(');
+fn f<'a>(x: &'a str) {
+var options = new Options
+{
+    Start = phase.Start,
+    Items = Build(items, id),
+    Discounts = Discounts(phase),
+};
+";
+        let lines: Vec<String> = src.lines().map(str::to_string).collect();
+        let at = |n: usize| {
+            let s = statement(&lines, n - 1, "A.cs");
+            (s.first + 1, s.last + 1, s.starts.map(|s| s + 1), s.goes_on)
+        };
+        // A call's line opens its arguments: the arguments after it. An argument: the call before it.
+        assert_eq!(at(1), (1, 3, None, false));
+        assert_eq!(at(2), (1, 3, None, false));
+        // A line standing alone: itself.
+        assert_eq!(at(5), (5, 5, None, false));
+        // A conditional's branches, past a trailing comment; a branch, back to the condition.
+        assert_eq!(at(6), (6, 8, None, false));
+        assert_eq!(at(8), (6, 8, None, false));
+        // A chained call: the call it continues.
+        assert_eq!(at(11), (9, 11, None, false));
+        // Under a `case` label: the label.
+        assert_eq!(at(14), (13, 14, None, false));
+        // A base list under a long parameter list: two lines back, and where it starts.
+        assert_eq!(at(21), (19, 21, Some(17), false));
+        assert_eq!(at(17), (17, 19, None, true));
+        // Brackets in strings, comments and character literals don't count; a Rust lifetime isn't a quote.
+        assert_eq!(at(23), (23, 24, None, false));
+        let rust = statement(&lines, 24, "a.rs");
+        assert_eq!((rust.first, rust.last), (24, 24));
+        // A member of an initializer in braces is a statement of its own: its commas don't join its neighbours.
+        assert_eq!(at(29), (29, 29, None, false));
+    }
+
+    /// A reference, a caller and an impact row whose call goes on over lines quote the statement; text trees mark its
+    /// other lines with `-`.
+    #[test]
+    fn references_callers_and_impact_rows_quote_their_statement() {
+        use crate::ops::{self, Scope};
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("cite-statement");
+        let files = [
+            ("src/Audit.cs", "public static class Audit\n{\n    public static void Log(string what, int level) { }\n}\n"),
+            ("src/Orders.cs", "public class Orders\n{\n    public void Place()\n    {\n        Audit.Log(\n            \"placed\",\n            2);\n        Audit.Log(\"done\", 1);\n    }\n}\n"),
+        ];
+        let root = crate::ops::tests::repo(&base, "app", &files);
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let r = ops::refs("Log", &[], 50, &scope).unwrap();
+        let cites: Vec<(String, String)> = r.env["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| (i["cite"]["at"].as_str().unwrap().to_string(), i["cite"]["text"].as_str().unwrap().to_string()))
+            .collect();
+        assert_eq!(
+            cites,
+            [
+                ("src/Orders.cs:5-7".to_string(), "Audit.Log(\n    \"placed\",\n    2);".to_string()),
+                ("src/Orders.cs:8".to_string(), "Audit.Log(\"done\", 1);".to_string())
+            ],
+            "{}",
+            r.env
+        );
+        let c = ops::context("Audit.Log", 2000, kc_store::skeleton::SourceMode::Auto, &scope).unwrap();
+        assert_eq!(c.env["items"][0]["callers"][0]["cite"]["at"], "src/Orders.cs:5-7", "{}", c.env);
+        let ip = ops::ImpactParams { symbol: Some("Audit.Log".into()), depth: 1, limit: 50, ..Default::default() };
+        let i = ops::impact(&ip, &scope).unwrap();
+        let text = crate::render::impact_text(&i.data, false);
+        assert!(text.contains("   5 | Audit.Log(\n") && text.contains("   6 -     \"placed\",\n") && text.contains("   7 -     2);\n"), "{text}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

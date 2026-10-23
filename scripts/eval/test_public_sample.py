@@ -77,6 +77,21 @@ class PublicSampleTests(unittest.TestCase):
         missing = next(g for g in groups if g['task'] == 'http-cross-repo' and g['group'] == 'bitwarden-core')
         self.assertEqual(missing['shortfall'], 3)
 
+    def test_a_later_bank_takes_its_own_quotas_and_skips_earlier_subjects(self):
+        rows = [('src/Old.cs', 'GET A.Old'), ('src/Other.cs', 'GET B.Same'), ('src/New.cs', 'GET C.New'),
+                ('src/Next.cs', 'GET D.Next')]
+        candidates = [{'task': 'http-cross-repo', 'family': 'shop', 'repo': 'shop-server', 'file': file, 'key': key,
+                       'rank': str(n), 'identity': str(n), 'id': str(n)} for n, (file, key) in enumerate(rows)]
+        earlier = [{'task': 'http-cross-repo', 'repo': 'shop-server', 'file': 'src/Old.cs', 'key': 'GET A.Gone'},
+                   {'task': 'http-cross-repo', 'repo': 'shop-server', 'file': 'src/Elsewhere.cs', 'key': 'GET B.Same'},
+                   {'task': 'two-hop-impact', 'repo': 'shop-server', 'file': 'src/New.cs', 'key': 'GET C.New'}]
+        quotas = {'http-cross-repo': {'shop': 2}, 'di-implementations': {}, 'two-hop-impact': {}}
+        groups = sample.provisional_picks(candidates, {'shop-server'}, quotas, earlier)
+        group = next(g for g in groups if g['task'] == 'http-cross-repo')
+        # Same file and same name are both excluded; the same subject under another task is not.
+        self.assertEqual((group['provisional_ids'], group['shortfall']), (['2', '3'], 0))
+        self.assertEqual(sum(sample.excluded(row, earlier) for row in candidates), 2)
+
     def test_integrated_sampling_rechecks_source_and_retains_existing_outputs(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

@@ -181,6 +181,9 @@ pub enum Assumption {
     /// A generated API client's operation is the controller action of that name (under the controller named like
     /// the client's tag): the API description the client was generated from was not read.
     OperationName,
+    /// Which server repo a client sends to is not known: no base address, configuration, client package or other
+    /// request of the client's names it, so every repo with an action of the operation's name is a candidate.
+    ServerUnverified,
 }
 
 /// What an edge rests on: how its target was found, and what that did not check.
@@ -343,6 +346,10 @@ pub struct Cite {
     /// What the cap left out (the rest of a declaration, the end of a long line), or why nothing could be quoted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cut: Option<String>,
+    /// For a site quoted with the rest of its statement: the site's own line; the other lines are the statement's.
+    /// Not serialized: the row's own `site` or `line` says it.
+    #[serde(skip)]
+    pub line: Option<u32>,
 }
 
 /// What a walk does with an edge, under an [`EvidencePolicy`].
@@ -433,6 +440,7 @@ pub const ASSUMPTIONS: &[Assumption] = &[
     Assumption::ProjectUnverified,
     Assumption::ConfiguredHost,
     Assumption::OperationName,
+    Assumption::ServerUnverified,
 ];
 
 impl Default for EvidencePolicy {

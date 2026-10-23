@@ -16,7 +16,8 @@ macro_rules! w {
     }};
 }
 
-/// A row's cited lines under it, each numbered (`    4 | this.log.info('placing');`), then what the cap left out.
+/// A row's cited lines under it, each numbered (`    4 | this.log.info('placing');`), then what the cap left out. A site
+/// quoted with the rest of its statement marks the statement's other lines with `-` (`    3 - await this.http`).
 ///
 /// Lines quoted already in this answer (`seen`) aren't printed again: the row's own location says where they are.
 fn cite_text(out: &mut String, indent: &str, cite: Option<&kc_store::answer::Cite>, seen: &mut std::collections::HashSet<String>) {
@@ -26,7 +27,9 @@ fn cite_text(out: &mut String, indent: &str, cite: Option<&kc_store::answer::Cit
     }
     let first: u32 = c.at.rsplit_once(':').and_then(|(_, l)| l.split('-').next()).and_then(|l| l.parse().ok()).unwrap_or(0);
     for (i, line) in c.text.as_deref().unwrap_or("").lines().enumerate() {
-        w!(out, "{indent}  {:>4} | {line}", first as usize + i);
+        let n = first + i as u32;
+        let mark = if c.line.is_some_and(|l| l != n) { '-' } else { '|' };
+        w!(out, "{indent}  {n:>4} {mark} {line}");
     }
     if let Some(cut) = &c.cut {
         w!(out, "{indent}       … {cut}");

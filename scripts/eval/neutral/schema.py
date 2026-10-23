@@ -23,6 +23,8 @@ label:
                     "note": optional, "optional": true if a tool may omit it without penalty,
                     "via": "dispatch" if reached only through virtual or interface dispatch}]
     tests         items that are test code, kept apart from `items` (neither hit nor false positive)
+    undecided     items the labeller can't rule in or out from source alone, such as a call through an external SDK
+                  whose route isn't in the cohort (neither hit nor false positive; counted apart)
     negatives     same-named but different targets; returning one is always a false positive
     completeness  "exhaustive" (precision and recall both count) | "lower_bound" (recall only) |
                   "uncertain" (recall only, and reported apart)
@@ -97,7 +99,7 @@ def validate_label(lab, question=None):
     m = lab["match"]
     if m not in {"file", "file_line", "symbol", "ci"} and not (m.startswith("line_within:") and m[12:].isdigit()):
         errs.append(f"label {lab['id']}: unknown match {m}")
-    for it in lab["items"] + lab.get("tests", []) + lab.get("negatives", []):
+    for it in lab["items"] + lab.get("tests", []) + lab.get("negatives", []) + lab.get("undecided", []):
         if not isinstance(it, dict) or not it.get("item") or not it.get("evidence"):
             errs.append(f"label {lab['id']}: every item needs `item` and `evidence`")
             break
