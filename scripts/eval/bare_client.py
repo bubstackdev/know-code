@@ -22,7 +22,9 @@ KNOWCODE_ARMS = ('knowcode', 'knowcode-unprompted')
 # `sandbox` (public-v2): the client allows any command, and the session sandbox is the boundary: only PROGRAMS (and
 # bash builtins) can run, only the source can be read, only control/profile can be written, no network. The KnowCode
 # arms' sandbox must let the client start the KnowCode binary as its MCP server, which would let Bash run it too, so in
-# every arm the client also refuses any Bash command naming it: those arms reach KnowCode only through MCP.
+# every arm the client also refuses any Bash command naming the binary's file (config `knowcode_binary_name`): those
+# arms reach KnowCode only through MCP. The name must be distinctive: a session whose own paths contain it is refused,
+# since every command naming a source path would then be refused too.
 SHELL_MODES = ('patterns', 'sandbox')
 
 
@@ -59,6 +61,12 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
     shell = config.get('shell', 'patterns')
     if shell not in SHELL_MODES:
         raise ValueError('unknown shell permission mode')
+    binary_name = config.get('knowcode_binary_name')
+    if shell == 'sandbox':
+        if not isinstance(binary_name, str) or not re.fullmatch(r'[A-Za-z0-9._-]{8,}', binary_name):
+            raise ValueError('sandbox shell mode needs a distinctive knowcode_binary_name')
+        if binary_name in str(session):
+            raise ValueError('session paths contain the KnowCode binary name; Bash would refuse every source path')
     budget = config.get('research_call_budget')
     if type(budget) is not int or budget <= 0:
         raise ValueError('positive common research-call budget required')
@@ -102,6 +110,8 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
         binary = Path(knowcode).resolve(strict=True)
         if not binary.is_file() or not os.access(binary, os.X_OK) or binary.is_relative_to(session):
             raise ValueError('trusted KnowCode executable must be outside mutable session state')
+        if shell == 'sandbox' and binary.name != binary_name:
+            raise ValueError('KnowCode binary file name differs from knowcode_binary_name')
         if file_hash(binary) != config.get('knowcode_sha256'):
             raise ValueError('KnowCode executable hash differs from run configuration')
         args = ['serve', '--tools', config.get('knowcode_profile', '')]
@@ -150,7 +160,7 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
             '--disable-slash-commands', '--setting-sources', '', '--settings', str(settings_path),
             '--tools', 'Bash,Read', '--permission-mode', 'dontAsk', '--strict-mcp-config',
             '--mcp-config', str(mcp_path), '--allowedTools', *allowed]
-    denied = ['Bash(*knowcode*)'] if shell == 'sandbox' else []
+    denied = [f'Bash(*{binary_name}*)'] if shell == 'sandbox' else []
     if knowcode_arm:
         denied.append('mcp__knowcode__kc_note_add')
     if denied:
