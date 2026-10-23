@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kc_index::{SyncOptions, sync};
-use kc_store::{Store, query, trace};
+use kc_store::{Store, query};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("knowcode-cfml-{name}-{}", std::process::id()));
@@ -81,12 +81,6 @@ fn includes_functions_components_tables_and_routes() {
     assert_eq!(refs(&store, "put"), one("exact", "Cache.put"));
     // A custom tag found in a custom tags directory, not beside the caller.
     assert_eq!(refs(&store, "box"), one("unique_name", "box"));
-
-    // Who reaches getUser: the page.
-    let t = trace::trace(store.conn(), "UserService.getUser", &trace::TraceOptions { direction: trace::Direction::In, depth: 2, max_nodes: 50 })
-        .unwrap()
-        .unwrap();
-    assert!(t.nodes.iter().any(|n| n.qualified == "users" && n.kind == "template"), "{:?}", t.nodes.iter().map(|n| &n.qualified).collect::<Vec<_>>());
 
     // `dbo.Users` and `Users` are one table, written by Base.save and read by getUser.
     let model = store.db_model().unwrap();

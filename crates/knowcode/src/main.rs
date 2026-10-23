@@ -19,6 +19,8 @@ mod refactor;
 mod refresh;
 mod removed;
 mod render;
+#[cfg(test)]
+mod repo_walks;
 mod settings;
 mod setup;
 mod uninstall;

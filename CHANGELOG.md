@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `coupled`'s `static_link` and `tests`' reverse walk now run on the symbol graph that `trace`, `impact`, `path` and
+  `flow` use, with the same gate, and the old in-repo walker is gone. Their answers don't change: on the 60 most-changed
+  source files of each of four public repos with history, 240 `coupled` and 240 `tests` answers are the same before
+  and after.
 - `context`'s `touches_tables` gives the same answer however the repo was indexed. When a method reaches a table
   several ways at one hop, the row now names the first by file and line, not the first the index happened to store.
   A walk cut at its limit visits symbols in file and line order, so it stops at the same place every time. Before,

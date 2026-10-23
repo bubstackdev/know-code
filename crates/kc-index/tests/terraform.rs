@@ -127,15 +127,5 @@ fn addresses_resolve_within_their_directory() {
     // Inside the module, `var.name` is the module's own variable, not an environment's local.
     let name = callers(&store, &root, "modules/net/main.tf#var.name");
     assert!(name.iter().any(|c| c.0 == "modules/net/main.tf" && c.2 == "aws_vpc.this"), "{name:?}");
-
-    // Impact from the module's VPC crosses its output into every environment's instances.
-    let vpc = query::definitions(conn, "aws_vpc.this").unwrap();
-    let impact = kc_store::trace::impact(conn, &[vpc[0].id], 3, 100).unwrap();
-    let mut reached: Vec<(String, String)> = impact.affected.iter().map(|a| (a.qualified.clone(), a.file.clone())).collect();
-    reached.sort();
-    assert!(reached.contains(&("output.subnet_id".into(), "modules/net/main.tf".into())), "{reached:?}");
-    for env in ["envs/prod/us-east-1", "envs/prod/us-west-2", "envs/staging/us-east-1"] {
-        assert!(reached.contains(&("aws_instance.web".into(), format!("{env}/main.tf"))), "{reached:?}");
-    }
     let _ = std::fs::remove_dir_all(&root);
 }

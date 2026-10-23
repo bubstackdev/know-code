@@ -1,5 +1,6 @@
 //! Dependency-injection bindings end to end: registrations are indexed, calls through a service type bound to one
-//! implementation carry it as `via_di`, `trace` follows it, and `context` lists registrations and flags.
+//! implementation carry it as `via_di`, and `context` lists registrations and flags (`trace` following it: see
+//! knowcode's `repo_walks`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,7 +8,6 @@ use std::process::Command;
 use kc_index::{SyncOptions, sync};
 use kc_store::Store;
 use kc_store::query::{self, ContextLimits};
-use kc_store::trace::{self, Direction, TraceOptions};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("knowcode-test-{name}-{}", std::process::id()));
@@ -125,21 +125,10 @@ fn calls_through_bound_services_reach_the_implementation() {
     assert_eq!(bound("Save"), None);
     assert_eq!(bound("Go"), None);
 
-    // `trace -d out` goes to the bound implementation.
-    let opts = TraceOptions { direction: Direction::Out, depth: 1, max_nodes: 40 };
-    let t = trace::trace(conn, "OrdersController.Post", &opts).unwrap().unwrap();
-    let place = t.nodes.iter().find(|n| n.qualified == "OrderService.Place").expect("bound implementation");
-    assert_eq!(place.edge, "via_di");
-    assert_eq!(place.binding.as_deref(), Some("src/App/Startup.cs:8, singleton"));
-    assert!(t.nodes.iter().any(|n| n.qualified == "IRepo.Save" && n.edge == "calls"));
-    assert!(!t.nodes.iter().any(|n| n.qualified == "IOrderService.Place"));
-
     // The implementation's callers include calls through the bound interface.
     let limits = ContextLimits::from_budget(2000);
     let ctx = query::context(conn, &root, "OrderService.Place", &limits).unwrap().unwrap();
     assert!(ctx.callers.iter().any(|h| h.from.as_ref().is_some_and(|f| f.name == "Post")));
-    let t = trace::trace(conn, "OrderService.Place", &TraceOptions { direction: Direction::In, depth: 1, max_nodes: 40 }).unwrap().unwrap();
-    assert!(t.nodes.iter().any(|n| n.qualified == "OrdersController.Post" && n.edge == "via_di"));
 
     // `context` on a service: registrations, the bound implementation, and flags.
     let di = |name: &str| query::context(conn, &root, name, &limits).unwrap().unwrap().di;

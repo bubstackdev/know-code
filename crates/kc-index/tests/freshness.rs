@@ -154,37 +154,7 @@ func run() {
 }
 
 #[test]
-fn traces_callers_through_protocols() {
-    let root = scratch("trace");
-    write(
-        &root,
-        "Sources/T.swift",
-        r#"
-protocol Fetching { func fetch() -> Int }
-struct Fetcher: Fetching { func fetch() -> Int { 1 } }
-final class Model {
-    let source: any Fetching
-    init(source: any Fetching = Fetcher()) { self.source = source }
-    func load() -> Int { source.fetch() }
-}
-func main() { _ = Model().load() }
-"#,
-    );
-    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
-    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
-    let opts = kc_store::trace::TraceOptions { direction: kc_store::trace::Direction::In, depth: 3, max_nodes: 50 };
-    let t = kc_store::trace::trace(store.conn(), "Fetcher.fetch", &opts).unwrap().unwrap();
-    let edges: Vec<(&str, &str, u8)> = t.nodes.iter().skip(1).map(|n| (n.edge, n.qualified.as_str(), n.depth)).collect();
-    // Called through the protocol by Model.load, which main calls.
-    assert_eq!(edges[0], ("via_protocol", "Model.load", 1));
-    assert_eq!(edges[1], ("calls", "main", 2));
-    let req = kc_store::trace::trace(store.conn(), "Fetching.fetch", &opts).unwrap().unwrap();
-    assert!(req.nodes.iter().any(|n| n.edge == "witness" && n.qualified == "Fetcher.fetch"));
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
-fn impact_from_symbol_and_working_diff() {
+fn a_working_diff_maps_to_the_symbols_it_edits() {
     let root = scratch("impact");
     write(
         &root,
@@ -221,12 +191,8 @@ struct View {
     sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
 
     let save = query::definitions(store.conn(), "Store.save").unwrap()[0].id;
-    let i = kc_store::trace::impact(store.conn(), &[save], 3, 50).unwrap();
-    let got: Vec<(&str, u8)> = i.affected.iter().map(|a| (a.qualified.as_str(), a.hop)).collect();
-    assert_eq!(got, [("Model.commit", 1), ("View.tap", 2)]);
-    assert_eq!(i.nearest, "direct");
 
-    // Edit inside Store.save: the diff maps to that method, and its dependents follow.
+    // Edit inside Store.save: the diff maps to that method.
     write(&root, "Sources/I.swift", &std::fs::read_to_string(root.join("Sources/I.swift")).unwrap().replace("func save() {}", "func save() { print(1) }"));
     sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
     let changes = kc_index::diff::changes(&root, None).unwrap();

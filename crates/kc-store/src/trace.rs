@@ -1,4 +1,6 @@
-//! Call and relation trees: what a symbol reaches (out) and what reaches it (in), to a small depth.
+//! Call and relation trees' parts: a repo's edges, what a symbol reaches (out) and what reaches it (in) through an
+//! [`EdgeCache`], the trees and impact rows they make, edge filters and the frontier past a walk's stops. The walks
+//! themselves run on the symbol graph (`knowcode::tree`, `knowcode::walk`).
 //!
 //! Edges come from query-time resolution, so each carries the reference's confidence. Only `exact` and
 //! `unique_name` edges are expanded further; `ambiguous` ones are listed as leaves so the tree never invents a path.
@@ -483,12 +485,6 @@ impl Trace {
     }
 }
 
-pub struct TraceOptions {
-    pub direction: Direction,
-    pub depth: u8,
-    pub max_nodes: usize,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct Trace {
     pub nodes: Vec<TraceNode>,
@@ -506,20 +502,12 @@ fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
+/// Reads one repo's edges for [`EdgeCache`]: what a symbol uses and what reaches it.
 struct Tracer<'c> {
     conn: &'c Connection,
-    /// Set on every node pushed: the repo `conn` indexes, when it isn't the traced repo.
-    repo: Option<String>,
-    nodes: Vec<TraceNode>,
-    max: usize,
-    truncated: bool,
-    /// Neighbours left out at the node limit.
-    omitted: usize,
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
     /// Registration (`file:line, lifetime`) of each implementation member reached `via_di`.
     bindings: HashMap<i64, String>,
-    /// The edges the walk lists and follows.
-    filter: EdgeFilter,
     /// Edges resolved from a SCIP index: (the symbol reached, the site).
     precise: HashSet<(i64, String)>,
     /// What each reference edge rests on: (the symbol reached, the site) to the reference's evidence.
@@ -527,41 +515,6 @@ struct Tracer<'c> {
     /// Label calls through a protocol requirement with several implementations `ambiguous`, as the forward
     /// `dispatch` edge is (for walks searching both ways).
     one_of: bool,
-    /// Nodes listed and not grown (see [`Stop`]).
-    stops: Vec<Stop>,
-}
-
-pub fn trace(conn: &Connection, query: &str, opts: &TraceOptions) -> Result<Option<Trace>> {
-    trace_filtered(conn, query, opts, &EdgeFilter::default())
-}
-
-/// [`trace`], listing and following only the edges `filter` allows.
-pub fn trace_filtered(conn: &Connection, query: &str, opts: &TraceOptions, filter: &EdgeFilter) -> Result<Option<Trace>> {
-    let Some(root) = query::definitions(conn, query)?.into_iter().next() else { return Ok(None) };
-    let mut t = Tracer {
-        conn,
-        repo: None,
-        nodes: Vec::new(),
-        max: opts.max_nodes,
-        truncated: false,
-        omitted: 0,
-        refs_by_name: HashMap::new(),
-        bindings: HashMap::new(),
-        filter: filter.clone(),
-        precise: HashSet::new(),
-        evidence: HashMap::new(),
-        one_of: false,
-        stops: Vec::new(),
-    };
-    t.nodes.push(node(&root, 0, None, "", "", "", None));
-    let depth = opts.depth.clamp(1, MAX_TRACE_DEPTH);
-    if matches!(opts.direction, Direction::Out | Direction::Both) {
-        t.expand(0, depth, "out", &mut HashMap::from([(root.id, depth)]))?;
-    }
-    if matches!(opts.direction, Direction::In | Direction::Both) {
-        t.expand(0, depth, "in", &mut HashMap::from([(root.id, depth)]))?;
-    }
-    Ok(Some(Trace { nodes: t.nodes, truncated: t.truncated, omitted: t.omitted, stopped: t.stops }))
 }
 
 /// A tree node for `s` at `depth` below `parent`, reached `direction` by an edge of kind `edge`.
@@ -613,64 +566,6 @@ impl Tracer<'_> {
             self.refs_by_name.insert(key.clone(), hits);
         }
         Ok(self.refs_by_name[&key].clone())
-    }
-
-    fn push(&mut self, mut n: TraceNode) -> Option<usize> {
-        if self.nodes.len() >= self.max {
-            self.truncated = true;
-            self.omitted += 1;
-            return None;
-        }
-        n.repo.clone_from(&self.repo);
-        self.nodes.push(n);
-        Some(self.nodes.len() - 1)
-    }
-
-    /// Lists what node `at` leads to (`dir`), `depth_left` levels down. `expanded` holds, per symbol, the most levels
-    /// any of its nodes was grown with: a symbol reached again with more levels left is grown again there, so depth
-    /// first order never hides what lies within the depth asked for behind a deeper first visit.
-    fn expand(&mut self, at: usize, depth_left: u8, dir: &'static str, expanded: &mut HashMap<i64, u8>) -> Result<()> {
-        if depth_left == 0 {
-            return Ok(());
-        }
-        // A cancelled query's walk stops here, as `knowcode::graph::Gate::expand` stops the others.
-        crate::limits::check()?;
-        let Some(sym) = self.symbol(self.nodes[at].id)? else { return Ok(()) };
-        let depth = self.nodes[at].depth + 1;
-        let edges = if dir == "out" { self.out_edges(&sym)? } else { self.in_edges(&sym)? };
-        let left = depth_left - 1;
-        for (target, edge, confidence, site) in edges {
-            if !self.filter.allows(edge) {
-                continue;
-            }
-            let precise = site.as_ref().is_some_and(|s| self.precise.contains(&(target.id, s.clone())));
-            let resolved = site.as_ref().and_then(|s| self.evidence.get(&(target.id, s.clone()))).cloned();
-            let evidence = Evidence::of_edge(edge, confidence, resolved.as_ref(), None, precise);
-            crate::answer::debug_check(|| format!("{edge} to {}", target.qualified()), confidence, evidence.as_ref());
-            let verdict = self.filter.judge((&self.repo, sym.id, target.id, edge, &site), confidence, evidence.as_ref());
-            if verdict == Verdict::Exclude {
-                continue;
-            }
-            let expand = verdict == Verdict::Follow && expanded.get(&target.id).is_none_or(|&had| had < left);
-            if expand {
-                expanded.insert(target.id, left);
-            }
-            let binding = if edge == "via_di" { self.bindings.get(&target.id).cloned() } else { None };
-            // Past the limit, the rest are counted, not listed.
-            let Some(idx) = self.push(node(&target, depth, Some(at), dir, edge, confidence, site)) else { continue };
-            self.nodes[idx].binding = binding;
-            self.nodes[idx].precise = precise;
-            self.nodes[idx].evidence = evidence;
-            if expand && left > 0 {
-                self.expand(idx, left, dir, expanded)?;
-            } else if expand {
-                // At the depth asked for: a deeper trace would go on from here.
-                self.stops.push(Stop { id: target.id, hop: depth, reason: "depth", dir, repo: self.repo.clone() });
-            } else if verdict == Verdict::Leaf {
-                self.stops.push(Stop { id: target.id, hop: depth, reason: "ambiguous", dir, repo: self.repo.clone() });
-            }
-        }
-        Ok(())
     }
 
     /// What `sym` uses: calls and instantiations in its body, the types it conforms to, and for a protocol
@@ -1045,7 +940,7 @@ fn ambiguous_all(hits: Vec<RefHit>) -> Vec<RefHit> {
 }
 
 /// Lookups one repo's edges reuse between calls, for walks that drive [`out_edges`] and [`in_edges`] themselves
-/// (`path`, `flow`) rather than growing a [`Trace`].
+/// (`trace`, `impact`, `path`, `flow`).
 #[derive(Default)]
 pub struct EdgeCache {
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
@@ -1074,18 +969,11 @@ impl EdgeCache {
     fn with<T>(&mut self, conn: &Connection, f: impl FnOnce(&mut Tracer) -> Result<T>) -> Result<T> {
         let mut t = Tracer {
             conn,
-            repo: None,
-            nodes: Vec::new(),
-            max: 0,
-            truncated: false,
-            omitted: 0,
             refs_by_name: std::mem::take(&mut self.refs_by_name),
             bindings: std::mem::take(&mut self.bindings),
-            filter: EdgeFilter::default(),
             precise: std::mem::take(&mut self.precise),
             evidence: std::mem::take(&mut self.evidence),
             one_of: false,
-            stops: Vec::new(),
         };
         let out = f(&mut t);
         self.refs_by_name = t.refs_by_name;
@@ -1296,21 +1184,7 @@ pub fn frontier(
     filter: &EdgeFilter,
     budget: usize,
 ) -> Result<(Vec<Frontier>, usize)> {
-    let mut t = Tracer {
-        conn,
-        repo: None,
-        nodes: Vec::new(),
-        max: 0,
-        truncated: false,
-        omitted: 0,
-        refs_by_name: HashMap::new(),
-        bindings: HashMap::new(),
-        filter: filter.clone(),
-        precise: HashSet::new(),
-        evidence: HashMap::new(),
-        one_of: false,
-        stops: Vec::new(),
-    };
+    let mut t = Tracer { conn, refs_by_name: HashMap::new(), bindings: HashMap::new(), precise: HashSet::new(), evidence: HashMap::new(), one_of: false };
     let mut out = Vec::new();
     let mut checked = HashSet::new();
     let mut unchecked = 0;
@@ -1544,196 +1418,6 @@ impl Reached {
         a.nearest_ambiguous_hop = self.ambiguous.get(&a.id).copied().filter(|&h| h < a.hop);
         a.class = class_of(a.nearest_ambiguous_hop.unwrap_or(a.hop), &a.file);
     }
-}
-
-/// What depends on `roots`, breadth first to `depth` hops (at most 5), classed by proximity (hop distance). Only `exact` and
-/// `unique_name` edges are followed further; `ambiguous` dependents are listed but not expanded. Each dependent is
-/// listed once, by its best way (see [`Reached`]).
-pub fn impact(conn: &Connection, roots: &[i64], depth: u8, max: usize) -> Result<Impact> {
-    impact_filtered(conn, roots, depth, max, &EdgeFilter::default())
-}
-
-/// [`impact`], following only the edges `filter` allows.
-pub fn impact_filtered(conn: &Connection, roots: &[i64], depth: u8, max: usize, filter: &EdgeFilter) -> Result<Impact> {
-    let mut scope = Vec::new();
-    let mut seen = Reached::default();
-    for &id in roots {
-        if seen.root(id)
-            && let Some(s) = symbol(conn, id)?
-        {
-            scope.push(node(&s, 0, None, "", "", "", None));
-        }
-    }
-    let ids: Vec<i64> = scope.iter().map(|s| s.id).collect();
-    let (mut affected, truncated) = dependents_filtered(conn, &ids, 0, depth.clamp(1, MAX_IMPACT_DEPTH), max, &mut seen, filter)?;
-    for a in &mut affected {
-        seen.settle(a);
-    }
-    let stopped = seen.stops(None);
-    let mut out = Impact { scope, affected, counts: Default::default(), nearest: "none", low_confidence: 0, truncated, stopped };
-    out.recount();
-    Ok(out)
-}
-
-/// What depends on `from`, symbols reached at hop `hop`: breadth first from hop `hop + 1` to `depth`, at most `max`
-/// of them, listing those `seen` has no better way to (and recording them there). A symbol `seen` held already comes
-/// back when this walk found a better way to it: the caller replaces its row. Also says whether `max` cut the walk
-/// short. [`impact`] starts it at the changed symbols; past an HTTP route, it continues from the code requesting the
-/// route, in that code's repo.
-pub fn dependents(conn: &Connection, from: &[i64], hop: u8, depth: u8, max: usize, seen: &mut Reached) -> Result<(Vec<Affected>, bool)> {
-    dependents_filtered(conn, from, hop, depth, max, seen, &EdgeFilter::default())
-}
-
-/// Where a dependent's row is during [`dependents_filtered`]: among this hop's, or listed at an earlier one.
-enum Slot {
-    Found(usize),
-    Listed(usize),
-}
-
-/// [`dependents`], following only the edges `filter` allows.
-pub fn dependents_filtered(
-    conn: &Connection,
-    from: &[i64],
-    hop: u8,
-    depth: u8,
-    max: usize,
-    seen: &mut Reached,
-    filter: &EdgeFilter,
-) -> Result<(Vec<Affected>, bool)> {
-    let mut t = Tracer {
-        conn,
-        repo: None,
-        nodes: Vec::new(),
-        max,
-        truncated: false,
-        omitted: 0,
-        refs_by_name: HashMap::new(),
-        bindings: HashMap::new(),
-        filter: filter.clone(),
-        precise: HashSet::new(),
-        evidence: HashMap::new(),
-        one_of: false,
-        stops: Vec::new(),
-    };
-    let mut frontier = Vec::new();
-    for &id in from {
-        if let Some(s) = t.symbol(id)? {
-            frontier.push(s);
-        }
-    }
-    let mut affected: Vec<Affected> = Vec::new();
-    let mut slots: HashMap<i64, Slot> = HashMap::new();
-    for hop in hop.saturating_add(1)..=depth {
-        // This hop's dependents, in the order found, each with what the walk continues from.
-        let mut found: Vec<(Affected, Vec<SymbolRow>)> = Vec::new();
-        // What the walk continues from for symbols listed at an earlier hop and first reached confidently at this one.
-        let mut late: Vec<SymbolRow> = Vec::new();
-        for sym in &frontier {
-            crate::limits::check()?;
-            let mut edges = t.in_edges(sym)?;
-            edges.extend(ngrx_dispatchers(conn, sym)?);
-            for (dep, edge, confidence, site) in edges {
-                if !t.filter.allows(edge) {
-                    continue;
-                }
-                let precise = site.as_ref().is_some_and(|s| t.precise.contains(&(dep.id, s.clone())));
-                let resolved = site.as_ref().and_then(|s| t.evidence.get(&(dep.id, s.clone()))).cloned();
-                let evidence = Evidence::of_edge(edge, confidence, resolved.as_ref(), None, precise);
-                crate::answer::debug_check(|| format!("{edge} from {}", dep.qualified()), confidence, evidence.as_ref());
-                let verdict = t.filter.judge((&t.repo, sym.id, dep.id, edge, &site), confidence, evidence.as_ref());
-                if verdict == Verdict::Exclude {
-                    continue;
-                }
-                let Some(grow) = seen.offer_as(dep.id, hop, confidence, verdict == Verdict::Follow) else { continue };
-                let row = Affected {
-                    id: dep.id,
-                    qualified: dep.qualified(),
-                    kind: dep.kind.clone(),
-                    file: dep.file.clone(),
-                    line: dep.line,
-                    hop,
-                    nearest_ambiguous_hop: None,
-                    class: class_of(hop, &dep.file),
-                    edge,
-                    confidence,
-                    via: sym.qualified(),
-                    site,
-                    repo: None,
-                    http: None,
-                    bus: None,
-                    sql: None,
-                    role: None,
-                    deploy: None,
-                    module: None,
-                    copies: Vec::new(),
-                    via_removed: false,
-                    evidence,
-                    cite: None,
-                };
-                let mut onward = Vec::new();
-                if grow {
-                    // An Entity Framework context holding a DbSet of the entity changes only for the code using that
-                    // DbSet: the walk continues from it, not from everything injecting or constructing the context.
-                    let sets = entity_sets(conn, sym, &dep)?;
-                    if sets.is_empty() {
-                        onward.push(dep);
-                    } else {
-                        seen.grew(dep.id);
-                        onward.extend(sets.into_iter().filter(|s| seen.offer(s.id, hop, "exact") == Some(true)));
-                    }
-                } else if verdict == Verdict::Leaf {
-                    // Listed, not walked past: what lies behind it is reported if anything does.
-                    seen.stop(dep.id, hop, "ambiguous");
-                }
-                for o in &onward {
-                    // At the depth asked for, the walk would go on from here: a stop of its own.
-                    if hop < depth { seen.grew(o.id) } else { seen.stop(o.id, hop, "depth") }
-                }
-                // A better way to a symbol already listed replaces its row.
-                match slots.get(&row.id) {
-                    Some(&Slot::Found(i)) => {
-                        found[i].0 = row;
-                        found[i].1.extend(onward);
-                    }
-                    Some(&Slot::Listed(i)) => {
-                        affected[i] = row;
-                        late.extend(onward);
-                    }
-                    None => {
-                        slots.insert(row.id, Slot::Found(found.len()));
-                        found.push((row, onward));
-                    }
-                }
-            }
-        }
-        // At the limit, what a change reaches directly (a use, a call, a subtype) outranks what it reaches only
-        // through the container's binding or a factory it injects.
-        let room = max.saturating_sub(affected.len());
-        let truncated = found.len() > room;
-        if truncated {
-            let weak = |a: &Affected| matches!(a.edge, "via_di" | "constructs");
-            let mut order: Vec<usize> = (0..found.len()).collect();
-            order.sort_by_key(|&i| weak(&found[i].0));
-            let mut keep = vec![false; found.len()];
-            for &i in order.iter().take(room) {
-                keep[i] = true;
-            }
-            affected.extend(found.into_iter().zip(keep).filter(|(_, k)| *k).map(|((a, _), _)| a));
-            return Ok((affected, true));
-        }
-        let mut next = Vec::new();
-        for (row, onward) in found {
-            slots.insert(row.id, Slot::Listed(affected.len()));
-            affected.push(row);
-            next.extend(onward);
-        }
-        next.extend(late);
-        frontier = next;
-        if frontier.is_empty() {
-            break;
-        }
-    }
-    Ok((affected, false))
 }
 
 /// When `context` is an Entity Framework context with DbSets of the type `entity`: those DbSet properties. Empty
