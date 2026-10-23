@@ -881,11 +881,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
         let _lane = lane;
         let _entered = kc_store::limits::enter(query);
         let _freshness = crate::refresh::Budget::enter(std::time::Duration::from_secs(2));
-        kc_index::workspace::clear_cached_reads();
-        let result = f();
-        drop(kc_index::cache::take_touched());
-        kc_index::workspace::clear_cached_reads();
-        result
+        f()
     })
     .await
     .map_err(|e| e.to_string());
