@@ -44,7 +44,7 @@ pub const RESOLVER_VERSION: u32 = 20;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].
-pub const SCHEMA_VERSION: u32 = 20;
+pub const SCHEMA_VERSION: u32 = 21;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -191,8 +191,8 @@ CREATE INDEX IF NOT EXISTS ts_configs_file ON ts_configs(file_id);
 -- API endpoint, encode constants in `path` instead: `{=Name}`, and an endpoint on a helper's parameter starts with
 -- `{@Helper#i}`); the service is `service`, or the value of the constant `service_ref`. `group` rows are route groups
 -- passed to helpers (`service` names the helper and parameter, `path` the prefix; `verb` is `?` when the prefix can't
--- be known and `path` says why); `unsupported` rows are registrations whose routes can't be placed (`verb` the
--- style, `path` why); `prefix` rows are classes' `[Route]` templates and `conventional` rows conventional route
+-- be known and `path` says why); registrations whose routes can't be placed are kept in `unsupported` (area `http`);
+-- `prefix` rows are classes' `[Route]` templates and `conventional` rows conventional route
 -- templates, placing actions whose path starts `{^Action}`; `operation` rows are calls to generated API clients
 -- (`path` the operation, `service` the tag). symbol_id is NULL in top-level statements. See `kc_extract::HttpRoute`.
 CREATE TABLE IF NOT EXISTS http_routes (
@@ -269,7 +269,9 @@ CREATE INDEX IF NOT EXISTS constants_qualified ON constants(qualified);
 -- concrete type's name when known, or an assembly scan's name filter (`*Service`). `kind` is `type`, `factory`,
 -- `instance` or `scan`; `lifetime` is NULL for the container's default. `made` is what a factory returns when only the
 -- repo's declarations tell (an encoded type expression), resolved into `implementation` (and, with `service_made`,
--- into the service too) after each sync; see `di::resolve_made`.
+-- into the service too) after each sync; see `di::resolve_made`. `mode` is NULL for a plain registration, `try` for
+-- one made only when the service has none yet (`TryAdd*`), `enumerable` for one added unless the same implementation
+-- is (`TryAddEnumerable`) and `replace` for one replacing the service's first (`Replace`).
 CREATE TABLE IF NOT EXISTS di_bindings (
     file_id        INTEGER NOT NULL,
     service        TEXT,
@@ -279,7 +281,8 @@ CREATE TABLE IF NOT EXISTS di_bindings (
     kind           TEXT NOT NULL,
     line           INTEGER NOT NULL,
     made           TEXT,
-    service_made   INTEGER NOT NULL DEFAULT 0
+    service_made   INTEGER NOT NULL DEFAULT 0,
+    mode           TEXT
 );
 CREATE INDEX IF NOT EXISTS di_bindings_file ON di_bindings(file_id);
 CREATE INDEX IF NOT EXISTS di_bindings_service ON di_bindings(service_name);
@@ -322,13 +325,16 @@ CREATE INDEX IF NOT EXISTS ansible_facts_file ON ansible_facts(file_id);
 CREATE INDEX IF NOT EXISTS ansible_facts_kind ON ansible_facts(kind, name);
 
 -- Constructs an extractor recognised but didn't read (`kc_extract::Unsupported`, see `unsupported`): the area they
--- belong to (`di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular`, `imports`), the construct as written,
--- and its line. Every language's; read per repo, never from the workspace summary.
+-- belong to (`di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular`, `imports`, `http`), the construct as
+-- written, and its line. Every language's; read per repo, never from the workspace summary. `http` rows are endpoint
+-- registrations whose routes can't be placed (`kc_extract::HttpRoute`'s `unsupported` side): construct `{verb}:
+-- {why}`, symbol_id the handler or the method registering it (NULL in top-level statements; NULL for other areas).
 CREATE TABLE IF NOT EXISTS unsupported (
     file_id   INTEGER NOT NULL,
     area      TEXT NOT NULL,
     construct TEXT NOT NULL,
-    line      INTEGER NOT NULL
+    line      INTEGER NOT NULL,
+    symbol_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS unsupported_file ON unsupported(file_id);
 CREATE INDEX IF NOT EXISTS unsupported_area ON unsupported(area);
@@ -1168,7 +1174,14 @@ impl Batch<'_> {
             "INSERT INTO http_routes(file_id, symbol_id, side, verb, path, path_ref, service, service_ref, line)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )?;
+        let mut unplaced_stmt =
+            self.tx.prepare_cached("INSERT INTO unsupported(file_id, area, construct, line, symbol_id) VALUES (?1, 'http', ?2, ?3, ?4)")?;
         for r in &rec.facts.http_routes {
+            // A registration whose route can't be placed is a construct met but not read (see [`unsupported`]).
+            if r.side == "unsupported" {
+                unplaced_stmt.execute(params![file_id, format!("{}: {}", r.verb, r.path), r.line, r.sym.map(|i| ids[i])])?;
+                continue;
+            }
             route_stmt.execute(params![file_id, r.sym.map(|i| ids[i]), r.side, r.verb, r.path, r.path_ref, r.service, r.service_ref, r.line])?;
         }
         let mut host_stmt =
@@ -1193,12 +1206,12 @@ impl Batch<'_> {
             const_stmt.execute(params![file_id, c.qualified, c.value, c.line])?;
         }
         let mut di_stmt = self.tx.prepare_cached(
-            "INSERT INTO di_bindings(file_id, service, service_name, implementation, lifetime, kind, line, made, service_made)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO di_bindings(file_id, service, service_name, implementation, lifetime, kind, line, made, service_made, mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )?;
         for b in &rec.facts.di {
             let name = b.service.as_deref().map(di::bare_name);
-            di_stmt.execute(params![file_id, b.service, name, b.implementation, b.lifetime, b.kind, b.line, b.made, b.service_made])?;
+            di_stmt.execute(params![file_id, b.service, name, b.implementation, b.lifetime, b.kind, b.line, b.made, b.service_made, b.mode])?;
         }
         let mut bus_stmt = self.tx.prepare_cached(
             "INSERT INTO bus_facts(file_id, symbol_id, kind, message, message_name, scopes, queue, via, line)
@@ -1540,6 +1553,45 @@ mod tests {
         b.remove(id).unwrap();
         b.commit().unwrap();
         assert!(unsupported::all(store.conn()).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An endpoint registration whose route can't be placed is kept as a construct not read (area `http`), anchored
+    /// to its handler, and read back among the routes as an `unsupported` row; `in_span` leaves it to them.
+    #[test]
+    fn unplaced_routes_are_constructs_not_read() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-unplaced-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = Store::open(&dir.join("i.sqlite")).unwrap();
+        let src = "public static class Api\n{\n    public static void Map(WebApplication app)\n    {\n        app.MapGet(Paths.Item(), GetItem);\n        app.MapGet(\"/items\", ListItems);\n    }\n    static string GetItem(int id) => \"\";\n    static string ListItems() => \"\";\n}\n";
+        let facts = kc_extract::extract_file(Lang::CSharp, "Api.cs", src);
+        let b = store.batch().unwrap();
+        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts }).unwrap();
+        b.commit().unwrap();
+        let conn = store.conn();
+        let stored: Vec<(String, String, u32, Option<String>)> = conn
+            .prepare("SELECT u.area, u.construct, u.line, s.name FROM unsupported u LEFT JOIN symbols s ON s.id = u.symbol_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(stored, [("http".to_string(), "MapGet: its route template is not a constant".to_string(), 5, Some("GetItem".to_string()))]);
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM http_routes WHERE side = 'unsupported'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        let routes: Vec<String> = query::http_routes(conn)
+            .unwrap()
+            .into_iter()
+            .map(|r| format!("{} {} {:?} {}:{} {:?}", r.side, r.verb, r.path, r.symbol, r.line, r.detail))
+            .collect();
+        assert_eq!(
+            routes,
+            [
+                "unsupported MapGet None Api.GetItem:5 Some(\"its route template is not a constant\")",
+                "server GET Some(\"items\") Api.ListItems:6 None",
+            ]
+        );
+        assert!(unsupported::in_span(conn, "Api.cs", 1, 10).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

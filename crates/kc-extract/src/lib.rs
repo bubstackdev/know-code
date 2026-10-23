@@ -676,6 +676,10 @@ pub struct DiBinding {
     pub made: Option<String>,
     /// The registration names no service: the container registers it as what it makes (`Register(_ => Make())`).
     pub service_made: bool,
+    /// How a Microsoft DI registration is added, when not plainly: `try` (`TryAdd*`: only when the service has no
+    /// registration yet), `enumerable` (`TryAddEnumerable`: unless the same implementation is registered for it) or
+    /// `replace` (`Replace`: in place of the service's first registration). `None` for `Add*`, Autofac and the rest.
+    pub mode: Option<&'static str>,
 }
 
 /// A message-bus fact (C#): a message type (`[ShopMessage(ShopHosts.X)]`), a call publishing or sending

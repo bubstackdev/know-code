@@ -343,7 +343,7 @@ impl<'a> Cx<'a> {
                     for c in children(v).filter(|c| c.kind() == "identifier") {
                         let name = self.text(c);
                         if starts_upper(name) {
-                            let b = DiBinding { service: Some(name.to_string()), implementation: Some(name.to_string()), lifetime: None, kind: "type", line: line(c), made: None, service_made: false };
+                            let b = DiBinding { service: Some(name.to_string()), implementation: Some(name.to_string()), lifetime: None, kind: "type", line: line(c), made: None, service_made: false, mode: None };
                             self.facts.di.push(b);
                         }
                     }
@@ -1445,7 +1445,7 @@ impl Cx<'_> {
         } else {
             return;
         };
-        self.facts.di.push(DiBinding { service: Some(service), implementation, lifetime: None, kind, line: line(obj), made: None, service_made: false });
+        self.facts.di.push(DiBinding { service: Some(service), implementation, lifetime: None, kind, line: line(obj), made: None, service_made: false, mode: None });
     }
 
     /// `@Injectable({ providedIn: 'root' })` registers the class itself; with `useClass`, `useExisting` or
@@ -1476,7 +1476,7 @@ impl Cx<'_> {
             } else {
                 ("type", Some(class.to_string()))
             };
-            self.facts.di.push(DiBinding { service: Some(class.to_string()), implementation, lifetime, kind, line: line(d), made: None, service_made: false });
+            self.facts.di.push(DiBinding { service: Some(class.to_string()), implementation, lifetime, kind, line: line(d), made: None, service_made: false, mode: None });
         }
     }
 

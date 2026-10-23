@@ -2649,13 +2649,20 @@ type RawRoute = (
 const GROUP_DEPTH: u32 = 4;
 
 /// Every HTTP route in the repo, with constant references resolved against the repo's constants, and minimal API
-/// endpoints under the prefixes of the route groups their helpers are called with.
+/// endpoints under the prefixes of the route groups their helpers are called with. Registrations whose routes can't
+/// be placed (kept as constructs not read, area `http`: `{verb}: {why}`) are `unsupported` rows among them.
 pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let mut stmt = conn.prepare(
-        "SELECT r.side, r.verb, r.path, r.path_ref, r.service, r.service_ref, s.name, s.container, s.kind, f.path,
-                s.start_line, s.end_line, r.line
-         FROM http_routes r LEFT JOIN symbols s ON s.id = r.symbol_id JOIN files f ON f.id = r.file_id
-         ORDER BY f.path, r.line",
+        "SELECT * FROM (
+           SELECT r.side, r.verb, r.path, r.path_ref, r.service, r.service_ref, s.name, s.container, s.kind, f.path AS file,
+                  s.start_line, s.end_line, r.line AS line
+           FROM http_routes r LEFT JOIN symbols s ON s.id = r.symbol_id JOIN files f ON f.id = r.file_id
+           UNION ALL
+           SELECT 'unsupported', substr(u.construct, 1, instr(u.construct, ': ') - 1), substr(u.construct, instr(u.construct, ': ') + 2),
+                  NULL, NULL, NULL, s.name, s.container, s.kind, f.path, s.start_line, s.end_line, u.line
+           FROM unsupported u LEFT JOIN symbols s ON s.id = u.symbol_id JOIN files f ON f.id = u.file_id
+           WHERE u.area = 'http')
+         ORDER BY file, line",
     )?;
     let mut consts = Constants::new(conn)?;
     let rows = stmt.query_map([], |r| {

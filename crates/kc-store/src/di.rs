@@ -47,6 +47,10 @@ pub struct Registration {
     /// a convention standing in for the injector tree (see [`ts_bound`]).
     #[serde(skip)]
     pub by_directory: bool,
+    /// How a Microsoft DI registration is added, when not plainly (`try`, `enumerable`, `replace`: see
+    /// `kc_extract::DiBinding::mode`): not a second implementation competing with the plain one.
+    #[serde(skip)]
+    pub mode: Option<String>,
 }
 
 impl Registration {
@@ -70,7 +74,7 @@ pub struct Bound {
     pub assumptions: Vec<crate::answer::Assumption>,
 }
 
-const COLS: &str = "d.service, d.implementation, d.lifetime, d.kind, f.path, d.line";
+const COLS: &str = "d.service, d.implementation, d.lifetime, d.kind, f.path, d.line, d.mode";
 
 fn registration(r: &rusqlite::Row) -> rusqlite::Result<Registration> {
     let file: String = r.get(4)?;
@@ -84,6 +88,7 @@ fn registration(r: &rusqlite::Row) -> rusqlite::Result<Registration> {
         file,
         line: r.get(5)?,
         implemented_interfaces: false,
+        mode: r.get(6)?,
     })
 }
 
@@ -485,7 +490,7 @@ pub struct DiSection {
     /// Constructors taking the type as a parameter: where it is injected.
     pub injection_sites: usize,
     /// `unregistered` (an interface injected somewhere with no registration in the repo) and `conflicting: A, B`
-    /// (one service registered with several implementations outside tests).
+    /// (one service registered with several implementations outside tests, by plain registrations).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<String>,
 }
@@ -571,9 +576,11 @@ pub fn section(conn: &Connection, symbol: &SymbolRow) -> Result<Option<DiSection
     if symbol.kind == "protocol" && registrations.iter().all(|r| r.test) && injection_sites > 0 {
         flags.push("unregistered".to_string());
     }
-    // Conflicts per service as written: `IValidator<A>` and `IValidator<B>` are different services.
+    // Conflicts per service as written: `IValidator<A>` and `IValidator<B>` are different services. Among plain
+    // registrations only: a `TryAdd*` one stands back for any other, `TryAddEnumerable` adds one of several meant to
+    // be resolved together, and `Replace` takes the place of the one before.
     let mut by_written: HashMap<&str, Vec<&str>> = HashMap::new();
-    for r in registrations.iter().filter(|r| !r.test) {
+    for r in registrations.iter().filter(|r| !r.test && r.mode.is_none()) {
         if let (Some(s), Some(i)) = (r.service.as_deref(), r.concrete()) {
             let v = by_written.entry(s).or_default();
             if !v.contains(&i) {
