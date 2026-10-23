@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 30;
+pub const VERSION: u32 = 31;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -2179,7 +2179,7 @@ impl<'a> Cx<'a> {
             None
         };
         for (service, line) in services {
-            self.facts.di.push(DiBinding { service: Some(service), implementation: implementation.clone(), lifetime, kind: "type", line, made: None, service_made: false });
+            self.facts.di.push(DiBinding { service: Some(service), implementation: implementation.clone(), lifetime, kind: "type", line, made: None, service_made: false, mode: None });
         }
     }
 
@@ -2200,8 +2200,10 @@ impl<'a> Cx<'a> {
         let ty = |n: Node| collapse(self.text(n), 120);
         let base = |n: Node| Some(base_type_name(self.src, n)).filter(|b| !b.is_empty());
         let line = line(link.at);
+        // `TryAddScoped<IFoo, Foo>()` registers only when the service has no registration yet.
+        let mode = link.name.starts_with("TryAdd").then_some("try");
         let pending = |kind, implementation: Option<String>, services: Vec<Option<String>>, lifetime| {
-            Some(PendingDi { kind, implementation, services, lifetime, line, default_service: None, made: None })
+            Some(PendingDi { kind, implementation, services, lifetime, line, default_service: None, made: None, mode })
         };
         // What a factory or instance makes: its type when the code says, else what the index resolves.
         let made = |kind, e: Node, services: Vec<Option<String>>, lifetime| {
@@ -2309,25 +2311,30 @@ impl<'a> Cx<'a> {
             }
             _ => return,
         };
-        // Handed to the service collection: an argument (perhaps in an array) of `Add`, `TryAdd*`, `Replace`, `Insert`.
+        // Handed to the service collection: an argument (perhaps in an array) of `Add`, `TryAdd*`, `Replace`, `Insert`;
+        // how it is added (see `DiBinding::mode`).
         let mut up = node.parent();
         let handed = loop {
-            let Some(n) = up else { break false };
+            let Some(n) = up else { break None };
             if n.kind() == "invocation_expression" {
                 let name = n.child_by_field_name("function").and_then(|f| match f.kind() {
                     "member_access_expression" => f.child_by_field_name("name"),
                     _ => Some(f),
                 });
-                break name.is_some_and(|m| matches!(name_text(self.src, m).as_str(), "Add" | "TryAdd" | "TryAddEnumerable" | "Replace" | "Insert"));
+                break name.and_then(|m| match name_text(self.src, m).as_str() {
+                    "Add" | "Insert" => Some(None),
+                    "TryAdd" => Some(Some("try")),
+                    "TryAddEnumerable" => Some(Some("enumerable")),
+                    "Replace" => Some(Some("replace")),
+                    _ => None,
+                });
             }
             if matches!(n.kind(), "block" | "lambda_expression" | "anonymous_method_expression" | "local_declaration_statement") {
-                break false;
+                break None;
             }
             up = n.parent();
         };
-        if !handed {
-            return;
-        }
+        let Some(mode) = handed else { return };
         let args: Vec<Node> = args.into_iter().flat_map(argument_exprs).collect();
         let line = line(node);
         let ty = |n: Node| collapse(self.text(n), 120);
@@ -2359,6 +2366,7 @@ impl<'a> Cx<'a> {
             line,
             default_service: None,
             made: None,
+            mode,
         };
         let made = |kind, e: Node, service: String, lifetime| {
             let (implementation, made) = self.made_type(e);
@@ -2457,6 +2465,7 @@ impl<'a> Cx<'a> {
                 line: p.line,
                 made: p.made.clone(),
                 service_made,
+                mode: p.mode,
             });
         }
     }
@@ -3757,6 +3766,8 @@ struct PendingDi {
     line: u32,
     /// What a factory makes, encoded, when only the repo's declarations tell (see `DiBinding::made`).
     made: Option<String>,
+    /// How it is added (see `DiBinding::mode`).
+    mode: Option<&'static str>,
 }
 
 /// One call of a fluent chain: `.Name<TypeArgs>(args)`.
@@ -6513,6 +6524,9 @@ static class Setup
                 (s("IApi"), s("ApiClient"), Some("transient"), "type", 17),
             ]
         );
+        // `TryAdd*` registers only when the service has none yet.
+        let tried: Vec<u32> = extract(src).di.into_iter().filter(|b| b.mode == Some("try")).map(|b| b.line).collect();
+        assert_eq!(tried, [9]);
     }
 
     #[test]
@@ -6556,6 +6570,22 @@ static class Setup
         );
         let unread: Vec<(String, u32)> = extract(src).unsupported.into_iter().map(|u| (u.construct, u.line)).collect();
         assert_eq!(unread, [("keyed registration ServiceDescriptor.KeyedSingleton(…)".to_string(), 18)]);
+        // How each is added: by the call it is handed to.
+        let modes: Vec<(u32, Option<&str>)> = extract(src).di.into_iter().map(|b| (b.line, b.mode)).collect();
+        assert_eq!(
+            modes,
+            [
+                (6, None),
+                (7, None),
+                (8, None),
+                (9, Some("try")),
+                (10, Some("try")),
+                (13, Some("enumerable")),
+                (14, Some("enumerable")),
+                (16, Some("replace")),
+                (17, None),
+            ]
+        );
     }
 
     #[test]

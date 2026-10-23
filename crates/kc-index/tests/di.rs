@@ -217,3 +217,53 @@ fn a_binding_shows_the_registration_of_the_application_making_the_call() {
     assert_eq!(bound.registered, "src/Shop.Api/Startup.cs:1");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn only_plain_registrations_conflict() {
+    let root = scratch("di-modes");
+    write(
+        &root,
+        "src/App/Services.cs",
+        "namespace App;
+public interface IClock { } public class SystemClock : IClock { } public class FixedClock : IClock { }
+public interface IHandler { } public class OrderHandler : IHandler { } public class RefundHandler : IHandler { }
+public interface IMailer { } public class SmtpMailer : IMailer { } public class QueueMailer : IMailer { }
+public interface IStore { } public class SqlStore : IStore { } public class FileStore : IStore { }
+",
+    );
+    write(
+        &root,
+        "src/App/Startup.cs",
+        "namespace App;
+public class Startup
+{
+    public void Build(IServiceCollection services)
+    {
+        services.AddSingleton<IClock, SystemClock>();
+        services.TryAddSingleton<IClock, FixedClock>();
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IHandler, OrderHandler>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IHandler, RefundHandler>());
+        services.AddScoped<IMailer, SmtpMailer>();
+        services.Replace(ServiceDescriptor.Scoped<IMailer, QueueMailer>());
+        services.AddScoped<IStore, SqlStore>();
+        services.AddScoped<IStore, FileStore>();
+    }
+}
+",
+    );
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let limits = ContextLimits::from_budget(2000);
+    let di = |name: &str| query::context(store.conn(), &root, name, &limits).unwrap().unwrap().di.unwrap();
+    let modes = |name: &str| di(name).registrations.iter().map(|r| r.mode.clone()).collect::<Vec<_>>();
+    assert_eq!(modes("IClock"), [None, Some("try".to_string())]);
+    assert_eq!(modes("IHandler"), [Some("enumerable".to_string()), Some("enumerable".to_string())]);
+    assert_eq!(modes("IMailer"), [None, Some("replace".to_string())]);
+    // A registration made only when there is none, one of several meant together, or one replacing another is no
+    // second implementation competing for the service; two plain ones are.
+    for name in ["IClock", "IHandler", "IMailer"] {
+        assert!(di(name).flags.is_empty(), "{name}: {:?}", di(name).flags);
+    }
+    assert_eq!(di("IStore").flags, ["conflicting: IStore → SqlStore, FileStore"]);
+    let _ = std::fs::remove_dir_all(&root);
+}

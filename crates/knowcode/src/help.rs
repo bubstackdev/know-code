@@ -199,10 +199,10 @@ template uses; where a component is opened as a dialog, routed or declared shows
 marked; a factory's implementation is what its lambda returns: `new X`, `GetRequiredService<X>()`, a local, a factory
 method's declared return type, a property's type), the implementations a service is bound to, injection sites
 (constructors taking it), and flags: `unregistered` (an interface injected but never registered in the repo) and
-`conflicting` (several implementations registered for one service). A call through a service bound to one
-implementation carries it as `via_di`; a generic service is one service per type arguments (`IHandler<Order>`,
-`IHandler<Invoice>`), an open generic registration (`typeof(IRepo<>)`) serves every one, and same-named services in two
-namespaces are two."#,
+`conflicting` (several implementations registered for one service by plain registrations: not `TryAdd*`,
+`TryAddEnumerable` or `Replace`). A call through a service bound to one implementation carries it as `via_di`; a
+generic service is one service per type arguments (`IHandler<Order>`, `IHandler<Invoice>`), an open generic
+registration (`typeof(IRepo<>)`) serves every one, and same-named services in two namespaces are two."#,
     },
     Topic {
         name: "kc_context.tables",

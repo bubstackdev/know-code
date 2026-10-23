@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `context`'s DI flag `conflicting` counts plain registrations only. A `TryAdd*` registration stands back when the
+  service has one already, `TryAddEnumerable` adds one of several implementations meant to be resolved together, and
+  `Replace` takes the place of the one before: none of them is a second implementation competing for the service, and
+  each was counted as one. On the public study's workspace 7 services lose a false `conflicting` flag (a password
+  manager's push engines, event writers and integration services registered in exclusive branches through `TryAdd*`
+  or `TryAddEnumerable`); no other answer of `context` on its 1,565 DI services changes. Each index is rebuilt once on
+  the first query after updating (index schema 21); endpoint registrations whose routes can't be placed are now kept
+  with the other constructs KnowCode doesn't read, and answers on them are unchanged.
 - `kc_search`'s first page shown whole stops after the last hit in code. Since 0.2.0 a first page at the default limit
   showed every hit when there were at most 60 and they fit; hits in tests, comments and prose past the first 20 now
   stay a page away, and `rest` says that is what they are (all of them still show when a search finds nothing else).

@@ -11,7 +11,7 @@ use crate::answer::{Incomplete, Reason};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Site {
     /// `di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular`, `imports` or `http` (endpoint registrations whose
-    /// routes can't be placed: read from the route facts, `unsupported` rows, not stored here).
+    /// routes can't be placed: read back as `unsupported` route rows by `query::http_routes`, which derives more).
     pub area: String,
     pub construct: String,
     pub file: String,
@@ -28,11 +28,12 @@ pub fn in_area(conn: &Connection, area: &str) -> Result<Vec<Site>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// The repo's constructs met but not read in `file` between lines `from` and `to`, any area.
+/// The repo's constructs met but not read in `file` between lines `from` and `to`, any area but `http` (an answer
+/// reads those with the routes, by the symbol handling them).
 pub fn in_span(conn: &Connection, file: &str, from: u32, to: u32) -> Result<Vec<Site>> {
     let mut stmt = conn.prepare_cached(
         "SELECT u.area, u.construct, f.path, u.line FROM unsupported u JOIN files f ON f.id = u.file_id
-         WHERE f.path = ?1 AND u.line BETWEEN ?2 AND ?3 ORDER BY u.line, u.rowid",
+         WHERE f.path = ?1 AND u.line BETWEEN ?2 AND ?3 AND u.area != 'http' ORDER BY u.line, u.rowid",
     )?;
     let rows = stmt.query_map(rusqlite::params![file, from, to], |r| Ok(Site { area: r.get(0)?, construct: r.get(1)?, file: r.get(2)?, line: r.get(3)? }))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
