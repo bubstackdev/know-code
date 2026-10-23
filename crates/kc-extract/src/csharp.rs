@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 29;
+pub const VERSION: u32 = 30;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -439,6 +439,7 @@ impl<'a> Cx<'a> {
                 if !chain_inner(node) {
                     self.di_registrations(node);
                 }
+                self.service_descriptor(node);
                 self.db_call(node);
                 self.outgoing_request(node);
                 self.endpoint(node);
@@ -509,6 +510,9 @@ impl<'a> Cx<'a> {
                         && let Some(a) = node.child_by_field_name("arguments")
                     {
                         self.component_registration(a);
+                    }
+                    if name == SERVICE_DESCRIPTOR {
+                        self.service_descriptor(node);
                     }
                     if !name.is_empty() {
                         self.creation(name, type_qualifier(self.src, t), node.child_by_field_name("arguments"), t);
@@ -2280,6 +2284,133 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// A Microsoft DI service descriptor handed to the service collection: `services.Add(new ServiceDescriptor(typeof(IFoo),
+    /// typeof(Foo), ServiceLifetime.Scoped))`, `TryAdd(ServiceDescriptor.Singleton<IFoo, Foo>())`,
+    /// `TryAddEnumerable(new[] { ServiceDescriptor.Transient<IFoo, Foo>(), … })`, `Replace(ServiceDescriptor.Describe(…))`,
+    /// `Insert(0, …)`. `node` is the descriptor: a `new ServiceDescriptor(…)` or a call of one of its static factories.
+    /// Each is a registration at its own line, with the lifetime it states (a `ServiceLifetime` member; singleton for an
+    /// instance), and the implementation where it names one. A keyed descriptor is said, not read; a descriptor built
+    /// elsewhere and handed over in a variable is not read.
+    fn service_descriptor(&mut self, node: Node) {
+        let (factory, args, type_args) = match node.kind() {
+            "object_creation_expression" => (None, node.child_by_field_name("arguments"), Vec::new()),
+            "invocation_expression" => {
+                let Some(f) = node.child_by_field_name("function").filter(|f| f.kind() == "member_access_expression") else { return };
+                let (Some(e), Some(n)) = (f.child_by_field_name("expression"), f.child_by_field_name("name")) else { return };
+                if base_type_name(self.src, e) != SERVICE_DESCRIPTOR {
+                    return;
+                }
+                let type_args: Vec<Node> = if n.kind() == "generic_name" {
+                    children(n).filter(|c| c.kind() == "type_argument_list").flat_map(children).filter(|c| c.is_named()).collect()
+                } else {
+                    Vec::new()
+                };
+                (Some(name_text(self.src, n)), node.child_by_field_name("arguments"), type_args)
+            }
+            _ => return,
+        };
+        // Handed to the service collection: an argument (perhaps in an array) of `Add`, `TryAdd*`, `Replace`, `Insert`.
+        let mut up = node.parent();
+        let handed = loop {
+            let Some(n) = up else { break false };
+            if n.kind() == "invocation_expression" {
+                let name = n.child_by_field_name("function").and_then(|f| match f.kind() {
+                    "member_access_expression" => f.child_by_field_name("name"),
+                    _ => Some(f),
+                });
+                break name.is_some_and(|m| matches!(name_text(self.src, m).as_str(), "Add" | "TryAdd" | "TryAddEnumerable" | "Replace" | "Insert"));
+            }
+            if matches!(n.kind(), "block" | "lambda_expression" | "anonymous_method_expression" | "local_declaration_statement") {
+                break false;
+            }
+            up = n.parent();
+        };
+        if !handed {
+            return;
+        }
+        let args: Vec<Node> = args.into_iter().flat_map(argument_exprs).collect();
+        let line = line(node);
+        let ty = |n: Node| collapse(self.text(n), 120);
+        let base = |n: Node| Some(base_type_name(self.src, n)).filter(|b| !b.is_empty());
+        let lambda = |n: &Node| matches!(n.kind(), "lambda_expression" | "anonymous_method_expression");
+        // `ServiceLifetime.Scoped`.
+        let stated = |n: &Node| -> Option<&'static str> {
+            let n = (n.kind() == "member_access_expression").then(|| n.child_by_field_name("name")).flatten()?;
+            Some(match self.text(n) {
+                "Singleton" => "singleton",
+                "Scoped" => "scoped",
+                "Transient" => "transient",
+                _ => return None,
+            })
+        };
+        let keyed = factory.as_deref().is_some_and(|f| f.starts_with("Keyed"))
+            || (factory.is_none() && args.len() == 4)
+            || (factory.as_deref() == Some("Describe") && args.len() == 4);
+        if keyed {
+            let what = factory.map(|f| format!("ServiceDescriptor.{f}(…)")).unwrap_or_else(|| "new ServiceDescriptor(…)".to_string());
+            self.facts.unsupported.push(Unsupported { area: "di", construct: format!("keyed registration {what}"), line });
+            return;
+        }
+        let pending = |kind, implementation: Option<String>, service: String, lifetime| PendingDi {
+            kind,
+            implementation,
+            services: vec![Some(service)],
+            lifetime,
+            line,
+            default_service: None,
+            made: None,
+        };
+        let made = |kind, e: Node, service: String, lifetime| {
+            let (implementation, made) = self.made_type(e);
+            PendingDi { made, ..pending(kind, implementation, service, lifetime) }
+        };
+        // What the descriptor's second argument gives: a type, a factory or an instance.
+        let given = |s: Node, i: Node, lifetime: Option<&'static str>| match typeof_type(i) {
+            Some(i) => pending("type", base(i), ty(s), lifetime),
+            None if lambda(&i) => made("factory", i, ty(s), lifetime),
+            None => made("instance", i, ty(s), lifetime.or(Some("singleton"))),
+        };
+        let p = match (factory.as_deref(), type_args.as_slice(), args.as_slice()) {
+            // `new ServiceDescriptor(typeof(IFoo), typeof(Foo) | factory, lifetime)`, `(typeof(IFoo), instance)`.
+            (None, [], [s, i, rest @ ..]) => {
+                let Some(s) = typeof_type(*s) else { return };
+                match rest.first() {
+                    Some(l) if typeof_type(*i).is_none() => made("factory", *i, ty(s), stated(l)),
+                    Some(l) => given(s, *i, stated(l)),
+                    None => made("instance", *i, ty(s), Some("singleton")),
+                }
+            }
+            (Some("Describe"), [], [s, i, l]) => {
+                let Some(s) = typeof_type(*s) else { return };
+                match typeof_type(*i) {
+                    Some(_) => given(s, *i, stated(l)),
+                    None => made("factory", *i, ty(s), stated(l)),
+                }
+            }
+            (Some(f @ ("Singleton" | "Scoped" | "Transient")), targs, args) => {
+                let lifetime = Some(match f {
+                    "Singleton" => "singleton",
+                    "Scoped" => "scoped",
+                    _ => "transient",
+                });
+                match (targs, args) {
+                    ([s, i], []) => pending("type", base(*i), ty(*s), lifetime),
+                    ([s, _], [a]) | ([s], [a]) => {
+                        let kind = if lambda(a) { "factory" } else { "instance" };
+                        made(kind, *a, ty(*s), lifetime)
+                    }
+                    ([], [s, i]) => {
+                        let Some(s) = typeof_type(*s) else { return };
+                        given(s, *i, lifetime)
+                    }
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+        self.flush_di(p);
+    }
+
     /// A registration method this recognises but doesn't read, in words with its type arguments: a typed HTTP client
     /// (`AddHttpClient<CatalogClient>(…)`, one type argument) or a keyed one (`AddKeyedScoped<IFoo, Foo>("k")`).
     fn di_unread(&self, link: &Link) -> Option<String> {
@@ -3678,6 +3809,9 @@ fn chain_inner(call: Node) -> bool {
 fn argument_exprs(list: Node) -> Vec<Node> {
     children(list).filter(|c| c.kind() == "argument").filter_map(|a| children(a).filter(|c| c.is_named()).last()).collect()
 }
+
+/// Microsoft DI's description of a registration (see `service_descriptor`).
+const SERVICE_DESCRIPTOR: &str = "ServiceDescriptor";
 
 /// The type of a container's registration built from its parts (see `component_registration`).
 const COMPONENT_REGISTRATION: &str = "ComponentRegistration";
@@ -6379,6 +6513,49 @@ static class Setup
                 (s("IApi"), s("ApiClient"), Some("transient"), "type", 17),
             ]
         );
+    }
+
+    #[test]
+    fn service_descriptors_are_registrations() {
+        let src = r#"
+static class Setup
+{
+    static void Add(IServiceCollection services, Settings settings)
+    {
+        services.Add(new ServiceDescriptor(typeof(IOrderService), typeof(OrderService), ServiceLifetime.Scoped));
+        services.Add(new ServiceDescriptor(typeof(IClock), sp => new SystemClock(), ServiceLifetime.Singleton));
+        services.Add(new ServiceDescriptor(typeof(Settings), settings));
+        services.TryAdd(ServiceDescriptor.Singleton<ICache, MemoryCache>());
+        services.TryAdd(ServiceDescriptor.Transient(typeof(IRepo<>), typeof(Repo<>)));
+        services.TryAddEnumerable(new[]
+        {
+            ServiceDescriptor.Scoped<IHandler, OrderHandler>(),
+            ServiceDescriptor.Scoped<IHandler, RefundHandler>(),
+        });
+        services.Replace(ServiceDescriptor.Describe(typeof(IMailer), typeof(SmtpMailer), ServiceLifetime.Transient));
+        services.Insert(0, ServiceDescriptor.Singleton<IFeed>(sp => new Feed(sp)));
+        services.TryAddEnumerable(ServiceDescriptor.KeyedSingleton<IHandler, AuditHandler>("audit"));
+        var unread = ServiceDescriptor.Singleton<IOther, Other>();
+        Assert.Contains(services, d => d.ServiceType == typeof(IOrderService));
+    }
+}
+"#;
+        assert_eq!(
+            di(src),
+            [
+                (s("IOrderService"), s("OrderService"), Some("scoped"), "type", 6),
+                (s("IClock"), s("SystemClock"), Some("singleton"), "factory", 7),
+                (s("Settings"), s("Settings"), Some("singleton"), "instance", 8),
+                (s("ICache"), s("MemoryCache"), Some("singleton"), "type", 9),
+                (s("IRepo<>"), s("Repo"), Some("transient"), "type", 10),
+                (s("IHandler"), s("OrderHandler"), Some("scoped"), "type", 13),
+                (s("IHandler"), s("RefundHandler"), Some("scoped"), "type", 14),
+                (s("IMailer"), s("SmtpMailer"), Some("transient"), "type", 16),
+                (s("IFeed"), s("Feed"), Some("singleton"), "factory", 17),
+            ]
+        );
+        let unread: Vec<(String, u32)> = extract(src).unsupported.into_iter().map(|u| (u.construct, u.line)).collect();
+        assert_eq!(unread, [("keyed registration ServiceDescriptor.KeyedSingleton(…)".to_string(), 18)]);
     }
 
     #[test]

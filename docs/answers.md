@@ -61,7 +61,9 @@ instead, with the same `{reason, detail, hint}` (reason `capped` or `budget`), a
 - cites past the first few that give their place without their line (`cite text: 12 of 30 cites quote their line`);
 - a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every match
   with the name asked for (in any case) is listed and the rest match by prefix or word; `search`'s when every file with
-  a match is named, on the page or in `other_files`, and the rest are their other lines. Cut further to fit
+  a match is named, on the page or in `other_files`, and the rest are their other lines (`rest` says when they are
+  all in tests, comments and prose: a first page at the default limit shows every hit in code when there are at most
+  60 hits and they fit, and leaves those a page away). Cut further to fit
   `max_chars`, the page is incomplete.
 
 The lists an answer is about stay `incomplete` when cut: the answer's `items` (references, impact rows, search hits
@@ -168,6 +170,7 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 | `same_deployment` | an HTTP route matched by verb and path reaches the repo serving it |
 | `configured_host` | an HTTP client reaches the repo through a host its URL, base address or settings name, which deploy or proxy configuration maps to that repo (the link's `host` says where); which environment's configuration applies, and for settings which key the request reads |
 | `operation_name` | a generated API client's operation is the controller action of that name (under the controller named like the client); the API description it was generated from wasn't read |
+| `server_unverified` | nothing says which server a generated client's repo calls (no base address, configuration, client package or other request of its names one): every repo with an action of the operation's name is a candidate |
 | `same_destination` | a message reaches the consumer on its virtual host or queue |
 | `same_database` | a SQL object matched by name is in the database the code uses |
 | `revision_unverified` | the dependency's checkout is the revision asked for (a Terraform `?ref=`, a CI include `ref:`, a registry version) |

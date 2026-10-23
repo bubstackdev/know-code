@@ -169,7 +169,8 @@ verb, or a request attribute or decorator the config names), code that creates o
 gateway by service and path (a gateway call the config names) or an HTTP client with a URL (fetch, axios, $.ajax,
 Angular and C# HttpClient, wrappers named for HTTP or API clients; base + path composed), the route it requests and
 the controller actions serving it, with their source; a call to a generated API client (`getItemsApi(api).getItems()`)
-links by operation name (assumption operation_name); for a controller action, the contracts and calls requesting it.
+links by operation name (assumption operation_name), in the servers its repo is known to call (server_unverified when
+none is); for a controller action, the contracts and calls requesting it.
 With no links, `note` says what was searched and what is left: requests whose URL is known only at run time, and the
 nearest routes by path. A contract that looks
 left over is marked: `unsent` (no code in the indexed repos creates it) and `commented_out` (nothing serves its route,
@@ -682,8 +683,9 @@ rest of the hit's statement follows it, one per line (`  41- text`): the chained
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
 names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` or `**/shop/src/**` searches that repo only; an absolute
 path, the repo it is in). A filter matching no file is refused, saying so (`paths matched 0 files (…)`), never answered as
-a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit when there
-are at most 60 and they all fit `max_chars`. A first page cut short names the other files with a match in
+a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit in code
+(definitions, declarations, code lines) when there are at most 60 hits and they fit `max_chars`; hits in tests,
+comments and prose past the page stay a page away (all of them when they are all there is). A first page cut short names the other files with a match in
 `other_files`, by directory, with a count when more than one (`src/core/: a.cs 2, b.cs`; up to 60 files, past that
 `files` counts them and `files_only` lists them); with every file named, the answer is `complete` and the other lines
 are a `more` entry with the cursor. Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
@@ -840,7 +842,8 @@ it, unchecked), `same_destination` (a message reaches the consumer on its virtua
 `same_database` (a SQL object matched by name is in the database the code uses, unchecked), `revision_unverified` (the
 dependency's checkout is the revision asked for, unchecked), `configured_host` (an HTTP client reaches the repo through a
 host configuration maps to it; which environment's applies, unchecked), `operation_name` (a generated client's operation
-is the action of that name; the API description wasn't read).
+is the action of that name; the API description wasn't read), `server_unverified` (nothing says which server the
+client calls: every action of the operation's name is a candidate).
 
 Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which edges to follow:
 - `default`: exact and unique_name edges followed, ambiguous ones listed, not followed;

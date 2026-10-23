@@ -1,7 +1,5 @@
 //! Bounded, disposable index storage. Never walk or remove unrelated cache subdirectories or durable notes.
 
-use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,10 +11,6 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
 use crate::{config, writer};
-
-thread_local! {
-    static TOUCHED: RefCell<BTreeSet<PathBuf>> = const { RefCell::new(BTreeSet::new()) };
-}
 
 #[derive(Deserialize, Serialize)]
 struct Access { format: u32, root: PathBuf, schema: u32 }
@@ -71,7 +65,7 @@ pub fn durable_file(path: &Path) -> Result<bool> { Ok(is_notes(path, &notes_path
 
 /// Records actual use, separately from SQLite's mtime (summary reads and derived writes are not user access).
 pub(crate) fn touch(root: &Path, db: &Path) {
-    TOUCHED.with(|r| { r.borrow_mut().insert(root.to_path_buf()); });
+    kc_store::limits::current().note_touched(root);
     let target = db.with_extension("used");
     let Ok(notes) = notes_paths() else { return };
     if is_notes(&target, &notes) || fs::symlink_metadata(&target).is_ok_and(|m| m.is_symlink()) { return; }
@@ -94,8 +88,9 @@ pub fn after_command() {
     if !roots.is_empty() { maintain_and_report(&roots); }
 }
 
+/// The repos whose indexes this query used since the last call (see [`kc_store::limits::Operation::take_touched`]).
 pub fn take_touched() -> Vec<PathBuf> {
-    TOUCHED.with(|r| std::mem::take(&mut *r.borrow_mut()).into_iter().collect())
+    kc_store::limits::current().take_touched()
 }
 
 pub fn maintain_and_report(protect: &[PathBuf]) {

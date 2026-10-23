@@ -881,11 +881,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
         let _lane = lane;
         let _entered = kc_store::limits::enter(query);
         let _freshness = crate::refresh::Budget::enter(std::time::Duration::from_secs(2));
-        kc_index::workspace::clear_cached_reads();
-        let result = f();
-        drop(kc_index::cache::take_touched());
-        kc_index::workspace::clear_cached_reads();
-        result
+        f()
     })
     .await
     .map_err(|e| e.to_string());
@@ -2150,7 +2146,7 @@ impl KnowcodeServer {
             args.extend(["-g".into(), g]);
         }
         args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
-        // A first page at the default limit shows every hit when they all fit the answer (at most 60).
+        // A first page at the default limit shows every hit in code when they fit the answer (at most 60 hits).
         if p.limit.is_none() && p.offset.unwrap_or(0) == 0 && !p.files_only {
             args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS).to_string()]);
         }
