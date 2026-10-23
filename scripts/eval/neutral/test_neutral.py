@@ -45,6 +45,9 @@ class Schema(unittest.TestCase):
         bad = label(items=["x"])
         bad["items"][0]["evidence"] = ""
         self.assertTrue(validate_label(bad))
+        unsure = label(items=["x"])
+        unsure["undecided"] = [{"item": "y"}]
+        self.assertTrue(validate_label(unsure))
         self.assertEqual(validate_label(label(items=[], completeness="exhaustive")), [])
         self.assertTrue(validate_label(label(items=[], completeness="lower_bound")))
 
@@ -354,6 +357,22 @@ class Score(unittest.TestCase):
         self.assertEqual((r["tp"], r["fn"], r["recall"], r["precision"]), (1, 0, 1.0, 1.0))
         r = score_one(lab, ["app/a.cs:1", "app/b.cs:1"])
         self.assertEqual((r["tp"], r["fp"], r["recall"]), (2, 0, 1.0))
+
+    def test_undecided_items_are_neither_hits_nor_false_positives(self):
+        # Callers through an external SDK: the labeller can't tell from source whether they reach the route.
+        lab = label(items=["web/src/a.ts"], match="file")
+        lab["undecided"] = [{"item": "web/src/sdk-user.ts", "evidence": "calls an SDK method whose route isn't in the cohort"}]
+        r = score_one(lab, ["web/src/a.ts", "web/src/sdk-user.ts:12", "web/src/other.ts"])
+        self.assertEqual((r["tp"], r["fp"], r["recall"]), (1, 1, 1.0))
+        self.assertAlmostEqual(r["precision"], 0.5)
+        self.assertEqual((r["undecided_returned"], r["extra"]), (["web/src/sdk-user.ts:12"], ["web/src/other.ts"]))
+        # An empty label stays a correct empty answer when only undecided calls are named.
+        empty = label(items=[], match="file")
+        empty["undecided"] = lab["undecided"]
+        r = score_one(empty, ["web/src/sdk-user.ts"])
+        self.assertEqual((r["recall"], r["precision"], r["fp"]), (1.0, 1.0, 0))
+        # Without the list, the same call is a false positive, as before.
+        self.assertEqual(score_one(label(items=[], match="file"), ["web/src/sdk-user.ts"])["fp"], 1)
 
     def test_dispatch_items_can_be_left_out(self):
         lab = label(items=["app/a.cs:1", "app/b.cs:1"])

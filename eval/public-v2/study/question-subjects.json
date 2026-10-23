@@ -1,0 +1,162 @@
+[
+  {
+    "id": "public2-definition-lookup-001",
+    "candidate_id": "ec0ba0c2b5cef4af51a9c3d5d93d6a5650b8eb503f643e3f0e51ffb1a061cfd0"
+  },
+  {
+    "id": "public2-definition-lookup-002",
+    "candidate_id": "f098bd7cb59fd636b26f37bc46d3236a207fd16f24269d5094f3d529e473fc59"
+  },
+  {
+    "id": "public2-definition-lookup-003",
+    "candidate_id": "5d95142b0f6da83704c11d2248ff63c937c780f27f15d05952d3b039b71797af"
+  },
+  {
+    "id": "public2-definition-lookup-004",
+    "candidate_id": "af001fcde39ce355ec1a122a7864c2a1c4c96f0a60a6f4f4eb730b916d67baaf"
+  },
+  {
+    "id": "public2-definition-lookup-005",
+    "candidate_id": "785ae48a82c047279b1ee5b4b32e156f7fcd3321e102d16abb5094338eaccf1b"
+  },
+  {
+    "id": "public2-definition-lookup-006",
+    "candidate_id": "3e3a56d112dff64171a6b9e82f618c0bab5df0e5630a448b640f6167beda6438"
+  },
+  {
+    "id": "public2-definition-lookup-007",
+    "candidate_id": "ab67ff6d1975c05a0be68c304f20a82a03a493e132a43dad6d375c302782fed2"
+  },
+  {
+    "id": "public2-definition-lookup-008",
+    "candidate_id": "22e8c8e8c6e36165166d2bb31e4f4359cb8d1605839aa8915817656ed4610829"
+  },
+  {
+    "id": "public2-definition-lookup-009",
+    "candidate_id": "60d2692f2150a0fb67b8df06c541dfbcdc44049d8043edf0f4097e84676c4bb4"
+  },
+  {
+    "id": "public2-definition-lookup-010",
+    "candidate_id": "e1227eed28608050c6189d67f7901ba43879b419ce73ec7fcb77fc3ad682c8f4"
+  },
+  {
+    "id": "public2-di-implementations-001",
+    "candidate_id": "9e94ffbc4419692b02e50753ae2dbef184a0a1cdbd80502eb1111edd08c8e466"
+  },
+  {
+    "id": "public2-di-implementations-002",
+    "candidate_id": "0a25b325f218fcee34bc294de43bad87f7832a36fda1ab8c34dba745bbfae6bc"
+  },
+  {
+    "id": "public2-di-implementations-003",
+    "candidate_id": "0ad7c31549337d6235a3e5fd1bfaf43bdcb3b6c2aeb7f8a5c9bdbd62d4dead26"
+  },
+  {
+    "id": "public2-di-implementations-004",
+    "candidate_id": "cdee576a649d6b45a556b5fe401e1b59e810d8fbee274c81541e7937ca7f0865"
+  },
+  {
+    "id": "public2-di-implementations-005",
+    "candidate_id": "154b0c824a06ec6ee22dac5d193f192244e30e5e729d48f44f24d08e2046de27"
+  },
+  {
+    "id": "public2-di-implementations-006",
+    "candidate_id": "e2536e1538ef917e218c3065262cb451c53a57862d637222aff8f22a135708c7"
+  },
+  {
+    "id": "public2-di-implementations-007",
+    "candidate_id": "7225d46017fc6b30a4dd197b8237e43cc1b4b29428a79a3d3aa6f0eb0c39a321"
+  },
+  {
+    "id": "public2-di-implementations-008",
+    "candidate_id": "52a9338f188fbb59c55f8f8541abf071e99200fca93fa34526fc87dc42c53777"
+  },
+  {
+    "id": "public2-di-implementations-009",
+    "candidate_id": "9cd44e3d86d24ad9497a8d4941238c568da462dbe7511142dbeae86f1bf6237b"
+  },
+  {
+    "id": "public2-di-implementations-010",
+    "candidate_id": "7210789260552ba5f7de2a48bb000c7cc773c8e0841b3612ab39a3e636d43218"
+  },
+  {
+    "id": "public2-http-cross-repo-001",
+    "candidate_id": "59369ed23aeed1dbe71f8d3eb2bace5c856fe901cfed226b055a9c64403e3d39"
+  },
+  {
+    "id": "public2-http-cross-repo-002",
+    "candidate_id": "f617d4f4317815aae7116d2c79ff812fcd925a5d2238bf18e942819b3147ba1c"
+  },
+  {
+    "id": "public2-http-cross-repo-003",
+    "candidate_id": "2901c3061cc0f33c2f9c37249bbc09f5bfd27b2069caa02935d4b011352f6c3a"
+  },
+  {
+    "id": "public2-http-cross-repo-004",
+    "candidate_id": "7a35934ff386abb220e6c29b820744a23aa74c9bfa5887f2872a6f00c617a02d"
+  },
+  {
+    "id": "public2-http-cross-repo-005",
+    "candidate_id": "8daaa943f40ab19f8c503a650baab87cf3ba6b4f8dee0ba6166a039fda381722"
+  },
+  {
+    "id": "public2-http-cross-repo-006",
+    "candidate_id": "375d95b6cdb8e6aa1cc86658a700575529c4081073c9a29b97e39228d2026f70"
+  },
+  {
+    "id": "public2-http-cross-repo-007",
+    "candidate_id": "c1e7d1dbe68757b8cc3592609bde91a67affcfc991bc5da70214504f947123a2"
+  },
+  {
+    "id": "public2-http-cross-repo-008",
+    "candidate_id": "c004529908cf3170521ecb89afe2d776432a4b407ac4f2264dfa29dd2cd33185"
+  },
+  {
+    "id": "public2-http-cross-repo-009",
+    "candidate_id": "83b9003cfa74cc1d150ee2199048e8be1c2b5c6e6e4fc8c08573f1201457ee4c"
+  },
+  {
+    "id": "public2-http-cross-repo-010",
+    "candidate_id": "d6a9d58c46df6303dd53a4c337e8193529b39f080100ad72af9c2cf9ddfcc95c"
+  },
+  {
+    "id": "public2-two-hop-impact-001",
+    "candidate_id": "e6768b21204a34c5d0f2d8108993949421278dd3a4522d36ea93303bee1fa372"
+  },
+  {
+    "id": "public2-two-hop-impact-002",
+    "candidate_id": "21624a76d9e50aa943851f29f1027eb4088c6766f8d6195b3dc4294d3355125b"
+  },
+  {
+    "id": "public2-two-hop-impact-003",
+    "candidate_id": "3750ba669852bd7bbbe1b80261abb2bd51b71bd944a3e976ada1c44643db8fcc"
+  },
+  {
+    "id": "public2-two-hop-impact-004",
+    "candidate_id": "9eae4cbc1971c76adb09ccc42a6a2005b1600b3c97ba7902acaf3e7b10392c31"
+  },
+  {
+    "id": "public2-two-hop-impact-005",
+    "candidate_id": "11f693758f5d5421f3c542d0a8d979109f3a6d2383049dfc1ea25a0519ba2910"
+  },
+  {
+    "id": "public2-two-hop-impact-006",
+    "candidate_id": "47fe1eb90a82a666c08b717f5887949f49e92c11a81c71cf6ddefecfd15ec346"
+  },
+  {
+    "id": "public2-two-hop-impact-007",
+    "candidate_id": "566d7391648b796446f139cc1e2f7f411a7845436c184c965128ba5593d66a4b"
+  },
+  {
+    "id": "public2-two-hop-impact-008",
+    "candidate_id": "b4f5c522ab8711b7195b23e13f2d26a73cae11d64e7b6b881da2044e95b3b6f0"
+  },
+  {
+    "id": "public2-two-hop-impact-009",
+    "candidate_id": "0f089bde1ed36d59760148ecff6b710ce7c9f71f825089bada2eb2dd868623b0"
+  },
+  {
+    "id": "public2-two-hop-impact-010",
+    "candidate_id": "f466dc82fc65bf1ea7e77dcac0c2fb7c40d928a49f202bea733777a953f5955b"
+  }
+]

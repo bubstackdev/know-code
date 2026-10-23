@@ -1,0 +1,316 @@
+{
+  "format": 1,
+  "seed": "knowcode-public-v2-source-2026-10-22",
+  "quotas": {
+    "http-cross-repo": {
+      "bitwarden-core": 5,
+      "jellyfin": 5
+    },
+    "di-implementations": {
+      "autofac": 2,
+      "bitwarden-core": 3,
+      "jellyfin": 2,
+      "serilog": 3
+    },
+    "two-hop-impact": {
+      "autofac": 2,
+      "bitwarden-core": 3,
+      "jellyfin": 2,
+      "serilog": 3
+    }
+  },
+  "server_repos": [
+    "bitwarden-server",
+    "jellyfin-server"
+  ],
+  "exclude": [
+    {
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/Vault/Controllers/SecurityTaskController.cs",
+      "key": "GET SecurityTaskController.GetTaskMetricsForOrganization",
+      "line": 91,
+      "source": "public-v1"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/AdminConsole/Controllers/ProvidersController.cs",
+      "key": "GET ProvidersController.Get",
+      "line": 44,
+      "source": "public-v1"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/SecretsManager/Controllers/SecretsController.cs",
+      "key": "GET SecretsController.GetAsync",
+      "line": 121,
+      "source": "public-v1"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/ChannelsController.cs",
+      "key": "GET ChannelsController.GetLatestChannelItems",
+      "line": 166,
+      "source": "public-v1"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/LiveTvController.cs",
+      "key": "GET LiveTvController.GetSeriesTimers",
+      "line": 876,
+      "source": "public-v1"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/LibraryController.cs",
+      "key": "GET LibraryController.GetFile",
+      "line": 114,
+      "source": "public-v1"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "autofac",
+      "file": "src/Autofac/Core/IModule.cs",
+      "key": "IModule",
+      "line": 12,
+      "source": "public-v1"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "autofac",
+      "file": "src/Autofac/Builder/IConcreteActivatorData.cs",
+      "key": "IConcreteActivatorData",
+      "line": 11,
+      "source": "public-v1"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "autofac",
+      "file": "src/Autofac/Core/Resolving/Pipeline/IResolvePipeline.cs",
+      "key": "IResolvePipeline",
+      "line": 9,
+      "source": "public-v1"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "bitwarden-server",
+      "file": "src/Billing/Services/IStripeWebhookHandler.cs",
+      "key": "ICustomerUpdatedHandler",
+      "line": 62,
+      "source": "public-v1"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Platform/PushRegistration/IPushRegistrationService.cs",
+      "key": "IPushRegistrationService",
+      "line": 8,
+      "source": "public-v1"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Controller/Entities/IHasMediaSources.cs",
+      "key": "IHasMediaSources",
+      "line": 12,
+      "source": "public-v1"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "autofac",
+      "file": "src/Autofac/Builder/RegistrationBuilder{TLimit,TActivatorData,TRegistrationStyle}.cs",
+      "key": "SingleInstance",
+      "line": 127,
+      "source": "public-v1"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "autofac",
+      "file": "src/Autofac/RegistrationExtensions.Decorators.cs",
+      "key": "RegisterDecorator",
+      "line": 69,
+      "source": "public-v1"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Billing/Premium/Commands/UpdatePremiumStorageCommand.cs",
+      "key": "BuildPhaseItemsWithStorage",
+      "line": 273,
+      "source": "public-v1"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Models/Business/SubscriptionCreateOptions.cs",
+      "key": "AddPremiumAccessAddon",
+      "line": 87,
+      "source": "public-v1"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinQueryHelperExtensions.cs",
+      "key": "WhereReferencedItem",
+      "line": 106,
+      "source": "public-v1"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Common/Plugins/BasePluginOfT.cs",
+      "key": "UpdateConfiguration",
+      "line": 163,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "autofac",
+      "file": "src/Autofac/Diagnostics/OperationDiagnosticTracerBase.cs",
+      "key": "OperationDiagnosticTracerBase",
+      "line": 19,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "autofac-di",
+      "file": "src/Autofac.Extensions.DependencyInjection/AutofacChildLifetimeScopeServiceProviderFactory.cs",
+      "key": "AutofacChildLifetimeScopeServiceProviderFactory",
+      "line": 11,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "bitwarden-clients",
+      "file": "libs/common/src/models/response/notification.response.ts",
+      "key": "SyncFolderNotification",
+      "line": 102,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "bitwarden-server",
+      "file": "src/Core/AdminConsole/OrganizationFeatures/OrganizationUsers/AutoConfirmUser/Errors.cs",
+      "key": "OrganizationUserIdIsInvalid",
+      "line": 9,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Model/Querying/NextUpQuery.cs",
+      "key": "NextUpQuery",
+      "line": 9,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "jellyfin-web",
+      "file": "src/components/htmlMediaHelper.js",
+      "key": "isValidDuration",
+      "line": 121,
+      "source": "public-v1"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "autofac",
+      "file": "src/Autofac/Core/ReflectionCacheSet.cs",
+      "key": "CacheFactory",
+      "line": 232,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Platform/PushRegistration/PushRegistrationData.cs",
+      "key": "WebPushRegistrationData",
+      "line": 3,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "definition-lookup",
+      "repo": "jellyfin-web",
+      "file": "src/utils/dashboard.js",
+      "key": "getCurrentUser",
+      "line": 21,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "autofac",
+      "file": "src/Autofac/IComponentContext.cs",
+      "key": "IComponentContext",
+      "line": 14,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "bitwarden-server",
+      "file": "src/Core/KeyManagement/Repositories/IUserAsymmetricKeysRepository.cs",
+      "key": "IUserAsymmetricKeysRepository",
+      "line": 7,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "di-implementations",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Controller/SyncPlay/IGroupState.cs",
+      "key": "IGroupState",
+      "line": 13,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/Vault/Controllers/CiphersController.cs",
+      "key": "PUT CiphersController.PutCollectionsAdmin",
+      "line": 994,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/SyncPlayController.cs",
+      "key": "POST SyncPlayController.SyncPlayPreviousItem",
+      "line": 379,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/UserLibraryController.cs",
+      "key": "GET UserLibraryController.GetItem",
+      "line": 84,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "autofac",
+      "file": "src/Autofac/Diagnostics/DiagnosticTracerBase.cs",
+      "key": "OnMiddlewareStart",
+      "line": 268,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Infrastructure.EntityFramework/Dirt/Repositories/Queries/EventReadPageByProviderIdQuery.cs",
+      "key": "Run",
+      "line": 24,
+      "source": "exploratory-ab"
+    },
+    {
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Server/Filters/FileRequestFilter.cs",
+      "key": "Apply",
+      "line": 12,
+      "source": "exploratory-ab"
+    }
+  ]
+}
