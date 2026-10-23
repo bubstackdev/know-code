@@ -683,8 +683,9 @@ rest of the hit's statement follows it, one per line (`  41- text`): the chained
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
 names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` or `**/shop/src/**` searches that repo only; an absolute
 path, the repo it is in). A filter matching no file is refused, saying so (`paths matched 0 files (…)`), never answered as
-a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit when there
-are at most 60 and they all fit `max_chars`. A first page cut short names the other files with a match in
+a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit in code
+(definitions, declarations, code lines) when there are at most 60 hits and they fit `max_chars`; hits in tests,
+comments and prose past the page stay a page away (all of them when they are all there is). A first page cut short names the other files with a match in
 `other_files`, by directory, with a count when more than one (`src/core/: a.cs 2, b.cs`; up to 60 files, past that
 `files` counts them and `files_only` lists them); with every file named, the answer is `complete` and the other lines
 are a `more` entry with the cursor. Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at

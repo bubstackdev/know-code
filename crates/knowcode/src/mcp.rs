@@ -2070,7 +2070,7 @@ impl KnowcodeServer {
             args.extend(["-g".into(), g]);
         }
         args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
-        // A first page at the default limit shows every hit when they all fit the answer (at most 60).
+        // A first page at the default limit shows every hit in code when they fit the answer (at most 60 hits).
         if p.limit.is_none() && p.offset.unwrap_or(0) == 0 && !p.files_only {
             args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS).to_string()]);
         }

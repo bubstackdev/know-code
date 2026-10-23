@@ -6756,8 +6756,9 @@ pub struct SearchParams {
     pub context: usize,
     /// One item per file instead of per line.
     pub files_only: bool,
-    /// A first page shows every hit, past `limit`, when there are at most [`OTHER_FILES`] and they fit this many
-    /// characters in the MCP server's compact form: the whole set of lines, with nothing to page or search for again.
+    /// A first page shows every hit in code, past `limit`, when there are at most [`OTHER_FILES`] hits and they fit this
+    /// many characters in the MCP server's compact form: the lines an agent would page or search for again (see
+    /// [`code_hits`]).
     pub fit: Option<usize>,
 }
 
@@ -6862,6 +6863,17 @@ fn other_files(files: &[FileSummary], page: &[search::PageHit], names: &[String]
         dirs[i].1.push(if f.matches > 1 { format!("{base} {}", f.matches) } else { base.to_string() });
     }
     Some(dirs.into_iter().map(|(d, l)| if d.is_empty() { l.join(", ") } else { format!("{d}: {}", l.join(", ")) }).collect())
+}
+
+/// How many of the ranked `hits` a first page shown whole shows (see [`SearchParams::fit`]): through the last hit in code
+/// (a definition, a declaration, a line of code); hits in tests, comments and prose rank after them and stay a page
+/// away. In the public study's sessions, agents used none of those past the first 20 rows, and some of the code hits
+/// past them. All of them when the search found nothing else (a search of tests).
+fn code_hits(hits: &[search::Hit]) -> usize {
+    match hits.iter().take_while(|h| matches!(h.kind, "def" | "decl" | "code")).count() {
+        0 => hits.len(),
+        n => n,
+    }
 }
 
 /// Whether search hits said as text rows fit `chars` characters with room for the rest of the answer.
@@ -6975,18 +6987,22 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     let multi = roots.len() > 1;
     let mut page = Vec::new();
     let mut other = None;
+    // Whether the hits past the page are all in tests, comments or prose.
+    let mut past_code = false;
     let (count, mut list): (usize, Vec<Value>) = if p.files_only {
         files = files.into_iter().skip(p.offset).take(p.limit).collect();
         (total_files, files.iter().map(|f| tag_repo_at(f, &names[f.repo], multi)).collect())
     } else {
         let end = (p.offset + p.limit).min(hits.len());
-        // Every hit, when there are few enough and they fit (see `fit`); else the page.
-        let whole = p.fit.is_some() && p.offset == 0 && end < hits.len() && hits.len() <= OTHER_FILES;
-        page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..if whole { hits.len() } else { end }], p.context);
+        // Every hit through the last in code, when there are few enough and they fit (see `fit`); else the page.
+        let through = code_hits(&hits);
+        let whole = p.fit.is_some() && p.offset == 0 && end < through && hits.len() <= OTHER_FILES;
+        page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..if whole { through } else { end }], p.context);
         search::add_params(&repos.iter().map(|o| &o.store).collect::<Vec<_>>(), &mut page)?;
         if whole && !p.fit.is_some_and(|chars| hits_fit(&page, &names, multi, chars)) {
             page.truncate(end);
         }
+        past_code = p.offset + page.len() >= through && through < hits.len();
         if p.offset == 0 {
             other = other_files(&files, &page, &names, multi);
         }
@@ -7011,7 +7027,8 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
     // their lines a page away.
     if next_offset.is_some() && other.is_some() && !scan.capped {
         let named = if other.as_ref().is_some_and(|o| !o.is_empty()) { "on this page or in other_files" } else { "on this page" };
-        env["rest"] = json!(format!("every file with a match is named {named}; the rest are their other matching lines"));
+        let lines = if past_code { "lines in tests, comments and prose" } else { "other matching lines" };
+        env["rest"] = json!(format!("every file with a match is named {named}; the rest are their {lines}"));
     }
     env["by_kind"] = json!(by_kind);
     if scan.capped {
@@ -11450,7 +11467,7 @@ public class CatalogService(HttpClient httpClient)
 
     /// A page of hits cut short names every other file with a match, by directory, with its count when more than one:
     /// the whole set of files without paging or searching again, so the answer is complete and the other lines are
-    /// `more`. A later page doesn't repeat them. A first page asked to fit a budget shows every hit when they fit.
+    /// `more`. A later page doesn't repeat them. A first page asked to fit a budget shows every hit in code when they fit.
     #[test]
     fn a_search_cut_short_names_the_files_its_page_leaves_out() {
         let cache = test_cache();
@@ -11488,6 +11505,46 @@ public class CatalogService(HttpClient httpClient)
         assert_eq!((all["items"].as_array().map(Vec::len), all["complete"].clone(), all.get("cursor")), (Some(4), json!(true), None), "{all}");
         assert_eq!(fitted(1, 0, Some(700))["items"].as_array().map(Vec::len), Some(1));
         assert_eq!(fitted(1, 1, Some(8_000))["items"].as_array().map(Vec::len), Some(1));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A first page shown whole stops after the last hit in code: hits in tests and comments stay a page away, said in
+    /// `rest`; a search finding nothing else shows them all.
+    #[test]
+    fn a_whole_first_page_stops_after_the_code() {
+        let cache = test_cache();
+        let base = cache.dir("search-code-first");
+        let web = repo(
+            &base,
+            "web",
+            &[
+                ("src/a.ts", "export const retryLimit = 3;\n"),
+                ("src/b.ts", "f(retryLimit);\n// retryLimit is read here\ng(retryLimit);\n"),
+                ("test/b.test.ts", "expect(retryLimit).toBe(3);\n"),
+                ("test/c.test.ts", "it('uses retryLimit', () => expect(1));\n"),
+            ],
+        );
+        let scope = Scope { repos: vec![web], no_sync: false };
+        let page = |pattern: &str| {
+            let opts = search::SearchOptions {
+                pattern: pattern.into(),
+                regex: false,
+                case: search::Case::Sensitive,
+                word: false,
+                langs: Vec::new(),
+                globs: Vec::new(),
+                max_lines: 1000,
+            };
+            search(&SearchParams { opts, limit: 1, offset: 0, context: 0, files_only: false, fit: Some(8_000) }, &scope).unwrap().env
+        };
+        let env = page("retryLimit");
+        let kinds: Vec<&str> = env["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["def", "code", "code"], "{env}");
+        assert_eq!(env["complete"], json!(true), "{env}");
+        assert!(env["rest"].as_str().unwrap().ends_with("the rest are their lines in tests, comments and prose"), "{env}");
+        // Only tests match: all of them.
+        let tests = page("expect(");
+        assert_eq!(tests["items"].as_array().map(Vec::len), Some(2), "{tests}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

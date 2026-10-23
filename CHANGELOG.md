@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `kc_search`'s first page shown whole stops after the last hit in code. Since 0.2.0 a first page at the default limit
+  showed every hit when there were at most 60 and they fit; hits in tests, comments and prose past the first 20 now
+  stay a page away, and `rest` says that is what they are (all of them still show when a search finds nothing else).
+  In the public study's sessions agents used 47 rows past the first 20 of such answers, every one a line of code
+  outside tests; none of the 55 test or 30 comment rows there. On the 497 distinct `kc_search` calls of
+  the public-v1 runs and a held-out A/B run, answers are 1.0% smaller (901,956 to 893,090 bytes): 13.8% of what
+  showing every hit added (64,455 bytes over a 20-row page), with every row agents used still shown.
+
 - A generated API client's operation links only to actions in the servers its repo is known to call: the repo itself,
   a repo it depends on, the one repo serving another of its requests or a host its settings name, or the one repo a
   tagged operation of its links to. Before, an untagged operation (`this.apiClient.getUser()`) linked to a same-named
