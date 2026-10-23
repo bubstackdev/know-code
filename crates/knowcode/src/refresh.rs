@@ -638,9 +638,9 @@ mod tests {
         assert!(!entries.iter().any(|i| i.detail.starts_with("fresh: ") || i.detail.starts_with("big: ")), "one entry, not one per repo: {env}");
         assert_eq!(env["complete"], false);
 
-        // `status` lists them as queued.
+        // `status` lists them as queued, or indexed when the query's own worker has taken one since.
         let status = ops::status(&Scope { repos: vec![new.clone(), big.clone()], no_sync: false }).unwrap().data;
-        assert!(status.iter().all(|v| v["background"] == "queued"), "{status:?}");
+        assert!(status.iter().all(|v| v["background"] == "queued" || v["complete"] == true), "{status:?}");
 
         // The background indexes them (the query worker may have taken some first), never the blocked one.
         let mut tried = HashMap::new();
