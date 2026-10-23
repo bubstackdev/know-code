@@ -647,8 +647,13 @@ pub fn generation_age(old: &str, now: &str) -> Option<String> {
     })
 }
 
-/// The `stale` entry for derived data (`what`: areas, a ranking) computed from index generation `old`, now `now`.
+/// The `stale` entry for derived data (`what`: areas, a ranking) computed from index generation `old`, now `now`. A
+/// ranking still being built in the background ([`crate::rank::PENDING`]) is a `deadline` entry instead: none was used.
 pub fn stale_derived(what: &str, old: &str, now: &str) -> Incomplete {
+    if old == crate::rank::PENDING {
+        return Incomplete::new(Reason::Deadline, format!("{what}: being computed in the background, not ready within this call's budget; in index order here"))
+            .with_hint("ask again shortly for the ranked order");
+    }
     let resolver = |g: &str| g.rsplit('|').next().map(str::to_string);
     let age = match generation_age(old, now) {
         Some(a) if resolver(old) == resolver(now) => format!("the index as it was {a} earlier"),

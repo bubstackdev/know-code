@@ -3935,19 +3935,39 @@ fn scoped_out_type(
 }
 
 pub(crate) fn resolve_all(conn: &Connection, hits: &mut [RefHit]) -> Result<()> {
-    resolve_hits(conn, hits, true)
+    resolve_hits(conn, hits, true, &mut Resolution::default())
 }
 
 /// [`resolve_all`] by the heuristics alone, ignoring any SCIP index: for comparing the two.
 pub(crate) fn resolve_heuristic(conn: &Connection, hits: &mut [RefHit]) -> Result<()> {
-    resolve_hits(conn, hits, false)
+    resolve_hits(conn, hits, false, &mut Resolution::default())
 }
 
-fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool) -> Result<()> {
-    let mut precise = if use_scip { Some(crate::scip::Precise::new(conn)?) } else { None };
+/// What resolution reads about a repo whatever the name: files' languages and the C# projects they reach, what C#
+/// files see (their namespaces, `using`s and projects), TypeScript and Python imports and where their modules are,
+/// which files a SCIP index covers. Each is a function of the index alone, so one `Resolution` serves every call of
+/// [`refs_in`] on one connection at one index state: the reference graph resolves every name in turn, and read each of
+/// these again per name (the repo's C# projects and its whole file list most of all).
+#[derive(Default)]
+pub struct Resolution {
+    scope: crate::scope::Scope,
+    vis: crate::csharp::Visibility,
+    modules: crate::ts::Modules,
+    py_modules: crate::py::Modules,
+    precise: Option<crate::scip::Precise>,
+}
+
+fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: &mut Resolution) -> Result<()> {
+    let mut precise = match (use_scip, shared.precise.take()) {
+        (false, _) => None,
+        (true, Some(p)) => Some(p),
+        (true, None) => Some(crate::scip::Precise::new(conn)?),
+    };
     let mut defs: HashMap<String, Vec<Def>> = HashMap::new();
     let mut targets: HashMap<i64, Target> = HashMap::new();
     let mut oracle = TypeOracle::new(conn);
+    // Kept for the next call; an error leaves `shared` without them, to be read again.
+    oracle.vis = std::mem::take(&mut shared.vis);
     let mut self_chains: HashMap<Option<String>, Vec<String>> = HashMap::new();
     // Per service, member, argument count and registration: the implementation's member it is bound to.
     type BindingKey = (String, String, Option<u32>, Option<String>);
@@ -3958,15 +3978,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool) -> Resul
     // TypeScript: per service and directory, the Angular provider in scope.
     let mut provided: HashMap<(String, String), Vec<crate::di::Registration>> = HashMap::new();
     // Per scope key and name: the definitions code there can see, and each one's position among them, by id.
-    let mut scope = crate::scope::Scope::default();
+    let scope = &mut shared.scope;
     let mut visible: HashMap<(String, String), Vec<Def>> = HashMap::new();
     let mut positions: HashMap<(String, String), HashMap<i64, usize>> = HashMap::new();
     let mut cfml: Option<crate::cfml::Files> = None;
     let mut sql = crate::sql::Resolver::default();
     let mut ansible = crate::ansible::Resolver::default();
     let mut terraform = crate::terraform::Resolver::default();
-    let mut modules = crate::ts::Modules::default();
-    let mut py_modules = crate::py::Modules::default();
+    let modules = &mut shared.modules;
+    let py_modules = &mut shared.py_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
     for hit in hits.iter_mut() {
@@ -4027,15 +4047,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool) -> Resul
         // In TypeScript an imported name comes from its module, and a bare one from the file itself; in Python a name
         // `from m import`ed, or a member of an `import`ed module, comes from that module.
         let scoped = if ts {
-            ts_scoped(conn, hit, &mut modules, &mut defs)?
+            ts_scoped(conn, hit, modules, &mut defs)?
         } else if hit.file.ends_with(".py") {
-            py_scoped(conn, hit, &mut py_modules, &mut defs)?
+            py_scoped(conn, hit, py_modules, &mut defs)?
         } else {
             None
         };
         let seen_key = (scope.key(conn, &hit.file)?, hit.name.clone());
         if !visible.contains_key(&seen_key) {
-            let v = in_scope(conn, &mut scope, &hit.file, &defs[&hit.name])?;
+            let v = in_scope(conn, scope, &hit.file, &defs[&hit.name])?;
             visible.insert(seen_key.clone(), v);
         }
         let named = &visible[&seen_key];
@@ -4062,7 +4082,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool) -> Resul
                 receiver(hit, &mut oracle)?
             };
             if ts {
-                recv = ts_receiver(conn, hit, recv, &mut oracle, &mut modules)?;
+                recv = ts_receiver(conn, hit, recv, &mut oracle, modules)?;
             }
             hit.receiver_type = match &recv {
                 Receiver::Known(c) | Receiver::Foreign(c) => c.first().cloned(),
@@ -4164,7 +4184,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool) -> Resul
         if hit.basis == Some(GUESSED_MODULE) {
             evidence = evidence.map(|_| Evidence::new(Mechanism::FilenameGuess));
         }
-        if cs && confidence == "exact" && assumed(conn, &mut scope, &hit.file, named, &ids)? {
+        if cs && confidence == "exact" && assumed(conn, scope, &hit.file, named, &ids)? {
             confidence = "unique_name";
             // The binding's own evidence stands; the project files couldn't confirm the caller sees the target.
             evidence = evidence.map(|e| e.assuming(Assumption::ProjectUnverified));
@@ -4315,6 +4335,10 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool) -> Resul
                 hit.via_di_any = members;
             }
         }
+    }
+    shared.vis = oracle.vis;
+    if use_scip {
+        shared.precise = precise;
     }
     Ok(())
 }
@@ -4654,13 +4678,76 @@ pub fn refs_with(
     limit: usize,
     deps: &[Dependency],
 ) -> Result<(Vec<RefHit>, RefSummary)> {
-    refs_filtered(conn, query, kinds, limit, deps, false)
+    refs_filtered(conn, query, kinds, limit, deps, false, &mut Resolution::default())
+}
+
+/// Every reference to a name, resolved as [`refs`] resolves them, with what resolution reads about the repo whatever
+/// the name kept in `shared` for the next name (see [`Resolution`]).
+pub fn refs_in(conn: &Connection, query: &str, shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, &[], usize::MAX, &[], false, shared)?.0)
 }
 
 /// [`refs_with`], keeping only references in files that import one of `deps`' modules: the only ones that can
 /// resolve into `deps`. The others are never resolved, which is most of the work when the name is common.
 pub fn refs_importing(conn: &Connection, query: &str, kinds: &[&str], deps: &[Dependency]) -> Result<Vec<RefHit>> {
-    Ok(refs_filtered(conn, query, kinds, usize::MAX, deps, true)?.0)
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, deps, true, &mut Resolution::default())?.0)
+}
+
+/// What a references query asks for: the container a dotted query names (`Type.member`), and the name. A name with a
+/// dot in it (an Ansible file name, `deploy.yml`) is the whole query when references use it whole.
+fn ref_query<'q>(conn: &Connection, query: &'q str) -> Result<(Option<&'q str>, &'q str)> {
+    let (container, name) = split_dotted(query.trim());
+    if container.is_some() {
+        let whole: bool = conn
+            .prepare_cached("SELECT EXISTS(SELECT 1 FROM refs WHERE name = ?1)")?
+            .query_row([query.trim()], |r| r.get(0))?;
+        if whole {
+            return Ok((None, query.trim()));
+        }
+    }
+    Ok((container, name))
+}
+
+/// The references to a name (`?1`), and in CFML and SQL files to its lower-case spelling (`?2`): references there are
+/// stored lower-cased, as those languages match names. In file and line order when `ordered`.
+fn refs_named_sql(ordered: bool) -> String {
+    format!(
+        "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
+         WHERE r.name = ?1 OR (?2 <> ?1 AND r.name = ?2 AND f.lang IN ('cfml', 'sql')){}",
+        if ordered { " ORDER BY f.path, r.line" } else { "" }
+    )
+}
+
+/// [`refs_in`], handing the references to `each` at most `chunk` at a time as they are resolved, in no particular order
+/// (the factory constructions last), so that a name with a great many references (a fluent API's `Property`, a
+/// hundred thousand times over) never holds them all, nor sorts them. Each reference resolves on its own (the caches
+/// a resolution keeps only spare reading again), so they come out resolved as [`refs_in`] resolves them.
+pub fn refs_in_chunks(
+    conn: &Connection,
+    query: &str,
+    shared: &mut Resolution,
+    chunk: usize,
+    mut each: impl FnMut(Vec<RefHit>) -> Result<()>,
+) -> Result<()> {
+    let (container, name) = ref_query(conn, query)?;
+    if container.is_some() {
+        return each(refs_in(conn, query, shared)?);
+    }
+    let mut stmt = conn.prepare_cached(&refs_named_sql(false))?;
+    let lower = name.to_lowercase();
+    let mut rows = stmt.query_map([name, &lower], ref_row)?;
+    loop {
+        let mut hits: Vec<RefHit> = rows.by_ref().take(chunk.max(1)).collect::<rusqlite::Result<_>>()?;
+        if hits.is_empty() {
+            break;
+        }
+        resolve_hits(conn, &mut hits, true, shared)?;
+        each(hits)?;
+    }
+    if let Some(more) = factory_constructions(conn)?.get(name) {
+        each(more.clone())?;
+    }
+    Ok(())
 }
 
 fn refs_filtered(
@@ -4670,23 +4757,10 @@ fn refs_filtered(
     limit: usize,
     deps: &[Dependency],
     importing_deps: bool,
+    shared: &mut Resolution,
 ) -> Result<(Vec<RefHit>, RefSummary)> {
-    let (mut container, mut name) = split_dotted(query.trim());
-    // A name with a dot in it (an Ansible file name, `deploy.yml`) is the whole query when references use it whole.
-    if container.is_some() {
-        let whole: bool = conn
-            .prepare_cached("SELECT EXISTS(SELECT 1 FROM refs WHERE name = ?1)")?
-            .query_row([query.trim()], |r| r.get(0))?;
-        if whole {
-            (container, name) = (None, query.trim());
-        }
-    }
-    // References in SQL files are stored lower-cased, as SQL matches names.
-    let sql = format!(
-        "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
-         WHERE r.name = ?1 OR (?2 <> ?1 AND r.name = ?2 AND f.lang IN ('cfml', 'sql')) ORDER BY f.path, r.line"
-    );
-    let mut stmt = conn.prepare_cached(&sql)?;
+    let (container, name) = ref_query(conn, query)?;
+    let mut stmt = conn.prepare_cached(&refs_named_sql(true))?;
     // CFML references are stored lower case: CFML ignores case.
     let mut hits: Vec<RefHit> = stmt
         .query_map([name, &name.to_lowercase()], ref_row)?
@@ -4710,7 +4784,7 @@ fn refs_filtered(
         }
         hits = keep;
     }
-    resolve_all(conn, &mut hits)?;
+    resolve_hits(conn, &mut hits, true, shared)?;
     resolve_external(conn, &mut hits, deps)?;
     if kinds.is_empty() || kinds.contains(&"instantiate") {
         add_factory_constructions(conn, name, &mut hits)?;
@@ -4752,7 +4826,7 @@ fn add_factory_constructions(conn: &Connection, name: &str, hits: &mut Vec<RefHi
     Ok(())
 }
 
-fn factory_constructions(conn: &Connection) -> Result<std::sync::Arc<HashMap<String, Vec<RefHit>>>> {
+pub(crate) fn factory_constructions(conn: &Connection) -> Result<std::sync::Arc<HashMap<String, Vec<RefHit>>>> {
     type Cache = HashMap<(String, String), std::sync::Arc<HashMap<String, Vec<RefHit>>>>;
     static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
     let generation: String =

@@ -176,11 +176,112 @@ fn index_in_background(root: &Path, threads: usize) -> Outcome {
         // Context intentionally reuses old derived caches for latency. Bring existing caches up to
         // date here so repeated queries eventually become complete without a manual overview call.
         kc_index::refresh_derived(root, &store)?;
+        // Those never computed (a repo new to the index) follow on a thread of their own: a query waiting for this
+        // index doesn't wait for them too, nor does the next repo's indexing.
+        if kc_index::derived_missing(&store)? {
+            Deriver::shared().queue(root);
+        }
         Ok(report)
     });
     match result {
         Ok(r) => r.map_err(|e| format!("{e:#}")),
         Err(_) => Err("background indexer panicked".into()),
+    }
+}
+
+/// Repos whose derived data (the file ranking, the areas) was never computed, built one at a time on a thread of its
+/// own, at background priority, with as many threads as the background may use (see
+/// [`kc_index::machine::rank_threads`]): one repo's reference graph at a time bounds the memory it takes. Queued when
+/// the server first indexes a repo (a new one under a root, or one a query asks about), and when a query finds a
+/// repo's never computed, so the first `overview`, `hotspots` or `areas` call finds it built. A query needing the graph
+/// while it is built waits for this build rather than building it again (see `kc_store::Store::ref_graph`): its answer
+/// is the same as ever. One only ordering a long list by it waits until its freshness deadline, then answers in index
+/// order and says so. (Derived data behind the index is the indexing worker's to bring up to date, as before.)
+struct Deriver {
+    state: Mutex<Derivations>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Derivations {
+    queue: std::collections::VecDeque<PathBuf>,
+    running: Option<PathBuf>,
+    /// When each repo whose build failed did: not tried again within [`NEW_REPO_RETRY`].
+    failed: HashMap<PathBuf, Instant>,
+}
+
+impl Deriver {
+    fn shared() -> &'static Self {
+        static DERIVER: OnceLock<Deriver> = OnceLock::new();
+        DERIVER.get_or_init(|| {
+            std::thread::Builder::new().name("knowcode-derive".into()).spawn(|| Deriver::shared().run()).expect("starting background ranking");
+            Deriver { state: Mutex::default(), changed: Condvar::new() }
+        })
+    }
+
+    fn run(&self) {
+        background_priority();
+        loop {
+            let root = {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.running = None;
+                self.changed.notify_all();
+                loop {
+                    if let Some(root) = state.queue.pop_front() {
+                        state.running = Some(root.clone());
+                        break root;
+                    }
+                    state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
+                }
+            };
+            if let Err(e) = derive_in_background(&root) {
+                eprintln!("knowcode: file ranking and areas of {}: {e}", root.display());
+                self.state.lock().unwrap_or_else(|e| e.into_inner()).failed.insert(root, Instant::now());
+            }
+        }
+    }
+
+    /// Queues `root`, unless it is queued or being built already, or its last build failed recently.
+    fn queue(&self, root: &Path) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.queue.iter().any(|r| r == root)
+            || state.running.as_deref() == Some(root)
+            || state.failed.get(root).is_some_and(|at| at.elapsed() < NEW_REPO_RETRY)
+        {
+            return;
+        }
+        state.queue.push_back(root.to_path_buf());
+        self.changed.notify_all();
+    }
+
+    /// Waits until nothing is queued or being built, up to `timeout`. Whether nothing is.
+    #[cfg(test)]
+    fn wait_idle(&self, timeout: Duration) -> bool {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let (state, _) = self.changed.wait_timeout_while(state, timeout, |s| !s.queue.is_empty() || s.running.is_some()).unwrap_or_else(|e| e.into_inner());
+        state.queue.is_empty() && state.running.is_none()
+    }
+}
+
+/// Brings `root`'s derived data up to its index (see [`kc_index::refresh_derived`]) as the background does.
+fn derive_in_background(root: &Path) -> std::result::Result<(), String> {
+    let result = std::panic::catch_unwind(|| -> Result<()> {
+        if !kc_index::db_path(root)?.exists() {
+            return Ok(());
+        }
+        let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
+        let store = kc_index::open(root)?;
+        store.begin_snapshot()?;
+        if !kc_index::derived_missing(&store)? && !kc_index::derived_stale(root, &store)? {
+            return Ok(());
+        }
+        use kc_index::machine::{Mode, plan, rank_threads, sniff};
+        let workers = kc_store::rank::Workers { threads: rank_threads(plan(&sniff(), Mode::Background, 1, 0)), init: Some(background_priority) };
+        kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store))
+    });
+    match result {
+        Ok(r) => r.map_err(|e| format!("{e:#}")),
+        Err(_) => Err("panicked".into()),
     }
 }
 
@@ -334,9 +435,12 @@ pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
         // The index matches the working tree. Derived data an earlier query computed may be from an earlier index
         // (after a CLI command synced it): the worker brings it up to date, but the index answers now, and an answer
         // drawing on the older data says so itself (`stale_derived`). Waiting for it, the first call of a session
-        // ran out of its budget and called a current index "queued or running".
+        // ran out of its budget and called a current index "queued or running". Derived data never computed (an
+        // index a query or an older build made) is built in the background.
         if kc_index::derived_stale(root, &store)? {
             Worker::shared().schedule(root)?;
+        } else if kc_index::derived_missing(&store)? {
+            Deriver::shared().queue(root);
         }
         // The worker may have committed after open() pinned its snapshot, before the stat check.
         store.end_snapshot()?;
@@ -446,7 +550,7 @@ mod tests {
         assert_eq!(out.env["complete"], true, "{}", out.env);
         assert_eq!(out.env["provenance"][0]["fresh"], true);
         assert!(out.env["freshness"]["status"].is_null(), "{}", out.env);
-        // The worker brings the derived data up to date once the writer is gone.
+        // The background brings the derived data up to date once the writer is gone, after the worker's index.
         let job = Worker::shared().schedule(&root).unwrap();
         drop(writer);
         let done = job.done.lock().unwrap();
@@ -454,6 +558,7 @@ mod tests {
         assert!(!timeout.timed_out());
         assert!(done.as_ref().unwrap().is_ok(), "{:?}", *done);
         drop(done);
+        assert!(Deriver::shared().wait_idle(Duration::from_secs(60)));
         assert!(!kc_index::derived_stale(&root, &kc_index::open(&root).unwrap()).unwrap());
 
         // What `index` does after its sync: nothing derived is left behind the index.
@@ -549,6 +654,13 @@ mod tests {
         }
         assert!(kc_index::unindexed_roots().unwrap().is_empty());
         assert!(!kc_index::db_path(&locked).unwrap().exists());
+        // Their file ranking and areas follow in the background: the first overview doesn't compute them.
+        assert!(Deriver::shared().wait_idle(Duration::from_secs(60)));
+        for root in [&new, &big] {
+            let store = kc_index::open(root).unwrap();
+            assert!(!kc_index::derived_missing(&store).unwrap() && !kc_index::derived_stale(root, &store).unwrap(), "{}", root.display());
+            assert!(store.derived_gen("areas").unwrap().is_some(), "{}", root.display());
+        }
         // What the answer queued is done before the next test takes its turn with the worker.
         let deadline = Instant::now() + Duration::from_secs(30);
         while Worker::shared().queued.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {

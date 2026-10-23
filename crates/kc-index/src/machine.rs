@@ -63,6 +63,23 @@ pub const REPO_MEMORY: u64 = 512 << 20;
 /// repos (measured with `index --phases`).
 pub const MAX_THREADS_PER_REPO: usize = 8;
 
+/// Memory one more thread building a repo's reference graph (see `kc_store::rank::ref_graph`) takes at its peak: its
+/// own connection and page cache, the references it is resolving and what resolution keeps, its part of the graph.
+/// Measured at 13 to 42 MiB per thread on public repos of 2,000 to 8,000 files (peak resident size at one, two and
+/// four threads); this leaves room for bigger ones.
+pub const RANK_THREAD_MEMORY: u64 = 128 << 20;
+
+/// Threads building one reference graph past this cost more than they bring: they share SQLite's page cache, whose
+/// lock they wait on, and each reads the repo's imports and project files again. Measured on a loaded machine, two
+/// threads took 5 to 25% more instructions than one, four 37 to 47% more; to be measured again on a quiet one.
+pub const MAX_RANK_THREADS: usize = 2;
+
+/// How many threads build one repo's reference graph under `plan`: its threads per repo, up to [`MAX_RANK_THREADS`],
+/// within the memory a repo is planned for ([`REPO_MEMORY`]).
+pub fn rank_threads(plan: Plan) -> usize {
+    plan.threads.min(MAX_RANK_THREADS).min((REPO_MEMORY / RANK_THREAD_MEMORY) as usize).max(1)
+}
+
 /// Below this load per core (other than indexing's own threads), the machine counts as idle.
 const IDLE_LOAD: f64 = 0.25;
 
@@ -295,6 +312,16 @@ mod tests {
     fn nothing_pending_starts_nothing() {
         assert_eq!(plan(&machine(), Mode::Explicit, 0, 0), Plan { repos: 0, threads: 0 });
         assert_eq!(plan(&machine(), Mode::Background, 0, 0), Plan { repos: 0, threads: 0 });
+    }
+
+    #[test]
+    fn a_reference_graph_takes_the_repos_threads_within_its_memory() {
+        let m = machine();
+        assert_eq!(rank_threads(plan(&m, Mode::Explicit, 1, 0)), MAX_RANK_THREADS);
+        assert_eq!(rank_threads(plan(&m, Mode::Explicit, 100, 0)), 1);
+        assert_eq!(rank_threads(plan(&m, Mode::Background, 1, 0)), 1);
+        assert_eq!(rank_threads(Plan { repos: 0, threads: 0 }), 1);
+        assert!(MAX_RANK_THREADS as u64 * RANK_THREAD_MEMORY <= REPO_MEMORY);
     }
 
     #[test]

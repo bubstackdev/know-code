@@ -944,17 +944,33 @@ pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
     Ok(areas::needs_refresh(root, store)? || store.derived_gen(&rank_key)?.is_some_and(|g| g != generation))
 }
 
-/// Brings stale derived data (see [`derived_stale`]) up to date, after a sync: `index` does, and the background
-/// indexer, so the next query finds it current.
+/// Whether the file ranking (the reference graph) was never computed for `store`'s index.
+pub fn derived_missing(store: &Store) -> Result<bool> {
+    Ok(store.derived_gen(&format!("rank_graph:{}", kc_store::rank::RANK_VERSION))?.is_none())
+}
+
+/// Brings stale derived data (see [`derived_stale`]) up to date, after a sync: the background indexer does, so the
+/// next query finds it current.
 pub fn refresh_derived(root: &Path, store: &Store) -> Result<()> {
-    if areas::needs_refresh(root, store)? {
-        areas::areas(root, store)?;
-    }
+    derive(root, store, false)
+}
+
+/// [`refresh_derived`], and computes the derived data when it is missing (see [`derived_missing`]): the file ranking,
+/// then the areas (which cluster over the same reference graph). `index` does, and a server in the background for the
+/// repos it indexes, so the first `overview`, `hotspots` or `areas` call finds them rather than computing them.
+pub fn build_derived(root: &Path, store: &Store) -> Result<()> {
+    derive(root, store, true)
+}
+
+fn derive(root: &Path, store: &Store, missing: bool) -> Result<()> {
     let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
     let generation = store.generation()?;
-    if store.derived_gen(&rank_key)?.is_some_and(|g| g != generation) {
+    if store.derived_gen(&rank_key)?.map_or(missing, |g| g != generation) {
         store.ref_graph()?;
         store.file_rank_at(&[], kc_store::rank::Flow::Uses, true)?;
+    }
+    if (missing && store.derived_gen("areas")?.is_none()) || areas::needs_refresh(root, store)? {
+        areas::areas(root, store)?;
     }
     Ok(())
 }

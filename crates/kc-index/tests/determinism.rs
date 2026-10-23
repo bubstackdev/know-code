@@ -251,3 +251,94 @@ fn nested_delegates_and_aliases_apply_only_where_the_language_says() {
         assert!(label.contains(" exact [Thing.label@Sources/App/Item.swift:5]"), "{label}");
     }
 }
+
+/// The reference graph as it was built before names shared what resolution reads about the repo, before threads and
+/// chunks: every name's references resolved on their own (`query::refs`), one name after another.
+fn ref_graph_one_name_at_a_time(store: &Store) -> kc_store::rank::RefGraph {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    let conn = store.conn();
+    let files: Vec<String> = conn
+        .prepare("SELECT path FROM files WHERE lang NOT IN ('swiftpm', 'xcodegen', 'cargo', 'hostconfig') ORDER BY path")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    let common: HashSet<String> = conn
+        .prepare("SELECT lower(name) FROM symbols GROUP BY name HAVING COUNT(DISTINCT file_id) > 5")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    let names: Vec<String> = conn.prepare("SELECT DISTINCT name FROM refs").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+    let mut target: HashMap<i64, (String, bool)> = HashMap::new();
+    let mut edges: BTreeMap<(String, String), BTreeMap<String, kc_store::rank::NameUse>> = BTreeMap::new();
+    for name in names {
+        let (hits, _) = query::refs(conn, &name, &[], usize::MAX).unwrap();
+        let mut counted = HashSet::new();
+        for h in hits {
+            let exact = match h.confidence {
+                "exact" => true,
+                "unique_name" => false,
+                _ => continue,
+            };
+            for &id in &h.target_ids {
+                let (dst, private) = target.entry(id).or_insert_with(|| {
+                    let (path, sig): (String, String) = conn
+                        .query_row("SELECT f.path, s.signature FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .unwrap_or_default();
+                    let private = sig.split_whitespace().any(|w| w == "private");
+                    (path, private)
+                });
+                if dst.is_empty() || *dst == h.file || !counted.insert((h.file.clone(), h.line, h.from.as_ref().map(|f| f.id), h.kind.clone(), id)) {
+                    continue;
+                }
+                let n = edges.entry((h.file.clone(), dst.clone())).or_default().entry(name.clone()).or_insert_with(|| kc_store::rank::NameUse {
+                    name: name.clone(),
+                    exact: 0,
+                    unique: 0,
+                    private: false,
+                    common: common.contains(&name.to_ascii_lowercase()),
+                });
+                if exact {
+                    n.exact += 1;
+                } else {
+                    n.unique += 1;
+                }
+                n.private |= *private || name.starts_with('_');
+            }
+        }
+    }
+    kc_store::rank::RefGraph { files, edges: edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect() }
+}
+
+#[test]
+fn invariant_the_reference_graph_is_the_same_however_it_is_built() {
+    let root = scratch("ref-graph");
+    fixture(&root);
+    // TypeScript and Python imports too, and a name used often enough to resolve over several chunks.
+    write(&root, "web/src/app/orders.service.ts", "export class OrdersService {\n  load(): number { return 1; }\n  save(): void {}\n}\n");
+    write(
+        &root,
+        "web/src/app/orders.component.ts",
+        "import { OrdersService } from './orders.service';\n\nexport class OrdersComponent {\n  constructor(private orders: OrdersService) {}\n  run(): number {\n    this.orders.save();\n    this.orders.save();\n    return this.orders.load();\n  }\n}\n",
+    );
+    write(&root, "tools/report/totals.py", "def total(rows):\n    return sum(rows)\n\n\ndef _clean(rows):\n    return [r for r in rows if r]\n");
+    write(&root, "tools/report/main.py", "from .totals import total, _clean\n\n\ndef run(rows):\n    return total(_clean(rows)) + total(rows) + total([])\n");
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "Add the web app and the report"]);
+    let store = index(&root, "graph.sqlite", false);
+
+    let json = |g: &kc_store::rank::RefGraph| serde_json::to_string(g).unwrap();
+    let before = json(&ref_graph_one_name_at_a_time(&store));
+    assert!(before.contains("orders.service.ts") && before.contains("totals.py") && before.contains("OrderRepository.cs"), "{before}");
+    for threads in [1, 3] {
+        for chunk in [1, 2, 2048] {
+            let graph = kc_store::rank::with_workers(kc_store::rank::Workers { threads, init: None }, || {
+                kc_store::rank::ref_graph_chunked(store.conn(), chunk).unwrap()
+            });
+            assert_eq!(json(&graph), before, "{threads} threads, {chunk} references at a time");
+        }
+    }
+}

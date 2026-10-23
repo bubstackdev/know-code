@@ -818,6 +818,12 @@ fn notes_repo(path: &std::path::Path) -> Result<PathBuf> {
 
 fn main() {
     let cli = Cli::parse();
+    // A command or query that has to build a repo's reference graph is one the user waits for: most of the machine
+    // (a server's background builds take their own share, see `refresh`). Read only when one is built.
+    kc_store::rank::set_default_threads(|| {
+        use kc_index::machine::{Mode, plan, rank_threads, sniff};
+        rank_threads(plan(&sniff(), Mode::Explicit, 1, 0))
+    });
     let notify = !matches!(&cli.command, Cmd::Config { .. } | Cmd::Workspace { .. } | Cmd::Setup(_) | Cmd::Uninstall(_) | Cmd::SelfUpdate { .. } | Cmd::CheckUpdate | Cmd::RefreshPlugin | Cmd::Hook { .. });
     // Once per command, before it runs: a long-lived `serve` would otherwise check only when it exits.
     if notify { update::start(); }
@@ -1354,18 +1360,20 @@ fn index(
             changed.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let content = kc_index::content::sync_content(root, &mut store, opts.threads)?;
-        // Derived data earlier queries computed (areas, the file ranking), brought up to this index: left stale, the
-        // first query after `index` would wait for it.
+        // The file ranking and the areas, computed or brought up to this index: left out or stale, the first overview,
+        // hotspots or areas call after `index` would wait for them. On this repo's threads, as far as its memory goes.
         // Not fatal: the index is complete without it, and a query brings it up to date.
+        let rank_threads = kc_index::machine::rank_threads(kc_index::machine::Plan { repos: jobs, threads: opts.threads });
+        let workers = kc_store::rank::Workers { threads: rank_threads, init: None };
         if phases {
             // What a first query would compute, counted here: the file ranking (the reference graph), then the areas.
             let mark = meter::Mark::now();
-            store.file_rank_at(&[], kc_store::rank::Flow::Uses, true)?;
+            kc_store::rank::with_workers(workers, || store.file_rank_at(&[], kc_store::rank::Flow::Uses, true))?;
             mark.record("derived.rank");
             let mark = meter::Mark::now();
             kc_index::areas::areas(root, &store)?;
             mark.record("derived.areas");
-        } else if let Err(e) = kc_index::refresh_derived(root, &store) {
+        } else if let Err(e) = kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store)) {
             eprintln!("knowcode: {}: areas and file ranking not refreshed: {e:#}", repo_name(root));
         }
         drop(store);

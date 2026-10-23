@@ -9,10 +9,14 @@
 //! rank, seeded by the files a query is about (the changed files of an impact, a symbol's own file), is computed
 //! on demand from the cached graph: about a millisecond per thousand files.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashMap, HashSet, btree_map};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::Instant;
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::query::{self, FileEdge};
@@ -105,9 +109,55 @@ fn name_weight(n: &NameUse) -> f64 {
     w
 }
 
+/// How many threads build the reference graph, and what each runs first: a background build lowers its threads'
+/// priority. One thread unless the caller says otherwise (see [`with_workers`], [`set_default_threads`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Workers {
+    pub threads: usize,
+    pub init: Option<fn()>,
+}
+
+static DEFAULT_THREADS: OnceLock<fn() -> usize> = OnceLock::new();
+
+thread_local! {
+    static WORKERS: Cell<Option<Workers>> = const { Cell::new(None) };
+}
+
+/// How many threads a reference graph built on a thread without [`with_workers`] uses: a process sets it from its
+/// budget (`kc_index::machine::plan`), asked each time a graph is built. The first setting holds.
+pub fn set_default_threads(threads: fn() -> usize) {
+    let _ = DEFAULT_THREADS.set(threads);
+}
+
+/// Runs `f` with reference graphs it builds on this thread using `workers`.
+pub fn with_workers<T>(workers: Workers, f: impl FnOnce() -> T) -> T {
+    let before = WORKERS.with(|w| w.replace(Some(workers)));
+    let out = f();
+    WORKERS.with(|w| w.set(before));
+    out
+}
+
+/// The workers a reference graph built on this thread now uses.
+pub fn workers() -> Workers {
+    WORKERS.with(Cell::get).unwrap_or_else(|| Workers { threads: DEFAULT_THREADS.get().map_or(1, |f| f()).max(1), init: None })
+}
+
+/// References resolved at a time per name: a name's references are many only in generated code (an Entity Framework
+/// model's `Property`, `HasColumnType`), and each resolved reference carries its targets.
+const CHUNK: usize = 2048;
+
 /// The reference graph: every reference resolved, as for [`query::file_edges`]. Expensive; cache it per index
 /// generation (see `Store::ref_graph`).
+///
+/// Names resolve independently of each other, so [`workers`] threads take them in turn, each on a connection of its
+/// own reading the index at the same generation as `conn` (a thread whose connection reads another one takes no
+/// names), and their edges are summed. The most used names go first, so that no thread is left with one at the end.
 pub fn ref_graph(conn: &Connection) -> Result<RefGraph> {
+    ref_graph_chunked(conn, CHUNK)
+}
+
+/// [`ref_graph`], resolving a name's references `chunk` at a time.
+pub fn ref_graph_chunked(conn: &Connection, chunk: usize) -> Result<RefGraph> {
     let files: Vec<String> = conn
         .prepare("SELECT path FROM files WHERE lang NOT IN ('swiftpm', 'xcodegen', 'cargo', 'hostconfig') ORDER BY path")?
         .query_map([], |r| r.get(0))?
@@ -117,15 +167,167 @@ pub fn ref_graph(conn: &Connection) -> Result<RefGraph> {
         .prepare("SELECT lower(name) FROM symbols GROUP BY name HAVING COUNT(DISTINCT file_id) > ?1")?
         .query_map([MANY_DEFINITIONS], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
-    let names: Vec<String> = conn.prepare("SELECT DISTINCT name FROM refs")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    let mut target: HashMap<i64, (String, bool)> = HashMap::new();
-    let mut stmt = conn.prepare_cached("SELECT f.path, s.signature FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1")?;
+    let mut names: Vec<(String, i64)> = conn
+        .prepare("SELECT name, COUNT(*) FROM refs GROUP BY name")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let names: Vec<String> = names.into_iter().map(|(n, _)| n).collect();
+    let generation = generation(conn)?;
+    let path = conn.path().unwrap_or_default().to_string();
+    let w = workers();
+    let threads = if path.is_empty() { 1 } else { w.threads.clamp(1, names.len().max(1)) };
+    // Kept per index generation: computed here once, not by every thread at once.
+    query::factory_constructions(conn)?;
+    let next = AtomicUsize::new(0);
+    let parts = std::thread::scope(|scope| -> Result<Vec<Partial>> {
+        let helpers: Vec<_> = (1..threads)
+            .map(|_| {
+                let (names, common, next, path, generation) = (&names, &common, &next, &path, &generation);
+                scope.spawn(move || -> Result<Partial> {
+                    if let Some(init) = w.init {
+                        init();
+                    }
+                    let mut part = Partial::default();
+                    // A thread that can't read the index at this generation takes no names: the others resolve them.
+                    let Ok(conn) = open_at(path, generation) else { return Ok(part) };
+                    part.resolve(&conn, names, next, common, chunk)?;
+                    Ok(part)
+                })
+            })
+            .collect();
+        let mut own = Partial::default();
+        let mine = own.resolve(conn, &names, &next, &common, chunk);
+        let mut parts = vec![own];
+        for h in helpers {
+            parts.push(h.join().map_err(|_| anyhow::anyhow!("a reference graph thread panicked"))??);
+        }
+        mine?;
+        Ok(parts)
+    })?;
     let mut edges: BTreeMap<(String, String), BTreeMap<String, NameUse>> = BTreeMap::new();
-    for name in names {
-        let (hits, _) = query::refs(conn, &name, &[], usize::MAX)?;
-        // A name used several times on one line from one symbol, as one kind of reference reaching one target, counts once: weights count the
-        // lines using a name, as before references kept their columns.
-        let mut counted: HashSet<(String, u32, Option<i64>, String, i64)> = HashSet::new();
+    for part in parts {
+        for (key, uses) in part.edges {
+            let into = edges.entry(key).or_default();
+            for (name, u) in uses {
+                match into.entry(name) {
+                    btree_map::Entry::Vacant(e) => {
+                        e.insert(u);
+                    }
+                    btree_map::Entry::Occupied(mut e) => {
+                        let n = e.get_mut();
+                        n.exact += u.exact;
+                        n.unique += u.unique;
+                        n.private |= u.private;
+                    }
+                }
+            }
+        }
+    }
+    let edges = edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect();
+    Ok(RefGraph { files, edges })
+}
+
+/// The reference graphs being built in this process, by index file and generation: a second thread needing one waits
+/// for the first's rather than building it again (and holding it twice). A server builds them in the background after
+/// indexing; a query arriving meanwhile waits for that one.
+static BUILDING: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+static BUILT: Condvar = Condvar::new();
+
+/// This thread's turn to build the reference graph of one index at one generation; the next waiting thread's when
+/// dropped.
+pub(crate) struct Turn(Option<(String, String)>);
+
+impl Turn {
+    /// Waits until no other thread of this process builds the graph of the index at `path` at `generation`, then
+    /// takes the turn. An index in memory (no path) has no turns.
+    pub(crate) fn take(path: &str, generation: &str) -> Turn {
+        if path.is_empty() {
+            return Turn(None);
+        }
+        let key = (path.to_string(), generation.to_string());
+        let mut building = BUILDING.lock().unwrap_or_else(|e| e.into_inner());
+        while building.contains(&key) {
+            building = BUILT.wait(building).unwrap_or_else(|e| e.into_inner());
+        }
+        building.push(key.clone());
+        Turn(Some(key))
+    }
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        if let Some(key) = self.0.take() {
+            BUILDING.lock().unwrap_or_else(|e| e.into_inner()).retain(|k| *k != key);
+            BUILT.notify_all();
+        }
+    }
+}
+
+/// Waits until no thread of this process builds the graph of the index at `path` at `generation`, or until
+/// `deadline`. Whether none does.
+pub(crate) fn wait_built(path: &str, generation: &str, deadline: Instant) -> bool {
+    let key = (path.to_string(), generation.to_string());
+    let mut building = BUILDING.lock().unwrap_or_else(|e| e.into_inner());
+    while building.contains(&key) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        building = BUILT.wait_timeout(building, left).unwrap_or_else(|e| e.into_inner()).0;
+    }
+    true
+}
+
+/// What [`crate::Store::file_rank_at`] gives for the generation of the graph it ranked when that graph was being built
+/// in the background and not ready by the call's freshness deadline: nothing was ranked (see
+/// [`crate::answer::stale_derived`]).
+pub const PENDING: &str = "pending";
+
+/// The index generation a connection reads (see `Store::generation`).
+fn generation(conn: &Connection) -> Result<String> {
+    Ok(conn.query_row("SELECT value FROM meta WHERE key = 'tree_gen'", [], |r| r.get(0)).optional()?.unwrap_or_default())
+}
+
+/// A read-only connection to the index at `path`, in a snapshot, when that reads `generation`.
+fn open_at(path: &str, generation: &str) -> Result<Connection> {
+    use rusqlite::OpenFlags;
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048; BEGIN DEFERRED")?;
+    anyhow::ensure!(self::generation(&conn)? == generation, "the index moved on");
+    Ok(conn)
+}
+
+/// A name used several times on one line from one symbol, as one kind of reference reaching one target: counted once.
+type Site = (String, u32, Option<i64>, String, i64);
+
+/// The edges one thread found, for the names it resolved.
+#[derive(Default)]
+struct Partial {
+    edges: BTreeMap<(String, String), BTreeMap<String, NameUse>>,
+    /// Per target symbol: its file, and whether it is declared `private`.
+    target: HashMap<i64, (String, bool)>,
+}
+
+impl Partial {
+    /// Resolves names from `names`, taking the next one from `next` until none is left. On an error, leaves none for
+    /// the other threads either.
+    fn resolve(&mut self, conn: &Connection, names: &[String], next: &AtomicUsize, common: &HashSet<String>, chunk: usize) -> Result<()> {
+        let mut shared = query::Resolution::default();
+        while let Some(name) = names.get(next.fetch_add(1, Ordering::Relaxed)) {
+            // Weights count the lines using a name, as before references kept their columns.
+            let mut counted: HashSet<Site> = HashSet::new();
+            if let Err(e) = query::refs_in_chunks(conn, name, &mut shared, chunk, |hits| self.add(conn, name, hits, &mut counted, common)) {
+                next.store(names.len(), Ordering::Relaxed);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    fn add(&mut self, conn: &Connection, name: &str, hits: Vec<query::RefHit>, counted: &mut HashSet<Site>, common: &HashSet<String>) -> Result<()> {
+        let mut stmt = conn.prepare_cached("SELECT f.path, s.signature FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1")?;
         for h in hits {
             let exact = match h.confidence {
                 "exact" => true,
@@ -133,7 +335,7 @@ pub fn ref_graph(conn: &Connection) -> Result<RefGraph> {
                 _ => continue,
             };
             for &id in &h.target_ids {
-                let (dst, private) = target.entry(id).or_insert_with(|| {
+                let (dst, private) = self.target.entry(id).or_insert_with(|| {
                     let (path, sig): (String, String) = stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap_or_default();
                     let private = sig.split_whitespace().any(|w| w == "private");
                     (path, private)
@@ -141,9 +343,9 @@ pub fn ref_graph(conn: &Connection) -> Result<RefGraph> {
                 if dst.is_empty() || *dst == h.file || !counted.insert((h.file.clone(), h.line, h.from.as_ref().map(|f| f.id), h.kind.clone(), id)) {
                     continue;
                 }
-                let names = edges.entry((h.file.clone(), dst.clone())).or_default();
-                let n = names.entry(name.clone()).or_insert_with(|| NameUse {
-                    name: name.clone(),
+                let names = self.edges.entry((h.file.clone(), dst.clone())).or_default();
+                let n = names.entry(name.to_string()).or_insert_with(|| NameUse {
+                    name: name.to_string(),
                     exact: 0,
                     unique: 0,
                     private: false,
@@ -157,9 +359,8 @@ pub fn ref_graph(conn: &Connection) -> Result<RefGraph> {
                 n.private |= *private || name.starts_with('_');
             }
         }
+        Ok(())
     }
-    let edges = edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect();
-    Ok(RefGraph { files, edges })
 }
 
 /// Which way rank flows along a dependency.
