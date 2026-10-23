@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Rank source-only public evaluation subjects; provisional picks require source review.
 
-No builds, source execution, indexing, KnowCode queries or model calls.
+No builds, source execution, indexing, KnowCode queries or model calls. public-v1's seed, quotas and server
+repositories are the defaults; a later bank passes its own with --plan, a JSON file with `seed`, `quotas`
+({task: {family: n}}), `server_repos` and `exclude`: earlier banks' subjects ({task, repo, file, key}). A candidate is
+excluded when an earlier subject has its task and either its file or its symbol name, so a new bank asks nothing an
+earlier one asked, nor about the same file for the same task.
 """
 from __future__ import annotations
 
@@ -62,7 +66,12 @@ def declarations(text, language):
                'line': text.count('\n', 0, match.start(2))+1}
 
 
-def rank_candidates(rows, views, seed=SEED):
+def excluded(row, subjects):
+    return any(row['task'] == s['task'] and ((row['repo'], row['file']) == (s['repo'], s['file']) or row['key'] == s['key'])
+               for s in subjects)
+
+
+def rank_candidates(rows, views, seed=SEED, server_repos=SERVER_REPOS):
     files = defaultdict(list)
     metadata = {}
     for row in rows:
@@ -84,7 +93,7 @@ def rank_candidates(rows, views, seed=SEED):
         paths = sorted(row['path'] for row in eligible)
         for task, bank_task in [('http-cross-repo', 'http-cross-repo'),
                                 ('di-implementations', 'di-implementations'), ('two-hop-impact', 'cs-callers')]:
-            if task == 'http-cross-repo' and repo not in SERVER_REPOS:
+            if task == 'http-cross-repo' and repo not in server_repos:
                 continue
             for item in BANK.structural_candidates(views/repo, paths, bank_task, None, None, eligible_files=set(paths)):
                 add(task, repo, item)
@@ -96,18 +105,20 @@ def rank_candidates(rows, views, seed=SEED):
                   row['repo'] if row['task'] == 'definition-lookup' else '', row['rank'], row['identity']))
 
 
-def provisional_picks(candidates, repos):
+def provisional_picks(candidates, repos, quotas=QUOTAS, exclude=()):
     groups = defaultdict(list)
     for row in candidates:
         group = row['repo'] if row['task'] == 'definition-lookup' else row['family']
         groups[(row['task'], group)].append(row)
     result = []
     for task in TASKS:
-        quotas = {repo: 1 for repo in sorted(repos)} if task == 'definition-lookup' else QUOTAS[task]
-        for group, quota in sorted(quotas.items()):
+        wanted = {repo: 1 for repo in sorted(repos)} if task == 'definition-lookup' else quotas[task]
+        for group, quota in sorted(wanted.items()):
             seen = set()
             picks = []
             for row in sorted(groups[(task, group)], key=lambda row: (row['rank'], row['identity'])):
+                if excluded(row, exclude):
+                    continue
                 file = (row['repo'], row['file'])
                 if file in seen:
                     continue
@@ -120,8 +131,13 @@ def provisional_picks(candidates, repos):
     return result
 
 
-def sample(manifest, source, census, scope_root, policy, out, seed=SEED):
+def sample(manifest, source, census, scope_root, policy, out, seed=SEED, plan=None):
     check_producers()
+    settings = json.loads(plan.read_bytes()) if plan else {}
+    seed = settings.get('seed', seed)
+    quotas = settings.get('quotas', QUOTAS)
+    server_repos = set(settings.get('server_repos', SERVER_REPOS))
+    exclude = settings.get('exclude', [])
     scope_bytes = (scope_root/'scope.json').read_bytes()
     previous = json.loads(scope_bytes)
     rows_bytes = (scope_root/'files.jsonl').read_bytes()
@@ -138,7 +154,7 @@ def sample(manifest, source, census, scope_root, policy, out, seed=SEED):
         if checked[field] != previous[field]:
             raise ValueError('sampling inputs differ from recorded scope: '+field)
     rows = [json.loads(line) for line in rows_bytes.decode().splitlines()]
-    candidates = rank_candidates(rows, source/'view', seed)
+    candidates = rank_candidates(rows, source/'view', seed, server_repos)
     # Recheck source after extraction as well, so candidate enumeration cannot conceal source edits.
     with tempfile.TemporaryDirectory(prefix='knowcode-sample-recheck-') as temp:
         after = SCOPE.scope(manifest, source, census, policy, Path(temp)/'scope')
@@ -146,10 +162,11 @@ def sample(manifest, source, census, scope_root, policy, out, seed=SEED):
         raise ValueError('source changed during candidate extraction')
     check_producers()
     encoded = ''.join(json.dumps(row, sort_keys=True)+'\n' for row in candidates).encode()
-    picks = provisional_picks(candidates, {row['repo'] for row in rows})
+    picks = provisional_picks(candidates, {row['repo'] for row in rows}, quotas, exclude)
     picks_bytes = (json.dumps(picks, indent=2)+'\n').encode()
     result = {'format': 1, 'stage': 'source candidates ranked; provisional picks unreviewed; no questions or labels frozen; no scored runs',
-              'seed': seed, 'scope_sha256': digest(scope_bytes), 'candidates_sha256': digest(encoded),
+              'seed': seed, 'plan_sha256': digest(plan.read_bytes()) if plan else None,
+              'excluded_candidates': sum(excluded(row, exclude) for row in candidates), 'scope_sha256': digest(scope_bytes), 'candidates_sha256': digest(encoded),
               'provisional_sha256': digest(picks_bytes), 'tool_sha256': digest(Path(__file__).read_bytes()),
               'neutral_sampler_sha256': digest((ROOT/'scripts/eval/neutral/sample.py').read_bytes()),
               'producer_hashes': PRODUCER_HASHES, 'python_version': sys.version,
@@ -175,5 +192,7 @@ if __name__ == '__main__':
     parser.add_argument('--scope', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--seed', default=SEED)
+    parser.add_argument('--plan', type=Path, help='a later bank\'s seed, quotas, server repositories and exclusions')
     args = parser.parse_args()
-    print(json.dumps(sample(args.manifest, args.source, args.census, args.scope, args.policy, args.out, args.seed), indent=2))
+    print(json.dumps(sample(args.manifest, args.source, args.census, args.scope, args.policy, args.out, args.seed,
+                            args.plan), indent=2))
