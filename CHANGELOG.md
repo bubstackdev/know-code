@@ -32,6 +32,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   query needing the graph while the background builds it waits for that build rather than building it again. One
   that only orders a long list by it (`refs`, `impact`, `overview`'s entry points) waits until its freshness
   deadline, then answers in index order and says so (`deadline`).
+- A cold `knowcode index` takes less memory at its peak, with the same index, rankings and answers. Most of the peak
+  was the history walk behind `hotspots` and `areas`, a `git log` that mapped the repo's pack files and cached delta
+  bases with git's defaults: it now runs (as do the ownership walks) within 64 MiB of mapped pack and a 32 MiB delta
+  cache. The content index's trigram pairs, freed before the file ranking is built, stayed counted against the
+  process; they are now mapped and unmapped on their own. Peak resident memory of a cold index on the four repos
+  above, over two runs each: about the same on the smallest, a tenth less on the media server, a fifth less on the
+  password manager's server and less than half on its clients. The walk alone on the clients went from 631 to 121
+  MiB, for 9% more of git's instructions.
 
 - `context`'s DI flag `conflicting` counts plain registrations only. A `TryAdd*` registration stands back when the
   service has one already, `TryAddEnumerable` adds one of several implementations meant to be resolved together, and

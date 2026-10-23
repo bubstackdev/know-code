@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -191,6 +192,8 @@ class BareClientTests(unittest.TestCase):
                     root, binary, config = self.fixture(base, arm)
                     if mode:
                         config['shell'] = mode
+                    if mode == 'sandbox':
+                        config['knowcode_binary_name'] = binary.name
                     kwargs = {}
                     if arm != 'plain':
                         index = root/'control/index/example'
@@ -203,7 +206,7 @@ class BareClientTests(unittest.TestCase):
                     argv = result['argv']
                     denied = argv[argv.index('--disallowedTools')+1:] if '--disallowedTools' in argv else []
                     # In sandbox mode every arm refuses Bash commands naming the KnowCode binary.
-                    self.assertEqual('Bash(*knowcode*)' in denied, mode == 'sandbox')
+                    self.assertEqual('Bash(*fake-client*)' in denied, mode == 'sandbox')
                 self.assertTrue(all(rules == seen[0] for rules in seen))
                 if expected:
                     self.assertEqual(seen[0], expected)
@@ -215,6 +218,41 @@ class BareClientTests(unittest.TestCase):
             config['shell'] = 'anything'
             with self.assertRaisesRegex(ValueError, 'shell permission mode'):
                 client.prepare(root, config, binary)
+            config['shell'] = 'sandbox'
+            with self.assertRaisesRegex(ValueError, 'distinctive knowcode_binary_name'):
+                client.prepare(root, config, binary)
+            # A name that occurs in the session's own paths would make Bash refuse every source path.
+            config['knowcode_binary_name'] = Path(temp).name
+            with self.assertRaisesRegex(ValueError, 'session paths contain'):
+                client.prepare(root, config, binary)
+
+
+    def test_a_session_under_a_path_naming_knowcode_still_lets_bash_name_its_source(self):
+        # Regression: the public-v2 pilot's sessions sat under a path containing "knowcode", and a deny rule on that
+        # word refused every Bash command naming a source path. The rule names the binary's file instead.
+        import fnmatch
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)/'scratch-of-knowcode-sessions'
+            for arm in client.ARMS:
+                root, binary, config = self.fixture(base, arm)
+                knowcode = base/'bin/knowcode-v0.2.0'
+                if not knowcode.exists():
+                    knowcode.parent.mkdir()
+                    shutil.copy(binary, knowcode)
+                config.update(shell='sandbox', knowcode_binary_name=knowcode.name, knowcode_sha256=client.file_hash(knowcode))
+                kwargs = {}
+                if arm != 'plain':
+                    index = root/'control/index/example'
+                    index.mkdir(parents=True)
+                    kwargs = {'knowcode': knowcode, 'index_repos': {'example': index}}
+                result = client.prepare(root, config, binary, **kwargs)
+                argv = result['argv']
+                denied = [a[5:-1] for a in argv[argv.index('--disallowedTools')+1:] if a.startswith('Bash(')]
+                self.assertEqual(denied, ['*knowcode-v0.2.0*'])
+                source_command = 'grep -rn Needle ' + str(root.resolve()/'source/example')
+                self.assertIn('knowcode', source_command)
+                self.assertFalse(any(fnmatch.fnmatchcase(source_command, pattern) for pattern in denied))
+                self.assertTrue(fnmatch.fnmatchcase(str(knowcode) + ' --version', denied[0]))
 
 
 if __name__ == '__main__':
