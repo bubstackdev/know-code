@@ -654,17 +654,23 @@ mod tests {
         }
         assert!(kc_index::unindexed_roots().unwrap().is_empty());
         assert!(!kc_index::db_path(&locked).unwrap().exists());
+        // A repo leaves that list when its sync commits; a query worker job that took it goes on to sync its contents,
+        // then queues its ranking. Wait for that job (joined if it is still queued or running, else a sync with
+        // nothing to do), so what the answer queued is done, and before the next test takes its turn with the worker.
+        for root in [&new, &big] {
+            let job = Worker::shared().schedule(root).unwrap();
+            let done = job.done.lock().unwrap();
+            let (done, timeout) = job.changed.wait_timeout_while(done, Duration::from_secs(60), |d| d.is_none()).unwrap();
+            assert!(!timeout.timed_out(), "{}", root.display());
+            assert!(done.as_ref().unwrap().is_ok(), "{:?}", *done);
+        }
         // Their file ranking and areas follow in the background: the first overview doesn't compute them.
         assert!(Deriver::shared().wait_idle(Duration::from_secs(60)));
         for root in [&new, &big] {
             let store = kc_index::open(root).unwrap();
-            assert!(!kc_index::derived_missing(&store).unwrap() && !kc_index::derived_stale(root, &store).unwrap(), "{}", root.display());
+            assert!(!kc_index::derived_missing(&store).unwrap(), "{}", root.display());
+            assert!(!kc_index::derived_stale(root, &store).unwrap(), "{}", root.display());
             assert!(store.derived_gen("areas").unwrap().is_some(), "{}", root.display());
-        }
-        // What the answer queued is done before the next test takes its turn with the worker.
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while Worker::shared().queued.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
         }
         let mut env = json!({ "repo": "workspace", "items": [] });
         ops::add_missing(&mut env);
