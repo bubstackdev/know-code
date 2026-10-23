@@ -683,8 +683,9 @@ rest of the hit's statement follows it, one per line (`  41- text`): the chained
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file
 names: "*.swift", "!*Tests*"; after a repo's name, `shop/src/**` or `**/shop/src/**` searches that repo only; an absolute
 path, the repo it is in). A filter matching no file is refused, saying so (`paths matched 0 files (…)`), never answered as
-a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit when there
-are at most 60 and they all fit `max_chars`. A first page cut short names the other files with a match in
+a missing match. `context` lines around each hit (max 10). A first page at the default `limit` shows every hit in code
+(definitions, declarations, code lines) when there are at most 60 hits and they fit `max_chars`; hits in tests,
+comments and prose past the page stay a page away (all of them when they are all there is). A first page cut short names the other files with a match in
 `other_files`, by directory, with a count when more than one (`src/core/: a.cs 2, b.cs`; up to 60 files, past that
 `files` counts them and `files_only` lists them); with every file named, the answer is `complete` and the other lines
 are a `more` entry with the cursor. Page with `offset` (`next_offset`) or kc_more with `cursor`. The scan stops at
@@ -786,10 +787,12 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
 - `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
-  and callees), the source lines it rests on, read from the working tree when the answer is built: an edge's site, else
-  the line naming the declaration. `{at, text, cut, repo}`: `at` is `file:line` or `file:start-end`; `cut` says what a
-  cap left out, or why nothing was quoted. By default (`cite: brief`) the first 12 rows quote one line, up to 120
-  characters, and the rest give `at` only (a `more` entry, `capped`, says so); `cite: lines` quotes every row,
+  and callees), the source lines it rests on, read from the working tree when the answer is built: an edge's site, with
+  the rest of its statement when it goes on over other lines (at most 2 each side; `at` is then the range and `cut`
+  says where a longer one starts or that it goes on), else the line naming the declaration. `{at, text, cut, repo}`:
+  `at` is `file:line` or `file:start-end`; `cut` says what a cap left out, or why nothing was quoted. By default
+  (`cite: brief`) the first 12 rows quote their line, up to 120 characters, and the rest give `at` only (a `more`
+  entry, `capped`, says so); the size cap drops statement lines before any row; `cite: lines` quotes every row,
   a declaration from its first line through its name (at most 3), each line up to 160 characters; `cite: check` gives
   no lines; `cite: none` leaves it out. Text trees print the lines under each row. Every cite's `check` compares the
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),

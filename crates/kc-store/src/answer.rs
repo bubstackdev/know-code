@@ -346,6 +346,10 @@ pub struct Cite {
     /// What the cap left out (the rest of a declaration, the end of a long line), or why nothing could be quoted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cut: Option<String>,
+    /// For a site quoted with the rest of its statement: the site's own line; the other lines are the statement's.
+    /// Not serialized: the row's own `site` or `line` says it.
+    #[serde(skip)]
+    pub line: Option<u32>,
 }
 
 /// What a walk does with an edge, under an [`EvidencePolicy`].

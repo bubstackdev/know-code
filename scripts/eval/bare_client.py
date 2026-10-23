@@ -20,7 +20,9 @@ KNOWCODE_ARMS = ('knowcode', 'knowcode-unprompted')
 # How the client grants shell commands, the same in every arm. `patterns` (public-v1): one allow rule per program, so
 # the client refuses any command it can't match to them (`cd x 2>/dev/null || ...`, `f=...; sed $f`, `awk`).
 # `sandbox` (public-v2): the client allows any command, and the session sandbox is the boundary: only PROGRAMS (and
-# bash builtins) can run, only the source can be read, only control/profile can be written, no network.
+# bash builtins) can run, only the source can be read, only control/profile can be written, no network. The KnowCode
+# arms' sandbox must let the client start the KnowCode binary as its MCP server, which would let Bash run it too, so in
+# every arm the client also refuses any Bash command naming it: those arms reach KnowCode only through MCP.
 SHELL_MODES = ('patterns', 'sandbox')
 
 
@@ -148,8 +150,11 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
             '--disable-slash-commands', '--setting-sources', '', '--settings', str(settings_path),
             '--tools', 'Bash,Read', '--permission-mode', 'dontAsk', '--strict-mcp-config',
             '--mcp-config', str(mcp_path), '--allowedTools', *allowed]
+    denied = ['Bash(*knowcode*)'] if shell == 'sandbox' else []
     if knowcode_arm:
-        argv += ['--disallowedTools', 'mcp__knowcode__kc_note_add']
+        denied.append('mcp__knowcode__kc_note_add')
+    if denied:
+        argv += ['--disallowedTools', *denied]
     return {'format': 1, 'stage': 'launch configuration only; not frozen or runnable', 'argv': argv,
             'cwd': str(control), 'env': {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'SHELL': '/bin/bash',
                                       'CLAUDE_CONFIG_DIR': str(profile), 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
