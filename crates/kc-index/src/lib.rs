@@ -28,6 +28,7 @@ pub mod grams;
 pub mod guess;
 pub mod health;
 pub mod light;
+pub mod meter;
 pub mod http;
 pub mod notes;
 pub mod revision;
@@ -823,6 +824,7 @@ fn plan(root: &Path, store: &Store, states: &HashMap<String, kc_store::FileState
     let ignores: Vec<String> = store.meta("disc.ignores")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let inputs = discovery_inputs(root, &ignores);
     let reuse = !opts.full_discovery && !opts.verify;
+    let mark = meter::Mark::now();
     let cached = if reuse { cached_discovery(root, store, &inputs, true)? } else { None };
     let t0 = Instant::now();
     let failed_before: Vec<String> = store.meta("sync.failed")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
@@ -863,6 +865,8 @@ fn plan(root: &Path, store: &Store, states: &HashMap<String, kc_store::FileState
     };
 
     let discover_ms = ms(t0);
+    mark.record("discovery");
+    let mark = meter::Mark::now();
     let t1 = Instant::now();
     let listed: HashSet<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
     let mut removed: Vec<i64> = states.iter().filter(|(p, _)| !listed.contains(p.as_str())).map(|(_, s)| s.id).collect();
@@ -899,6 +903,7 @@ fn plan(root: &Path, store: &Store, states: &HashMap<String, kc_store::FileState
         }
     }
     let stat_ms = ms(t1);
+    mark.record("stat");
     Ok(Plan { files, moved_dirs, full, sniffed, failed_before, candidates, large, removed, symlinks, unchanged, skipped, discovery, discover_ms, stat_ms })
 }
 
@@ -1069,6 +1074,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
     }
 
     let t2 = Instant::now();
+    // This thread writes; workers parse. What the process spent less what this thread did is the parsing.
+    let (mark, writer) = (meter::Mark::now(), meter::ThreadMark::now());
     if rewrites {
         fresh::invalidate(store);
     }
@@ -1193,8 +1200,13 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
         batch.set_meta("sync.failed", &serde_json::to_string(&report.failed)?)?;
     }
     report.parse_ms = ms(t2);
+    // The writing overlaps the parsing: the phase's wall time goes to the parse.
+    let (both, rows) = (mark.cost(), writer.cost());
+    meter::record("parse", meter::Cost { wall_ms: both.wall_ms, ..both - rows });
+    meter::record("write.rows", meter::Cost { wall_ms: 0.0, ..rows });
 
     let t3 = Instant::now();
+    let mark = meter::Mark::now();
     // What DI factories make, from declarations in any file: again whenever a file changed, or resolution did.
     if report.parsed + report.removed > 0 || di_stale {
         batch.resolve_di_factories()?;
@@ -1216,13 +1228,18 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
     if report.parsed > 200 || report.removed > 200 {
         store.checkpoint()?;
     }
+    mark.record("write.commit");
+    let mark = meter::Mark::now();
     report.scip = scip::refresh(root, store, opts.scip_compare)?;
+    mark.record("scip");
+    let mark = meter::Mark::now();
     if !report.failed.is_empty() {
         fresh::invalidate(store);
     } else if rewrites || !fresh::exists(store) {
         // Best effort: without it, the repo only counts as changed.
         let _ = fresh::write(store);
     }
+    mark.record("write.snapshot");
     report.write_ms = ms(t3);
     report.total_ms = ms(t0);
     Ok(report)

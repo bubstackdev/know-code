@@ -229,6 +229,7 @@ fn sync_content_locked(root: &Path, store: &mut Store, threads: usize) -> Result
     report.files = files.len();
 
     // Stat everything; reread what moved (or everything, after a version bump).
+    let mark = crate::meter::Mark::now();
     let stats = stat_all(root, &files);
     let changed: Vec<usize> = (0..files.len())
         .filter(|&i| {
@@ -244,6 +245,7 @@ fn sync_content_locked(root: &Path, store: &mut Store, threads: usize) -> Result
     let first_build = stale_version || files.iter().all(|f| f.hash.is_empty());
     let (reads, mut pairs) = read_files(root, &files, &changed, &stats, threads, first_build);
     report.reread = reads.len();
+    let mut read_cost = mark.cost();
 
     let merged_before: usize = store.meta("content.merged")?.and_then(|v| v.parse().ok()).unwrap_or(0);
     let mut state: Vec<i64> = files.iter().map(|f| f.state).collect();
@@ -281,7 +283,9 @@ fn sync_content_locked(root: &Path, store: &mut Store, threads: usize) -> Result
         let held: std::collections::HashSet<usize> = pairs.files.iter().copied().collect();
         let missing: Vec<usize> = wanted.iter().copied().filter(|i| !held.contains(i)).collect();
         drop(held);
+        let more_mark = crate::meter::Mark::now();
         let (more, more_pairs) = read_files(root, &files, &missing, &stats, threads, true);
+        read_cost = read_cost + more_mark.cost();
         for r in &more {
             // Record what was read, so the stored hash always describes the indexed content.
             state[r.idx] = if r.skip.is_some() { SKIPPED } else { PENDING };
@@ -317,6 +321,9 @@ fn sync_content_locked(root: &Path, store: &mut Store, threads: usize) -> Result
     if report.rebuilt {
         store.checkpoint()?;
     }
+    // Reading (stats, hashes, trigrams) on worker threads; the rest is writing.
+    crate::meter::record("content.read", read_cost);
+    crate::meter::record("content.write", mark.cost() - read_cost);
 
     for (i, st) in state.iter().enumerate() {
         match *st {

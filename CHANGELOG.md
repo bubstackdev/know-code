@@ -39,6 +39,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   statement lines, from the last row up, before it cuts a row. On the 67 distinct `kc_refs`, `kc_context`,
   `kc_impact` and `kc_trace` calls of the public study's runs, answers grow 1.7% (295,622 to 300,592 bytes) and show
   the same 720 rows.
+- `index --phases` reports what each indexing phase cost: opening the index, discovery, stat, parse, writing rows,
+  committing, SCIP, the text content index (read and write) and derived data (file ranking and areas, which it computes
+  so they are counted), each with wall and CPU time, the CPU time of child processes (git), and on macOS the
+  instructions retired and the phase's share of them. `scripts/index-phases.py` runs it cold and warm over repos and
+  prints the medians.
 
 ## 0.2.0 (2026-10-22)
 
