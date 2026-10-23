@@ -292,8 +292,10 @@ fn ts_providers(conn: &Connection, service: &str, file: &str, caller: Option<&st
     let mut names = vec![service.to_string()];
     let tokens: Vec<String> = conn
         .prepare_cached(
-            "SELECT DISTINCT s.name FROM symbols s WHERE s.type_name = ?1 AND s.kind = 'property' AND s.container IS NULL
-             AND EXISTS(SELECT 1 FROM refs r WHERE r.from_id = s.id AND r.kind = 'instantiate' AND r.name = 'InjectionToken')
+            // From the few `new InjectionToken` sites (by name) to the constants holding them: not every top-level symbol.
+            "SELECT DISTINCT s.name FROM refs r JOIN symbols s ON s.id = r.from_id
+             WHERE r.name = 'InjectionToken' AND r.kind = 'instantiate' AND s.type_name = ?1 AND s.kind = 'property'
+             AND s.container IS NULL
              ORDER BY s.name",
         )?
         .query_map([service], |r| r.get(0))?
@@ -364,9 +366,10 @@ fn ts_providers(conn: &Connection, service: &str, file: &str, caller: Option<&st
 fn root_provider_files(conn: &Connection) -> Result<Vec<String>> {
     let rows: Vec<(String, String)> = conn
         .prepare_cached(
+            // From the few bootstrap calls (by name) to their files' imports: not every relative import's file searched.
             "SELECT f.path, i.module FROM imports i JOIN files f ON f.id = i.file_id
-             WHERE i.module LIKE '.%' AND EXISTS(SELECT 1 FROM refs r WHERE r.file_id = i.file_id AND r.kind = 'call'
-                                                 AND r.name IN ('bootstrapApplication', 'bootstrapModule'))
+             WHERE i.module LIKE '.%' AND i.file_id IN (SELECT r.file_id FROM refs r WHERE r.kind = 'call'
+                                                        AND r.name IN ('bootstrapApplication', 'bootstrapModule'))
              ORDER BY f.path, i.module",
         )?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?

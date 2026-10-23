@@ -823,9 +823,12 @@ impl Store {
         self.derived("file_edges", &self.generation()?, || Ok(self.ref_graph()?.file_edges()))
     }
 
-    /// The file reference graph with per-name reference counts, cached per index generation.
+    /// The file reference graph with per-name reference counts, cached per index generation. Built once per process:
+    /// while another thread builds it (a server's background, after indexing), this one waits for that.
     pub fn ref_graph(&self) -> Result<rank::RefGraph> {
-        self.derived(&format!("ref_graph:{}", rank::RANK_VERSION), &self.generation()?, || rank::ref_graph(&self.conn))
+        let generation = self.generation()?;
+        let _turn = rank::Turn::take(self.conn.path().unwrap_or_default(), &generation);
+        self.derived(&format!("ref_graph:{}", rank::RANK_VERSION), &generation, || rank::ref_graph(&self.conn))
     }
 
     /// File ranks for ordering a long answer: PageRank over the reference graph, personalized toward `seeds` (the
@@ -839,7 +842,9 @@ impl Store {
     }
 
     /// [`Store::file_rank`], and the generation of the graph it ranked when that is an earlier one than the index's:
-    /// an answer ordered by it says so.
+    /// an answer ordered by it says so. With none cached while the graph is being built in the background, a query
+    /// with a freshness deadline waits for it until then; past it, nothing is ranked and the generation given is
+    /// [`rank::PENDING`].
     pub fn file_rank_at(&self, seeds: &[&str], flow: rank::Flow, compute: bool) -> Result<(rank::FileRank, Option<String>)> {
         let generation = self.generation()?;
         let key = format!("rank_graph:{}", rank::RANK_VERSION);
@@ -851,7 +856,14 @@ impl Store {
                 (generation.clone(), self.derived(&key, &generation, || Ok(self.ref_graph()?.weighted()))?)
             }
             Some(stale) => stale,
-            None if compute => (generation.clone(), self.derived(&key, &generation, || Ok(self.ref_graph()?.weighted()))?),
+            None if compute => {
+                if let Some(deadline) = limits::current().freshness_deadline()
+                    && !rank::wait_built(self.conn.path().unwrap_or_default(), &generation, deadline)
+                {
+                    return Ok((rank::FileRank::default(), Some(rank::PENDING.to_string())));
+                }
+                (generation.clone(), self.derived(&key, &generation, || Ok(self.ref_graph()?.weighted()))?)
+            }
             None => return Ok((rank::FileRank::default(), None)),
         };
         let stale = (graph_gen != generation).then(|| graph_gen.clone());
@@ -1473,6 +1485,40 @@ mod tests {
         ] {
             assert_ne!(key(&edited), k, "{what}");
         }
+    }
+
+    /// A graph another thread is building is waited for, not built again: an ordering waits until its freshness
+    /// deadline and then says it is pending, the graph itself until it is built.
+    #[test]
+    fn a_reference_graph_being_built_is_waited_for() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-rank-turns-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("i.sqlite");
+        let store = Store::open(&path).unwrap();
+        let generation = store.generation().unwrap();
+        let turn = rank::Turn::take(store.conn().path().unwrap(), &generation);
+
+        let op = limits::Operation::new();
+        op.set_freshness_deadline(Some(std::time::Instant::now() + std::time::Duration::from_millis(50)));
+        let entered = limits::enter(op);
+        let (ranked, at) = store.file_rank_at(&[], rank::Flow::Uses, true).unwrap();
+        drop(entered);
+        assert!(ranked.0.is_empty());
+        assert_eq!(at.as_deref(), Some(rank::PENDING));
+        let note = answer::stale_derived("order of references (app): file ranking", rank::PENDING, &generation);
+        assert_eq!(note.reason, answer::Reason::Deadline);
+
+        // Another thread's query waits for the graph this one builds, then reads it.
+        let waiting = std::thread::spawn({
+            let path = dir.join("i.sqlite");
+            move || Store::open(&path).unwrap().ref_graph().unwrap().files.len()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!waiting.is_finished());
+        store.derived(&format!("ref_graph:{}", rank::RANK_VERSION), &generation, || rank::ref_graph(store.conn())).unwrap();
+        drop(turn);
+        assert_eq!(waiting.join().unwrap(), 0);
+        assert!(store.file_rank_at(&[], rank::Flow::Uses, true).unwrap().1.is_none());
     }
 
     /// Constructs met but not read have their own table: never among the Ansible (or CI) facts, replaced and removed

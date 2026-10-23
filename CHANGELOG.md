@@ -4,6 +4,27 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The file ranking (the reference graph behind `overview`'s map and entry points, `hotspots`' coupling, `areas`, and
+  the order of long `refs` and `impact` lists) costs a seventh to a fortieth of what it did, with the same rankings.
+  Resolving every name in turn read again, for each name, what doesn't depend on it: a C# repo's project files and
+  `using`s, a TypeScript repo's whole file list, imports and Angular root providers. That is now read once per graph,
+  and two queries finding an Angular provider's root injector and `InjectionToken`s start from the few sites by name
+  instead of every import or top-level symbol. Building the graph from a cold index, in instructions on one thread:
+  a small Python web framework 0.80 to 0.48 G, a .NET media server 156 to 22 G, a .NET password manager's server
+  664 to 93 G and its TypeScript clients 3,401 to 81 G. A name's references resolve a few thousand at a time,
+  and no longer sorted: the server's peak resident memory building it went from 1,177 MiB to 182 MiB. Several
+  threads may share the work (two at most for now: on a loaded machine more cost more instructions than they
+  saved), each within the memory a repo's indexing is planned for. The graphs, ranks and areas are byte-identical
+  before and after on those four repos.
+- `knowcode index` builds the file ranking and the areas when they are missing, not only when an earlier query had
+  computed them, and a server builds them in the background, at background priority and one repo at a time, for each
+  repo it indexes for the first time and each indexed repo it finds without them: the first `overview`, `hotspots`
+  or `areas` call no longer computes them. A cold `index` costs that much more: on the four repos above, 1.8 to 2.4,
+  73 to 100, 514 to 624 and 116 to 209 G instructions, with peak resident memory up to 626 MiB (the clients). A
+  query needing the graph while the background builds it waits for that build rather than building it again. One
+  that only orders a long list by it (`refs`, `impact`, `overview`'s entry points) waits until its freshness
+  deadline, then answers in index order and says so (`deadline`).
+
 - `context`'s DI flag `conflicting` counts plain registrations only. A `TryAdd*` registration stands back when the
   service has one already, `TryAddEnumerable` adds one of several implementations meant to be resolved together, and
   `Replace` takes the place of the one before: none of them is a second implementation competing for the service, and
