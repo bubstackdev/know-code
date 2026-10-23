@@ -113,9 +113,19 @@ Ansible and Terraform links), and what a query covers outside any repo without `
 - Every git repo under a root, down to `workspace.max_depth` directories, is in the workspace: clones, worktrees,
   and the worktrees git lists for them. The search doesn't enter a repo, hidden directories, or dependency and build
   directories (`node_modules`, `vendor`, `target`, `build`, …) unless they are repos themselves.
-- Adding a root records the checkouts without building full indexes. While the MCP server runs, a low-priority
-  worker reads their manifests and name summaries; a repo is fully indexed when you first query it or run
+- Adding a root records the checkouts without building full indexes. While the MCP server runs, it indexes them in
+  the background, one at a time at low priority, smallest first, and never ahead of a query's own indexing. The
+  server checks the roots when it starts and again as workspace queries arrive (a `stat` of each directory the last
+  walk read), so a repo cloned under a root is noticed without an `index` command. Its AI privacy file is read
+  before anything else: a repo blocked whole is never indexed. A repo is also indexed when you first query it or run
   `knowcode index`.
+- Until every repo under the roots is indexed, workspace-wide answers say how many are not yet, and name them, in
+  one `incomplete` entry (`missing_repo`: "N repositories found, not yet indexed"). `status` (`kc_status`) lists each
+  with `background: "queued"`.
+- Background indexing stops short of `cache.max_size` (at nine tenths of it), so it never makes the cache evict an
+  index a query used. Repos left then are read for manifests and names only, and are listed as `cache_full`; raise
+  `cache.max_size` to index them.
+- A repo removed from under a root drops out of the workspace at once; cache maintenance then removes its index.
 - A query about a repo outside every root still answers for that repo.
 
 ## Ignoring paths

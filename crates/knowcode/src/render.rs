@@ -504,7 +504,12 @@ pub fn status(v: &serde_json::Value) {
         println!("privacy  {}", privacy_line(p));
     }
     if v.pointer("/index/exists").and_then(|v| v.as_bool()) == Some(false) {
-        println!("index    not built ({})", s("/discovery").as_str().unwrap_or("unindexed"));
+        let background = match s("/background").as_str() {
+            Some("queued") => "; queued for background indexing",
+            Some(_) => "; not indexed in the background: the cache is near cache.max_size",
+            None => "",
+        };
+        println!("index    not built ({}{background})", s("/discovery").as_str().unwrap_or("unindexed"));
         for note in crate::ops::freshness_notes(v) { println!("{note}"); }
         return;
     }

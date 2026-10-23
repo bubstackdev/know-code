@@ -2218,7 +2218,12 @@ impl KnowcodeServer {
             Ok(match env {
                 Value::Array(list) => {
                     let n = list.len();
-                    serde_json::json!({ "items": list, "total": n, "truncated": false })
+                    let mut env = serde_json::json!({ "items": list, "total": n, "truncated": false });
+                    // The workspace's repos not indexed yet, counted once.
+                    if let Some(note) = ops::unindexed_note().filter(|_| p.workspace) {
+                        ops::push_incomplete(&mut env, note);
+                    }
+                    env
                 }
                 one => one,
             })

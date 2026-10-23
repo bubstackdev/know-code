@@ -306,6 +306,25 @@ pub fn indexed_roots() -> Result<Vec<PathBuf>> {
     Ok(workspace::summaries(&[])?.iter().filter(|s| !s.blocked.whole && !s.gone).map(|s| s.root.clone()).collect())
 }
 
+/// Repos found under the workspace roots whose full index isn't built yet: no index (only discovered, or scanned for
+/// names and manifests), or one never synced to the end. Neither those blocked whole by their AI privacy file (never
+/// indexed) nor gone checkouts. Smallest first, by the size of their git index (a cheap measure of how many files
+/// they track), so the most repos become answerable soonest.
+pub fn unindexed_roots() -> Result<Vec<PathBuf>> {
+    let mut roots: Vec<(u64, PathBuf)> = workspace::summaries(&[])?
+        .iter()
+        .filter(|s| s.light && !s.blocked.whole && !s.gone)
+        .map(|s| (git_index_bytes(&s.root), s.root.clone()))
+        .collect();
+    roots.sort();
+    Ok(roots.into_iter().map(|(_, r)| r).collect())
+}
+
+/// The size of a checkout's git index (`.git/index`, or a worktree's own), 0 when it can't be read.
+fn git_index_bytes(root: &Path) -> u64 {
+    git::GitDir::find(root).and_then(|g| std::fs::metadata(g.dir.join("index")).ok()).map_or(0, |m| m.len())
+}
+
 /// The repos in the workspace whose AI privacy policy blocks anything, with what it blocks: whole repos (left out of
 /// [`indexed_roots`]) and repos with blocked paths.
 pub fn blocked_roots() -> Result<Vec<(PathBuf, privacy::Blocked)>> {

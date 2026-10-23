@@ -41,9 +41,11 @@ withheld answers retain their distinct meanings.
 
 ## Workspace and storage
 
-`knowcode workspace add` registers roots. A light background scan discovers
-repositories and their manifests and name summaries; full indexing happens lazily
-when a repository is touched. Deleted checkouts are pruned automatically and a
+`knowcode workspace add` registers roots. A running server indexes the
+repositories under them in the background, after reading each one's privacy file,
+and workspace answers name the ones not indexed yet rather than leaving them out
+silently. Where the cache budget leaves no room, a light scan of manifests and
+name summaries stands in, and full indexing happens when a repository is touched. Deleted checkouts are pruned automatically and a
 least-recently-used size cap bounds derived cache storage. Notes are durable user
 data, separate from disposable indexes.
 

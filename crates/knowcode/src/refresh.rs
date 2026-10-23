@@ -57,6 +57,11 @@ impl Worker {
             let worker_watched = watched.clone();
             let queued = Arc::new(AtomicUsize::new(0));
             let worker_queued = queued.clone();
+            #[cfg(not(test))]
+            {
+                let queued = worker_queued.clone();
+                std::thread::Builder::new().name("knowcode-new-repos".into()).spawn(move || new_repos(&queued)).expect("starting background indexer");
+            }
             std::thread::Builder::new().name("knowcode-index".into()).spawn(move || {
                 background_priority();
                 #[cfg(not(test))]
@@ -78,7 +83,9 @@ impl Worker {
                                     kc_index::cache::maintain_and_report(&[]);
                                     maintained = Instant::now();
                                 }
-                                if worker_queued.load(Ordering::Relaxed) == 0 {
+                                // Names and manifests only, for repos the cache has no room to index in full (see
+                                // `new_repos`): a workspace query can still tell which of them may hold a name.
+                                if worker_queued.load(Ordering::Relaxed) == 0 && !kc_index::cache::room_for_background().unwrap_or(true) {
                                     match kc_index::light::pending() {
                                         Ok(roots) => if let Some(root) = roots.into_iter().find(|r| scanned.get(r).is_none_or(|at| at.elapsed() >= Duration::from_secs(60))) {
                                             eprintln!("knowcode: scanning names and manifests in {}", root.display());
@@ -97,22 +104,7 @@ impl Worker {
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
                     eprintln!("knowcode: indexing {}", root.display());
-                    // Separate from a query's cancellation: work continues when its freshness budget expires.
-                    // Only one repository and one extraction thread run in the background at a time.
-                    let result = std::panic::catch_unwind(|| -> Result<SyncReport> {
-                        let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
-                        let mut store = kc_index::open(&root)?;
-                        let report = kc_index::sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() })?;
-                        kc_index::content::sync_content(&root, &mut store, 1)?;
-                        // Context intentionally reuses old derived caches for latency. Bring existing caches up to
-                        // date here so repeated queries eventually become complete without a manual overview call.
-                        kc_index::refresh_derived(&root, &store)?;
-                        Ok(report)
-                    });
-                    let outcome = match result {
-                        Ok(r) => r.map_err(|e| format!("{e:#}")),
-                        Err(_) => Err("background indexer panicked".into()),
-                    };
+                    let outcome = index_in_background(&root);
                     match &outcome {
                         Ok(_) => eprintln!("knowcode: indexed {}", root.display()),
                         Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
@@ -171,6 +163,78 @@ impl Worker {
             eprintln!("knowcode: background refresh {}: {e:#}", root.display());
         }
     }
+}
+
+/// Indexes `root` as the background does: one extraction thread, under an operation of its own (separate from a
+/// query's cancellation: work continues when the query's freshness budget expires).
+fn index_in_background(root: &Path) -> Outcome {
+    let result = std::panic::catch_unwind(|| -> Result<SyncReport> {
+        let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
+        let mut store = kc_index::open(root)?;
+        let report = kc_index::sync(root, &mut store, &SyncOptions { threads: 1, ..Default::default() })?;
+        kc_index::content::sync_content(root, &mut store, 1)?;
+        // Context intentionally reuses old derived caches for latency. Bring existing caches up to
+        // date here so repeated queries eventually become complete without a manual overview call.
+        kc_index::refresh_derived(root, &store)?;
+        Ok(report)
+    });
+    match result {
+        Ok(r) => r.map_err(|e| format!("{e:#}")),
+        Err(_) => Err("background indexer panicked".into()),
+    }
+}
+
+/// How long a repo whose background indexing failed waits before it is tried again.
+const NEW_REPO_RETRY: Duration = Duration::from_secs(600);
+
+/// Repos found under the workspace roots without a full index (see [`kc_index::unindexed_roots`]) are indexed in the
+/// background, one at a time, on a thread of their own at background priority: a query's indexing (the worker's)
+/// never waits behind one, and this thread waits while a query's is queued. Roots are checked first thing, so a
+/// server notices repos added while it wasn't running before its first query; after that, every workspace query
+/// checks them (a `stat` of each directory the last walk read) and maintenance walks them again every minute.
+#[cfg(not(test))]
+fn new_repos(queries: &AtomicUsize) {
+    background_priority();
+    if let Err(e) = kc_index::light::discover_roots() {
+        eprintln!("knowcode: root discovery: {e:#}");
+    }
+    let mut tried = HashMap::new();
+    loop {
+        if queries.load(Ordering::Relaxed) == 0 {
+            match index_next_new_repo(&mut tried) {
+                Ok(Some(_)) => continue,
+                Ok(None) => {}
+                Err(e) => eprintln!("knowcode: new repos: {e:#}"),
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+/// Indexes the next repo found under the workspace roots without a full index, unless one failed within
+/// [`NEW_REPO_RETRY`] (`tried`) or the cache has no room for it (see [`kc_index::cache::room_for_background`]). Its
+/// AI privacy file is read first: a repo it blocks whole is never indexed. Returns the repo indexed, if any.
+pub(crate) fn index_next_new_repo(tried: &mut HashMap<PathBuf, Instant>) -> Result<Option<PathBuf>> {
+    let Some(root) = kc_index::unindexed_roots()?.into_iter().find(|r| tried.get(r).is_none_or(|at| at.elapsed() >= NEW_REPO_RETRY)) else {
+        return Ok(None);
+    };
+    if !kc_index::cache::room_for_background()? {
+        return Ok(None);
+    }
+    tried.insert(root.clone(), Instant::now());
+    if kc_index::privacy::Privacy::load(&root).whole() {
+        return Ok(None);
+    }
+    eprintln!("knowcode: indexing new repo {}", root.display());
+    match index_in_background(&root) {
+        Ok(_) => {
+            tried.remove(&root);
+            eprintln!("knowcode: indexed {}", root.display());
+        }
+        Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
+    }
+    kc_index::cache::maintain_and_report(std::slice::from_ref(&root));
+    Ok(Some(root))
 }
 
 /// Start discovery when MCP starts, even before its first query. No standalone daemon is created.
@@ -265,6 +329,7 @@ mod tests {
     use super::*;
     use crate::ops::{self, Scope};
     use crate::ops::tests::{repo, test_cache};
+    use serde_json::json;
 
     #[test]
     fn invariant_budget_returns_stale_without_waiting_for_writer_then_converges() {
@@ -367,6 +432,99 @@ mod tests {
         assert_eq!(stale.len(), 1, "{stale:?}");
         assert!(stale[0].starts_with("alpha: "), "{stale:?}");
         assert!(!stale[0].contains(&base.to_string_lossy().into_owned()), "{stale:?}");
+    }
+
+    /// A git repo at `dir` holding `files`, staged and not indexed.
+    fn clone_into(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        assert!(std::process::Command::new("git").args(["init", "-q"]).arg(dir).status().unwrap().success());
+        for (path, text) in files {
+            std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(path), text).unwrap();
+        }
+        assert!(std::process::Command::new("git").arg("-C").arg(dir).args(["add", "-A"]).status().unwrap().success());
+        kc_index::repo_root(dir).unwrap()
+    }
+
+    #[test]
+    fn invariant_a_repo_cloned_under_a_root_is_said_not_indexed_until_the_background_indexes_it() {
+        let cache = test_cache();
+        let base = cache.dir("new-repos");
+        let roots = base.join("roots");
+        let old = repo(&roots, "old", &[("src/a.py", "def shared_name():\n    return 1\n")]);
+        kc_index::config::add_root(&roots).unwrap();
+        let new = clone_into(&roots.join("fresh"), &[("src/b.py", "def shared_name_too():\n    return 2\n")]);
+        // Bigger than `fresh`, by its git index: indexed after it.
+        let big = clone_into(&roots.join("big"), &[("src/c.py", "def other():\n    return 3\n"), ("src/d.py", "x = 1\n")]);
+        let privacy = kc_index::privacy::file_name();
+        let locked = clone_into(&roots.join("locked"), &[(privacy.as_str(), "level: 1\n"), ("src/e.py", "def secret():\n    return 4\n")]);
+
+        // Noticed, its privacy file read: the one blocked whole is never in the queue.
+        assert_eq!(kc_index::unindexed_roots().unwrap(), vec![new.clone(), big.clone()]);
+        assert!(kc_index::indexed_roots().unwrap().contains(&old));
+
+        // A workspace-wide answer that couldn't index them within its budget says so once, naming them.
+        let writers = [kc_index::writer::WriterLock::acquire(&new).unwrap(), kc_index::writer::WriterLock::acquire(&big).unwrap()];
+        let scope = Scope { repos: kc_index::indexed_roots().unwrap(), no_sync: false };
+        let budget = Budget::enter(Duration::from_millis(1));
+        let mut env = ops::find("shared_name", None, 10, &scope).unwrap().env;
+        drop(budget);
+        drop(writers);
+        ops::add_missing(&mut env);
+        let entries = crate::contract::incomplete_of(&env);
+        let notes: Vec<&str> = entries.iter().filter(|i| i.detail.starts_with("workspace: ")).map(|i| i.detail.as_str()).collect();
+        assert_eq!(notes, ["workspace: 2 repositories found, not yet indexed (big, fresh); nothing from them is in this answer"], "{env}");
+        assert!(!entries.iter().any(|i| i.detail.starts_with("fresh: ") || i.detail.starts_with("big: ")), "one entry, not one per repo: {env}");
+        assert_eq!(env["complete"], false);
+
+        // `status` lists them as queued.
+        let status = ops::status(&Scope { repos: vec![new.clone(), big.clone()], no_sync: false }).unwrap().data;
+        assert!(status.iter().all(|v| v["background"] == "queued"), "{status:?}");
+
+        // The background indexes them (the query worker may have taken some first), never the blocked one.
+        let mut tried = HashMap::new();
+        for _ in 0..10 {
+            if kc_index::unindexed_roots().unwrap().is_empty() {
+                break;
+            }
+            if index_next_new_repo(&mut tried).unwrap().is_none() {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+        assert!(kc_index::unindexed_roots().unwrap().is_empty());
+        assert!(!kc_index::db_path(&locked).unwrap().exists());
+        // What the answer queued is done before the next test takes its turn with the worker.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Worker::shared().queued.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let mut env = json!({ "repo": "workspace", "items": [] });
+        ops::add_missing(&mut env);
+        assert!(env.get("incomplete").is_none(), "{env}");
+
+        // A repo removed from the root drops out: no longer listed, nor counted.
+        std::fs::remove_dir_all(&big).unwrap();
+        assert!(!kc_index::indexed_roots().unwrap().contains(&big));
+        assert!(kc_index::unindexed_roots().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_queue_waits_while_the_cache_has_no_room() {
+        let cache = test_cache();
+        let base = cache.dir("new-repos-full");
+        let roots = base.join("roots");
+        repo(&roots, "old", &[("src/a.py", "def a():\n    return 1\n")]);
+        kc_index::config::add_root(&roots).unwrap();
+        let new = clone_into(&roots.join("fresh"), &[("src/b.py", "def b():\n    return 2\n")]);
+        // A budget the one index already fills.
+        let config = cache.base().join("config/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(&config, format!("{text}\n[cache]\nmax_size = 1\n")).unwrap();
+        assert_eq!(kc_index::unindexed_roots().unwrap(), vec![new.clone()]);
+        assert!(index_next_new_repo(&mut HashMap::new()).unwrap().is_none());
+        assert!(!kc_index::db_path(&new).unwrap().exists());
+        let note = ops::unindexed_note().unwrap();
+        assert!(note.hint.as_deref().unwrap().contains("cache.max_size"), "{note:?}");
     }
 
     #[test]

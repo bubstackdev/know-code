@@ -44,6 +44,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   so they are counted), each with wall and CPU time, the CPU time of child processes (git), and on macOS the
   instructions retired and the phase's share of them. `scripts/index-phases.py` runs it cold and warm over repos and
   prints the medians.
+- Repos under the workspace roots are indexed by a running server without an `index` command or a query touching
+  them ([#40](https://github.com/bubstackdev/knowcode/issues/40)). The server checks the roots when it starts and as
+  workspace queries arrive, reads a new repo's AI privacy file first (a repo blocked whole is never indexed), and
+  indexes new repos in the background, smallest first, never ahead of a query's own indexing, and only while the cache
+  is below nine tenths of `cache.max_size`. Until then, a workspace-wide answer says "N repositories found, not yet
+  indexed" in one `incomplete` entry naming them, instead of one entry per repo or none, and `status` marks each
+  `background: "queued"` (or `cache_full`). A repo removed from a root drops out of the workspace.
 
 ## 0.2.0 (2026-10-22)
 

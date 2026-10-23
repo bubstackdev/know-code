@@ -69,8 +69,10 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
   from the available committed snapshot with `freshness.status: "indexing"`, `complete: false` and a `stale` reason.
   A missing index never yields a confidently complete empty answer.
 - One low-priority background worker, with one extraction thread, finishes indexing. While the server is alive it
-  polls one queried checkout per idle tick, so edits are picked up before the next query, and it reads manifests and
-  name summaries for checkouts under the workspace roots.
+  polls one queried checkout per idle tick, so edits are picked up before the next query.
+- A second low-priority thread indexes the repos under the workspace roots that have no full index yet, one at a
+  time and smallest first, while no query's indexing is queued, and only while the cache is below nine tenths of
+  `cache.max_size`; past that the worker reads their manifests and name summaries instead.
 - Calls run one at a time, except that a call past 2 seconds lets the next one start beside it (at most two), and
   `kc_search` and `kc_grep_ast` run in a child process of their own.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check registered-root discovery and lazy cross-repo HTTP context on isolated synthetic repos.
+"""Check registered-root discovery, background indexing and cross-repo HTTP context on isolated synthetic repos.
 
 Usage: python3 scripts/check-workspace-first-run.py /path/to/knowcode
 No manual indexing or configuration edits. Public-repository acceptance is a separate gate.
@@ -79,27 +79,22 @@ def check(binary: Path) -> None:
                 call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "workspace-first-run-check", "version": "1"}})
                 process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
                 process.stdin.flush()
-                deadline = time.monotonic() + 25
-                while True:
-                    catalog = json.loads((base / "cache/discovery.json").read_text())
-                    if len(catalog["entries"]) == 3 and all(e["snapshot"] is not None for e in catalog["entries"].values()):
-                        break
-                    assert time.monotonic() < deadline, "idle registered-root light scans did not finish"
-                    time.sleep(0.1)
-                assert not list((base / "cache/repos").glob("*.sqlite")), "light scans created full indexes"
-                status = subprocess.run([str(binary), "status", "--repo", str(unused), "--json"], env=env, cwd=base, check=True, capture_output=True, text=True)
-                status = json.loads(status.stdout)
-                assert status["index"]["exists"] is False and status["discovery"] == "light", status
-                assert not list((base / "cache/repos").glob("*.sqlite")), "status created a full index"
+                def indexed(root: Path) -> bool:
+                    status = subprocess.run([str(binary), "status", "--repo", str(root), "--json"], env=env, cwd=base, check=True, capture_output=True, text=True)
+                    status = json.loads(status.stdout)
+                    return status["index"].get("exists", True) and status.get("coverage", {}).get("files", 0) > 0
+
+                def wait_indexed(roots, what: str) -> None:
+                    deadline = time.monotonic() + 60
+                    while not all(indexed(r) for r in roots):
+                        assert time.monotonic() < deadline, f"{what} were not indexed in the background"
+                        time.sleep(0.25)
+
+                # Every repo under the root is indexed by the server, without an `index` command or a query.
+                wait_indexed([backend, web, unused], "the repos under the root")
                 found = tool("kc_find", {"query": "OrderService"})
                 # MCP always says `complete`.
                 assert found["complete"] is True and "OrderService" in json.dumps(found["items"]), found
-                assert not list((base / "cache/repos").glob("backend-*.sqlite")), "a local name lookup indexed the unrelated backend"
-                assert not list((base / "cache/repos").glob("unused-*.sqlite")), "a local name lookup indexed the unrelated checkout"
-                snapshot = subprocess.run([str(binary), "context", "OrderService.load", "--repo", str(web), "--no-sync", "--json"], env=env, cwd=base, check=True, capture_output=True, text=True)
-                snapshot = json.loads(snapshot.stdout)
-                assert snapshot["complete"] is False and any(i["reason"] == "stale" for i in snapshot["incomplete"]), snapshot
-                assert not list((base / "cache/repos").glob("backend-*.sqlite")), "--no-sync created the backend index"
                 deadline = time.monotonic() + 20
                 while True:
                     context = tool("kc_context", {"symbol": "OrderService.load", "max_chars": 20000})
@@ -109,6 +104,15 @@ def check(binary: Path) -> None:
                     assert time.monotonic() < deadline, context
                     time.sleep(0.1)
                 assert list((base / "cache/repos").glob("backend-*.sqlite")), "the needed backend was not indexed automatically"
+                # Repos cloned under the root later are noticed and indexed; one whose privacy file blocks it whole is not.
+                late, locked = workspace / "late", workspace / "locked"
+                for root, files in ((locked, {".knowcode-privacy.yml": "level: 1\n", "secret.py": "def kept_out():\n    return 2\n"}), (late, {"late.py": "def late_arrival():\n    return 1\n"})):
+                    root.mkdir()
+                    subprocess.run(["git", "init", "-q", str(root)], check=True)
+                    for name, text in files.items():
+                        (root / name).write_text(text)
+                wait_indexed([late], "a repo cloned under the root while the server ran")
+                assert not list((base / "cache/repos").glob("locked-*.sqlite")), "a repo blocked whole was indexed"
                 (backend / ".knowcode-privacy.yml").write_text("level: 1\n")
                 private = tool("kc_context", {"symbol": "OrderService.load", "max_chars": 20000})
                 assert private["complete"] is False and any(i["reason"] == "withheld" for i in private["incomplete"]), private
@@ -127,7 +131,7 @@ def check(binary: Path) -> None:
                     process.wait()
                 reader.join(timeout=5)
             assert process.returncode == 0, process.returncode
-    print("workspace first-run check passed: idle light scans, lazy local query, honest no-sync answer, automatic HTTP backend indexing")
+    print("workspace first-run check passed: background indexing of the roots and of a repo added later, blocked repo left out, HTTP backend linked")
 
 
 if __name__ == "__main__":
