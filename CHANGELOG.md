@@ -51,6 +51,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   is below nine tenths of `cache.max_size`. Until then, a workspace-wide answer says "N repositories found, not yet
   indexed" in one `incomplete` entry naming them, instead of one entry per repo or none, and `status` marks each
   `background: "queued"` (or `cache_full`). A repo removed from a root drops out of the workspace.
+- Indexing adapts to the machine ([#41](https://github.com/bubstackdev/knowcode/issues/41)). `index` of several repos
+  (`--workspace`, or several paths) indexes them at once, as many as half the memory and every core but one allow,
+  with at most 8 parser threads a repo; `--jobs` sets how many. Background indexing of the workspace's new repos reads
+  the cores, memory, load, memory pressure and power source every few seconds: idle and on power it indexes a repo
+  per four cores, under load, on battery or under memory pressure one at a time on one thread, and under critical
+  memory pressure it starts none. Queries still come first.
 
 ## 0.2.0 (2026-10-22)
 

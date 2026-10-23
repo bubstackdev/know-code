@@ -70,9 +70,16 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
   A missing index never yields a confidently complete empty answer.
 - One low-priority background worker, with one extraction thread, finishes indexing. While the server is alive it
   polls one queried checkout per idle tick, so edits are picked up before the next query.
-- A second low-priority thread indexes the repos under the workspace roots that have no full index yet, one at a
-  time and smallest first, while no query's indexing is queued, and only while the cache is below nine tenths of
-  `cache.max_size`; past that the worker reads their manifests and name summaries instead.
+- Background threads index the repos under the workspace roots that have no full index yet, smallest first, while no
+  query's indexing is queued, and only while the cache is below nine tenths of `cache.max_size`; past that the worker
+  reads their manifests and name summaries instead. How many run at once follows the machine
+  (`kc_index::machine`): every few seconds it reads the cores, memory, load average, memory pressure and power source.
+  Under load from other work, on battery, or under memory pressure, one repo on one thread; idle and on power, a repo
+  per four cores, within a quarter of the memory; under critical memory pressure, none starts. A repo already started
+  finishes, at background priority.
+- `knowcode index` of several repos (`--workspace`, or several paths) indexes them at once: as many as half the
+  memory holds (512 MiB each) and every core but one allows, the cores shared among them, at most 8 parser threads a
+  repo (one thread writes each index, and bounds its parse past that). `--jobs` and `--threads` override it.
 - Calls run one at a time, except that a call past 2 seconds lets the next one start beside it (at most two), and
   `kc_search` and `kc_grep_ast` run in a child process of their own.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a
