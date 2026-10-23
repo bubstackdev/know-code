@@ -342,3 +342,38 @@ fn invariant_the_reference_graph_is_the_same_however_it_is_built() {
         }
     }
 }
+
+/// The code a method's `touches_tables` names for a table it reaches two ways at one hop is the first by file and
+/// line, whichever the index stored first.
+#[test]
+fn invariant_a_touched_tables_way_does_not_depend_on_the_order_files_were_stored_in() {
+    let root = scratch("determinism-touched");
+    write(&root, "src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+    write(
+        &root,
+        "src/Data/ShopContext.cs",
+        "namespace Shop.Data;\npublic class Order { }\npublic class ShopContext : DbContext\n{\n    public DbSet<Order> Orders { get; set; }\n}\n",
+    );
+    for q in ["AQuery", "BQuery"] {
+        write(
+            &root,
+            &format!("src/Queries/{q}.cs"),
+            &format!("namespace Shop.Queries;\npublic class {q}\n{{\n    private Shop.Data.ShopContext _ctx;\n    public int Run() => _ctx.Orders.Count();\n}}\n"),
+        );
+    }
+    write(
+        &root,
+        "src/Service.cs",
+        "namespace Shop;\npublic class Service\n{\n    private Shop.Queries.BQuery _b;\n    private Shop.Queries.AQuery _a;\n    public void Go()\n    {\n        _b.Run();\n        _a.Run();\n    }\n}\n",
+    );
+    let touches = |store: &Store| -> Vec<String> {
+        let model = store.db_model().unwrap();
+        let go = query::definitions(store.conn(), "Service.Go").unwrap().remove(0).id;
+        let (touches, _) = kc_store::db::touched(store.conn(), &model, go, 2).unwrap();
+        touches.iter().map(|t| format!("{} {} {} hop {} via {} at {}", t.kind, t.name, t.mode, t.hop, t.via, t.site)).collect()
+    };
+    let forward = touches(&index(&root, "forward.sqlite", false));
+    assert_eq!(forward, ["table Orders read hop 1 via AQuery.Run at src/Queries/AQuery.cs:5"]);
+    assert_eq!(touches(&index(&root, "reversed.sqlite", true)), forward);
+    let _ = std::fs::remove_dir_all(&root);
+}

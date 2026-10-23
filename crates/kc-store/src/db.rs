@@ -1515,10 +1515,18 @@ pub struct Touch {
     pub mode: String,
     /// Calls between the symbol and the code touching the table (0: the symbol itself).
     pub hop: u8,
-    /// The symbol touching it, on the shortest path.
+    /// The symbol touching it, on the shortest path (the first by file and line among as short ones).
     pub via: String,
     /// Where, `file:line`.
     pub site: String,
+}
+
+/// A `file:line` site's order: by file, then line as a number.
+fn site_order(site: &str) -> (&str, u32) {
+    match site.rsplit_once(':') {
+        Some((file, line)) => (file, line.parse().unwrap_or(0)),
+        None => (site, 0),
+    }
 }
 
 /// Tables and procedures `root` touches, itself or through its calls, to `depth` hops. Calls are followed when they
@@ -1539,8 +1547,15 @@ pub fn touched(conn: &Connection, model: &DbModel, root: i64, depth: u8) -> Resu
         procs.entry(p.id).or_default().push(p);
     }
     let mut out: Vec<Touch> = Vec::new();
+    // Of the ways to one table or procedure, the nearest names it; among as near ones, the first by file and line, so
+    // the answer doesn't follow the order the index happened to store symbols in.
     let mut merge = |touch: Touch| match out.iter_mut().find(|t| t.kind == touch.kind && t.name == touch.name && t.context == touch.context) {
-        Some(t) => t.mode = combine(&t.mode, &touch.mode).into(),
+        Some(t) => {
+            t.mode = combine(&t.mode, &touch.mode).into();
+            if (touch.hop, site_order(&touch.site)) < (t.hop, site_order(&t.site)) {
+                (t.hop, t.via, t.site) = (touch.hop, touch.via, touch.site);
+            }
+        }
         None => out.push(touch),
     };
     let mut seen = HashSet::from([root]);
@@ -1586,17 +1601,26 @@ pub fn touched(conn: &Connection, model: &DbModel, root: i64, depth: u8) -> Resu
         let mut hits: Vec<RefHit> = stmt.query_map([id], ref_row)?.collect::<rusqlite::Result<_>>()?;
         resolve_all(conn, &mut hits)?;
         for h in hits.iter().filter(|h| matches!(h.confidence, "exact" | "unique_name")) {
+            // A call's targets and their implementations in file and line order, not the order the index stored them
+            // in: which symbols the walk visits before its limit is the same however the repo was indexed.
+            let mut nexts: Vec<(String, u32, String, i64)> = Vec::new();
             for &tid in &h.target_ids {
                 for next in std::iter::once(tid).chain(implementations(conn, tid)?) {
-                    if seen.contains(&next) {
-                        continue;
+                    if !seen.contains(&next)
+                        && !nexts.iter().any(|n| n.3 == next)
+                        && let Some(s) = crate::trace::symbol(conn, next)?
+                    {
+                        nexts.push((s.file.clone(), s.line, s.qualified(), next));
                     }
-                    if seen.len() < TOUCH_NODES {
-                        seen.insert(next);
-                        queue.push_back((next, hop + 1));
-                    } else {
-                        cut = true;
-                    }
+                }
+            }
+            nexts.sort();
+            for (.., next) in nexts {
+                if seen.len() < TOUCH_NODES {
+                    seen.insert(next);
+                    queue.push_back((next, hop + 1));
+                } else {
+                    cut = true;
                 }
             }
         }
