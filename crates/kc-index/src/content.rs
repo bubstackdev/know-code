@@ -151,12 +151,104 @@ struct Read {
 /// Pairs per chunk: 2 MB.
 const CHUNK: usize = 1 << 18;
 
+/// A chunk of pairs, at most [`CHUNK`], in memory of its own on Unix: mapped from the OS when made and given back when
+/// dropped. The pairs are a cold index's largest allocation (87 MiB on bitwarden/clients); from the allocator, their
+/// pages stayed counted against the process once freed, and the file ranking built next took as much again beside
+/// them.
+struct Chunk {
+    #[cfg(unix)]
+    ptr: std::ptr::NonNull<u64>,
+    #[cfg(unix)]
+    len: usize,
+    #[cfg(not(unix))]
+    vec: Vec<u64>,
+}
+
+// SAFETY: a chunk owns its mapping alone, like a `Vec<u64>`.
+#[cfg(unix)]
+unsafe impl Send for Chunk {}
+
+#[cfg(unix)]
+impl Chunk {
+    const BYTES: usize = CHUNK * std::mem::size_of::<u64>();
+
+    fn new() -> Chunk {
+        // SAFETY: an anonymous private mapping, owned by this chunk until it is dropped. Pages are zeroed and touched
+        // only as pairs are written.
+        let p = unsafe {
+            libc::mmap(std::ptr::null_mut(), Self::BYTES, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANON, -1, 0)
+        };
+        match std::ptr::NonNull::new(p.cast::<u64>()) {
+            Some(ptr) if p != libc::MAP_FAILED => Chunk { ptr, len: 0 },
+            _ => std::alloc::handle_alloc_error(std::alloc::Layout::new::<[u64; CHUNK]>()),
+        }
+    }
+
+    fn push(&mut self, pair: u64) {
+        assert!(self.len < CHUNK);
+        // SAFETY: within the mapping, which holds CHUNK pairs.
+        unsafe { self.ptr.as_ptr().add(self.len).write(pair) };
+        self.len += 1;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Chunk {
+    fn drop(&mut self) {
+        // SAFETY: the mapping made in `new`, unmapped once.
+        unsafe { libc::munmap(self.ptr.as_ptr().cast(), Self::BYTES) };
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::Deref for Chunk {
+    type Target = [u64];
+    fn deref(&self) -> &[u64] {
+        // SAFETY: the first `len` pairs are written.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::DerefMut for Chunk {
+    fn deref_mut(&mut self) -> &mut [u64] {
+        // SAFETY: as for `deref`, and the chunk is borrowed mutably.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+#[cfg(not(unix))]
+impl Chunk {
+    fn new() -> Chunk {
+        Chunk { vec: Vec::with_capacity(CHUNK) }
+    }
+
+    fn push(&mut self, pair: u64) {
+        self.vec.push(pair);
+    }
+}
+
+#[cfg(not(unix))]
+impl std::ops::Deref for Chunk {
+    type Target = [u64];
+    fn deref(&self) -> &[u64] {
+        &self.vec
+    }
+}
+
+#[cfg(not(unix))]
+impl std::ops::DerefMut for Chunk {
+    fn deref_mut(&mut self) -> &mut [u64] {
+        &mut self.vec
+    }
+}
+
 /// Trigram occurrences as `gram << 32 | file id`, which sort into trigram lists. They are held in fixed-size chunks,
 /// each sorted once full, and merged when written: one growing array per thread, concatenated and sorted, needed up
 /// to three times the pairs' size (spare capacity from doubling, then the copy).
 #[derive(Default)]
 struct Pairs {
-    chunks: Vec<Vec<u64>>,
+    chunks: Vec<Chunk>,
     /// Indexes (into the file list) of the files whose trigrams are in `chunks`.
     files: Vec<usize>,
 }
@@ -169,7 +261,7 @@ impl Pairs {
                 if let Some(full) = self.chunks.last_mut() {
                     full.sort_unstable();
                 }
-                let mut c = Vec::with_capacity(CHUNK);
+                let mut c = Chunk::new();
                 c.push(pair);
                 self.chunks.push(c);
             }
@@ -478,6 +570,27 @@ mod tests {
         // The bitmap is clean for the next file.
         assert_eq!(set.grams(b"xyz"), vec![gram(b'x', b'y', b'z')]);
         assert!(set.grams(b"ab").is_empty());
+    }
+
+    #[test]
+    fn pairs_come_out_ascending_across_chunks() {
+        // Two full chunks and part of a third, pushed out of order, from two threads' worth of pairs.
+        let n = 2 * CHUNK + 5;
+        let value = |i: usize| (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 8;
+        let (mut a, mut b) = (Pairs::default(), Pairs::default());
+        for i in 0..n {
+            a.push(value(i));
+        }
+        b.push(7);
+        b.push(3);
+        a.seal();
+        b.seal();
+        a.extend(b);
+        assert_eq!(a.chunks.len(), 4);
+        assert!(a.chunks.iter().all(|c| c.len() <= CHUNK && c.windows(2).all(|w| w[0] <= w[1])));
+        let mut want: Vec<u64> = (0..n).map(value).chain([7, 3]).collect();
+        want.sort_unstable();
+        assert_eq!(a.sorted().collect::<Vec<_>>(), want);
     }
 
     #[test]
