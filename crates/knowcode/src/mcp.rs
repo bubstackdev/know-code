@@ -881,11 +881,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
         let _lane = lane;
         let _entered = kc_store::limits::enter(query);
         let _freshness = crate::refresh::Budget::enter(std::time::Duration::from_secs(2));
-        kc_index::workspace::clear_cached_reads();
-        let result = f();
-        drop(kc_index::cache::take_touched());
-        kc_index::workspace::clear_cached_reads();
-        result
+        f()
     })
     .await
     .map_err(|e| e.to_string());
@@ -926,7 +922,37 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
     if whole.len() <= max {
         return Ok(whole);
     }
+    // Rows before the rest of their sites' statements: those lines go first, from the last row up.
+    let body = unstate_text(&body, whole.len() - max);
+    let whole = format!("{}{body}", header(&env, complete));
+    if whole.len() <= max {
+        return Ok(whole);
+    }
     Ok(cap_text(&format!("{}{body}", header(&env, false)), max))
+}
+
+/// A tree's text less up to `excess` bytes of the lines quoting the rest of a site's statement (`  41 - text`, and the
+/// cite's `… the statement …` line), from the bottom up: what the size cap drops before any row.
+fn unstate_text(text: &str, excess: usize) -> String {
+    let statement = |l: &str| {
+        let t = l.trim_start();
+        let n = t.bytes().take_while(u8::is_ascii_digit).count();
+        (n > 0 && t[n..].starts_with(" - ")) || t.starts_with("… the statement ")
+    };
+    let mut lines: Vec<&str> = text.lines().collect();
+    let mut dropped = 0;
+    for i in (0..lines.len()).rev() {
+        if dropped >= excess {
+            break;
+        }
+        if statement(lines[i]) {
+            dropped += lines[i].len() + 1;
+            lines.remove(i);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 /// A tree line's use site said once: `at <file>:<line>` after a symbol in that same file becomes `at line <line>`,
@@ -1305,9 +1331,12 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
     let mut lost: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     while len > max && guard < 10_000 {
         guard += 1;
+        // Rows' detail dropped (a statement's lines, whose cite then compacts further than the full form says): measured
+        // exactly before any row is cut.
+        let mut detail = false;
         match shrink(&mut env) {
             // Rows' detail dropped: no row lost.
-            Some(path) if path.is_empty() => {}
+            Some(path) if path.is_empty() => detail = true,
             Some(path) => {
                 if let Some(r) = resume.as_mut() {
                     crate::cursor::cut(&mut env, r, &path);
@@ -1341,7 +1370,7 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
         crate::contract::finish(&mut env);
         let full = env.to_string().len();
         len = full.saturating_sub(saved);
-        if len <= max {
+        if len <= max || detail {
             len = crate::compact::measure(&env, names).len();
             saved = full.saturating_sub(len);
         }
@@ -1429,6 +1458,45 @@ fn tier(path: &str) -> u8 {
 /// Detail an answer list's rows can do without, dropped before a row of one is cut: the row keeps its name, kind and
 /// `file:line`.
 const ROW_DETAIL: &[&str] = &["signature", "doc", "attrs", "start_line", "end_line", "complexity", "cite"];
+
+/// The last row in `v` whose cite quotes the rest of its site's statement (`at` a range around the row's `site`, else
+/// its `line`), quoting the site's line alone again; `false` when no row does.
+fn unstate(v: &mut Value) -> bool {
+    match v {
+        Value::Array(a) => a.iter_mut().rev().any(unstate),
+        Value::Object(m) => {
+            if m.iter_mut().rev().filter(|(k, _)| !untouchable(k)).any(|(_, x)| unstate(x)) {
+                return true;
+            }
+            let line = match m.get("site").and_then(Value::as_str) {
+                Some(site) => site.rsplit_once(':').and_then(|(_, l)| l.parse::<u64>().ok()),
+                None => m.get("line").and_then(Value::as_u64),
+            };
+            let Some(Value::Object(c)) = m.get_mut("cite") else { return false };
+            let (Some(line), Some(at), Some(text)) = (line, c.get("at").and_then(Value::as_str), c.get("text").and_then(Value::as_str)) else {
+                return false;
+            };
+            let Some((file, (first, last))) = at.rsplit_once(':').and_then(|(f, r)| Some((f, r.split_once('-')?))) else { return false };
+            let (Ok(first), Ok(last)) = (first.parse::<u64>(), last.parse::<u64>()) else { return false };
+            if !(first..=last).contains(&line) {
+                return false;
+            }
+            let Some(own) = text.lines().nth((line - first) as usize).map(|l| l.trim().to_string()) else { return false };
+            let at = format!("{file}:{line}");
+            // What the cap said of the site's line stays; what it said of the statement goes.
+            let cut: Vec<String> = c.get("cut").and_then(Value::as_str).unwrap_or("").split("; ").filter(|p| p.starts_with(&format!("line {line} "))).map(str::to_string).collect();
+            c.insert("at".into(), Value::from(at));
+            c.insert("text".into(), Value::from(own));
+            if cut.is_empty() {
+                c.remove("cut");
+            } else {
+                c.insert("cut".into(), Value::from(cut.join("; ")));
+            }
+            true
+        }
+        _ => false,
+    }
+}
 
 /// Trims one item from the longest list, returning its path (`/items`, `/items/0/callers`); or shortens a long
 /// string, returning `/…`; or drops the detail of answer lists' rows, returning an empty path; `None` when nothing is
@@ -1518,6 +1586,10 @@ fn shrink(v: &mut Value) -> Option<String> {
             }
             _ => None,
         }
+    }
+    // The rest of a site's statement goes before any row.
+    if unstate(v) {
+        return Some(String::new());
     }
     if let Some((a, path, (tier, _))) = longest(v, String::new(), false, false)
         && tier > 0
@@ -2084,7 +2156,7 @@ impl KnowcodeServer {
             args.extend(["-g".into(), g]);
         }
         args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
-        // A first page at the default limit shows every hit when they all fit the answer (at most 60).
+        // A first page at the default limit shows every hit in code when they fit the answer (at most 60 hits).
         if p.limit.is_none() && p.offset.unwrap_or(0) == 0 && !p.files_only {
             args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS).to_string()]);
         }
@@ -2270,6 +2342,33 @@ mod tests {
 
     fn server(tools: &str) -> KnowcodeServer {
         KnowcodeServer::new(Scope { repos: Vec::new(), no_sync: false }, tools).unwrap()
+    }
+
+    /// The size cap drops the rest of sites' statements, from the last row up, before it cuts a row: a reference's
+    /// cite goes back to its line, keeping what was said of that line; a tree's `-` lines go first.
+    #[test]
+    fn the_size_cap_drops_statement_lines_before_rows() {
+        let row = |line: u64| {
+            json!({ "file": "src/A.cs", "line": line, "name": "Log", "confidence": "exact", "evidence": "receiver_type",
+                    "cite": { "at": format!("src/A.cs:{}-{}", line - 1, line + 1), "check": "verified",
+                              "text": format!("Audit.Log(\n    \"{}\",\n    2);", "x".repeat(300)),
+                              "cut": format!("the statement starts at line 1; line {line} cut at 120 of 300 characters") } })
+        };
+        let env = json!({ "complete": true, "items": (2..12).map(row).collect::<Vec<_>>(), "total": 10 });
+        let full = env.to_string().len();
+        let capped = cap_full(env, full - 400);
+        let items = capped["items"].as_array().unwrap();
+        assert_eq!(items.len(), 10, "{capped}");
+        // The last rows lost their statements; the first still have theirs.
+        let last = &items[9]["cite"];
+        assert_eq!((last["at"].as_str(), last["text"].as_str()), (Some("src/A.cs:11"), Some(format!("\"{}\",", "x".repeat(300)).as_str())), "{last}");
+        assert_eq!(last["cut"], "line 11 cut at 120 of 300 characters");
+        assert_eq!(items[0]["cite"]["at"], "src/A.cs:1-3");
+        assert!(capped.get("omitted").is_none(), "{capped}");
+        // A tree: the `-` lines and the statement's cut line, from the bottom up.
+        let tree = "a\n   1 - Audit.Log(\n   2 |     \"x\",\n   3 -     2);\n     … the statement starts at line 0\nb\n   7 - Audit.Log(\n   8 |     \"y\",\n";
+        assert_eq!(unstate_text(tree, 10), "a\n   1 - Audit.Log(\n   2 |     \"x\",\n   3 -     2);\n     … the statement starts at line 0\nb\n   8 |     \"y\",\n");
+        assert_eq!(unstate_text(tree, 1000), "a\n   2 |     \"x\",\nb\n   8 |     \"y\",\n");
     }
 
     /// Bytes the default (`core`) tool list and the instructions may take together: 3,707 at b0a3564 with kc_trace in

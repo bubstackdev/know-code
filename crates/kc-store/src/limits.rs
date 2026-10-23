@@ -1,6 +1,6 @@
 //! Execution limits: deadlines for child processes, and the per-query context ([`Operation`]) a thread runs: its
-//! cancellation, its freshness wait, and what it collects for the answer's envelope (cut children, repos left out of
-//! a fan-out, gone checkouts that mattered).
+//! cancellation, its freshness wait, what it collects for the answer's envelope (cut children, repos left out of a
+//! fan-out, gone checkouts that mattered, repos answered from a cached summary), and the repos whose indexes it used.
 //!
 //! One query is one [`Operation`], created where the query starts (an MCP tool call, a CLI command) and entered for
 //! the thread doing its work ([`enter`]). Everything the answer collects on the side is kept in it, never per thread,
@@ -105,6 +105,10 @@ pub struct Operation {
     missing: Mutex<Vec<PathBuf>>,
     /// Whether the answer's rows quote the lines they rest on (see [`crate::answer::Cite`]).
     cite: Mutex<crate::answer::CiteMode>,
+    /// Repos whose summary the query read from the cache rather than a current index, with the summary's generation.
+    cached_reads: Mutex<std::collections::HashMap<PathBuf, String>>,
+    /// Repos whose indexes the query used, for cache upkeep after it.
+    touched: Mutex<std::collections::BTreeSet<PathBuf>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -181,6 +185,26 @@ impl Operation {
         let mut out = std::mem::take(&mut *lock(&self.missing));
         out.sort();
         out
+    }
+
+    /// Records that the answer read the cached summary of the repo at `root`, of `generation`; the first read counts.
+    pub fn note_cached_read(&self, root: &Path, generation: &str) {
+        lock(&self.cached_reads).entry(root.to_path_buf()).or_insert_with(|| generation.to_string());
+    }
+
+    /// The repos [`Operation::note_cached_read`] recorded, with their summaries' generations.
+    pub fn cached_reads(&self) -> std::collections::HashMap<PathBuf, String> {
+        lock(&self.cached_reads).clone()
+    }
+
+    /// Records that the query used the index of the repo at `root`.
+    pub fn note_touched(&self, root: &Path) {
+        lock(&self.touched).insert(root.to_path_buf());
+    }
+
+    /// The repos [`Operation::note_touched`] recorded since the last call, sorted.
+    pub fn take_touched(&self) -> Vec<PathBuf> {
+        std::mem::take(&mut *lock(&self.touched)).into_iter().collect()
     }
 
     /// `f`, with what it notes as missing dropped.
@@ -420,6 +444,33 @@ mod tests {
         assert!(check().is_err());
         assert!(output(Command::new("true"), Kind::Search, "true", None).is_err());
         unsafe { std::env::remove_var("KNOWCODE_SEARCH_DEADLINE") };
+    }
+
+    /// The cached summaries a query read and the indexes it used are the query's: a worker entering it records into
+    /// it, and another query sees none of them.
+    #[test]
+    fn invariant_cached_reads_and_used_indexes_belong_to_the_query() {
+        let op = Operation::new();
+        let _in = enter(op.clone());
+        let worker = op.clone();
+        std::thread::spawn(move || {
+            let _in = enter(worker);
+            current().note_cached_read(Path::new("/w/a"), "g1");
+            current().note_touched(Path::new("/w/a"));
+        })
+        .join()
+        .unwrap();
+        current().note_cached_read(Path::new("/w/a"), "g2");
+        current().note_touched(Path::new("/w/b"));
+        assert_eq!(current().cached_reads(), [(PathBuf::from("/w/a"), "g1".to_string())].into_iter().collect());
+        {
+            let other = op.sharing_cancellation();
+            let _inner = enter(other);
+            assert!(current().cached_reads().is_empty());
+            assert!(current().take_touched().is_empty());
+        }
+        assert_eq!(current().take_touched(), [PathBuf::from("/w/a"), PathBuf::from("/w/b")]);
+        assert!(current().take_touched().is_empty(), "each taken once");
     }
 
     /// Two queries running at once, on two threads, or one after the other on one thread (a call nested in another,

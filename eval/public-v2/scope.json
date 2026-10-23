@@ -1,0 +1,137 @@
+{
+  "format": 1,
+  "stage": "subject scope before sampling; no scored runs",
+  "languages": [
+    "csharp",
+    "typescript",
+    "javascript"
+  ],
+  "exclude_flags": [
+    "test-path",
+    "sample-or-benchmark-path",
+    "dependency-or-vendor-path",
+    "build-or-output-path",
+    "generated-filename",
+    "generated-header",
+    "symlink"
+  ],
+  "repos": {
+    "autofac": {
+      "include": [
+        "src/"
+      ],
+      "evidence": [
+        "src/Autofac/Autofac.csproj"
+      ],
+      "note": "Library source; codegen, benchmarks and tests remain evidence but are not subjects. The source project references the code generator."
+    },
+    "autofac-di": {
+      "include": [
+        "src/"
+      ],
+      "evidence": [
+        "src/Autofac.Extensions.DependencyInjection/Autofac.Extensions.DependencyInjection.csproj"
+      ],
+      "note": "Integration library source. Its pinned Autofac package version does not establish that these two source pins build together; label cross-snapshot assumptions explicitly."
+    },
+    "bitwarden-clients": {
+      "include": [
+        "apps/",
+        "libs/"
+      ],
+      "evidence": [
+        "package.json"
+      ],
+      "note": "Both apps and libs are primary workspace code. Tests, e2e, scripts and configuration are evidence. Separately licensed bitwarden_license content was excluded during export."
+    },
+    "bitwarden-server": {
+      "include": [
+        "src/",
+        "util/",
+        "AppHost/"
+      ],
+      "evidence": [
+        "src/Api/Api.csproj",
+        "src/Core/Core.csproj",
+        "util/Server/Server.csproj",
+        "AppHost/AppHost.csproj"
+      ],
+      "note": "Includes service, utility, migration and composition source. Some project references point into excluded separately licensed source: this is a partial source scope, not a buildable or complete application graph."
+    },
+    "jellyfin-server": {
+      "include": [
+        "src/",
+        "Emby.Naming/",
+        "Emby.Photos/",
+        "Emby.Server.Implementations/",
+        "Jellyfin.Api/",
+        "Jellyfin.Data/",
+        "Jellyfin.Server/",
+        "Jellyfin.Server.Implementations/",
+        "MediaBrowser.Common/",
+        "MediaBrowser.Controller/",
+        "MediaBrowser.LocalMetadata/",
+        "MediaBrowser.MediaEncoding/",
+        "MediaBrowser.Model/",
+        "MediaBrowser.Providers/",
+        "MediaBrowser.XbmcMetadata/",
+        "SharedVersion.cs"
+      ],
+      "evidence": [
+        "Jellyfin.Api/Jellyfin.Api.csproj",
+        "Jellyfin.Server/Jellyfin.Server.csproj",
+        "MediaBrowser.Controller/MediaBrowser.Controller.csproj",
+        "src/Jellyfin.Extensions/Jellyfin.Extensions.csproj"
+      ],
+      "note": "Primary projects span root directories as well as src. Tests and fuzz harnesses are evidence but not subjects."
+    },
+    "jellyfin-web": {
+      "include": [
+        "src/"
+      ],
+      "evidence": [
+        "package.json"
+      ],
+      "note": "Web source imports @jellyfin/sdk and jellyfin-apiclient, whose source repositories are outside this cohort. Label external boundaries rather than inferring that an absent client implementation does not exist."
+    },
+    "bitwarden-directory-connector": {
+      "include": [
+        "libs/",
+        "src-cli/",
+        "src-gui/",
+        "utils/"
+      ],
+      "evidence": [
+        "package.json"
+      ],
+      "note": "Directory Connector source: a CLI and desktop app that call the Bitwarden server's public API. Tests and configuration are evidence."
+    },
+    "serilog": {
+      "include": [
+        "src/"
+      ],
+      "evidence": [
+        "src/Serilog/Serilog.csproj"
+      ],
+      "note": "Library source; tests, performance tests and approval tests are evidence but not subjects."
+    },
+    "serilog-extensions-hosting": {
+      "include": [
+        "src/"
+      ],
+      "evidence": [
+        "src/Serilog.Extensions.Hosting/Serilog.Extensions.Hosting.csproj"
+      ],
+      "note": "Hosting integration source; samples and tests are evidence. Its Serilog package version does not establish that these pins build together."
+    },
+    "serilog-aspnetcore": {
+      "include": [
+        "src/"
+      ],
+      "evidence": [
+        "src/Serilog.AspNetCore/Serilog.AspNetCore.csproj"
+      ],
+      "note": "ASP.NET Core integration source; samples and tests are evidence. Package versions do not establish that these pins build together."
+    }
+  }
+}

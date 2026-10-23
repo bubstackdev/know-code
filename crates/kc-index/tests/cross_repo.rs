@@ -820,3 +820,68 @@ fn invariant_another_checkout_of_a_package_repo_never_removes_dependency_edges()
     assert!(one_each.iter().any(|s| s.root == *lib_root));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Two unrelated backends with an action of one name, and generated clients calling an operation of that name with
+/// no tag. A client known to call one backend (another of its requests is served there) links only there; a client
+/// with nothing saying which backend it calls links to both, `ambiguous`, assuming `server_unverified`. From the other
+/// backend's action, the first client is no caller.
+#[test]
+fn untagged_operations_link_to_the_servers_their_client_calls() {
+    let turn = turn();
+    let base = turn.dir("operations");
+    let shop = scratch(&base, "shop-api");
+    write(
+        &shop,
+        "src/ProductsController.cs",
+        "[ApiController]\n[Route(\"api/products\")]\npublic class ProductsController : ControllerBase\n{\n    [HttpGet]\n    public Task ListItems() => null;\n    [HttpGet(\"featured\")]\n    public Task Featured() => null;\n}\n",
+    );
+    let wiki = scratch(&base, "wiki-api");
+    write(
+        &wiki,
+        "src/PagesController.cs",
+        "[ApiController]\n[Route(\"api/pages\")]\npublic class PagesController : ControllerBase\n{\n    [HttpGet]\n    public Task ListItems() => null;\n    [HttpGet(\"all\")]\n    public Task ListPages() => null;\n}\n",
+    );
+    let web = scratch(&base, "shop-web");
+    write(
+        &web,
+        "src/catalog.ts",
+        "export class Catalog {\n  featured() { return fetch('/api/products/featured'); }\n  all() { return this.apiClient.listItems(); }\n  pages() { return this.apiClient.listPages(); }\n}\n",
+    );
+    let kiosk = scratch(&base, "kiosk");
+    write(&kiosk, "src/screen.ts", "export class Screen {\n  load() { return this.apiClient.listItems(); }\n}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&shop, &wiki, &web, &kiosk].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let operation = |i: usize, symbol: &str| routes(i).into_iter().find(|r| r.symbol == symbol && r.side == "operation").unwrap_or_else(|| panic!("{symbol}"));
+    use kc_store::answer::Assumption::{OperationName, SameDeployment, ServerUnverified};
+    let link = |i: usize, symbol: &str| -> Vec<(String, String, &'static str, Vec<kc_store::answer::Assumption>)> {
+        kc_index::http::handlers(&operation(i, symbol), &roots[i], &summaries)
+            .into_iter()
+            .map(|l| (l.repo.file_name().unwrap().to_string_lossy().into_owned(), l.route.symbol, l.confidence, l.assumptions))
+            .collect()
+    };
+    // shop-web's other request is served by shop-api: its operation is shop-api's action only.
+    assert_eq!(link(2, "Catalog.all"), [("shop-api".to_string(), "ProductsController.ListItems".to_string(), "exact", vec![SameDeployment, OperationName])]);
+    // Nothing says which backend the kiosk calls: both, and the answer says so.
+    let unverified = vec![SameDeployment, OperationName, ServerUnverified];
+    assert_eq!(
+        link(3, "Screen.load"),
+        [
+            ("shop-api".to_string(), "ProductsController.ListItems".to_string(), "ambiguous", unverified.clone()),
+            ("wiki-api".to_string(), "PagesController.ListItems".to_string(), "ambiguous", unverified),
+        ]
+    );
+    // From wiki-api's action: the kiosk may call it; shop-web doesn't.
+    let pages = routes(1).into_iter().find(|r| r.symbol == "PagesController.ListItems").unwrap();
+    let callers: Vec<String> = kc_index::http::callers(&pages, &roots[1], &summaries).into_iter().map(|l| l.route.symbol).collect();
+    assert_eq!(callers, ["Screen.load"]);
+    // An operation only the other backend has: no link, and the note says where the name is.
+    assert!(link(2, "Catalog.pages").is_empty());
+    let note = kc_index::http::unlinked_note(&operation(2, "Catalog.pages"), &summaries, false).unwrap();
+    assert!(note.contains("actions named `listPages` only in repos it isn't known to call (wiki-api)"), "{note}");
+    let _ = std::fs::remove_dir_all(&base);
+}

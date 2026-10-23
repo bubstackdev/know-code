@@ -54,7 +54,10 @@ Resolved:
   (`Func<T>`, `Owned<T>`, `GetInstance<T>()`, Autofac delegate factories), mapper calls, FluentValidation child
   rules, and extension methods in scope.
 - **Dependency injection.** Autofac-style and Microsoft DI registrations (`RegisterType<Foo>().As<IFoo>()`,
-  `AddScoped<IFoo, Foo>()`, `TryAdd*`, `typeof` pairs, factories, assembly scans, open generics), and a registration
+  `AddScoped<IFoo, Foo>()`, `TryAdd*`, `typeof` pairs, factories, assembly scans, open generics), service descriptors
+  handed to the collection (`services.Add(new ServiceDescriptor(typeof(IFoo), typeof(Foo), ServiceLifetime.Scoped))`,
+  `ServiceDescriptor.Singleton<IFoo, Foo>()` and its relatives under `TryAdd`, `TryAddEnumerable`, `Replace` or
+  `Insert`, with the lifetime they state; keyed ones are said, not read), and a registration
   built from its parts, the way a container registers itself under the services it answers for (`new
   ComponentRegistration(…, new DelegateActivator(typeof(Scope), …), …, new TypedService(typeof(IScope)) …)`, or those
   arguments to `base(…)` in a class deriving `ComponentRegistration`). A call through a
@@ -98,8 +101,11 @@ Resolved:
   `new URL(path, base)` after a base address, and locals holding any of them. A call to a generated API client whose
   code isn't indexed (`getItemsApi(api).getItems()`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`)
   is an operation, linked to the action of that name under the controller named like the client (`Items`), else
-  under any controller, assuming `operation_name`; a client the repo declares itself is read through its own
-  requests instead.
+  under any controller, assuming `operation_name`. Only actions in the servers the client's repo is known to call
+  count: the repo itself, a repo it depends on, the one repo serving another of its requests or a host its settings
+  name, the one repo a tagged operation of its links to. With none known, an untagged operation links to every
+  action of its name, `ambiguous`, assuming `server_unverified`. A client the repo declares itself is read through its
+  own requests instead.
 - **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
   are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
   methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may
