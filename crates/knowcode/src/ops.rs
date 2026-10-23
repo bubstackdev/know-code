@@ -7206,14 +7206,18 @@ fn search_failed(env: &mut Value, roots: &[PathBuf], failed: &[(usize, String)])
     }
 }
 
-/// Maps `f` over `items` on up to `workers` threads, keeping order.
+/// Maps `f` over `items` on up to `workers` threads, keeping order. The workers run as this thread's query: its
+/// cancellation and freshness wait hold there, and what they collect is the query's.
 fn pool_map<T: Send, R: Send>(items: Vec<T>, workers: usize, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    let query = kc_store::limits::current();
     let n = items.len();
     let queue = std::sync::Mutex::new(items.into_iter().enumerate());
     let results: std::sync::Mutex<Vec<Option<R>>> = std::sync::Mutex::new((0..n).map(|_| None).collect());
     std::thread::scope(|scope| {
         for _ in 0..workers.clamp(1, n.max(1)) {
+            let query = query.clone();
             scope.spawn(|| {
+                let _query = kc_store::limits::enter(query);
                 loop {
                     let Some((i, item)) = queue.lock().unwrap().next() else { break };
                     let r = f(item);
@@ -7429,6 +7433,23 @@ pub fn note_rm(id: i64, args: &Scope) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A fan-out's workers run as the query that started it: what they note is the query's, and its cancellation
+    /// stops them.
+    #[test]
+    fn pool_workers_run_as_the_query() {
+        let query = kc_store::limits::Operation::new();
+        let _in = kc_store::limits::enter(query.clone());
+        let roots: Vec<PathBuf> = (0..8).map(|i| PathBuf::from(format!("/gone/{i}"))).collect();
+        let checked = pool_map(roots.clone(), 4, |r| {
+            kc_index::workspace::note_missing(&r);
+            kc_store::limits::check().is_ok()
+        });
+        assert!(checked.iter().all(|ok| *ok));
+        assert_eq!(kc_index::workspace::take_missing(), roots);
+        query.cancel();
+        assert!(pool_map(vec![()], 2, |_| kc_store::limits::check().is_err()).iter().all(|cancelled| *cancelled));
+    }
 
     #[test]
     fn every_envelope_says_which_knowcode_answered() {
