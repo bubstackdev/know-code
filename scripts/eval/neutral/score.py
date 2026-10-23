@@ -21,7 +21,8 @@ repo prefix get it.
 Labels may mark items `optional` (a hit counts, a miss costs nothing) and `via` (a call reached through dispatch;
 reported with and without them), list `negatives` (same-named different targets: always a false positive), and set
 `dynamic_name` (a runtime-built name; reported with and without). Answer items matching a label's `tests` are
-neither hits nor false positives.
+neither hits nor false positives. Neither are items matching its `undecided` list: calls the labeller can't rule in or
+out from source alone (a call through an external SDK whose route isn't in the cohort). They are counted apart.
 
 Precision counts only for `exhaustive` labels (plus negatives, on any label). `lower_bound` and `uncertain` labels
 score recall only, and `uncertain` ones are reported apart. With --census, the structural headline is the mean of
@@ -106,13 +107,14 @@ def score_one(label, answer_items, repos=(), skip_via=False):
     rule = label["match"]
     labelled = [i for i in label["items"] if not (skip_via and i.get("via"))]
     ignored = [i for i in label["items"] if skip_via and i.get("via")] + label.get("tests", [])
+    undecided = [split_item(i["item"]) for i in label.get("undecided", [])]
     paths = rule not in {"ci", "symbol"}
     truth = [split_item(i["item"]) for i in labelled]
     required = [not i.get("optional") for i in labelled]
     neutral = [split_item(i["item"]) for i in ignored]
     negatives = [split_item(i["item"]) for i in label.get("negatives", [])]
     used = [False] * len(truth)
-    extra, wrong, seen = [], [], set()
+    extra, wrong, unsure, seen = [], [], [], set()
 
     def hits(a, t):
         return any(matches(f, t, rule) for f in a)
@@ -128,6 +130,8 @@ def score_one(label, answer_items, repos=(), skip_via=False):
         hit = next((k for k, t in enumerate(truth) if not used[k] and hits(a, t)), None)
         if hit is not None:
             used[hit] = True
+        elif any(hits(a, t) for t in undecided):
+            unsure.append(raw)
         elif not any(hits(a, t) for t in neutral + truth):
             extra.append(raw)
     tp = sum(u for u in used)
@@ -147,7 +151,7 @@ def score_one(label, answer_items, repos=(), skip_via=False):
         recall = 0.0 if wrong or (exhaustive and extra) else 1.0
     return {"tp": tp, "fn": fn, "fp": fp, "precision": precision, "recall": recall,
             "missed": [labelled[k]["item"] for k, u in enumerate(used) if not u and required[k]],
-            "extra": extra, "negatives_returned": wrong}
+            "extra": extra, "negatives_returned": wrong, "undecided_returned": unsure}
 
 
 def summarize(rows):
