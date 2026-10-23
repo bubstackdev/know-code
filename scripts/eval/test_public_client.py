@@ -191,6 +191,8 @@ class BareClientTests(unittest.TestCase):
                     root, binary, config = self.fixture(base, arm)
                     if mode:
                         config['shell'] = mode
+                    if mode == 'sandbox':
+                        config['knowcode_binary_name'] = binary.name
                     kwargs = {}
                     if arm != 'plain':
                         index = root/'control/index/example'
@@ -203,7 +205,7 @@ class BareClientTests(unittest.TestCase):
                     argv = result['argv']
                     denied = argv[argv.index('--disallowedTools')+1:] if '--disallowedTools' in argv else []
                     # In sandbox mode every arm refuses Bash commands naming the KnowCode binary.
-                    self.assertEqual('Bash(*knowcode*)' in denied, mode == 'sandbox')
+                    self.assertEqual('Bash(*fake-client*)' in denied, mode == 'sandbox')
                 self.assertTrue(all(rules == seen[0] for rules in seen))
                 if expected:
                     self.assertEqual(seen[0], expected)
@@ -214,6 +216,13 @@ class BareClientTests(unittest.TestCase):
             root, binary, config = self.fixture(Path(temp), 'plain')
             config['shell'] = 'anything'
             with self.assertRaisesRegex(ValueError, 'shell permission mode'):
+                client.prepare(root, config, binary)
+            config['shell'] = 'sandbox'
+            with self.assertRaisesRegex(ValueError, 'distinctive knowcode_binary_name'):
+                client.prepare(root, config, binary)
+            # A name that occurs in the session's own paths would make Bash refuse every source path.
+            config['knowcode_binary_name'] = Path(temp).name
+            with self.assertRaisesRegex(ValueError, 'session paths contain'):
                 client.prepare(root, config, binary)
 
 
