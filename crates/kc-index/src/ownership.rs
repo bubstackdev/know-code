@@ -472,7 +472,7 @@ fn walk_log(root: &Path, anchor: Anchor, rev: &str) -> Walk {
     let excludes = privacy.exclude_pathspecs();
     let mut args = vec!["log", "--no-merges", "--numstat", "-M", "--format=@@%H\t%ct\t%aE\t%aN\t%s", rev, "--"];
     args.extend(excludes.iter().map(String::as_str));
-    let log = git::run(root, &args).unwrap_or_default();
+    let log = git::run_walk(root, &args).unwrap_or_default();
     let mut w = parse(&String::from_utf8_lossy(&log), anchor, &shallow, &vitals::Bots::load());
     w.files.retain(|p, _| !privacy.blocks(p));
     w.shallow = !shallow.is_empty();

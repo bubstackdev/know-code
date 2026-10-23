@@ -703,7 +703,7 @@ fn walk_span(root: &Path, end: &End, since: Option<i64>, file: Option<&str>) -> 
     }
     args.extend(privacy.exclude_pathspecs());
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let log = git::run(root, &args).unwrap_or_default();
+    let log = git::run_walk(root, &args).unwrap_or_default();
     let w = Window {
         head_time: end_time,
         cc_since: since.unwrap_or(i64::MIN),
@@ -1093,7 +1093,7 @@ fn walk_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Opti
         args.push("--");
         args.extend(excludes.iter().map(String::as_str));
     }
-    let log = git::run(root, &args).unwrap_or_default();
+    let log = git::run_walk(root, &args).unwrap_or_default();
     let (mut out, stats, mut words) = parse_log(&String::from_utf8_lossy(&log), &window);
     drop_blocked(&privacy, &mut out, Some(&mut words));
     // A log cut at its deadline is partial: answered from (the answer says so), never cached.

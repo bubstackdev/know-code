@@ -57,6 +57,8 @@ pub struct Plan {
 
 /// Memory one cold index may take at its peak, for sizing how many run at once: measured peaks were 32 to 193 MiB
 /// resident on public repos of 100 to 8,000 files (`/usr/bin/time -l knowcode index`), so this leaves room for bigger.
+/// With the file ranking, the areas and their history walk (a `git` child, counted in that peak) built by the index
+/// too: 38 to 331 MiB on four public repos of 100 to 8,200 files, 25 to 226 MiB of footprint.
 pub const REPO_MEMORY: u64 = 512 << 20;
 
 /// Parser threads past this buy little: one thread writes the index, and it bounds the parse phase on medium and large

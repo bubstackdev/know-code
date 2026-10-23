@@ -162,18 +162,30 @@ pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
 /// [`kc_store::limits`]): a command past it, or in a cancelled operation, is killed and fails with a
 /// [`kc_store::limits::Cut`], recorded for the answer to say it is incomplete.
 pub fn run(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    run_inner(dir, args, None)
+    run_inner(dir, &[], args, None)
+}
+
+/// Git's memory for a history walk (`log --numstat -M` over a year or more): pack files mapped 16 MiB at a time, 64
+/// MiB at most, and a 32 MiB cache of delta bases, where git's defaults (1 GiB windows, 96 MiB) let a walk of a large
+/// repo reach 631 MiB resident (bitwarden/clients, a year's history). Same output; measured at 121 MiB resident there
+/// for 9% more of git's instructions, 81 rather than 161 MiB on bitwarden/server (same instructions).
+const WALK_MEMORY: [&str; 6] =
+    ["-c", "core.packedGitWindowSize=16m", "-c", "core.packedGitLimit=64m", "-c", "core.deltaBaseCacheLimit=32m"];
+
+/// [`run`] for a history walk: `git log` over many commits, within [`WALK_MEMORY`].
+pub fn run_walk(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    run_inner(dir, &WALK_MEMORY, args, None)
 }
 
 /// [`run`], writing `input` to git's standard input (`cat-file --batch`).
 pub fn run_with_input(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
-    run_inner(dir, args, Some(input))
+    run_inner(dir, &[], args, Some(input))
 }
 
-fn run_inner(dir: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
+fn run_inner(dir: &Path, config: &[&str], args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
     let mut cmd = Command::new("git");
     // Read-only: `--no-optional-locks` keeps `git status` from refreshing and rewriting the repo's `.git/index`.
-    cmd.arg("--no-optional-locks").arg("-C").arg(dir).args(args);
+    cmd.args(config).arg("--no-optional-locks").arg("-C").arg(dir).args(args);
     let what = format!("git {}", args.first().copied().unwrap_or_default());
     let out = kc_store::limits::output(cmd, kc_store::limits::Kind::Git, &what, input).context("running git")?;
     if !out.status.success() {
@@ -247,6 +259,32 @@ mod tests {
         let committed = agrees().expect("the first commit");
         git(&["checkout", "--quiet", "--detach", "HEAD"]);
         assert_eq!(agrees().as_deref(), Some(committed.as_str()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_walk_within_its_memory_reads_the_same_log() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("knowcode-walk-{}-{unique}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture Author", "-c", "user.email=fixture@example.invalid"])
+                .arg("-C").arg(&root).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&["init", "--quiet"]);
+        let body: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        std::fs::write(root.join("old.txt"), &body).unwrap();
+        git(&["add", "old.txt"]);
+        git(&["commit", "--quiet", "-m", "add"]);
+        git(&["mv", "old.txt", "new.txt"]);
+        std::fs::write(root.join("new.txt"), format!("{body}one more\n")).unwrap();
+        git(&["commit", "--quiet", "-am", "move"]);
+        let args = ["log", "--no-merges", "--numstat", "--summary", "-M", "--format=@@%H\t%s"];
+        let walk = run_walk(&root, &args).unwrap();
+        assert_eq!(walk, run(&root, &args).unwrap());
+        assert!(String::from_utf8_lossy(&walk).contains("old.txt => new.txt"), "{}", String::from_utf8_lossy(&walk));
         std::fs::remove_dir_all(root).unwrap();
     }
 
