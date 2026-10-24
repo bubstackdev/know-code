@@ -518,6 +518,24 @@ pub fn is_test_path(path: &str) -> bool {
         || name.contains(".test.")
 }
 
+/// Whether `e` is SQLite saying another connection held the index's write lock past the busy timeout.
+pub fn is_busy(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        matches!(c.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(f, _))
+            if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+    })
+}
+
+/// Writes a cache with `write`, unless another connection holds the index's write lock past the busy timeout (an
+/// indexer whose transaction outlasts it, as the background's does when it is starved of CPU): then the value is used
+/// without being kept, and computed again next time, rather than failing the query that computed it.
+pub fn keep(write: impl FnOnce() -> Result<()>) -> Result<()> {
+    match write() {
+        Err(e) if is_busy(&e) => Ok(()),
+        r => r,
+    }
+}
+
 /// Whether `path` is under a directory holding copies rather than the live code: a backup, an old version, an
 /// archive, a copy or a site template variant (`2020_backup/`, `old/`, `_templates/`, `Copy of x/`). When several
 /// definitions share a name, these rank after the others.
@@ -800,11 +818,14 @@ impl Store {
         if limits::cuts_so_far() != cuts {
             return Ok(v);
         }
-        self.side()?.execute(
-            "INSERT INTO derived(key, gen, data) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET gen = excluded.gen, data = excluded.data",
-            params![key, generation, serde_json::to_string(&v)?],
-        )?;
+        keep(|| {
+            self.side()?.execute(
+                "INSERT INTO derived(key, gen, data) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET gen = excluded.gen, data = excluded.data",
+                params![key, generation, serde_json::to_string(&v)?],
+            )?;
+            Ok(())
+        })?;
         Ok(v)
     }
 

@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A query that reads a repo while the server indexes it in the background no longer fails with "database is
+  locked". The query wrote caches (the history walk, derived values) that waited on the indexer's write, and the
+  indexer, at background priority on a loaded machine, could hold it past SQLite's 5 s busy timeout. Such a cache
+  write is now skipped: the query answers from what it computed, and the cache is written next time. The background
+  file ranking no longer starts on a repo that is still being indexed (a query could queue it between the index's
+  sync and its contents), where the two writers each waited for the other; it is built once the indexing is done. On
+  main, the workspace gate failed this way in 1 of 4 runs.
 - `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
   hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
   the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools

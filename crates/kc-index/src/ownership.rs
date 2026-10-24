@@ -445,7 +445,7 @@ fn walk(root: &Path, store: &Store, anchor: Anchor) -> Result<Walk> {
     let key = if anchor.explicit { format!("at{}", anchor.time) } else { format!("day{}", anchor.time.div_euclid(DAY)) };
     let stamp = format!("{OWNERSHIP_FORMAT}|{head}|{key}|{}", vitals::history_inputs(root));
     let conn = store.side()?;
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS ownership (key TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID;")?;
+    kc_store::keep(|| Ok(conn.execute_batch("CREATE TABLE IF NOT EXISTS ownership (key TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID;")?))?;
     if !head.is_empty() && store.side_meta("ownership.head")?.as_deref() == Some(stamp.as_str()) {
         let data: Option<String> = conn.query_row("SELECT data FROM ownership WHERE key = 'walk'", [], |r| r.get(0)).ok();
         if let Some(w) = data.and_then(|d| serde_json::from_str(&d).ok()) {
@@ -458,8 +458,11 @@ fn walk(root: &Path, store: &Store, anchor: Anchor) -> Result<Walk> {
     if kc_store::limits::cuts_so_far() != cuts {
         return Ok(w);
     }
-    conn.execute("INSERT OR REPLACE INTO ownership(key, data) VALUES ('walk', ?1)", params![serde_json::to_string(&w)?])?;
-    store.set_meta("ownership.head", &stamp)?;
+    // Kept unless an indexer holds the write lock past the busy timeout (see `kc_store::keep`).
+    kc_store::keep(|| {
+        conn.execute("INSERT OR REPLACE INTO ownership(key, data) VALUES ('walk', ?1)", params![serde_json::to_string(&w)?])?;
+        store.set_meta("ownership.head", &stamp)
+    })?;
     Ok(w)
 }
 
