@@ -234,9 +234,20 @@ impl Deriver {
                     state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            if let Err(e) = derive_in_background(&root) {
-                eprintln!("knowcode: file ranking and areas of {}: {e}", root.display());
-                self.state.lock().unwrap_or_else(|e| e.into_inner()).failed.insert(root, Instant::now());
+            match derive_in_background(&root) {
+                Ok(true) => {},
+                // Being indexed: again after the others queued, once the indexing is likely done.
+                Ok(false) => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if !state.queue.contains(&root) {
+                        state.queue.push_back(root);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("knowcode: file ranking and areas of {}: {e}", root.display());
+                    self.state.lock().unwrap_or_else(|e| e.into_inner()).failed.insert(root, Instant::now());
+                },
             }
         }
     }
@@ -263,21 +274,28 @@ impl Deriver {
     }
 }
 
-/// Brings `root`'s derived data up to its index (see [`kc_index::refresh_derived`]) as the background does.
-fn derive_in_background(root: &Path) -> std::result::Result<(), String> {
-    let result = std::panic::catch_unwind(|| -> Result<()> {
+/// Brings `root`'s derived data up to its index (see [`kc_index::refresh_derived`]) as the background does. False when
+/// the repo is being indexed, and nothing was done.
+fn derive_in_background(root: &Path) -> std::result::Result<bool, String> {
+    let result = std::panic::catch_unwind(|| -> Result<bool> {
         if !kc_index::db_path(root)?.exists() {
-            return Ok(());
+            return Ok(true);
         }
+        // Not while the repo is being indexed (a query may queue it between the index's sync and its contents): the
+        // build's writes would wait on the indexer's and the indexer's on them, past SQLite's busy timeout, failing
+        // both and the queries reading the repo meanwhile. Held through the build, so indexing that starts meanwhile
+        // waits for it instead.
+        let Some(_writer) = kc_index::writer::WriterLock::try_acquire(root)? else { return Ok(false) };
         let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
         let store = kc_index::open(root)?;
         store.begin_snapshot()?;
         if !kc_index::derived_missing(&store)? && !kc_index::derived_stale(root, &store)? {
-            return Ok(());
+            return Ok(true);
         }
         use kc_index::machine::{Mode, plan, rank_threads, sniff};
         let workers = kc_store::rank::Workers { threads: rank_threads(plan(&sniff(), Mode::Background, 1, 0)), init: Some(background_priority) };
-        kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store))
+        kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store))?;
+        Ok(true)
     });
     match result {
         Ok(r) => r.map_err(|e| format!("{e:#}")),
@@ -680,6 +698,66 @@ mod tests {
         std::fs::remove_dir_all(&big).unwrap();
         assert!(!kc_index::indexed_roots().unwrap().contains(&big));
         assert!(kc_index::unindexed_roots().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_query_answers_while_an_indexer_holds_the_write_lock_past_the_busy_timeout() {
+        let cache = test_cache();
+        let base = cache.dir("query-while-writing");
+        let root = repo(&base, "app", &[("src/refund.py", "def approve_refund():\n    return 1\n")]);
+        assert!(std::process::Command::new("git").arg("-C").arg(&root).args(["-c", "user.name=Ann", "-c", "user.email=ann@example.test", "add", "-A"]).status().unwrap().success());
+        assert!(std::process::Command::new("git").arg("-C").arg(&root).args(["-c", "user.name=Ann", "-c", "user.email=ann@example.test", "commit", "-qm", "refund approval"]).status().unwrap().success());
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        ops::find("approve_refund", None, 10, &scope).unwrap();
+        let _budget = Budget::enter(Duration::from_secs(2));
+        // An indexer's write transaction (the background's, starved of CPU at its priority) outlasting the query's
+        // busy timeout: the caches the query would write are left for later; its answer is the same.
+        let writer = rusqlite::Connection::open(kc_index::db_path(&root).unwrap()).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let busy = ops::locate("refund approval", 10, &scope);
+        writer.execute_batch("ROLLBACK").unwrap();
+        let busy = busy.unwrap();
+        let free = ops::locate("refund approval", 10, &scope).unwrap();
+        assert_eq!(busy.env["items"], free.env["items"]);
+        assert!(!busy.env["items"].as_array().unwrap().is_empty(), "{}", busy.env);
+    }
+
+    #[test]
+    fn a_ranking_queued_while_the_repo_is_indexed_waits_for_the_indexing() {
+        let cache = test_cache();
+        let base = cache.dir("derive-while-indexing");
+        let root = repo(&base, "app", &[("src/app.py", "def handler():\n    return helper()\n\ndef helper():\n    return 1\n")]);
+        assert!(kc_index::derived_missing(&kc_index::open(&root).unwrap()).unwrap());
+        // An indexer holds the repo (as the background does between its sync and its contents) when a query queues
+        // the ranking: it is neither built against the indexer's writes nor given up as failed.
+        let writer = kc_index::writer::WriterLock::acquire(&root).unwrap();
+        Deriver::shared().queue(&root);
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(kc_index::derived_missing(&kc_index::open(&root).unwrap()).unwrap());
+        assert!(!Deriver::shared().state.lock().unwrap().failed.contains_key(&root));
+        // Built once the indexing is done.
+        drop(writer);
+        assert!(Deriver::shared().wait_idle(Duration::from_secs(60)));
+        assert!(!kc_index::derived_missing(&kc_index::open(&root).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn a_workspace_answer_says_once_which_repos_it_left_out() {
+        let cache = test_cache();
+        let base = cache.dir("one-note");
+        let roots = base.join("roots");
+        repo(&roots, "old", &[("src/a.py", "def a():\n    return 1\n")]);
+        kc_index::config::add_root(&roots).unwrap();
+        let first = clone_into(&roots.join("first"), &[("src/b.py", "def b():\n    return 2\n")]);
+        clone_into(&roots.join("second"), &[("src/c.py", "def c():\n    return 3\n"), ("src/d.py", "x = 1\n")]);
+        // The answer notes the repos not indexed as it finishes; the server notes every workspace answer again as it
+        // sends it. A repo indexed in between leaves the first note as it was, not a second one beside it.
+        let mut env = json!({ "repo": "workspace", "items": [] });
+        ops::add_missing(&mut env);
+        kc_index::sync(&first, &mut kc_index::open(&first).unwrap(), &kc_index::SyncOptions { threads: 1, ..Default::default() }).unwrap();
+        ops::add_unindexed(&mut env);
+        let notes: Vec<String> = crate::contract::incomplete_of(&env).into_iter().map(|i| i.detail).filter(|d| d.contains("not yet indexed")).collect();
+        assert_eq!(notes, ["workspace: 2 repositories found, not yet indexed (first, second); nothing from them is in this answer"], "{env}");
     }
 
     #[test]

@@ -11,6 +11,24 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   instructions before, and 75 s user, 36 s system and 949 G instructions after (one run each on a loaded machine).
   The server no longer sets SQLite's 4 MiB process-wide soft memory limit: it needs that counting, and each
   connection's page cache is still bounded by its own size.
+- A query that reads a repo while the server indexes it in the background no longer fails with "database is
+  locked". The query wrote caches (the history walk, derived values) that waited on the indexer's write, and the
+  indexer, at background priority on a loaded machine, could hold it past SQLite's 5 s busy timeout. Such a cache
+  write is now skipped: the query answers from what it computed, and the cache is written next time. The background
+  file ranking no longer starts on a repo that is still being indexed (a query could queue it between the index's
+  sync and its contents), where the two writers each waited for the other; it is built once the indexing is done. On
+  main, the workspace gate failed this way in 1 of 4 runs.
+- `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
+  hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
+  the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools
+  cost fewer tokens on every turn: parameter lines whose names say enough are gone (`symbols`, `names`, `queries`,
+  `kc_more`'s `cursor`), `kc_impact` no longer advertises `file` (still taken, and documented in `kc_help`), and the
+  instructions are shorter. By the token-counting endpoint, the eight core schemas went from 1,151 to 1,031 tokens and
+  the instructions from 256 to 227.
+- A workspace-wide answer says once which repos it left out because they aren't indexed yet. The server noted them
+  twice, once as the answer finished and again as it sent it; when the background finished indexing a repo in
+  between, the answer carried two "not yet indexed" entries with different counts. The workspace gate read them
+  together and, in one run, counted nine repos as left out silently.
 - `index` walks the history for the areas beside the file ranking instead of after it. The walk is a `git log` child
   that needs nothing from the ranking; on a repo with a long history it ran alone for most of a cold `index`. On a
   public TypeScript password manager client (8,177 files), a cold `index` took 19.4 to 20.7 s instead of 26.9 to
