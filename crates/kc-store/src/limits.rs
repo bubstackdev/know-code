@@ -109,6 +109,8 @@ pub struct Operation {
     cached_reads: Mutex<std::collections::HashMap<PathBuf, String>>,
     /// Repos whose indexes the query used, for cache upkeep after it.
     touched: Mutex<std::collections::BTreeSet<PathBuf>>,
+    /// How many indexes the query has opened (see [`Operation::note_opened`]).
+    opened: std::sync::atomic::AtomicUsize,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -198,6 +200,11 @@ impl Operation {
     }
 
     /// Records that the query used the index of the repo at `root`.
+    /// Counts an index the query opens; returns how many it has opened, this one included.
+    pub fn note_opened(&self) -> usize {
+        self.opened.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
     pub fn note_touched(&self, root: &Path) {
         lock(&self.touched).insert(root.to_path_buf());
     }

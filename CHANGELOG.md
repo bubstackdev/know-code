@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A workspace-wide answer holds at most 254 MiB of SQLite page cache over 500 repos. It keeps every index it
+  reads open until it answers, and each held up to 4 MiB of page cache (about 2 GiB over 500 repos). Past the first
+  index a call opens, each one's connections now hold 256 KiB. Answers are the same: ten workspace-wide `search`,
+  `locate`, `find`, `refs`, `hotspots` and `deps` calls over 111 public repos gave identical output. They took 0 to 8%
+  more instructions (`search` most).
 - Indexing several repos at once no longer spends most of its time in the kernel. SQLite was built with one page
   cache and one allocation counter for the whole process, each behind a global lock, and every connection's page
   fetches and allocations took them. Each connection now has its own page cache, and allocations aren't counted. On
