@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
+  hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
+  the instructions out (Claude Code's `--bare` mode), so the descriptions carry the map on their own. The core tools
+  cost fewer tokens on every turn: parameter lines whose names say enough are gone (`symbols`, `names`, `queries`,
+  `kc_more`'s `cursor`), `kc_impact` no longer advertises `file` (still taken, and documented in `kc_help`), and the
+  instructions are shorter. By the token-counting endpoint, the eight core schemas went from 1,151 to 1,031 tokens and
+  the instructions from 256 to 227.
 - `coupled`'s `static_link` and `tests`' reverse walk now run on the symbol graph that `trace`, `impact`, `path` and
   `flow` use, with the same gate, and the old in-repo walker is gone. Their answers don't change: on the 60 most-changed
   source files of each of four public repos with history, 240 `coupled` and 240 `tests` answers are the same before

@@ -220,8 +220,8 @@ out is still documented in `kc_help`, which says it isn't advertised, but can't 
 started with it.
 
 The default is the small set because a client that doesn't defer tools loads every advertised schema, and the
-server's instructions, on every turn. The core tools and the instructions are about 3.5k characters; `all` is about
-7.4k. kc_trace is not in the core set: kc_impact answers callers by hop, kc_context a symbol's callers and callees, and
+server's instructions, on every turn. The core tools and the instructions are about 3.1k characters; `all` is about
+7.0k. kc_trace is not in the core set: kc_impact answers callers by hop, kc_context a symbol's callers and callees, and
 kc_trace's schema is one of the largest.
 
 Each tool's schema lists only the parameters most calls need, with a line only where the name doesn't say enough.

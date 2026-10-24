@@ -2375,8 +2375,9 @@ mod tests {
     }
 
     /// Bytes the default (`core`) tool list and the instructions may take together: 3,707 at b0a3564 with kc_trace in
-    /// core and the shorter instructions.
-    const CORE_BUDGET: usize = 3_500;
+    /// core and the shorter instructions; 3,470 at 0.2.0; 3,073 with kc_impact naming HTTP endpoints and hops and the
+    /// parameter lines whose names say enough dropped.
+    const CORE_BUDGET: usize = 3_150;
 
     /// What tool discovery costs an agent's context, held to a budget so it can't creep back: the advertised schema
     /// (every tool, as `tools/list` sends it), each description, each parameter's line, and the instructions.
