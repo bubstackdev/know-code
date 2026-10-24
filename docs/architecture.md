@@ -80,6 +80,13 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
 - `knowcode index` of several repos (`--workspace`, or several paths) indexes them at once: as many as half the
   memory holds (512 MiB each) and every core but one allows, the cores shared among them, at most 8 parser threads a
   repo (one thread writes each index, and bounds its parse past that). `--jobs` and `--threads` override it.
+- SQLite's memory is bounded per connection, not per process. Each connection's page cache holds at most 2 MiB
+  (`cache_size`). A process holds one connection per index it has open, a second for caches written outside a
+  query's snapshot, and one per thread building a reference graph. A workspace-wide call keeps the indexes it reads
+  open until it answers, so its page caches can reach 4 MiB per repo it reads. Sorting and temporary tables come on
+  top of that, and are freed when their statement ends. SQLite is built without a process-wide page cache or
+  allocation counting (`.cargo/config.toml`): with several repos indexing at once, their global locks cost more
+  system time than the indexing did. That rules out a process-wide limit (`sqlite3_soft_heap_limit64`).
 - Calls run one at a time, except that a call past 2 seconds lets the next one start beside it (at most two), and
   `kc_search` and `kc_grep_ast` run in a child process of their own.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a
