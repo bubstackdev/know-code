@@ -885,3 +885,67 @@ fn untagged_operations_link_to_the_servers_their_client_calls() {
     assert!(note.contains("actions named `listPages` only in repos it isn't known to call (wiki-api)"), "{note}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// One repo, two apps, a controller of one name in each: the API's has a `[Route]`, the admin app's none and is mapped
+/// by `MapDefaultControllerRoute`. The admin app's actions are placed by the conventional template (`Async`
+/// dropped), never under the API's prefix, so a request to the API's route links to the API's action only. A repo
+/// mapping no conventional route leaves such an action unplaced and says why.
+#[test]
+fn a_conventionally_routed_controller_never_takes_a_namesakes_prefix() {
+    let turn = turn();
+    let base = turn.dir("namesakes");
+    let server = scratch(&base, "store-server");
+    for dir in ["src/Api", "src/Admin"] {
+        std::fs::create_dir_all(server.join(dir)).unwrap();
+    }
+    write(
+        &server,
+        "src/Api/OrdersController.cs",
+        "[ApiController]\n[Route(\"orders\")]\npublic class OrdersController : ControllerBase\n{\n    [HttpPost]\n    public Task Create() => null;\n}\n",
+    );
+    write(
+        &server,
+        "src/Admin/OrdersController.cs",
+        "public class OrdersController : Controller\n{\n    public Task<IActionResult> Index() => null;\n    [HttpPost]\n    public Task<IActionResult> UnlinkAsync(Guid id) => null;\n}\n",
+    );
+    write(
+        &server,
+        "src/Admin/Startup.cs",
+        "public class Startup\n{\n    public void Configure(IApplicationBuilder app)\n    {\n        app.UseEndpoints(endpoints => endpoints.MapDefaultControllerRoute());\n    }\n}\n",
+    );
+    let legacy = scratch(&base, "legacy-server");
+    write(&legacy, "src/ReportsController.cs", "public class ReportsController : Controller\n{\n    [HttpPost]\n    public Task Rebuild() => null;\n}\n");
+    let web = scratch(&base, "store-web");
+    write(&web, "src/orders.ts", "export class Orders {\n  create(o: Order) { return fetch('/orders', { method: 'POST', body: JSON.stringify(o) }); }\n}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&server, &legacy, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let served: Vec<(String, String, String, String)> =
+        routes(0).into_iter().filter(|r| r.side == "server").map(|r| (r.file, r.symbol, r.verb, r.path.unwrap_or_default())).collect();
+    let s = |file: &str, sym: &str, verb: &str, path: &str| (file.to_string(), sym.to_string(), verb.to_string(), path.to_string());
+    assert_eq!(
+        served,
+        [
+            s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders/Index"),
+            s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders/Index/{id}"),
+            s("src/Admin/OrdersController.cs", "OrdersController.UnlinkAsync", "POST", "Orders/Unlink"),
+            s("src/Admin/OrdersController.cs", "OrdersController.UnlinkAsync", "POST", "Orders/Unlink/{id}"),
+            s("src/Api/OrdersController.cs", "OrdersController.Create", "POST", "orders"),
+        ]
+    );
+    let create = routes(2).into_iter().find(|r| r.symbol == "Orders.create").unwrap();
+    let links: Vec<(String, &'static str)> =
+        kc_index::http::handlers(&create, &roots[2], &summaries).into_iter().map(|l| (l.route.file, l.confidence)).collect();
+    assert_eq!(links, [("src/Api/OrdersController.cs".to_string(), "exact")]);
+    // No conventional route mapped: the action without a template is unplaced, not served at the root.
+    let legacy: Vec<(String, Option<String>, Option<String>)> =
+        routes(1).into_iter().filter(|r| r.symbol == "ReportsController.Rebuild").map(|r| (r.side, r.path, r.detail)).collect();
+    assert_eq!(legacy.len(), 1, "{legacy:?}");
+    assert_eq!(legacy[0].0, "unsupported");
+    assert!(legacy[0].2.as_deref().is_some_and(|d| d.contains("no conventional route template read")), "{legacy:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}

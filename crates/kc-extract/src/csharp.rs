@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 31;
+pub const VERSION: u32 = 32;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -166,6 +166,9 @@ struct ControllerScope {
     routed: bool,
     /// A concrete `…Controller` with no `[Route]` of its own: conventional routes may serve its public methods.
     conventional: bool,
+    /// The class has no `[Route]` of its own, in this part or another (it isn't partial): its prefix can come from
+    /// its bases only, never from another class of its name.
+    unrouted: bool,
     /// `[Area("x")]`, for `[area]`.
     area: Option<String>,
 }
@@ -839,6 +842,7 @@ impl<'a> Cx<'a> {
         let controller = ControllerScope {
             routed: own_route || custom_base || has_modifier(self.src, node, "partial"),
             conventional: class_name.ends_with("Controller") && !own_route && !has_modifier(self.src, node, "abstract"),
+            unrouted: !own_route && !has_modifier(self.src, node, "partial"),
             area,
         };
         self.service_dto(sym, node);
@@ -1286,7 +1290,8 @@ impl<'a> Cx<'a> {
     /// constant, or partial) leaves the prefix to the query, which takes the nearest `[Route]` up the class's bases,
     /// as ASP.NET does, with `[controller]` the class's own name: the path starts `{^Action}`. With none there, an
     /// action without a template is conventionally routed, and so is a public method with no route attribute in a
-    /// controller with no `[Route]` (`{^*Action}`, any verb), when the repo maps conventional routes.
+    /// controller with no `[Route]` (`{^*Action}`, any verb), when the repo maps conventional routes. `{^!…}`: the
+    /// class has no `[Route]` of its own (see [`ControllerScope::unrouted`]), so the query looks from its bases.
     fn action_route(&mut self, sym: usize, node: Node) {
         const VERBS: &[&str] = &["HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch", "HttpHead", "HttpOptions"];
         let attrs = attribute_args(self.src, node, &[VERBS, &["Route", "NonAction", "ActionName"]].concat());
@@ -1307,7 +1312,7 @@ impl<'a> Cx<'a> {
             (None, None) => {
                 // A public method of a conventionally routed controller is an action.
                 if scope.conventional && has_modifier(self.src, node, "public") && !has_modifier(self.src, node, "static") && !has_modifier(self.src, node, "override") {
-                    let path = format!("{{^*{action}}}");
+                    let path = format!("{{^{}*{action}}}", if scope.unrouted { "!" } else { "" });
                     self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb: "*".to_string(), path, path_ref: None, service: None, service_ref: None, line: line(node) });
                 }
                 return;
@@ -1332,7 +1337,7 @@ impl<'a> Cx<'a> {
         let mut path = joined.replace("[controller]", &controller).replace("[action]", &action).trim_matches('/').to_string();
         // No prefix written on the class: the query places it (see above), unless a constant names the template.
         if !absolute && prefix.is_none() && path_ref.is_none() && (scope.routed || scope.conventional && template.is_empty()) {
-            path = format!("{{^{action}}}{}{path}", if path.is_empty() { "" } else { "/" });
+            path = format!("{{^{}{action}}}{}{path}", if scope.unrouted { "!" } else { "" }, if path.is_empty() { "" } else { "/" });
         }
         self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref, service: None, service_ref: None, line: line(node) });
     }
@@ -5769,10 +5774,10 @@ public class GroupController : Controller
                 ("GetDomainHistory", "server", "GET", "GetDomainHistory", None),
                 ("Search", "server", "POST", "Search", None),
                 // No template and no prefix: conventional routes may place it (see `kc_store::query`).
-                ("Index", "server", "GET", "{^Index}", None),
+                ("Index", "server", "GET", "{^!Index}", None),
                 ("Legacy", "server", "GET", "", Some("Routes.Legacy")),
                 // A public method with no route attribute: an action only under conventional routes.
-                ("NotAnAction", "server", "*", "{^*NotAnAction}", None),
+                ("NotAnAction", "server", "*", "{^!*NotAnAction}", None),
                 ("OrdersController", "prefix", "", "api/[controller]", None),
                 ("Delete", "server", "DELETE", "api/Orders/{id}", None),
                 ("Refresh", "server", "PUT", "api/Orders/Refresh/all", None),
@@ -5788,7 +5793,8 @@ public class GroupController : Controller
         assert_eq!(f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect::<Vec<_>>(), [("Routes.Legacy", "legacy/find")]);
     }
 
-    /// A controller with no `[Route]` of its own leaves its prefix to the query (`{^Action}`): a base controller's
+    /// A controller with no `[Route]` of its own leaves its prefix to the query (`{^Action}`; `{^!Action}` when it
+    /// isn't partial, so no other part has one either): a base controller's
     /// `[Route]` (recorded as a `prefix`), or conventional routes (`conventional`), which also serve public methods
     /// with no route attribute (`{^*Action}`). `[Area]`, `[ActionName]` and `[NonAction]` are read.
     #[test]
@@ -5832,6 +5838,12 @@ public class HomeController : Controller
     public static void Util() { }
 }
 
+public partial class CartController : Controller
+{
+    [HttpGet]
+    public Task Show() => null;
+}
+
 public static class Startup
 {
     public static void Configure(WebApplication app)
@@ -5848,14 +5860,16 @@ public static class Startup
             routes,
             [
                 ("ApiControllerBase", "prefix", "", "api/[controller]"),
-                ("Latest", "server", "GET", "{^Latest}/Latest"),
-                ("List", "server", "GET", "{^List}"),
-                ("Lookup", "server", "GET", "{^Find}/Find/{id}"),
+                ("Latest", "server", "GET", "{^!Latest}/Latest"),
+                ("List", "server", "GET", "{^!List}"),
+                ("Lookup", "server", "GET", "{^!Find}/Find/{id}"),
                 ("UsersController", "prefix", "", "Admin/[controller]"),
                 ("Get", "server", "GET", "Admin/Users"),
-                ("Index", "server", "*", "{^*Index}"),
-                ("Save", "server", "POST", "{^Save}"),
+                ("Index", "server", "*", "{^!*Index}"),
+                ("Save", "server", "POST", "{^!Save}"),
                 ("About", "server", "*", "about"),
+                // Another part of a partial class may have the `[Route]`: the query looks at the class's own name too.
+                ("Show", "server", "GET", "{^Show}"),
                 ("Configure", "conventional", "MapControllerRoute", "{controller=Home}/{action=Index}/{id?}"),
                 // An area template needs the area: not placed.
                 ("Configure", "unsupported", "MapControllerRoute", "conventional routes: a template filled from controller and action names, which KnowCode doesn't expand"),
@@ -5894,7 +5908,7 @@ public class SprocketController : GadgetControllerBase
                 ("GadgetControllerBase", "prefix", "", "[controller]"),
                 ("WidgetShelfController", "prefix", "", ""),
                 ("GetWidget", "server", "GET", "Widgets/{widgetId}"),
-                ("Latest", "server", "GET", "{^Latest}/Latest"),
+                ("Latest", "server", "GET", "{^!Latest}/Latest"),
             ]
         );
     }
