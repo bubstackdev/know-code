@@ -9,6 +9,30 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   already in `http`, but after the callers, which for an action are mostly its tests; agents asking who calls an
   endpoint read those and went to grep the client repo. The callers hint for an action now points to `kc_impact`,
   which follows the routes, instead of `kc_refs`, which matches the name.
+- The server starts indexing the next new repo under the workspace roots as soon as one finishes, instead of on its
+  next 2-second tick. Most repos of a workspace index in well under that, so a free slot sat idle: on a 111-repo
+  public workspace, the background averaged 0.3 repos at once against a plan of 1, and 1.1 to 1.75 against a plan of
+  4. It now averages 0.93 and 3.4, and indexed the workspace in about 100 s instead of about 260 s at one at a time
+  (41 s instead of 65 to 69 s at four), for the same instructions.
+- A workspace-wide answer holds at most 254 MiB of SQLite page cache over 500 repos. It keeps every index it
+  reads open until it answers, and each held up to 4 MiB of page cache (about 2 GiB over 500 repos). Past the first
+  index a call opens, each one's connections now hold 256 KiB. Answers are the same: ten workspace-wide `search`,
+  `locate`, `find`, `refs`, `hotspots` and `deps` calls over 111 public repos gave identical output. They took 0 to 8%
+  more instructions (`search` most).
+- Indexing several repos at once no longer spends most of its time in the kernel. SQLite was built with one page
+  cache and one allocation counter for the whole process, each behind a global lock, and every connection's page
+  fetches and allocations took them. Each connection now has its own page cache, and allocations aren't counted. On
+  a workspace of 111 public repos, `index --workspace` used 114 s of user and 355 s of system CPU and 1,236 G
+  instructions before, and 75 s user, 36 s system and 949 G instructions after (one run each on a loaded machine).
+  The server no longer sets SQLite's 4 MiB process-wide soft memory limit: it needs that counting, and each
+  connection's page cache is still bounded by its own size.
+- A query that reads a repo while the server indexes it in the background no longer fails with "database is
+  locked". The query wrote caches (the history walk, derived values) that waited on the indexer's write, and the
+  indexer, at background priority on a loaded machine, could hold it past SQLite's 5 s busy timeout. Such a cache
+  write is now skipped: the query answers from what it computed, and the cache is written next time. The background
+  file ranking no longer starts on a repo that is still being indexed (a query could queue it between the index's
+  sync and its contents), where the two writers each waited for the other; it is built once the indexing is done. On
+  main, the workspace gate failed this way in 1 of 4 runs.
 - `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
   hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
   the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools

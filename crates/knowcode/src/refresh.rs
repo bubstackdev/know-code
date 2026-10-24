@@ -234,9 +234,20 @@ impl Deriver {
                     state = self.changed.wait(state).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            if let Err(e) = derive_in_background(&root) {
-                eprintln!("knowcode: file ranking and areas of {}: {e}", root.display());
-                self.state.lock().unwrap_or_else(|e| e.into_inner()).failed.insert(root, Instant::now());
+            match derive_in_background(&root) {
+                Ok(true) => {},
+                // Being indexed: again after the others queued, once the indexing is likely done.
+                Ok(false) => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if !state.queue.contains(&root) {
+                        state.queue.push_back(root);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("knowcode: file ranking and areas of {}: {e}", root.display());
+                    self.state.lock().unwrap_or_else(|e| e.into_inner()).failed.insert(root, Instant::now());
+                },
             }
         }
     }
@@ -263,21 +274,28 @@ impl Deriver {
     }
 }
 
-/// Brings `root`'s derived data up to its index (see [`kc_index::refresh_derived`]) as the background does.
-fn derive_in_background(root: &Path) -> std::result::Result<(), String> {
-    let result = std::panic::catch_unwind(|| -> Result<()> {
+/// Brings `root`'s derived data up to its index (see [`kc_index::refresh_derived`]) as the background does. False when
+/// the repo is being indexed, and nothing was done.
+fn derive_in_background(root: &Path) -> std::result::Result<bool, String> {
+    let result = std::panic::catch_unwind(|| -> Result<bool> {
         if !kc_index::db_path(root)?.exists() {
-            return Ok(());
+            return Ok(true);
         }
+        // Not while the repo is being indexed (a query may queue it between the index's sync and its contents): the
+        // build's writes would wait on the indexer's and the indexer's on them, past SQLite's busy timeout, failing
+        // both and the queries reading the repo meanwhile. Held through the build, so indexing that starts meanwhile
+        // waits for it instead.
+        let Some(_writer) = kc_index::writer::WriterLock::try_acquire(root)? else { return Ok(false) };
         let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
         let store = kc_index::open(root)?;
         store.begin_snapshot()?;
         if !kc_index::derived_missing(&store)? && !kc_index::derived_stale(root, &store)? {
-            return Ok(());
+            return Ok(true);
         }
         use kc_index::machine::{Mode, plan, rank_threads, sniff};
         let workers = kc_store::rank::Workers { threads: rank_threads(plan(&sniff(), Mode::Background, 1, 0)), init: Some(background_priority) };
-        kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store))
+        kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store))?;
+        Ok(true)
     });
     match result {
         Ok(r) => r.map_err(|e| format!("{e:#}")),
@@ -307,12 +325,13 @@ fn new_repos(queries: Arc<AtomicUsize>) {
     if let Err(e) = kc_index::light::discover_roots() {
         eprintln!("knowcode: root discovery: {e:#}");
     }
-    let busy: Arc<Mutex<std::collections::HashSet<PathBuf>>> = Arc::default();
+    let slots: Arc<Slots> = Arc::default();
     let mut tried = HashMap::new();
     let mut sniffed: Option<(Instant, machine::Machine)> = None;
     let mut last = None;
     loop {
-        let running = busy.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let (busy, finished) = slots.busy();
+        let running = busy.len();
         if queries.load(Ordering::Relaxed) == 0 {
             let m = match sniffed {
                 Some((at, m)) if at.elapsed() < SNIFF_EVERY => m,
@@ -322,7 +341,7 @@ fn new_repos(queries: Arc<AtomicUsize>) {
                     m
                 }
             };
-            let pending = match pending_new_repos(&mut tried, &busy.lock().unwrap_or_else(|e| e.into_inner())) {
+            let pending = match pending_new_repos(&mut tried, &busy) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("knowcode: new repos: {e:#}");
@@ -336,8 +355,8 @@ fn new_repos(queries: Arc<AtomicUsize>) {
             }
             for root in pending.into_iter().take(plan.repos.saturating_sub(running)) {
                 tried.insert(root.clone(), Instant::now());
-                busy.lock().unwrap_or_else(|e| e.into_inner()).insert(root.clone());
-                let busy = busy.clone();
+                slots.start(&root);
+                let slots = slots.clone();
                 let threads = plan.threads.max(1);
                 let spawned = std::thread::Builder::new().name("knowcode-new-repo".into()).spawn(move || {
                     background_priority();
@@ -347,7 +366,7 @@ fn new_repos(queries: Arc<AtomicUsize>) {
                         Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
                     }
                     kc_index::cache::maintain_and_report(std::slice::from_ref(&root));
-                    busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&root);
+                    slots.finish(&root);
                 });
                 if let Err(e) = spawned {
                     eprintln!("knowcode: background indexing: {e}");
@@ -355,7 +374,41 @@ fn new_repos(queries: Arc<AtomicUsize>) {
                 }
             }
         }
-        std::thread::sleep(Duration::from_secs(2));
+        // The next repo starts as soon as one finishes, not on the next tick: most repos of a workspace index in
+        // well under the tick, and a slot left free until then halved the repos indexed at once.
+        slots.wait(finished, Duration::from_secs(2));
+    }
+}
+
+/// The repos [`new_repos`] is indexing, and how many it has finished: finishing one wakes it to start the next.
+#[derive(Default)]
+struct Slots {
+    state: Mutex<(std::collections::HashSet<PathBuf>, u64)>,
+    finished: Condvar,
+}
+
+impl Slots {
+    /// The repos being indexed, and how many have finished so far (for [`Slots::wait`]).
+    fn busy(&self) -> (std::collections::HashSet<PathBuf>, u64) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        (state.0.clone(), state.1)
+    }
+
+    fn start(&self, root: &Path) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).0.insert(root.to_path_buf());
+    }
+
+    fn finish(&self, root: &Path) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.0.remove(root);
+        state.1 += 1;
+        self.finished.notify_all();
+    }
+
+    /// Waits until a repo finishes after `seen` of them had (at once if one already has), or `timeout` passes.
+    fn wait(&self, seen: u64, timeout: Duration) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        drop(self.finished.wait_timeout_while(state, timeout, |s| s.1 == seen).unwrap_or_else(|e| e.into_inner()));
     }
 }
 
@@ -683,6 +736,47 @@ mod tests {
     }
 
     #[test]
+    fn a_query_answers_while_an_indexer_holds_the_write_lock_past_the_busy_timeout() {
+        let cache = test_cache();
+        let base = cache.dir("query-while-writing");
+        let root = repo(&base, "app", &[("src/refund.py", "def approve_refund():\n    return 1\n")]);
+        assert!(std::process::Command::new("git").arg("-C").arg(&root).args(["-c", "user.name=Ann", "-c", "user.email=ann@example.test", "add", "-A"]).status().unwrap().success());
+        assert!(std::process::Command::new("git").arg("-C").arg(&root).args(["-c", "user.name=Ann", "-c", "user.email=ann@example.test", "commit", "-qm", "refund approval"]).status().unwrap().success());
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        ops::find("approve_refund", None, 10, &scope).unwrap();
+        let _budget = Budget::enter(Duration::from_secs(2));
+        // An indexer's write transaction (the background's, starved of CPU at its priority) outlasting the query's
+        // busy timeout: the caches the query would write are left for later; its answer is the same.
+        let writer = rusqlite::Connection::open(kc_index::db_path(&root).unwrap()).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let busy = ops::locate("refund approval", 10, &scope);
+        writer.execute_batch("ROLLBACK").unwrap();
+        let busy = busy.unwrap();
+        let free = ops::locate("refund approval", 10, &scope).unwrap();
+        assert_eq!(busy.env["items"], free.env["items"]);
+        assert!(!busy.env["items"].as_array().unwrap().is_empty(), "{}", busy.env);
+    }
+
+    #[test]
+    fn a_ranking_queued_while_the_repo_is_indexed_waits_for_the_indexing() {
+        let cache = test_cache();
+        let base = cache.dir("derive-while-indexing");
+        let root = repo(&base, "app", &[("src/app.py", "def handler():\n    return helper()\n\ndef helper():\n    return 1\n")]);
+        assert!(kc_index::derived_missing(&kc_index::open(&root).unwrap()).unwrap());
+        // An indexer holds the repo (as the background does between its sync and its contents) when a query queues
+        // the ranking: it is neither built against the indexer's writes nor given up as failed.
+        let writer = kc_index::writer::WriterLock::acquire(&root).unwrap();
+        Deriver::shared().queue(&root);
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(kc_index::derived_missing(&kc_index::open(&root).unwrap()).unwrap());
+        assert!(!Deriver::shared().state.lock().unwrap().failed.contains_key(&root));
+        // Built once the indexing is done.
+        drop(writer);
+        assert!(Deriver::shared().wait_idle(Duration::from_secs(60)));
+        assert!(!kc_index::derived_missing(&kc_index::open(&root).unwrap()).unwrap());
+    }
+
+    #[test]
     fn a_workspace_answer_says_once_which_repos_it_left_out() {
         let cache = test_cache();
         let base = cache.dir("one-note");
@@ -699,6 +793,42 @@ mod tests {
         ops::add_unindexed(&mut env);
         let notes: Vec<String> = crate::contract::incomplete_of(&env).into_iter().map(|i| i.detail).filter(|d| d.contains("not yet indexed")).collect();
         assert_eq!(notes, ["workspace: 2 repositories found, not yet indexed (first, second); nothing from them is in this answer"], "{env}");
+    }
+
+    #[test]
+    fn a_repo_finishing_wakes_the_new_repo_loop_at_once() {
+        let slots = Arc::new(Slots::default());
+        let (a, b) = (PathBuf::from("/w/alpha"), PathBuf::from("/w/beta"));
+        slots.start(&a);
+        slots.start(&b);
+        let (busy, seen) = slots.busy();
+        assert_eq!(busy.len(), 2);
+
+        // Nothing finishes: the loop waits out its tick.
+        let start = Instant::now();
+        slots.wait(seen, Duration::from_millis(100));
+        assert!(start.elapsed() >= Duration::from_millis(100));
+
+        // One finishes while it waits: it wakes then, well before the tick.
+        let finisher = slots.clone();
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            finisher.finish(&a);
+        });
+        let start = Instant::now();
+        slots.wait(seen, Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+        done.join().unwrap();
+        let (busy, now) = slots.busy();
+        assert_eq!(busy.into_iter().collect::<Vec<_>>(), vec![b.clone()]);
+        assert_eq!(now, seen + 1);
+
+        // One that finished after the loop last looked, before it waits: no wait at all.
+        slots.finish(&b);
+        let start = Instant::now();
+        slots.wait(now, Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(slots.busy().0.is_empty());
     }
 
     #[test]

@@ -1019,9 +1019,10 @@ fn churn_of(root: &Path, store: &Store, paths: &[&str], anchor: Anchor) -> Resul
 /// What a team calls the code a file holds, in its own words: `locate` reads them as a field of the file. Reuses the
 /// hotspots walk and its cache.
 pub fn subject_words(root: &Path, store: &Store) -> Result<HashMap<String, Vec<(String, u32)>>> {
-    walk_unless_cached(root, store, anchor(root, None)?)?;
+    if let Some((_, words)) = walk_words_unless_cached(root, store, anchor(root, None)?)? {
+        return Ok(words);
+    }
     let conn = store.side()?;
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS churn_words (path TEXT PRIMARY KEY, words TEXT NOT NULL) WITHOUT ROWID;")?;
     let mut stmt = conn.prepare("SELECT path, words FROM churn_words")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
     let mut out = HashMap::new();
@@ -1158,9 +1159,14 @@ fn take_ahead(root: &Path, stamp: &str, args: &[String]) -> Option<(Vec<u8>, usi
 /// Walks the log into the `churn` table unless it holds this HEAD's and anchor's walk already; returns the walk when
 /// it ran.
 fn walk_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Option<HashMap<String, Churn>>> {
+    Ok(walk_words_unless_cached(root, store, anchor)?.map(|(churn, _)| churn))
+}
+
+/// [`walk_unless_cached`], with the subject words of the walk when it ran.
+fn walk_words_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Option<(HashMap<String, Churn>, SubjectWords)>> {
     let (head, stamp) = walk_stamp(root, anchor);
     let conn = store.side()?;
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS churn (path TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID;")?;
+    kc_store::keep(|| Ok(conn.execute_batch("CREATE TABLE IF NOT EXISTS churn (path TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID;")?))?;
     if !head.is_empty() && store.side_meta("churn.head")?.as_deref() == Some(stamp.as_str()) {
         return Ok(None);
     }
@@ -1179,7 +1185,7 @@ fn walk_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Opti
     drop_blocked(&privacy, &mut out, Some(&mut words));
     // A log cut at its deadline is partial: answered from (the answer says so), never cached.
     if kc_store::limits::cuts_so_far() != cuts {
-        return Ok(Some(out));
+        return Ok(Some((out, words)));
     }
     let last = stats.last_commit.or_else(|| (window.head_time > 0 && window.head_time <= anchor.time).then_some(window.head_time));
     let history = History {
@@ -1191,26 +1197,30 @@ fn walk_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Opti
         commits_365d: stats.commits,
         bot_commits_365d: stats.bot_commits,
     };
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS churn_words (path TEXT PRIMARY KEY, words TEXT NOT NULL) WITHOUT ROWID;")?;
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM churn", [])?;
-    tx.execute("DELETE FROM churn_words", [])?;
-    {
-        let mut stmt = tx.prepare("INSERT INTO churn(path, data) VALUES (?1, ?2)")?;
-        for (p, c) in &out {
-            stmt.execute(params![p, serde_json::to_string(c)?])?;
+    // Kept unless an indexer holds the write lock past the busy timeout: then answered from, as a cut walk is.
+    kc_store::keep(|| {
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS churn_words (path TEXT PRIMARY KEY, words TEXT NOT NULL) WITHOUT ROWID;")?;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM churn", [])?;
+        tx.execute("DELETE FROM churn_words", [])?;
+        {
+            let mut stmt = tx.prepare("INSERT INTO churn(path, data) VALUES (?1, ?2)")?;
+            for (p, c) in &out {
+                stmt.execute(params![p, serde_json::to_string(c)?])?;
+            }
+            let mut stmt = tx.prepare("INSERT INTO churn_words(path, words) VALUES (?1, ?2)")?;
+            for (p, w) in &words {
+                let text: Vec<String> = w.iter().map(|(t, n)| format!("{t}:{n}")).collect();
+                stmt.execute(params![p, text.join(" ")])?;
+            }
         }
-        let mut stmt = tx.prepare("INSERT INTO churn_words(path, words) VALUES (?1, ?2)")?;
-        for (p, w) in &words {
-            let text: Vec<String> = w.iter().map(|(t, n)| format!("{t}:{n}")).collect();
-            stmt.execute(params![p, text.join(" ")])?;
-        }
-    }
-    tx.commit()?;
-    store.set_meta("churn.history", &serde_json::to_string(&history)?)?;
-    store.set_meta("churn.cc_total", &stats.cc_commits.to_string())?;
-    store.set_meta("churn.head", &stamp)?;
-    Ok(Some(out))
+        tx.commit()?;
+        store.set_meta("churn.history", &serde_json::to_string(&history)?)?;
+        store.set_meta("churn.cc_total", &stats.cc_commits.to_string())?;
+        store.set_meta("churn.head", &stamp)?;
+        Ok(())
+    })?;
+    Ok(Some((out, words)))
 }
 
 /// The time frame of a walk.

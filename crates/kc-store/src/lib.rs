@@ -475,22 +475,17 @@ pub struct FileRecord<'a> {
     pub facts: &'a FileFacts,
 }
 
-/// Asks SQLite to keep its memory (mostly page caches) under `bytes` across every connection in the process, by
-/// recycling cached pages. The MCP server sets it: its calls open many indexes, and pages the allocator handed out
-/// stay resident after the connections close.
-pub fn limit_sqlite_memory(bytes: i64) {
-    // SAFETY: sqlite3_soft_heap_limit64 only sets a process-wide limit; it is safe to call at any time.
-    unsafe {
-        rusqlite::ffi::sqlite3_soft_heap_limit64(bytes);
-    }
-}
-
 /// A repo's index. Reads made through [`Store::conn`] while a snapshot is held (see [`Store::begin_snapshot`]) all see
 /// one committed state of the index, whatever another process writes meanwhile.
+/// Each connection's page cache, in KiB: queries touch little, and the MCP server may hold several connections.
+pub const CACHE_KIB: i64 = 2048;
+
 pub struct Store {
     conn: Connection,
     /// A second connection, outside the snapshot, for caches that carry their own validity key (see [`Store::side`]).
     side: std::cell::OnceCell<Connection>,
+    /// Each connection's page cache, in KiB (see [`Store::limit_cache`]).
+    cache_kib: std::cell::Cell<i64>,
     // Dropped after both SQLite connections, so cache eviction cannot unlink a live index.
     _lease: Option<std::fs::File>,
 }
@@ -516,6 +511,24 @@ pub fn is_test_path(path: &str) -> bool {
         // `foo.spec.ts`, `foo.test.js`.
         || name.contains(".spec.")
         || name.contains(".test.")
+}
+
+/// Whether `e` is SQLite saying another connection held the index's write lock past the busy timeout.
+pub fn is_busy(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        matches!(c.downcast_ref::<rusqlite::Error>(), Some(rusqlite::Error::SqliteFailure(f, _))
+            if matches!(f.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+    })
+}
+
+/// Writes a cache with `write`, unless another connection holds the index's write lock past the busy timeout (an
+/// indexer whose transaction outlasts it, as the background's does when it is starved of CPU): then the value is used
+/// without being kept, and computed again next time, rather than failing the query that computed it.
+pub fn keep(write: impl FnOnce() -> Result<()>) -> Result<()> {
+    match write() {
+        Err(e) if is_busy(&e) => Ok(()),
+        r => r,
+    }
 }
 
 /// Whether `path` is under a directory holding copies rather than the live code: a backup, an old version, an
@@ -650,9 +663,9 @@ impl Store {
         // or closes its WAL is briefly busy, so wait rather than fail.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // A 2 MB page cache per connection: queries touch little, and the MCP server may hold several connections.
-        conn.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048;")?;
+        conn.execute_batch(&format!("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{CACHE_KIB};"))?;
         set_wal(&conn)?;
-        let mut store = Store { conn, side: std::cell::OnceCell::new(), _lease: None };
+        let mut store = Store { conn, side: std::cell::OnceCell::new(), cache_kib: std::cell::Cell::new(CACHE_KIB), _lease: None };
         store.migrate()?;
         Ok(store)
     }
@@ -684,6 +697,17 @@ impl Store {
         !self.conn.is_autocommit()
     }
 
+    /// Holds each of this store's connections' page caches to `kib` KiB (from [`CACHE_KIB`]): for a query reading many
+    /// indexes at once, whose caches would otherwise add up with every repo it reads.
+    pub fn limit_cache(&self, kib: i64) -> Result<()> {
+        self.cache_kib.set(kib);
+        self.conn.execute_batch(&format!("PRAGMA cache_size = -{kib};"))?;
+        if let Some(side) = self.side.get() {
+            side.execute_batch(&format!("PRAGMA cache_size = -{kib};"))?;
+        }
+        Ok(())
+    }
+
     /// The connection for caches whose rows carry what they are valid for (a generation, a git HEAD) rather than
     /// depending on the snapshot: the `derived` cache, `meta` writes and the history caches. Outside a snapshot it is
     /// [`Store::conn`]; inside one, a second connection, so cache writes commit at once instead of upgrading the
@@ -699,7 +723,7 @@ impl Store {
         let path = self.conn.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from).context("an in-memory index has no side connection")?;
         let c = Connection::open(&path).with_context(|| format!("opening {}", path.display()))?;
         c.busy_timeout(std::time::Duration::from_secs(5))?;
-        c.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048;")?;
+        c.execute_batch(&format!("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{};", self.cache_kib.get()))?;
         Ok(self.side.get_or_init(|| c))
     }
 
@@ -800,11 +824,14 @@ impl Store {
         if limits::cuts_so_far() != cuts {
             return Ok(v);
         }
-        self.side()?.execute(
-            "INSERT INTO derived(key, gen, data) VALUES (?1, ?2, ?3)
-             ON CONFLICT(key) DO UPDATE SET gen = excluded.gen, data = excluded.data",
-            params![key, generation, serde_json::to_string(&v)?],
-        )?;
+        keep(|| {
+            self.side()?.execute(
+                "INSERT INTO derived(key, gen, data) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(key) DO UPDATE SET gen = excluded.gen, data = excluded.data",
+                params![key, generation, serde_json::to_string(&v)?],
+            )?;
+            Ok(())
+        })?;
         Ok(v)
     }
 
@@ -1412,6 +1439,35 @@ pub fn name_tokens(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_limited_store_holds_both_its_connections_to_the_limit() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-cache-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir.join("index.sqlite")).unwrap();
+        let size = |c: &Connection| c.query_row("PRAGMA cache_size", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(size(store.conn()), -CACHE_KIB);
+        store.limit_cache(256).unwrap();
+        assert_eq!(size(store.conn()), -256);
+        // The side connection, opened after the limit (inside a snapshot), and one opened before it.
+        store.begin_snapshot().unwrap();
+        assert_eq!(size(store.side().unwrap()), -256);
+        store.limit_cache(128).unwrap();
+        assert_eq!(size(store.side().unwrap()), -128);
+        store.end_snapshot().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sqlite_has_no_process_wide_locks() {
+        // Built as .cargo/config.toml says: a page cache per connection, allocations not counted. Without it,
+        // concurrent indexing waits on two global mutexes.
+        let conn = Connection::open_in_memory().unwrap();
+        let options: Vec<String> =
+            conn.prepare("PRAGMA compile_options").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+        assert!(!options.iter().any(|o| o == "ENABLE_MEMORY_MANAGEMENT"), "{options:?}");
+        assert!(options.iter().any(|o| o == "DEFAULT_MEMSTATUS=0"), "{options:?}");
+    }
 
     #[test]
     fn concurrent_opens_of_a_new_index_keep_its_schema() {

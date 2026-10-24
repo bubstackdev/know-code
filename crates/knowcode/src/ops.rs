@@ -296,10 +296,21 @@ pub struct Opened {
     pub consulted: Consulted,
 }
 
+/// The page cache of each connection to an index a query opens past its first, in KiB. An index has two (its
+/// reads and the caches it writes): 4 MiB for the first and 0.5 MiB for each other one bound a 500-repo answer's
+/// page caches to 254 MiB. A workspace answer reads little of each repo: on 111 public repos, workspace-wide calls
+/// took 0 to 8% more instructions with it (`search` most), and gave the same answers.
+const FANOUT_CACHE_KIB: i64 = 256;
+
 /// Opens `root`'s index, syncs it unless `no_sync`, and pins the query's reads to the state the sync left: every
 /// later read sees that one generation, whatever another process reindexes meanwhile.
 pub fn open_fresh(root: &Path, no_sync: bool) -> Result<Opened> {
     let (store, sync) = crate::refresh::open(root, no_sync)?;
+    // A query keeps the indexes it reads open until it answers: past its first, each one's page caches are held
+    // smaller, so a workspace-wide answer over 500 repos stays within 256 MiB of them (see `FANOUT_CACHE_KIB`).
+    if kc_store::limits::current().note_opened() > 1 {
+        store.limit_cache(FANOUT_CACHE_KIB)?;
+    }
     store.begin_snapshot()?;
     let generation = store.generation()?;
     let head = kc_index::head(root, &store);
