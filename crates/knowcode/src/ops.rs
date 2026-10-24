@@ -538,9 +538,20 @@ pub fn unindexed_note() -> Option<Incomplete> {
     Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_hint(hint))
 }
 
+/// Whether `i` is the entry [`unindexed_note`] makes.
+fn is_unindexed_note(i: &Incomplete) -> bool {
+    i.reason == Reason::MissingRepo && i.detail.starts_with("workspace: ") && i.detail.contains(" found, not yet indexed (")
+}
+
 /// Says in a workspace-wide answer which repos of the workspace have no full index yet, in one entry (see
 /// [`unindexed_note`]), in place of an entry per repo saying it is still being indexed.
 pub fn add_unindexed(env: &mut Value) {
+    // Once per answer, as of when it was read: called again later (the server notes every workspace answer, whatever
+    // its form), a repo indexed in between would drop out of a second entry with other counts, and the two entries
+    // together no longer say which repos the answer left out.
+    if crate::contract::incomplete_of(env).iter().any(is_unindexed_note) {
+        return;
+    }
     let Some(note) = unindexed_note() else { return };
     let prefixes: Vec<String> = kc_index::unindexed_roots().unwrap_or_default().iter().map(|r| format!("{}: ", repo_name(r))).collect();
     crate::contract::retain_incomplete(env, |i| i.reason != Reason::Stale || !prefixes.iter().any(|p| i.detail.starts_with(p.as_str())));

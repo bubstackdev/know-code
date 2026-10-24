@@ -55,6 +55,14 @@ def policy_for(session,client,knowcode=None,git_toolchain=None):
     return policy
 
 
+def open_study(freeze):
+    """A public-v1 freeze, or a public-v2 one (public_v2.Study), checked from content either way."""
+    if public_transcript.load_json(Path(freeze).read_bytes()).get('format')=='knowcode-public-v2-freeze-1':
+        import public_v2
+        return public_v2.Study(freeze)
+    return FrozenStudy(freeze)
+
+
 def execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_connection_factory=None):
     state={}
     try:
@@ -74,7 +82,7 @@ def execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_con
 
 
 def _execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_connection_factory=None,_state):
-    study=FrozenStudy(freeze)  # All content gates precede configuration/index/client/network startup.
+    study=open_study(freeze)  # All content gates precede configuration/index/client/network startup.
     client,knowcode=Path(client).resolve(strict=True),Path(knowcode).resolve(strict=True)
     study.binaries(client,knowcode)
     session=Path(session)

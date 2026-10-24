@@ -965,11 +965,17 @@ pub fn build_derived(root: &Path, store: &Store) -> Result<()> {
 fn derive(root: &Path, store: &Store, missing: bool) -> Result<()> {
     let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
     let generation = store.generation()?;
-    if store.derived_gen(&rank_key)?.map_or(missing, |g| g != generation) {
+    let rank = store.derived_gen(&rank_key)?.map_or(missing, |g| g != generation);
+    let areas = (missing && store.derived_gen("areas")?.is_none()) || areas::needs_refresh(root, store)?;
+    // The areas' history walk is a `git` child that needs nothing of the ranking: given a thread to spare (as the
+    // ranking is), it runs beside the ranking rather than after it. On bitwarden/clients it took 11 of the 19 s of a
+    // cold `index`, alone. The background ranks on one thread and keeps the walk after it.
+    let _ahead = if rank && areas && kc_store::rank::workers().threads > 1 { Some(vitals::walk_ahead(root, store)?) } else { None };
+    if rank {
         store.ref_graph()?;
         store.file_rank_at(&[], kc_store::rank::Flow::Uses, true)?;
     }
-    if (missing && store.derived_gen("areas")?.is_none()) || areas::needs_refresh(root, store)? {
+    if areas {
         areas::areas(root, store)?;
     }
     Ok(())
