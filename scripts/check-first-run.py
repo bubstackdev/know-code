@@ -134,8 +134,16 @@ def check(binary: Path) -> None:
                         break
                     assert time.monotonic() < deadline, "MCP did not refresh the edited checkout while idle"
                     time.sleep(0.1)
-                warm = context("warmedApiHandler")
-                assert warm["complete"] is True and "warmedApiHandler" in json.dumps(warm["items"]), warm
+                # Derived data (areas, ranking) follows the symbols in the background: the answer may say its area
+                # is a moment behind until that lands, so wait for it within the same deadline.
+                while True:
+                    warm = context("warmedApiHandler")
+                    if warm["complete"]:
+                        break
+                    assert all(i["reason"] == "stale" for i in warm["incomplete"]), warm
+                    assert time.monotonic() < deadline, warm
+                    time.sleep(0.1)
+                assert "warmedApiHandler" in json.dumps(warm["items"]), warm
             except Exception:
                 stderr.flush()
                 stderr.seek(0)
