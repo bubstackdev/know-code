@@ -2807,7 +2807,22 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let declared: std::collections::HashSet<String> =
         out.iter().filter(|r| r.side == "client" && r.kind == "method").filter_map(|r| r.symbol.rsplit('.').next().map(str::to_ascii_lowercase)).collect();
     out.retain(|r| r.side != "operation" || r.path.as_deref().is_some_and(|op| !declared.contains(&op.to_ascii_lowercase())));
-    Ok(out)
+    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
+    // `Client` a class of the repo's), reaches the repo's own code, not a generated client: no operation. A type the
+    // repo only declares (in a `.d.ts`, an external client's surface) doesn't count.
+    let mut implemented = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM refs r JOIN files f ON f.id = r.file_id
+           JOIN symbols s ON s.name = r.name AND s.container = r.receiver_type JOIN files sf ON sf.id = s.file_id
+         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND sf.path NOT LIKE '%.d.ts')",
+    )?;
+    let mut kept = Vec::with_capacity(out.len());
+    for r in out {
+        if r.side == "operation" && implemented.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get::<_, bool>(0))? {
+            continue;
+        }
+        kept.push(r);
+    }
+    Ok(kept)
 }
 
 /// What places a controller action whose class writes no `[Route]` out (`{^Action}/rest`, `{^*Action}` for a public
