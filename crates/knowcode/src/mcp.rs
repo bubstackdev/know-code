@@ -564,8 +564,8 @@ pub struct HelpParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct Common {
-    // Every tool has these two, so their descriptions are said once, in the server's instructions and in each tool's
-    // help topic (see `help::COMMON`), not in every tool's schema.
+    // Every tool has these two, so their descriptions are said once, in each tool's help topic (see `help::COMMON`),
+    // not in every tool's schema; the server's instructions name `repo`.
     #[serde(default)]
     pub repo: Option<String>,
     #[serde(default)]
@@ -595,21 +595,22 @@ pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc
 pub const ALWAYS_LOADED: &[&str] = CORE;
 
 /// The parameters each tool's schema advertises, with the line each carries there: the ones most calls need. Every
-/// other parameter (`repo` and `max_chars`, which the instructions state once for every tool, and the rarer ones such
-/// as `as_of`, `since`, `order`, `format`, `kinds`, `evidence`, `edges`, `cite`) is accepted all the same and
-/// documented in the tool's help topic, with its full line. A client without tool search loads every schema on every
-/// turn, so a parameter belongs here only when most questions need it.
+/// other parameter (`repo` and `max_chars`, which every tool takes, and the rarer ones such as kc_impact's `file`,
+/// `as_of`, `since`, `order`, `format`, `kinds`, `evidence`, `edges`, `cite`) is accepted all the same and documented
+/// in the tool's help topic, with its full line. A client without tool search loads every schema on every turn, so a
+/// parameter belongs here only when most questions need it, and its line only when its name doesn't say enough (a
+/// line costs about as many tokens as the parameter: `symbols` says "several").
 pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_help", &[("topic", "")]),
     ("kc_symbol_at", &[("file", ""), ("line", "")]),
     ("kc_find", &[("query", "")]),
-    ("kc_locate", &[("query", ""), ("queries", "Several, at most 20.")]),
-    ("kc_refs", &[("name", ""), ("names", "Several, at most 20.")]),
-    ("kc_context", &[("symbol", ""), ("symbols", "Several, at most 20.")]),
+    ("kc_locate", &[("query", ""), ("queries", "")]),
+    ("kc_refs", &[("name", ""), ("names", "")]),
+    ("kc_context", &[("symbol", ""), ("symbols", "")]),
     ("kc_trace", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("direction", "`in`, `out` or `both` (default)."), ("depth", "1 (default) to 3.")]),
     ("kc_path", &[("from", ""), ("to", "")]),
     ("kc_flow", &[("entry", "")]),
-    ("kc_impact", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("file", ""), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
+    ("kc_impact", &[("symbol", "Name, `Type.member` or file:line."), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
     ("kc_unused", &[]),
     ("kc_rename_preview", &[("symbol", ""), ("new_name", "")]),
     ("kc_coupled", &[("file", "")]),
@@ -623,7 +624,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_note_add", &[("symbol", ""), ("text", "")]),
     ("kc_search", &[("pattern", "Literal unless `regex`."), ("regex", ""), ("paths", "Globs; `!` excludes.")]),
     ("kc_grep_ast", &[("pattern", ""), ("lang", "csharp, typescript, javascript, python, rust or swift.")]),
-    ("kc_more", &[("cursor", "A `cursor` or `<list>_cursor`, as it is.")]),
+    ("kc_more", &[("cursor", "")]),
     ("kc_status", &[]),
 ];
 
@@ -1712,7 +1713,7 @@ impl KnowcodeServer {
         Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden) })
     }
 
-    #[tool(description = "Docs: a tool with all its parameters, a section (`kc_context.http`) or a concept (`contract`). None: the index.")]
+    #[tool(description = "Docs on any tool, parameter or concept; no topic: the index.")]
     async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, String> {
         self.help(p.topic.as_deref())
     }
@@ -1731,7 +1732,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Where a name is defined (name, prefix or `Type.member`): file:line and signature. What calls it or breaks if it changes: kc_impact on that file:line.")]
+    #[tool(description = "Where a name is defined (name, prefix or `Type.member`): file:line and signature.")]
     async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
@@ -1742,7 +1743,7 @@ impl KnowcodeServer {
         .await
     }
 
-    #[tool(description = "Files for a concept, bug report or ticket (\"refund approval\"), ranked. First, when you don't know the names.")]
+    #[tool(description = "Files for a concept, bug report or ticket, ranked. First, when you don't know the names.")]
     async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, p.workspace)?;
         let limit = p.limit.unwrap_or(10);
@@ -1756,7 +1757,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "Every reference to a name, resolved, across repos. What calls X or breaks if X changes: kc_impact on X's file:line.")]
+    #[tool(description = "Every reference to a name, resolved, across repos. What calls X, by hop or across HTTP: kc_impact on X's file:line.")]
     async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
@@ -1954,7 +1955,7 @@ impl KnowcodeServer {
         }
     }
 
-    #[tool(description = "What calls or breaks if a symbol, file or diff changes: its dependents, by hop, across repos, HTTP, bus and SQL.")]
+    #[tool(description = "Who calls a method or an HTTP endpoint, from any repo, by hop (`depth` 2: callers' callers): what breaks if it changes. Bus and SQL too.")]
     async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
         let tree = p.walk.tree()?;
@@ -2311,14 +2312,16 @@ impl ServerHandler for KnowcodeServer {
 /// Where the help topics are served as resources.
 const HELP_URI: &str = "knowcode://help/";
 
-/// The server's instructions: what KnowCode is for, which core tool answers which question (a short map; each tool's
-/// description says more), and how its answers read; the rest is in `kc_help`.
+/// The server's instructions: what KnowCode is for and which core tool answers which question (a short map; each
+/// tool's description says more), callers and HTTP endpoints first, the questions agents most often took to grep; the
+/// rest is in `kc_help`. A client may leave them out (Claude Code's `--bare` does), so the tools' descriptions carry the
+/// same map, and every token here is paid on every turn by the clients that keep them.
 const INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use it instead \
-of grep and reading files: where X is defined kc_find; every use of X kc_refs; what X is kc_context; where a concept or \
-bug lives kc_locate; text kc_search; what calls X or breaks if X changes kc_impact, X as file:line or `Type.member`. \
-Rows have file:line; edges a confidence, ambiguous ones listed. `complete` is for what was asked, else `incomplete` \
-says why; `more`: side lists cut; `cursor`: kc_more. Tools take `repo` and `max_chars` (default 8000). `withheld`: a \
-privacy file blocks it; don't read it another way. kc_help {topic} documents every parameter, concept and tool, listed or not.";
+of grep and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what breaks if X changes: \
+kc_impact, X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X is defined kc_find; every use \
+kc_refs; what X is kc_context; files for a concept or bug kc_locate; text kc_search; the next page kc_more; every tool \
+and parameter kc_help. Tools take `repo`. Each edge has a confidence; an incomplete answer says why. `withheld`: a \
+privacy file blocks it; don't read it another way.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2394,7 +2397,8 @@ mod tests {
                 assert!(!p["type"].is_array(), "{}.{name}: optional parameters are typed plainly: {p}", t.name);
             }
         }
-        assert!(INSTRUCTIONS.len() <= 700, "instructions {} bytes", INSTRUCTIONS.len());
+        // The callers-and-HTTP map made the instructions shorter, not longer.
+        assert!(INSTRUCTIONS.len() <= 640, "instructions {} bytes", INSTRUCTIONS.len());
         // The instructions map questions to the core tools, every one of them and no other: the default server
         // advertises only those.
         assert!(INSTRUCTIONS.contains("Use it instead of grep and reading files"));
@@ -2408,15 +2412,21 @@ mod tests {
         assert!(core + INSTRUCTIONS.len() <= CORE_BUDGET, "core schema and instructions {} bytes, budget {CORE_BUDGET}", core + INSTRUCTIONS.len());
     }
 
-    /// "What calls X" and "what breaks if X changes" go to kc_impact with a `file:line` selector, said where an agent
-    /// asking them looks: the instructions, and the tools it would otherwise use, kc_refs and kc_find. The selector
-    /// those name is one kc_impact and kc_trace take.
+    /// "What calls X", "who calls this HTTP endpoint" and "what breaks if X changes" go to kc_impact with a `file:line`
+    /// selector, said where an agent asking them looks: the instructions, the tool it would otherwise use, kc_refs, and
+    /// kc_impact's own description, which a client dropping the instructions (Claude Code's `--bare`) still shows: it
+    /// names methods, HTTP endpoints and hops. The selector those name is one kc_impact and kc_trace take.
     #[test]
     fn caller_and_impact_questions_are_steered_to_kc_impact_by_file_line() {
         let tools = server("all").tool_router.list_all();
         let described = |name: &str| tools.iter().find(|t| t.name == name).and_then(|t| t.description.as_deref()).unwrap_or("").to_string();
-        for (place, text) in [("instructions", INSTRUCTIONS.to_string()), ("kc_refs", described("kc_refs")), ("kc_find", described("kc_find"))] {
+        for (place, text) in [("instructions", INSTRUCTIONS.to_string()), ("kc_refs", described("kc_refs"))] {
             assert!(text.contains("kc_impact") && text.contains("file:line") && text.contains("calls"), "{place}: {text}");
+            assert!(text.contains("HTTP") && text.contains("hop"), "{place}: {text}");
+        }
+        let impact = described("kc_impact");
+        for word in ["calls a method", "HTTP endpoint", "any repo", "hop", "`depth` 2"] {
+            assert!(impact.contains(word), "kc_impact: {word:?} in {impact}");
         }
         for tool in ["kc_impact", "kc_trace"] {
             let t = tools.iter().find(|t| t.name == tool).unwrap();
