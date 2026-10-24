@@ -23,7 +23,7 @@
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "728509ae9caf9053dcebe43935c8b3ef51d18e49a80648e6163a90c3a1e770b2"
+      "sha256": "421c8dda4cb83e1c61f6ec4fc76428dde01e5d2207e0b2ef01a87f51e974c415"
     },
     "questions": {
       "path": "questions.jsonl",
