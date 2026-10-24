@@ -11,6 +11,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   file ranking no longer starts on a repo that is still being indexed (a query could queue it between the index's
   sync and its contents), where the two writers each waited for the other; it is built once the indexing is done. On
   main, the workspace gate failed this way in 1 of 4 runs.
+- A workspace-wide answer says once which repos it left out because they aren't indexed yet. The server noted them
+  twice, once as the answer finished and again as it sent it; when the background finished indexing a repo in
+  between, the answer carried two "not yet indexed" entries with different counts. The workspace gate read them
+  together and, in one run, counted nine repos as left out silently.
 - `index` walks the history for the areas beside the file ranking instead of after it. The walk is a `git log` child
   that needs nothing from the ranking; on a repo with a long history it ran alone for most of a cold `index`. On a
   public TypeScript password manager client (8,177 files), a cold `index` took 19.4 to 20.7 s instead of 26.9 to

@@ -742,6 +742,25 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_answer_says_once_which_repos_it_left_out() {
+        let cache = test_cache();
+        let base = cache.dir("one-note");
+        let roots = base.join("roots");
+        repo(&roots, "old", &[("src/a.py", "def a():\n    return 1\n")]);
+        kc_index::config::add_root(&roots).unwrap();
+        let first = clone_into(&roots.join("first"), &[("src/b.py", "def b():\n    return 2\n")]);
+        clone_into(&roots.join("second"), &[("src/c.py", "def c():\n    return 3\n"), ("src/d.py", "x = 1\n")]);
+        // The answer notes the repos not indexed as it finishes; the server notes every workspace answer again as it
+        // sends it. A repo indexed in between leaves the first note as it was, not a second one beside it.
+        let mut env = json!({ "repo": "workspace", "items": [] });
+        ops::add_missing(&mut env);
+        kc_index::sync(&first, &mut kc_index::open(&first).unwrap(), &kc_index::SyncOptions { threads: 1, ..Default::default() }).unwrap();
+        ops::add_unindexed(&mut env);
+        let notes: Vec<String> = crate::contract::incomplete_of(&env).into_iter().map(|i| i.detail).filter(|d| d.contains("not yet indexed")).collect();
+        assert_eq!(notes, ["workspace: 2 repositories found, not yet indexed (first, second); nothing from them is in this answer"], "{env}");
+    }
+
+    #[test]
     fn the_queue_waits_while_the_cache_has_no_room() {
         let cache = test_cache();
         let base = cache.dir("new-repos-full");
