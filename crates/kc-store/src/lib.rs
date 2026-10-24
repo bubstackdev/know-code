@@ -477,10 +477,15 @@ pub struct FileRecord<'a> {
 
 /// A repo's index. Reads made through [`Store::conn`] while a snapshot is held (see [`Store::begin_snapshot`]) all see
 /// one committed state of the index, whatever another process writes meanwhile.
+/// Each connection's page cache, in KiB: queries touch little, and the MCP server may hold several connections.
+pub const CACHE_KIB: i64 = 2048;
+
 pub struct Store {
     conn: Connection,
     /// A second connection, outside the snapshot, for caches that carry their own validity key (see [`Store::side`]).
     side: std::cell::OnceCell<Connection>,
+    /// Each connection's page cache, in KiB (see [`Store::limit_cache`]).
+    cache_kib: std::cell::Cell<i64>,
     // Dropped after both SQLite connections, so cache eviction cannot unlink a live index.
     _lease: Option<std::fs::File>,
 }
@@ -658,9 +663,9 @@ impl Store {
         // or closes its WAL is briefly busy, so wait rather than fail.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         // A 2 MB page cache per connection: queries touch little, and the MCP server may hold several connections.
-        conn.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048;")?;
+        conn.execute_batch(&format!("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{CACHE_KIB};"))?;
         set_wal(&conn)?;
-        let mut store = Store { conn, side: std::cell::OnceCell::new(), _lease: None };
+        let mut store = Store { conn, side: std::cell::OnceCell::new(), cache_kib: std::cell::Cell::new(CACHE_KIB), _lease: None };
         store.migrate()?;
         Ok(store)
     }
@@ -692,6 +697,17 @@ impl Store {
         !self.conn.is_autocommit()
     }
 
+    /// Holds each of this store's connections' page caches to `kib` KiB (from [`CACHE_KIB`]): for a query reading many
+    /// indexes at once, whose caches would otherwise add up with every repo it reads.
+    pub fn limit_cache(&self, kib: i64) -> Result<()> {
+        self.cache_kib.set(kib);
+        self.conn.execute_batch(&format!("PRAGMA cache_size = -{kib};"))?;
+        if let Some(side) = self.side.get() {
+            side.execute_batch(&format!("PRAGMA cache_size = -{kib};"))?;
+        }
+        Ok(())
+    }
+
     /// The connection for caches whose rows carry what they are valid for (a generation, a git HEAD) rather than
     /// depending on the snapshot: the `derived` cache, `meta` writes and the history caches. Outside a snapshot it is
     /// [`Store::conn`]; inside one, a second connection, so cache writes commit at once instead of upgrading the
@@ -707,7 +723,7 @@ impl Store {
         let path = self.conn.path().filter(|p| !p.is_empty()).map(std::path::PathBuf::from).context("an in-memory index has no side connection")?;
         let c = Connection::open(&path).with_context(|| format!("opening {}", path.display()))?;
         c.busy_timeout(std::time::Duration::from_secs(5))?;
-        c.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048;")?;
+        c.execute_batch(&format!("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{};", self.cache_kib.get()))?;
         Ok(self.side.get_or_init(|| c))
     }
 
@@ -1423,6 +1439,24 @@ pub fn name_tokens(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_limited_store_holds_both_its_connections_to_the_limit() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-cache-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir.join("index.sqlite")).unwrap();
+        let size = |c: &Connection| c.query_row("PRAGMA cache_size", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(size(store.conn()), -CACHE_KIB);
+        store.limit_cache(256).unwrap();
+        assert_eq!(size(store.conn()), -256);
+        // The side connection, opened after the limit (inside a snapshot), and one opened before it.
+        store.begin_snapshot().unwrap();
+        assert_eq!(size(store.side().unwrap()), -256);
+        store.limit_cache(128).unwrap();
+        assert_eq!(size(store.side().unwrap()), -128);
+        store.end_snapshot().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn sqlite_has_no_process_wide_locks() {
