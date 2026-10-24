@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A controller action's `context` now says first who calls it over HTTP: `called_over_http` gives each route it
+  serves and its first five callers as `repo/file:line Symbol`, ahead of its callees and code callers. The links were
+  already in `http`, but after the callers, which for an action are mostly its tests; agents asking who calls an
+  endpoint read those and went to grep the client repo. The callers hint for an action now points to `kc_impact`,
+  which follows the routes, instead of `kc_refs`, which matches the name.
 - The server starts indexing the next new repo under the workspace roots as soon as one finishes, instead of on its
   next 2-second tick. Most repos of a workspace index in well under that, so a free slot sat idle: on a 111-repo
   public workspace, the background averaged 0.3 repos at once against a plan of 1, and 1.1 to 1.75 against a plan of
