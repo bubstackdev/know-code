@@ -10,6 +10,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   listed with no link and no note in `routes`. On the public-v1 workspace, 400 of jellyfin-web's unlinked calls carry
   the note; links are unchanged. The client's own method-to-route mapping isn't in the workspace, so they stay
   unlinked.
+- An API wrapper's own requests are read: `this.send("DELETE", "/ciphers/" + id + "/attachment/" + …)` in a class
+  named for an API, client or HTTP (`ApiService`) is a request of its method, as `this.apiService.send(…)` from
+  another service already was. On the public-v1 workspace, bitwarden-clients' `ApiService` gained 98 requests: 94
+  link, `exact`, to the action serving them, and 4 are left unlinked (no action serves their path). TypeScript files
+  are re-extracted.
 - A call through a class the client repo implements itself is no longer read as a generated API client's operation.
   `const client = new Client(options); client.login(user)` in an importer, `Client` a class of the repo's, was
   linked by name, `exact`, to the server's `SsoController.Login`. A call whose receiver's type the repo implements
