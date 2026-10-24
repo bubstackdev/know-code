@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A call to an external client whose method the repo only declares (a `.d.ts` for a package such as
+  `jellyfin-apiclient`), and which links to no action, now says so: its note names where the method is declared and
+  that the client's code, and so its route, isn't in the workspace. Such calls (`apiClient.markUnplayed(…)`) were
+  listed with no link and no note in `routes`. On the public-v1 workspace, 400 of jellyfin-web's unlinked calls carry
+  the note; links are unchanged. The client's own method-to-route mapping isn't in the workspace, so they stay
+  unlinked.
 - A call through a class the client repo implements itself is no longer read as a generated API client's operation.
   `const client = new Client(options); client.login(user)` in an importer, `Client` a class of the repo's, was
   linked by name, `exact`, to the server's `SsoController.Login`. A call whose receiver's type the repo implements

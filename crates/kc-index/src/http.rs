@@ -728,6 +728,13 @@ pub fn unlinked_note(route: &RouteRow, summaries: &[RepoSummary], brief: bool) -
             parts.push(format!("{unplaced} repo{} routes KnowCode can't place", if unplaced == 1 { " registers" } else { "s register" }));
         }
     }
+    // A method the repo only declares (a `.d.ts`): an external client, whose code the workspace doesn't hold. Said even
+    // in a list, so an answer doesn't silently drop the call.
+    if route.side == "operation"
+        && let Some(d) = route.detail.as_deref()
+    {
+        parts.push(format!("an external client: {d}; its code isn't in the workspace, so which route it requests, if any, isn't known"));
+    }
     let near = nearest(route, if server { "client" } else { "server" }, summaries);
     if !near.is_empty() {
         let shown: Vec<String> = near
