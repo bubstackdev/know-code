@@ -1369,6 +1369,8 @@ fn index(
         let workers = kc_store::rank::Workers { threads: rank_threads, init: None };
         if phases {
             // What a first query would compute, counted here: the file ranking (the reference graph), then the areas.
+            // As `build_derived` does: the areas' history walk runs beside the ranking when it has threads to spare.
+            let _ahead = if rank_threads > 1 { Some(kc_index::vitals::walk_ahead(root, &store)?) } else { None };
             let mark = meter::Mark::now();
             kc_store::rank::with_workers(workers, || store.file_rank_at(&[], kc_store::rank::Flow::Uses, true))?;
             mark.record("derived.rank");

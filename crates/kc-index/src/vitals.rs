@@ -1068,11 +1068,97 @@ pub fn shallow_commits(root: &Path) -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// HEAD, and the key of its walk as of `anchor` in the `churn` table (`churn.head`).
+fn walk_stamp(root: &Path, anchor: Anchor) -> (String, String) {
+    let head = git::GitDir::find(root).and_then(|g| g.head_commit()).unwrap_or_default();
+    let stamp = format!("{CHURN_FORMAT}|{head}|{}|{}", anchor.key(), history_inputs(root));
+    (head, stamp)
+}
+
+/// The `git log` arguments of the walk.
+fn walk_args(privacy: &crate::privacy::Privacy, head_time: i64, anchor: Anchor) -> Vec<String> {
+    let since = (head_time.min(anchor.time) - 365 * DAY).to_string();
+    // `-M`: a moved file keeps its history under its current path. It costs git about as much as `--no-renames`
+    // (about the same instructions retired on large histories).
+    let mut args: Vec<String> = ["log", "--no-merges", "--numstat", "--summary", "-M"].map(String::from).into();
+    args.push(format!("--since={since}"));
+    args.push("--format=@@%H\t%ct\t%aE\t%aN\t%s".into());
+    // Paths the repo's AI privacy file blocks are left out by git itself: a commit touching only them is no commit.
+    let excludes = privacy.exclude_pathspecs();
+    if !excludes.is_empty() {
+        args.push("--".into());
+        args.extend(excludes);
+    }
+    args
+}
+
+/// A walk's `git log` started by [`walk_ahead`]: for which repo and walk (its `churn.head`), with which arguments,
+/// the process's cuts before it started (see [`kc_store::limits::cuts_so_far`]), and the thread waiting for its
+/// output.
+struct Ahead {
+    root: std::path::PathBuf,
+    stamp: String,
+    args: Vec<String>,
+    cuts: usize,
+    log: std::thread::JoinHandle<Vec<u8>>,
+}
+
+thread_local! {
+    static AHEAD: std::cell::RefCell<Option<Ahead>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Until dropped, the next walk of the repo on this thread takes the log [`walk_ahead`] started; dropped before that,
+/// it waits for that log and drops it.
+pub struct WalkAhead(());
+
+impl Drop for WalkAhead {
+    fn drop(&mut self) {
+        if let Some(ahead) = AHEAD.with(|a| a.borrow_mut().take()) {
+            let _ = ahead.log.join();
+        }
+    }
+}
+
+/// Starts the walk's `git log` for `root` now, on a thread of its own, when the `churn` table doesn't hold this
+/// HEAD's walk: a `git` child that needs nothing of this process, so it runs beside what this thread does next (the
+/// file ranking, before the areas cluster over both) rather than after it. The next walk of `root` on this thread,
+/// while the guard lives, takes its output instead of running `git` again; it is the same log either way.
+pub fn walk_ahead(root: &Path, store: &Store) -> Result<WalkAhead> {
+    let guard = WalkAhead(());
+    let anchor = anchor(root, None)?;
+    let (head, stamp) = walk_stamp(root, anchor);
+    if head.is_empty() || store.side_meta("churn.head")?.as_deref() == Some(stamp.as_str()) {
+        return Ok(guard);
+    }
+    let privacy = crate::privacy::Privacy::load(root);
+    let args = walk_args(&privacy, head_time(root), anchor);
+    let cuts = kc_store::limits::cuts_so_far();
+    let operation = kc_store::limits::current();
+    let (dir, run) = (root.to_path_buf(), args.clone());
+    let log = std::thread::Builder::new().name("knowcode-history".into()).spawn(move || {
+        // The caller's operation: its cancellation stops this child too, and a cut is the caller's.
+        let _operation = kc_store::limits::enter(operation);
+        git::run_walk(&dir, &run.iter().map(String::as_str).collect::<Vec<_>>()).unwrap_or_default()
+    })?;
+    AHEAD.with(|a| *a.borrow_mut() = Some(Ahead { root: root.to_path_buf(), stamp, args, cuts, log }));
+    Ok(guard)
+}
+
+/// The log [`walk_ahead`] started for `root`'s walk `stamp` with `args`, and the cuts before it started, once it is
+/// done. One started for another walk (HEAD moved since) is waited for and dropped.
+fn take_ahead(root: &Path, stamp: &str, args: &[String]) -> Option<(Vec<u8>, usize)> {
+    let ahead = AHEAD.with(|a| a.borrow_mut().take())?;
+    if ahead.root != root || ahead.stamp != stamp || ahead.args != args {
+        let _ = ahead.log.join();
+        return None;
+    }
+    Some((ahead.log.join().ok()?, ahead.cuts))
+}
+
 /// Walks the log into the `churn` table unless it holds this HEAD's and anchor's walk already; returns the walk when
 /// it ran.
 fn walk_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Option<HashMap<String, Churn>>> {
-    let head = git::GitDir::find(root).and_then(|g| g.head_commit()).unwrap_or_default();
-    let stamp = format!("{CHURN_FORMAT}|{head}|{}|{}", anchor.key(), history_inputs(root));
+    let (head, stamp) = walk_stamp(root, anchor);
     let conn = store.side()?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS churn (path TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID;")?;
     if !head.is_empty() && store.side_meta("churn.head")?.as_deref() == Some(stamp.as_str()) {
@@ -1080,20 +1166,15 @@ fn walk_unless_cached(root: &Path, store: &Store, anchor: Anchor) -> Result<Opti
     }
     let head = head_time(root);
     let window = Window { head_time: head, cc_since: head - 365 * DAY, anchor, shallow: shallow_commits(root), bots: Bots::load() };
-    let since = (window.head_time.min(anchor.time) - 365 * DAY).to_string();
-    // `-M`: a moved file keeps its history under its current path. It costs git about as much as `--no-renames`
-    // (about the same instructions retired on large histories).
-    let cuts = kc_store::limits::cuts_so_far();
-    // Paths the repo's AI privacy file blocks are left out by git itself: a commit touching only them is no commit.
     let privacy = crate::privacy::Privacy::load(root);
-    let since = format!("--since={since}");
-    let mut args = vec!["log", "--no-merges", "--numstat", "--summary", "-M", since.as_str(), "--format=@@%H\t%ct\t%aE\t%aN\t%s"];
-    let excludes = privacy.exclude_pathspecs();
-    if !excludes.is_empty() {
-        args.push("--");
-        args.extend(excludes.iter().map(String::as_str));
-    }
-    let log = git::run_walk(root, &args).unwrap_or_default();
+    let args = walk_args(&privacy, window.head_time, anchor);
+    let (log, cuts) = match take_ahead(root, &stamp, &args) {
+        Some(ahead) => ahead,
+        None => {
+            let cuts = kc_store::limits::cuts_so_far();
+            (git::run_walk(root, &args.iter().map(String::as_str).collect::<Vec<_>>()).unwrap_or_default(), cuts)
+        }
+    };
     let (mut out, stats, mut words) = parse_log(&String::from_utf8_lossy(&log), &window);
     drop_blocked(&privacy, &mut out, Some(&mut words));
     // A log cut at its deadline is partial: answered from (the answer says so), never cached.
