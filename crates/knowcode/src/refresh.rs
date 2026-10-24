@@ -325,12 +325,13 @@ fn new_repos(queries: Arc<AtomicUsize>) {
     if let Err(e) = kc_index::light::discover_roots() {
         eprintln!("knowcode: root discovery: {e:#}");
     }
-    let busy: Arc<Mutex<std::collections::HashSet<PathBuf>>> = Arc::default();
+    let slots: Arc<Slots> = Arc::default();
     let mut tried = HashMap::new();
     let mut sniffed: Option<(Instant, machine::Machine)> = None;
     let mut last = None;
     loop {
-        let running = busy.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let (busy, finished) = slots.busy();
+        let running = busy.len();
         if queries.load(Ordering::Relaxed) == 0 {
             let m = match sniffed {
                 Some((at, m)) if at.elapsed() < SNIFF_EVERY => m,
@@ -340,7 +341,7 @@ fn new_repos(queries: Arc<AtomicUsize>) {
                     m
                 }
             };
-            let pending = match pending_new_repos(&mut tried, &busy.lock().unwrap_or_else(|e| e.into_inner())) {
+            let pending = match pending_new_repos(&mut tried, &busy) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("knowcode: new repos: {e:#}");
@@ -354,8 +355,8 @@ fn new_repos(queries: Arc<AtomicUsize>) {
             }
             for root in pending.into_iter().take(plan.repos.saturating_sub(running)) {
                 tried.insert(root.clone(), Instant::now());
-                busy.lock().unwrap_or_else(|e| e.into_inner()).insert(root.clone());
-                let busy = busy.clone();
+                slots.start(&root);
+                let slots = slots.clone();
                 let threads = plan.threads.max(1);
                 let spawned = std::thread::Builder::new().name("knowcode-new-repo".into()).spawn(move || {
                     background_priority();
@@ -365,7 +366,7 @@ fn new_repos(queries: Arc<AtomicUsize>) {
                         Err(e) => eprintln!("knowcode: indexing {} failed: {e}", root.display()),
                     }
                     kc_index::cache::maintain_and_report(std::slice::from_ref(&root));
-                    busy.lock().unwrap_or_else(|e| e.into_inner()).remove(&root);
+                    slots.finish(&root);
                 });
                 if let Err(e) = spawned {
                     eprintln!("knowcode: background indexing: {e}");
@@ -373,7 +374,41 @@ fn new_repos(queries: Arc<AtomicUsize>) {
                 }
             }
         }
-        std::thread::sleep(Duration::from_secs(2));
+        // The next repo starts as soon as one finishes, not on the next tick: most repos of a workspace index in
+        // well under the tick, and a slot left free until then halved the repos indexed at once.
+        slots.wait(finished, Duration::from_secs(2));
+    }
+}
+
+/// The repos [`new_repos`] is indexing, and how many it has finished: finishing one wakes it to start the next.
+#[derive(Default)]
+struct Slots {
+    state: Mutex<(std::collections::HashSet<PathBuf>, u64)>,
+    finished: Condvar,
+}
+
+impl Slots {
+    /// The repos being indexed, and how many have finished so far (for [`Slots::wait`]).
+    fn busy(&self) -> (std::collections::HashSet<PathBuf>, u64) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        (state.0.clone(), state.1)
+    }
+
+    fn start(&self, root: &Path) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).0.insert(root.to_path_buf());
+    }
+
+    fn finish(&self, root: &Path) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.0.remove(root);
+        state.1 += 1;
+        self.finished.notify_all();
+    }
+
+    /// Waits until a repo finishes after `seen` of them had (at once if one already has), or `timeout` passes.
+    fn wait(&self, seen: u64, timeout: Duration) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        drop(self.finished.wait_timeout_while(state, timeout, |s| s.1 == seen).unwrap_or_else(|e| e.into_inner()));
     }
 }
 
@@ -758,6 +793,42 @@ mod tests {
         ops::add_unindexed(&mut env);
         let notes: Vec<String> = crate::contract::incomplete_of(&env).into_iter().map(|i| i.detail).filter(|d| d.contains("not yet indexed")).collect();
         assert_eq!(notes, ["workspace: 2 repositories found, not yet indexed (first, second); nothing from them is in this answer"], "{env}");
+    }
+
+    #[test]
+    fn a_repo_finishing_wakes_the_new_repo_loop_at_once() {
+        let slots = Arc::new(Slots::default());
+        let (a, b) = (PathBuf::from("/w/alpha"), PathBuf::from("/w/beta"));
+        slots.start(&a);
+        slots.start(&b);
+        let (busy, seen) = slots.busy();
+        assert_eq!(busy.len(), 2);
+
+        // Nothing finishes: the loop waits out its tick.
+        let start = Instant::now();
+        slots.wait(seen, Duration::from_millis(100));
+        assert!(start.elapsed() >= Duration::from_millis(100));
+
+        // One finishes while it waits: it wakes then, well before the tick.
+        let finisher = slots.clone();
+        let done = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            finisher.finish(&a);
+        });
+        let start = Instant::now();
+        slots.wait(seen, Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+        done.join().unwrap();
+        let (busy, now) = slots.busy();
+        assert_eq!(busy.into_iter().collect::<Vec<_>>(), vec![b.clone()]);
+        assert_eq!(now, seen + 1);
+
+        // One that finished after the loop last looked, before it waits: no wait at all.
+        slots.finish(&b);
+        let start = Instant::now();
+        slots.wait(now, Duration::from_secs(30));
+        assert!(start.elapsed() < Duration::from_secs(10));
+        assert!(slots.busy().0.is_empty());
     }
 
     #[test]

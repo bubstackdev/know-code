@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The server starts indexing the next new repo under the workspace roots as soon as one finishes, instead of on its
+  next 2-second tick. Most repos of a workspace index in well under that, so a free slot sat idle: on a 111-repo
+  public workspace, the background averaged 0.3 repos at once against a plan of 1, and 1.1 to 1.75 against a plan of
+  4. It now averages 0.93 and 3.4, and indexed the workspace in about 100 s instead of about 260 s at one at a time
+  (41 s instead of 65 to 69 s at four), for the same instructions.
 - A workspace-wide answer holds at most 254 MiB of SQLite page cache over 500 repos. It keeps every index it
   reads open until it answers, and each held up to 4 MiB of page cache (about 2 GiB over 500 repos). Past the first
   index a call opens, each one's connections now hold 256 KiB. Answers are the same: ten workspace-wide `search`,
