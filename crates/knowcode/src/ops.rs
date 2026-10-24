@@ -2520,7 +2520,15 @@ fn called_over_http(http: &[HttpOut]) -> Option<Value> {
                 .iter()
                 .take(CALLED_OVER_HTTP)
                 .map(|l| {
-                    let sure = if l.confidence == "exact" { String::new() } else { format!(" ({})", l.confidence) };
+                    // Said when it isn't exact, or rests on a generated client's operation name rather than a path.
+                    let mut tags: Vec<&str> = Vec::new();
+                    if l.confidence != "exact" {
+                        tags.push(l.confidence);
+                    }
+                    if l.assumptions.contains(&Assumption::OperationName) {
+                        tags.push("by operation name");
+                    }
+                    let sure = if tags.is_empty() { String::new() } else { format!(" ({})", tags.join(", ")) };
                     format!("{}/{}:{} {}{sure}", l.repo, l.file, l.line, l.symbol)
                 })
                 .collect();
