@@ -890,7 +890,7 @@ under any profile and defers the rest to tool search."#,
 ];
 
 /// The parameters every tool shares, described once (their schemas carry no description, to keep each tool's
-/// advertised schema short); the server's instructions say them too.
+/// advertised schema short); the server's instructions name `repo`.
 pub const COMMON: &[(&str, &str)] = &[
     ("repo", "Repo to query: a path, or the name of an indexed repo. Default: the server's repo."),
     ("max_chars", "Answer size cap in characters (default 8000, max 40000); a list cut to fit says so (`incomplete`, `more`)."),

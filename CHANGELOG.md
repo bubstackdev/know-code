@@ -11,6 +11,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   file ranking no longer starts on a repo that is still being indexed (a query could queue it between the index's
   sync and its contents), where the two writers each waited for the other; it is built once the indexing is done. On
   main, the workspace gate failed this way in 1 of 4 runs.
+- `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
+  hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
+  the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools
+  cost fewer tokens on every turn: parameter lines whose names say enough are gone (`symbols`, `names`, `queries`,
+  `kc_more`'s `cursor`), `kc_impact` no longer advertises `file` (still taken, and documented in `kc_help`), and the
+  instructions are shorter. By the token-counting endpoint, the eight core schemas went from 1,151 to 1,031 tokens and
+  the instructions from 256 to 227.
 - A workspace-wide answer says once which repos it left out because they aren't indexed yet. The server noted them
   twice, once as the answer finished and again as it sent it; when the background finished indexing a repo in
   between, the answer carried two "not yet indexed" entries with different counts. The workspace gate read them

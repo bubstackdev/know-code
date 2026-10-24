@@ -213,19 +213,22 @@ KnowCode's own configuration directory is a different one; `--delete-config` rem
 
 By default `serve` advertises the core tools: `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`,
 `kc_search`, `kc_more` and `kc_help`. They answer where a name is defined, every use of it, what a symbol is, where a
-concept lives, text search, and what calls a symbol or breaks if it changes. `serve --tools all` (or
+concept lives, text search, and what calls a symbol or an HTTP endpoint, hop by hop and from any repo, or breaks if it
+changes. `serve --tools all` (or
 `KNOWCODE_TOOLS=all`) advertises all 25 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). A tool left
 out is still documented in `kc_help`, which says it isn't advertised, but can't be called until the server is
 started with it.
 
 The default is the small set because a client that doesn't defer tools loads every advertised schema, and the
-server's instructions, on every turn. The core tools and the instructions are about 3.5k characters; `all` is about
-7.4k. kc_trace is not in the core set: kc_impact answers callers by hop, kc_context a symbol's callers and callees, and
+server's instructions, on every turn. The core tools and the instructions are about 3.1k characters; `all` is about
+7.0k. kc_trace is not in the core set: kc_impact answers callers by hop, kc_context a symbol's callers and callees, and
 kc_trace's schema is one of the largest.
 
-Each tool's schema lists only the parameters most calls need. Every other parameter, `repo` and `max_chars` among
-them, is accepted all the same and documented in `kc_help <tool>`, so a client that loads every schema on every turn
-carries less.
+Each tool's schema lists only the parameters most calls need, with a line only where the name doesn't say enough.
+Every other parameter, `repo`, `max_chars` and `kc_impact`'s `file` among them, is accepted all the same and
+documented in `kc_help <tool>`, so a client that loads every schema on every turn carries less. Some clients leave the
+server's instructions out (Claude Code's bare mode does), so each core tool's description says on its own which
+questions it answers.
 
 In Claude Code, the core tools are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from
 the start instead of waiting behind tool search; with `all`, the other tools stay deferred. A server-level
