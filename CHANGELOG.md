@@ -2,7 +2,9 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.3.0 (date TBD)
+
+SUMMARY TBD: the lead writes this paragraph once the public-v2 study results are in.
 
 - A call to an external client whose method the repo only declares (a `.d.ts` for a package such as
   `jellyfin-apiclient`), and which links to no action, now says so: its note names where the method is declared and
