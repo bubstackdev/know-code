@@ -6,7 +6,7 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 - `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
   hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
-  the instructions out (Claude Code's `--bare` mode), so the descriptions carry the map on their own. The core tools
+  the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools
   cost fewer tokens on every turn: parameter lines whose names say enough are gone (`symbols`, `names`, `queries`,
   `kc_more`'s `cursor`), `kc_impact` no longer advertises `file` (still taken, and documented in `kc_help`), and the
   instructions are shorter. By the token-counting endpoint, the eight core schemas went from 1,151 to 1,031 tokens and

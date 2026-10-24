@@ -227,7 +227,7 @@ kc_trace's schema is one of the largest.
 Each tool's schema lists only the parameters most calls need, with a line only where the name doesn't say enough.
 Every other parameter, `repo`, `max_chars` and `kc_impact`'s `file` among them, is accepted all the same and
 documented in `kc_help <tool>`, so a client that loads every schema on every turn carries less. Some clients leave the
-server's instructions out (Claude Code's `--bare` mode does), so each core tool's description says on its own which
+server's instructions out (Claude Code's bare mode does), so each core tool's description says on its own which
 questions it answers.
 
 In Claude Code, the core tools are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from
