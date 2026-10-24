@@ -772,6 +772,10 @@ pub struct PageHit {
     pub before: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+    /// On an HTTP route with links across repos: what it links to, and the call listing every caller (set by the
+    /// caller, which knows the workspace).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<String>,
 }
 
 /// Snippet width in characters.
@@ -951,6 +955,7 @@ pub fn finish(roots: &[PathBuf], scanned: &Scanned, files: &[FileData], hits: &[
                 member,
                 before: Vec::new(),
                 after: Vec::new(),
+                http: None,
             }
         })
         .collect();

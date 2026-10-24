@@ -429,7 +429,7 @@ fn lean_row(m: &mut Map<String, Value>) {
 /// - `kc_search`: `repo/file:line kind symbol | text`, the symbol a `def` or `decl` declares, or `in` the one
 ///   containing the line, with its parameter names on the first code hit inside it (`in Orders.Place(o)`); `[stale]`
 ///   for a file that could not be read (as last indexed); the lines around it (`context`, or the rest of its
-///   statement) follow, one per line, `  line- text`;
+///   statement) follow, one per line, `  line- text`, then, on an HTTP route with links, `  http: …`;
 /// - `kc_search` with `files_only`: `repo/file:line best (n matches)`, the line and kind of its best-ranked hit;
 /// - `kc_grep_ast`: `repo/file:line:column[-end_line] [$X=captured, …] | text`.
 pub fn hit_row(v: &Value) -> Option<String> {
@@ -446,7 +446,7 @@ pub fn hit_row(v: &Value) -> Option<String> {
     // A search hit.
     if let (Some(kind), Some(text)) = (str_of("kind"), str_of("text"))
         && matches!(kind, "def" | "decl" | "code" | "test" | "comment" | "doc")
-        && only(&["file", "line", "kind", "text", "symbol", "in", "in_params", "before", "after"])
+        && only(&["file", "line", "kind", "text", "symbol", "in", "in_params", "before", "after", "http"])
     {
         let at = match (str_of("symbol"), str_of("in")) {
             (Some(s), _) => format!(" {s}"),
@@ -460,6 +460,9 @@ pub fn hit_row(v: &Value) -> Option<String> {
         let around = before.iter().enumerate().map(|(i, l)| (first + i as u64, l)).chain(after.iter().enumerate().map(|(i, l)| (line + 1 + i as u64, l)));
         for (n, l) in around {
             row.push_str(&format!("\n  {n}- {l}"));
+        }
+        if let Some(h) = str_of("http") {
+            row.push_str(&format!("\n  http: {h}"));
         }
         return Some(row);
     }
@@ -841,6 +844,7 @@ mod tests {
                   "text": "_audit.Log(\"placed | ok\");", "before": ["// Log it"], "after": ["Validate(o);", "}"] },
                 { "file": "README.md", "line": 2, "kind": "doc", "repo": "billing", "text": "Logged through Audit.Log.", "stale": true },
                 { "file": "a.cs", "line": 1, "kind": "comment", "text": "// Log" },
+                { "file": "Api.cs", "line": 4, "kind": "code", "in": "Api.Get", "text": "[HttpGet(\"x\")]", "http": "GET x: 1 caller over HTTP in web; kc_impact Api.Get lists them" },
             ],
         });
         let v: Value = serde_json::from_str(&output(&env, &Names::default())).unwrap();
@@ -851,6 +855,7 @@ mod tests {
                 "shop/src/Orders.cs:6 code in Orders.Place(o) | _audit.Log(\"placed | ok\");\n  5- // Log it\n  7- Validate(o);\n  8- }",
                 "billing/README.md:2 doc [stale] | Logged through Audit.Log.",
                 "a.cs:1 comment | // Log",
+                "Api.cs:4 code in Api.Get | [HttpGet(\"x\")]\n  http: GET x: 1 caller over HTTP in web; kc_impact Api.Get lists them",
             ]),
             "{v}"
         );

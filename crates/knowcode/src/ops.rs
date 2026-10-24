@@ -1518,7 +1518,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     // left with its place alone under `cite: brief`.
     let mut citer = crate::cite::Citer::new([]).with_stores(opened.iter().map(|o: &Opened| (o.root.clone(), &o.store)));
     let mut cited = 0;
-    let list: Vec<_> = items
+    let mut list: Vec<_> = items
         .iter()
         .map(|(root, h)| {
             let mut v = tag_repo(h, root, multi);
@@ -1529,6 +1529,14 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
             v
         })
         .collect();
+    // A controller action, or code making a request: its callers over HTTP are one `kc_impact` away.
+    for (v, (root, h)) in list.iter_mut().zip(&items) {
+        if let Some(o) = opened.iter().find(|o| &o.root == root)
+            && let Some(mark) = find_mark(o, &h.symbol)?
+        {
+            v["http"] = json!(mark);
+        }
+    }
     // A cite that drifted says so in its `check`; the answer isn't less whole for it (its items come from the index,
     // and a repo behind its working tree is said in `stale` already), so no `incomplete` entry of its own.
     let mut env = envelope(&opened, json!(list), total, items.len());
@@ -2569,6 +2577,96 @@ fn http_unsupported(o: &Opened, ctx: &Context) -> Result<Vec<kc_store::unsupport
         out.push(site);
     }
     Ok(out)
+}
+
+/// What a `search` or `find` hit on a linked HTTP route says, in a line: a server route's callers across repos, or the
+/// action a request reaches, with the `kc_impact` call listing every caller. `None` when nothing links to it. Agents
+/// asking who calls an endpoint read the action and grepped the client repo, one tool call short of the answer.
+fn route_mark(route: &query::RouteRow, root: &Path, summaries: &[kc_index::workspace::RepoSummary]) -> Option<String> {
+    let at = match route.path.as_deref() {
+        Some(p) if !route.verb.is_empty() => format!("{} {p}", route.verb),
+        Some(p) => p.to_string(),
+        None => route.verb.clone(),
+    };
+    match route.side.as_str() {
+        "server" => {
+            let links = kc_index::http::callers(route, root, summaries);
+            let mut repos: Vec<String> = links.iter().map(|l| repo_name(&l.repo)).collect();
+            repos.sort();
+            repos.dedup();
+            let n = links.len();
+            (n > 0).then(|| format!("{at}: {n} caller{} over HTTP in {}; kc_impact {} lists them", if n == 1 { "" } else { "s" }, repos.join(", "), route.symbol))
+        }
+        "client" | "operation" => {
+            let links = kc_index::http::handlers(route, root, summaries);
+            let first = links.first()?;
+            let more = if links.len() > 1 { format!(" (or {} more)", links.len() - 1) } else { String::new() };
+            let action = &first.route.symbol;
+            Some(format!("requests {at}, served by {}/{action}{more}; kc_impact {action} lists every caller", repo_name(&first.repo)))
+        }
+        _ => None,
+    }
+}
+
+/// Whether the repo has HTTP routes in `file`: a cheap check before reading the workspace's.
+fn routes_in(conn: &rusqlite::Connection, file: &str) -> Result<bool> {
+    let mut stmt = conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM http_routes r JOIN files f ON f.id = r.file_id WHERE f.path = ?1)")?;
+    Ok(stmt.query_row([file], |r| r.get(0))?)
+}
+
+/// Marks the search hits on linked HTTP routes (see [`route_mark`]), each route once, at its first hit: a server
+/// route's attribute line or its action's declaration, or a line of the method or contract making a request.
+fn mark_route_hits(repos: &[Opened], page: &mut [search::PageHit]) -> Result<()> {
+    for (i, o) in repos.iter().enumerate() {
+        let mut files: Vec<&str> = page.iter().filter(|h| h.repo == i).map(|h| h.file.as_str()).collect();
+        files.sort_unstable();
+        files.dedup();
+        let mut any = false;
+        for f in files {
+            if routes_in(o.store.conn(), f)? {
+                any = true;
+                break;
+            }
+        }
+        if !any {
+            continue;
+        }
+        let summaries = full_summaries(o)?;
+        let Some(mine) = summaries.iter().find(|s| s.root == o.root) else { continue };
+        let on = |r: &query::RouteRow, h: &search::PageHit| {
+            r.file == h.file
+                && match r.side.as_str() {
+                    "server" => h.line == r.line || (h.kind == "def" && (r.start_line..=r.end_line).contains(&h.line)),
+                    "client" | "operation" => matches!(h.kind, "code" | "def" | "decl") && (r.start_line..=r.end_line).contains(&h.line),
+                    _ => false,
+                }
+        };
+        let mut seen = HashSet::new();
+        for h in page.iter_mut().filter(|h| h.repo == i) {
+            let Some((n, r)) = mine.routes.iter().enumerate().find(|(_, r)| on(r, h)) else { continue };
+            if seen.insert(n) {
+                h.http = route_mark(r, &o.root, &summaries);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The route mark (see [`route_mark`]) of a definition `find` returns: a controller action, or a method or contract
+/// making a request.
+fn find_mark(o: &Opened, s: &query::SymbolRow) -> Result<Option<String>> {
+    let mut stmt = o.store.conn().prepare_cached("SELECT EXISTS(SELECT 1 FROM http_routes WHERE symbol_id = ?1 AND side IN ('server', 'client', 'operation'))")?;
+    if !stmt.query_row([s.id], |r| r.get::<_, bool>(0))? {
+        return Ok(None);
+    }
+    let summaries = full_summaries(o)?;
+    let qualified = s.container.as_ref().map_or_else(|| s.name.clone(), |c| format!("{c}.{}", s.name));
+    let Some(mine) = summaries.iter().find(|r| r.root == o.root) else { return Ok(None) };
+    Ok(mine
+        .routes
+        .iter()
+        .filter(|r| r.symbol == qualified && r.file == s.file && r.start_line == s.line)
+        .find_map(|r| route_mark(r, &o.root, &summaries)))
 }
 
 fn http_for(o: &Opened, ctx: &Context, no_sync: bool) -> Result<Vec<HttpOut>> {
@@ -7095,6 +7193,7 @@ pub fn search(p: &SearchParams, args: &Scope) -> Result<Out<SearchData>> {
         let whole = p.fit.is_some() && p.offset == 0 && end < through && hits.len() <= OTHER_FILES;
         page = search::finish(&roots, &scanned, &file_data, &hits[p.offset.min(end)..if whole { through } else { end }], p.context);
         search::add_params(&repos.iter().map(|o| &o.store).collect::<Vec<_>>(), &mut page)?;
+        mark_route_hits(&repos, &mut page)?;
         if whole && !p.fit.is_some_and(|chars| hits_fit(&page, &names, multi, chars)) {
             page.truncate(end);
         }
@@ -7870,6 +7969,39 @@ pub(crate) mod tests {
     /// The `missing_repo` entries of an answer, as `reason: detail`.
     fn missing_notes(env: &Value) -> Vec<String> {
         crate::contract::incomplete_of(env).iter().filter(|i| i.reason == Reason::MissingRepo).map(|i| i.detail.clone()).collect()
+    }
+
+    #[test]
+    fn search_and_find_hits_on_a_linked_route_point_to_its_callers() {
+        let cache = test_cache();
+        let base = cache.dir("http-marks");
+        let (web, api) = orders_web_and_api(&base);
+        let both = Scope { repos: vec![web, api], no_sync: false };
+        let run = |pattern: &str| {
+            let opts = search::SearchOptions {
+                pattern: pattern.into(),
+                regex: false,
+                case: search::Case::Sensitive,
+                word: false,
+                langs: Vec::new(),
+                globs: Vec::new(),
+                max_lines: 1000,
+            };
+            let env = search(&SearchParams { opts, limit: 20, offset: 0, context: 0, files_only: false, fit: None }, &both).unwrap().env;
+            env["items"].as_array().unwrap().iter().map(|i| (format!("{}:{}", i["file"].as_str().unwrap(), i["line"]), i["http"].as_str().map(str::to_string))).collect::<Vec<_>>()
+        };
+        let callers = "POST Orders: 1 caller over HTTP in web; kc_impact OrdersController.Orders lists them";
+        // The action's attribute, and the contract requesting it; the route nothing requests says nothing.
+        let hits = run("HttpPost(");
+        assert!(hits.contains(&("src/OrdersController.cs:4".into(), Some(callers.into()))), "{hits:?}");
+        let hits = run("ApiPlaceOrder {}");
+        assert_eq!(hits, [("src/contracts.ts:2".into(), Some("requests POST Orders, served by api/OrdersController.Orders; kc_impact OrdersController.Orders lists every caller".into()))]);
+        // A line the route isn't on: nothing.
+        assert_eq!(run("_q.Run()"), [("src/OrdersController.cs:5".to_string(), None)]);
+        // `find` on the action.
+        let f = find("OrdersController.Orders", None, 10, &both).unwrap();
+        assert_eq!(f.env["items"][0]["http"], callers, "{}", f.env);
+        assert!(find("OrderQuery.Run", None, 10, &both).unwrap().env["items"][0].get("http").is_none());
     }
 
     #[test]

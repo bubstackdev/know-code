@@ -1392,6 +1392,9 @@ pub fn search(d: &crate::ops::SearchData) {
         for (i, l) in h.after.iter().enumerate() {
             println!("  {:>5}-        {l}", h.line as usize + 1 + i);
         }
+        if let Some(http) = &h.http {
+            println!("         http    {http}");
+        }
     }
     if let Some(next) = d.next_offset {
         println!("… more: --offset {next}");

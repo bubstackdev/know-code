@@ -29,7 +29,8 @@ overloads, and how many references in code name it across the workspace (the oth
 resolves). When files KnowCode doesn't read as code (Razor, vendored JavaScript) name it too, the count is "at least",
 with those lines. Each item declaring the name asked for quotes the line naming it in `cite`, read from the file now
 and checked against the index (`check: verified`). Matches with the name asked for (in any case) come first: when only
-others are past the limit, the answer is `complete` and they are a `more` entry. Use kc_locate when you know what the code does but not its name,
+others are past the limit, the answer is `complete` and they are a `more` entry. A controller action, or code making a
+request, linked across repos has `http`, as in kc_search. Use kc_locate when you know what the code does but not its name,
 kc_search for exact text."#,
     },
     Topic {
@@ -677,7 +678,10 @@ the answer spans repos; kind def, decl, code, test, comment or doc; the symbol a
 the one enclosing the line, with its parameter names on the first code hit inside a method or function (`in
 Orders.Place(order, user)`); `[stale]` for a file that could not be read; the trimmed line after the first ` | `. The
 rest of the hit's statement follows it, one per line (`  41- text`): the chained call a `.then(` line continues, the
-`.map(` continuing it, the `case` label it runs under; with `context`, the lines around it instead. With
+`.map(` continuing it, the `case` label it runs under; with `context`, the lines around it instead. A hit on an HTTP
+route linked across repos (an action's route attribute or declaration, a line of code or a contract making a request)
+ends with `  http: …`: the action's callers by repo, or the action a request reaches, and the kc_impact call listing
+every caller; each route once. With
 `files_only`, a row per file, `repo/file:line best (n matches)`. `case`: sensitive (default), insensitive, or smart
 (insensitive unless the pattern has an uppercase letter); `word` for whole words. Filter with `lang` (swift, python, rust, markdown, json, yaml,
 toml, shell, …, or an extension: `ts`, `cs`) and `paths` globs (a leading `!` excludes; without a `/`, a glob matches file

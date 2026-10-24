@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A `search` hit on an HTTP route that KnowCode links across repos ends with an `http:` line: for an action's route
+  attribute or declaration, how many callers request it and from which repos; for code or a contract making a
+  request, the action it reaches. Either way it names the `kc_impact` call that lists every caller. `find` on such an
+  action or request adds the same line as `http`. Agents asking who calls an endpoint read the controller and grepped
+  the client repo for URL fragments, one call short of the answer. Each route is marked once per page.
 - `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
   hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
   the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools
