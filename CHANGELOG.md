@@ -4,6 +4,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A call through a class the client repo implements itself is no longer read as a generated API client's operation.
+  `const client = new Client(options); client.login(user)` in an importer, `Client` a class of the repo's, was
+  linked by name, `exact`, to the server's `SsoController.Login`. A call whose receiver's type the repo implements
+  with a method of that name now reaches that code only; a type the repo only declares (a `.d.ts` for an external
+  client) still counts as a client. A one-word operation (`update`, `approve`) not under the controller its client's
+  tag names now links `ambiguous` at most: many APIs' methods share such a name. On the public-v1 workspace, 346
+  operation rows that were calls into the repo's own code are gone (one had a link: the false `login` one), and six
+  one-word operations of clients naming no controller went from `exact` to `ambiguous` (two of them, `update` and
+  `policies`, were linked to the wrong controller).
 - A controller action's `context` now says first who calls it over HTTP: `called_over_http` gives each route it
   serves and its first five callers as `repo/file:line Symbol`, ahead of its callees and code callers. The links were
   already in `http`, but after the callers, which for an action are mostly its tests; agents asking who calls an

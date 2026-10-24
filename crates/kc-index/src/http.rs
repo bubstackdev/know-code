@@ -376,7 +376,8 @@ fn action_of(r: &RouteRow) -> (&str, &str) {
 /// operation, under the controller named like the client's tag when one is, else under any controller. When the
 /// client repo is known to call some server repos (see [`called`]), only theirs: an action of that name in a repo it
 /// isn't known to call is another API's. The link rests on names (`operation_name`): `exact` when one action fits,
-/// `ambiguous` when several do. When no server is known, an untagged operation links to every action of that name,
+/// `ambiguous` when several do, or when the client has no tag and the operation is one word (`update`): nothing then
+/// says the receiver is the API's client rather than another of the name. When no server is known, an untagged operation links to every action of that name,
 /// `ambiguous`, assuming `server_unverified`: nothing says which server the client sends to.
 fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
     let Some(op) = client.path.as_deref() else { return Vec::new() };
@@ -392,7 +393,10 @@ fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSu
     let unverified = known.is_empty() && !by_tag;
     let cands: Vec<(&Path, &RouteRow)> =
         if known.is_empty() { cands } else { cands.into_iter().filter(|(repo, _)| known.iter().any(|k| k == repo)).collect() };
-    let confidence = if cands.len() == 1 && !unverified { "exact" } else { "ambiguous" };
+    // A one-word operation (`update`, `login`) not under the controller its tag names is a name many APIs' methods
+    // share: never `exact`.
+    let specific = by_tag || op.chars().skip(1).any(|c| c.is_ascii_uppercase() || c == '_');
+    let confidence = if cands.len() == 1 && !unverified && specific { "exact" } else { "ambiguous" };
     let mut assumptions = vec![Assumption::SameDeployment, Assumption::OperationName];
     if unverified {
         assumptions.push(Assumption::ServerUnverified);

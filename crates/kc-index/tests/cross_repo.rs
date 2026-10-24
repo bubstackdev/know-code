@@ -885,3 +885,47 @@ fn untagged_operations_link_to_the_servers_their_client_calls() {
     assert!(note.contains("actions named `listPages` only in repos it isn't known to call (wiki-api)"), "{note}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A call through a class the client repo implements itself (`new Client(…).login()`) is no generated client's
+/// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is. An untagged
+/// client's one-word operation (`update`) links `ambiguous` at most: the name alone doesn't say whose method it is.
+#[test]
+fn only_generated_clients_link_by_operation_name() {
+    let turn = turn();
+    let base = turn.dir("operation-receivers");
+    let api = scratch(&base, "vault-api");
+    write(
+        &api,
+        "src/AccountsController.cs",
+        "[ApiController]\n[Route(\"accounts\")]\npublic class AccountsController : ControllerBase\n{\n    [HttpPost(\"login\")]\n    public Task Login() => null;\n    [HttpGet(\"profile\")]\n    public Task GetProfile() => null;\n    [HttpPut(\"{id}\")]\n    public Task Update(string id) => null;\n    [HttpGet(\"devices\")]\n    public Task ListDevices() => null;\n}\n",
+    );
+    let web = scratch(&base, "vault-web");
+    write(
+        &web,
+        "src/importer.ts",
+        "export class Client {\n  login(user: string) { return this.rest.post(user); }\n}\nexport class Importer {\n  run(user: string) {\n    const client = new Client();\n    return client.login(user);\n  }\n}\n",
+    );
+    write(&web, "src/apiclient.d.ts", "declare class ApiClient {\n  getProfile(): Promise<any>;\n}\n");
+    write(
+        &web,
+        "src/profile.ts",
+        "export class Profile {\n  load(apiClient: ApiClient) { return apiClient.getProfile(); }\n  save(id: string) { return this.withSdk((client) => client.update(id)); }\n  devices() { return fetch('/accounts/devices'); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let ops: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().filter(|r| r.side == "operation").cloned().collect();
+    // `client.login` reaches the repo's own `Client.login`: not an operation.
+    let names: Vec<&str> = ops.iter().filter_map(|r| r.path.as_deref()).collect();
+    assert_eq!(names, ["getProfile", "update"]);
+    let link = |op: &str| -> Vec<(String, &'static str)> {
+        let r = ops.iter().find(|r| r.path.as_deref() == Some(op)).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "exact")]);
+    assert_eq!(link("update"), [("AccountsController.Update".to_string(), "ambiguous")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
