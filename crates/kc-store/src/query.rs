@@ -2731,11 +2731,16 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
             && path.starts_with("{^")
         {
             let class = container.as_deref().map(|c| c.rsplit('.').next().unwrap_or(c)).unwrap_or_default();
-            for p in ctl.paths(&mut consts, class, &path)? {
-                let r = row(side.clone(), verb.clone(), Some(p), None);
-                if !out.contains(&r) {
-                    out.push(r);
+            match ctl.paths(&mut consts, class, &file, &path)? {
+                Ok(paths) => {
+                    for p in paths {
+                        let r = row(side.clone(), verb.clone(), Some(p), None);
+                        if !out.contains(&r) {
+                            out.push(r);
+                        }
+                    }
                 }
+                Err(why) => out.push(row("unsupported".to_string(), verb.clone(), None, Some(why))),
             }
             continue;
         }
@@ -2821,54 +2826,104 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
 }
 
 /// What places a controller action whose class writes no `[Route]` out (`{^Action}/rest`, `{^*Action}` for a public
-/// method with no route attribute; see `kc_extract::csharp`): the classes' `[Route]` templates, their bases, and
-/// the repo's conventional route templates.
+/// method with no route attribute; `{^!…}` when the class has no `[Route]` in any part; see `kc_extract::csharp`):
+/// the classes' `[Route]` templates, their bases, and the repo's conventional route templates.
+///
+/// Classes are known by name only, and one repo may have several of a name (an admin app's `OrdersController` and an
+/// API's): a class with no `[Route]` of its own never takes another's, and a prefix same-named classes disagree on
+/// places nothing.
 struct Controllers {
-    /// Class name → its `[Route]` template, or the constant naming it.
-    prefixes: HashMap<String, (String, Option<String>)>,
-    /// Class name → the names of its bases.
+    /// Class name → its `[Route]` templates, or the constants naming them, each with the file it is written in.
+    prefixes: HashMap<String, Vec<(String, String, Option<String>)>>,
+    /// Class name → the names of its bases, in any class of that name.
     bases: HashMap<String, Vec<String>>,
-    conventional: Vec<String>,
+    /// (class name, file) → the names of the bases written on that class in that file.
+    bases_at: HashMap<(String, String), Vec<String>>,
+    /// The conventional route templates, each with the method mapping it (`MapControllerRoute`).
+    conventional: Vec<(String, String)>,
 }
 
 /// How many bases up a class's route prefix is looked for.
 const BASE_DEPTH: u32 = 8;
 
+/// A `[Route]` template, or the constant naming it.
+type Prefix = (String, Option<String>);
+
+/// Conventional routes of ASP.NET Core MVC, where an action's name drops `Async` (`SuppressAsyncSuffixInActionNames`).
+const CORE_CONVENTIONAL: &[&str] = &["MapControllerRoute", "MapDefaultControllerRoute", "MapAreaControllerRoute"];
+
 impl Controllers {
     fn new(conn: &Connection, rows: &[RawRoute]) -> Result<Self> {
-        let mut prefixes = HashMap::new();
-        let mut conventional = Vec::new();
-        for ((side, _, path, path_ref), _, (name, ..), _) in rows {
+        let mut prefixes: HashMap<String, Vec<(String, String, Option<String>)>> = HashMap::new();
+        let mut conventional: Vec<(String, String)> = Vec::new();
+        for ((side, verb, path, path_ref), _, (name, _, _, file), _) in rows {
             match side.as_str() {
                 "prefix" => {
                     if let Some(n) = name {
-                        prefixes.entry(n.clone()).or_insert((path.clone(), path_ref.clone()));
+                        let v = prefixes.entry(n.clone()).or_default();
+                        let p = (file.clone(), path.clone(), path_ref.clone());
+                        if !v.contains(&p) {
+                            v.push(p);
+                        }
                     }
                 }
-                "conventional" if !conventional.contains(path) => conventional.push(path.clone()),
+                "conventional" if !conventional.iter().any(|(t, _)| t == path) => conventional.push((path.clone(), verb.clone())),
                 _ => {}
             }
         }
         let mut bases: HashMap<String, Vec<String>> = HashMap::new();
+        let mut bases_at: HashMap<(String, String), Vec<String>> = HashMap::new();
         let mut stmt = conn.prepare_cached(
-            "SELECT DISTINCT s.name, r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id WHERE s.kind = 'class' ORDER BY s.name, r.line",
+            "SELECT DISTINCT s.name, r.target_name, f.path FROM relations r JOIN symbols s ON s.id = r.from_id JOIN files f ON f.id = r.file_id
+             WHERE s.kind = 'class' ORDER BY s.name, f.path, r.line",
         )?;
-        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-            let (class, base) = row?;
-            bases.entry(class).or_default().push(base);
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+            let (class, base, file) = row?;
+            let all = bases.entry(class.clone()).or_default();
+            if !all.contains(&base) {
+                all.push(base.clone());
+            }
+            bases_at.entry((class, file)).or_default().push(base);
         }
-        Ok(Controllers { prefixes, bases, conventional })
+        Ok(Controllers { prefixes, bases, bases_at, conventional })
     }
 
-    /// The `[Route]` template nearest `class` up its bases (its own first), as ASP.NET takes it.
-    fn prefix(&self, class: &str) -> Option<&(String, Option<String>)> {
-        let mut level = vec![class.to_string()];
+    /// The `[Route]` template of the classes named `class`: the one written in `file` when there is one, else the one
+    /// they all agree on. `Err` when they disagree.
+    fn own(&self, class: &str, file: Option<&str>) -> std::result::Result<Option<Prefix>, String> {
+        let Some(found) = self.prefixes.get(class) else { return Ok(None) };
+        if let Some((_, t, r)) = file.and_then(|f| found.iter().find(|(at, ..)| at == f)) {
+            return Ok(Some((t.clone(), r.clone())));
+        }
+        let mut distinct: Vec<Prefix> = Vec::new();
+        for (_, t, r) in found {
+            if !distinct.iter().any(|(dt, dr)| dt == t && dr == r) {
+                distinct.push((t.clone(), r.clone()));
+            }
+        }
+        match distinct.len() {
+            1 => Ok(distinct.pop()),
+            _ => Err(format!("classes named {class} in several files have different [Route] prefixes")),
+        }
+    }
+
+    /// The `[Route]` template nearest the class up its bases, as ASP.NET takes it: its own first (written in `file`,
+    /// or in another part of it), unless it has none (`unrouted`), then its bases'. `Err` when same-named classes on
+    /// the way disagree.
+    fn prefix(&self, class: &str, file: &str, unrouted: bool) -> std::result::Result<Option<Prefix>, String> {
+        let mut level: Vec<String> = if unrouted {
+            // Its own bases, read where it is declared: another class of its name has its own.
+            self.bases_at.get(&(class.to_string(), file.to_string())).cloned().unwrap_or_default()
+        } else {
+            vec![class.to_string()]
+        };
         let mut seen = std::collections::HashSet::new();
-        for _ in 0..=BASE_DEPTH {
+        for depth in 0..=BASE_DEPTH {
+            let mine = depth == 0 && !unrouted;
             let mut next = Vec::new();
             for c in &level {
-                if let Some(p) = self.prefixes.get(c) {
-                    return Some(p);
+                if let Some(p) = self.own(c, mine.then_some(file))? {
+                    return Ok(Some(p));
                 }
                 if seen.insert(c.clone()) {
                     next.extend(self.bases.get(c).into_iter().flatten().cloned());
@@ -2879,14 +2934,19 @@ impl Controllers {
             }
             level = next;
         }
-        None
+        Ok(None)
     }
 
-    /// The paths of an action of `class` encoded `{^Action}rest` (see [`Controllers`]): under the inherited prefix,
-    /// else, for an action without a template, each conventional route's, else the action's own template. None for a
-    /// method no route serves.
-    fn paths(&self, consts: &mut Constants, class: &str, encoded: &str) -> Result<Vec<String>> {
-        let Some((marker, rest)) = encoded.strip_prefix("{^").and_then(|e| e.split_once('}')) else { return Ok(vec![encoded.to_string()]) };
+    /// The paths of an action of `class` (declared in `file`) encoded `{^Action}rest` (see [`Controllers`]): under the
+    /// inherited prefix, else, for an action without a template, each conventional route's, else the action's own
+    /// template. None for a method no route serves. `Err`, saying why, for an action that can't be placed: same-named
+    /// classes disagree on its prefix, or it has no template and no conventional route was read.
+    fn paths(&self, consts: &mut Constants, class: &str, file: &str, encoded: &str) -> Result<std::result::Result<Vec<String>, String>> {
+        let Some((marker, rest)) = encoded.strip_prefix("{^").and_then(|e| e.split_once('}')) else { return Ok(Ok(vec![encoded.to_string()])) };
+        let (unrouted, marker) = match marker.strip_prefix('!') {
+            Some(m) => (true, m),
+            None => (false, marker),
+        };
         let (implicit, action) = match marker.strip_prefix('*') {
             Some(a) => (true, a),
             None => (false, marker),
@@ -2902,33 +2962,47 @@ impl Controllers {
                 .collect::<Vec<_>>()
                 .join("/")
         };
-        if let Some((template, r)) = self.prefix(class) {
+        let prefix = match self.prefix(class, file, unrouted) {
+            Ok(p) => p,
+            // A method with no route attribute is an action only under conventional routes, which a prefix rules out.
+            Err(_) if implicit => return Ok(Ok(Vec::new())),
+            Err(why) => return Ok(Err(why)),
+        };
+        if let Some((template, r)) = prefix {
             // An inherited prefix routes the actions written with attributes only.
             if implicit {
-                return Ok(Vec::new());
+                return Ok(Ok(Vec::new()));
             }
             let template = match r {
-                Some(r) => match consts.resolve(r)? {
+                Some(r) => match consts.resolve(&r)? {
                     Some(v) => v,
-                    None => return Ok(vec![rest.to_string()]),
+                    None => return Ok(Ok(vec![rest.to_string()])),
                 },
-                None => template.clone(),
+                None => template,
             };
             let joined = [fill(&template), rest.to_string()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
-            return Ok(vec![joined]);
+            return Ok(Ok(vec![joined]));
         }
         if rest.is_empty() && !self.conventional.is_empty() {
             let mut out: Vec<String> = Vec::new();
-            for t in &self.conventional {
+            for (t, method) in &self.conventional {
+                let action = if CORE_CONVENTIONAL.contains(&method.as_str()) { action.strip_suffix("Async").filter(|a| !a.is_empty()).unwrap_or(action) } else { action };
                 for p in conventional_paths(t, controller, action) {
                     if !out.contains(&p) {
                         out.push(p);
                     }
                 }
             }
-            return Ok(out);
+            return Ok(Ok(out));
         }
-        Ok(if implicit { Vec::new() } else { vec![rest.to_string()] })
+        if implicit {
+            return Ok(Ok(Vec::new()));
+        }
+        if rest.is_empty() {
+            // Conventional routes would place it, and none was read: no path rather than a guessed one.
+            return Ok(Err("an action with no route template, in a controller with no [Route], and no conventional route template read".to_string()));
+        }
+        Ok(Ok(vec![rest.to_string()]))
     }
 }
 
@@ -6150,42 +6224,97 @@ mod tests {
     }
 
     /// An action's prefix is the nearest `[Route]` up its class's bases (a constant resolved, `[controller]` its own
-    /// class); with none, conventional routes place an action without a template, and a public method with no
-    /// route attribute only then.
+    /// class); with none, conventional routes place an action without a template (ASP.NET Core's dropping `Async`),
+    /// and a public method with no route attribute only then.
     #[test]
     fn controller_actions_take_inherited_and_conventional_prefixes() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE constants (file_id INTEGER, qualified TEXT, value TEXT, line INTEGER);
              INSERT INTO constants VALUES (1, 'Routes.Admin', 'admin/[controller]', 1);
+             CREATE TABLE files (id INTEGER, path TEXT);
+             INSERT INTO files VALUES (1, 'Items.cs'), (2, 'Home.cs');
              CREATE TABLE symbols (id INTEGER, name TEXT, kind TEXT);
              CREATE TABLE relations (file_id INTEGER, from_id INTEGER, target TEXT, target_name TEXT, kind TEXT, line INTEGER);
-             INSERT INTO symbols VALUES (1, 'ItemsController', 'class'), (2, 'VersionedController', 'class'), (3, 'UsersController', 'class');
+             INSERT INTO symbols VALUES (1, 'ItemsController', 'class'), (2, 'VersionedController', 'class'), (3, 'UsersController', 'class'),
+               (4, 'HomeController', 'class');
              INSERT INTO relations VALUES (1, 1, 'Api.VersionedController', 'VersionedController', 'inherits', 1),
-               (1, 2, 'ApiControllerBase', 'ApiControllerBase', 'inherits', 1), (1, 3, 'AdminBase', 'AdminBase', 'inherits', 1);",
+               (1, 2, 'ApiControllerBase', 'ApiControllerBase', 'inherits', 1), (1, 3, 'AdminBase', 'AdminBase', 'inherits', 1),
+               (2, 4, 'Controller', 'Controller', 'inherits', 1);",
         )
         .unwrap();
-        let row = |side: &str, path: &str, path_ref: Option<&str>, name: &str| {
-            ((side.to_string(), String::new(), path.to_string(), path_ref.map(str::to_string)), (None, None), (Some(name.to_string()), None, None, String::new()), (None, None, 1))
-        };
         let rows = [
-            row("prefix", "api/v{version}/[controller]", None, "ApiControllerBase"),
-            row("prefix", "", Some("Routes.Admin"), "AdminBase"),
-            row("conventional", "{controller=Home}/{action=Index}/{id?}", None, "Configure"),
+            route_row("prefix", "", "api/v{version}/[controller]", None, "ApiControllerBase", "Base.cs"),
+            route_row("prefix", "", "", Some("Routes.Admin"), "AdminBase", "Base.cs"),
+            route_row("conventional", "MapControllerRoute", "{controller=Home}/{action=Index}/{id?}", None, "Configure", "Startup.cs"),
         ];
         let ctl = Controllers::new(&conn, &rows).unwrap();
         let mut c = Constants::new(&conn).unwrap();
-        let mut paths = |class: &str, encoded: &str| ctl.paths(&mut c, class, encoded).unwrap();
+        let mut paths = |class: &str, file: &str, encoded: &str| ctl.paths(&mut c, class, file, encoded).unwrap().unwrap();
         // Two bases up; `[controller]` is the subclass.
-        assert_eq!(paths("ItemsController", "{^Latest}/Latest"), ["api/v{version}/Items/Latest"]);
-        assert_eq!(paths("UsersController", "{^List}"), ["admin/Users"]);
+        assert_eq!(paths("ItemsController", "Items.cs", "{^!Latest}/Latest"), ["api/v{version}/Items/Latest"]);
+        assert_eq!(paths("UsersController", "Items.cs", "{^List}"), ["admin/Users"]);
         // Under an inherited prefix, a method with no route attribute isn't an action.
-        assert!(paths("ItemsController", "{^*Helper}").is_empty());
+        assert!(paths("ItemsController", "Items.cs", "{^!*Helper}").is_empty());
         // No prefix up the bases: conventional routes, for actions without a template.
-        assert_eq!(paths("HomeController", "{^*Privacy}"), ["Home/Privacy", "Home/Privacy/{id}"]);
-        assert_eq!(paths("HomeController", "{^Save}"), ["Home/Save", "Home/Save/{id}"]);
-        assert_eq!(paths("HomeController", "{^About}/about"), ["about"]);
+        assert_eq!(paths("HomeController", "Home.cs", "{^!*Privacy}"), ["Home/Privacy", "Home/Privacy/{id}"]);
+        assert_eq!(paths("HomeController", "Home.cs", "{^!Save}"), ["Home/Save", "Home/Save/{id}"]);
+        assert_eq!(paths("HomeController", "Home.cs", "{^!SaveAsync}"), ["Home/Save", "Home/Save/{id}"]);
+        assert_eq!(paths("HomeController", "Home.cs", "{^!About}/about"), ["about"]);
         assert_eq!(conventional_paths("api/{controller}/{id}", "Orders", "Get"), ["api/Orders", "api/Orders/{id}"]);
+    }
+
+    fn route_row(side: &str, verb: &str, path: &str, path_ref: Option<&str>, name: &str, file: &str) -> RawRoute {
+        (
+            (side.to_string(), verb.to_string(), path.to_string(), path_ref.map(str::to_string)),
+            (None, None),
+            (Some(name.to_string()), None, None, file.to_string()),
+            (None, None, 1),
+        )
+    }
+
+    /// Two controllers of one name, in two apps of a repo: the API's has a `[Route]`, the admin app's none and is
+    /// conventionally routed. The admin app's actions never take the API's prefix; with no conventional route read,
+    /// an action without a template is unplaced, saying so, never given a guessed path; same-named bases disagreeing
+    /// on a prefix place nothing.
+    #[test]
+    fn a_controller_never_takes_the_prefix_of_another_of_its_name() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE constants (file_id INTEGER, qualified TEXT, value TEXT, line INTEGER);
+             CREATE TABLE files (id INTEGER, path TEXT);
+             INSERT INTO files VALUES (1, 'src/Api/OrdersController.cs'), (2, 'src/Admin/OrdersController.cs'), (3, 'src/Admin/ShelfController.cs');
+             CREATE TABLE symbols (id INTEGER, name TEXT, kind TEXT);
+             CREATE TABLE relations (file_id INTEGER, from_id INTEGER, target TEXT, target_name TEXT, kind TEXT, line INTEGER);
+             INSERT INTO symbols VALUES (1, 'OrdersController', 'class'), (2, 'OrdersController', 'class'), (3, 'ShelfController', 'class');
+             INSERT INTO relations VALUES (1, 1, 'ControllerBase', 'ControllerBase', 'inherits', 1), (2, 2, 'Controller', 'Controller', 'inherits', 1),
+               (3, 3, 'PartsBase', 'PartsBase', 'inherits', 1);",
+        )
+        .unwrap();
+        let api = route_row("prefix", "", "orders", None, "OrdersController", "src/Api/OrdersController.cs");
+        let conventional =
+            route_row("conventional", "MapDefaultControllerRoute", "{controller=Home}/{action=Index}/{id?}", None, "Configure", "src/Admin/Startup.cs");
+        let parts = [
+            route_row("prefix", "", "api/parts", None, "PartsBase", "src/Api/PartsBase.cs"),
+            route_row("prefix", "", "admin/parts", None, "PartsBase", "src/Admin/PartsBase.cs"),
+        ];
+        let mut c = Constants::new(&conn).unwrap();
+        let ctl = Controllers::new(&conn, &[api.clone(), conventional, parts[0].clone(), parts[1].clone()]).unwrap();
+        let admin = "src/Admin/OrdersController.cs";
+        let ok = |p: &[&str]| Ok(p.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!UnlinkAsync}").unwrap(), ok(&["Orders/Unlink", "Orders/Unlink/{id}"]));
+        assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&["Orders/Index", "Orders/Index/{id}"]));
+        // The API's own actions keep its prefix.
+        assert_eq!(ctl.paths(&mut c, "OrdersController", "src/Api/OrdersController.cs", "{^Get}/{id}").unwrap(), ok(&["orders/{id}"]));
+        // Bases of one name with different prefixes: unplaced, saying why.
+        let shelf = ctl.paths(&mut c, "ShelfController", "src/Admin/ShelfController.cs", "{^!List}/all").unwrap();
+        assert!(shelf.as_ref().is_err_and(|why| why.contains("PartsBase")), "{shelf:?}");
+        // No conventional route read: an action without a template is unplaced rather than served at the root.
+        let alone = Controllers::new(&conn, &[api]).unwrap();
+        let unplaced = alone.paths(&mut c, "OrdersController", admin, "{^!UnlinkAsync}").unwrap();
+        assert!(unplaced.as_ref().is_err_and(|why| why.contains("no conventional route")), "{unplaced:?}");
+        assert_eq!(alone.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&[]));
+        assert_eq!(alone.paths(&mut c, "OrdersController", admin, "{^!Find}/find").unwrap(), ok(&["find"]));
     }
 
     #[test]

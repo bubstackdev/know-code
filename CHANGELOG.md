@@ -13,6 +13,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   operation rows that were calls into the repo's own code are gone (one had a link: the false `login` one), and six
   one-word operations of clients naming no controller went from `exact` to `ambiguous` (two of them, `update` and
   `policies`, were linked to the wrong controller).
+- An ASP.NET controller with no `[Route]`, routed by `MapDefaultControllerRoute` or `MapControllerRoute`, no longer
+  takes the `[Route]` of another controller of its name. Classes were matched by name only, so in a repo with an
+  admin app and an API each declaring `OrganizationsController`, the admin app's `[HttpPost]` actions were placed at
+  the API's `POST organizations` and linked, `exact`, to the client calling the API. They are now placed by the
+  conventional template (`Organizations/UnlinkOrganizationFromProvider`, ASP.NET Core dropping `Async` from action
+  names). An action without a template that no conventional route places is now unplaced and listed as such, where
+  it was served at the root path; a prefix same-named base classes disagree on places nothing. On the public-v1
+  workspace, 19 wrongly placed admin actions moved to their conventional routes, two requests to the API's
+  `POST organizations` lost 6 false `exact` links each, and two tests posting to an admin route now link to its
+  action. C# files are re-extracted.
 - A controller action's `context` now says first who calls it over HTTP: `called_over_http` gives each route it
   serves and its first five callers as `repo/file:line Symbol`, ahead of its callees and code callers. The links were
   already in `http`, but after the callers, which for an action are mostly its tests; agents asking who calls an
