@@ -993,3 +993,48 @@ fn only_generated_clients_link_by_operation_name() {
     assert_eq!(link("update"), [("AccountsController.Update".to_string(), "ambiguous")]);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A call to an external client the repo only declares (`declare module 'media-apiclient'` in a `.d.ts`) whose
+/// method names no action: its route isn't in the workspace, and the answer says so, in a list too, instead of
+/// leaving the call out silently.
+#[test]
+fn an_external_clients_unlinked_call_says_where_it_is_declared() {
+    let turn = turn();
+    let base = turn.dir("sdk-boundary");
+    let api = scratch(&base, "media-api");
+    write(
+        &api,
+        "src/PlaystateController.cs",
+        "[ApiController]\n[Route(\"UserPlayedItems\")]\npublic class PlaystateController : ControllerBase\n{\n    [HttpDelete(\"{itemId}\")]\n    public Task MarkUnplayedItem(string itemId) => null;\n    [HttpGet(\"{itemId}\")]\n    public Task GetPlayedState(string itemId) => null;\n}\n",
+    );
+    let web = scratch(&base, "media-web");
+    write(
+        &web,
+        "src/apiclient.d.ts",
+        "declare module 'media-apiclient' {\n    class ApiClient {\n        getPlayedState(itemId: string): Promise<any>;\n        markUnplayed(userId: string, itemId: string): Promise<any>;\n    }\n}\n",
+    );
+    write(
+        &web,
+        "src/menu.ts",
+        "export class Menu {\n  played(apiClient: ApiClient, id: string) { return apiClient.getPlayedState(id); }\n  unplay(apiClient: ApiClient, id: string) { return apiClient.markUnplayed(this.userId, id); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let op = |name: &str| {
+        summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().find(|r| r.side == "operation" && r.path.as_deref() == Some(name)).cloned().unwrap()
+    };
+    // A method named like an action still links by name.
+    let played = kc_index::http::handlers(&op("getPlayedState"), &roots[1], &summaries);
+    assert_eq!(played.iter().map(|l| l.route.symbol.as_str()).collect::<Vec<_>>(), ["PlaystateController.GetPlayedState"]);
+    let unplay = op("markUnplayed");
+    assert!(kc_index::http::handlers(&unplay, &roots[1], &summaries).is_empty());
+    for brief in [true, false] {
+        let note = kc_index::http::unlinked_note(&unplay, &summaries, brief).unwrap();
+        assert!(note.contains("an external client: ApiClient.markUnplayed is declared at src/apiclient.d.ts:4"), "{note}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

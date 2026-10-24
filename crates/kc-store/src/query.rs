@@ -2631,7 +2631,8 @@ pub struct RouteRow {
     /// Where `host` was read (`file:line`), when not at the route itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_at: Option<String>,
-    /// For an `unsupported` registration: why its route can't be placed.
+    /// For an `unsupported` registration: why its route can't be placed. For an `operation` whose method the repo only
+    /// declares (a `.d.ts` for an external client): where (`ApiClient.markUnplayed is declared at src/apiclient.d.ts:233`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -2815,10 +2816,29 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
            JOIN symbols s ON s.name = r.name AND s.container = r.receiver_type JOIN files sf ON sf.id = s.file_id
          WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND sf.path NOT LIKE '%.d.ts')",
     )?;
+    // A method of that name the repo only declares (`markUnplayed` in a `.d.ts` for `jellyfin-apiclient`): the call
+    // goes to an external client whose routes aren't in the workspace, which an answer says (`detail`). The receiver's
+    // own type first, when the call site names it.
+    let mut declared_only = conn.prepare_cached(
+        "SELECT s.container, f.path, s.start_line FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE s.name = ?1 AND f.path LIKE '%.d.ts' AND s.container IS NOT NULL
+         ORDER BY s.container = (SELECT r.receiver_type FROM refs r JOIN files rf ON rf.id = r.file_id
+                                 WHERE rf.path = ?2 AND r.line = ?3 AND r.name = ?1 AND r.kind = 'call' LIMIT 1) DESC, f.path, s.start_line
+         LIMIT 1",
+    )?;
     let mut kept = Vec::with_capacity(out.len());
-    for r in out {
-        if r.side == "operation" && implemented.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get::<_, bool>(0))? {
-            continue;
+    for mut r in out {
+        if r.side == "operation" {
+            if implemented.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get::<_, bool>(0))? {
+                continue;
+            }
+            let found = declared_only
+                .query_map(rusqlite::params![r.path, r.file, r.line], |x| Ok((x.get::<_, String>(0)?, x.get::<_, String>(1)?, x.get::<_, u32>(2)?)))?
+                .next()
+                .transpose()?;
+            if let Some((class, file, line)) = found {
+                r.detail = Some(format!("{class}.{} is declared at {file}:{line}", r.path.as_deref().unwrap_or_default()));
+            }
         }
         kept.push(r);
     }
