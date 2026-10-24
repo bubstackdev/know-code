@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -1222,7 +1222,10 @@ impl Cx<'_> {
         let fetch = method == "fetch" && recv.as_deref().is_none_or(|r| matches!(r, "window" | "globalthis" | "self" | "this"));
         let direct = recv.is_none() && matches!(method.as_str(), "axios" | "ajax" | "superagent" | "ky");
         let strong = recv.as_deref().is_some_and(|r| r == "$" || r == "jquery" || named(r, &["http", "axios", "ajax", "superagent"]));
-        let weak = recv.as_deref().is_some_and(|r| named(r, &["api", "client", "request", "fetch", "rest"]));
+        // `this.send(…)` in an API wrapper's own methods: the class is the client, named like one (`ApiService`).
+        let own = (recv.as_deref() == Some("this")).then(|| self.enclosing_type()).flatten().map(|t| t.to_ascii_lowercase());
+        let weak = recv.as_deref().is_some_and(|r| named(r, &["api", "client", "request", "fetch", "rest"]))
+            || own.as_deref().is_some_and(|t| named(t, &["api", "client", "http"]));
         if !(fetch || direct || strong || weak) {
             if let Some(o) = receiver {
                 self.operation_call(node, o, &method);
@@ -2356,6 +2359,39 @@ export class FlexDirective {}
         assert_eq!(consts, [("API", "{=environment.apiUrl}"), ("BASE", "{=environment.apiUrl}/v2")]);
         // A selector held in an imported constant names the constant's exported name.
         assert!(f.ng.iter().any(|n| n.kind == "selector" && n.value == "{=flexSelectors}"));
+    }
+
+    /// An API wrapper's own requests (`this.send(…)` in `ApiService`) are client routes of its methods, as calls
+    /// through it from other services are; a class not named for an API isn't taken for one.
+    #[test]
+    fn an_api_wrappers_own_requests_are_client_routes() {
+        let f = extract(
+            r#"
+export class ApiService {
+  deleteAttachment(id: string, attachmentId: string) {
+    return this.send("DELETE", "/ciphers/" + id + "/attachment/" + attachmentId, null, true, false);
+  }
+  getProfile() { return this.send("GET", "/accounts/profile", null, true, true); }
+  forward(path: string) { return this.send("GET", path, null, true, true); }
+  async send(method: string, path: string, body: any, auth: boolean, hasResponse: boolean) { return fetch(path); }
+}
+export class MessageBus {
+  publish() { return this.send("POST", "/events/" + this.topic); }
+}
+"#,
+            false,
+        );
+        let routes: Vec<(&str, &str, &str)> =
+            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.as_str(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("deleteAttachment", "DELETE", "/ciphers/{}/attachment/{}"),
+                ("getProfile", "GET", "/accounts/profile"),
+                // The wrapper's own `fetch` of a path known only at run time.
+                ("send", "GET", ""),
+            ]
+        );
     }
 
     /// fetch, axios (and instances), jQuery, superagent-style wrappers and URL builders, with composed URLs; a request
