@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A query that reads a repo while the server indexes it in the background no longer fails with "database is
+  locked". The query wrote caches (the history walk, derived values) that waited on the indexer's write, and the
+  indexer, at background priority on a loaded machine, could hold it past SQLite's 5 s busy timeout. Such a cache
+  write is now skipped: the query answers from what it computed, and the cache is written next time. The background
+  file ranking no longer starts on a repo that is still being indexed (a query could queue it between the index's
+  sync and its contents), where the two writers each waited for the other; it is built once the indexing is done. On
+  main, the workspace gate failed this way in 1 of 4 runs.
 - `index` walks the history for the areas beside the file ranking instead of after it. The walk is a `git log` child
   that needs nothing from the ranking; on a repo with a long history it ran alone for most of a cold `index`. On a
   public TypeScript password manager client (8,177 files), a cold `index` took 19.4 to 20.7 s instead of 26.9 to
