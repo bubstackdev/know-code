@@ -47,6 +47,20 @@ There are three arms, as in public-v1:
 - Isolation, as in public-v1: a fresh source copy per session, an isolated client profile, the API key held only by
   a local relay, and KnowCode's cache, config and data inside the session.
 
+**The client doesn't pass on the MCP server's instructions.** The bare client (`claude --bare`) sends the model the
+KnowCode server's tool names, descriptions and schemas, but not the instructions the server returns when it starts.
+
+A no-model capture of the client's requests under the study's configuration showed this:
+
+- The KnowCode arm's first request is about 2.6 KB larger than the plain arm's, almost all of it the KnowCode tools'
+  JSON.
+- None of the 0.2.0 server's 689 bytes of instructions appears in any request of the session.
+
+So in this study, as in public-v1, the model is steered toward KnowCode only by its tool names, descriptions and
+schemas. A Claude Code session outside bare mode also gets the server's instructions. **Unprompted use measured here
+is therefore a lower bound** of what a client that passes on the instructions would see. The other criteria are
+measured under the same condition in both builds. The harness is not changed for this.
+
 **Answer contract:** as in public-v1. The reply ends with one JSON object in a fenced `json` block, with `status`,
 `items` and `notes`, and impact answers add `hops`.
 
@@ -214,3 +228,6 @@ Raw transcripts aren't published, because they contain build-machine paths. Summ
 - **2026-10-24, before the baseline:** the "Analysis" section was added. It states that the two runs are pooled and
   why, and how each criterion is decided. The lower-bound recall question is reported per arm and per run. No
   criterion, threshold, arm, question or run changed.
+- **2026-10-24, before the baseline:** a limitation was added under "Arms": the bare client doesn't pass the MCP
+  server's instructions to the model, so unprompted use is a lower bound. A no-model request capture confirmed it. The
+  harness, criteria and runs are unchanged.
