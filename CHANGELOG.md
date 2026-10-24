@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A workspace-wide answer says once which repos it left out because they aren't indexed yet. The server noted them
+  twice, once as the answer finished and again as it sent it; when the background finished indexing a repo in
+  between, the answer carried two "not yet indexed" entries with different counts. The workspace gate read them
+  together and, in one run, counted nine repos as left out silently.
 - `index` walks the history for the areas beside the file ranking instead of after it. The walk is a `git log` child
   that needs nothing from the ranking; on a repo with a long history it ran alone for most of a cold `index`. On a
   public TypeScript password manager client (8,177 files), a cold `index` took 19.4 to 20.7 s instead of 26.9 to
