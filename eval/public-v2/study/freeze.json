@@ -23,7 +23,7 @@
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "cdde4ac22488c1b068b342aefc1b8345f40045ea2744c4616f0bbba926b3c6a7"
+      "sha256": "728509ae9caf9053dcebe43935c8b3ef51d18e49a80648e6163a90c3a1e770b2"
     },
     "questions": {
       "path": "questions.jsonl",
@@ -47,7 +47,7 @@
     "scripts/eval/neutral/score.py": "c67ec3d263d2285f4b172a14b1ae8500191c54ea678c9793ade2c903351b75a2",
     "scripts/eval/owned_process.py": "762d4ffc07f3da67b076feddc212cad333fb7cfa14338f3ab8e2cc61d67e1b87",
     "scripts/eval/public_transcript.py": "e04b3c08708e1744e8ddb09cc49b7c25125633f2baf544e9995cff5200a6d632",
-    "scripts/eval/public_v2.py": "3ad71fcd6fe41341e71f5fb7816fd41c500cc18add22297383826cae11389156",
+    "scripts/eval/public_v2.py": "750a8118e448c6cba27078b861041303e788c6673cef5b7b95dab701007930a9",
     "scripts/eval/recheck.py": "c15fe754a7af2ee6ca79f596867de31038bd0420ff4b6c1d80a1dbf454f1b692",
     "scripts/eval/recheck_cost.py": "e969760737c2504b035befe8a212b4640898e08cdf820736dacc36f41592ada0",
     "scripts/eval/session_runner.py": "6a186ba991edaa6321ab99afe9158091fbc47a42139703eaa2aba0cda21ef62a",

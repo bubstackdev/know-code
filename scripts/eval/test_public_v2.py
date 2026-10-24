@@ -29,6 +29,7 @@ class PublicV2Tests(unittest.TestCase):
         self.assertEqual(c['1_recheck_cost_halved']['sessions'], 16)
         self.assertAlmostEqual(c['3_f1_and_recall_at_least_equal']['f1_difference'], 0.1)
         self.assertTrue(c['3_f1_and_recall_at_least_equal']['met'])
+        self.assertEqual(c['3_f1_and_recall_at_least_equal']['recall_by_question'], {})
         self.assertEqual(c['4_research_tokens_at_most_equal']['difference'], -1000)
         self.assertTrue(c['4_research_tokens_at_most_equal']['met'])
         self.assertEqual((c['5_unprompted_use']['sessions'], c['5_unprompted_use']['sessions_with_call']), (16, 16))
@@ -46,6 +47,18 @@ class PublicV2Tests(unittest.TestCase):
         worse = public_v2.summarize(rows(runs, 32000, 31000, lambda n: 1), QUESTIONS, runs, baseline=base)['criteria']
         self.assertFalse(worse['1_recheck_cost_halved']['met'])
         self.assertFalse(worse['4_research_tokens_at_most_equal']['met'])
+
+    def test_the_lower_bound_question_is_reported_per_arm_and_run(self):
+        runs = ['b1', 'b2']
+        r = rows(runs, 1, 1, lambda n: 1)
+        for run in runs:
+            for arm in public_v2.ARMS:
+                r[(run, arm, 'q3')].update(label='lower_bound', recall=0.5 if arm == 'plain' else 1.0)
+        c = public_v2.summarize(r, QUESTIONS, runs)['criteria']['3_f1_and_recall_at_least_equal']
+        self.assertEqual(c['recall_n'], 2)
+        self.assertAlmostEqual(c['recall_difference'], 0.5)
+        self.assertEqual(c['recall_by_question']['q3']['b2/plain'], 0.5)
+        self.assertEqual(len(c['recall_by_question']['q3']), 6)
 
     def test_unprompted_use_threshold_is_twenty_of_every_twenty_four(self):
         runs = ['b1', 'b2', 'b3']  # 24 unprompted sessions

@@ -350,6 +350,8 @@ def summarize(rows, questions, runs, baseline=None):
         f1_n=len(paired('f1', ('exhaustive',), qids)), recall_difference=recall,
         recall_ci95=bootstrap(qids, lambda s: mean(paired('recall', ('lower_bound',), s)), rng),
         recall_n=len(paired('recall', ('lower_bound',), qids)),
+        recall_by_question={q: {f'{r}/{arm}': get(r, arm, q).get('recall') for r in runs for arm in ARMS}
+                            for q in qids if get(runs[0], 'knowcode', q).get('label') == 'lower_bound'},
         met=None if f1 is None else f1 >= 0 and (recall is None or recall >= 0))
     kinds = ('exhaustive', 'exhaustive-empty', 'lower_bound', 'uncertain')
     tokens = median(paired('tokens', kinds, qids))

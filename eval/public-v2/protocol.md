@@ -146,8 +146,7 @@ Per session:
 
 ## Criteria
 
-These are the 0.3 plan's five criteria. For each build, they are computed over both runs pooled: every (run, question)
-pair in an arm.
+These are the 0.3 plan's five criteria. See [Analysis](#analysis) for how each is decided from the two runs.
 
 1. **Re-check cost halved.** The release candidate's mean re-check tokens per named-arm session is at most half the
    0.2.0 baseline's, on the same questions.
@@ -155,11 +154,39 @@ pair in an arm.
    re-check that found something KnowCode didn't say. All of them are listed.
 3. **Answer F1 and recall at least equal** to the plain arm. The mean paired difference (named − plain) in F1, on
    exhaustive labels with items, is ≥ 0, and the mean paired difference in recall, on lower-bound labels, is ≥ 0.
-   - The bank has one lower-bound label. That recall difference rests on one question, and the results page says so.
+   - The bank has one lower-bound label (`public2-two-hop-impact-006`), so the recall part rests on one question. The
+     results page says so, and reports that question's recall per arm and per run next to the criterion.
 4. **Research tokens at most equal** to the plain arm: the median paired difference in session tokens
    (named − plain) is ≤ 0. Tool schemas are included.
 5. **Unprompted use:** KnowCode is called in at least 20 of every 24 sessions where the prompt doesn't name it. That is
    a share of at least 20/24 of the unprompted sessions over both runs: 67 of 80.
+
+## Analysis
+
+**The two runs are pooled.** Each criterion is computed once per build, over every (run, question) session of an arm.
+That is 80 sessions per arm, or 80 named − plain pairs.
+
+Requiring both runs to meet a criterion separately would be the alternative. It is rejected for two reasons:
+
+- It throws away half the data each time, so each decision rests on 40 sessions with about 1.4 times the noise.
+- The chance of passing would then depend on the number of runs as much as on the effect: two independent tries
+  must both succeed.
+
+The pilot's run-count arithmetic assumes pooling: two runs halve the variance of one build's mean. Each run's own
+values are reported next to the pooled one, as descriptive numbers.
+
+How each criterion is decided:
+
+| Criterion | Statistic, pooled over b1 and b2 | Met when |
+| --- | --- | --- |
+| 1. Re-check cost halved | mean re-check tokens over the 80 named-arm sessions | release candidate ≤ 0.5 × baseline |
+| 2. Re-checks that change the answer | count and list, per run and pooled, both KnowCode arms | descriptive; never met or missed |
+| 3. F1 and recall at least equal | mean of named − plain F1 over the 62 pairs on exhaustive labels with items; mean of named − plain recall over the 2 pairs on the lower-bound label | both ≥ 0 |
+| 4. Research tokens at most equal | median of named − plain session tokens over the 80 pairs | ≤ 0 |
+| 5. Unprompted use | unprompted sessions with a KnowCode call, out of 80 | ≥ 67 (20 of every 24) |
+
+A missing or failed session stays in every denominator. It is scored as public-v1 scores one: F1 and recall 0, no
+KnowCode call, and its tokens and re-check tokens left out of the token medians and of criterion 1's mean.
 
 Every number is published with a 95% interval:
 
@@ -184,4 +211,6 @@ Raw transcripts aren't published, because they contain build-machine paths. Summ
 
 ## Deviations
 
-None yet.
+- **2026-10-24, before the baseline:** the "Analysis" section was added. It states that the two runs are pooled and
+  why, and how each criterion is decided. The lower-bound recall question is reported per arm and per run. No
+  criterion, threshold, arm, question or run changed.
