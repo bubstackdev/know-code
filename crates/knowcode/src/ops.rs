@@ -2503,6 +2503,37 @@ pub struct HttpOut {
     pub note: Option<String>,
 }
 
+/// How many of an action's HTTP callers `called_over_http` names; `http` lists them all.
+const CALLED_OVER_HTTP: usize = 5;
+
+/// A controller action's callers over HTTP, said first in its context (the key sorts ahead of `callees` and
+/// `callers`): one entry per route it serves with callers, `{route, by: ["repo/file:line Symbol", …]}`, the first
+/// few callers by name and place (`by_total` when cut; `http` has every link, with its assumptions). `None` for
+/// anything else. An agent asking who calls an endpoint read the test callers above `http` and went to grep.
+fn called_over_http(http: &[HttpOut]) -> Option<Value> {
+    let over: Vec<Value> = http
+        .iter()
+        .filter(|h| h.role == "serves" && !h.links.is_empty())
+        .map(|h| {
+            let by: Vec<String> = h
+                .links
+                .iter()
+                .take(CALLED_OVER_HTTP)
+                .map(|l| {
+                    let sure = if l.confidence == "exact" { String::new() } else { format!(" ({})", l.confidence) };
+                    format!("{}/{}:{} {}{sure}", l.repo, l.file, l.line, l.symbol)
+                })
+                .collect();
+            let mut v = json!({ "route": format!("{} {}", h.verb, h.path.as_deref().unwrap_or("?")), "by": by });
+            if h.links.len() > CALLED_OVER_HTTP {
+                v["by_total"] = json!(h.links.len());
+            }
+            v
+        })
+        .collect();
+    (!over.is_empty()).then(|| json!(over))
+}
+
 #[derive(Serialize)]
 pub struct HttpLinkOut {
     pub repo: String,
@@ -3366,6 +3397,9 @@ pub fn context_raised(
             }
             if !http.is_empty() {
                 v["http"] = json!(http);
+            }
+            if let Some(over) = called_over_http(http) {
+                v["called_over_http"] = over;
             }
             if !bus.is_empty() {
                 v["bus"] = json!(bus);
@@ -7870,6 +7904,22 @@ pub(crate) mod tests {
     /// The `missing_repo` entries of an answer, as `reason: detail`.
     fn missing_notes(env: &Value) -> Vec<String> {
         crate::contract::incomplete_of(env).iter().filter(|i| i.reason == Reason::MissingRepo).map(|i| i.detail.clone()).collect()
+    }
+
+    #[test]
+    fn an_actions_context_says_its_callers_over_http_first() {
+        let cache = test_cache();
+        let base = cache.dir("http-first");
+        let (_web, api) = orders_web_and_api(&base);
+        let c = context("OrdersController.Orders", 4000, Default::default(), &Scope { repos: vec![api.clone()], no_sync: false }).unwrap();
+        let item = &c.env["items"][0];
+        assert_eq!(item["called_over_http"], json!([{ "route": "POST Orders", "by": ["web/src/contracts.ts:1 ApiPlaceOrder"] }]), "{item}");
+        // Ahead of the callers and callees in the serialized answer.
+        let text = item.to_string();
+        assert!(text.find("\"called_over_http\"") < text.find("\"callees\"").or(text.find("\"http\"")), "{text}");
+        // A method no route reaches has none.
+        let c = context("OrderQuery.Run", 4000, Default::default(), &Scope { repos: vec![api], no_sync: false }).unwrap();
+        assert!(c.env["items"][0].get("called_over_http").is_none(), "{}", c.env);
     }
 
     #[test]

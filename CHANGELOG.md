@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A controller action's `context` now says first who calls it over HTTP: `called_over_http` gives each route it
+  serves and its first five callers as `repo/file:line Symbol`, ahead of its callees and code callers. The links were
+  already in `http`, but after the callers, which for an action are mostly its tests; agents asking who calls an
+  endpoint read those and went to grep the client repo. The callers hint for an action now points to `kc_impact`,
+  which follows the routes, instead of `kc_refs`, which matches the name.
 - `kc_impact`'s description now says what it answers: who calls a method or an HTTP endpoint, from any repo, hop by
   hop (`depth` 2 for callers' callers). `kc_refs` and the server's instructions point there too. Some clients leave
   the instructions out (Claude Code's bare mode), so the descriptions carry the map on their own. The core tools

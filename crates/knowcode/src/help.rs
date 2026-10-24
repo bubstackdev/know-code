@@ -170,7 +170,8 @@ gateway by service and path (a gateway call the config names) or an HTTP client 
 Angular and C# HttpClient, wrappers named for HTTP or API clients; base + path composed), the route it requests and
 the controller actions serving it, with their source; a call to a generated API client (`getItemsApi(api).getItems()`)
 links by operation name (assumption operation_name), in the servers its repo is known to call (server_unverified when
-none is); for a controller action, the contracts and calls requesting it.
+none is); for a controller action, the contracts and calls requesting it, said first too as `called_over_http`
+({route, by: the first 5 as `repo/file:line Symbol`, by_total when cut}).
 With no links, `note` says what was searched and what is left: requests whose URL is known only at run time, and the
 nearest routes by path. A contract that looks
 left over is marked: `unsent` (no code in the indexed repos creates it) and `commented_out` (nothing serves its route,

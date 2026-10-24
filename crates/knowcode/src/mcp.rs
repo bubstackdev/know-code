@@ -1434,6 +1434,8 @@ fn answer_list(key: &str) -> bool {
             | "registered_as"
             | "bound"
             | "http"
+            | "called_over_http"
+            | "by"
             | "bus"
             | "sql"
             | "links"
@@ -1662,7 +1664,14 @@ fn context_hints(mut env: Value) -> Value {
             if let Some(total) = item["callers_summary"]["total"].as_u64()
                 && total > shown("callers")
             {
-                hints.push(format!("callers: {} of {total} shown; kc_refs {name} lists them all", shown("callers")));
+                // An action's callers over HTTP are `kc_impact`'s, not `kc_refs`'s (references by name).
+                let serves = item["http"].as_array().is_some_and(|h| h.iter().any(|e| e["role"] == "serves"));
+                hints.push(if serves {
+                    let qualified = item["symbol"]["container"].as_str().map_or(name.clone(), |c| format!("{c}.{name}"));
+                    format!("callers: {} of {total} in code shown; kc_impact {qualified} lists every caller by hop, over HTTP too", shown("callers"))
+                } else {
+                    format!("callers: {} of {total} shown; kc_refs {name} lists them all", shown("callers"))
+                });
             }
             if let Some(total) = item["callees_total"].as_u64()
                 && total > shown("callees")
@@ -2813,6 +2822,11 @@ mod tests {
             "callees": [], "callees_total": 0, "members_total": 0, "source_truncated": true, "source_mode": "full" }] });
         let hints = context_hints(env)["items"][0]["hints"].clone();
         assert_eq!(hints, json!(["callers: 1 of 4 shown; kc_refs Save lists them all", "source cut at the budget; raise budget or pass source=skeleton"]));
+        // A controller action's: kc_impact, which follows its routes to the code requesting them.
+        let env = json!({ "items": [{ "symbol": { "name": "Save", "container": "OrdersController" }, "callers": [1],
+            "callers_summary": { "total": 4 }, "http": [{ "role": "serves" }] }] });
+        let hints = context_hints(env)["items"][0]["hints"].clone();
+        assert_eq!(hints, json!(["callers: 1 of 4 in code shown; kc_impact OrdersController.Save lists every caller by hop, over HTTP too"]));
     }
 
     #[test]
