@@ -231,3 +231,8 @@ Raw transcripts aren't published, because they contain build-machine paths. Summ
 - **2026-10-24, before the baseline:** a limitation was added under "Arms": the bare client doesn't pass the MCP
   server's instructions to the model, so unprompted use is a lower bound. A no-model request capture confirmed it. The
   harness, criteria and runs are unchanged.
+- **2026-10-25, second freeze for the release candidate:** RC binary `knowcode 0.3.0`, sha256
+  `4ae7e237fa7370713e84ec50218621d344757da65b74eb5aacddc695d5c9ee2d`, built with cargo-dist from `release/0.3.0` at
+  dd67050 (main at cb70124 plus the version bump), installed for the study as `knowcode-v0.3.0-rc`. config.json changes
+  only `knowcode_sha256` and `knowcode_binary_name`; plan.json carries the new config hash. Everything else is as frozen
+  for the baseline, which ran from freeze `1ba58b1b…` at e71ad46.
