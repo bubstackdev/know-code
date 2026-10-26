@@ -622,7 +622,10 @@ renames of the file; whitespace changes count), each with sha, date, author (aft
 newest; `first`, the oldest, given only when the whole history was read; `commits_total`. `writers`: who last changed
 its current lines (git blame of the working tree, whitespace ignored; `writers_uncommitted` and `writers_automated`
 counted apart). `changed_with`: the files changed in those commits, by shared commits (`changed_with_total`; commits of
-more than 50 files left out and counted in `sweeps`). `since` keeps commits since a date (`2025-01-01`, `90 days ago`).
+more than 50 files left out and counted in `sweeps`). `callers_changed_with`: its direct callers (kc_impact's hop 1,
+in this repo) whose files changed in those commits, each with how many (`shared`), the newest few and `test` for test
+code; `callers_total` counts every direct caller, those in its own file included (they aren't listed: each of its
+commits changes that file). `since` keeps commits since a date (`2025-01-01`, `90 days ago`).
 
 Give the symbol as a name, `Type.member` or file:line; when several definitions match (overloads), the first is read
 and `others` lists the rest: ask with file:line for another. Uncommitted edits that move the lines are allowed for

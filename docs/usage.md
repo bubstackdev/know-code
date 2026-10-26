@@ -95,7 +95,7 @@ base commit (`removed`), and warns about usual partners the diff leaves alone (`
 | --- | --- | --- |
 | Files that keep hurting: churn, fix commits, complexity, coupling, health; one file's code-health biomarkers | `knowcode hotspots [FILE]` | `kc_hotspots` |
 | Historical contribution: top contributor, truck factor, share of lines by former authors; surviving lines for a file | `knowcode ownership [PATH]` | `kc_ownership` |
-| One symbol's history: the commits that changed its lines, its first and last change, who wrote its current lines, the files changed in the same commits | `knowcode history SYMBOL` | `kc_history` |
+| One symbol's history: the commits that changed its lines, its first and last change, who wrote its current lines, the files and direct callers changed in the same commits | `knowcode history SYMBOL` | `kc_history` |
 
 These read local git history only. They measure history, not who understands the code today.
 

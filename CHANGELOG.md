@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `history` lists a symbol's direct callers whose files changed in its commits (`callers_changed_with`), each with
+  how many of its commits and the newest few, tests marked; `callers_total` counts every direct caller. Callers come
+  from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits
+  changes that file. On history-v1's two caller questions it names the one production caller of each label that
+  `impact` reaches; the other, a call through Serilog's `ILogger` inside Serilog.Extensions.Hosting, isn't reached.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
