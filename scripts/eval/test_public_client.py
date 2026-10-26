@@ -254,6 +254,49 @@ class BareClientTests(unittest.TestCase):
                 self.assertFalse(any(fnmatch.fnmatchcase(source_command, pattern) for pattern in denied))
                 self.assertTrue(fnmatch.fnmatchcase(str(knowcode) + ' --version', denied[0]))
 
+    def test_full_client_arms_install_the_plugin_and_work_in_the_indexed_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            for arm in client.FULL_ARMS:
+                root, binary, config = self.fixture(base, arm)
+                knowcode = base/'bin/knowcode-v9.9.9'
+                if not knowcode.exists():
+                    knowcode.parent.mkdir()
+                    shutil.copy(binary, knowcode)
+                config.update(shell='sandbox', knowcode_binary_name=knowcode.name, knowcode_sha256=client.file_hash(knowcode))
+                index = root/'control/index/example'
+                index.mkdir(parents=True)
+                served = client.ARM_SPECS[arm]['knowcode']
+                result = client.prepare(root, config, binary, knowcode=knowcode if served else None, index_repos={'example': index})
+                argv = result['argv']
+                self.assertEqual(result['client_mode'], 'full')
+                for flag in ['--bare', '--strict-mcp-config', '--mcp-config', '--disable-slash-commands']:
+                    self.assertNotIn(flag, argv)
+                self.assertEqual(argv[argv.index('--tools')+1], 'Bash,Read,Skill,ToolSearch')
+                self.assertEqual(argv[argv.index('--setting-sources')+1], 'user')
+                prompt = argv[argv.index('--print')+1]
+                self.assertIn('example: '+str(index.resolve()), prompt)
+                self.assertNotIn(str(root.resolve()/'source'), prompt)
+                self.assertIn('Read(/'+str(root.resolve()/'control/index')+'/**)', argv)
+                self.assertEqual(result['env']['HOME'], str(root.resolve()/'control/home'))
+                denied = argv[argv.index('--disallowedTools')+1:]
+                self.assertIn('Bash(*knowcode-v9.9.9*)', denied)
+                if served:
+                    self.assertEqual(result['setup']['argv'], [str(knowcode.resolve()), 'setup', 'claude', '--client-dir', str(root.resolve()/'profile')])
+                    self.assertEqual(result['setup']['env']['KNOWCODE_CACHE_DIR'], str(root.resolve()/'control/kc-cache'))
+                    self.assertIn('mcp__plugin_knowcode_knowcode', argv)
+                    self.assertIn('mcp__plugin_knowcode_knowcode__kc_note_add', denied)
+                    self.assertEqual(json.loads((root/'control/mcp.json').read_text()), {'mcpServers': {}})
+                else:
+                    self.assertIsNone(result['setup'])
+                    self.assertNotIn('mcp__plugin_knowcode_knowcode', argv)
+                self.assertEqual('Your brief names the KnowCode' in prompt or 'KnowCode MCP tools' in prompt, client.ARM_SPECS[arm]['named'])
+            # A full arm needs the sandbox shell mode and every cohort repository's workspace.
+            root, binary, config = self.fixture(base/'second', 'plain-full')
+            config.update(shell='sandbox', knowcode_binary_name='knowcode-v9.9.9')
+            with self.assertRaisesRegex(ValueError, 'neutral workspace of every cohort repository'):
+                client.prepare(root, config, binary)
+
 
 if __name__ == '__main__':
     unittest.main()
