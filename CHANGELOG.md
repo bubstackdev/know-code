@@ -2,8 +2,15 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## 0.4.1 (date TBD)
+## 0.4.1 (2026-10-26)
 
+0.4.1 fixes two faults in 0.4.0, found by its own checks: one that could make an answer claim to be complete while
+missing a just-made edit, and one that made some `impact`, `trace` and `context` queries scan every symbol.
+
+- An answer no longer says it is complete while it misses an edit. A query that found indexing already under way
+  waited for that job, and took its report as fresh even when the job had read the tree before the edit, so under
+  load an answer could say `complete` without the edit's symbol. It now waits once more on a job that reads the
+  current tree, within the same time budget, or says the repository is still indexing.
 - Faster `impact`, `trace` and `context` on code implementing interfaces: four lookups of a symbol by its name (the
   supertype walk run for every implementation member reached among them) compared names case-sensitively in a way
   SQLite couldn't serve from the name index, so each scanned every symbol. They now use the index, as the other
