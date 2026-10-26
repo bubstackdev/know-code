@@ -673,7 +673,8 @@ kc_context picks it. Answers the note as kc_notes does. Notes are removed with `
     Topic {
         name: "kc_search",
         summary: "ranked text and regex search",
-        text: r#"Search file contents across repos (literal by default, or regex: Rust syntax, matches never span lines),
+        text: r#"Search file contents across repos (literal by default, or regex: Rust syntax, plus a look-ahead ending the
+pattern or a look-behind starting it, `\bSave\b(?!\()`, `(?<!\.)Save`; matches never span lines),
 like a ranked grep over an index: definitions of matching symbols first, then declarations, other code, then tests,
 comments and docs. Matches are per line. Each item is a text row, `repo/file:line kind symbol | text`: `repo/` when
 the answer spans repos; kind def, decl, code, test, comment or doc; the symbol a def or decl declares, or `in X` for

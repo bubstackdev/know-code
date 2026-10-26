@@ -4,6 +4,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `search` takes a look-ahead at the end of a regex or a look-behind at its start, which agents write to find uses
+  that aren't calls: `\bSetParent\b(?!\()`, `(?<!\.)Save`. The rest of the pattern finds each match and the
+  look-around is checked on its line. Such patterns were refused as invalid; look-around anywhere else still is.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an

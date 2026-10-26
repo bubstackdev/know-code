@@ -49,7 +49,7 @@ pub struct SearchOptions {
 
 /// A compiled query.
 pub struct Matcher {
-    re: Regex,
+    re: Pattern,
     pub plan: Plan,
     langs: Vec<String>,
     include: Vec<String>,
@@ -66,14 +66,24 @@ pub fn compile(o: &SearchOptions) -> Result<Matcher> {
         Case::Insensitive => true,
         Case::Smart => !has_uppercase(&o.pattern, o.regex),
     };
-    let base = if o.regex { o.pattern.clone() } else { regex::escape(&o.pattern) };
+    let (behind, base, ahead) = if o.regex { split_lookaround(&o.pattern) } else { (None, regex::escape(&o.pattern), None) };
     let pattern = if o.word { format!(r"(?-u:\b)(?:{base})(?-u:\b)") } else { base };
-    let re = RegexBuilder::new(&pattern)
-        .case_insensitive(ignore_case)
-        .multi_line(true)
-        .size_limit(50 << 20)
-        .build()
-        .with_context(|| format!("invalid pattern {:?}", o.pattern))?;
+    let build = |p: &str| {
+        RegexBuilder::new(p)
+            .case_insensitive(ignore_case)
+            .multi_line(true)
+            .size_limit(50 << 20)
+            .build()
+            .with_context(|| format!("invalid pattern {:?}", o.pattern))
+    };
+    let around = |side: Option<Around>, anchored: fn(&str) -> String| -> Result<Option<(bool, Regex)>> {
+        side.map(|(negated, inner)| Ok((negated, build(&anchored(&inner))?))).transpose()
+    };
+    let re = Pattern {
+        re: build(&pattern)?,
+        ahead: around(ahead, |x| format!(r"\A(?:{x})"))?,
+        behind: around(behind, |x| format!(r"(?:{x})\z"))?,
+    };
     let hir = regex_syntax::ParserBuilder::new()
         .case_insensitive(ignore_case)
         .multi_line(true)
@@ -118,6 +128,123 @@ fn has_uppercase(pattern: &str, regex: bool) -> bool {
         }
     }
     false
+}
+
+/// A search regex, with the look-ahead that ends it or the look-behind that starts it, which the regex engine lacks:
+/// `\bSave\b(?!\()`, `(?<!\.)Save`. The regex finds a match and the look-around is checked on the rest of its line,
+/// after it or before it; a match failing the check is passed over for the next.
+pub struct Pattern {
+    re: Regex,
+    /// (negated, the look-ahead's pattern anchored at the match's end).
+    ahead: Option<(bool, Regex)>,
+    /// (negated, the look-behind's pattern anchored at the match's start).
+    behind: Option<(bool, Regex)>,
+}
+
+impl Pattern {
+    /// The first match at or after `pos` whose look-around holds.
+    pub fn find_at<'h>(&self, data: &'h [u8], mut pos: usize) -> Option<regex::bytes::Match<'h>> {
+        loop {
+            let m = self.re.find_at(data, pos)?;
+            if self.holds(data, m.start(), m.end()) {
+                return Some(m);
+            }
+            if m.start() >= data.len() {
+                return None;
+            }
+            pos = m.start() + 1;
+        }
+    }
+
+    pub fn is_match(&self, data: &[u8]) -> bool {
+        self.find_at(data, 0).is_some()
+    }
+
+    fn holds(&self, data: &[u8], start: usize, end: usize) -> bool {
+        if let Some((negated, ahead)) = &self.ahead {
+            let line_end = memchr::memchr(b'\n', &data[end..]).map_or(data.len(), |i| end + i);
+            if ahead.is_match(&data[end..line_end]) == *negated {
+                return false;
+            }
+        }
+        if let Some((negated, behind)) = &self.behind {
+            let line_start = memchr::memrchr(b'\n', &data[..start]).map_or(0, |i| i + 1);
+            if behind.is_match(&data[line_start..start]) == *negated {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// A look-around group: (negated, its pattern).
+type Around = (bool, String);
+
+/// A regex split into the look-behind group that starts it, the rest, and the look-ahead group that ends it: each
+/// group as (negated, its pattern). `(?<!\.)\bSave\b(?!\()` is ((true, `\.`), `\bSave\b`, (true, `\(`)). Look-around
+/// anywhere else stays in the rest, for the regex engine to refuse.
+fn split_lookaround(pattern: &str) -> (Option<Around>, String, Option<Around>) {
+    let groups = top_groups(pattern);
+    let mut core = (0, pattern.len());
+    let mut behind = None;
+    let mut ahead = None;
+    if let Some(&(open, close)) = groups.first()
+        && open == 0
+        && let Some(negated) = lookaround_kind(&pattern[open..], &["(?<!", "(?<="])
+        && close + 1 < pattern.len()
+    {
+        behind = Some((negated, pattern[open + 4..close].to_string()));
+        core.0 = close + 1;
+    }
+    if let Some(&(open, close)) = groups.last()
+        && close + 1 == pattern.len()
+        && open >= core.0
+        && let Some(negated) = lookaround_kind(&pattern[open..], &["(?!", "(?="])
+        && open > core.0
+    {
+        ahead = Some((negated, pattern[open + 3..close].to_string()));
+        core.1 = open;
+    }
+    (behind, pattern[core.0..core.1].to_string(), ahead)
+}
+
+/// Whether `rest` starts with a negated (first) or plain (second) look-around opener: Some(negated).
+fn lookaround_kind(rest: &str, openers: &[&str; 2]) -> Option<bool> {
+    if rest.starts_with(openers[0]) {
+        Some(true)
+    } else if rest.starts_with(openers[1]) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The (open, close) byte offsets of a pattern's outermost parenthesised groups, skipping escapes and classes.
+fn top_groups(pattern: &str) -> Vec<(usize, usize)> {
+    let bytes = pattern.as_bytes();
+    let (mut out, mut depth, mut open, mut class, mut i) = (Vec::new(), 0usize, 0usize, false, 0usize);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'[' if !class => class = true,
+            b']' if class => class = false,
+            b'(' if !class => {
+                if depth == 0 {
+                    open = i;
+                }
+                depth += 1;
+            }
+            b')' if !class && depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push((open, i));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
 }
 
 impl Matcher {
@@ -665,7 +792,7 @@ pub fn read_into(path: &Path, buf: &mut Vec<u8>) -> std::io::Result<()> {
 /// Every line with a match, like `git grep`: matches never span lines. The whole buffer is searched for the next
 /// match start; the line holding it is then matched on its own, which finds that line's first match whether or not
 /// the buffer match ran past the newline. Matching lines are appended to `text`.
-pub fn match_lines(re: &Regex, data: &[u8], lang: &str, text: &mut String) -> Vec<LineHit> {
+pub fn match_lines(re: &Pattern, data: &[u8], lang: &str, text: &mut String) -> Vec<LineHit> {
     let mut out = Vec::new();
     let len = data.len();
     let (mut pos, mut line_no, mut counted) = (0usize, 1u32, 0usize);
@@ -690,7 +817,7 @@ pub fn match_lines(re: &Regex, data: &[u8], lang: &str, text: &mut String) -> Ve
         }
         counted = ls;
         let line = &data[ls..le];
-        let found = if m.end() <= le { Some((s - ls, m.end() - ls)) } else { re.find(line).map(|x| (x.start(), x.end())) };
+        let found = if m.end() <= le { Some((s - ls, m.end() - ls)) } else { re.find_at(line, 0).map(|x| (x.start(), x.end())) };
         if let Some((start, end)) = found {
             let cut = &line[..line.len().min(MAX_LINE)];
             let cut = cut.strip_suffix(b"\r").unwrap_or(cut);
@@ -1211,8 +1338,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn re(p: &str) -> Regex {
-        RegexBuilder::new(p).multi_line(true).build().unwrap()
+    fn re(p: &str) -> Pattern {
+        Pattern { re: RegexBuilder::new(p).multi_line(true).build().unwrap(), ahead: None, behind: None }
+    }
+
+    fn opts(pattern: &str) -> SearchOptions {
+        SearchOptions { pattern: pattern.into(), regex: true, case: Case::Sensitive, word: false, langs: Vec::new(), globs: Vec::new(), max_lines: 100 }
+    }
+
+    #[test]
+    fn a_lookaround_at_either_end_is_checked_on_each_match() {
+        let data = b"item.SetParent(a);\nvar f = item.SetParent;\nSetParent(b);\n";
+        let lines = |p: &str| match_lines(&compile(&opts(p)).unwrap().re, data, "text", &mut String::new()).iter().map(|h| h.line).collect::<Vec<_>>();
+        assert_eq!(lines(r"\bSetParent\b(?!\()"), [2], "a use that isn't a call");
+        assert_eq!(lines(r"\bSetParent\b(?=\()"), [1, 3]);
+        assert_eq!(lines(r"(?<!\.)\bSetParent\("), [3], "a call not through a member access");
+        assert_eq!(lines(r"(?<=\.)SetParent(?!\()"), [2]);
+        // A match failing its look-ahead gives way to a later one on the same line.
+        let data = b"Save(); Save;\n";
+        let m = compile(&opts(r"Save(?!\()")).unwrap();
+        assert_eq!(match_lines(&m.re, data, "text", &mut String::new())[0].start, 8);
+        assert!(!m.re.is_match(b"Save();"));
+        // Case and whole-word options apply inside the look-around too.
+        let m = compile(&SearchOptions { case: Case::Insensitive, word: true, ..opts(r"save(?!\s*\()") }).unwrap();
+        assert!(m.re.is_match(b"x = SAVE;") && !m.re.is_match(b"SAVE ()") && !m.re.is_match(b"saved;"));
+    }
+
+    #[test]
+    fn only_lookaround_at_the_ends_is_split_off() {
+        assert_eq!(split_lookaround(r"a(?!b)"), (None, "a".into(), Some((true, "b".into()))));
+        assert_eq!(split_lookaround(r"(?<=x)a(?=b)"), (Some((false, "x".into())), "a".into(), Some((false, "b".into()))));
+        assert_eq!(split_lookaround(r"a(b)(?!c[)])"), (None, "a(b)".into(), Some((true, "c[)]".into()))));
+        assert_eq!(split_lookaround(r"a\(?!b\)"), (None, r"a\(?!b\)".into(), None), "escaped parentheses are no group");
+        assert_eq!(split_lookaround(r"(?!b)"), (None, "(?!b)".into(), None), "nothing left to match");
+        // Look-around elsewhere is left for the regex engine to refuse, as before.
+        assert!(compile(&opts(r"a(?!b)c")).is_err());
     }
 
     #[test]
