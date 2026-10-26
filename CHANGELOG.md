@@ -2,7 +2,7 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## 0.3.0 (date TBD)
+## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
 answers. Repositories under the workspace roots are found and indexed in the background, several at once and sized to
