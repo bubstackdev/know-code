@@ -89,6 +89,19 @@ def knowcode_tools(events):
     return counts
 
 
+def hook_tally(sessions):
+    """The plugin's hooks over a full arm's sessions, per hook event (descriptive): sessions where one ran, runs, runs
+    with a response, responses carrying a note, responses that were not a clean success, and sessions not recorded."""
+    out = {}
+    for s in sessions:
+        for event, h in (s.get('hooks') or {}).items():
+            t = out.setdefault(event, dict(sessions_with_hook=0, started=0, responded=0, with_note=0, not_success=0))
+            t['sessions_with_hook'] += 1
+            for k in ('started', 'responded', 'with_note', 'not_success'):
+                t[k] += h.get(k, 0)
+    return dict(by_event=out, sessions_without_hook_record=sum(s.get('hooks') is None for s in sessions))
+
+
 def summarize(rows, questions, runs, baseline=None):
     qids = sorted(q['id'] for q in questions)
     stratum = {q['id']: q['stratum'] for q in questions}
@@ -167,6 +180,8 @@ def summarize(rows, questions, runs, baseline=None):
                          cost_usd=sum(x.get('cost_usd') or 0 for x in rs),
                          refused_naming_binary=sum(x.get('refused_naming_binary') or 0 for x in rs),
                          refused_other=sum(x.get('refused_other') or 0 for x in rs))
+        if arm in (NAMED, UNPROMPTED):
+            arms[arm]['hooks'] = hook_tally(rs)
         if arm != PLAIN:
             claims = sum(x.get('answers_with_claims') or 0 for x in rs)
             arms[arm].update(recheck_tokens_mean=mean([x.get('recheck_tokens') for x in rs]),
@@ -194,6 +209,7 @@ def score(args):
             scorer, questions[row['question_id']], labels[row['question_id']], result, events,
             study.config['knowcode_binary_name'], not row['arm'].startswith('plain'))
         rows[(row['run'], row['arm'], row['question_id'])]['knowcode_tools'] = knowcode_tools(events)
+        rows[(row['run'], row['arm'], row['question_id'])]['hooks'] = ((result or {}).get('audit') or {}).get('hooks')
     baseline = json.loads(Path(args.baseline).read_text()) if args.baseline else None
     summary = dict(format='public-v3-summary-1', freeze_sha256=study.freeze_sha256, runs=runs,
                    bootstrap=dict(seed=SEED, resamples=public_v2.RESAMPLES, unit='question'),

@@ -174,6 +174,7 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
     session_ids = set()
     compacted = False
     model_refusal = False
+    hooks = {}
     for position, event in enumerate(events):
         session_id = event.get('session_id')
         if session_id is not None:
@@ -190,6 +191,12 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
             terminals.append((position, event))
         if kind == 'system' and event.get('subtype') == 'compact_boundary':
             compacted = True
+        # A full client run with --include-hook-events records each hook it runs: started, then its response.
+        if kind == 'system' and event.get('subtype') in ('hook_started', 'hook_response') and isinstance(event.get('hook_id'), str):
+            hook = hooks.setdefault(event['hook_id'], dict(event=str(event.get('hook_event')), name=str(event.get('hook_name')), response=None))
+            if event['subtype'] == 'hook_response':
+                hook['response'] = dict(outcome=event.get('outcome'), exit_code=event.get('exit_code'),
+                                        note='additionalContext' in str(event.get('stdout') or event.get('output') or ''))
         message = event.get('message')
         if kind not in ('assistant', 'user'):
             continue
@@ -303,6 +310,14 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
     answer, answer_issues = answer_from_result(terminal, question_id, source_root, two_hop)
     if issues:
         answer = {'id':question_id,'status':'error','items':[], 'notes':'Transcript integrity error; inspect audit and raw transcript.'}
+    hook_summary = {}
+    for hook in hooks.values():
+        row = hook_summary.setdefault(hook['event'], dict(started=0, responded=0, with_note=0, not_success=0))
+        row['started'] += 1
+        if hook['response'] is not None:
+            row['responded'] += 1
+            row['with_note'] += hook['response']['note']
+            row['not_success'] += hook['response']['outcome'] != 'success' or hook['response']['exit_code'] != 0
     kc_tools = [knowcode_tool(row['name'], row['input']) for row in call_rows]
     kc_calls = sum(t is not None for t in kc_tools)
     by_tool = {}
@@ -311,7 +326,7 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
             by_tool[t[0]] = by_tool.get(t[0], 0) + 1
     return dict(format=1, id=question_id, arm=arm, answer=answer, answer_issues=answer_issues,
                 transcript_integrity=not issues, transcript_issues=sorted(set(issues)), policy_flags=sorted(set(flags)),
-                research_calls=len(call_rows), knowcode_calls=kc_calls, knowcode_tools=by_tool, plain_calls=sum(row['name'] in ('Bash','Read','Grep','Glob') for row in call_rows),
+                research_calls=len(call_rows), knowcode_calls=kc_calls, knowcode_tools=by_tool, hooks=hook_summary, plain_calls=sum(row['name'] in ('Bash','Read','Grep','Glob') for row in call_rows),
                 research_call_budget=research_call_budget, research_call_overrun=max(0,len(call_rows)-research_call_budget),
                 research_call_budget_enforced=False, refused_calls=len(refused),
                 heuristic_refusal_calls=len(refusal_candidates),

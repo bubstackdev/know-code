@@ -137,6 +137,34 @@ class KcCallTests(unittest.TestCase):
         self.assertEqual(rewritten, 60)
 
 
+class HookEventTests(unittest.TestCase):
+    """A full client run with --include-hook-events records each hook it runs; the audit counts them per event."""
+    def test_hook_runs_responses_and_notes_are_counted_per_event(self):
+        evs = events('one-tool.jsonl')
+        def hook(sub, hid, name, **extra):
+            return dict(type='system', subtype=sub, hook_id=hid, hook_name=name, hook_event=name.split(':')[0], session_id='s', **extra)
+        evs[1:1] = [hook('hook_started', 'h0', 'SessionStart:startup'),
+                    hook('hook_response', 'h0', 'SessionStart:startup', outcome='success', exit_code=0,
+                         stdout='{"hookSpecificOutput":{"additionalContext":"KnowCode index: app"}}'),
+                    hook('hook_started', 'h1', 'PreToolUse:Grep'),
+                    hook('hook_response', 'h1', 'PreToolUse:Grep', outcome='success', exit_code=0, stdout=''),
+                    hook('hook_started', 'h2', 'PreToolUse:Bash'),
+                    hook('hook_response', 'h2', 'PreToolUse:Bash', outcome='success', exit_code=0,
+                         stdout='{"hookSpecificOutput":{"additionalContext":"KnowCode index: Save"}}'),
+                    hook('hook_started', 'h3', 'PreToolUse:Glob'),
+                    hook('hook_started', 'h4', 'PreToolUse:Grep'),
+                    hook('hook_response', 'h4', 'PreToolUse:Grep', outcome='error', exit_code=1, stdout='')]
+        out = audit(evs)
+        self.assertTrue(out['transcript_integrity'], out['transcript_issues'])
+        self.assertEqual(out['policy_flags'], [])
+        self.assertEqual(out['hooks'], {'SessionStart': dict(started=1, responded=1, with_note=1, not_success=0),
+                                        'PreToolUse': dict(started=4, responded=3, with_note=1, not_success=1)})
+        self.assertEqual(audit(events('one-tool.jsonl'))['hooks'], {})
+        tally = public_v3.hook_tally([dict(hooks=out['hooks']), dict(hooks={}), dict()])
+        self.assertEqual(tally['by_event']['PreToolUse'], dict(sessions_with_hook=1, started=4, responded=3, with_note=1, not_success=1))
+        self.assertEqual(tally['sessions_without_hook_record'], 1)
+
+
 TOOLCHAIN = Path('/Library/Developer/CommandLineTools')
 
 
