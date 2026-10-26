@@ -798,7 +798,14 @@ impl Tracer<'_> {
             }
         } else if let Some(container) = &sym.container {
             let owner = query::definitions(self.conn, container)?.into_iter().find(|d| d.kind != "extension");
+            // An interface's static member (C#: `private static readonly object[] NoValues`) is its own: implementing
+            // types have none to supply, unless it is `abstract` or `virtual`.
+            let words = |w: &str| sym.signature.split_whitespace().any(|x| x == w);
+            let own_static = words("static") && !words("abstract") && !words("virtual");
             if owner.as_ref().is_some_and(|o| o.kind == "protocol") {
+                if own_static {
+                    return Ok(out);
+                }
                 // A protocol requirement: its implementations in conforming types depend on it.
                 let sql = format!(
                     "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id

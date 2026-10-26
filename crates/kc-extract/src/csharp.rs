@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 33;
+pub const VERSION: u32 = 34;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -94,9 +94,22 @@ pub fn extract(source: &str) -> FileFacts {
     let source = &*blank_verbatim_doubled_quotes(source);
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into()).expect("tree-sitter-c-sharp ABI matches tree-sitter");
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(mut tree) = parser.parse(source, None) else {
         return FileFacts { parse_errors: 1, ..Default::default() };
     };
+    // A conditional splitting a declaration loses it: read the file with each conditional's first branch, when that
+    // parses better.
+    let first;
+    let mut source = source;
+    if tree.root_node().has_error()
+        && let Some(text) = first_branches(source)
+        && let Some(t) = parser.parse(&text, None)
+        && parse_errors(t.root_node()) < parse_errors(tree.root_node())
+    {
+        first = text;
+        source = &first;
+        tree = t;
+    }
     let conv = crate::conventions::current();
     // Only a file that publishes can have publish helpers.
     let publishes = conv.bus.publish.iter().any(|c| source.contains(c.name.as_str()));
@@ -5366,6 +5379,62 @@ fn blank_verbatim_doubled_quotes(src: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(String::from_utf8(out).expect("ASCII-for-ASCII replacement keeps UTF-8"))
 }
 
+/// Error and missing nodes in a parse tree.
+fn parse_errors(node: Node) -> usize {
+    if !node.has_error() {
+        return 0;
+    }
+    usize::from(node.is_error() || node.is_missing()) + children(node).map(parse_errors).sum::<usize>()
+}
+
+/// `src` with each conditional's first branch kept (`#if X` true) and the rest (`#elif`, `#else`) and the directive
+/// lines themselves blanked to spaces: the same length, so every offset and line still indexes the original text.
+/// tree-sitter-c-sharp reads a directive only between declarations or statements; one splitting a declaration
+/// (`ILogger ForContext(Type t)` then `#if X` a body `#else` a `;` `#endif`) loses the declaration, and error recovery
+/// its type's other members. `None` without a conditional.
+fn first_branches(src: &str) -> Option<String> {
+    if !src.contains("#if") {
+        return None;
+    }
+    let mut out = String::with_capacity(src.len());
+    // Per open conditional: whether the branch being read is a later one, blanked.
+    let mut open: Vec<bool> = Vec::new();
+    for line in src.split_inclusive('\n') {
+        let t = line.trim_start();
+        let directive = t.strip_prefix('#').map(|d| d.trim_start().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or(""));
+        let blank = match directive {
+            Some("if") => {
+                open.push(false);
+                true
+            }
+            Some("elif" | "else") => {
+                if let Some(later) = open.last_mut() {
+                    *later = true;
+                }
+                true
+            }
+            Some("endif") => {
+                open.pop();
+                true
+            }
+            _ => open.iter().any(|&later| later),
+        };
+        if blank {
+            // A multi-byte character becomes as many spaces as it has bytes.
+            for c in line.chars() {
+                if c == '\n' || c == '\r' {
+                    out.push(c);
+                } else {
+                    out.extend(std::iter::repeat_n(' ', c.len_utf8()));
+                }
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    Some(out)
+}
+
 /// The expression of the first argument in an `argument_list`.
 fn first_argument(list: Node) -> Option<Node> {
     children(list).find(|c| c.kind() == "argument").and_then(|a| children(a).filter(|c| c.is_named()).last())
@@ -5627,6 +5696,34 @@ public class CartServiceTests
         // The extension lives in the static class, which still contains it.
         assert_eq!(f.symbols[m("ThrowIfError").parent.unwrap()].name, "ResultExtensions");
         assert_eq!(m("Helper").container.as_deref(), Some("ResultExtensions"));
+    }
+
+    #[test]
+    fn a_conditional_splitting_a_declaration_keeps_the_types_members() {
+        let src = "namespace Shelf;\npublic interface IShelf\n{\n    IShelf Narrow(Type t)\n#if DEFAULT_BODIES\n        => Narrow(t, 1)\n#endif\n    ;\n\
+                   \n    IShelf Narrow<T>()\n#if DEFAULT_BODIES\n    {\n        return Narrow(typeof(T));\n    }\n#else\n        ;\n#endif\n\
+                   \n    IShelf Narrow(Type t, int depth);\n}\n";
+        let f = extract(src);
+        let members: Vec<(&str, SymbolKind, Option<&str>, u32)> =
+            f.symbols.iter().filter(|s| s.name == "Narrow").map(|s| (s.name.as_str(), s.kind, s.container.as_deref(), s.start_line)).collect();
+        assert_eq!(
+            members,
+            [
+                ("Narrow", SymbolKind::Method, Some("IShelf"), 4),
+                ("Narrow", SymbolKind::Method, Some("IShelf"), 10),
+                ("Narrow", SymbolKind::Method, Some("IShelf"), 19)
+            ],
+            "{:?}",
+            f.symbols.iter().map(|s| (&s.name, s.kind, &s.container, s.start_line)).collect::<Vec<_>>()
+        );
+        // The kept branch's call is at its own line; the text is the file's, offsets unchanged.
+        assert!(f.refs.iter().any(|r| r.name == "Narrow" && r.line == 13 && r.kind == RefKind::Call));
+        // A file whose conditionals parse is read as it is: both branches.
+        let both = extract("public class C\n{\n#if A\n    void One() { }\n#else\n    void Two() { }\n#endif\n}\n");
+        assert_eq!(both.symbols.iter().filter(|s| s.kind == SymbolKind::Method).count(), 2);
+        let blanked = first_branches("a\n#if X\nb\n#elif Y\nc é\n#else\nd\n#endif\ne\n").unwrap();
+        assert_eq!(blanked.len(), "a\n#if X\nb\n#elif Y\nc é\n#else\nd\n#endif\ne\n".len());
+        assert_eq!(blanked.lines().map(str::trim).collect::<Vec<_>>(), ["a", "", "b", "", "", "", "", "", "e"]);
     }
 
     #[test]
