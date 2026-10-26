@@ -1,0 +1,587 @@
+{
+  "adjudications": [
+    {
+      "final_label_sha256": "476653ab3875f1a0a2f862d03268c31cea4efa5acd0b48447ce4c6caa76adbf4",
+      "id": "public3-definition-lookup-002",
+      "independent_label_sha256": "ccd98e28edf7de68be50bbbac488f9b232b86cb596198d57562162f691d3244f",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "0b7bccd055d5d970f479c2e5b878b7db1fcc86de9a4e049c3c735454c52086db",
+      "id": "public3-definition-lookup-006",
+      "independent_label_sha256": "30e384aa93db8b2b240813335963dde17c18fe69f0a972ae789b67a692b1ab76",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "9532a89aef658d6fab1732456037c08cc092c1d284be284022817dddc5743adb",
+      "id": "public3-di-implementations-002",
+      "independent_label_sha256": "0d1120012142bdab5b3801a1ff119a9bbb28ec0bbae39346b31baf42de862674",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "d427e4879fa94946321f0f10b52651dcbca381355e4433d88e65ebc389644bb6",
+      "id": "public3-di-implementations-003",
+      "independent_label_sha256": "ce2dd9ab28b226fb9fb6b349af4f49ee6d05991b8ded6840434ffef2e2178367",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "5898e42e8710f2046c9a88dadb4dc6347cfc5770c5eefd95a4f2cce3f4fb2429",
+      "id": "public3-http-cross-repo-007",
+      "independent_label_sha256": "e5aae93096c141f5c7c00894e30985edc3eb7c5bf483b631c800e1974e4dbc44",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "cf4e0e3e01bdbde098655c802e566ceb822c7eec2d908f1a3606fa38f534eeaf",
+      "id": "public3-http-cross-repo-011",
+      "independent_label_sha256": "54bafb17c9934b0295ff092dcd3040369fa84708cccadc2e1dbc828d1a4a93d9",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "1333342d4bf849b326815ec65ab67eea6c4e8ad43bc86e7f1051adc4b643c4ca",
+      "id": "public3-two-hop-impact-006",
+      "independent_label_sha256": "ae7f14fadde46f6a371b7de9c20298367679a80f7e8b5c07712c2e878b71e078",
+      "resolution": "Items, completeness and match agree."
+    },
+    {
+      "final_label_sha256": "c37d8c6c8c3dfa5de79082cabf94d79f4fdeb38d3ca19e0007da58cc50a8355a",
+      "id": "public3-two-hop-impact-013",
+      "independent_label_sha256": "0ecc8170103a40d0dac648c2957c76b0f476407d68ccb064908c61ace4ee4438",
+      "resolution": "Items, completeness and match agree."
+    }
+  ],
+  "agreement": {
+    "completeness_agree": 8,
+    "questions": 8,
+    "required_items_agree": 8
+  },
+  "compared_tool_outputs_read": false,
+  "labels": [
+    {
+      "completeness": "exhaustive",
+      "dynamic_name": false,
+      "id": "public3-definition-lookup-002",
+      "items": [
+        {
+          "evidence": "bitwarden-server/src/Infrastructure.Dapper/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:12 `public class OrganizationUserKeyRepository : IOrganizationUserKeyRepository`",
+          "item": "bitwarden-server/src/Infrastructure.Dapper/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:12",
+          "note": "Dapper implementation; non-partial class declaration"
+        },
+        {
+          "evidence": "bitwarden-server/src/Infrastructure.EntityFramework/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:11 `public class OrganizationUserKeyRepository : BaseEntityFrameworkRepository, IOrganizationUserKeyRepository`",
+          "item": "bitwarden-server/src/Infrastructure.EntityFramework/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:11",
+          "note": "Entity Framework implementation (different namespace, same simple name); non-partial class declaration"
+        }
+      ],
+      "match": "file_line",
+      "minutes": 4,
+      "negatives": [
+        {
+          "evidence": "`public OrganizationUserKeyRepository(GlobalSettings globalSettings)`",
+          "item": "bitwarden-server/src/Infrastructure.Dapper/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:16",
+          "note": "constructor"
+        },
+        {
+          "evidence": "`public OrganizationUserKeyRepository(string connectionString)`",
+          "item": "bitwarden-server/src/Infrastructure.Dapper/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:21",
+          "note": "constructor"
+        },
+        {
+          "evidence": "`public OrganizationUserKeyRepository(IServiceScopeFactory serviceScopeFactory, IMapper mapper)`",
+          "item": "bitwarden-server/src/Infrastructure.EntityFramework/KeyManagement/Repositories/OrganizationUserKeyRepository.cs:13",
+          "note": "constructor"
+        },
+        {
+          "evidence": "`services.AddSingleton<IOrganizationUserKeyRepository, OrganizationUserKeyRepository>();`",
+          "item": "bitwarden-server/src/Infrastructure.Dapper/DapperServiceCollectionExtensions.cs:92",
+          "note": "DI registration use"
+        },
+        {
+          "evidence": "`services.AddSingleton<IOrganizationUserKeyRepository, OrganizationUserKeyRepository>();`",
+          "item": "bitwarden-server/src/Infrastructure.EntityFramework/EntityFrameworkServiceCollectionExtensions.cs:126",
+          "note": "DI registration use"
+        }
+      ],
+      "note": "Searched: grep -rnw OrganizationUserKeyRepository over the whole bitwarden-server source view (all file types). 7 hits: 2 class declarations (Dapper and EF, neither partial), 3 constructors, 2 DI registrations. No test-code occurrences of the exact name; prefixed names (IOrganizationUserKeyRepository) excluded by -w.",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "completeness": "exhaustive",
+      "dynamic_name": false,
+      "id": "public3-definition-lookup-006",
+      "items": [
+        {
+          "evidence": "serilog/src/Serilog/Core/Filters/DelegateFilter.cs:17 `class DelegateFilter : ILogEventFilter`",
+          "item": "serilog/src/Serilog/Core/Filters/DelegateFilter.cs:17",
+          "note": "internal (no modifier) non-partial class declaration"
+        }
+      ],
+      "match": "file_line",
+      "minutes": 3,
+      "negatives": [
+        {
+          "evidence": "`public DelegateFilter(Func<LogEvent, bool> isEnabled)`",
+          "item": "serilog/src/Serilog/Core/Filters/DelegateFilter.cs:21",
+          "note": "constructor"
+        },
+        {
+          "evidence": "`return With(new DelegateFilter(logEvent => !exclusionPredicate(logEvent)));`",
+          "item": "serilog/src/Serilog/Configuration/LoggerFilterConfiguration.cs:72",
+          "note": "use (construction)"
+        },
+        {
+          "evidence": "`return With(new DelegateFilter(inclusionPredicate));`",
+          "item": "serilog/src/Serilog/Configuration/LoggerFilterConfiguration.cs:83",
+          "note": "use (construction)"
+        }
+      ],
+      "note": "Searched: grep -rnw DelegateFilter over the whole serilog source view. 5 hits: 1 class declaration, 1 constructor, 2 production uses, 1 test use. Not partial; no other declaration.",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "`var filter = new DelegateFilter(e => ...)`",
+          "item": "serilog/test/Serilog.Tests/Configuration/LoggerConfigurationTests.cs:77",
+          "note": "test use (construction), not a declaration"
+        }
+      ]
+    },
+    {
+      "completeness": "exhaustive",
+      "dynamic_name": false,
+      "id": "public3-di-implementations-002",
+      "items": [
+        {
+          "evidence": "`public class DefaultPropertySelector : IPropertySelector`",
+          "item": "autofac/src/Autofac/Core/Activators/DefaultPropertySelector.cs:15",
+          "note": "impl",
+          "relationship": "direct",
+          "role": "declaration"
+        },
+        {
+          "evidence": "`public sealed class DelegatePropertySelector : IPropertySelector`",
+          "item": "autofac/src/Autofac/Core/Activators/DelegatePropertySelector.cs:11",
+          "note": "impl",
+          "relationship": "direct",
+          "role": "declaration"
+        }
+      ],
+      "match": "line_within:2",
+      "minutes": 6,
+      "negatives": [
+        {
+          "evidence": "`registration.PropertiesAutowired(new DefaultPropertySelector(preserveSetValues), allowCircularDependencies)`",
+          "item": "autofac/src/Autofac/RegistrationExtensions.cs:368",
+          "note": "selector instance passed as a strategy argument to property autowiring; not a container registration of IPropertySelector as a service"
+        },
+        {
+          "evidence": "`registration.PropertiesAutowired(new DelegatePropertySelector(propertySelector))`",
+          "item": "autofac/src/Autofac/RegistrationExtensions.cs:390",
+          "note": "same: strategy argument, not a service registration"
+        },
+        {
+          "evidence": "`internal static IPropertySelector OverwriteSetValueInstance { get; } = new DefaultPropertySelector(false);`",
+          "item": "autofac/src/Autofac/Core/Activators/DefaultPropertySelector.cs:36",
+          "note": "static singleton field, not DI registration (also line 41)"
+        }
+      ],
+      "note": "Searched: grep -rnw IPropertySelector over autofac and autofac-di (all files); grep for derived interfaces (`interface X : ...IPropertySelector`) - none; grep -rnw for DefaultPropertySelector/DelegatePropertySelector to find subclasses (none; Delegate is sealed) and registrations. autofac-di has no reference at all. IPropertySelector is never registered as a container service (no As<IPropertySelector>, typeof(IPropertySelector), Register...IPropertySelector) in either repo; it is only passed as an argument to PropertiesAutowired/InjectProperties, so the label has zero registration items. Assumption: user code outside the corpus may implement it (not counted).",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "`public class InjectAttributePropertySelector : IPropertySelector`",
+          "item": "autofac/test/Autofac.Specification.Test/Features/PropertyInjection/InjectAttributePropertySelector.cs:9",
+          "note": "test-only implementation"
+        }
+      ]
+    },
+    {
+      "completeness": "exhaustive",
+      "dynamic_name": false,
+      "id": "public3-di-implementations-003",
+      "items": [
+        {
+          "evidence": "`public class MultiServiceMailDeliveryService : IMailDeliveryService`",
+          "item": "bitwarden-server/src/Core/Platform/Mail/Delivery/MultiServiceMailDeliveryService.cs:8",
+          "note": "impl; composite that news up AmazonSes and SendGrid services internally",
+          "relationship": "direct",
+          "role": "declaration"
+        },
+        {
+          "evidence": "`public class AmazonSesMailDeliveryService : IMailDeliveryService, IDisposable`",
+          "item": "bitwarden-server/src/Core/Platform/Mail/Delivery/AmazonSesMailDeliveryService.cs:14",
+          "note": "impl",
+          "relationship": "direct",
+          "role": "declaration"
+        },
+        {
+          "evidence": "`public class NoopMailDeliveryService : IMailDeliveryService`",
+          "item": "bitwarden-server/src/Core/Platform/Mail/Delivery/NoopMailDeliveryService.cs:5",
+          "note": "impl",
+          "relationship": "direct",
+          "role": "declaration"
+        },
+        {
+          "evidence": "`public class SendGridMailDeliveryService : IMailDeliveryService, IDisposable`",
+          "item": "bitwarden-server/src/Core/Platform/Mail/Delivery/SendGridMailDeliveryService.cs:11",
+          "note": "impl; never registered in DI directly, only constructed inside MultiServiceMailDeliveryService",
+          "relationship": "direct",
+          "role": "declaration"
+        },
+        {
+          "evidence": "`public class MailKitSmtpMailDeliveryService : IMailDeliveryService`",
+          "item": "bitwarden-server/src/Core/Platform/Mail/Delivery/MailKitSmtpMailDeliveryService.cs:11",
+          "note": "impl",
+          "relationship": "direct",
+          "role": "declaration"
+        },
+        {
+          "evidence": "`services.AddSingleton<IMailDeliveryService, MultiServiceMailDeliveryService>();`",
+          "item": "bitwarden-server/src/SharedWeb/Utilities/ServiceCollectionExtensions.cs:325",
+          "note": "registration (when AWS and SendGrid configured)",
+          "role": "registration"
+        },
+        {
+          "evidence": "`services.AddSingleton<IMailDeliveryService, AmazonSesMailDeliveryService>();`",
+          "item": "bitwarden-server/src/SharedWeb/Utilities/ServiceCollectionExtensions.cs:329",
+          "note": "registration (AWS only)",
+          "role": "registration"
+        },
+        {
+          "evidence": "`services.AddSingleton<IMailDeliveryService, MailKitSmtpMailDeliveryService>();`",
+          "item": "bitwarden-server/src/SharedWeb/Utilities/ServiceCollectionExtensions.cs:333",
+          "note": "registration (SMTP host configured)",
+          "role": "registration"
+        },
+        {
+          "evidence": "`services.AddSingleton<IMailDeliveryService, NoopMailDeliveryService>();`",
+          "item": "bitwarden-server/src/SharedWeb/Utilities/ServiceCollectionExtensions.cs:337",
+          "note": "registration (fallback)",
+          "role": "registration"
+        },
+        {
+          "evidence": "`services.AddSingleton<IMailDeliveryService, NoopMailDeliveryService>();` in AddNoopServices",
+          "item": "bitwarden-server/src/SharedWeb/Utilities/ServiceCollectionExtensions.cs:407",
+          "note": "registration",
+          "role": "registration"
+        }
+      ],
+      "match": "line_within:2",
+      "minutes": 7,
+      "negatives": [
+        {
+          "evidence": "`_sesService = new AmazonSesMailDeliveryService(...)` (and line 23 SendGrid)",
+          "item": "bitwarden-server/src/Core/Platform/Mail/Delivery/MultiServiceMailDeliveryService.cs:22",
+          "note": "direct construction inside the composite, not a DI registration"
+        }
+      ],
+      "note": "Searched: grep -rnw IMailDeliveryService across bitwarden-server, bitwarden-clients, bitwarden-directory-connector (all files) - clients and directory-connector have no occurrence (TypeScript repos, no such interface). grep for derived interfaces (none), for subclasses of each implementation (`: XMailDeliveryService`, none) and for any other registration of the concrete types (none outside the five AddSingleton lines). All five implementations are direct. SendGridMailDeliveryService has no DI registration of its own. Test code (Substitute.For mocks, test-host Replace) put in tests.",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "`Replace<IMailDeliveryService, NoopMailDeliveryService>(services);`",
+          "item": "bitwarden-server/test/IntegrationTestCommon/Factories/WebApplicationFactoryBase.cs:229",
+          "note": "test-host registration override"
+        }
+      ]
+    },
+    {
+      "completeness": "exhaustive",
+      "endpoint": "POST /Users/{userId}/Configuration",
+      "id": "public3-http-cross-repo-007",
+      "items": [],
+      "match": "file",
+      "negatives": [
+        {
+          "evidence": "jellyfin-server/Jellyfin.Api/Controllers/UserController.cs:467",
+          "item": "POST /Users/Configuration?userId= (UserController.UpdateUserConfiguration, UserController.cs:467)",
+          "note": "Non-legacy sibling route; @jellyfin/sdk getUserApi().updateUserConfiguration would target this, but no jellyfin-web file calls it."
+        }
+      ],
+      "note": "Route resolved from UserController class [Route(\"Users\")] + [HttpPost(\"{userId}/Configuration\")]. Searched jellyfin-web/src (excluding strings/) for '/Configuration', \"Configuration'\", 'updateUserConfiguration', getUserApi( usages and getUrl('Users...') builders. No source-built URL to Users/{id}/Configuration and no @jellyfin/sdk updateUserConfiguration call exists (getUserApi used only for getUserById/getUsers/policy/create/delete/updateUser). All six apiClient.updateUserConfiguration callers go through the external legacy jellyfin-apiclient and are listed as undecided. Items empty: no file is proved by cohort source; exhaustive in the sense that nothing outside the undecided list can be a caller.",
+      "outside_corpus": 0,
+      "route_evidence": [
+        "jellyfin-server/Jellyfin.Api/Controllers/UserController.cs:37 [Route(\"Users\")]",
+        "jellyfin-server/Jellyfin.Api/Controllers/UserController.cs:501 [HttpPost(\"{userId}/Configuration\")] (Obsolete, ApiExplorerSettings IgnoreApi=true)"
+      ],
+      "tests": [],
+      "undecided": [
+        {
+          "evidence": "jellyfin-web/src/components/homeScreenSettings/homeScreenSettings.js:527 apiClient.updateUserConfiguration(...)",
+          "item": "jellyfin-web/src/components/homeScreenSettings/homeScreenSettings.js",
+          "note": "Call goes through external jellyfin-apiclient 1.11.0 (package.json:116), whose source is not in the cohort; src/apiclient.d.ts:297 only types it. The legacy route is IgnoreApi, so it is plausibly what the legacy ApiClient posts to, but source here does not prove the URL."
+        },
+        {
+          "evidence": "jellyfin-web/src/components/displaySettings/displaySettings.js:189 apiClient.updateUserConfiguration(...)",
+          "item": "jellyfin-web/src/components/displaySettings/displaySettings.js",
+          "note": "Call goes through external jellyfin-apiclient 1.11.0 (package.json:116), whose source is not in the cohort; src/apiclient.d.ts:297 only types it. The legacy route is IgnoreApi, so it is plausibly what the legacy ApiClient posts to, but source here does not prove the URL."
+        },
+        {
+          "evidence": "jellyfin-web/src/components/subtitlesettings/subtitlesettings.js:103 apiClient.updateUserConfiguration(...)",
+          "item": "jellyfin-web/src/components/subtitlesettings/subtitlesettings.js",
+          "note": "Call goes through external jellyfin-apiclient 1.11.0 (package.json:116), whose source is not in the cohort; src/apiclient.d.ts:297 only types it. The legacy route is IgnoreApi, so it is plausibly what the legacy ApiClient posts to, but source here does not prove the URL."
+        },
+        {
+          "evidence": "jellyfin-web/src/components/playbackSettings/playbackSettings.js:347 apiClient.updateUserConfiguration(...)",
+          "item": "jellyfin-web/src/components/playbackSettings/playbackSettings.js",
+          "note": "Call goes through external jellyfin-apiclient 1.11.0 (package.json:116), whose source is not in the cohort; src/apiclient.d.ts:297 only types it. The legacy route is IgnoreApi, so it is plausibly what the legacy ApiClient posts to, but source here does not prove the URL."
+        },
+        {
+          "evidence": "jellyfin-web/src/scripts/settings/userSettings.js:146 apiClient.updateUserConfiguration(...)",
+          "item": "jellyfin-web/src/scripts/settings/userSettings.js",
+          "note": "Call goes through external jellyfin-apiclient 1.11.0 (package.json:116), whose source is not in the cohort; src/apiclient.d.ts:297 only types it. The legacy route is IgnoreApi, so it is plausibly what the legacy ApiClient posts to, but source here does not prove the URL."
+        },
+        {
+          "evidence": "jellyfin-web/src/apps/modern/features/preferences/hooks/useDisplaySettings.ts:163 apiClient.updateUserConfiguration(...)",
+          "item": "jellyfin-web/src/apps/modern/features/preferences/hooks/useDisplaySettings.ts",
+          "note": "Call goes through external jellyfin-apiclient 1.11.0 (package.json:116), whose source is not in the cohort; src/apiclient.d.ts:297 only types it. The legacy route is IgnoreApi, so it is plausibly what the legacy ApiClient posts to, but source here does not prove the URL."
+        }
+      ],
+      "verb": "POST"
+    },
+    {
+      "completeness": "exhaustive",
+      "endpoint": "POST /Sessions/Viewing",
+      "id": "public3-http-cross-repo-011",
+      "items": [],
+      "match": "file",
+      "negatives": [
+        {
+          "evidence": "jellyfin-web/src/lib/jellyfin-apiclient/connectionManager.js:336 sessionApi?.reportSessionEnded()",
+          "item": "jellyfin-web/src/lib/jellyfin-apiclient/connectionManager.js",
+          "note": "Same controller, different route (POST /Sessions/Logout), via @jellyfin/sdk."
+        }
+      ],
+      "note": "Route = '' prefix + 'Sessions/Viewing'. Case-insensitive search for 'viewing' over jellyfin-web/src (excluding strings/, css) finds no code; no reportViewing call; all getSessionApi( uses are getSessions, sendMessageCommand, playstate, reportSessionEnded; no source-built 'Sessions/' URL; src/apiclient.d.ts declares no viewing-report method for the legacy apiclient. Empty and exhaustive.",
+      "outside_corpus": 0,
+      "route_evidence": [
+        "jellyfin-server/Jellyfin.Api/Controllers/SessionController.cs:25 [Route(\"\")]",
+        "jellyfin-server/Jellyfin.Api/Controllers/SessionController.cs:409 [HttpPost(\"Sessions/Viewing\")]"
+      ],
+      "tests": [],
+      "undecided": [],
+      "verb": "POST"
+    },
+    {
+      "assumptions": [
+        "Hop-2 edges go through IUpdateGroupCommand interface dispatch; UpdateGroupCommand is the only implementation in the cohort."
+      ],
+      "completeness": "exhaustive",
+      "id": "public3-two-hop-impact-006",
+      "items": [
+        {
+          "caller_member": "UpdateGroupCommand.UpdateGroupAsync(Group, Organization, ICollection<CollectionAccessSelection>?, IEnumerable<Guid>?) (line 36)",
+          "evidence": "bitwarden-server/src/Core/AdminConsole/OrganizationFeatures/Groups/UpdateGroupCommand.cs:42 await SaveGroupWithCollectionsAsync(group, collections);",
+          "hop": 1,
+          "item": "bitwarden-server/src/Core/AdminConsole/OrganizationFeatures/Groups/UpdateGroupCommand.cs:42"
+        },
+        {
+          "caller_member": "UpdateGroupCommand.UpdateGroupAsync(Group, Organization, EventSystemUser, ...) (line 52)",
+          "evidence": "bitwarden-server/src/Core/AdminConsole/OrganizationFeatures/Groups/UpdateGroupCommand.cs:58 await SaveGroupWithCollectionsAsync(group, collections);",
+          "hop": 1,
+          "item": "bitwarden-server/src/Core/AdminConsole/OrganizationFeatures/Groups/UpdateGroupCommand.cs:58"
+        },
+        {
+          "caller_member": "Public.Controllers.GroupsController.Put(Guid, GroupCreateUpdateRequestModel)",
+          "evidence": "bitwarden-server/src/Api/AdminConsole/Public/Controllers/GroupsController.cs:151 await _updateGroupCommand.UpdateGroupAsync(updatedGroup, organization, associations);",
+          "hop": 2,
+          "item": "bitwarden-server/src/Api/AdminConsole/Public/Controllers/GroupsController.cs:151",
+          "note": "IUpdateGroupCommand interface call; binds to the non-systemUser overload (3rd arg List<CollectionAccessSelection>); sole implementation UpdateGroupCommand (registered OrganizationServiceCollectionExtensions.cs:202).",
+          "via": "dispatch"
+        },
+        {
+          "caller_member": "Controllers.GroupsController.Put(Guid orgId, Guid id, GroupRequestModel)",
+          "evidence": "bitwarden-server/src/Api/AdminConsole/Controllers/GroupsController.cs:213 await _updateGroupCommand.UpdateGroupAsync(model.ToGroup(group), organization, collectionsToSave, model.Users);",
+          "hop": 2,
+          "item": "bitwarden-server/src/Api/AdminConsole/Controllers/GroupsController.cs:213",
+          "note": "IUpdateGroupCommand interface call; non-systemUser overload.",
+          "via": "dispatch"
+        }
+      ],
+      "match": "file_line",
+      "negatives": [],
+      "note": "Subject is private; grep for SaveGroupWithCollectionsAsync across the three repos finds only the two calls at :42 and :58 (no method-group use, no recursion). Hop 2 = every call of UpdateGroupAsync outside tests: only the two controller Put methods, both through IUpdateGroupCommand (via dispatch) and both binding to the non-systemUser overload. The systemUser overload (:52) has no production caller in the exported view (bitwarden_license/, e.g. SCIM, is not present in the view and was not examined; not counted). bitwarden-clients and bitwarden-directory-connector contain no reference (C# member; HTTP hops not added). Marked exhaustive despite dispatch because all IUpdateGroupCommand.UpdateGroupAsync call sites are enumerable by name and there is one implementation.",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "lines 33,57,72,87,101,120,132,151,171,190,212 call Sut.UpdateGroupAsync",
+          "item": "bitwarden-server/test/Core.Test/AdminConsole/OrganizationFeatures/Groups/UpdateGroupCommandTests.cs",
+          "note": "test callers of the hop-1 members"
+        },
+        {
+          "evidence": "Received(1).UpdateGroupAsync(...) mock verifications",
+          "item": "bitwarden-server/test/Api.Test/AdminConsole/Controllers/GroupsControllerPutTests.cs; bitwarden-server/test/Api.Test/AdminConsole/Public/Controllers/GroupsControllerTests.cs",
+          "note": "NSubstitute verifications, test only"
+        }
+      ]
+    },
+    {
+      "completeness": "exhaustive",
+      "id": "public3-two-hop-impact-013",
+      "items": [],
+      "match": "file_line",
+      "negatives": [
+        {
+          "evidence": "serilog/src/Serilog/Configuration/LoggerSettingsConfiguration.cs:60 return KeyValuePairs(uniqueSettings);",
+          "item": "serilog/src/Serilog/Configuration/LoggerSettingsConfiguration.cs:60",
+          "note": "Inside the subject; argument is Dictionary<string,string>, which binds to the more specific private overload KeyValuePairs(IReadOnlyDictionary<string,string>) at :65, not to the subject. Not recursion."
+        }
+      ],
+      "note": "grep -rn 'KeyValuePairs' over serilog, serilog-extensions-hosting, serilog-aspnetcore. Production hits are the subject declaration (:51), the private overload (:65), its call at :60 (resolves to :65; negative) and namespace/using lines. No occurrence at all in serilog-extensions-hosting or serilog-aspnetcore. All .ReadFrom.KeyValuePairs callers are tests (29 lines). No production caller, so no hop 2. Empty and exhaustive.",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:10 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:10",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:39 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:39",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:100 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:100",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:122 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:122",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:145 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:145",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:191 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:191",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:210 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:210",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:233 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:233",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:253 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:253",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:283 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:283",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:304 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:304",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:342 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:342",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:361 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:361",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:372 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:372",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:406 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:406",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:425 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:425",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:446 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:446",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:466 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:466",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:485 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:485",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:504 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:504",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:524 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:524",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:541 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:541",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:560 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:560",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:580 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:580",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:597 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:597",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:616 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:616",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:637 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:637",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:656 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Settings/KeyValuePairSettingsTests.cs:656",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        },
+        {
+          "evidence": "serilog/test/Serilog.Tests/Debugging/SelfLogTests.cs:84 .ReadFrom.KeyValuePairs(...)",
+          "item": "serilog/test/Serilog.Tests/Debugging/SelfLogTests.cs:84",
+          "note": "test caller; from outside the class the private overload is inaccessible, so binds to the subject"
+        }
+      ]
+    }
+  ],
+  "primary_labels_read": false,
+  "questions_sha256": "dad543692da9962308beb5be02e263449b779235f743eb66b648842fabed5284",
+  "reviewer": "separate AI agent sessions (Claude Opus 5.5 in Claude Code); no human has reviewed these labels",
+  "rule": "Two questions per task type, ranked by SHA256(seed+NUL+id), labelled again by a separate blind source-only session without access to the primary labels.",
+  "seed": "knowcode-public-v3-independent-review-2026-10-26",
+  "source_only": true,
+  "status": "complete"
+}
