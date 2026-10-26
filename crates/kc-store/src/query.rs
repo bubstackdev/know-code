@@ -5002,7 +5002,17 @@ pub fn refs_in(conn: &Connection, query: &str, shared: &mut Resolution) -> Resul
 /// [`refs_with`], keeping only references in files that import one of `deps`' modules: the only ones that can
 /// resolve into `deps`. The others are never resolved, which is most of the work when the name is common.
 pub fn refs_importing(conn: &Connection, query: &str, kinds: &[&str], deps: &[Dependency]) -> Result<Vec<RefHit>> {
-    Ok(refs_filtered(conn, query, kinds, usize::MAX, deps, true, &mut Resolution::default())?.0)
+    refs_importing_in(conn, query, kinds, deps, &mut Resolution::default())
+}
+
+/// [`refs_importing`], keeping what resolution reads about the repo in `shared` for the next name (see [`refs_in`]).
+pub fn refs_importing_in(conn: &Connection, query: &str, kinds: &[&str], deps: &[Dependency], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, deps, true, shared)?.0)
+}
+
+/// [`refs`] of `kinds`, keeping what resolution reads about the repo in `shared` for the next name.
+pub fn refs_of_kinds_in(conn: &Connection, query: &str, kinds: &[&str], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, &[], false, shared)?.0)
 }
 
 /// What a references query asks for: the container a dotted query names (`Type.member`), and the name. A name with a
@@ -5944,9 +5954,42 @@ pub fn names_outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<bo
     Ok(!outside_supertypes(conn, sym)?.0.is_empty())
 }
 
+/// The supertypes the type `container` (`Ns.Type`) names, directly or through its own repo's types, that no type of
+/// its repo (`conn`) is named: bare names, namespace and generic arguments dropped. A quick check, by name alone, for
+/// whether [`implemented_members_in`] can find anything.
+pub fn outside_supertype_names(conn: &Connection, container: &str) -> Result<Vec<String>> {
+    let bare = |t: &str| t.split('<').next().unwrap_or(t).trim().rsplit('.').next().unwrap_or("").to_string();
+    let mut defined = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM symbols WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ('class', 'struct', 'enum', 'actor', 'protocol'))",
+    )?;
+    let start = bare(container);
+    let mut seen = HashSet::from([start.clone()]);
+    let mut queue = vec![start];
+    let mut outside = Vec::new();
+    while let Some(ty) = queue.pop() {
+        for p in supertypes(conn, &ty)? {
+            let p = bare(&p);
+            if p.is_empty() || seen.len() > 32 || !seen.insert(p.clone()) {
+                continue;
+            }
+            if defined.query_row([&p], |r| r.get::<_, bool>(0))? {
+                queue.push(p);
+            } else {
+                outside.push(p);
+            }
+        }
+    }
+    Ok(outside)
+}
+
 /// The supertypes of `sym`'s type its repo doesn't define, and the ones it does (the type's own name included).
 fn outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<(Vec<String>, HashSet<String>)> {
     let Some(container) = sym.container.as_deref() else { return Ok((Vec::new(), HashSet::new())) };
+    outside_supertypes_of(conn, container)
+}
+
+/// [`outside_supertypes`] of the type `container`.
+fn outside_supertypes_of(conn: &Connection, container: &str) -> Result<(Vec<String>, HashSet<String>)> {
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let mut seen = HashSet::from([short.clone()]);
     let mut queue = vec![short];

@@ -3847,11 +3847,16 @@ pub fn open_dependencies(o: &Opened, name: Option<&str>, no_sync: bool) -> Resul
 
 /// [`open_dependencies`], keeping only those providing a module one of `imported` names (every one with `None`).
 pub fn open_dependencies_importing(o: &Opened, imported: Option<&[String]>, no_sync: bool) -> Result<Vec<OpenedDep>> {
-    let pkgs = manifests::packages(o.store.conn())?;
+    dependencies_of(o, &o.root, o.store.conn(), imported, no_sync)
+}
+
+/// [`open_dependencies_importing`] of the repo at `root` (index `conn`): `o`'s, or a repo it consults.
+fn dependencies_of(o: &Opened, root: &Path, conn: &rusqlite::Connection, imported: Option<&[String]>, no_sync: bool) -> Result<Vec<OpenedDep>> {
+    let pkgs = manifests::packages(conn)?;
     let summaries = planned_summaries(o)?;
     let graph = kc_index::workspace::graph(&summaries);
-    let me = kc_index::workspace::identity_of(&o.root, &summaries);
-    let mut edges = manifests::repo_edges(&pkgs, &o.root.to_string_lossy(), &me, graph.owners());
+    let me = kc_index::workspace::identity_of(root, &summaries);
+    let mut edges = manifests::repo_edges(&pkgs, &root.to_string_lossy(), &me, graph.owners());
     kc_index::revision::check_edges(&mut edges, &summaries);
     let mut roots: Vec<PathBuf> = edges.iter().map(|e| PathBuf::from(&e.to_repo)).collect();
     roots.sort();
@@ -3996,6 +4001,18 @@ pub fn dependent_refs(o: &Opened, name: &str, kinds: &[&str], no_sync: bool) -> 
 /// [`dependent_refs`] of the repo at `root` (index `conn`): `o`'s, or a repo it consults, such as a dependency. The
 /// repos depending on it may include `o`'s own.
 fn refs_into(o: &Opened, root: &Path, conn: &rusqlite::Connection, name: &str, kinds: &[&str], no_sync: bool) -> Result<Vec<query::RefHit>> {
+    Ok(refs_into_repos(o, root, conn, name, kinds, no_sync)?.into_iter().map(|(_, h)| h).collect())
+}
+
+/// [`refs_into`], each hit with the root of the repo it is in.
+fn refs_into_repos(
+    o: &Opened,
+    root: &Path,
+    conn: &rusqlite::Connection,
+    name: &str,
+    kinds: &[&str],
+    no_sync: bool,
+) -> Result<Vec<(PathBuf, query::RefHit)>> {
     let me_name = repo_name(root);
     let summaries = planned_summaries(o)?;
     let graph = kc_index::workspace::graph(&summaries);
@@ -4017,7 +4034,7 @@ fn refs_into(o: &Opened, root: &Path, conn: &rusqlite::Connection, name: &str, k
         for mut h in query::refs_importing(dependent.conn(), name, kinds, std::slice::from_ref(&dep))? {
             if h.targets.iter().any(|t| t.repo.as_deref() == Some(me_name.as_str())) {
                 h.repo = Some(repo_name(&s.root));
-                out.push(h);
+                out.push((s.root.clone(), h));
             }
         }
     }
@@ -4059,13 +4076,25 @@ pub fn dependent_conformers(o: &Opened, ty: &query::SymbolRow, member: Option<&q
 /// may run for any of them, the dependency's own or another repo's, so each is `ambiguous`. `sym`'s own body calling
 /// the member (on another instance) isn't listed.
 fn through_dependencies(o: &Opened, sym: &query::SymbolRow, no_sync: bool) -> Result<Vec<RefHit>> {
-    if !matches!(sym.kind.as_str(), "method" | "property") || sym.container.is_none() || !query::names_outside_supertypes(o.store.conn(), sym)? {
+    Ok(through_dependencies_of(o, &o.root, o.store.conn(), sym, no_sync)?.into_iter().map(|(_, _, h)| h).collect())
+}
+
+/// [`through_dependencies`] of `sym` in the repo at `root` (index `conn`): `o`'s, or a repo it consults. Each hit with
+/// the root of the repo it is in and the dependency declaring the member called through.
+fn through_dependencies_of(
+    o: &Opened,
+    root: &Path,
+    conn: &rusqlite::Connection,
+    sym: &query::SymbolRow,
+    no_sync: bool,
+) -> Result<Vec<(PathBuf, String, RefHit)>> {
+    if !matches!(sym.kind.as_str(), "method" | "property") || sym.container.is_none() || !query::names_outside_supertypes(conn, sym)? {
         return Ok(Vec::new());
     }
-    let me = repo_name(&o.root);
-    let mut out: Vec<RefHit> = Vec::new();
-    for d in open_dependencies(o, None, no_sync)? {
-        let theirs = query::implemented_members_in(o.store.conn(), d.store.conn(), sym)?;
+    let me = repo_name(root);
+    let mut out: Vec<(PathBuf, String, RefHit)> = Vec::new();
+    for d in dependencies_of(o, root, conn, None, no_sync)? {
+        let theirs = query::implemented_members_in(conn, d.store.conn(), sym)?;
         if theirs.is_empty() {
             continue;
         }
@@ -4082,10 +4111,12 @@ fn through_dependencies(o: &Opened, sym: &query::SymbolRow, no_sync: bool) -> Re
         // The dependency's own calls, resolved there; then those of the repos using it, resolved into it.
         let own = query::refs(d.store.conn(), &sym.name, &["call", "member"], usize::MAX)?.0.into_iter().map(|mut h| {
             h.repo = Some(there.clone());
-            (h, None)
+            (d.root.clone(), h, None)
         });
-        let using = refs_into(o, &d.root, d.store.conn(), &sym.name, &["call", "member"], no_sync)?.into_iter().map(|h| (h, Some(there.as_str())));
-        for (h, into) in own.chain(using).collect::<Vec<_>>() {
+        let using = refs_into_repos(o, &d.root, d.store.conn(), &sym.name, &["call", "member"], no_sync)?
+            .into_iter()
+            .map(|(r, h)| (r, h, Some(there.as_str())));
+        for (r, h, into) in own.chain(using).collect::<Vec<_>>() {
             if h.confidence == "external_likely"
                 || !through_owner(&h)
                 || (h.repo.as_deref() == Some(me.as_str()) && h.from.as_ref().is_some_and(|f| f.id == sym.id))
@@ -4093,9 +4124,9 @@ fn through_dependencies(o: &Opened, sym: &query::SymbolRow, no_sync: bool) -> Re
                 continue;
             }
             if let Some(t) = theirs.iter().find_map(|m| m.through_member_of(&h, into))
-                && !out.iter().any(|x| x.repo == t.repo && x.file == t.file && x.line == t.line && x.col == t.col)
+                && !out.iter().any(|(_, _, x)| x.repo == t.repo && x.file == t.file && x.line == t.line && x.col == t.col)
             {
-                out.push(t);
+                out.push((r, there.clone(), t));
             }
         }
     }
@@ -4385,7 +4416,39 @@ pub(crate) struct HttpCrossing<'a> {
     pub(crate) limited: bool,
     /// What the CI limits left out of the pipelines read for deploy chains (`repo: what`), once read.
     pub(crate) ci_cut: Vec<String>,
+    /// Symbols whose library crossings were looked up (at most [`LIBRARY_CROSSINGS`]), and those past the budget,
+    /// whose weren't.
+    pub(crate) library_checked: usize,
+    pub(crate) library_cut: usize,
+    /// Whether to cross to a library's users at all (a walk inward does; `trace` out doesn't).
+    pub(crate) library: bool,
+    /// What library crossings reuse within the answer.
+    lib: LibraryCache,
 }
+
+/// What [`HttpCrossing::library_crossings`] reads once an answer: the workspace's repo graph, each repo's dependents
+/// and dependencies, the modules a library provides, what resolving into it assumes, and whether a type names a
+/// supertype from outside its repo.
+#[derive(Default)]
+struct LibraryCache {
+    workspace: Option<(std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>, std::sync::Arc<kc_index::workspace::Graph>)>,
+    dependents: HashMap<PathBuf, Vec<(PathBuf, bool)>>,
+    dependencies: HashMap<PathBuf, Vec<PathBuf>>,
+    modules: HashMap<PathBuf, Vec<String>>,
+    assumptions: HashMap<(PathBuf, PathBuf), Vec<Assumption>>,
+    outside: HashMap<(PathBuf, String), bool>,
+    /// Per repo, what resolving its references reads about it, kept from name to name.
+    resolutions: HashMap<PathBuf, query::Resolution>,
+    /// References by repo and name (a repo's own, resolved there), and by library and name (in the repos using it,
+    /// resolved into it): overloads and implementations of one name look the same ones up.
+    own_refs: HashMap<(PathBuf, String), Vec<RefHit>>,
+    used_refs: HashMap<(PathBuf, String), Vec<(PathBuf, RefHit)>>,
+}
+
+/// The most symbols a walk looks up library crossings for (see [`HttpCrossing::library_crossings`]): each opens the
+/// repos using the symbol's (and, for an implementation of a dependency's member, the dependency's), and resolves
+/// their references.
+pub(crate) const LIBRARY_CROSSINGS: usize = if cfg!(test) { 3 } else { 64 };
 
 impl<'a> HttpCrossing<'a> {
     pub(crate) fn new(home: &'a Opened, no_sync: bool) -> Self {
@@ -4399,6 +4462,10 @@ impl<'a> HttpCrossing<'a> {
             max_repos: usize::MAX,
             limited: false,
             ci_cut: Vec::new(),
+            library_checked: 0,
+            library_cut: 0,
+            library: true,
+            lib: LibraryCache::default(),
         }
     }
 
@@ -4454,11 +4521,288 @@ impl<'a> HttpCrossing<'a> {
     /// `impact`, `trace` and the frontier check read across repos.
     pub(crate) fn crossings(&mut self, root: &Path, id: i64, qualified: &str, file: &str) -> Result<Vec<crate::graph::Crossing>> {
         let landings = self.landings(root, id, qualified, file)?;
-        Ok(landings
+        let mut out: Vec<crate::graph::Crossing> = landings
             .into_iter()
             .filter(|l| self.gate.allows(l.via.edge()))
             .map(|l| crate::graph::Crossing::new(l.root, l.via, l.publish, l.creators))
-            .collect())
+            .collect();
+        out.extend(self.library_crossings(root, id, qualified)?);
+        Ok(out)
+    }
+
+    /// The code using symbol `id` (a method, function or property of the repo at `root`, which is open) across a
+    /// library boundary: its calls in the repos depending on the repo, resolved into it, at their own confidence; and
+    /// for an implementation of an interface or base class member a dependency declares, the calls through that member
+    /// in the dependency and the repos using it, `ambiguous` (another implementation may run). One crossing per repo
+    /// landed in and way. Looked up for at most [`LIBRARY_CROSSINGS`] symbols an answer (then `library_cut` counts
+    /// those left), and only where the workspace summary says a repo using it may name it, or its type names a supertype
+    /// its repo doesn't define.
+    fn library_crossings(&mut self, root: &Path, id: i64, qualified: &str) -> Result<Vec<crate::graph::Crossing>> {
+        let uses = ["calls", "uses"].iter().any(|e| self.gate.allows(e));
+        let through = self.gate.allows("via_protocol");
+        if !self.library || (!uses && !through) {
+            return Ok(Vec::new());
+        }
+        // From the workspace summary and the name alone, before reading the symbol: most symbols cross nothing.
+        let (container, name) = match qualified.rsplit_once('.') {
+            Some((c, n)) => (Some(c), n),
+            None => (None, qualified),
+        };
+        let used = uses && self.lib_dependents(root)?.iter().any(|(r, changed)| *changed || self.lib_summary(r).is_some_and(|s| s.may_reference(name)));
+        let dispatch = through && match container {
+            Some(c) => self.lib_outside(root, c)?,
+            None => false,
+        };
+        if !used && !dispatch {
+            return Ok(Vec::new());
+        }
+        let Some(sym) = trace::symbol(self.store(root).conn(), id)? else { return Ok(Vec::new()) };
+        if !matches!(sym.kind.as_str(), "method" | "function" | "property") {
+            return Ok(Vec::new());
+        }
+        if self.library_checked >= LIBRARY_CROSSINGS {
+            self.library_cut += 1;
+            return Ok(Vec::new());
+        }
+        self.library_checked += 1;
+        let library = repo_name(root);
+        let mut found: Vec<(PathBuf, trace::LibraryVia, RefHit)> = Vec::new();
+        if used {
+            for (r, h) in self.lib_refs(root, &sym.name)? {
+                if h.targets.iter().any(|t| t.id == sym.id && t.repo.as_deref() == Some(library.as_str())) {
+                    let edge = if h.kind == "call" { "calls" } else { "uses" };
+                    found.push((r, trace::LibraryVia { library: library.clone(), through: None, edge, link: "exact" }, h));
+                }
+            }
+        }
+        if dispatch {
+            for d in self.lib_dependencies(root)? {
+                if !self.open(&d)? {
+                    continue;
+                }
+                let theirs = query::implemented_members_in(self.store(root).conn(), self.store(&d).conn(), &sym)?;
+                if theirs.is_empty() {
+                    continue;
+                }
+                let there = repo_name(&d);
+                // A call reaches this implementation only through a receiver of the member's type, or unqualified in
+                // the interface itself (see `through_dependencies`).
+                let bare = |t: &str| t.split('<').next().unwrap_or(t).trim().rsplit('.').next().unwrap_or("").to_string();
+                let owners: HashSet<String> = theirs.iter().map(|m| bare(&m.owner)).collect();
+                let through_owner = |h: &RefHit| match h.receiver.as_deref() {
+                    None | Some("this") => h.from.as_ref().and_then(|f| f.container.as_deref()).is_some_and(|c| owners.contains(&bare(c))),
+                    Some(_) => h.receiver_type.as_deref().is_some_and(|t| owners.contains(&bare(t))),
+                };
+                let mut hits: Vec<(PathBuf, RefHit, Option<&str>)> = self
+                    .lib_own_refs(&d, &sym.name)?
+                    .into_iter()
+                    .map(|mut h| {
+                        h.repo = Some(there.clone());
+                        (d.clone(), h, None)
+                    })
+                    .collect();
+                hits.extend(self.lib_refs(&d, &sym.name)?.into_iter().map(|(r, h)| (r, h, Some(there.as_str()))));
+                for (r, h, into) in hits {
+                    if h.confidence == "external_likely" || !through_owner(&h) || (r == root && h.from.as_ref().is_some_and(|f| f.id == sym.id)) {
+                        continue;
+                    }
+                    if let Some(t) = theirs.iter().find_map(|m| m.through_member_of(&h, into)) {
+                        let via = trace::LibraryVia { library: there.clone(), through: t.through.clone(), edge: "via_protocol", link: "ambiguous" };
+                        found.push((r, via, t));
+                    }
+                }
+            }
+        }
+        let mut out: Vec<crate::graph::Crossing> = Vec::new();
+        for (r, via, h) in found {
+            if !self.gate.allows(via.edge) || h.confidence == "external_likely" {
+                continue;
+            }
+            let Some(from) = h.from.as_ref() else { continue };
+            if !self.open(&r)? {
+                continue;
+            }
+            let Some(caller) = trace::symbol(self.store(&r).conn(), from.id)? else { continue };
+            let confidence = if via.link == "ambiguous" { "ambiguous" } else { h.confidence };
+            let evidence = Evidence::of_edge(via.edge, confidence, h.evidence.as_ref(), None, h.precise);
+            let site = Some(format!("{}:{}", h.file, h.line));
+            let same = |c: &crate::graph::Crossing| {
+                c.root == r && c.via.library().is_some_and(|l| l.library == via.library && l.through == via.through && l.edge == via.edge)
+            };
+            if out.iter().any(|c| same(c) && c.arrivals.iter().any(|a| a.sym().id == caller.id && *a.site() == site)) {
+                continue;
+            }
+            let arrival = crate::graph::Arrival { creator: (caller, h.confidence, site), confidence, evidence };
+            match out.iter_mut().find(|c| same(c)) {
+                Some(c) => c.arrivals.push(arrival),
+                None => out.push(crate::graph::Crossing { root: r, via: trace::Via::Library(via), publish: None, arrivals: vec![arrival] }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// The workspace's summaries and repo graph, read once an answer.
+    fn lib_workspace(&mut self) -> Result<(std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>, std::sync::Arc<kc_index::workspace::Graph>)> {
+        if self.lib.workspace.is_none() {
+            let summaries = planned_summaries(self.home)?;
+            let graph = kc_index::workspace::graph(&summaries);
+            self.lib.workspace = Some((summaries, graph));
+        }
+        Ok(self.lib.workspace.clone().expect("read above"))
+    }
+
+    /// The summary of the repo at `root`.
+    fn lib_summary(&self, root: &Path) -> Option<&kc_index::workspace::RepoSummary> {
+        self.lib.workspace.as_ref().and_then(|(s, _)| s.iter().find(|s| s.root == root))
+    }
+
+    /// The repos depending on the repo at `root` whose checkout is there, each with whether it changed since its
+    /// summary was written (then its summary can't rule a name out).
+    fn lib_dependents(&mut self, root: &Path) -> Result<Vec<(PathBuf, bool)>> {
+        if let Some(d) = self.lib.dependents.get(root) {
+            return Ok(d.clone());
+        }
+        let (summaries, graph) = self.lib_workspace()?;
+        let me = kc_index::workspace::identity_of(root, &summaries);
+        let roots: Vec<PathBuf> = graph
+            .dependents(&me)
+            .into_iter()
+            .map(|i| &summaries[i])
+            .filter(|s| s.root != root && !s.gone && s.root.join(".git").exists())
+            .map(|s| s.root.clone())
+            .collect();
+        let changed = changed_unless(self.no_sync, &roots);
+        let out: Vec<(PathBuf, bool)> = roots.into_iter().map(|r| {
+            let c = changed.contains(&r);
+            (r, c)
+        }).collect();
+        self.lib.dependents.insert(root.to_path_buf(), out.clone());
+        Ok(out)
+    }
+
+    /// The repos the repo at `root` depends on whose checkout is there.
+    fn lib_dependencies(&mut self, root: &Path) -> Result<Vec<PathBuf>> {
+        if let Some(d) = self.lib.dependencies.get(root) {
+            return Ok(d.clone());
+        }
+        let (summaries, graph) = self.lib_workspace()?;
+        let out: Vec<PathBuf> = match summaries.iter().position(|s| s.root == root) {
+            Some(i) => {
+                let ids = graph.dependencies(i);
+                summaries.iter().filter(|s| s.root != root && !s.gone && ids.contains(&s.identity()) && s.root.join(".git").exists()).map(|s| s.root.clone()).collect()
+            }
+            None => Vec::new(),
+        };
+        self.lib.dependencies.insert(root.to_path_buf(), out.clone());
+        Ok(out)
+    }
+
+    /// Whether the type `container` names a supertype its repo (at `root`) doesn't define and one of the repos it
+    /// depends on does, once per type.
+    fn lib_outside(&mut self, root: &Path, container: &str) -> Result<bool> {
+        if self.lib_dependencies(root)?.is_empty() {
+            return Ok(false);
+        }
+        if let Some(&b) = self.lib.outside.get(&(root.to_path_buf(), container.to_string())) {
+            return Ok(b);
+        }
+        // Only a supertype a dependency defines can have members there to implement (`IEquatable` is no repo's).
+        let names = query::outside_supertype_names(self.store(root).conn(), container)?;
+        let mut b = false;
+        if !names.is_empty() {
+            for d in self.lib_dependencies(root)? {
+                // The dependency's summary rules most names out without opening its index.
+                let bare = |n: &String| n.split('<').next().unwrap_or(n).trim().to_string();
+                if !self.lib_summary(&d).is_some_and(|s| names.iter().any(|n| s.may_define(&bare(n)))) || !self.open(&d)? {
+                    continue;
+                }
+                for n in &names {
+                    let bare = n.split('<').next().unwrap_or(n).trim();
+                    if query::definitions(self.store(&d).conn(), bare)?.iter().any(|t| matches!(t.kind.as_str(), "protocol" | "class" | "struct")) {
+                        b = true;
+                        break;
+                    }
+                }
+                if b {
+                    break;
+                }
+            }
+        }
+        self.lib.outside.insert((root.to_path_buf(), container.to_string()), b);
+        Ok(b)
+    }
+
+    /// References named `name` (calls and member uses) in the repos depending on the repo at `lib`, resolved into it,
+    /// each with the root of the repo it is in (see [`dependent_refs`]). Only references with a target in `lib`.
+    fn lib_own_refs(&mut self, root: &Path, name: &str) -> Result<Vec<RefHit>> {
+        let key = (root.to_path_buf(), name.to_string());
+        if let Some(h) = self.lib.own_refs.get(&key) {
+            return Ok(h.clone());
+        }
+        let mut res = self.lib.resolutions.remove(root).unwrap_or_default();
+        let hits = query::refs_of_kinds_in(self.store(root).conn(), name, &["call", "member"], &mut res);
+        self.lib.resolutions.insert(root.to_path_buf(), res);
+        let hits = hits?;
+        self.lib.own_refs.insert(key, hits.clone());
+        Ok(hits)
+    }
+
+    /// References named `name` in the repos depending on the repo at `lib`, resolved into it (see
+    /// [`HttpCrossing::lib_used_refs`]), once per library and name.
+    fn lib_refs(&mut self, lib: &Path, name: &str) -> Result<Vec<(PathBuf, RefHit)>> {
+        let key = (lib.to_path_buf(), name.to_string());
+        if let Some(h) = self.lib.used_refs.get(&key) {
+            return Ok(h.clone());
+        }
+        let hits = self.lib_used_refs(lib, name)?;
+        self.lib.used_refs.insert(key, hits.clone());
+        Ok(hits)
+    }
+
+    /// The references [`HttpCrossing::lib_refs`] reads.
+    fn lib_used_refs(&mut self, lib: &Path, name: &str) -> Result<Vec<(PathBuf, RefHit)>> {
+        let lib_name = repo_name(lib);
+        let mut out = Vec::new();
+        for (dep, changed) in self.lib_dependents(lib)? {
+            if !changed && !self.lib_summary(&dep).is_some_and(|s| s.may_reference(name.trim())) {
+                continue;
+            }
+            if !self.open(&dep)? {
+                continue;
+            }
+            if !self.lib.modules.contains_key(lib) {
+                let m = query::provided_modules(self.store(lib).conn())?;
+                self.lib.modules.insert(lib.to_path_buf(), m);
+            }
+            let key = (dep.clone(), lib.to_path_buf());
+            if !self.lib.assumptions.contains_key(&key) {
+                let (summaries, graph) = self.lib_workspace()?;
+                let a = match summaries.iter().find(|s| s.root == dep) {
+                    Some(s) => {
+                        let mut edges = manifests::repo_edges(&s.packages, &s.root.to_string_lossy(), &s.identity(), graph.owners());
+                        edges.retain(|e| Path::new(&e.to_repo) == lib);
+                        kc_index::revision::check_edges(&mut edges, &summaries);
+                        kc_index::revision::assumptions_into(&edges, lib)
+                    }
+                    None => Vec::new(),
+                };
+                self.lib.assumptions.insert(key.clone(), a);
+            }
+            let mut res = self.lib.resolutions.remove(&dep).unwrap_or_default();
+            let (modules, assumptions) = (self.lib.modules[lib].clone(), self.lib.assumptions[&key].clone());
+            let hits = {
+                let dependency = query::Dependency { repo: lib_name.clone(), conn: self.store(lib).conn(), modules, assumptions };
+                query::refs_importing_in(self.store(&dep).conn(), name, &["call", "member"], std::slice::from_ref(&dependency), &mut res)
+            };
+            self.lib.resolutions.insert(dep.clone(), res);
+            for mut h in hits? {
+                if h.targets.iter().any(|t| t.repo.as_deref() == Some(lib_name.as_str())) {
+                    h.repo = Some(repo_name(&dep));
+                    out.push((dep.clone(), h));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The code depending on `qualified` (symbol `id`, defined in `file` of the repo at `root`, which is open) across
@@ -5325,6 +5669,9 @@ pub struct ImpactRepo {
     pub removed: Vec<crate::removed::Removed>,
     /// What the CI limits left out of the pipelines read for deploy hops (`repo: what`).
     pub ci_cut: Vec<String>,
+    /// Walked symbols whose library crossings were looked up, and those past [`LIBRARY_CROSSINGS`] whose weren't.
+    pub library_checked: usize,
+    pub library_cut: usize,
     /// Symbols the walk listed without walking past that have dependents it doesn't list (see [`trace::Frontier`]).
     pub frontier: Vec<trace::Frontier>,
     /// Symbols the walk stopped at past [`FRONTIER_CHECKS`], not checked for dependents.
@@ -5649,6 +5996,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         let (mut frontier, frontier_unchecked) =
             crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
+        let (library_checked, library_cut) = (crossing.library_checked, crossing.library_cut);
         // Each stop's exact call going on from it.
         let mut go_on = p.filter.args(&edges);
         go_on.insert("depth".into(), p.depth.clamp(1, trace::MAX_IMPACT_DEPTH).into());
@@ -5738,6 +6086,18 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
                 }
             }
         }
+        // A use the walk lists across a library boundary (in `affected`, with its repo) isn't listed again here.
+        let home = repo_name(&o.root);
+        let walked: HashSet<(String, String)> = impact
+            .affected
+            .iter()
+            .filter(|a| a.library.is_some())
+            .flat_map(|a| {
+                let repo = a.repo.clone().unwrap_or_else(|| home.clone());
+                a.site.iter().chain(&a.also).map(move |s| (repo.clone(), s.clone()))
+            })
+            .collect();
+        cross_repo.retain(|h| !walked.contains(&(h.repo.clone().unwrap_or_else(|| home.clone()), format!("{}:{}", h.file, h.line))));
         let model = o.store.db_model()?;
         let tables: Vec<db::Table> = model
             .tables
@@ -5789,6 +6149,8 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             base,
             removed,
             ci_cut,
+            library_checked,
+            library_cut,
             frontier,
             frontier_unchecked,
             registrations,
@@ -5871,6 +6233,21 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
                 ),
             )
             .with_hint("narrow the change (a symbol, or a smaller diff) to look up the rest"),
+        );
+    }
+    for r in found.iter().filter(|r| r.library_cut > 0) {
+        push_incomplete(
+            &mut env,
+            Incomplete::new(
+                Reason::Capped,
+                format!(
+                    "items[] affected: uses across a library boundary looked up for {} of {} walked symbols repos using {} may name",
+                    r.library_checked,
+                    r.library_checked + r.library_cut,
+                    repo_name(&r.root)
+                ),
+            )
+            .with_hint("impact a symbol nearer the boundary (one listed in another repo, or on the frontier) to look up the rest"),
         );
     }
     report_policy(&mut env, &edges);
@@ -9321,10 +9698,15 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let p = ImpactParams { symbol: Some("src/IPayClient.cs:4".into()), depth: 1, limit: 100, ..Default::default() };
         let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
         let r = &out.data[0];
-        let implementations: Vec<(String, u32)> = r.impact.affected.iter().map(|a| (a.qualified.clone(), a.line)).collect();
-        assert_eq!(implementations, [("PayClient.Submit".to_string(), 4)], "the one-argument overload's implementation only");
-        let cross: Vec<(Option<&str>, u32)> = r.cross_repo.iter().map(|h| (h.repo.as_deref(), h.line)).collect();
-        assert_eq!(cross, [(Some("app"), 6)], "the dependent's call through the interface, by arity");
+        let found: Vec<(Option<&str>, String, Option<&str>)> =
+            r.impact.affected.iter().map(|a| (a.repo.as_deref(), a.qualified.clone(), a.site.as_deref())).collect();
+        // The one-argument overload's implementation, and the dependent's call through the interface, by arity, across
+        // the library boundary (listed in the walk, so not again in `cross_repo`).
+        assert_eq!(
+            found,
+            [(None, "PayClient.Submit".to_string(), None), (Some("app"), "Checkout.Run".to_string(), Some("src/Checkout.cs:6"))]
+        );
+        assert!(r.cross_repo.is_empty(), "{:?}", r.cross_repo);
         let _ = app;
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -9347,6 +9729,117 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         // An instance member still has its implementation.
         let r = impact_of(&root, "src/IShelf.cs:5");
         assert_eq!(r.impact.affected.iter().map(|a| (a.qualified.as_str(), a.edge)).collect::<Vec<_>>(), [("Shelf.Count", "witness")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A library declaring `INotes` and a static `Note` calling through it; a host implementing it; a web app calling
+    /// `Note.Tagged<T>()` from `Middleware.Log`, which `Middleware.Run` calls.
+    fn library_repos(base: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let lib = repo(
+            base,
+            "notes",
+            &[
+                ("src/Notes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/INotes.cs", "namespace Notes;\npublic interface INotes\n{\n    INotes Tagged<T>();\n}\n"),
+                ("src/Plain.cs", "namespace Notes;\npublic class Plain : INotes\n{\n    public INotes Tagged<T>() => this;\n}\n"),
+                ("src/Note.cs", "namespace Notes;\npublic static class Note\n{\n    public static INotes Root { get; set; } = new Plain();\n    public static INotes Tagged<T>() => Root.Tagged<T>();\n}\n"),
+            ],
+        );
+        let host = repo(
+            base,
+            "notes-host",
+            &[
+                ("src/Notes.Host.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Swappable.cs", "using Notes;\nnamespace Notes.Host;\npublic sealed class Swappable : INotes\n{\n    public INotes Tagged<T>() => this;\n}\n"),
+            ],
+        );
+        let web = repo(
+            base,
+            "notes-web",
+            &[
+                ("src/Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\">\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                (
+                    "src/Middleware.cs",
+                    "using Notes;\nnamespace Web;\npublic class Middleware\n{\n    public INotes Log() => Note.Tagged<Middleware>();\n    public void Run() { Log(); }\n}\n",
+                ),
+            ],
+        );
+        (lib, host, web)
+    }
+
+    #[test]
+    fn impact_walks_on_across_a_library_boundary() {
+        let cache = test_cache();
+        let base = cache.dir("lib-walk");
+        let (lib, host, _web) = library_repos(&base);
+        let rows = |r: &ImpactRepo| -> Vec<(u8, String, &str, String)> {
+            r.impact
+                .affected
+                .iter()
+                .map(|a| (a.hop, format!("{}/{}", a.repo.as_deref().unwrap_or("-"), a.qualified), a.confidence, a.edge.to_string()))
+                .collect()
+        };
+        // From the library's own method: its caller in the web app (exact, resolved into the library), and that
+        // caller's caller there, walked on.
+        let p = ImpactParams { symbol: Some("src/Note.cs:5".into()), depth: 2, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        assert_eq!(
+            rows(&out.data[0]),
+            [(1, "notes-web/Middleware.Log".to_string(), "exact", "calls".to_string()), (2, "notes-web/Middleware.Run".to_string(), "exact", "calls".to_string())]
+        );
+        assert_eq!(out.data[0].impact.affected[0].library.as_ref().map(|l| l.library.as_str()), Some("notes"));
+        // From the host's implementation: the library's call through `INotes`, one implementation of several, listed
+        // but not walked past; the frontier names it with the call going on, by line (`Tagged` has no overload here,
+        // so by name).
+        let p = ImpactParams { symbol: Some("src/Swappable.cs:5".into()), depth: 2, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        let r = &out.data[0];
+        assert_eq!(rows(r), [(1, "notes/Note.Tagged".to_string(), "ambiguous", "via_protocol".to_string())]);
+        let stop = r.frontier.iter().find(|f| f.qualified == "Note.Tagged").expect("a stop at Note.Tagged");
+        assert_eq!(stop.repo.as_deref(), Some("notes"));
+        assert!(stop.next.contains("\"repo\":\"notes\""), "{}", stop.next);
+        // Walking past ambiguous edges: on into the web app, through the library's own method.
+        let p = ImpactParams { filter: WalkFilter { evidence: "all".into(), ..Default::default() }, ..p };
+        let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        assert_eq!(
+            rows(&out.data[0]),
+            [(1, "notes/Note.Tagged".to_string(), "ambiguous", "via_protocol".to_string()), (2, "notes-web/Middleware.Log".to_string(), "exact", "calls".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn library_crossings_stop_at_their_budget_and_say_so() {
+        let cache = test_cache();
+        let base = cache.dir("lib-budget");
+        // Five library methods, each calling the next, each called from the app: the walk looks up three (the budget
+        // under test) and says how many it left.
+        let mut chain = String::from("namespace Steps;\npublic static class Step\n{\n");
+        for i in 1..=5 {
+            let next = if i < 5 { format!("S{}(); ", i + 1) } else { String::new() };
+            chain.push_str(&format!("    public static void S{i}() {{ {next}}}\n"));
+        }
+        chain.push_str("}\n");
+        let lib = repo(
+            &base,
+            "steps",
+            &[("src/Steps.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Steps</PackageId></PropertyGroup>\n</Project>\n"), ("src/Step.cs", &chain)],
+        );
+        let calls: String = (1..=5).map(|i| format!("    public void C{i}() => Step.S{i}();\n")).collect();
+        let _app = repo(
+            &base,
+            "steps-app",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Steps\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/App.cs", &format!("using Steps;\nnamespace App;\npublic class App\n{{\n{calls}}}\n")),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("src/Step.cs:8".into()), depth: 5, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let r = &out.data[0];
+        assert_eq!((r.library_checked, r.library_cut), (3, 2));
+        let notes = out.env["incomplete"].to_string();
+        assert!(notes.contains("looked up for 3 of 5 walked symbols"), "{notes}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -9394,20 +9887,26 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let p = ImpactParams { symbol: Some("src/Swappable.cs:6".into()), depth: 2, limit: 100, ..Default::default() };
         let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
         let r = &out.data[0];
-        let cross: Vec<(String, &str, Option<&str>)> = r
-            .cross_repo
+        let rows: Vec<(String, &str, Option<String>)> = r
+            .impact
+            .affected
             .iter()
-            .map(|h| (format!("{}/{}:{}", h.repo.as_deref().unwrap_or(""), h.file, h.line), h.confidence, h.through.as_deref()))
+            .filter(|a| a.library.is_some())
+            .map(|a| {
+                let site = format!("{}/{}", a.repo.as_deref().unwrap_or(""), a.site.as_deref().unwrap_or(""));
+                (site, a.confidence, a.library.as_ref().and_then(|l| l.through.clone()))
+            })
             .collect();
         // The library's call and the other user's call through `INotes.Tagged<T>()`, each one implementation of
         // several. Not the one-argument overload's call, not a call on the library's own `Plain`, not its own body's.
         assert_eq!(
-            cross,
+            rows,
             [
-                ("notes/src/Note.cs:5".to_string(), "ambiguous", Some("INotes")),
-                ("notes-web/src/Middleware.cs:7".to_string(), "ambiguous", Some("INotes"))
+                ("notes/src/Note.cs:5".to_string(), "ambiguous", Some("INotes".to_string())),
+                ("notes-web/src/Middleware.cs:7".to_string(), "ambiguous", Some("INotes".to_string()))
             ]
         );
+        assert!(r.cross_repo.is_empty(), "listed in the walk, not again: {:?}", r.cross_repo);
         let _ = (lib, web);
         let _ = std::fs::remove_dir_all(&base);
     }
