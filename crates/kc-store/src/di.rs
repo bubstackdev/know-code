@@ -456,7 +456,7 @@ fn interfaces_of(conn: &Connection, ty: &str) -> Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
         "SELECT DISTINCT r.target_name,
            (SELECT MAX(t.kind = 'protocol') FROM symbols t WHERE t.name = r.target_name AND t.kind IN ('class', 'struct', 'protocol'))
-         FROM relations r JOIN symbols s ON s.id = r.from_id WHERE s.name = ?1 COLLATE BINARY ORDER BY r.line, r.target_name",
+         FROM relations r JOIN symbols s ON s.id = r.from_id WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY ORDER BY r.line, r.target_name",
     )?;
     let rows: Vec<(String, Option<bool>)> = stmt.query_map([ty], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     Ok(rows

@@ -2,6 +2,14 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.4.1 (date TBD)
+
+- Faster `impact`, `trace` and `context` on code implementing interfaces: four lookups of a symbol by its name (the
+  supertype walk run for every implementation member reached among them) compared names case-sensitively in a way
+  SQLite couldn't serve from the name index, so each scanned every symbol. They now use the index, as the other
+  lookups do; answers are unchanged. On the public-v1/v2 workspace, `impact` at depth 2 retires a median 19% fewer
+  instructions, and up to 93% fewer on large C# repos (jellyfin-server, bitwarden-server).
+
 ## 0.4.0 (2026-10-26)
 
 0.4 makes KnowCode cheaper to keep in a session and more exact across repositories. By default a client now loads one
