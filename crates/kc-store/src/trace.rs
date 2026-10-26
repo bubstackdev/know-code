@@ -843,18 +843,18 @@ impl Tracer<'_> {
                 let own = arity(sym.id)?;
                 for p in protocols {
                     // The requirement taking the arguments it does: a `Find(query, parent)` overload doesn't implement
-                    // the interface's `Find(query)`, and calls of that one don't reach it.
-                    let mut req = None;
+                    // the interface's `Find(query)`, and calls of that one don't reach it. Of several taking as many
+                    // (`Find(query, bool)`, `Find(query, parents)`), the members below tell them apart by type.
+                    let mut reqs = Vec::new();
                     for d in query::definitions(self.conn, &format!("{p}.{}", sym.name))? {
                         if d.kind == sym.kind && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}"))) {
                             let theirs = arity(d.id)?;
                             if theirs == own || theirs.0.is_none() || own.0.is_none() {
-                                req = Some(d);
-                                break;
+                                reqs.push(d);
                             }
                         }
                     }
-                    let Some(req) = req else { continue };
+                    let Some(req) = reqs.pop().filter(|_| reqs.is_empty()) else { continue };
                     let is_protocol = query::definitions(self.conn, &p)?.iter().any(|d| d.kind == "protocol");
                     if !is_protocol {
                         continue;
