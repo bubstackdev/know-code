@@ -587,10 +587,12 @@ pub struct KnowcodeServer {
 /// and callees, and its schema is one of the largest.
 pub const CORE: &[&str] = &["kc_find", "kc_locate", "kc_context", "kc_refs", "kc_impact", "kc_search", "kc_more", "kc_help"];
 
-/// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the
-/// core set, so an agent sees the same tools whether its client defers the rest (`all`) or the server leaves them out
-/// (`core`).
-pub const ALWAYS_LOADED: &[&str] = CORE;
+/// The tools Claude Code loads up front instead of deferring to tool search (`_meta` `anthropic/alwaysLoad`): the core
+/// tools that answer a first question. Their schemas are paid on every turn, so the core tools sessions don't start
+/// with stay deferred, one tool search away: in 0.3's study kc_locate and kc_help were never called and kc_more 3
+/// times in 320 sessions. A cut answer names the kc_more call that continues it (`hint`), and the instructions name
+/// all three. A client that doesn't defer tools still loads every core tool.
+pub const ALWAYS_LOADED: &[&str] = &["kc_find", "kc_context", "kc_refs", "kc_impact", "kc_search"];
 
 /// The parameters each tool's schema advertises, with the line each carries there: the ones most calls need. Every
 /// other parameter (`repo` and `max_chars`, which every tool takes, and the rarer ones such as kc_impact's `file`,
@@ -2593,8 +2595,9 @@ mod tests {
         assert_eq!(names(&server("all")).len(), names(&server("core,all")).len());
     }
 
-    /// Exactly the always-loaded tools, the core set, carry Claude Code's `anthropic/alwaysLoad` mark; the rest stay
-    /// deferred, and a profile that leaves one out doesn't list it. Their schemas are the upfront cost under `all`.
+    /// Exactly the always-loaded tools, core tools all of them, carry Claude Code's `anthropic/alwaysLoad` mark; the
+    /// rest stay deferred, kc_locate, kc_more and kc_help among them, and a profile that leaves one out doesn't list
+    /// it. Their schemas are the upfront cost under `all`.
     #[test]
     fn only_the_always_loaded_tools_are_marked() {
         let tools = server("all").tool_router.list_all();
@@ -2615,14 +2618,15 @@ mod tests {
         let mut want: Vec<String> = ALWAYS_LOADED.iter().map(|s| s.to_string()).collect();
         want.sort();
         assert_eq!(marked, want);
-        let mut core: Vec<&str> = CORE.to_vec();
-        core.sort();
-        assert_eq!(marked, core, "always loaded is the core set");
-        assert!(bytes <= 3_200, "always-loaded schemas {bytes} bytes");
+        assert!(marked.iter().all(|t| CORE.contains(&t.as_str())), "always loaded are core tools: {marked:?}");
+        for deferred in ["kc_locate", "kc_more", "kc_help"] {
+            assert!(!marked.iter().any(|t| t == deferred), "{deferred} is deferred");
+        }
+        // 2,462 bytes with all eight core tools loaded (0.3.0); 1,770 with five.
+        assert!(bytes <= 1_800, "always-loaded schemas {bytes} bytes");
         let few = server("kc_trace,kc_context").tool_router.list_all();
-        let mut marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
-        marked.sort();
-        assert_eq!(marked, ["kc_context", "kc_help"]);
+        let marked: Vec<&str> = few.iter().filter(|t| t.meta.is_some()).map(|t| t.name.as_ref()).collect();
+        assert_eq!(marked, ["kc_context"]);
     }
 
     #[test]
@@ -3031,6 +3035,36 @@ mod tests {
         let callers = v["more"].as_array().unwrap().iter().find(|i| i["detail"].as_str().unwrap().contains("callers")).expect("callers cut");
         assert!(callers["hint"].as_str().unwrap().contains("items[0].callers_cursor"), "{v}");
         assert!(crate::compact::resolve(v["items"][0]["callers_cursor"].as_str().unwrap()).is_ok(), "{v}");
+
+        // Every answer that continues by cursor names the kc_more call in a hint: kc_more and kc_help are deferred in
+        // Claude Code, so the answer itself says how to page.
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let opts = kc_index::search::SearchOptions {
+            pattern: "Audit.Log".into(),
+            regex: false,
+            case: kc_index::search::Case::Sensitive,
+            word: false,
+            langs: Vec::new(),
+            globs: Vec::new(),
+            max_lines: 50_000,
+        };
+        let search = ops::search(&ops::SearchParams { opts, limit: 5, offset: 0, context: 0, files_only: false, fit: None }, &scope).unwrap().env;
+        let answers = [
+            ("kc_find", rt.block_on(s.kc_find(p(json!({ "query": "C" })))).unwrap()),
+            ("kc_refs", rt.block_on(s.kc_refs(p(json!({ "name": "Audit.Log" })))).unwrap()),
+            ("kc_context", rt.block_on(s.kc_context(p(json!({ "symbol": "Audit.Log" })))).unwrap()),
+            ("kc_impact", rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log" })))).unwrap()),
+            ("kc_impact json", rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log", "format": "json" })))).unwrap()),
+            ("kc_search", cap(search, DEFAULT_CHARS)),
+        ];
+        let mut paged = 0;
+        for (tool, text) in answers {
+            if text.contains("kc~") {
+                paged += 1;
+                assert!(text.contains("kc_more {cursor: "), "{tool} continues by cursor without naming kc_more: {text}");
+            }
+        }
+        assert!(paged >= 5, "{paged} of the answers were cut");
         let _ = std::fs::remove_dir_all(&base);
     }
 
