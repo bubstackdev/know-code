@@ -68,7 +68,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   unauthenticated requests an hour per network, and on a shared address self-update failed with `curl: (56) The
   requested URL returned error: 403`. When the API refuses, KnowCode reads the latest tag from the release page
   (`releases/latest` redirects to it) and installs this platform's release archive, checked against the SHA-256
-  published beside it; nothing is installed without that check. The API is not asked again until its limit resets.
+  published beside it; nothing is installed without that check. The installer's own checksum is only in the API's
+  answer, so the archive is used instead. It installs as the installer does under self-update: the binary replaces
+  the old one by a rename at the same path, mode 0755, the receipt is left as it is (the installer leaves it too), a
+  binary that does not report the new version is rolled back, and the plugin is refreshed. Neither path checks
+  GitHub's build attestations; both trust a SHA-256 GitHub serves for the release's own files. A platform with no
+  release archive (an Intel Mac) has no fallback and gets the message below. The API is not asked again until its
+  limit resets.
   When the release page fails too, self-update says so: `GitHub's API rate limit for this network is used up; try
   again after 14:05, or set KNOWCODE_GITHUB_TOKEN`. With `KNOWCODE_GITHUB_TOKEN` set, the API request uses it (passed
   to curl in a private file, not on its command line); it is never required. The daily check never mentions a

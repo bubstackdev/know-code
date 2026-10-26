@@ -292,11 +292,24 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
             assert json.loads(state_path.read_text())["api_retry_at"] == reset_at
             requests.unlink()
             (root / "invoked").unlink(missing_ok=True)
-            run("self-update", executable=installed)
+            done = run("self-update", executable=installed)
             assert [c["url"] for c in calls()] == [LATEST, archive_url + ".sha256", archive_url], calls()
+            # As from the installer: the version check, then the new binary's plugin refresh and the closing message.
             assert (root / "invoked").read_text().split() == ["--version", "_refresh-plugin"]
+            assert f"Installed KnowCode {new}. Start a new client session to use it." in done.stdout, done.stdout
             assert run("--version", executable=installed).stdout.strip() == f"knowcode {new}"
+            # The same path and an executable mode; nothing else left in the prefix. The receipt is left as it is, as
+            # the installer leaves it under KNOWCODE_DISABLE_UPDATE, so later updates and uninstall still find it.
+            assert installed.stat().st_mode & 0o777 == 0o755 and sorted(p.name for p in prefix.iterdir()) == ["knowcode"]
             assert receipt.read_text() == receipt_text
+
+            # A new binary that does not report the expected version is rolled back, as after the installer.
+            reset()
+            archive(binary_script.replace(f"knowcode {new}", "knowcode 0.99.0"))
+            failed = run("self-update", executable=installed, ok=False)
+            assert "restored" in failed.stderr and installed.read_bytes() == original, failed.stderr
+            assert receipt.read_text() == receipt_text and sorted(p.name for p in prefix.iterdir()) == ["knowcode"]
+            archive(binary_script)
 
             # The fallback never installs without its checksum: a mismatch, or no line for the archive, installs nothing.
             for digest in ("0" * 64, None):
