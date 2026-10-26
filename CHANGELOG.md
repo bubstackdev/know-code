@@ -56,6 +56,11 @@ measure what KnowCode returns, and make no claim about how agents use it.
   a fifth of its own commits with the file (a rule or settings file that sweeps touched) comes after the others.
   Against history-v1's two file co-change questions (labels from git alone, renames followed), `coupled --since all`
   lists 51 of 55 and 14 of 14 of the labelled files at the label's size.
+- The default `kc` tool names the history questions: its description lists `history`, and the server's instructions
+  say which op answers a symbol's commits and authors (`history`) and the files changing with a file (`coupled`).
+  Before, agents learned of them only from `help`. To stay within the 1,300-byte budget, the instructions no longer
+  say answers are read from the working tree. The tool and instructions are 1,290 bytes and 501 tokens
+  (count_tokens), from 1,283 and 502.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an

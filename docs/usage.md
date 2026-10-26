@@ -234,8 +234,9 @@ KnowCode's own configuration directory is a different one; `--delete-config` rem
 By default `serve` advertises one tool, `kc` (profile `one`). Its `op` names the tool to run, without `kc_`:
 `impact` for what calls a symbol or an HTTP endpoint, hop by hop and from any repo, or breaks if it changes; `find`
 for where a name is defined; `refs` for every use; `context` for what a symbol is; `search` for text; `locate` for
-where a concept lives; `more` for the next page of a cut list; `help` for the documentation; and every other tool by
-its name (`trace`, `tests`, `reviewers`, …). `q` fills the op's main parameter, `qs` several, and any other parameter
+where a concept lives; `history` for who changed a symbol, when and with what; `coupled` for the files that change
+with a file; `more` for the next page of a cut list; `help` for the documentation; and every other tool by its name
+(`trace`, `tests`, `reviewers`, …). `q` fills the op's main parameter, `qs` several, and any other parameter
 of that tool is passed by its own name: `kc {op: impact, q: OrderService.Place, depth: 2}`. `kc_help kc` lists which
 parameter `q` fills for each op. Answers, the server's instructions and the Claude Code plugin's notes, skills and
 session-start line then name calls as ops: a cut list says `kc {op: more, cursor: …}`.
