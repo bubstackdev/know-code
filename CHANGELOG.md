@@ -47,6 +47,21 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   which `brew upgrade` removes: the client configuration, and the Codex hook you trusted, keep working across
   upgrades.
 
+## 0.4.1 (2026-10-26)
+
+0.4.1 fixes two faults in 0.4.0, found by its own checks: one that could make an answer claim to be complete while
+missing a just-made edit, and one that made some `impact`, `trace` and `context` queries scan every symbol.
+
+- An answer no longer says it is complete while it misses an edit. A query that found indexing already under way
+  waited for that job, and took its report as fresh even when the job had read the tree before the edit, so under
+  load an answer could say `complete` without the edit's symbol. It now waits once more on a job that reads the
+  current tree, within the same time budget, or says the repository is still indexing.
+- Faster `impact`, `trace` and `context` on code implementing interfaces: four lookups of a symbol by its name (the
+  supertype walk run for every implementation member reached among them) compared names case-sensitively in a way
+  SQLite couldn't serve from the name index, so each scanned every symbol. They now use the index, as the other
+  lookups do; answers are unchanged. On the public-v1/v2 workspace, `impact` at depth 2 retires a median 19% fewer
+  instructions, and up to 93% fewer on large C# repos (jellyfin-server, bitwarden-server).
+
 ## 0.4.0 (2026-10-26)
 
 0.4 makes KnowCode cheaper to keep in a session and more exact across repositories. By default a client now loads one

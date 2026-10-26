@@ -1,6 +1,6 @@
 {
   "name": "knowcode",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Local code context, cross-repository tracing, and explicit evidence and completeness for coding agents.",
   "author": { "name": "KnowCode contributors" },
   "homepage": "https://github.com/bubstackdev/knowcode",

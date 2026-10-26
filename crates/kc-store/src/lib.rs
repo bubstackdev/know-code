@@ -1470,6 +1470,54 @@ mod tests {
     }
 
     #[test]
+    fn symbol_name_lookups_can_use_the_name_index() {
+        // `symbols.name` is `COLLATE NOCASE`: a lookup by `name = ?1 COLLATE BINARY` alone scans every symbol, so each
+        // is written `name = ?1 AND name = ?1 COLLATE BINARY` (the index finds the candidates, the second test keeps the
+        // exact case). A supertype walk without it cost an impact on a large repo most of its time.
+        let sources = [
+            ("ansible.rs", include_str!("ansible.rs")),
+            ("bus.rs", include_str!("bus.rs")),
+            ("cfml.rs", include_str!("cfml.rs")),
+            ("ci.rs", include_str!("ci.rs")),
+            ("csharp.rs", include_str!("csharp.rs")),
+            ("db.rs", include_str!("db.rs")),
+            ("di.rs", include_str!("di.rs")),
+            ("locate.rs", include_str!("locate.rs")),
+            ("manifests.rs", include_str!("manifests.rs")),
+            ("ngrx.rs", include_str!("ngrx.rs")),
+            ("py.rs", include_str!("py.rs")),
+            ("query.rs", include_str!("query.rs")),
+            ("scip.rs", include_str!("scip.rs")),
+            ("sql.rs", include_str!("sql.rs")),
+            ("terraform.rs", include_str!("terraform.rs")),
+            ("trace.rs", include_str!("trace.rs")),
+            ("ts.rs", include_str!("ts.rs")),
+        ];
+        let mut bare = Vec::new();
+        for (file, src) in sources {
+            for (i, _) in src.match_indices(" COLLATE BINARY") {
+                // The comparison just before: `<column> = ?<n>`.
+                let before = &src[..i];
+                let Some((lhs, param)) = before.rsplit_once(" = ") else { continue };
+                if !param.starts_with('?') || param.len() < 2 || !param[1..].chars().all(|c| c.is_ascii_digit()) {
+                    continue;
+                }
+                let start = lhs.rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.')).map_or(0, |p| p + 1);
+                let column = &lhs[start..];
+                // Only `symbols.name` (aliased or not) is case-insensitive.
+                if !(column == "name" || column.ends_with(".name")) {
+                    continue;
+                }
+                let guarded = lhs[..start].trim_end().strip_suffix("AND").is_some_and(|l| l.trim_end().ends_with(&format!("name = {param}")));
+                if !guarded {
+                    bare.push(format!("{file}: {column} = {param} COLLATE BINARY"));
+                }
+            }
+        }
+        assert!(bare.is_empty(), "lookups by name that can't use the index: {bare:#?}");
+    }
+
+    #[test]
     fn concurrent_opens_of_a_new_index_keep_its_schema() {
         let dir = std::env::temp_dir().join(format!("knowcode-test-store-{}", std::process::id()));
         for round in 0..20 {
