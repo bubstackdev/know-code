@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode setup codex` adds a user-level `[[hooks.SessionStart]]` entry to Codex's `config.toml`, beside the MCP
+  server, that runs KnowCode's session-start hook (the line Claude Code's plugin adds). Codex runs it only once you
+  trust it in `/hooks`, and setup says so. The entry names only the binary and KnowCode's directory overrides, so the
+  line can change without trusting it again. `knowcode uninstall` removes it and keeps your own hooks.
 - The Claude Code plugin adds a `SessionStart` hook. At the start of a session, and after `/clear` or a compaction, it
   adds one line of about 40 tokens where KnowCode has an index: `KnowCode indexes shop. Callers, impact, HTTP:
   kc_impact; definitions: kc_find.` It says nothing in a directory with no index, in a repo whose privacy file blocks
