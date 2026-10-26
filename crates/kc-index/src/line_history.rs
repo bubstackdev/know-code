@@ -33,6 +33,9 @@ pub struct ChangedWith {
     pub file: String,
     /// Commits (of at most [`vitals::COCHANGE_MAX_FILES`] files) that changed both.
     pub shared: u32,
+    /// Those commits, newest first, by their first 12 characters.
+    #[serde(skip)]
+    pub commits: Vec<String>,
 }
 
 /// What a walk read.
@@ -147,17 +150,17 @@ pub fn changed_with(root: &Path, shas: &[String], own: &str) -> Result<(Vec<Chan
     let text = String::from_utf8_lossy(&out);
     // `--stdin` prints each commit's id, then its files.
     let given: HashSet<&str> = shas.iter().map(String::as_str).collect();
-    let mut commits: Vec<Vec<&str>> = Vec::new();
+    let mut commits: Vec<(&str, Vec<&str>)> = Vec::new();
     for l in text.lines().filter(|l| !l.is_empty()) {
         if given.contains(l) {
-            commits.push(Vec::new());
-        } else if let Some(c) = commits.last_mut() {
+            commits.push((l, Vec::new()));
+        } else if let Some((_, c)) = commits.last_mut() {
             c.push(l);
         }
     }
-    let mut counts: HashMap<String, u32> = HashMap::new();
+    let mut by_file: HashMap<String, Vec<String>> = HashMap::new();
     let mut sweeps = 0;
-    for files in commits {
+    for (sha, files) in commits {
         let files: HashSet<&str> = files.into_iter().collect();
         if files.len() > vitals::COCHANGE_MAX_FILES {
             sweeps += 1;
@@ -165,11 +168,12 @@ pub fn changed_with(root: &Path, shas: &[String], own: &str) -> Result<(Vec<Chan
         }
         for f in files {
             if f != own && now.contains(f) && !privacy.blocks(f) {
-                *counts.entry(f.to_string()).or_default() += 1;
+                by_file.entry(f.to_string()).or_default().push(sha[..sha.len().min(12)].to_string());
             }
         }
     }
-    let mut list: Vec<ChangedWith> = counts.into_iter().map(|(file, shared)| ChangedWith { file, shared }).collect();
+    let mut list: Vec<ChangedWith> =
+        by_file.into_iter().map(|(file, commits)| ChangedWith { file, shared: commits.len() as u32, commits }).collect();
     list.sort_by(|a, b| b.shared.cmp(&a.shared).then_with(|| a.file.cmp(&b.file)));
     Ok((list, sweeps))
 }

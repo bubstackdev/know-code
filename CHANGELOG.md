@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `history` lists a symbol's direct callers whose files changed in its commits (`callers_changed_with`), each with
+  how many of its commits and the newest few, tests marked; `callers_total` counts every direct caller. Callers come
+  from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits
+  changes that file. On history-v1's two caller questions it names the one production caller of each label that
+  `impact` reaches; the other, a call through Serilog's `ILogger` inside Serilog.Extensions.Hosting, isn't reached.
 - A call to an external client the repo declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`) links
   through the client package's own code when it is installed in the repo's `node_modules` at the version the
   lockfile pins: to the action serving the request the package's method makes, assuming `package_code`, with

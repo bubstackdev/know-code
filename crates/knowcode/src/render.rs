@@ -1017,6 +1017,13 @@ pub fn history(repos: &[crate::history::HistoryRepo], p: &crate::history::Histor
         if r.sweeps > 0 {
             println!("  {} of its commits changed more than 50 files: left out of what changed with it", r.sweeps);
         }
+        if !r.commits.is_empty() && !r.changed_with_unread && r.callers_total > 0 {
+            println!("  direct callers changed in its commits: {} of {}", r.callers.len(), r.callers_total);
+            for c in &r.callers {
+                let test = if c.test { "  (test)" } else { "" };
+                println!("    {:>3}  {}  {}:{}  {}{test}", c.shared, c.qualified, loc_file(root, &c.file), c.line, c.commits.join(" "));
+            }
+        }
         if !r.others.is_empty() {
             println!("  other definitions: {}", r.others.join(", "));
         }

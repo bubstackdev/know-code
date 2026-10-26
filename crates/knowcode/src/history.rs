@@ -243,6 +243,10 @@ pub struct HistoryRepo {
     pub sweeps: u32,
     /// `changed_with` wasn't read: the time budget was spent.
     pub changed_with_unread: bool,
+    /// Its direct callers in other files changed in its commits, most shared first.
+    pub callers: Vec<CallerHistory>,
+    /// Its direct callers in the repo, every one: in other files and in its own.
+    pub callers_total: usize,
 }
 
 impl HistoryRepo {
@@ -250,6 +254,54 @@ impl HistoryRepo {
     pub fn first(&self) -> Option<&Change> {
         self.commits.last().filter(|_| !self.capped && !self.cut && !self.shallow)
     }
+}
+
+/// Callers walked at most for `callers`: a definition with more direct callers lists those of the first this many.
+const CALLERS_WALKED: usize = 500;
+
+/// Commits listed per caller.
+const CALLER_COMMITS_SHOWN: usize = 3;
+
+/// A direct caller of a definition, in another file, that changed in the definition's commits.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct CallerHistory {
+    pub qualified: String,
+    pub file: String,
+    pub line: u32,
+    /// The caller is test code.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub test: bool,
+    /// The definition's commits that changed the caller's file too.
+    pub shared: u32,
+    /// The newest of them.
+    pub commits: Vec<String>,
+}
+
+/// The definition's direct callers (hop 1 of `impact`, in this repo) whose files changed in its commits, with those
+/// commits, most shared first; and how many direct callers it has. Callers in its own file aren't listed: every
+/// commit of the definition changes that file.
+fn callers_changed_with(o: &ops::Opened, def: &kc_store::query::SymbolRow, changed: &[ChangedWith], no_sync: bool) -> Result<(Vec<CallerHistory>, usize)> {
+    let walk = crate::tree::impact(&mut crate::walk::Graph::new(o, &[], no_sync, usize::MAX), &[def.id], 1, CALLERS_WALKED)?;
+    let direct: Vec<_> = walk.affected.iter().filter(|a| a.hop == 1 && a.repo.is_none()).collect();
+    let by_file: std::collections::HashMap<&str, &ChangedWith> = changed.iter().map(|c| (c.file.as_str(), c)).collect();
+    let mut seen = HashSet::new();
+    let mut list: Vec<CallerHistory> = direct
+        .iter()
+        .filter(|a| seen.insert(a.id))
+        .filter_map(|a| {
+            let c = by_file.get(a.file.as_str())?;
+            Some(CallerHistory {
+                qualified: a.qualified.clone(),
+                file: a.file.clone(),
+                line: a.line,
+                test: a.class == "test",
+                shared: c.shared,
+                commits: c.commits.iter().take(CALLER_COMMITS_SHOWN).cloned().collect(),
+            })
+        })
+        .collect();
+    list.sort_by(|a, b| b.shared.cmp(&a.shared).then_with(|| (&a.file, a.line).cmp(&(&b.file, b.line))));
+    Ok((list, seen.len()))
 }
 
 /// One definition's git history, read over the lines the index says it spans (see [`kc_index::line_history`]):
@@ -292,6 +344,8 @@ pub fn symbol_history(p: &HistoryParams, args: &ops::Scope) -> Result<ops::Out<V
             changed_with_total: 0,
             sweeps: 0,
             changed_with_unread: false,
+            callers: Vec::new(),
+            callers_total: 0,
         };
         let until = kc_store::limits::current().freshness_deadline();
         if let Some(span) = head {
@@ -303,6 +357,7 @@ pub fn symbol_history(p: &HistoryParams, args: &ops::Scope) -> Result<ops::Out<V
                 let shas: Vec<String> = r.commits.iter().map(|c| c.id.clone()).collect();
                 let (list, sweeps) = line_history::changed_with(&o.root, &shas, &def.file)?;
                 (r.changed_with_total, r.changed_with, r.sweeps) = (list.len(), list, sweeps);
+                (r.callers, r.callers_total) = callers_changed_with(&o, &def, &r.changed_with, args.no_sync)?;
             }
         }
         if let Some((w, uncommitted, automated)) = kc_index::ownership::surviving_in(&o.root, &def.file, Some((start, end))) {
@@ -389,6 +444,10 @@ fn history_item(r: &HistoryRepo, limit: usize) -> Value {
             v["sweeps"] = json!(r.sweeps);
         }
     }
+    if !r.commits.is_empty() && !r.changed_with_unread {
+        v["callers_changed_with"] = json!(r.callers);
+        v["callers_total"] = json!(r.callers_total);
+    }
     if !r.others.is_empty() {
         v["others"] = json!(r.others);
     }
@@ -453,7 +512,7 @@ mod tests {
         let r = &out.data[0];
         assert_eq!(authors(r), [("bob", "price total again"), ("bob", "price total"), ("ann", "start")]);
         assert_eq!(r.first().map(|c| c.subject.as_str()), Some("start"));
-        assert_eq!(r.changed_with, [ChangedWith { file: "src/Price.cs".into(), shared: 3 }]);
+        assert_eq!(r.changed_with.iter().map(|c| (c.file.as_str(), c.shared)).collect::<Vec<_>>(), [("src/Price.cs", 3)]);
         assert_eq!(r.writers.iter().map(|w| (w.author.as_str(), w.lines)).collect::<Vec<_>>(), [("ann", 3), ("bob", 1)]);
         assert_eq!(out.env["items"][0]["last"]["subject"], "price total again");
         assert_eq!(out.env["items"][0]["commits_total"], 3);
@@ -478,6 +537,36 @@ mod tests {
         // A bad `since` is refused before git sees it.
         let p = HistoryParams { symbol: "Cart.Total".into(), limit: 10, since: Some("--output=x".into()) };
         assert!(symbol_history(&p, &ops::Scope { repos: vec![app.clone()], no_sync: false }).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Its direct callers whose files changed in its commits are listed with those commits; a caller whose file never
+    /// changed with it isn't, but counts among its callers.
+    #[test]
+    fn callers_changed_in_its_commits() {
+        let cache = test_cache();
+        let base = cache.dir("symbol-history-callers");
+        let _ = std::fs::remove_dir_all(&base);
+        let checkout = |n: i32| format!("namespace Shop;\n\npublic class Checkout\n{{\n    public int Pay(Cart c)\n    {{\n        return c.Total({n});\n    }}\n}}\n");
+        let report = "namespace Shop;\n\npublic class Report\n{\n    public int Sum(Cart c)\n    {\n        return c.Total(0);\n    }\n}\n";
+        let app = repo(&base, "app", &[("src/Cart.cs", CART), ("src/Checkout.cs", &checkout(1))]);
+        commit_as(&app, "ann", "start");
+        write(&app, "src/Cart.cs", &CART.replace("return a;", "return a + 1;"));
+        write(&app, "src/Checkout.cs", &checkout(2));
+        commit_as(&app, "bob", "total and checkout");
+        write(&app, "src/Report.cs", report);
+        commit_as(&app, "cy", "report");
+        write(&app, "src/Report.cs", &report.replace("Total(0)", "Total(1)"));
+        commit_as(&app, "cy", "report alone");
+
+        let out = ask(&app, "Cart.Total", None);
+        let r = &out.data[0];
+        assert_eq!(r.callers_total, 2, "{}", out.env);
+        let listed: Vec<(&str, u32)> = r.callers.iter().map(|c| (c.qualified.as_str(), c.shared)).collect();
+        // Checkout changed in both of Total's commits (the first created both); Report in neither.
+        assert_eq!(listed, [("Checkout.Pay", 2)]);
+        assert_eq!(r.callers[0].commits, r.commits.iter().map(|c| c.sha.clone()).collect::<Vec<_>>());
+        assert_eq!(out.env["items"][0]["callers_changed_with"][0]["file"], "src/Checkout.cs");
         let _ = std::fs::remove_dir_all(&base);
     }
 
