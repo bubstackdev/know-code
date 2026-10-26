@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,10 +66,10 @@ def prepare(manifest, source, plan_root, session_id, out):
     if len(question) != 1:
         raise ValueError('session question missing or duplicated')
     census = census_module()
-    with tempfile.TemporaryDirectory(prefix='knowcode-session-verify-') as temp:
-        verified = census.census(manifest, source, Path(temp)/'census')
-    if verified['files_sha256'] != plan.get('source_files_sha256'):
-        raise ValueError('source file population differs from plan')
+    census.expected_repos(captured[manifest], receipt)
+    shared = source/'view'
+    if shared.is_symlink() or not shared.is_dir() or {p.name for p in shared.iterdir()} != {r['name'] for r in receipt['repos']}:
+        raise ValueError('source view repository entries differ from manifest')
 
     def unchanged():
         if any(p.read_bytes() != value for p, value in captured.items()):
@@ -86,7 +85,9 @@ def prepare(manifest, source, plan_root, session_id, out):
         view.mkdir(parents=True, mode=0o700)
         upstream = []
         copied = 0
+        cloned = 0
         byte_count = 0
+        rows = {}
         for repo in receipt['repos']:
             target = view/repo['name']
             target.mkdir()
@@ -107,8 +108,7 @@ def prepare(manifest, source, plan_root, session_id, out):
                 else:
                     if path.is_symlink() or not path.is_file():
                         raise ValueError('source entry type changed')
-                    with path.open('rb') as src, destination.open('xb') as dst:
-                        shutil.copyfileobj(src, dst)
+                    cloned += census.clone_or_copy(path, destination)
                     copied_stat, original_stat = destination.stat(), path.stat()
                     if copied_stat.st_nlink != 1 or (copied_stat.st_dev, copied_stat.st_ino) == (original_stat.st_dev, original_stat.st_ino):
                         raise ValueError('session source must be copied by value, never hard-linked')
@@ -118,8 +118,13 @@ def prepare(manifest, source, plan_root, session_id, out):
                 parts = Path(name).parts
                 if Path(name).name in ('AGENTS.md', 'CLAUDE.md', '.mcp.json') or '.claude' in parts or '.codex' in parts:
                     upstream.append(repo['name']+'/'+name)
-            # This verifies the copied bytes, entry set, internal symlinks and absence of Git/privacy surprises.
-            census.inspect_view(target, repo)
+            # The session's own copy is what the agent reads, so it is what is hashed: its bytes, entry set, internal
+            # symlinks and absence of Git/privacy surprises, against the pinned receipt. The shared source is never
+            # trusted in its place; a change there reaches a session only as a mismatch here.
+            rows[repo['name']] = census.inspect_view(target, repo, reread=False)
+        files_sha256 = census.rows_digest([row for name in sorted(rows) for row in rows[name]])
+        if files_sha256 != plan.get('source_files_sha256'):
+            raise ValueError('source file population differs from plan')
         for directory, _, _ in os.walk(view, topdown=False):
             Path(directory).chmod(0o555)
         (staging/'control').mkdir(mode=0o700)
@@ -129,7 +134,8 @@ def prepare(manifest, source, plan_root, session_id, out):
                   'plan_sha256': digest(captured[plan_root/'plan.json']),
                   'manifest_sha256': digest(captured[manifest]),
                   'source_receipt_sha256': digest(captured[source/'source-receipt.json']),
-                  'source_files_sha256': verified['files_sha256'], 'copied_files': copied, 'copied_bytes': byte_count,
+                  'source_files_sha256': files_sha256, 'copied_files': copied, 'cloned_files': cloned,
+                  'copied_bytes': byte_count,
                   'producer_hashes': {p.name: value for p, value in producers.items()},
                   'source_root': 'source', 'required_client_cwd': 'control', 'empty_profile_directory': 'profile',
                   'upstream_instruction_paths': sorted(upstream),
@@ -140,10 +146,7 @@ def prepare(manifest, source, plan_root, session_id, out):
                                       'separate source-identical synthetic Git/index workspace for the KnowCode arm',
                                       'no source edits, notes, unrelated integrations or other-session interference']}
         (staging/'session.json').write_text(json.dumps(result, indent=2)+'\n')
-        unchanged()
-        # Verify originals again after the copy, so the artifact never silently mixes source versions.
-        for repo in receipt['repos']:
-            census.inspect_view(source/'view'/repo['name'], repo)
+        # The copy was hashed after it was made, so it cannot mix source versions however the originals change.
         unchanged()
         if out.exists() or out.is_symlink():
             raise ValueError('output appeared; existing session evidence is retained')

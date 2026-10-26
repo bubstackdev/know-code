@@ -112,16 +112,14 @@ def prepare(manifest, source_receipt, session):
             raise ValueError('unsafe cohort repository name')
     if {p.name for p in view.iterdir()} != set(expected):
         raise ValueError('session source repository set differs')
-    rows = []
     for repo in sorted(receipt['repos'], key=lambda r: r['name']):
         if any(repo.get(key) != value for key, value in expected[repo['name']].items()):
             raise ValueError('source metadata differs from public manifest')
         if any(item['symlink'] for item in repo['files']):
             raise ValueError('neutral workspace currently requires a regular-file-only cohort; no files dropped')
-        rows.extend(census.inspect_view(view/repo['name'], repo))
-    encoded = ''.join(json.dumps(row, sort_keys=True)+'\n' for row in rows).encode()
-    if digest(encoded) != state.get('source_files_sha256'):
-        raise ValueError('source file population differs from prepared session')
+        # Session preparation hashed this view against the receipt; here its entries, sizes and modes are rechecked,
+        # and each workspace's own bytes are hashed against the receipt below (verify_payload).
+        census.view_metadata(view/repo['name'], repo)
     producers = {p: digest(p.read_bytes()) for p in [Path(__file__), ROOT/'scripts/census-public-eval.py']}
     git = shutil.which('git')
     if git is None:
@@ -155,13 +153,11 @@ def prepare(manifest, source_receipt, session):
                 source = view/repo['name']/name
                 destination = target/name
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                with source.open('rb') as src, destination.open('xb') as dst:
-                    shutil.copyfileobj(src, dst)
+                census.clone_or_copy(source, destination)
                 a, b = source.stat(), destination.stat()
                 if b.st_nlink != 1 or (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino):
                     raise ValueError('neutral payload must be copied by value')
                 destination.chmod(0o444)
-            census.inspect_view(target, repo)
             run_git(target, 'init', '--quiet', '--initial-branch=public-eval', '--template='+str(template))
             run_git(target, 'config', '--local', 'core.hooksPath', '/dev/null')
             run_git(target, 'config', '--local', 'remote.origin.url', repo['url'])
@@ -181,7 +177,7 @@ def prepare(manifest, source_receipt, session):
             summaries.append({'name': repo['name'], 'source_pin': repo['commit'], 'public_origin': repo['url'],
                               'files': len(repo['files']), 'head_unborn': True, 'refs': 0, 'objects': 0})
         for repo in receipt['repos']:
-            census.inspect_view(view/repo['name'], repo)
+            census.view_metadata(view/repo['name'], repo)
         unchanged()
         if out.exists() or record.exists():
             raise ValueError('workspace output appeared; retained existing evidence')
