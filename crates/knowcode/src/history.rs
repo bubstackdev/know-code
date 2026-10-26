@@ -1,5 +1,5 @@
 //! `knowcode history deepen`: fetch more history into a shallow clone, so the history-based answers have something
-//! to read, and say how deep the history is before and after. CLI only, like `fetch-deps` (see docs/decisions.md).
+//! to read, and say how deep the history is before and after. CLI only, like `fetch-deps` (see docs/plans/0.1.0-decisions.md).
 //! It runs `git fetch --deepen=N` (or `--shallow-since=DATE`) and nothing else: no ref is written but what that
 //! fetch writes. A clone that isn't shallow is left alone.
 

@@ -15,7 +15,7 @@ KnowCode works with no configuration. Everything here is optional.
 Nothing is written into the repos you index. `knowcode config path` prints the config file's path, and
 `knowcode status` shows the config file, the cache directory, the notes database and the workspace roots, each with
 where its setting came from. `knowcode uninstall` removes what KnowCode wrote; removing a shell-installer
-installation is in [usage](usage.md#setup-settings-and-updates).
+installation is in [install](install.md#uninstall).
 
 ## config.toml
 
