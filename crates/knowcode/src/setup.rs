@@ -300,11 +300,11 @@ fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
                 manifest = Some((plugin.join(name), format!("{}\n", serde_json::to_string_pretty(&value)?)));
                 continue;
             }
-            // Claude Code defers the tools not marked always loaded (`mcp::ALWAYS_LOADED`) to tool search, and the
-            // plugin's skills use the others, so its server advertises every tool unless the user picked a profile.
+            // The plugin's server takes the default profile, the single `kc` tool, unless the user picked one; the
+            // skills name tools as its ops (see [`skill_text`]).
             ".mcp.json" => {
                 let mut env = env.clone();
-                env.entry("KNOWCODE_TOOLS".into()).or_insert_with(|| "all".into());
+                env.entry("KNOWCODE_TOOLS".into()).or_insert_with(|| crate::mcp::DEFAULT_PROFILE.into());
                 format!("{}\n", serde_json::to_string_pretty(&json!({"mcpServers": {"knowcode": server(command, &env)}}))?)
             }
             "hooks/knowcode-grep-hint.sh" | "hooks/knowcode-session-start.sh" => {
@@ -312,6 +312,7 @@ fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
                 for (key, value) in env { prefix.push_str(&format!("export {key}={}\n", shell_quote(value))); }
                 prefix + text
             }
+            skill if skill.ends_with("SKILL.md") => skill_text(text, env.get("KNOWCODE_TOOLS").map_or(crate::mcp::DEFAULT_PROFILE, String::as_str)),
             _ => text.to_string(),
         };
         writes.push((plugin.join(name), text));
@@ -379,6 +380,19 @@ fn update_plugin(directory: &Path) -> Result<()> {
 }
 
 /// The version in the plugin manifest of the bundle at `marketplace`, if it has a readable one.
+/// A skill as the plugin's profile calls the tools: under `one`, `kc_impact(symbol: "X")` is
+/// `kc {op: impact, symbol: "X"}`; under the others, as written.
+fn skill_text(text: &str, profile: &str) -> String {
+    if !crate::mcp::is_one(profile) {
+        return text.to_string();
+    }
+    let text = text.replace(
+        "Use KnowCode's advertised `kc_*` tools; the client may add a plugin or server prefix to their names.",
+        "Use KnowCode's `kc` tool, its `op` naming what to run; the client may add a plugin or server prefix to its name.",
+    );
+    crate::mcp::one_text(&text, true)
+}
+
 fn bundle_version(marketplace: &Path) -> Option<semver::Version> {
     let text = fs::read_to_string(marketplace.join("knowcode/.claude-plugin/plugin.json")).ok()?;
     let manifest: Value = serde_json::from_str(&text).ok()?;
@@ -421,10 +435,14 @@ fn refresh(failed: &mut Vec<PathBuf>) -> Result<()> {
     // The latest registration wrote the bundle; keep its binary and the overrides its server configuration carries.
     let latest = ours.last().expect("not empty").command.clone();
     let config: Value = read(&marketplace.join("knowcode/.mcp.json"))?.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    let env: BTreeMap<String, String> = config["mcpServers"]["knowcode"]["env"].as_object().into_iter().flatten()
+    let mut env: BTreeMap<String, String> = config["mcpServers"]["knowcode"]["env"].as_object().into_iter().flatten()
         .filter(|(key, _)| OVERRIDES.contains(&key.as_str()))
         .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string())))
         .collect();
+    // Before 0.4 the bundle wrote `KNOWCODE_TOOLS=all` as its default: an update takes the new default instead.
+    if bundle_version(&marketplace).is_some_and(|v| v < semver::Version::new(0, 4, 0)) && env.get("KNOWCODE_TOOLS").is_some_and(|t| t == "all") {
+        env.remove("KNOWCODE_TOOLS");
+    }
     bundle(&latest, &env)?;
     let mut errors = Vec::new();
     for registration in &ours {

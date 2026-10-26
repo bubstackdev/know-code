@@ -215,18 +215,26 @@ uninstaller; for an installation it made, an `uninstall` that completes ends wit
 
 KnowCode's own configuration directory is a different one; `--delete-config` removes the files KnowCode wrote there.
 
-By default `serve` advertises the core tools: `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`,
-`kc_search`, `kc_more` and `kc_help`. They answer where a name is defined, every use of it, what a symbol is, where a
-concept lives, text search, and what calls a symbol or an HTTP endpoint, hop by hop and from any repo, or breaks if it
-changes. `serve --tools all` (or
-`KNOWCODE_TOOLS=all`) advertises all 25 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). A tool left
-out is still documented in `kc_help`, which says it isn't advertised, but can't be called until the server is
-started with it.
+By default `serve` advertises one tool, `kc` (profile `one`). Its `op` names the tool to run, without `kc_`:
+`impact` for what calls a symbol or an HTTP endpoint, hop by hop and from any repo, or breaks if it changes; `find`
+for where a name is defined; `refs` for every use; `context` for what a symbol is; `search` for text; `locate` for
+where a concept lives; `more` for the next page of a cut list; `help` for the documentation; and every other tool by
+its name (`trace`, `tests`, `reviewers`, …). `q` fills the op's main parameter, `qs` several, and any other parameter
+of that tool is passed by its own name: `kc {op: impact, q: OrderService.Place, depth: 2}`. `kc_help kc` lists which
+parameter `q` fills for each op. Answers, the server's instructions and the Claude Code plugin's notes, skills and
+session-start line then name calls as ops: a cut list says `kc {op: more, cursor: …}`.
 
-The default is the small set because a client that doesn't defer tools loads every advertised schema, and the
-server's instructions, on every turn. The core tools and the instructions are about 3.1k characters; `all` is about
-7.0k. kc_trace is not in the core set: kc_impact answers callers by hop, kc_context a symbol's callers and callees, and
-kc_trace's schema is one of the largest.
+One tool is the default because every advertised schema, and the server's instructions, is paid on every turn: `kc`
+and its instructions are about 500 tokens, where the eight core tools and their instructions were about 1,300 in a
+client that loads every schema, and about 1,300 with the plugin's 25 tools in Claude Code, which defers most of them.
+
+The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
+`kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
+all 25 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
+answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
+`KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
+runs in, and it is recorded in the client's configuration.
 
 Each tool's schema lists only the parameters most calls need, with a line only where the name doesn't say enough.
 Every other parameter, `repo`, `max_chars` and `kc_impact`'s `file` among them, is accepted all the same and
@@ -234,14 +242,14 @@ documented in `kc_help <tool>`, so a client that loads every schema on every tur
 server's instructions out (Claude Code's bare mode does), so each core tool's description says on its own which
 questions it answers.
 
-In Claude Code, the core tools that answer a first question, `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and
-`kc_search`, are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from the start instead
-of waiting behind tool search. Every other tool stays deferred, one tool search away, among them `kc_locate`,
-`kc_more` and `kc_help`: sessions rarely call them, and a schema loaded up front is paid on every turn. A cut answer's
-`hint` names the `kc_more` call that continues it. A client that doesn't defer tools loads all eight core tools. A
+Under `core` and `all`, in Claude Code, the core tools that answer a first question, `kc_find`, `kc_context`,
+`kc_refs`, `kc_impact` and `kc_search`, are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in
+context from the start instead of waiting behind tool search. Every other tool stays deferred, one tool search away,
+among them `kc_locate`, `kc_more` and `kc_help`: sessions rarely call them, and a schema loaded up front is paid on
+every turn. A client that doesn't defer tools loads all eight core tools. `kc` is marked always loaded too. A
 server-level `alwaysLoad` setting overrides the mark, and a profile that leaves a core tool out doesn't list it. The
-Claude Code plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=all` (unless you set it): Claude Code
-defers the tools not marked, and the plugin's skills use them.
+Claude Code plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=one` unless you set it; a plugin
+updated from 0.3, which wrote `all` as its default, takes `one` too.
 
 ## MCP tools
 
@@ -343,7 +351,8 @@ its coverage. To make one: `npx @sourcegraph/scip-typescript index` in a TypeScr
 
 At the start of a Claude Code session (and after `/clear` or a compaction) the plugin adds one line saying what
 KnowCode has indexed here and which tools answer callers, impact, HTTP and definitions:
-`KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.` It says nothing in a directory with no
+`KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: op find.` (under `core`
+or `all`, `kc_impact` and `kc_find`) It says nothing in a directory with no
 index or in a repo whose privacy file blocks KnowCode, reads no index and makes no network call. Turn it off with
 `knowcode config set hooks.session_start false`.
 

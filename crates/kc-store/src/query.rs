@@ -2666,6 +2666,7 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
          ORDER BY file, line",
     )?;
     let mut consts = Constants::new(conn)?;
+    let mut modules = crate::ts::Modules::default();
     let rows = stmt.query_map([], |r| {
         Ok((
             (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?),
@@ -2768,6 +2769,15 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         let mut host = None;
         let path = match path_ref {
             None if side == "client" => {
+                // A URL a function of the repo builds from the path given (`addQuery('/events', …)`): the path, when
+                // the function is known to add only a query string; otherwise unread, saying which function.
+                let path = match built(conn, &mut modules, &file, &path)? {
+                    Ok(p) => p,
+                    Err(f) => {
+                        out.push(row("unresolved".to_string(), verb, None, Some(format!("its URL is built by {f}(…), which KnowCode doesn't read"))));
+                        continue;
+                    }
+                };
                 let url = consts.expand(&path, 0)?;
                 host = kc_extract::urls::host_of(&url);
                 let p = client_path(&url);
@@ -2873,6 +2883,37 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         kept.push(r);
     }
     Ok(kept)
+}
+
+/// A client URL with the functions building it (`{=addQuery()}`, see `kc_extract`'s TypeScript extractor) replaced
+/// by what each adds: nothing, for a function declared to append only a query string (its file's constant
+/// `addQuery()`), found in the file making the request or the one it imports the function from. `Err` naming the
+/// first function not known to.
+fn built(conn: &Connection, modules: &mut crate::ts::Modules, file: &str, encoded: &str) -> Result<std::result::Result<String, String>> {
+    let mut out = encoded.to_string();
+    while let Some(i) = out.find("{=").filter(|i| out[*i..].find('}').is_some_and(|j| out[*i..*i + j].ends_with("()"))) {
+        let j = out[i..].find('}').expect("found");
+        let f = out[i + 2..i + j - 2].to_string();
+        let declared_in = match modules.module_of(conn, file, &f)? {
+            Some(m) => match modules.origin(conn, file, &m)? {
+                crate::ts::Origin::File(p) => Some(p),
+                _ => None,
+            },
+            None => Some(file.to_string()),
+        };
+        let value: Option<String> = match declared_in {
+            Some(at) => conn
+                .prepare_cached("SELECT c.value FROM constants c JOIN files f ON f.id = c.file_id WHERE f.path = ?1 AND c.qualified = ?2 LIMIT 1")?
+                .query_row(rusqlite::params![at, format!("{f}()")], |r| r.get(0))
+                .optional()?,
+            None => None,
+        };
+        match value {
+            Some(v) => out.replace_range(i..i + j + 1, &v),
+            None => return Ok(Err(f)),
+        }
+    }
+    Ok(Ok(out))
 }
 
 /// What places a controller action whose class writes no `[Route]` out (`{^Action}/rest`, `{^*Action}` for a public

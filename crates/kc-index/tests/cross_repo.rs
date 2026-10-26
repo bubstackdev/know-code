@@ -1156,6 +1156,55 @@ fn typed_field_receivers_are_judged_by_their_type() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// Requests whose path is built by a function of the repo, or chosen by a condition: `addQuery('/events', start)`,
+/// with `addQuery` (in another file) appending only a query string, requests `events`; `all ? '/sync?all=true' :
+/// '/sync'` requests `sync` either way. A function that may change the path (`withVersion`) leaves its request
+/// unread, saying which function, never guessed.
+#[test]
+fn paths_given_to_url_functions_are_read_only_when_known() {
+    let turn = turn();
+    let base = turn.dir("path-params");
+    let api = scratch(&base, "vault-api");
+    write(
+        &api,
+        "src/EventsController.cs",
+        "[ApiController]\npublic class EventsController : ControllerBase\n{\n    [HttpGet(\"events\")]\n    public Task List() => null;\n    [HttpGet(\"sync\")]\n    public Task Sync() => null;\n    [HttpGet(\"orders/{id}\")]\n    public Task Order(string id) => null;\n}\n",
+    );
+    let web = scratch(&base, "vault-web");
+    write(
+        &web,
+        "src/query.ts",
+        "export function addQuery(base: string, start: string, end: string): string {\n  if (start != null) {\n    base += \"?start=\" + start;\n  }\n  if (end != null) {\n    base += base.indexOf(\"?\") > -1 ? \"&\" : \"?\";\n    base += \"end=\" + end;\n  }\n  return base;\n}\nexport function withVersion(base: string): string {\n  return base + \"/v2\";\n}\n",
+    );
+    write(
+        &web,
+        "src/api.service.ts",
+        "import { addQuery, withVersion } from './query';\nexport class ApiService {\n  getEvents(start: string, end: string) {\n    return this.send('GET', addQuery('/events', start, end));\n  }\n  getSync(all: boolean) {\n    const path = all ? '/sync?all=true' : '/sync';\n    return this.send('GET', path);\n  }\n  getOrder() {\n    return this.send('GET', withVersion('/orders/'));\n  }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.clone();
+    let rows: Vec<(&str, &str, Option<&str>)> =
+        routes.iter().filter(|r| r.side != "server").map(|r| (r.symbol.as_str(), r.side.as_str(), r.path.as_deref())).collect();
+    assert_eq!(
+        rows,
+        [("ApiService.getEvents", "client", Some("events")), ("ApiService.getSync", "client", Some("sync")), ("ApiService.getOrder", "unresolved", None)]
+    );
+    let order = routes.iter().find(|r| r.symbol == "ApiService.getOrder").unwrap();
+    assert!(order.detail.as_deref().is_some_and(|d| d.contains("withVersion")), "{order:?}");
+    let link = |sym: &str| -> Vec<(String, &'static str)> {
+        let r = routes.iter().find(|r| r.symbol == sym).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("ApiService.getEvents"), [("EventsController.List".to_string(), "exact")]);
+    assert_eq!(link("ApiService.getSync"), [("EventsController.Sync".to_string(), "exact")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A call to an external client the repo only declares (`declare module 'media-apiclient'` in a `.d.ts`) whose
 /// method names no action: its route isn't in the workspace, and the answer says so, in a list too, instead of
 /// leaving the call out silently.

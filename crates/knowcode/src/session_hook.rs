@@ -60,7 +60,7 @@ pub fn note(cwd: &Path) -> Option<String> {
             Here::Workspace
         }
     };
-    text(&here, indexes)
+    text(&here, indexes, crate::mcp::is_one(&crate::mcp::profile_spec()))
 }
 
 /// Where the session is, for [`text`].
@@ -74,15 +74,20 @@ pub enum Here {
 
 /// The line itself, from where the session is and how many indexes the cache holds. Every later turn pays for it
 /// (about 40 tokens), so it says only what the tool list doesn't: what is indexed here, and which tool answers the
-/// questions agents most often took to grep.
-pub fn text(here: &Here, indexes: usize) -> Option<String> {
+/// questions agents most often took to grep, by the names the plugin's server profile gives them (`one`: ops of `kc`).
+pub fn text(here: &Here, indexes: usize, one: bool) -> Option<String> {
     let first = match here {
         Here::Repo { name, indexed: true } => format!("KnowCode indexes {name}."),
         Here::Repo { name, indexed: false } => format!("KnowCode indexes {name} on first use."),
         Here::Workspace if indexes == 0 => return None,
         Here::Workspace => format!("KnowCode indexes {indexes} repo{} here.", if indexes == 1 { "" } else { "s" }),
     };
-    Some(format!("{first} Callers, impact, HTTP: kc_impact; definitions: kc_find."))
+    // Under `one`, the ops of `kc`: 44 tokens for a workspace of 12 repos (count_tokens), against 45 allowed.
+    Some(if one {
+        format!("{first} Callers, impact, HTTP: kc {{op: impact}}; definitions: op find.")
+    } else {
+        format!("{first} Callers, impact, HTTP: kc_impact; definitions: kc_find.")
+    })
 }
 
 /// How many repo indexes the cache holds, from its directory listing alone; `None` when it holds none.
@@ -99,13 +104,16 @@ mod tests {
     #[test]
     fn the_line_says_what_is_indexed_and_names_the_tools() {
         let repo = |indexed| Here::Repo { name: "shop".into(), indexed };
-        let t = |here: Here, n| text(&here, n).unwrap();
+        let t = |here: Here, n| text(&here, n, false).unwrap();
         assert_eq!(t(repo(true), 1), "KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
         assert_eq!(t(repo(true), 13), t(repo(true), 1));
         assert_eq!(t(repo(false), 3), "KnowCode indexes shop on first use. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
         assert_eq!(t(Here::Workspace, 4), "KnowCode indexes 4 repos here. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
         assert_eq!(t(Here::Workspace, 1), "KnowCode indexes 1 repo here. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
-        assert_eq!(text(&Here::Workspace, 0), None);
+        assert_eq!(text(&Here::Workspace, 0, false), None);
+        // Under `one`, the default: the same tools, as ops of `kc`.
+        assert_eq!(text(&repo(true), 1, true).unwrap(), "KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: op find.");
+        assert_eq!(text(&Here::Workspace, 0, true), None);
     }
 
     #[test]
