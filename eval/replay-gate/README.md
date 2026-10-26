@@ -66,11 +66,10 @@ repository.
 - **Fast subset:** `--repos autofac,autofac-di,serilog,serilog-extensions-hosting,serilog-aspnetcore` keeps the 22
   questions whose repositories are all small (about 12 MB of source, 119 calls). It takes about 6 s per build.
 
-**Proposed for CI:** the fast subset, comparing the v0.3.0 release asset with the PR's build.
-
-- **Source:** CI would fetch those five repositories at their pinned commits and export them as
-  `prepare-public-eval.py` does. That is about 12 MB, and cacheable by commit.
-- **Not yet wired:** the export step's CI cost and caching aren't measured yet.
+**In CI:** the `replay` job of [ci.yml](../../.github/workflows/ci.yml) runs the fast subset on every pull request, on
+Linux. It compares the latest release's `x86_64-unknown-linux-gnu` asset, checked against its published checksum, with
+the change's debug build. `replay_gate.py fetch` exports the five repositories' pinned public source, cached by the
+manifest that pins them. The comparison goes in the job summary, and the job fails on a regression beyond tolerance.
 
 ## First replay: v0.3.0 against main
 

@@ -141,5 +141,27 @@ class ReplayGateTests(unittest.TestCase):
         self.assertEqual(len(found), 5, found)
 
 
+    def test_fetch_exports_only_the_named_repositories_with_their_pins_and_exclusions(self):
+        seen = {}
+        class Prepare:
+            @staticmethod
+            def prepare(manifest, out):
+                seen['manifest'], seen['out'] = json.loads(Path(manifest).read_text()), out
+        with tempfile.TemporaryDirectory() as temp, patch.object(replay_gate, 'load', lambda *a: Prepare):
+            replay_gate.fetch(['autofac', 'serilog'], Path(temp)/'source')
+            with self.assertRaises(SystemExit):
+                replay_gate.fetch(['autofac', 'no-such-repo'], Path(temp)/'other')
+        published = json.loads((replay_gate.ROOT/'eval/public-v2/manifest.json').read_text())
+        pins = {r['name']: r for f in published['families'] for r in f['repos']}
+        repos = [r for f in seen['manifest']['families'] for r in f['repos']]
+        self.assertEqual(sorted(r['name'] for r in repos), ['autofac', 'serilog'])
+        self.assertTrue(all(r == pins[r['name']] for r in repos))
+        self.assertEqual(seen['out'], Path(temp)/'source')
+
+    def test_the_fast_subset_is_the_ci_jobs(self):
+        workflow = (replay_gate.ROOT/'.github/workflows/ci.yml').read_text()
+        self.assertIn('SUBSET: ' + ','.join(replay_gate.SUBSET), workflow)
+
+
 if __name__ == '__main__':
     unittest.main()
