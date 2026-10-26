@@ -5002,7 +5002,17 @@ pub fn refs_in(conn: &Connection, query: &str, shared: &mut Resolution) -> Resul
 /// [`refs_with`], keeping only references in files that import one of `deps`' modules: the only ones that can
 /// resolve into `deps`. The others are never resolved, which is most of the work when the name is common.
 pub fn refs_importing(conn: &Connection, query: &str, kinds: &[&str], deps: &[Dependency]) -> Result<Vec<RefHit>> {
-    Ok(refs_filtered(conn, query, kinds, usize::MAX, deps, true, &mut Resolution::default())?.0)
+    refs_importing_in(conn, query, kinds, deps, &mut Resolution::default())
+}
+
+/// [`refs_importing`], keeping what resolution reads about the repo in `shared` for the next name (see [`refs_in`]).
+pub fn refs_importing_in(conn: &Connection, query: &str, kinds: &[&str], deps: &[Dependency], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, deps, true, shared)?.0)
+}
+
+/// [`refs`] of `kinds`, keeping what resolution reads about the repo in `shared` for the next name.
+pub fn refs_of_kinds_in(conn: &Connection, query: &str, kinds: &[&str], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, &[], false, shared)?.0)
 }
 
 /// What a references query asks for: the container a dotted query names (`Type.member`), and the name. A name with a

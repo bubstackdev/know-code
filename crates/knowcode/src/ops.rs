@@ -4437,6 +4437,12 @@ struct LibraryCache {
     modules: HashMap<PathBuf, Vec<String>>,
     assumptions: HashMap<(PathBuf, PathBuf), Vec<Assumption>>,
     outside: HashMap<(PathBuf, String), bool>,
+    /// Per repo, what resolving its references reads about it, kept from name to name.
+    resolutions: HashMap<PathBuf, query::Resolution>,
+    /// References by repo and name (a repo's own, resolved there), and by library and name (in the repos using it,
+    /// resolved into it): overloads and implementations of one name look the same ones up.
+    own_refs: HashMap<(PathBuf, String), Vec<RefHit>>,
+    used_refs: HashMap<(PathBuf, String), Vec<(PathBuf, RefHit)>>,
 }
 
 /// The most symbols a walk looks up library crossings for (see [`HttpCrossing::library_crossings`]): each opens the
@@ -4587,8 +4593,8 @@ impl<'a> HttpCrossing<'a> {
                     None | Some("this") => h.from.as_ref().and_then(|f| f.container.as_deref()).is_some_and(|c| owners.contains(&bare(c))),
                     Some(_) => h.receiver_type.as_deref().is_some_and(|t| owners.contains(&bare(t))),
                 };
-                let mut hits: Vec<(PathBuf, RefHit, Option<&str>)> = query::refs(self.store(&d).conn(), &sym.name, &["call", "member"], usize::MAX)?
-                    .0
+                let mut hits: Vec<(PathBuf, RefHit, Option<&str>)> = self
+                    .lib_own_refs(&d, &sym.name)?
                     .into_iter()
                     .map(|mut h| {
                         h.repo = Some(there.clone());
@@ -4728,7 +4734,33 @@ impl<'a> HttpCrossing<'a> {
 
     /// References named `name` (calls and member uses) in the repos depending on the repo at `lib`, resolved into it,
     /// each with the root of the repo it is in (see [`dependent_refs`]). Only references with a target in `lib`.
+    fn lib_own_refs(&mut self, root: &Path, name: &str) -> Result<Vec<RefHit>> {
+        let key = (root.to_path_buf(), name.to_string());
+        if let Some(h) = self.lib.own_refs.get(&key) {
+            return Ok(h.clone());
+        }
+        let mut res = self.lib.resolutions.remove(root).unwrap_or_default();
+        let hits = query::refs_of_kinds_in(self.store(root).conn(), name, &["call", "member"], &mut res);
+        self.lib.resolutions.insert(root.to_path_buf(), res);
+        let hits = hits?;
+        self.lib.own_refs.insert(key, hits.clone());
+        Ok(hits)
+    }
+
+    /// References named `name` in the repos depending on the repo at `lib`, resolved into it (see
+    /// [`HttpCrossing::lib_used_refs`]), once per library and name.
     fn lib_refs(&mut self, lib: &Path, name: &str) -> Result<Vec<(PathBuf, RefHit)>> {
+        let key = (lib.to_path_buf(), name.to_string());
+        if let Some(h) = self.lib.used_refs.get(&key) {
+            return Ok(h.clone());
+        }
+        let hits = self.lib_used_refs(lib, name)?;
+        self.lib.used_refs.insert(key, hits.clone());
+        Ok(hits)
+    }
+
+    /// The references [`HttpCrossing::lib_refs`] reads.
+    fn lib_used_refs(&mut self, lib: &Path, name: &str) -> Result<Vec<(PathBuf, RefHit)>> {
         let lib_name = repo_name(lib);
         let mut out = Vec::new();
         for (dep, changed) in self.lib_dependents(lib)? {
@@ -4756,13 +4788,14 @@ impl<'a> HttpCrossing<'a> {
                 };
                 self.lib.assumptions.insert(key.clone(), a);
             }
-            let dependency = query::Dependency {
-                repo: lib_name.clone(),
-                conn: self.store(lib).conn(),
-                modules: self.lib.modules[lib].clone(),
-                assumptions: self.lib.assumptions[&key].clone(),
+            let mut res = self.lib.resolutions.remove(&dep).unwrap_or_default();
+            let (modules, assumptions) = (self.lib.modules[lib].clone(), self.lib.assumptions[&key].clone());
+            let hits = {
+                let dependency = query::Dependency { repo: lib_name.clone(), conn: self.store(lib).conn(), modules, assumptions };
+                query::refs_importing_in(self.store(&dep).conn(), name, &["call", "member"], std::slice::from_ref(&dependency), &mut res)
             };
-            for mut h in query::refs_importing(self.store(&dep).conn(), name, &["call", "member"], std::slice::from_ref(&dependency))? {
+            self.lib.resolutions.insert(dep.clone(), res);
+            for mut h in hits? {
                 if h.targets.iter().any(|t| t.repo.as_deref() == Some(lib_name.as_str())) {
                     h.repo = Some(repo_name(&dep));
                     out.push((dep.clone(), h));
