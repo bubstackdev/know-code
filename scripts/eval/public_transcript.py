@@ -22,8 +22,9 @@ CONTEXT_FIELDS = ('input_tokens', 'cache_creation_input_tokens', 'cache_read_inp
 # KnowCode's tools through an explicit MCP config (bare client) or through its Claude Code plugin (full client).
 KNOWCODE_PREFIXES = ('mcp__knowcode__', 'mcp__plugin_knowcode_knowcode__')
 # 0.4's default profile advertises one tool, `kc`, whose `op` names the tool it runs. Each op: (the parameter `q`
-# fills, the one `qs` fills), as the knowcode crate's mcp.rs ONE_OPS has them. A `kc` call is scored as the tool it
-# runs, so a build with separate tools and a build with `kc` are scored the same way.
+# fills, the one `qs` fills), as the knowcode crate's mcp.rs ONE_OPS has them (test_public_kc.py holds them equal).
+# A `kc` call is scored as the tool it runs, so a build with separate tools and a build with `kc` are scored the same
+# way.
 ONE_OPS = {'impact': ('symbol', ''), 'find': ('query', ''), 'refs': ('name', 'names'), 'context': ('symbol', 'symbols'),
            'search': ('pattern', ''), 'locate': ('query', 'queries'), 'more': ('cursor', ''), 'help': ('topic', ''),
            'trace': ('symbol', ''), 'path': ('from', ''), 'flow': ('entry', ''), 'symbol_at': ('file', ''),

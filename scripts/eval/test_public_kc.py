@@ -78,11 +78,10 @@ class KcCallTests(unittest.TestCase):
         self.assertEqual(tool(PLUGIN + 'kc', {}), ('kc', {}))
         self.assertIsNone(tool('Grep', {'pattern': 'Save'}))
 
-    def test_the_op_table_matches_the_server_when_it_has_one(self):
+    def test_the_op_table_matches_the_server(self):
         source = (HERE.parent.parent / 'crates/knowcode/src/mcp.rs').read_text()
         table = re.search(r'pub const ONE_OPS[^=]*= &\[(.*?)\];', source, re.S)
-        if table is None:
-            self.skipTest('this build advertises separate tools only')
+        self.assertIsNotNone(table, 'mcp.rs has no ONE_OPS')
         ops = {op: (main, many) for op, main, many in re.findall(r'\("(\w+)", "(\w*)", "(\w*)"\)', table.group(1))}
         self.assertEqual(ops, public_transcript.ONE_OPS)
         lists = re.search(r'const ONE_LISTS[^=]*= &\[(.*?)\];', source, re.S)
