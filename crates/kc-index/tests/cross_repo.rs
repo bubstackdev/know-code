@@ -930,6 +930,7 @@ fn a_conventionally_routed_controller_never_takes_a_namesakes_prefix() {
     assert_eq!(
         served,
         [
+            s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders"),
             s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders/Index"),
             s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders/Index/{id}"),
             s("src/Admin/OrdersController.cs", "OrdersController.UnlinkAsync", "POST", "Orders/Unlink"),
@@ -947,6 +948,72 @@ fn a_conventionally_routed_controller_never_takes_a_namesakes_prefix() {
     assert_eq!(legacy.len(), 1, "{legacy:?}");
     assert_eq!(legacy[0].0, "unsupported");
     assert!(legacy[0].2.as_deref().is_some_and(|d| d.contains("no conventional route template read")), "{legacy:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A conventional route's defaults, inline or given as `defaults: new { … }`: `Index`, the default action, is served
+/// at its controller's route (`Orders` as well as `Orders/Index`), and the default controller's at the root. A
+/// request to `/Orders` links to `OrdersController.Index`; one with a verb an action is constrained to links to that
+/// action alone, not to an action answering every verb at the same path.
+#[test]
+fn default_actions_are_served_at_their_controllers_route() {
+    let turn = turn();
+    let base = turn.dir("default-actions");
+    let server = scratch(&base, "shop-admin");
+    write(&server, "src/Admin.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n");
+    write(
+        &server,
+        "src/Program.cs",
+        "var app = WebApplication.Create(args);\napp.MapControllerRoute(name: \"default\", pattern: \"{controller}/{action}/{id?}\", defaults: new { controller = \"Home\", action = \"Index\" });\napp.Run();\n",
+    );
+    write(&server, "src/HomeController.cs", "public class HomeController : Controller\n{\n    public IActionResult Index() => null;\n}\n");
+    write(
+        &server,
+        "src/OrdersController.cs",
+        "public class OrdersController : Controller\n{\n    public Task<IActionResult> IndexAsync() => null;\n    public IActionResult List() => null;\n}\n",
+    );
+    write(
+        &server,
+        "src/ReportsController.cs",
+        "public class ReportsController : Controller\n{\n    public IActionResult Index() => null;\n    [HttpPost(\"~/Reports\")]\n    public IActionResult Create() => null;\n}\n",
+    );
+    let web = scratch(&base, "shop-web");
+    write(
+        &web,
+        "src/admin.ts",
+        "export class Admin {\n  orders() { return fetch('/Orders'); }\n  report() { return fetch('/Reports', { method: 'POST' }); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&server, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let served: Vec<(String, String)> =
+        routes(0).into_iter().filter(|r| r.side == "server" && r.symbol.contains(".Index")).map(|r| (r.symbol, r.path.unwrap_or_default())).collect();
+    let s = |sym: &str, path: &str| (sym.to_string(), path.to_string());
+    assert_eq!(
+        served,
+        [
+            s("HomeController.Index", ""),
+            s("HomeController.Index", "Home"),
+            s("HomeController.Index", "Home/Index"),
+            s("HomeController.Index", "Home/Index/{id}"),
+            s("OrdersController.IndexAsync", "Orders"),
+            s("OrdersController.IndexAsync", "Orders/Index"),
+            s("OrdersController.IndexAsync", "Orders/Index/{id}"),
+            s("ReportsController.Index", "Reports"),
+            s("ReportsController.Index", "Reports/Index"),
+            s("ReportsController.Index", "Reports/Index/{id}"),
+        ]
+    );
+    let link = |sym: &str| -> Vec<(String, &'static str)> {
+        let r = routes(1).into_iter().find(|r| r.symbol == sym).unwrap();
+        kc_index::http::handlers(&r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("Admin.orders"), [("OrdersController.IndexAsync".to_string(), "exact")]);
+    assert_eq!(link("Admin.report"), [("ReportsController.Create".to_string(), "exact")]);
     let _ = std::fs::remove_dir_all(&base);
 }
 

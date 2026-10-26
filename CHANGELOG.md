@@ -2,6 +2,17 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- Default actions are served at their controller's route. A conventional template's defaults
+  (`{controller=Home}/{action=Index}/{id?}`, or `defaults: new { action = "Index" }`) let a URL leave a trailing
+  segment out when it holds the default: `OrdersController.Index` is served at `Orders` as well as `Orders/Index`, and
+  the default controller's `Index` at the root. Where an action constrained to the request's verb serves the path,
+  an action answering every verb at the same path is no longer a candidate, as ASP.NET Core prefers the constrained
+  one. On the public-v1 workspace, bitwarden-server's admin app gained 7 routes (`Organizations`, `Providers`, `Users`,
+  `Login` ×2, `Home` and the root), and the admin test fixture's `GET /login` and `POST /login` now link, `exact`, to
+  `LoginController.Index`. C# files are re-extracted.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
