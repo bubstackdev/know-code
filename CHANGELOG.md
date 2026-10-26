@@ -2,7 +2,9 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.4.0 (date TBD)
+
+SUMMARY TBD: the lead writes this paragraph from the release gate's measurements.
 
 - A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
   written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
