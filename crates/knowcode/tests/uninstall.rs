@@ -64,12 +64,20 @@ fn codex_session_start_hook_is_removed_and_other_hooks_kept() {
     let mine = "[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo mine\"\n";
     q.write("codex/config.toml", mine);
     q.setup("codex");
+    // Codex's records of the user trusting each hook, by place: theirs first, ours (an earlier version of it) second.
+    let record = |index: usize, hash: &str| format!("\n[hooks.state.\"{}:session_start:{index}:0\"]\ntrusted_hash = \"{hash}\"\n", q.path("codex/config.toml").display());
+    let mut text = fs::read_to_string(q.path("codex/config.toml")).unwrap();
+    text.push_str(&record(0, "sha256:mine"));
+    text.push_str(&record(1, "sha256:an-earlier-knowcode-hook"));
+    fs::write(q.path("codex/config.toml"), text).unwrap();
     success(q.run(&["uninstall"]));
     let doc: DocumentMut = fs::read_to_string(q.path("codex/config.toml")).unwrap().parse().unwrap();
     let groups = doc["hooks"]["SessionStart"].as_array_of_tables().unwrap();
     assert_eq!(groups.len(), 1);
     assert_eq!(groups.get(0).unwrap()["hooks"][0]["command"].as_str(), Some("echo mine"));
     assert!(doc["mcp_servers"].get("knowcode").is_none());
+    let records: Vec<String> = doc["hooks"]["state"].as_table_like().unwrap().iter().map(|(k, _)| k.to_string()).collect();
+    assert_eq!(records, [format!("{}:session_start:0:0", q.path("codex/config.toml").display())], "only the user's record stays");
 }
 
 /// Codex keys a hook's trust by its entry's position in `hooks.SessionStart`. When the user's hooks follow ours,

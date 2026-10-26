@@ -49,7 +49,8 @@ knowcode setup claude     # or: knowcode setup codex, knowcode setup cursor
 
 `setup claude` installs the bundled Claude Code plugin: the MCP server, a Grep/Glob hook and four workflow skills.
 `setup codex` and `setup cursor` add the MCP server to the client's user settings; `setup codex` also adds a
-session-start hook, which Codex runs once you trust it in `/hooks`. `--print` shows the configuration without changing
+session-start hook, which Codex runs once you trust it (setup says how, and `knowcode status` says whether you have).
+`--print` shows the configuration without changing
 anything. Start a new client session afterwards.
 
 The server advertises one tool, `kc`, whose `op` names what to run (`impact`, `find`, `refs`, `context`, `search`, …,

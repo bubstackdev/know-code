@@ -28,6 +28,14 @@ measure what KnowCode returns, and make no claim about how agents use it.
   file's, as top-level statements are, where it was dropped: jellyfin-web's `ApiClient.getLiveTvSeriesTimers(query)`
   in `self.preRender = function () {…}`. On the public-v1 workspace this adds 25 request rows (21 in jellyfin-web,
   4 in bitwarden-clients' specs), 9 of them linked.
+- `knowcode setup codex` says whether Codex runs KnowCode's session-start hook yet, read from Codex's own record of
+  the hooks you trusted: if not, the one step left ("Hooks need review" → "Review hooks" when Codex starts, or
+  `/hooks`), and if it changed since you trusted it, why. `knowcode status` gives the same line for each Codex
+  profile set up (`codex_hooks` in `--json`). KnowCode only reads that record; trusting the hook stays yours to do in
+  Codex. `knowcode uninstall` also removes Codex's record of trusting KnowCode's hook.
+- For a Homebrew install, setup names `opt/knowcode/bin/knowcode` when it would otherwise name the versioned keg,
+  which `brew upgrade` removes: the client configuration, and the Codex hook you trusted, keep working across
+  upgrades.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
