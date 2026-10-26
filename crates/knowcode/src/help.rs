@@ -438,8 +438,9 @@ implementations and subclasses, or implementing members, in repos depending on i
 `implements`). Each dependent is listed once, by its best way: a confident edge over an ambiguous one, then the nearest
 hop; when an ambiguous way reaches it nearer, `nearest_ambiguous_hop` says so and its class goes by that hop. An
 ambiguous link counts as low-confidence and, under the default evidence policy, isn't walked past (`evidence: all`
-walks past it, marked ambiguous). When the walk stops at the limit (`limit`, default 30; `truncated`), `counts_cover`
-is "shown": the counts are of the affected symbols listed, not all.
+walks past it, marked ambiguous). A dependent reaching what it was reached from on several lines gives the first as
+its `site` and the rest in `also` (`at a.cs:12 (also 30, 41)` in text). When the walk stops at the limit (`limit`,
+default 30; `truncated`), `counts_cover` is "shown": the counts are of the affected symbols listed, not all.
 
 Where the walk stops: the walk goes up to 16 hops (deeper asked: `depth: {asked, walked}`), its budget the symbol
 limit. Listed symbols it didn't walk past that have dependents it doesn't list are its `frontier` ({qualified, file,

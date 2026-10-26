@@ -739,6 +739,14 @@ fn relation_label(
 /// One affected symbol's line in the impact tree.
 fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
     let mut site = a.site.as_deref().map(|s| format!(" at {}", in_repo(a.repo.as_deref(), s))).unwrap_or_default();
+    if let Some(first) = a.site.as_deref()
+        && !a.also.is_empty()
+    {
+        // Its other sites: lines of the same file by number, any other file in full.
+        let file = first.rsplit_once(':').map_or(first, |(f, _)| f);
+        let lines: Vec<&str> = a.also.iter().map(|s| s.strip_prefix(file).and_then(|r| r.strip_prefix(':')).unwrap_or(s)).collect();
+        site.push_str(&format!(" (also {})", lines.join(", ")));
+    }
     if !a.copies.is_empty() {
         site.push_str(&format!(" (also copies at {})", a.copies.join(", ")));
     }

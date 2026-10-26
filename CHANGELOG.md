@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- An impact row whose caller reaches the changed symbol on several lines lists them all: `at line 526 (also 532, 592,
+  602)` in text, `also` in JSON. Before, one line per caller was named; agents in 0.3's study grepped for the rest,
+  and a two-hop question's label counts each call line. Replaying that study's KnowCode calls, impact answers grow
+  by 0.1% in bytes (4 of 27 change).
 - **Changed default: one MCP tool.** `knowcode serve`, and so `setup claude`, `setup codex` and `setup cursor`,
   now advertise a single tool, `kc`, instead of the eight core tools. Its `op` names the tool to run, without `kc_`
   (`impact`, `find`, `refs`, `context`, `search`, `locate`, `more`, `help`, and every other tool by name); `q` fills

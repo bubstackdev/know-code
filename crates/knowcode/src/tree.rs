@@ -278,6 +278,9 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                     continue;
                 }
                 let Some(grow) = seen.offer_as(dep.id, hop, confidence, verdict == Verdict::Follow) else { continue };
+                // Its other sites reaching `sym`: another reference on the site's own line says nothing new.
+                let mut also: Vec<String> = g.also(repo, dep.id, sym.id).into_iter().filter(|a| Some(a) != site.as_ref()).collect();
+                also.sort_by_key(|a| a.rsplit_once(':').map(|(f, l)| (f.to_string(), l.parse::<u32>().unwrap_or(0))));
                 let row = Affected {
                     id: dep.id,
                     qualified: dep.qualified(),
@@ -298,6 +301,7 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                     role: None,
                     deploy: None,
                     module: None,
+                    also,
                     copies: Vec::new(),
                     via_removed: false,
                     evidence,
@@ -448,6 +452,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                     role: landing.via.role(),
                     deploy: landing.via.deploy(),
                     module: landing.via.module(),
+                    also: Vec::new(),
                     copies: Vec::new(),
                     via_removed: false,
                     evidence: arrival.evidence.clone(),
