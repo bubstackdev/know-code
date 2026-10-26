@@ -26,6 +26,11 @@ python3 scripts/check-docs.py target/debug/knowcode   # docs match the binary's 
 scripts/check-size.sh                             # the dist binary against size-budget.txt
 ```
 
+CI also replays the recorded KnowCode calls on five small public repositories against the latest release and the
+change, with no model calls, and fails on a regression beyond the replay gate's tolerances; the comparison is in the
+job summary ([eval/replay-gate/README.md](../eval/replay-gate/README.md)). The full replay, all ten repositories, runs
+before a release.
+
 Then **diff the answers**: snapshot the query set with the base build and with the change, each on its own fresh
 cache, and explain every difference in the commit or merge message. A difference nobody can explain is a regression
 until shown otherwise.

@@ -2,12 +2,17 @@
 """Release replay gate: KnowCode's answers on recorded calls, with no model calls.
 
     replay_gate.py extract --study public-v2 --transcripts DIR [DIR ...] --out corpus.jsonl
+    replay_gate.py fetch --repos a,b --out SOURCE
     replay_gate.py run --knowcode BIN --label NAME --source SOURCE --work WORK [--corpus FILE ...] [--repos a,b]
     replay_gate.py compare BASE_SUMMARY CANDIDATE_SUMMARY [--recall-tolerance …]
 
 `extract` collects every KnowCode call in a study's raw transcripts as the tool it runs and that tool's arguments
 (a `kc {op: …}` call reads as its op's tool, public_transcript.knowcode_tool), one row per question and distinct
 call, with session paths made repository-relative. eval/replay-gate/corpus.jsonl holds public-v1's and public-v2's.
+
+`fetch` exports the pinned public source of some of public-v2's repositories, as prepare-public-eval.py does for all of
+them: a shallow fetch of each pinned commit, exported with the manifest's exclusions. CI uses it for the fast subset
+(SUBSET), cached by those commits.
 
 `run` replays a corpus against one build. It prepares neutral Git workspaces from the pinned public source once
 (APFS clones, each hashed against the source receipt), indexes them with the build into the build's own cache, starts
@@ -64,6 +69,8 @@ PROFILES = ('one', 'core', 'all')
 REFUSALS = (re.compile(r'\bmatched 0 files \('),)
 GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+# The fast subset: the questions whose repositories are all small. About 12 MB of source, 22 questions, 119 calls.
+SUBSET = ('autofac', 'autofac-di', 'serilog', 'serilog-aspnetcore', 'serilog-extensions-hosting')
 TOLERANCES = {'recall': 0.02, 'precision': 0.05, 'bytes': 0.10, 'schema': 0.05}
 
 
@@ -108,6 +115,21 @@ def extract(study, transcript_dirs):
                     key = (match.group(1), tool[0], json.dumps(args, sort_keys=True))
                     rows[key] = rows.get(key, 0) + 1
     return [dict(study=study, question=q, tool=t, args=json.loads(a), sessions=n) for (q, t, a), n in sorted(rows.items())]
+
+
+def fetch(repos, out, manifest=ROOT/'eval/public-v2/manifest.json'):
+    """The pinned public source of `repos` (names in the manifest) in OUT: objects/, view/ and source-receipt.json."""
+    spec = json.loads(Path(manifest).read_text())
+    families = [dict(family, repos=[r for r in family['repos'] if r['name'] in repos]) for family in spec['families']]
+    families = [f for f in families if f['repos']]
+    found = {r['name'] for f in families for r in f['repos']}
+    if found != set(repos):
+        raise SystemExit('not in the manifest: ' + ', '.join(sorted(set(repos) - found)))
+    prepare = load('replay_gate_prepare', ROOT/'scripts/prepare-public-eval.py')
+    with tempfile.TemporaryDirectory(prefix='replay-gate-manifest-') as temp:
+        subset = Path(temp)/'manifest.json'
+        subset.write_text(json.dumps(dict(spec, families=families), indent=2) + '\n')
+        prepare.prepare(subset, Path(out))
 
 
 # --- workspaces and index ------------------------------------------------------------------------------------------
@@ -423,6 +445,9 @@ def main():
     e.add_argument('--study', required=True, choices=sorted(STUDIES))
     e.add_argument('--transcripts', nargs='+', required=True)
     e.add_argument('--out', required=True)
+    f = sub.add_parser('fetch')
+    f.add_argument('--repos', default=','.join(SUBSET), help='comma-separated public-v2 repositories (default: the fast subset)')
+    f.add_argument('--out', required=True, help='a new or empty directory outside this checkout')
     r = sub.add_parser('run')
     r.add_argument('--knowcode', required=True)
     r.add_argument('--label', required=True)
@@ -442,6 +467,8 @@ def main():
         rows = extract(a.study, a.transcripts)
         Path(a.out).write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
         print(json.dumps(dict(rows=len(rows), calls=sum(r['sessions'] for r in rows))))
+    elif a.command == 'fetch':
+        fetch(a.repos.split(','), a.out)
     elif a.command == 'run':
         summary = run(a)
         print(json.dumps({k: summary[k] for k in ('label', 'knowcode_version', 'calls', 'skipped', 'strata', 'timing')}, indent=1))
