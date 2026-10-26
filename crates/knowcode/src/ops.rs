@@ -774,6 +774,7 @@ pub fn routes(args: &Scope) -> Result<Out<Vec<(PathBuf, HttpOut)>>> {
             confidence: l.confidence,
             assumptions: l.assumptions,
             host: l.host,
+            package: l.package,
             local: l.route.local,
             source: None,
             source_truncated: false,
@@ -2545,6 +2546,9 @@ fn called_over_http(http: &[HttpOut]) -> Option<Value> {
                     if l.assumptions.contains(&Assumption::OperationName) {
                         tags.push("by operation name");
                     }
+                    if l.assumptions.contains(&Assumption::PackageCode) {
+                        tags.push("through its SDK package");
+                    }
                     let sure = if tags.is_empty() { String::new() } else { format!(" ({})", tags.join(", ")) };
                     format!("{}/{}:{} {}{sure}", l.repo, l.file, l.line, l.symbol)
                 })
@@ -2577,6 +2581,10 @@ pub struct HttpLinkOut {
     /// The host evidence the link rests on: the host, where the client names it, where it is mapped to the repo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<kc_index::http::HostLink>,
+    /// For a call to an external client the repo declares: the package method, read from `node_modules`, whose
+    /// request the link follows (package, version, method, where, the request).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<kc_index::http::PackageLink>,
     /// For a link to a request whose URL is a `const` local of its function: the local and where it is declared.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local: Option<String>,
@@ -2671,6 +2679,7 @@ fn http_for(o: &Opened, ctx: &Context, no_sync: bool) -> Result<Vec<HttpOut>> {
         confidence: l.confidence,
         assumptions: l.assumptions,
         host: l.host,
+        package: l.package,
         local: l.route.local,
         }
     };

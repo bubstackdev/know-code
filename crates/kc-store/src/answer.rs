@@ -188,9 +188,13 @@ pub enum Assumption {
     /// `local` says where): that the name in the call is that local was read from the syntax, without a type checker.
     UrlLocal,
     /// An operation is a method of an external client the repo only declares (a `.d.ts`): the client's code, where the
-    /// request is made, wasn't read, so the route is matched by the method's name, and the action's `…Legacy` twin is
-    /// as likely.
+    /// request is made, wasn't read (or, read from `node_modules`, didn't say which route: the link's `package` says
+    /// what it showed), so the route is matched by the method's name, and the action's `…Legacy` twin is as likely.
     ClientUnread,
+    /// A declared external client's method requests the route its package's code shows, read from the client repo's
+    /// `node_modules` at the version its lockfile pins (the link's `package` says which method, where): that the
+    /// installed copy is the code that runs, and that the method's request is the one made, wasn't checked further.
+    PackageCode,
 }
 
 /// What an edge rests on: how its target was found, and what that did not check.
@@ -450,6 +454,7 @@ pub const ASSUMPTIONS: &[Assumption] = &[
     Assumption::ServerUnverified,
     Assumption::UrlLocal,
     Assumption::ClientUnread,
+    Assumption::PackageCode,
 ];
 
 impl Default for EvidencePolicy {

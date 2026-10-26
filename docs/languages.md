@@ -114,7 +114,13 @@ Resolved:
   action of its name, `ambiguous`, assuming `server_unverified`. A client the repo declares itself is read through its
   own requests instead. A method of an external client the repo only declares in a `.d.ts` (`declare module
   'media-apiclient'`), called with no tag (`apiClient.getItem(…)`), makes its request in code that isn't read: it
-  links to the action of its name and that action's `…Legacy` twin, `ambiguous`, assuming `client_unread`.
+  links to the action of its name and that action's `…Legacy` twin, `ambiguous`, assuming `client_unread`. When the
+  package is installed in the repo's `node_modules` at the version its lockfile pins, its code is read instead (see
+  [configuration](configuration.md#ignoring-paths)): the call links through the request the package's method makes
+  (its own, or that of a method of its class it calls, one call deep), as the repo's own request of that verb and
+  path would, assuming `package_code`, with `package` naming the package, version, method and where it is (a
+  minified bundle's original source, from its source map). A method making two requests links `ambiguous`; one
+  making none that KnowCode reads, or whose URL is built at run time, keeps the name guess, saying so.
 - **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
   are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
   methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may

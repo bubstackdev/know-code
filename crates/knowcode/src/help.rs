@@ -185,7 +185,9 @@ every verb, under MapGroup prefixes, through helper methods); the handler owns t
 Requested: also request classes with a path and verb in an attribute ([Endpoint("/orders", HttpMethod.Get)]). A link
 with `host` rests on a host: the client's URL, base address or settings name it, and launch profiles, compose,
 Aspire, ingress or proxy configuration map it to the repo (assumption configured_host). A registration KnowCode can't
-place (a template that isn't a constant) makes the answer incomplete with reason `unsupported`."#,
+place (a template that isn't a constant) makes the answer incomplete with reason `unsupported`. A call to an
+external client the repo declares in a .d.ts links through its SDK package's code when that is installed at the
+version the lockfile pins: `package` {package, version, method, at, request} (assumption package_code)."#,
     },
     Topic {
         name: "kc_context.angular",
@@ -872,7 +874,8 @@ is the action of that name; the API description wasn't read), `server_unverified
 client calls: every action of the operation's name is a candidate), `url_local` (a request's URL is a `const` of its
 function, read from its declaration; the request's `local` says where), `client_unread` (a method of an external client
 the repo only declares, in a `.d.ts`: its code wasn't read, so the route is matched by the method's name, its
-`…Legacy` twin too).
+`…Legacy` twin too), `package_code` (a declared client's method requests the route its package's code shows, read
+from the repo's node_modules at the version its lockfile pins; the link's `package` says which method, where).
 
 Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which edges to follow:
 - `default`: exact and unique_name edges followed, ambiguous ones listed, not followed;

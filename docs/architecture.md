@@ -34,6 +34,15 @@ Each extractor has a version; bumping it re-extracts that language's files on th
 An index written by a newer schema is refused with an error naming both schemas, rather than rebuilt; an older one
 is rebuilt.
 
+One thing in the index isn't the repo's own code: for an SDK package the repo declares as an external client
+(`declare module '<package>'` in a `.d.ts`), installed in its `node_modules` at the version its lockfile pins, the
+requests each method of the package's classes makes (`kc-index`'s `sdk.rs`). It is the one deliberate exception to
+indexing only the repo's listed files, kept narrow: only declared packages, only the pinned version, the repo's
+privacy file applied, links never followed, minified code read only from its source map's original sources, nothing
+fetched, nothing written into the repo. The package's code is extracted in memory; only the methods and their
+requests are kept, in the index's metadata, read again when a declaring file, the installed `package.json` or the
+lockfile changes. `index.node_modules = false` turns it off (see [configuration](configuration.md#ignoring-paths)).
+
 ## Freshness
 
 Every CLI query syncs the repos it reads before answering, unless `--no-sync`:

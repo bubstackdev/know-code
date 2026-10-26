@@ -37,6 +37,7 @@ pub mod ownership;
 pub mod privacy;
 pub mod roots;
 pub mod scip;
+pub mod sdk;
 pub mod search;
 pub mod sql;
 pub mod test_select;
@@ -1271,6 +1272,10 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
         store.checkpoint()?;
     }
     mark.record("write.commit");
+    // SDK packages the repo declares as external clients, read from its `node_modules` when they changed.
+    let mark = meter::Mark::now();
+    sdk::refresh(root, store, &privacy)?;
+    mark.record("sdk");
     let mark = meter::Mark::now();
     report.scip = scip::refresh(root, store, opts.scip_compare)?;
     mark.record("scip");

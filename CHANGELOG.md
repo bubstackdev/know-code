@@ -4,6 +4,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A call to an external client the repo declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`) links
+  through the client package's own code when it is installed in the repo's `node_modules` at the version the
+  lockfile pins: to the action serving the request the package's method makes, assuming `package_code`, with
+  `package` naming the package, version, method and its file and line (a minified bundle is read from its source
+  map's original sources). Only declared packages are read, the repo's privacy file applies, links aren't followed,
+  nothing is fetched or written into the repo; `index.node_modules = false` turns it off. On the public-v1
+  workspace, with jellyfin-web's lockfile-pinned packages installed, 194 calls link through the package (87 that
+  linked nothing, 43 to other actions than the name guess, among them 11 to the `…Legacy` twin), and public-v1's
+  http-cross-repo-005 finds its one missed file.
 - A call to an external client the repo only declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`), with
   no tag (`apiClient.updateUserConfiguration(…)`), no longer links `exact` by the method's name: the client's code,
   where the request is made, isn't read, and it may request the action's `…Legacy` twin instead (on public-v1's

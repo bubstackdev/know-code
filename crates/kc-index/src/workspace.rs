@@ -35,6 +35,9 @@ pub struct RepoSummary {
     /// Hosts its config and code say it serves, or its clients send to (see [`crate::http`]).
     #[serde(default)]
     pub hosts: Vec<query::HostRow>,
+    /// SDK packages it declares as external clients, and the requests their methods make (see [`crate::sdk`]).
+    #[serde(default)]
+    pub sdk: Vec<crate::sdk::SdkPackage>,
     /// The `origin` remote, normalized to `host/path` (see [`normalize_remote`]): what makes two checkouts (a
     /// clone and a worktree, say) the same repo.
     #[serde(default)]
@@ -106,7 +109,7 @@ pub struct RepoSummary {
 /// Bumped whenever [`RepoSummary`] changes. With the index schema version, it names the summary file's format: a
 /// file in any other format (written by an older or newer build sharing the cache) is rebuilt, not trusted, since
 /// its entries' stamps would still match while their contents lack what this build reads.
-const SUMMARY_FORMAT: u32 = 20;
+const SUMMARY_FORMAT: u32 = 21;
 
 #[derive(Serialize, Deserialize)]
 struct SummaryFile {
@@ -483,6 +486,7 @@ fn read_store(db: &Path, stamp: String, store: Store) -> Result<Option<RepoSumma
     let modules = query::provided_modules(store.conn())?;
     let routes = query::http_routes(store.conn())?;
     let hosts = query::host_facts(store.conn())?;
+    let sdk = crate::sdk::stored(store.conn())?;
     let selectors = query::ng_selectors(store.conn())?;
     let root = PathBuf::from(root);
     let origin = git::run(&root, &["config", "--get", "remote.origin.url"])
@@ -505,7 +509,7 @@ fn read_store(db: &Path, stamp: String, store: Store) -> Result<Option<RepoSumma
     let defines = name_filter(&defined_names(store.conn())?);
     let tables = name_filter(&table_names(store.conn())?);
     Ok(Some(RepoSummary {
-        root, packages, modules, routes, hosts, selectors, bus, sql, db_names, ansible, ci, terraform, origin, indexed_at, names, defines, tables, stamp, generation,
+        root, packages, modules, routes, hosts, sdk, selectors, bus, sql, db_names, ansible, ci, terraform, origin, indexed_at, names, defines, tables, stamp, generation,
         outside_roots: false,
         blocked,
         privacy_key,
@@ -908,6 +912,7 @@ impl RepoSummary {
             modules: Vec::new(),
             routes: Vec::new(),
             hosts: Vec::new(),
+            sdk: Vec::new(),
             origin: None,
             selectors: Vec::new(),
             bus: Vec::new(),
