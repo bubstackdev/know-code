@@ -187,6 +187,10 @@ pub enum Assumption {
     /// An HTTP request's URL is a `const` local of the function making it, read from its declaration (the route's
     /// `local` says where): that the name in the call is that local was read from the syntax, without a type checker.
     UrlLocal,
+    /// An operation is a method of an external client the repo only declares (a `.d.ts`): the client's code, where the
+    /// request is made, wasn't read, so the route is matched by the method's name, and the action's `…Legacy` twin is
+    /// as likely.
+    ClientUnread,
 }
 
 /// What an edge rests on: how its target was found, and what that did not check.
@@ -445,6 +449,7 @@ pub const ASSUMPTIONS: &[Assumption] = &[
     Assumption::OperationName,
     Assumption::ServerUnverified,
     Assumption::UrlLocal,
+    Assumption::ClientUnread,
 ];
 
 impl Default for EvidencePolicy {

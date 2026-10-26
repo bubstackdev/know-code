@@ -111,7 +111,9 @@ Resolved:
   count: the repo itself, a repo it depends on, the one repo serving another of its requests or a host its settings
   name, the one repo a tagged operation of its links to. With none known, an untagged operation links to every
   action of its name, `ambiguous`, assuming `server_unverified`. A client the repo declares itself is read through its
-  own requests instead.
+  own requests instead. A method of an external client the repo only declares in a `.d.ts` (`declare module
+  'media-apiclient'`), called with no tag (`apiClient.getItem(…)`), makes its request in code that isn't read: it
+  links to the action of its name and that action's `…Legacy` twin, `ambiguous`, assuming `client_unread`.
 - **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
   are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
   methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may

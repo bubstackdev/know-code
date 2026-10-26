@@ -397,9 +397,17 @@ fn action_of(r: &RouteRow) -> (&str, &str) {
 /// `ambiguous` when several do, or when the client has no tag and the operation is one word (`update`): nothing then
 /// says the receiver is the API's client rather than another of the name. When no server is known, an untagged operation links to every action of that name,
 /// `ambiguous`, assuming `server_unverified`: nothing says which server the client sends to.
+///
+/// An untagged method of an external client the repo only declares (a `.d.ts`, see [`RouteRow::detail`]) makes its
+/// request inside code that wasn't read, so its URL isn't known: the server's `…Legacy` twin of the action (the same
+/// operation under its older route) is as likely, and the links are `ambiguous` at most, assuming `client_unread`.
 fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
     let Some(op) = client.path.as_deref() else { return Vec::new() };
-    let named = named_actions(op, summaries);
+    let unread = declared_untagged(client);
+    let mut named = named_actions(op, summaries);
+    if unread {
+        named.extend(named_actions(&format!("{op}Legacy"), summaries));
+    }
     let tagged: Vec<(&Path, &RouteRow)> = match client.service.as_deref() {
         Some(tag) => named.iter().filter(|(_, r)| squash(action_of(r).1) == squash(tag)).copied().collect(),
         None => Vec::new(),
@@ -414,17 +422,37 @@ fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSu
     // A one-word operation (`update`, `login`) not under the controller its tag names is a name many APIs' methods
     // share: never `exact`.
     let specific = by_tag || op.chars().skip(1).any(|c| c.is_ascii_uppercase() || c == '_');
-    let confidence = if cands.len() == 1 && !unverified && specific { "exact" } else { "ambiguous" };
+    let confidence = if cands.len() == 1 && !unverified && specific && !unread { "exact" } else { "ambiguous" };
     let mut assumptions = vec![Assumption::SameDeployment, Assumption::OperationName];
     if unverified {
         assumptions.push(Assumption::ServerUnverified);
     }
+    if unread {
+        assumptions.push(Assumption::ClientUnread);
+    }
+    assumptions.sort();
     let mut links: Vec<RouteLink> = cands
         .into_iter()
         .map(|(repo, route)| RouteLink { repo: repo.to_path_buf(), route: route.clone(), confidence, assumptions: assumptions.clone(), host: None })
         .collect();
     links.sort_by(|a, b| (&a.repo, &a.route.symbol).cmp(&(&b.repo, &b.route.symbol)));
     links
+}
+
+/// Whether an operation is an untagged call to an external client the repo only declares (`detail` says where): its
+/// request is made in code that wasn't read.
+fn declared_untagged(op: &RouteRow) -> bool {
+    op.side == "operation" && op.service.is_none() && op.detail.is_some()
+}
+
+/// Whether the operation `op` may be the action named `action`: of its name, or, for an external client the repo only
+/// declares, its `…Legacy` twin (see [`operation_handlers`]).
+fn may_be_action(op: &RouteRow, action: &str) -> bool {
+    let Some(name) = op.path.as_deref() else { return false };
+    action.eq_ignore_ascii_case(name)
+        || declared_untagged(op)
+            && action.get(..name.len()).is_some_and(|a| a.eq_ignore_ascii_case(name))
+            && action.get(name.len()..).is_some_and(|rest| rest.eq_ignore_ascii_case("Legacy"))
 }
 
 /// The actions named `op` in any repo, one per action (an action routed under several paths is one action).
@@ -568,7 +596,7 @@ pub fn callers(server: &RouteRow, server_repo: &Path, summaries: &[RepoSummary])
     for s in distinct(summaries) {
         let requests = |r: &&RouteRow| match r.side.as_str() {
             "client" => key(r).is_some_and(|ck| serves_key(&k, &ck)),
-            "operation" => r.path.as_deref().is_some_and(|op| op.eq_ignore_ascii_case(action)),
+            "operation" => may_be_action(r, action),
             _ => false,
         };
         for c in s.routes.iter().filter(requests) {

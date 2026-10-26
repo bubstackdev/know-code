@@ -12,6 +12,11 @@ reaches further: replaying every call recorded in the published studies, two-hop
 labelled places (recall 0.587 to 0.628) with fewer wrong ones, and no question type got worse. From 0.4 on, releases ship on [checks that make no model calls](eval/release-gate/0.4.0.md); they
 measure what KnowCode returns, and make no claim about how agents use it.
 
+- A call to an external client the repo only declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`), with
+  no tag (`apiClient.updateUserConfiguration(…)`), no longer links `exact` by the method's name: the client's code,
+  where the request is made, isn't read, and it may request the action's `…Legacy` twin instead (on public-v1's
+  workspace, at least 10 of 179 such links went to the wrong one of the two). These links are now `ambiguous`,
+  include the `…Legacy` twin, and assume `client_unread`.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
