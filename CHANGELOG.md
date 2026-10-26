@@ -8,6 +8,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   edit, and call that answer complete: the edit's new symbol was missing with nothing said. When the job it joined
   finishes and the working tree still differs from the index, the query now waits on a new one, within the same
   budget, or says the repo is still being indexed.
+- `impact` and `trace` (callers) walk on across a library boundary: from a method or property, to its calls in the repos
+  depending on its repo (resolved into it) and on to their callers there; from an implementation of an interface
+  member a dependency declares, to the calls through that member in the dependency and the repos using it. A row
+  across the boundary has its `repo` and `library` (`{library, through}`). Calls through an interface are
+  `ambiguous` (another implementation may run): listed, not walked past under the default policy, with the frontier's
+  call going on from them; `evidence: all` walks past them. Before, these were one hop deep, in `cross_repo` only.
+  **`cross_repo` changes:** it no longer lists a site the walk lists, so its count drops where the walk reaches
+  across. Library crossings are looked up for at most 64 walked symbols an answer (then `incomplete` says how many
+  were left). A continue call names a symbol by `file:line` when overloads share its file.
 - `history` lists a symbol's direct callers whose files changed in its commits (`callers_changed_with`), each with
   how many of its commits and the newest few, tests marked; `callers_total` counts every direct caller. Callers come
   from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits

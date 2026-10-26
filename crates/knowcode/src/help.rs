@@ -435,9 +435,13 @@ class; `low_confidence` counts the dependents reached through an edge that isn't
 release): `nearest` in the old names (critical, high, medium, low), kept for scripts that read it; it never measured
 risk either.
 
-Also: cross-repo dependents (`cross_repo`; for an interface or base class, or an interface member, also its
+Across a library boundary the walk goes on: a method's or property's calls in repos depending on its repo, and for an
+implementation of an interface member a dependency declares, the calls through that member in the dependency and the
+repos using it (ambiguous: another implementation may run), each with its `repo` and `library` (the repo crossed, and
+`through` the interface). Looked up for at most 64 walked symbols (then `incomplete` says how many it left). Also:
+cross-repo dependents the walk doesn't list (`cross_repo`; for an interface or base class, or an interface member, its
 implementations and subclasses, or implementing members, in repos depending on its repo: kind `inherits` or
-`implements`). Each dependent is listed once, by its best way: a confident edge over an ambiguous one, then the nearest
+`implements`; a type's uses and creations). Each dependent is listed once, by its best way: a confident edge over an ambiguous one, then the nearest
 hop; when an ambiguous way reaches it nearer, `nearest_ambiguous_hop` says so and its class goes by that hop. An
 ambiguous link counts as low-confidence and, under the default evidence policy, isn't walked past (`evidence: all`
 walks past it, marked ambiguous). A dependent reaching what it was reached from on several lines gives the first as

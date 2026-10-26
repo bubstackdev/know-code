@@ -4420,6 +4420,23 @@ pub(crate) struct HttpCrossing<'a> {
     /// whose weren't.
     pub(crate) library_checked: usize,
     pub(crate) library_cut: usize,
+    /// Whether to cross to a library's users at all (a walk inward does; `trace` out doesn't).
+    pub(crate) library: bool,
+    /// What library crossings reuse within the answer.
+    lib: LibraryCache,
+}
+
+/// What [`HttpCrossing::library_crossings`] reads once an answer: the workspace's repo graph, each repo's dependents
+/// and dependencies, the modules a library provides, what resolving into it assumes, and whether a type names a
+/// supertype from outside its repo.
+#[derive(Default)]
+struct LibraryCache {
+    workspace: Option<(std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>, std::sync::Arc<kc_index::workspace::Graph>)>,
+    dependents: HashMap<PathBuf, Vec<(PathBuf, bool)>>,
+    dependencies: HashMap<PathBuf, Vec<PathBuf>>,
+    modules: HashMap<PathBuf, Vec<String>>,
+    assumptions: HashMap<(PathBuf, PathBuf), Vec<Assumption>>,
+    outside: HashMap<(PathBuf, String), bool>,
 }
 
 /// The most symbols a walk looks up library crossings for (see [`HttpCrossing::library_crossings`]): each opens the
@@ -4441,6 +4458,8 @@ impl<'a> HttpCrossing<'a> {
             ci_cut: Vec::new(),
             library_checked: 0,
             library_cut: 0,
+            library: true,
+            lib: LibraryCache::default(),
         }
     }
 
@@ -4515,22 +4534,15 @@ impl<'a> HttpCrossing<'a> {
     fn library_crossings(&mut self, root: &Path, id: i64) -> Result<Vec<crate::graph::Crossing>> {
         let uses = ["calls", "uses"].iter().any(|e| self.gate.allows(e));
         let through = self.gate.allows("via_protocol");
-        if !uses && !through {
+        if !self.library || (!uses && !through) {
             return Ok(Vec::new());
         }
         let Some(sym) = trace::symbol(self.store(root).conn(), id)? else { return Ok(Vec::new()) };
         if !matches!(sym.kind.as_str(), "method" | "function" | "property") {
             return Ok(Vec::new());
         }
-        if self.summaries.is_none() {
-            self.summaries = Some(full_summaries(self.home)?);
-        }
-        let summaries = self.summaries.clone().unwrap_or_default();
-        let graph = kc_index::workspace::graph(&summaries);
-        let me = kc_index::workspace::identity_of(root, &summaries);
-        let used = uses
-            && graph.dependents(&me).into_iter().any(|i| summaries[i].root != root && !summaries[i].gone && summaries[i].may_reference(&sym.name));
-        let dispatch = through && sym.container.is_some() && query::names_outside_supertypes(self.store(root).conn(), &sym)?;
+        let used = uses && self.lib_dependents(root)?.iter().any(|(r, changed)| *changed || self.lib_summary(r).is_some_and(|s| s.may_reference(&sym.name)));
+        let dispatch = through && self.lib_outside(root, &sym)?;
         if !used && !dispatch {
             return Ok(Vec::new());
         }
@@ -4541,21 +4553,49 @@ impl<'a> HttpCrossing<'a> {
         self.library_checked += 1;
         let library = repo_name(root);
         let mut found: Vec<(PathBuf, trace::LibraryVia, RefHit)> = Vec::new();
-        {
-            let conn = self.store(root).conn();
-            if used {
-                for (r, h) in refs_into_repos(self.home, root, conn, &sym.name, &["call", "member"], self.no_sync)? {
-                    if !h.targets.iter().any(|t| t.id == sym.id && t.repo.as_deref() == Some(library.as_str())) {
-                        continue;
-                    }
+        if used {
+            for (r, h) in self.lib_refs(root, &sym.name)? {
+                if h.targets.iter().any(|t| t.id == sym.id && t.repo.as_deref() == Some(library.as_str())) {
                     let edge = if h.kind == "call" { "calls" } else { "uses" };
                     found.push((r, trace::LibraryVia { library: library.clone(), through: None, edge, link: "exact" }, h));
                 }
             }
-            if dispatch {
-                for (r, dep, h) in through_dependencies_of(self.home, root, conn, &sym, self.no_sync)? {
-                    let via = trace::LibraryVia { library: dep, through: h.through.clone(), edge: "via_protocol", link: "ambiguous" };
-                    found.push((r, via, h));
+        }
+        if dispatch {
+            for d in self.lib_dependencies(root)? {
+                if !self.open(&d)? {
+                    continue;
+                }
+                let theirs = query::implemented_members_in(self.store(root).conn(), self.store(&d).conn(), &sym)?;
+                if theirs.is_empty() {
+                    continue;
+                }
+                let there = repo_name(&d);
+                // A call reaches this implementation only through a receiver of the member's type, or unqualified in
+                // the interface itself (see `through_dependencies`).
+                let bare = |t: &str| t.split('<').next().unwrap_or(t).trim().rsplit('.').next().unwrap_or("").to_string();
+                let owners: HashSet<String> = theirs.iter().map(|m| bare(&m.owner)).collect();
+                let through_owner = |h: &RefHit| match h.receiver.as_deref() {
+                    None | Some("this") => h.from.as_ref().and_then(|f| f.container.as_deref()).is_some_and(|c| owners.contains(&bare(c))),
+                    Some(_) => h.receiver_type.as_deref().is_some_and(|t| owners.contains(&bare(t))),
+                };
+                let mut hits: Vec<(PathBuf, RefHit, Option<&str>)> = query::refs(self.store(&d).conn(), &sym.name, &["call", "member"], usize::MAX)?
+                    .0
+                    .into_iter()
+                    .map(|mut h| {
+                        h.repo = Some(there.clone());
+                        (d.clone(), h, None)
+                    })
+                    .collect();
+                hits.extend(self.lib_refs(&d, &sym.name)?.into_iter().map(|(r, h)| (r, h, Some(there.as_str()))));
+                for (r, h, into) in hits {
+                    if h.confidence == "external_likely" || !through_owner(&h) || (r == root && h.from.as_ref().is_some_and(|f| f.id == sym.id)) {
+                        continue;
+                    }
+                    if let Some(t) = theirs.iter().find_map(|m| m.through_member_of(&h, into)) {
+                        let via = trace::LibraryVia { library: there.clone(), through: t.through.clone(), edge: "via_protocol", link: "ambiguous" };
+                        found.push((r, via, t));
+                    }
                 }
             }
         }
@@ -4571,13 +4611,133 @@ impl<'a> HttpCrossing<'a> {
             let Some(caller) = trace::symbol(self.store(&r).conn(), from.id)? else { continue };
             let confidence = if via.link == "ambiguous" { "ambiguous" } else { h.confidence };
             let evidence = Evidence::of_edge(via.edge, confidence, h.evidence.as_ref(), None, h.precise);
-            let arrival = crate::graph::Arrival { creator: (caller, h.confidence, Some(format!("{}:{}", h.file, h.line))), confidence, evidence };
+            let site = Some(format!("{}:{}", h.file, h.line));
             let same = |c: &crate::graph::Crossing| {
                 c.root == r && c.via.library().is_some_and(|l| l.library == via.library && l.through == via.through && l.edge == via.edge)
             };
+            if out.iter().any(|c| same(c) && c.arrivals.iter().any(|a| a.sym().id == caller.id && *a.site() == site)) {
+                continue;
+            }
+            let arrival = crate::graph::Arrival { creator: (caller, h.confidence, site), confidence, evidence };
             match out.iter_mut().find(|c| same(c)) {
                 Some(c) => c.arrivals.push(arrival),
                 None => out.push(crate::graph::Crossing { root: r, via: trace::Via::Library(via), publish: None, arrivals: vec![arrival] }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// The workspace's summaries and repo graph, read once an answer.
+    fn lib_workspace(&mut self) -> Result<(std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>, std::sync::Arc<kc_index::workspace::Graph>)> {
+        if self.lib.workspace.is_none() {
+            if self.summaries.is_none() {
+                self.summaries = Some(full_summaries(self.home)?);
+            }
+            let summaries = self.summaries.clone().unwrap_or_default();
+            let graph = kc_index::workspace::graph(&summaries);
+            self.lib.workspace = Some((summaries, graph));
+        }
+        Ok(self.lib.workspace.clone().expect("read above"))
+    }
+
+    /// The summary of the repo at `root`.
+    fn lib_summary(&self, root: &Path) -> Option<&kc_index::workspace::RepoSummary> {
+        self.lib.workspace.as_ref().and_then(|(s, _)| s.iter().find(|s| s.root == root))
+    }
+
+    /// The repos depending on the repo at `root` whose checkout is there, each with whether it changed since its
+    /// summary was written (then its summary can't rule a name out).
+    fn lib_dependents(&mut self, root: &Path) -> Result<Vec<(PathBuf, bool)>> {
+        if let Some(d) = self.lib.dependents.get(root) {
+            return Ok(d.clone());
+        }
+        let (summaries, graph) = self.lib_workspace()?;
+        let me = kc_index::workspace::identity_of(root, &summaries);
+        let roots: Vec<PathBuf> = graph
+            .dependents(&me)
+            .into_iter()
+            .map(|i| &summaries[i])
+            .filter(|s| s.root != root && !s.gone && s.root.join(".git").exists())
+            .map(|s| s.root.clone())
+            .collect();
+        let changed = changed_unless(self.no_sync, &roots);
+        let out: Vec<(PathBuf, bool)> = roots.into_iter().map(|r| {
+            let c = changed.contains(&r);
+            (r, c)
+        }).collect();
+        self.lib.dependents.insert(root.to_path_buf(), out.clone());
+        Ok(out)
+    }
+
+    /// The repos the repo at `root` depends on whose checkout is there.
+    fn lib_dependencies(&mut self, root: &Path) -> Result<Vec<PathBuf>> {
+        if let Some(d) = self.lib.dependencies.get(root) {
+            return Ok(d.clone());
+        }
+        let (summaries, graph) = self.lib_workspace()?;
+        let out: Vec<PathBuf> = match summaries.iter().position(|s| s.root == root) {
+            Some(i) => {
+                let ids = graph.dependencies(i);
+                summaries.iter().filter(|s| s.root != root && !s.gone && ids.contains(&s.identity()) && s.root.join(".git").exists()).map(|s| s.root.clone()).collect()
+            }
+            None => Vec::new(),
+        };
+        self.lib.dependencies.insert(root.to_path_buf(), out.clone());
+        Ok(out)
+    }
+
+    /// Whether `sym`'s type names a supertype its repo (at `root`) doesn't define, once per type.
+    fn lib_outside(&mut self, root: &Path, sym: &query::SymbolRow) -> Result<bool> {
+        let Some(container) = sym.container.clone() else { return Ok(false) };
+        if let Some(&b) = self.lib.outside.get(&(root.to_path_buf(), container.clone())) {
+            return Ok(b);
+        }
+        let b = query::names_outside_supertypes(self.store(root).conn(), sym)?;
+        self.lib.outside.insert((root.to_path_buf(), container), b);
+        Ok(b)
+    }
+
+    /// References named `name` (calls and member uses) in the repos depending on the repo at `lib`, resolved into it,
+    /// each with the root of the repo it is in (see [`dependent_refs`]). Only references with a target in `lib`.
+    fn lib_refs(&mut self, lib: &Path, name: &str) -> Result<Vec<(PathBuf, RefHit)>> {
+        let lib_name = repo_name(lib);
+        let mut out = Vec::new();
+        for (dep, changed) in self.lib_dependents(lib)? {
+            if !changed && !self.lib_summary(&dep).is_some_and(|s| s.may_reference(name.trim())) {
+                continue;
+            }
+            if !self.open(&dep)? {
+                continue;
+            }
+            if !self.lib.modules.contains_key(lib) {
+                let m = query::provided_modules(self.store(lib).conn())?;
+                self.lib.modules.insert(lib.to_path_buf(), m);
+            }
+            let key = (dep.clone(), lib.to_path_buf());
+            if !self.lib.assumptions.contains_key(&key) {
+                let (summaries, graph) = self.lib_workspace()?;
+                let a = match summaries.iter().find(|s| s.root == dep) {
+                    Some(s) => {
+                        let mut edges = manifests::repo_edges(&s.packages, &s.root.to_string_lossy(), &s.identity(), graph.owners());
+                        edges.retain(|e| Path::new(&e.to_repo) == lib);
+                        kc_index::revision::check_edges(&mut edges, &summaries);
+                        kc_index::revision::assumptions_into(&edges, lib)
+                    }
+                    None => Vec::new(),
+                };
+                self.lib.assumptions.insert(key.clone(), a);
+            }
+            let dependency = query::Dependency {
+                repo: lib_name.clone(),
+                conn: self.store(lib).conn(),
+                modules: self.lib.modules[lib].clone(),
+                assumptions: self.lib.assumptions[&key].clone(),
+            };
+            for mut h in query::refs_importing(self.store(&dep).conn(), name, &["call", "member"], std::slice::from_ref(&dependency))? {
+                if h.targets.iter().any(|t| t.repo.as_deref() == Some(lib_name.as_str())) {
+                    h.repo = Some(repo_name(&dep));
+                    out.push((dep.clone(), h));
+                }
             }
         }
         Ok(out)

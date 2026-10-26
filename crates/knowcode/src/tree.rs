@@ -28,6 +28,8 @@ pub fn trace(g: &mut Graph, root: &SymbolRow, direction: trace::Direction, depth
     let mut t = Trace { nodes: vec![trace::node(root, 0, None, "", "", "", None)], truncated: false, omitted: 0, stopped: Vec::new() };
     let depth = depth.clamp(1, trace::MAX_TRACE_DEPTH);
     let (inward, outward) = (direction != trace::Direction::Out, direction != trace::Direction::In);
+    // A library's users depend on it: crossing to them is for a walk inward only.
+    g.crossing().library = inward;
     if outward {
         grow(g, &mut t, 0, 0, &None, depth, "out", &mut HashMap::from([(root.id, depth)]), max)?;
     }
