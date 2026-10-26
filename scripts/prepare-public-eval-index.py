@@ -81,8 +81,9 @@ def prepare(manifest, source_receipt, session):
     state = json.loads(captured[session_path])
     if specification.get('format') != 1 or not receipt.get('stage', '').startswith('source-ready;'):
         raise ValueError('source preparation is incomplete or has an unknown format')
-    if state.get('session', {}).get('arm') not in ('knowcode', 'knowcode-unprompted'):
-        raise ValueError('neutral Git workspaces belong only to the KnowCode arms')
+    # The KnowCode arms index these workspaces; a full-client arm's agent also works in them, plain-full's included.
+    if state.get('session', {}).get('arm') not in ('knowcode', 'knowcode-unprompted', 'plain-full', 'knowcode-full', 'knowcode-unprompted-full'):
+        raise ValueError('neutral Git workspaces belong only to the KnowCode and full-client arms')
     if state.get('manifest_sha256') != digest(captured[Path(manifest)]) or receipt.get('manifest_sha256') != digest(captured[Path(manifest)]):
         raise ValueError('manifest differs from prepared source/session')
     if state.get('source_receipt_sha256') != digest(captured[Path(source_receipt)]):
