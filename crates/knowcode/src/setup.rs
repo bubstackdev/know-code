@@ -196,11 +196,63 @@ fn codex(directory: &Path, command: &Path, env: &BTreeMap<String, String>, repla
                     }
                 }
             }
+            codex_hook(&mut doc, command)?;
             return write_checked(&path, before.as_deref(), &doc.to_string());
         }
     }
     servers.insert("knowcode", Item::Table(toml_server(command, env)));
+    codex_hook(&mut doc, command)?;
     write_checked(&path, before.as_deref(), &doc.to_string())
+}
+
+/// What a Codex session-start hook of ours runs: the binary, with the directory overrides its server has. Only the
+/// binary's path and those overrides are in it, never the line it prints, so the line can change without the user
+/// trusting the hook again (Codex trusts a hook by its definition's hash).
+pub(crate) const CODEX_HOOK: &str = "hook session-start";
+
+fn codex_hook_command(command: &Path, env: &BTreeMap<String, String>) -> String {
+    let mut line = String::new();
+    for (key, value) in env.iter().filter(|(k, _)| *k != "KNOWCODE_TOOLS") {
+        line.push_str(&format!("{key}={} ", shell_quote(value)));
+    }
+    format!("{line}{} {CODEX_HOOK}", shell_quote(&command.to_string_lossy()))
+}
+
+/// Whether a `[[hooks.SessionStart]]` entry is one setup wrote: every hook in it runs KnowCode's session-start hook.
+pub(crate) fn is_codex_hook(group: &Table) -> bool {
+    group.get("hooks").and_then(Item::as_array_of_tables).is_some_and(|hooks| {
+        !hooks.is_empty() && hooks.iter().all(|h| h.get("command").and_then(Item::as_str).is_some_and(|c| c.ends_with(&format!(" {CODEX_HOOK}"))))
+    })
+}
+
+/// Adds the user-level `[[hooks.SessionStart]]` entry that runs KnowCode's session-start hook, in place of any
+/// earlier one of ours, with the overrides the knowcode server entry ends up with. Other hooks are left alone.
+fn codex_hook(doc: &mut DocumentMut, command: &Path) -> Result<()> {
+    let env: BTreeMap<String, String> = doc.get("mcp_servers").and_then(|s| s.get("knowcode")).and_then(|k| k.get("env"))
+        .and_then(Item::as_table_like).into_iter().flat_map(|t| t.iter())
+        .filter(|(k, _)| OVERRIDES.contains(k))
+        .filter_map(|(k, v)| Some((k.to_string(), v.as_str()?.to_string())))
+        .collect();
+    let hooks = doc.entry("hooks").or_insert_with(|| {
+        let mut t = Table::new();
+        t.set_implicit(true);
+        Item::Table(t)
+    }).as_table_like_mut().context("hooks must be a TOML table")?;
+    let groups = hooks.entry("SessionStart").or_insert(Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
+        .as_array_of_tables_mut().context("hooks.SessionStart must be an array of tables")?;
+    groups.retain(|g| !is_codex_hook(g));
+    let mut hook = Table::new();
+    hook.insert("type", toml_edit::value("command"));
+    hook.insert("command", toml_edit::value(codex_hook_command(command, &env)));
+    hook.insert("timeout", toml_edit::value(5));
+    let mut list = toml_edit::ArrayOfTables::new();
+    list.push(hook);
+    let mut group = Table::new();
+    // A resumed or forked session already has the line from its first start.
+    group.insert("matcher", toml_edit::value("^(startup|clear|compact)$"));
+    group.insert("hooks", Item::ArrayOfTables(list));
+    groups.push(group);
+    Ok(())
 }
 
 fn cursor(directory: &Path, command: &Path, env: &BTreeMap<String, String>, replace: bool) -> Result<()> {
@@ -445,5 +497,8 @@ pub fn run(options: Options) -> Result<()> {
     }
     remember(Registration { client: options.client, directory: directory.clone(), command, marketplace: installed_marketplace })?;
     println!("KnowCode is configured for {:?} in {}. Start a new client session; the first query indexes automatically.", options.client, directory.display());
+    if options.client == Client::Codex {
+        println!("Codex runs KnowCode's session-start hook only once you trust it: in Codex, run /hooks and trust the SessionStart hook that runs `{CODEX_HOOK}`.");
+    }
     Ok(())
 }

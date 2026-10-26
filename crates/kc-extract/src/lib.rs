@@ -21,7 +21,7 @@ mod tsconfig;
 mod typescript;
 
 pub use manifest::implicit_usings;
-pub use typescript::action_name;
+pub use typescript::{action_name, api_tag};
 pub mod types;
 pub mod urls;
 mod yaml;

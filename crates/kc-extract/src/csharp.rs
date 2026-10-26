@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 32;
+pub const VERSION: u32 = 33;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -4045,6 +4045,42 @@ impl Cx<'_> {
     }
 }
 
+/// A conventional route template with the defaults an anonymous object gives (`new { action = "Index" }`) written
+/// into its parameters as inline defaults (`{action=Index}`); a parameter with an inline default, or a value that
+/// isn't a string literal, is left as it is.
+fn with_defaults(src: &str, template: &str, defaults: Node) -> String {
+    if defaults.kind() != "anonymous_object_creation_expression" {
+        return template.to_string();
+    }
+    let mut values: Vec<(String, String)> = Vec::new();
+    let mut name: Option<String> = None;
+    // `identifier = expression` pairs, flat among the braces and commas.
+    for c in children(defaults).filter(|c| c.is_named()) {
+        if c.kind() == "identifier" && c.next_sibling().is_some_and(|n| n.kind() == "=") {
+            name = Some(src[c.byte_range()].to_string());
+            continue;
+        }
+        if let (Some(n), Some(v)) = (name.take(), string_value(src, c)) {
+            values.push((n, v));
+        }
+    }
+    template
+        .split('/')
+        .map(|seg| {
+            let Some(inner) = seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')) else { return seg.to_string() };
+            let n = inner.split([':', '?']).next().unwrap_or_default();
+            match values.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)) {
+                Some((_, v)) if !inner.contains('=') && !inner.starts_with('*') => {
+                    let rest = &inner[n.len()..];
+                    format!("{{{n}={v}{}}}", rest.trim_end_matches('?'))
+                }
+                _ => seg.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Minimal API registrations and the HTTP verb each serves (`MapMethods` names its own, `Map` serves every verb).
 const MAP_VERBS: &[(&str, &str)] =
     &[("MapGet", "GET"), ("MapPost", "POST"), ("MapPut", "PUT"), ("MapDelete", "DELETE"), ("MapPatch", "PATCH"), ("MapMethods", ""), ("Map", "*")];
@@ -4091,6 +4127,15 @@ impl Cx<'_> {
                         .and_then(|t| string_value(self.src, t)),
                     _ => None,
                 };
+                // `defaults: new { controller = "Home", action = "Index" }`: written into the template, as inline ones.
+                let defaults = match method {
+                    "MapControllerRoute" | "MapRoute" | "MapHttpRoute" => named("defaults").or_else(|| positional.get(2).copied()),
+                    _ => None,
+                };
+                let template = template.map(|t| match defaults {
+                    Some(d) => with_defaults(self.src, &t, d),
+                    None => t,
+                });
                 if let Some(t) = template.filter(|t| t.contains("{controller") && !t.contains("{area")) {
                     self.facts.http_routes.push(HttpRoute {
                         sym: self.current(),

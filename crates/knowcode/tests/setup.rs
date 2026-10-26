@@ -89,6 +89,46 @@ fn codex_setup_keeps_comments_other_servers_and_a_symlink_and_is_idempotent() {
     assert_eq!(doc["mcp_servers"]["other"]["command"].as_str(), Some("other-server"));
 }
 
+/// `setup codex` adds a user-level SessionStart hook beside the server entry, in `CODEX_HOME`: one entry however often
+/// setup runs, the user's own hooks kept, its command naming only the binary and the directory overrides (so the line
+/// it prints can change without Codex asking for trust again), and the output says it must be trusted in /hooks.
+#[test]
+fn codex_setup_adds_a_session_start_hook_to_trust() {
+    let p = Profile::new("codex-hook");
+    let user_hook = "[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo mine\"\n";
+    p.write("home/config.toml", user_hook);
+    let setup = |cache: &str| {
+        let mut cmd = Command::new(KC);
+        cmd.args(["setup", "codex"]).env("CODEX_HOME", p.dir("home")).env("KNOWCODE_CONFIG_DIR", p.dir("settings"))
+            .env("KNOWCODE_CACHE_DIR", p.dir(cache)).env("KNOWCODE_DATA_DIR", p.dir("data"));
+        success(cmd.output().unwrap())
+    };
+    let out = setup("cache");
+    assert!(out.contains("/hooks") && out.contains("trust"), "setup says the hook needs trust: {out}");
+    let hooks = |doc: &DocumentMut| -> Vec<(String, String)> {
+        doc["hooks"]["SessionStart"].as_array_of_tables().unwrap().iter()
+            .map(|g| (g["matcher"].as_str().unwrap().to_string(), g["hooks"].as_array_of_tables().unwrap().get(0).unwrap()["command"].as_str().unwrap().to_string()))
+            .collect()
+    };
+    let text = fs::read_to_string(p.dir("home/config.toml")).unwrap();
+    let doc: DocumentMut = text.parse().unwrap();
+    assert_eq!(doc["mcp_servers"]["knowcode"]["command"].as_str(), Some(KC));
+    let cache = p.dir("cache");
+    let ours = format!("KNOWCODE_CACHE_DIR='{}' KNOWCODE_CONFIG_DIR='{}' KNOWCODE_DATA_DIR='{}' '{KC}' hook session-start",
+        cache.display(), p.dir("settings").display(), p.dir("data").display());
+    assert_eq!(hooks(&doc), vec![("^startup$".into(), "echo mine".into()), ("^(startup|clear|compact)$".into(), ours)]);
+    assert_eq!(doc["hooks"]["SessionStart"][1]["hooks"][0]["timeout"].as_integer(), Some(5));
+    setup("cache");
+    assert_eq!(fs::read_to_string(p.dir("home/config.toml")).unwrap(), text, "setup again changes nothing");
+    // A moved cache: the same one entry, with the server's new override.
+    setup("moved");
+    let doc: DocumentMut = fs::read_to_string(p.dir("home/config.toml")).unwrap().parse().unwrap();
+    let h = hooks(&doc);
+    assert_eq!(h.len(), 2, "{h:?}");
+    assert!(h[1].1.starts_with(&format!("KNOWCODE_CACHE_DIR='{}' ", p.dir("moved").display())), "{h:?}");
+    assert_eq!(h[0].1, "echo mine");
+}
+
 #[test]
 fn cursor_setup_preserves_other_settings_and_conflicts_require_replacement() {
     let p = Profile::new("cursor");

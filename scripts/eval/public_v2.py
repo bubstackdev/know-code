@@ -57,14 +57,19 @@ def jsonl(data):
 
 
 class Study:
-    """A public-v2 freeze, checked from content: inputs and runner implementation by hash, plan bindings, bank."""
+    """A public-v2 freeze, checked from content: inputs and runner implementation by hash, plan bindings, bank.
+    A later bank subclasses it with its own format, arms and task counts (public_v3.py)."""
+
+    FORMAT = FORMAT
+    ARMS = ARMS
+    COUNTS = {s: 10 for s in STRATA}
 
     def __init__(self, path):
         self.path = Path(path).resolve(strict=True)
         self.raw = self.path.read_bytes()
         self.freeze_sha256 = digest(self.raw)
         spec = load_json(self.raw)
-        if spec.get('format') != FORMAT or set(spec.get('files', {})) != FILES:
+        if spec.get('format') != self.FORMAT or set(spec.get('files', {})) != FILES:
             raise ValueError('complete public-v2 freeze file inventory required')
         self.captured, self.inputs, self.hashes = {self.path: self.raw}, {}, {}
         for name, entry in spec['files'].items():
@@ -101,17 +106,17 @@ class Study:
         errors = schema.validate_bank(self.questions, self.labels)
         if errors:
             raise ValueError('complete valid label bank required: ' + '; '.join(errors[:3]))
-        if Counter(q['stratum'] for q in self.questions) != {s: 10 for s in STRATA}:
-            raise ValueError('forty questions, ten per task type, required')
+        if Counter(q['stratum'] for q in self.questions) != self.COUNTS:
+            raise ValueError('the frozen number of questions per task type is required')
         bindings = {'manifest_sha256': 'manifest', 'source_receipt_sha256': 'source_receipt', 'order_sha256': 'order',
                     'operator_questions_sha256': 'questions', 'config_sha256': 'config'}
         if any(self.plan.get(k) != self.hashes[v] for k, v in bindings.items()):
             raise ValueError('plan differs from frozen inputs')
         qids = {q['id'] for q in self.questions}
         for row in self.order:
-            if row.get('arm') not in ARMS or row.get('question_id') not in qids or row.get('run') not in self.runs:
+            if row.get('arm') not in self.ARMS or row.get('question_id') not in qids or row.get('run') not in self.runs:
                 raise ValueError('order row outside the frozen questions, arms and runs')
-        expected = {(run, arm, q) for run in self.runs for arm in ARMS for q in qids}
+        expected = {(run, arm, q) for run in self.runs for arm in self.ARMS for q in qids}
         if {(r['run'], r['arm'], r['question_id']) for r in self.order} != expected or len(self.order) != len(expected):
             raise ValueError('every run must hold every question in every arm exactly once')
         self.unchanged()
@@ -141,10 +146,10 @@ def remove_tree(path):
     shutil.rmtree(path)
 
 
-def run(args):
+def run(args, study_class=Study):
     import session_runner
     prepare_session = load('public_v2_session', ROOT / 'scripts/prepare-public-eval-session.py')
-    study = Study(args.freeze)
+    study = study_class(args.freeze)
     runs = args.runs.split(',')
     if not set(runs) <= set(study.runs):
         raise SystemExit('unknown run')

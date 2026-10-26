@@ -2666,6 +2666,7 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
          ORDER BY file, line",
     )?;
     let mut consts = Constants::new(conn)?;
+    let mut modules = crate::ts::Modules::default();
     let rows = stmt.query_map([], |r| {
         Ok((
             (r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?),
@@ -2768,6 +2769,15 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         let mut host = None;
         let path = match path_ref {
             None if side == "client" => {
+                // A URL a function of the repo builds from the path given (`addQuery('/events', …)`): the path, when
+                // the function is known to add only a query string; otherwise unread, saying which function.
+                let path = match built(conn, &mut modules, &file, &path)? {
+                    Ok(p) => p,
+                    Err(f) => {
+                        out.push(row("unresolved".to_string(), verb, None, Some(format!("its URL is built by {f}(…), which KnowCode doesn't read"))));
+                        continue;
+                    }
+                };
                 let url = consts.expand(&path, 0)?;
                 host = kc_extract::urls::host_of(&url);
                 let p = client_path(&url);
@@ -2808,14 +2818,23 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let declared: std::collections::HashSet<String> =
         out.iter().filter(|r| r.side == "client" && r.kind == "method").filter_map(|r| r.symbol.rsplit('.').next().map(str::to_ascii_lowercase)).collect();
     out.retain(|r| r.side != "operation" || r.path.as_deref().is_some_and(|op| !declared.contains(&op.to_ascii_lowercase())));
-    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
-    // `Client` a class of the repo's), reaches the repo's own code, not a generated client: no operation. A type the
-    // repo only declares (in a `.d.ts`, an external client's surface) doesn't count.
-    let mut implemented = conn.prepare_cached(
-        "SELECT EXISTS(SELECT 1 FROM refs r JOIN files f ON f.id = r.file_id
-           JOIN symbols s ON s.name = r.name AND s.container = r.receiver_type JOIN files sf ON sf.id = s.file_id
-         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND sf.path NOT LIKE '%.d.ts')",
+    // The type of a call's receiver, as the call site writes it (encoded), for an operation's client.
+    let mut receiver = conn.prepare_cached(
+        "SELECT r.receiver_type FROM refs r JOIN files f ON f.id = r.file_id
+         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND r.receiver_type IS NOT NULL LIMIT 1",
     )?;
+    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
+    // or `this.client` with `private client: Client`, `Client` a class of the repo's), reaches the repo's own code,
+    // not a generated client: no operation. A type the repo only declares (in a `.d.ts`, an external client's
+    // surface) doesn't count.
+    let mut implemented = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM symbols s JOIN files sf ON sf.id = s.file_id
+         WHERE s.name = ?1 AND s.container = ?2 AND sf.path NOT LIKE '%.d.ts')",
+    )?;
+    let mut declared_in_dts = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM symbols s JOIN files sf ON sf.id = s.file_id WHERE s.container = ?1 AND sf.path LIKE '%.d.ts')",
+    )?;
+    let mut oracle = TypeOracle::new(conn);
     // A method of that name the repo only declares (`markUnplayed` in a `.d.ts` for `jellyfin-apiclient`): the call
     // goes to an external client whose routes aren't in the workspace, which an answer says (`detail`). The receiver's
     // own type first, when the call site names it.
@@ -2829,8 +2848,29 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let mut kept = Vec::with_capacity(out.len());
     for mut r in out {
         if r.side == "operation" {
-            if implemented.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get::<_, bool>(0))? {
-                continue;
+            // The receiver's type, through a field's or a local's declaration where the call site doesn't name it.
+            let written: Option<String> = receiver.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get(0)).optional()?;
+            let typed = match written {
+                Some(enc) => {
+                    let caller = symbols_at(conn, &r.file, r.line)?.into_iter().find(|s| TYPE_KINDS.contains(&s.kind.as_str())).map(|s| s.qualified);
+                    oracle.file = Some(r.file.clone());
+                    match oracle.eval_encoded(&enc, caller.as_deref())? {
+                        Some(TypeExpr::Named(n) | TypeExpr::Generic { name: n, .. }) => Some(last_segment(&n).to_string()).filter(|n| !n.is_empty()),
+                        _ => None,
+                    }
+                }
+                None => None,
+            };
+            if let Some(t) = &typed {
+                if implemented.query_row(rusqlite::params![r.path, t], |x| x.get::<_, bool>(0))? {
+                    continue;
+                }
+                // A type named for no API client (`chrome.storage.StorageArea` behind a field named
+                // `chromeStorageApi`), and not an external client's surface the repo declares: the receiver's name
+                // made it look like a client, its type says it isn't one.
+                if kc_extract::api_tag(t).is_none() && !declared_in_dts.query_row([t], |x| x.get::<_, bool>(0))? {
+                    continue;
+                }
             }
             let found = declared_only
                 .query_map(rusqlite::params![r.path, r.file, r.line], |x| Ok((x.get::<_, String>(0)?, x.get::<_, String>(1)?, x.get::<_, u32>(2)?)))?
@@ -2843,6 +2883,37 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         kept.push(r);
     }
     Ok(kept)
+}
+
+/// A client URL with the functions building it (`{=addQuery()}`, see `kc_extract`'s TypeScript extractor) replaced
+/// by what each adds: nothing, for a function declared to append only a query string (its file's constant
+/// `addQuery()`), found in the file making the request or the one it imports the function from. `Err` naming the
+/// first function not known to.
+fn built(conn: &Connection, modules: &mut crate::ts::Modules, file: &str, encoded: &str) -> Result<std::result::Result<String, String>> {
+    let mut out = encoded.to_string();
+    while let Some(i) = out.find("{=").filter(|i| out[*i..].find('}').is_some_and(|j| out[*i..*i + j].ends_with("()"))) {
+        let j = out[i..].find('}').expect("found");
+        let f = out[i + 2..i + j - 2].to_string();
+        let declared_in = match modules.module_of(conn, file, &f)? {
+            Some(m) => match modules.origin(conn, file, &m)? {
+                crate::ts::Origin::File(p) => Some(p),
+                _ => None,
+            },
+            None => Some(file.to_string()),
+        };
+        let value: Option<String> = match declared_in {
+            Some(at) => conn
+                .prepare_cached("SELECT c.value FROM constants c JOIN files f ON f.id = c.file_id WHERE f.path = ?1 AND c.qualified = ?2 LIMIT 1")?
+                .query_row(rusqlite::params![at, format!("{f}()")], |r| r.get(0))
+                .optional()?,
+            None => None,
+        };
+        match value {
+            Some(v) => out.replace_range(i..i + j + 1, &v),
+            None => return Ok(Err(f)),
+        }
+    }
+    Ok(Ok(out))
 }
 
 /// What places a controller action whose class writes no `[Route]` out (`{^Action}/rest`, `{^*Action}` for a public
@@ -3105,16 +3176,21 @@ impl Controllers {
 }
 
 /// A conventional route template filled for one action: `{controller=Home}/{action=Index}/{id?}` is `Orders/List`
-/// and `Orders/List/{id}` (trailing parameters may be left out). A template without `{action}` (Web API's
-/// `api/{controller}/{id}`) picks the action by verb: `api/Orders`, `api/Orders/{id}`.
+/// and `Orders/List/{id}` (trailing parameters may be left out). A trailing `{controller}` or `{action}` may be left
+/// out too when the action's value is the template's default for it: `Orders/Index` is also served at `Orders`, and
+/// `Home/Index` at `Home` and the root (``). A template without `{action}` (Web API's `api/{controller}/{id}`) picks
+/// the action by verb: `api/Orders`, `api/Orders/{id}`.
 fn conventional_paths(template: &str, controller: &str, action: &str) -> Vec<String> {
     let mut segs: Vec<(String, bool)> = Vec::new();
     for s in template.split('/').filter(|s| !s.is_empty()) {
         let inner = s.strip_prefix('{').and_then(|s| s.strip_suffix('}'));
         let name = inner.map(|i| i.trim_start_matches('*').split(['=', ':', '?']).next().unwrap_or_default());
+        // `{action=Index}`: the default, which a URL leaving the segment out stands for.
+        let default = inner.and_then(|i| i.split_once('=')).map(|(_, d)| d.split([':', '?']).next().unwrap_or_default());
+        let omitted = |value: &str| default.is_some_and(|d| d.eq_ignore_ascii_case(value));
         segs.push(match name {
-            Some("controller") => (controller.to_string(), false),
-            Some("action") => (action.to_string(), false),
+            Some("controller") => (controller.to_string(), omitted(controller)),
+            Some("action") => (action.to_string(), omitted(action)),
             Some(n) => (format!("{{{n}}}"), true),
             None => (s.to_string(), false),
         });
@@ -6360,6 +6436,14 @@ mod tests {
         assert_eq!(paths("HomeController", "Home.cs", "{^!SaveAsync}"), ["Home/Save", "Home/Save/{id}"]);
         assert_eq!(paths("HomeController", "Home.cs", "{^!About}/about"), ["about"]);
         assert_eq!(conventional_paths("api/{controller}/{id}", "Orders", "Get"), ["api/Orders", "api/Orders/{id}"]);
+        // Defaults: a trailing segment holding its default may be left out, and only then.
+        let default = "{controller=Home}/{action=Index}/{id?}";
+        assert_eq!(conventional_paths(default, "Orders", "Index"), ["Orders", "Orders/Index", "Orders/Index/{id}"]);
+        assert_eq!(conventional_paths(default, "Home", "Index"), ["", "Home", "Home/Index", "Home/Index/{id}"]);
+        assert_eq!(conventional_paths(default, "Home", "About"), ["Home/About", "Home/About/{id}"]);
+        assert_eq!(conventional_paths("{controller=Seed}/{action=Index}/{id?}", "Home", "Index"), ["Home", "Home/Index", "Home/Index/{id}"]);
+        assert_eq!(conventional_paths("admin/{controller}/{action=list}", "Orders", "List"), ["admin/Orders", "admin/Orders/List"]);
+        assert_eq!(conventional_paths("{controller}/{action}", "Orders", "Index"), ["Orders/Index"]);
     }
 
     fn route_row(side: &str, verb: &str, path: &str, path_ref: Option<&str>, name: &str, file: &str) -> RawRoute {
@@ -6401,7 +6485,7 @@ mod tests {
         let admin = "src/Admin/OrdersController.cs";
         let ok = |p: &[&str]| Ok(p.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!UnlinkAsync}").unwrap(), ok(&["Orders/Unlink", "Orders/Unlink/{id}"]));
-        assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&["Orders/Index", "Orders/Index/{id}"]));
+        assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&["Orders", "Orders/Index", "Orders/Index/{id}"]));
         // The API's own actions keep its prefix.
         assert_eq!(ctl.paths(&mut c, "OrdersController", "src/Api/OrdersController.cs", "{^Get}/{id}").unwrap(), ok(&["orders/{id}"]));
         // Bases of one name with different prefixes: unplaced, saying why.

@@ -17,6 +17,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `KNOWCODE_TOOLS=core` or `all` (`KNOWCODE_TOOLS=all knowcode setup claude` for the plugin, or in the environment
   `setup codex` and `setup cursor` run in); everything then reads as before. A plugin updated from 0.3, which wrote
   `KNOWCODE_TOOLS=all` as its default, takes `one`; one you set by hand is kept.
+- `knowcode setup codex` adds a user-level `[[hooks.SessionStart]]` entry to Codex's `config.toml`, beside the MCP
+  server, that runs KnowCode's session-start hook (the line Claude Code's plugin adds). Codex runs it only once you
+  trust it in `/hooks`, and setup says so. The entry names only the binary and KnowCode's directory overrides, so the
+  line can change without trusting it again. `knowcode uninstall` removes it and keeps your own hooks.
 - The Claude Code plugin adds a `SessionStart` hook. At the start of a session, and after `/clear` or a compaction, it
   adds one line of about 40 tokens where KnowCode has an index: `KnowCode indexes shop. Callers, impact, HTTP:
   kc {op: impact}; definitions: op find.` (with `KNOWCODE_TOOLS=core` or `all`: `kc_impact` and `kc_find`) It says nothing in a directory with no index, in a repo whose privacy file blocks
@@ -36,6 +40,30 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   referencing it, never another app's; an action with no template that no app's templates reach is listed as
   unsupported, saying so. On the public-v1 workspace, 18 routes of controllers declared in bitwarden-server's test
   projects, which no app maps, are gone; nothing else changed.
+- A call through a typed field is judged by the field's type, not its name. `this.chromeStorageApi.remove(key)`,
+  with `chromeStorageApi: chrome.storage.StorageArea`, was read as a generated API client's operation because of
+  the field's name, and linked `ambiguous` to two server actions named `Remove`. A receiver's type, from a field, a
+  constructor parameter property or a local, now decides: a class of the repo's with that method is the repo's own
+  code (as for `new Client(…)` since 0.3.0), and a type named for no API client is no client. A generated client's
+  type (`ItemsApi`) and an external client the repo declares in a `.d.ts` still are. On the public-v1 workspace, 15
+  operation rows are gone, 2 of which had links (both the `remove` above); no other link changed.
+- Default actions are served at their controller's route. A conventional template's defaults
+  (`{controller=Home}/{action=Index}/{id?}`, or `defaults: new { action = "Index" }`) let a URL leave a trailing
+  segment out when it holds the default: `OrdersController.Index` is served at `Orders` as well as `Orders/Index`, and
+  the default controller's `Index` at the root. Where an action constrained to the request's verb serves the path,
+  an action answering every verb at the same path is no longer a candidate, as ASP.NET Core prefers the constrained
+  one. On the public-v1 workspace, bitwarden-server's admin app gained 7 routes (`Organizations`, `Providers`, `Users`,
+  `Login` ×2, `Home` and the root), and the admin test fixture's `GET /login` and `POST /login` now link, `exact`, to
+  `LoginController.Index`. C# files are re-extracted.
+- Requests whose path is given to a function building the URL are read when the function is known to add only a
+  query string. `this.send("GET", addEventParameters("/ciphers/" + id + "/events", start, end, token))`, with
+  `addEventParameters` (in another file) appending `?start=…&end=…` to its first parameter, requests
+  `ciphers/{}/events`. A function that may change the path leaves the request unread, and the answer names it
+  ("its URL is built by withVersion(…), which KnowCode doesn't read"), never a guessed path. A URL chosen by a
+  condition (`all ? "/sync?all=true" : "/sync"`) is read when both choices have one path. On the public-v1
+  workspace, bitwarden-clients gained 11 requests, all linked `exact`: `ApiService.getSync` and the nine
+  `ApiService.getEvents*` that #89 left unread, and `EventLogApiService.getEventsSend`. TypeScript files are
+  re-extracted.
 
 ## 0.3.0 (2026-10-26)
 

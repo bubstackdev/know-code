@@ -930,6 +930,7 @@ fn a_conventionally_routed_controller_never_takes_a_namesakes_prefix() {
     assert_eq!(
         served,
         [
+            s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders"),
             s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders/Index"),
             s("src/Admin/OrdersController.cs", "OrdersController.Index", "*", "Orders/Index/{id}"),
             s("src/Admin/OrdersController.cs", "OrdersController.UnlinkAsync", "POST", "Orders/Unlink"),
@@ -999,6 +1000,72 @@ fn each_app_routes_its_controllers_by_its_own_conventional_template() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A conventional route's defaults, inline or given as `defaults: new { … }`: `Index`, the default action, is served
+/// at its controller's route (`Orders` as well as `Orders/Index`), and the default controller's at the root. A
+/// request to `/Orders` links to `OrdersController.Index`; one with a verb an action is constrained to links to that
+/// action alone, not to an action answering every verb at the same path.
+#[test]
+fn default_actions_are_served_at_their_controllers_route() {
+    let turn = turn();
+    let base = turn.dir("default-actions");
+    let server = scratch(&base, "shop-admin");
+    write(&server, "src/Admin.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n");
+    write(
+        &server,
+        "src/Program.cs",
+        "var app = WebApplication.Create(args);\napp.MapControllerRoute(name: \"default\", pattern: \"{controller}/{action}/{id?}\", defaults: new { controller = \"Home\", action = \"Index\" });\napp.Run();\n",
+    );
+    write(&server, "src/HomeController.cs", "public class HomeController : Controller\n{\n    public IActionResult Index() => null;\n}\n");
+    write(
+        &server,
+        "src/OrdersController.cs",
+        "public class OrdersController : Controller\n{\n    public Task<IActionResult> IndexAsync() => null;\n    public IActionResult List() => null;\n}\n",
+    );
+    write(
+        &server,
+        "src/ReportsController.cs",
+        "public class ReportsController : Controller\n{\n    public IActionResult Index() => null;\n    [HttpPost(\"~/Reports\")]\n    public IActionResult Create() => null;\n}\n",
+    );
+    let web = scratch(&base, "shop-web");
+    write(
+        &web,
+        "src/admin.ts",
+        "export class Admin {\n  orders() { return fetch('/Orders'); }\n  report() { return fetch('/Reports', { method: 'POST' }); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&server, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let served: Vec<(String, String)> =
+        routes(0).into_iter().filter(|r| r.side == "server" && r.symbol.contains(".Index")).map(|r| (r.symbol, r.path.unwrap_or_default())).collect();
+    let s = |sym: &str, path: &str| (sym.to_string(), path.to_string());
+    assert_eq!(
+        served,
+        [
+            s("HomeController.Index", ""),
+            s("HomeController.Index", "Home"),
+            s("HomeController.Index", "Home/Index"),
+            s("HomeController.Index", "Home/Index/{id}"),
+            s("OrdersController.IndexAsync", "Orders"),
+            s("OrdersController.IndexAsync", "Orders/Index"),
+            s("OrdersController.IndexAsync", "Orders/Index/{id}"),
+            s("ReportsController.Index", "Reports"),
+            s("ReportsController.Index", "Reports/Index"),
+            s("ReportsController.Index", "Reports/Index/{id}"),
+        ]
+    );
+    let link = |sym: &str| -> Vec<(String, &'static str)> {
+        let r = routes(1).into_iter().find(|r| r.symbol == sym).unwrap();
+        kc_index::http::handlers(&r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("Admin.orders"), [("OrdersController.IndexAsync".to_string(), "exact")]);
+    assert_eq!(link("Admin.report"), [("ReportsController.Create".to_string(), "exact")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A call through a class the client repo implements itself (`new Client(…).login()`) is no generated client's
 /// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is. An untagged
 /// client's one-word operation (`update`) links `ambiguous` at most: the name alone doesn't say whose method it is.
@@ -1040,6 +1107,101 @@ fn only_generated_clients_link_by_operation_name() {
     };
     assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "exact")]);
     assert_eq!(link("update"), [("AccountsController.Update".to_string(), "ambiguous")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A receiver reached through a typed field (`this.client` with `private client: Client`, a parameter property or a
+/// field, declared here or in a base class) is judged by the field's type: a class of the repo's is its own code, and
+/// a type named for no API client (`chrome.storage.StorageArea` behind `chromeStorageApi`) is no client, so neither
+/// is an operation; a generated client's type (`ItemsApi`) still is, and so is an external client the repo declares.
+#[test]
+fn typed_field_receivers_are_judged_by_their_type() {
+    let turn = turn();
+    let base = turn.dir("typed-fields");
+    let api = scratch(&base, "vault-api");
+    write(
+        &api,
+        "src/ItemsController.cs",
+        "[ApiController]\n[Route(\"items\")]\npublic class ItemsController : ControllerBase\n{\n    [HttpDelete(\"{id}\")]\n    public Task Remove(string id) => null;\n    [HttpGet]\n    public Task GetItems() => null;\n    [HttpPost(\"open\")]\n    public Task OpenVault() => null;\n    [HttpGet(\"profile\")]\n    public Task GetProfile() => null;\n}\n",
+    );
+    let web = scratch(&base, "vault-web");
+    write(&web, "src/client.ts", "export class Client {\n  openVault() { return this.rest.post('x'); }\n}\n");
+    write(&web, "src/vault.ts", "import { Client } from './client';\nexport class Vault {\n  private vaultClient: Client;\n  open() { return this.vaultClient.openVault(); }\n}\n");
+    write(
+        &web,
+        "src/storage.ts",
+        "export abstract class BaseStorage {\n  constructor(protected chromeStorageApi: chrome.storage.StorageArea) {}\n}\nexport class LocalStorage extends BaseStorage {\n  drop(key: string) { return this.chromeStorageApi.remove(key); }\n}\n",
+    );
+    write(&web, "src/apiclient.d.ts", "declare class ApiClient {\n  getProfile(): Promise<any>;\n}\n");
+    write(
+        &web,
+        "src/items.ts",
+        "import { ItemsApi } from '@media/sdk';\nexport class Items {\n  constructor(private itemsApi: ItemsApi, private apiClient: ApiClient) {}\n  load() { return this.itemsApi.getItems(); }\n  profile() { return this.apiClient.getProfile(); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let ops: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().filter(|r| r.side == "operation").cloned().collect();
+    let names: Vec<(&str, &str)> = ops.iter().map(|r| (r.symbol.as_str(), r.path.as_deref().unwrap_or_default())).collect();
+    assert_eq!(names, [("Items.load", "getItems"), ("Items.profile", "getProfile")]);
+    let link = |op: &str| -> Vec<(String, &'static str)> {
+        let r = ops.iter().find(|r| r.path.as_deref() == Some(op)).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("getItems"), [("ItemsController.GetItems".to_string(), "exact")]);
+    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "exact")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Requests whose path is built by a function of the repo, or chosen by a condition: `addQuery('/events', start)`,
+/// with `addQuery` (in another file) appending only a query string, requests `events`; `all ? '/sync?all=true' :
+/// '/sync'` requests `sync` either way. A function that may change the path (`withVersion`) leaves its request
+/// unread, saying which function, never guessed.
+#[test]
+fn paths_given_to_url_functions_are_read_only_when_known() {
+    let turn = turn();
+    let base = turn.dir("path-params");
+    let api = scratch(&base, "vault-api");
+    write(
+        &api,
+        "src/EventsController.cs",
+        "[ApiController]\npublic class EventsController : ControllerBase\n{\n    [HttpGet(\"events\")]\n    public Task List() => null;\n    [HttpGet(\"sync\")]\n    public Task Sync() => null;\n    [HttpGet(\"orders/{id}\")]\n    public Task Order(string id) => null;\n}\n",
+    );
+    let web = scratch(&base, "vault-web");
+    write(
+        &web,
+        "src/query.ts",
+        "export function addQuery(base: string, start: string, end: string): string {\n  if (start != null) {\n    base += \"?start=\" + start;\n  }\n  if (end != null) {\n    base += base.indexOf(\"?\") > -1 ? \"&\" : \"?\";\n    base += \"end=\" + end;\n  }\n  return base;\n}\nexport function withVersion(base: string): string {\n  return base + \"/v2\";\n}\n",
+    );
+    write(
+        &web,
+        "src/api.service.ts",
+        "import { addQuery, withVersion } from './query';\nexport class ApiService {\n  getEvents(start: string, end: string) {\n    return this.send('GET', addQuery('/events', start, end));\n  }\n  getSync(all: boolean) {\n    const path = all ? '/sync?all=true' : '/sync';\n    return this.send('GET', path);\n  }\n  getOrder() {\n    return this.send('GET', withVersion('/orders/'));\n  }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.clone();
+    let rows: Vec<(&str, &str, Option<&str>)> =
+        routes.iter().filter(|r| r.side != "server").map(|r| (r.symbol.as_str(), r.side.as_str(), r.path.as_deref())).collect();
+    assert_eq!(
+        rows,
+        [("ApiService.getEvents", "client", Some("events")), ("ApiService.getSync", "client", Some("sync")), ("ApiService.getOrder", "unresolved", None)]
+    );
+    let order = routes.iter().find(|r| r.symbol == "ApiService.getOrder").unwrap();
+    assert!(order.detail.as_deref().is_some_and(|d| d.contains("withVersion")), "{order:?}");
+    let link = |sym: &str| -> Vec<(String, &'static str)> {
+        let r = routes.iter().find(|r| r.symbol == sym).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("ApiService.getEvents"), [("EventsController.List".to_string(), "exact")]);
+    assert_eq!(link("ApiService.getSync"), [("EventsController.Sync".to_string(), "exact")]);
     let _ = std::fs::remove_dir_all(&base);
 }
 
