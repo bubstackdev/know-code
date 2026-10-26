@@ -2019,7 +2019,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     let first_in = |chain: &[String], exact_only: bool| -> Vec<&Def> {
         for c in chain {
             let found: Vec<&Def> = if exact_only {
-                cands.iter().copied().filter(|d| d.container.as_deref() == Some(c.as_str())).collect()
+                // A C# extension method is its declaring class's static method there: `M(x)` calls it.
+                cands
+                    .iter()
+                    .copied()
+                    .filter(|d| d.container.as_deref() == Some(c.as_str()) || (d.extension && d.declaring.as_deref() == Some(last_segment(c))))
+                    .collect()
             } else {
                 in_container(c)
             };
@@ -2496,7 +2501,7 @@ impl Params {
 /// The columns [`def_row`] reads, from `symbols s JOIN files f` and the parent symbol `p`.
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
-     f.script, s.min_args, s.max_args, s.signature LIKE '%(this %', p.name,
+     f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
      CASE WHEN f.lang = 'csharp' THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang";
@@ -4253,7 +4258,10 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let mut oracle = TypeOracle::new(conn);
     // Kept for the next call; an error leaves `shared` without them, to be read again.
     oracle.vis = std::mem::take(&mut shared.vis);
-    let mut self_chains: HashMap<Option<String>, Vec<String>> = HashMap::new();
+    // Per caller type, or per C# extension method's declaring class: the types an unqualified name is looked up in.
+    let mut self_chains: HashMap<(Option<String>, bool), Vec<String>> = HashMap::new();
+    // Per C# method: the static class declaring it, when it is an extension method.
+    let mut declaring: HashMap<i64, Option<String>> = HashMap::new();
     // Per service, member, argument count and registration: the implementation's member it is bound to.
     type BindingKey = (String, String, Option<u32>, Option<String>);
     let mut bound: HashMap<BindingKey, Option<crate::di::Bound>> = HashMap::new();
@@ -4377,15 +4385,34 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             if let Receiver::Known(c) | Receiver::Foreign(c) = &recv {
                 hit.receiver_chain = c.clone();
             }
-            let caller = hit.caller_type();
+            // In a C# extension method (`static M(this IFoo x)`, whose container is `IFoo`) an unqualified name is
+            // the declaring static class's, never the extended type's: `M(a, b)` there calls the class's overload.
+            let extended = match &hit.from {
+                Some(f) if cs && f.kind == "method" => {
+                    if let std::collections::hash_map::Entry::Vacant(e) = declaring.entry(f.id) {
+                        let d: Option<String> = conn
+                            .prepare_cached(
+                                "SELECT CASE WHEN p.container IS NULL THEN p.name ELSE p.container || '.' || p.name END
+                                 FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1 AND REPLACE(s.signature, '( ', '(') LIKE '%(this %'",
+                            )?
+                            .query_map([f.id], |r| r.get(0))?
+                            .next()
+                            .transpose()?;
+                        e.insert(d);
+                    }
+                    declaring[&f.id].clone()
+                }
+                _ => None,
+            };
+            let caller = (extended.clone().or_else(|| hit.caller_type()), extended.is_some());
             if !self_chains.contains_key(&caller) {
                 let mut chain = Vec::new();
-                let mut s = caller.clone();
+                let mut s = caller.0.clone();
                 while let Some(cur) = s {
                     s = cur.rsplit_once('.').map(|(p, _)| p.to_string());
                     chain.push(cur);
                 }
-                if let Some(c) = &caller {
+                if let Some(c) = caller.0.as_ref().filter(|_| !caller.1) {
                     for sup in oracle.chain(c)?.into_iter().skip(1) {
                         if !chain.contains(&sup) {
                             chain.push(sup);
@@ -5867,7 +5894,17 @@ impl Implemented {
     /// `hit` as a call through this member, for an implementation outside the repo `hit` was resolved in (a
     /// dependency's base class calling its own virtual member). `None` for the override calling its base.
     pub fn through_member(&self, hit: &RefHit) -> Option<RefHit> {
-        if !hit.may_target(self.id) || hit.receiver.as_deref() == Some("base") {
+        self.through_member_of(hit, None)
+    }
+
+    /// [`Self::through_member`] for `hit` resolved in a repo depending on `repo` (the repo declaring this member):
+    /// its target is this member there.
+    pub fn through_member_of(&self, hit: &RefHit, repo: Option<&str>) -> Option<RefHit> {
+        let reaches = match repo {
+            None => hit.may_target(self.id),
+            Some(r) => hit.targets.iter().any(|t| t.id == self.id && t.repo.as_deref() == Some(r)),
+        };
+        if !reaches || hit.receiver.as_deref() == Some("base") {
             return None;
         }
         let mut h = hit.clone();
@@ -5894,7 +5931,22 @@ pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Imp
 /// `sym`'s type names in its own repo (`conn`) that no type there defines, looked up in `dep`, and theirs there,
 /// transitively. Any repo's implementation may run for a call in `dep`, so each is `shared`.
 pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolRow) -> Result<Vec<Implemented>> {
-    let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
+    let (outside, seen) = outside_supertypes(conn, sym)?;
+    if outside.is_empty() {
+        return Ok(Vec::new());
+    }
+    implemented_in(conn, dep, sym, outside, seen, true)
+}
+
+/// Whether `sym`'s type names a supertype, directly or through its own repo's types, that its repo (`conn`) doesn't
+/// define: a dependency's base class or interface it may implement a member of (see [`implemented_members_in`]).
+pub fn names_outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<bool> {
+    Ok(!outside_supertypes(conn, sym)?.0.is_empty())
+}
+
+/// The supertypes of `sym`'s type its repo doesn't define, and the ones it does (the type's own name included).
+fn outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<(Vec<String>, HashSet<String>)> {
+    let Some(container) = sym.container.as_deref() else { return Ok((Vec::new(), HashSet::new())) };
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let mut seen = HashSet::from([short.clone()]);
     let mut queue = vec![short];
@@ -5911,11 +5963,8 @@ pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolR
             }
         }
     }
-    if outside.is_empty() {
-        return Ok(Vec::new());
-    }
     seen.retain(|n| !outside.contains(n));
-    implemented_in(conn, dep, sym, outside, seen, true)
+    Ok((outside, seen))
 }
 
 /// The type a DI factory registered at `file`:`line` makes, from `made` (an encoded type expression, see

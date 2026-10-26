@@ -372,7 +372,7 @@ for c in $CASES; do
   if [ "$SKIP_SESSIONS" = 1 ]; then step "sessions-$c" SKIP "--skip-sessions"; continue; fi
   for label in unprompted named; do
     prompt=$question
-    [ "$label" = named ] && prompt="Use the KnowCode kc_context tool to answer: $question"
+    [ "$label" = named ] && prompt="Use KnowCode to answer: $question"
     cat <<EOF
 
 Case $c, $label session. In a NEW terminal window run:

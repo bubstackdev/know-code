@@ -72,6 +72,52 @@ fn codex_session_start_hook_is_removed_and_other_hooks_kept() {
     assert!(doc["mcp_servers"].get("knowcode").is_none());
 }
 
+/// Codex keys a hook's trust by its entry's position in `hooks.SessionStart`. When the user's hooks follow ours,
+/// uninstall leaves our entry emptied (it runs nothing) so they keep their place and their trust, and says so; setup
+/// later fills that same entry. With nothing after it, ours and any empty entry of ours go.
+#[test]
+fn codex_uninstall_keeps_the_users_later_hooks_in_place() {
+    let p = Profile::new("codex-hook-place");
+    let hook = |name: &str| format!("\n[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo {name}\"\n");
+    p.write("codex/config.toml", &hook("before"));
+    p.setup("codex");
+    let mut text = fs::read_to_string(p.path("codex/config.toml")).unwrap();
+    text.push_str(&hook("after"));
+    fs::write(p.path("codex/config.toml"), &text).unwrap();
+    let commands = |p: &Profile| -> Vec<Vec<String>> {
+        let doc: DocumentMut = fs::read_to_string(p.path("codex/config.toml")).unwrap().parse().unwrap();
+        doc["hooks"]["SessionStart"].as_array_of_tables().unwrap().iter()
+            .map(|g| g.get("hooks").and_then(|h| h.as_array_of_tables()).into_iter().flatten()
+                .map(|h| h["command"].as_str().unwrap().to_string()).collect())
+            .collect()
+    };
+    let out = p.run(&["uninstall"]);
+    success(out.clone());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("keep their place"), "{}", String::from_utf8_lossy(&out.stderr));
+    let text = fs::read_to_string(p.path("codex/config.toml")).unwrap();
+    assert_eq!(commands(&p), [vec!["echo before".to_string()], vec![], vec!["echo after".to_string()]], "{text}");
+    assert!(text.contains("# Left by `knowcode uninstall`") && !text.contains("hook session-start"), "{text}");
+    let doc: DocumentMut = text.parse().unwrap();
+    assert!(doc["mcp_servers"].get("knowcode").is_none());
+
+    // Setup again fills the same entry, and the user's later hook stays third.
+    p.setup("codex");
+    let after_setup = commands(&p);
+    assert_eq!(after_setup.len(), 3, "{after_setup:?}");
+    assert!(after_setup[1].len() == 1 && after_setup[1][0].ends_with(" hook session-start"), "{after_setup:?}");
+    assert_eq!(after_setup[2], ["echo after"]);
+    assert!(!fs::read_to_string(p.path("codex/config.toml")).unwrap().contains("# Left by"));
+
+    // With the user's later hook gone, ours is last and uninstall removes it outright.
+    let q = Profile::new("codex-hook-last");
+    q.write("codex/config.toml", &hook("before"));
+    q.setup("codex");
+    let out = q.run(&["uninstall"]);
+    success(out.clone());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("keep their place"));
+    assert_eq!(commands(&q), [vec!["echo before".to_string()]]);
+}
+
 #[test]
 fn invariant_uninstall_preserves_settings_notes_and_unrelated_files_by_default() {
     let p = Profile::new("preserve");

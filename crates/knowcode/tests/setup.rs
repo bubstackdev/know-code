@@ -129,6 +129,44 @@ fn codex_setup_adds_a_session_start_hook_to_trust() {
     assert_eq!(h[0].1, "echo mine");
 }
 
+/// The commands of each `[[hooks.SessionStart]]` entry, in order (an empty list for an entry with no hooks).
+fn session_start_commands(path: &std::path::Path) -> Vec<Vec<String>> {
+    let doc: DocumentMut = fs::read_to_string(path).unwrap().parse().unwrap();
+    doc["hooks"]["SessionStart"].as_array_of_tables().unwrap().iter()
+        .map(|g| g.get("hooks").and_then(|h| h.as_array_of_tables()).into_iter().flatten()
+            .map(|h| h["command"].as_str().unwrap().to_string()).collect())
+        .collect()
+}
+
+/// Codex keys a hook's trust by its entry's position in `hooks.SessionStart`. Re-running setup updates our entry where
+/// it is, so neither it nor a hook the user added after it moves (moving one would make Codex ask to trust it again),
+/// and setup with nothing changed leaves the file byte for byte.
+#[test]
+fn codex_setup_updates_its_hook_in_place_and_never_moves_the_users_hooks() {
+    let p = Profile::new("codex-hook-place");
+    let hook = |name: &str| format!("\n[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo {name}\"\n");
+    p.write("home/config.toml", &hook("before"));
+    let setup = |cache: &str| {
+        let mut cmd = Command::new(KC);
+        cmd.args(["setup", "codex"]).env("CODEX_HOME", p.dir("home")).env("KNOWCODE_CONFIG_DIR", p.dir("settings"))
+            .env("KNOWCODE_CACHE_DIR", p.dir(cache)).env("KNOWCODE_DATA_DIR", p.dir("data"));
+        success(cmd.output().unwrap())
+    };
+    setup("cache");
+    // The user adds a hook after ours.
+    let mut text = fs::read_to_string(p.dir("home/config.toml")).unwrap();
+    text.push_str(&hook("after"));
+    fs::write(p.dir("home/config.toml"), &text).unwrap();
+    setup("cache");
+    assert_eq!(fs::read_to_string(p.dir("home/config.toml")).unwrap(), text, "setup again changes nothing");
+    setup("moved");
+    let commands = session_start_commands(&p.dir("home/config.toml"));
+    assert_eq!(commands.len(), 3, "{commands:?}");
+    assert_eq!(commands[0], ["echo before"]);
+    assert!(commands[1].len() == 1 && commands[1][0].starts_with(&format!("KNOWCODE_CACHE_DIR='{}' ", p.dir("moved").display())), "{commands:?}");
+    assert_eq!(commands[2], ["echo after"]);
+}
+
 #[test]
 fn cursor_setup_preserves_other_settings_and_conflicts_require_replacement() {
     let p = Profile::new("cursor");

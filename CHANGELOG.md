@@ -6,6 +6,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 SUMMARY TBD: the lead writes this paragraph from the release gate's measurements.
 
+- C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
+  `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
+  call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
+  interface member reach only an implementation taking the same arguments: a private `Find(query, parent)` overload
+  is no longer reached by calls of the interface's `Find(query)` (on public-v2's two-hop-impact-007 this removed 7
+  false hop-2 rows). In an extension method an unqualified call is the declaring class's (its overload, or an
+  extension called in static form), never the extended type's member; an extension whose `this` parameter starts a
+  line is recognised as one.
 - A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
   written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
   `const url = 'Videos/' + itemId + '/Subtitles/' + index` passed to `apiClient.getUrl(url)`, which weren't read
@@ -13,6 +21,12 @@ SUMMARY TBD: the lead writes this paragraph from the release gate's measurements
   passing such a `const` straight to `fetch(url)` or `send("GET", path)`, linked before, now say so too. A URL
   builder or `{ url }` option given a `let`, `var`, parameter, a `const` of an enclosing function or the module, a
   name declared twice in the function, or a `const` built from another local holding URL text, isn't read.
+- `impact` on an implementation of an interface member declared in a dependency (Serilog.Extensions.Hosting's
+  `ReloadableLogger.ForContext<T>()`, implementing Serilog's `ILogger.ForContext<T>()`) lists, in `cross_repo`, the
+  calls through that member in the dependency and in the other repos using it (`Log.ForContext<T>()` in serilog,
+  `RequestLoggingMiddleware` in serilog-aspnetcore), `through ILogger`. Another implementation may run for each, so
+  they are `ambiguous`: listed, not walked past. Before, an implementation's interface members were looked up only
+  in its own repo, and these calls were missing.
 - C#: a conditional that splits a declaration (`ILogger ForContext(Type t)`, then `#if X` a body, `#else` a `;`,
   `#endif`) no longer loses it. tree-sitter reads a directive only between declarations or statements, and its
   error recovery lost the declaration and often its type's other members: Serilog's `ILogger` had no members, and
@@ -42,7 +56,11 @@ SUMMARY TBD: the lead writes this paragraph from the release gate's measurements
 - `knowcode setup codex` adds a user-level `[[hooks.SessionStart]]` entry to Codex's `config.toml`, beside the MCP
   server, that runs KnowCode's session-start hook (the line Claude Code's plugin adds). Codex runs it only once you
   trust it in `/hooks`, and setup says so. The entry names only the binary and KnowCode's directory overrides, so the
-  line can change without trusting it again. `knowcode uninstall` removes it and keeps your own hooks.
+  line can change without trusting it again. Codex keys that trust to the entry's place among the `SessionStart`
+  entries, so setup adds the entry last and, run again, updates it where it is: neither it nor your own hooks move,
+  and Codex keeps trusting them. `knowcode uninstall` removes it and keeps your own hooks. When your hooks follow it,
+  uninstall leaves an empty entry in its place, with a comment saying why, so that they keep their place and their
+  trust.
 - The Claude Code plugin adds a `SessionStart` hook. At the start of a session, and after `/clear` or a compaction, it
   adds one line of about 40 tokens where KnowCode has an index: `KnowCode indexes shop. Callers, impact, HTTP:
   kc {op: impact}; definitions: op find.` (with `KNOWCODE_TOOLS=core` or `all`: `kc_impact` and `kc_find`) It says nothing in a directory with no index, in a repo whose privacy file blocks
