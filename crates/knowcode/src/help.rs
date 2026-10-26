@@ -870,7 +870,9 @@ dependency's checkout is the revision asked for, unchecked), `configured_host` (
 host configuration maps to it; which environment's applies, unchecked), `operation_name` (a generated client's operation
 is the action of that name; the API description wasn't read), `server_unverified` (nothing says which server the
 client calls: every action of the operation's name is a candidate), `url_local` (a request's URL is a `const` of its
-function, read from its declaration; the request's `local` says where).
+function, read from its declaration; the request's `local` says where), `client_unread` (a method of an external client
+the repo only declares, in a `.d.ts`: its code wasn't read, so the route is matched by the method's name, its
+`…Legacy` twin too).
 
 Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which edges to follow:
 - `default`: exact and unique_name edges followed, ambiguous ones listed, not followed;

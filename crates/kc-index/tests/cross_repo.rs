@@ -1067,8 +1067,9 @@ fn default_actions_are_served_at_their_controllers_route() {
 }
 
 /// A call through a class the client repo implements itself (`new Client(…).login()`) is no generated client's
-/// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is. An untagged
-/// client's one-word operation (`update`) links `ambiguous` at most: the name alone doesn't say whose method it is.
+/// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is, `ambiguous`
+/// (its code isn't read). An untagged client's one-word operation (`update`) links `ambiguous` at most: the name alone
+/// doesn't say whose method it is.
 #[test]
 fn only_generated_clients_link_by_operation_name() {
     let turn = turn();
@@ -1105,7 +1106,7 @@ fn only_generated_clients_link_by_operation_name() {
         let r = ops.iter().find(|r| r.path.as_deref() == Some(op)).unwrap();
         kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
     };
-    assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "exact")]);
+    assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "ambiguous")]);
     assert_eq!(link("update"), [("AccountsController.Update".to_string(), "ambiguous")]);
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1152,7 +1153,8 @@ fn typed_field_receivers_are_judged_by_their_type() {
         kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
     };
     assert_eq!(link("getItems"), [("ItemsController.GetItems".to_string(), "exact")]);
-    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "exact")]);
+    // An external client the repo only declares: its code isn't read, so never `exact`.
+    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "ambiguous")]);
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1256,7 +1258,8 @@ fn urls_in_const_locals_link_naming_the_local() {
 
 /// A call to an external client the repo only declares (`declare module 'media-apiclient'` in a `.d.ts`) whose
 /// method names no action: its route isn't in the workspace, and the answer says so, in a list too, instead of
-/// leaving the call out silently.
+/// leaving the call out silently. One named like an action links to it and to its `…Legacy` twin, `ambiguous`: the
+/// client's code, which would say which route it requests, isn't read.
 #[test]
 fn an_external_clients_unlinked_call_says_where_it_is_declared() {
     let turn = turn();
@@ -1265,7 +1268,7 @@ fn an_external_clients_unlinked_call_says_where_it_is_declared() {
     write(
         &api,
         "src/PlaystateController.cs",
-        "[ApiController]\n[Route(\"UserPlayedItems\")]\npublic class PlaystateController : ControllerBase\n{\n    [HttpDelete(\"{itemId}\")]\n    public Task MarkUnplayedItem(string itemId) => null;\n    [HttpGet(\"{itemId}\")]\n    public Task GetPlayedState(string itemId) => null;\n}\n",
+        "[ApiController]\n[Route(\"UserPlayedItems\")]\npublic class PlaystateController : ControllerBase\n{\n    [HttpDelete(\"{itemId}\")]\n    public Task MarkUnplayedItem(string itemId) => null;\n    [HttpGet(\"{itemId}\")]\n    public Task GetPlayedState(string itemId) => null;\n    [HttpGet(\"/Users/{userId}/PlayedItems/{itemId}\")]\n    public Task GetPlayedStateLegacy(string userId, string itemId) => null;\n}\n",
     );
     let web = scratch(&base, "media-web");
     write(
@@ -1287,9 +1290,22 @@ fn an_external_clients_unlinked_call_says_where_it_is_declared() {
     let op = |name: &str| {
         summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().find(|r| r.side == "operation" && r.path.as_deref() == Some(name)).cloned().unwrap()
     };
-    // A method named like an action still links by name.
+    // A method named like an action still links by name, to its `…Legacy` twin too, neither `exact`.
+    use kc_store::answer::Assumption::{ClientUnread, OperationName, SameDeployment, ServerUnverified};
+    let unread = vec![SameDeployment, OperationName, ServerUnverified, ClientUnread];
     let played = kc_index::http::handlers(&op("getPlayedState"), &roots[1], &summaries);
-    assert_eq!(played.iter().map(|l| l.route.symbol.as_str()).collect::<Vec<_>>(), ["PlaystateController.GetPlayedState"]);
+    assert_eq!(
+        played.iter().map(|l| (l.route.symbol.as_str(), l.confidence, l.assumptions.clone())).collect::<Vec<_>>(),
+        [
+            ("PlaystateController.GetPlayedState", "ambiguous", unread.clone()),
+            ("PlaystateController.GetPlayedStateLegacy", "ambiguous", unread),
+        ]
+    );
+    // From the twin's side, the same call.
+    let server = summaries.iter().find(|s| s.root == roots[0]).unwrap();
+    let twin = server.routes.iter().find(|r| r.symbol == "PlaystateController.GetPlayedStateLegacy").unwrap();
+    let back: Vec<_> = kc_index::http::callers(twin, &roots[0], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect();
+    assert_eq!(back, [("Menu.played".to_string(), "ambiguous")]);
     let unplay = op("markUnplayed");
     assert!(kc_index::http::handlers(&unplay, &roots[1], &summaries).is_empty());
     for brief in [true, false] {
