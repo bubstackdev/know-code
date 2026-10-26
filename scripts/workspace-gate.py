@@ -107,6 +107,11 @@ class Server:
                 return m["result"]
 
     def tool(self, name, args):
+        # The server's profile decides the tools: the separate kc_search, or the one `kc` tool's search op.
+        if getattr(self, "names", None) is None:
+            self.names = {tool["name"] for tool in self.call("tools/list", {})["tools"]}
+        if name not in self.names and "kc" in self.names:
+            name, args = "kc", {"op": name.removeprefix("kc_"), **args}
         result = self.call("tools/call", {"name": name, "arguments": args})
         text = result["content"][0]["text"]
         if result.get("isError"):
