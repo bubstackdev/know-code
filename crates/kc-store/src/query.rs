@@ -5944,9 +5944,32 @@ pub fn names_outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<bo
     Ok(!outside_supertypes(conn, sym)?.0.is_empty())
 }
 
-/// [`names_outside_supertypes`] of a member of the type `container` (`Ns.Type`).
-pub fn type_names_outside_supertypes(conn: &Connection, container: &str) -> Result<bool> {
-    Ok(!outside_supertypes_of(conn, container)?.0.is_empty())
+/// The supertypes the type `container` (`Ns.Type`) names, directly or through its own repo's types, that no type of
+/// its repo (`conn`) is named: bare names, namespace and generic arguments dropped. A quick check, by name alone, for
+/// whether [`implemented_members_in`] can find anything.
+pub fn outside_supertype_names(conn: &Connection, container: &str) -> Result<Vec<String>> {
+    let bare = |t: &str| t.split('<').next().unwrap_or(t).trim().rsplit('.').next().unwrap_or("").to_string();
+    let mut defined = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM symbols WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ('class', 'struct', 'enum', 'actor', 'protocol'))",
+    )?;
+    let start = bare(container);
+    let mut seen = HashSet::from([start.clone()]);
+    let mut queue = vec![start];
+    let mut outside = Vec::new();
+    while let Some(ty) = queue.pop() {
+        for p in supertypes(conn, &ty)? {
+            let p = bare(&p);
+            if p.is_empty() || seen.len() > 32 || !seen.insert(p.clone()) {
+                continue;
+            }
+            if defined.query_row([&p], |r| r.get::<_, bool>(0))? {
+                queue.push(p);
+            } else {
+                outside.push(p);
+            }
+        }
+    }
+    Ok(outside)
 }
 
 /// The supertypes of `sym`'s type its repo doesn't define, and the ones it does (the type's own name included).

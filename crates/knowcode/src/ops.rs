@@ -4691,8 +4691,8 @@ impl<'a> HttpCrossing<'a> {
         Ok(out)
     }
 
-    /// Whether the type `container` names a supertype its repo (at `root`) doesn't define, once per type; never when
-    /// the repo depends on no indexed repo.
+    /// Whether the type `container` names a supertype its repo (at `root`) doesn't define and one of the repos it
+    /// depends on does, once per type.
     fn lib_outside(&mut self, root: &Path, container: &str) -> Result<bool> {
         if self.lib_dependencies(root)?.is_empty() {
             return Ok(false);
@@ -4700,7 +4700,28 @@ impl<'a> HttpCrossing<'a> {
         if let Some(&b) = self.lib.outside.get(&(root.to_path_buf(), container.to_string())) {
             return Ok(b);
         }
-        let b = query::type_names_outside_supertypes(self.store(root).conn(), container)?;
+        // Only a supertype a dependency defines can have members there to implement (`IEquatable` is no repo's).
+        let names = query::outside_supertype_names(self.store(root).conn(), container)?;
+        let mut b = false;
+        if !names.is_empty() {
+            for d in self.lib_dependencies(root)? {
+                // The dependency's summary rules most names out without opening its index.
+                let bare = |n: &String| n.split('<').next().unwrap_or(n).trim().to_string();
+                if !self.lib_summary(&d).is_some_and(|s| names.iter().any(|n| s.may_define(&bare(n)))) || !self.open(&d)? {
+                    continue;
+                }
+                for n in &names {
+                    let bare = n.split('<').next().unwrap_or(n).trim();
+                    if query::definitions(self.store(&d).conn(), bare)?.iter().any(|t| matches!(t.kind.as_str(), "protocol" | "class" | "struct")) {
+                        b = true;
+                        break;
+                    }
+                }
+                if b {
+                    break;
+                }
+            }
+        }
         self.lib.outside.insert((root.to_path_buf(), container.to_string()), b);
         Ok(b)
     }
