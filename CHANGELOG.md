@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
+  written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
+  `const url = 'Videos/' + itemId + '/Subtitles/' + index` passed to `apiClient.getUrl(url)`, which weren't read
+  before. The request names the local (`local: url at src/a.js:44`) and its links assume `url_local`; requests
+  passing such a `const` straight to `fetch(url)` or `send("GET", path)`, linked before, now say so too. A URL
+  builder or `{ url }` option given a `let`, `var`, parameter, a `const` of an enclosing function or the module, a
+  name declared twice in the function, or a `const` built from another local holding URL text, isn't read.
 - An impact row whose caller reaches the changed symbol on several lines lists them all: `at line 526 (also 532, 592,
   602)` in text, `also` in JSON. Before, one line per caller was named; agents in 0.3's study grepped for the rest,
   and a two-hop question's label counts each call line. Replaying that study's KnowCode calls, impact answers grow

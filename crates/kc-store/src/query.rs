@@ -2635,6 +2635,10 @@ pub struct RouteRow {
     /// declares (a `.d.ts` for an external client): where (`ApiClient.markUnplayed is declared at src/apiclient.d.ts:233`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// For a client request whose URL is a `const` local of its function (`fetch(url)`): the local and where it is
+    /// declared (`url at src/a.js:44`). Links from it assume `url_local`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<String>,
 }
 
 /// An `http_routes` row as [`http_routes`] reads it: (side, verb, path, path_ref), (service, service_ref), (symbol
@@ -2722,6 +2726,7 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
             host: None,
             host_at: None,
             detail,
+            local: None,
         };
         if side == "unsupported" {
             out.push(row(side, verb, None, Some(path)));
@@ -2767,6 +2772,15 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
             continue;
         }
         let mut host = None;
+        // A URL read from a local of the function (`{~url@44}` after the path, see `kc_extract`'s TypeScript
+        // extractor): the local and its declaration.
+        let (path, local) = match path.find("{~").filter(|_| side == "client" && path.ends_with('}')) {
+            Some(i) => {
+                let local = path[i + 2..path.len() - 1].split_once('@').map(|(name, at)| format!("{name} at {file}:{at}"));
+                (path[..i].to_string(), local)
+            }
+            None => (path, None),
+        };
         let path = match path_ref {
             None if side == "client" => {
                 // A URL a function of the repo builds from the path given (`addQuery('/events', …)`): the path, when
@@ -2800,6 +2814,7 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
         };
         let mut r = row(side, verb, path, None);
         r.service = service;
+        r.local = local;
         if r.side == "client" {
             let class = if matches!(r.kind.as_str(), "class" | "struct") { name.clone() } else { container.as_deref().map(|c| c.rsplit('.').next().unwrap_or(c).to_string()) };
             match (host, class.and_then(|c| clients.get(&c))) {

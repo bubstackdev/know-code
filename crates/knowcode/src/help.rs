@@ -869,7 +869,8 @@ it, unchecked), `same_destination` (a message reaches the consumer on its virtua
 dependency's checkout is the revision asked for, unchecked), `configured_host` (an HTTP client reaches the repo through a
 host configuration maps to it; which environment's applies, unchecked), `operation_name` (a generated client's operation
 is the action of that name; the API description wasn't read), `server_unverified` (nothing says which server the
-client calls: every action of the operation's name is a candidate).
+client calls: every action of the operation's name is a candidate), `url_local` (a request's URL is a `const` of its
+function, read from its declaration; the request's `local` says where).
 
 Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which edges to follow:
 - `default`: exact and unique_name edges followed, ambiguous ones listed, not followed;

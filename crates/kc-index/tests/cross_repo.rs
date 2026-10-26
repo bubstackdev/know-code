@@ -1205,6 +1205,55 @@ fn paths_given_to_url_functions_are_read_only_when_known() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A request whose URL is a `const` of its function (`{ url }`, `getUrl(url)`) links as the URL written in the call
+/// would, assuming `url_local` and naming the local; a `let` assigned again doesn't link.
+#[test]
+fn urls_in_const_locals_link_naming_the_local() {
+    let turn = turn();
+    let base = turn.dir("url-locals");
+    let api = scratch(&base, "album-api");
+    write(
+        &api,
+        "src/AlbumsController.cs",
+        "[ApiController]\npublic class AlbumsController : ControllerBase\n{\n    [HttpPost(\"Albums\")]\n    public Task Create() => null;\n    [HttpDelete(\"Tracks/{trackId}/Captions/{index}\")]\n    public Task DeleteCaption(string trackId, int index) => null;\n}\n",
+    );
+    let web = scratch(&base, "album-web");
+    write(
+        &web,
+        "src/albums.js",
+        "export function createAlbum(apiClient, dlg) {\n    const url = apiClient.getUrl('Albums', { Name: dlg.name });\n    return apiClient.ajax({ type: 'POST', url, dataType: 'json' });\n}\nexport function removeCaption(apiClient, trackId, index) {\n    const url = 'Tracks/' + trackId + '/Captions/' + index;\n    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });\n}\nexport function moved(apiClient, trackId, index) {\n    let url = 'Tracks/' + trackId + '/Captions/' + index;\n    url = url + '/moved';\n    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.clone();
+    let rows: Vec<(&str, &str, Option<&str>, Option<&str>)> =
+        routes.iter().map(|r| (r.symbol.as_str(), r.side.as_str(), r.path.as_deref(), r.local.as_deref())).collect();
+    assert_eq!(
+        rows,
+        [
+            ("createAlbum", "client", Some("Albums"), Some("url at src/albums.js:2")),
+            ("removeCaption", "client", Some("Tracks/{}/Captions/{}"), Some("url at src/albums.js:6")),
+        ]
+    );
+    let link = |sym: &str| -> Vec<(String, &'static str, Vec<kc_store::answer::Assumption>)> {
+        let r = routes.iter().find(|r| r.symbol == sym).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence, l.assumptions)).collect()
+    };
+    let assumed = vec![kc_store::answer::Assumption::SameDeployment, kc_store::answer::Assumption::UrlLocal];
+    assert_eq!(link("createAlbum"), [("AlbumsController.Create".to_string(), "exact", assumed.clone())]);
+    assert_eq!(link("removeCaption"), [("AlbumsController.DeleteCaption".to_string(), "exact", assumed)]);
+    // From the action's side, the same links.
+    let server = summaries.iter().find(|s| s.root == roots[0]).unwrap();
+    let action = server.routes.iter().find(|r| r.symbol == "AlbumsController.Create").unwrap();
+    let callers = kc_index::http::callers(action, &roots[0], &summaries);
+    assert_eq!(callers.iter().map(|l| (l.route.symbol.as_str(), l.route.local.as_deref())).collect::<Vec<_>>(), [("createAlbum", Some("url at src/albums.js:2"))]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A call to an external client the repo only declares (`declare module 'media-apiclient'` in a `.d.ts`) whose
 /// method names no action: its route isn't in the workspace, and the answer says so, in a list too, instead of
 /// leaving the call out silently.

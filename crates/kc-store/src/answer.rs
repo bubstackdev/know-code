@@ -184,6 +184,9 @@ pub enum Assumption {
     /// Which server repo a client sends to is not known: no base address, configuration, client package or other
     /// request of the client's names it, so every repo with an action of the operation's name is a candidate.
     ServerUnverified,
+    /// An HTTP request's URL is a `const` local of the function making it, read from its declaration (the route's
+    /// `local` says where): that the name in the call is that local was read from the syntax, without a type checker.
+    UrlLocal,
 }
 
 /// What an edge rests on: how its target was found, and what that did not check.
@@ -441,6 +444,7 @@ pub const ASSUMPTIONS: &[Assumption] = &[
     Assumption::ConfiguredHost,
     Assumption::OperationName,
     Assumption::ServerUnverified,
+    Assumption::UrlLocal,
 ];
 
 impl Default for EvidencePolicy {
