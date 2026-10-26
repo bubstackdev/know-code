@@ -1,10 +1,10 @@
 # Evaluation
 
 How KnowCode is checked: the gates every change passes, where ground truth comes from, how results are reported,
-and the public evaluation being prepared. No evaluation results are published yet. Until they are, the
-documentation describes capabilities only and makes no comparative or performance claims.
+and the evaluations published so far. The documentation makes no comparative or performance claim beyond what
+those evaluations show.
 
-KnowCode is developed against public repositories and is also validated on a private multi-repo codebase.
+KnowCode is developed and evaluated against public repositories.
 
 The tools live in [`scripts/eval/`](../scripts/eval), behind one entry point, `scripts/eval/run.py <command>`
 (Python 3.12, standard library only). Data they produce (query sets beyond the public example, snapshots, results,
@@ -109,15 +109,29 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
 6. Each question runs at least three times per tool.
 7. "This tool can't answer this" is counted apart from wrong answers, per stratum.
 
-## The public evaluation
+## Published evaluations
 
-[`eval/public-v1/`](../eval/public-v1) defines a paired study on pinned public repositories (Jellyfin server and web
-client, Bitwarden server and clients, Autofac with its DI integration): the [method](../eval/public-v1/method.md),
-the [sampling plan](../eval/public-v1/sampling.md), the [manifest](../eval/public-v1/manifest.json) and the
-[subject scope](../eval/public-v1/scope.json). The plain arm gets grep, find and read; the KnowCode arm gets the same
-plus its MCP tools. Questions, labels, run order and configuration are frozen with content hashes before either arm
-runs. The results page will show where KnowCode loses, every unsupported and failed task, and every deviation from
-the design. No scored runs have been performed yet.
+**Release gates**, with no model calls, compare each release candidate with the previous release:
+
+- [Release gate, 0.4.0](../eval/release-gate/0.4.0.md): tool cost per turn in tokens, the replay of recorded calls,
+  the workspace gate, clean-machine acceptance and the update from 0.3.0.
+- [Replay gate](../eval/replay-gate/README.md): every KnowCode call recorded in the public studies, replayed against
+  a build and scored against the studies' labels.
+- [History gate](../eval/history-v1/README.md): history questions on full clones, labelled from git alone, with
+  KnowCode scored against the plain-git approaches.
+- [Schema cost](../eval/schema-cost.md): what the advertised tools and instructions cost a session per turn.
+
+**Agent studies** compare agents with and without KnowCode on pinned public repositories, pre-registered, with the
+misses stated first. The plain arm gets grep, find and read; the KnowCode arm gets the same plus its MCP tools.
+Questions, labels, run order and configuration are frozen with content hashes before either arm runs.
+
+- [public-v1](../eval/public-v1/results.md) (0.2.0): Jellyfin server and web client, Bitwarden server and clients,
+  Autofac with its DI integration. The [method](../eval/public-v1/method.md), the
+  [protocol](../eval/public-v1/protocol.md), the [sampling plan](../eval/public-v1/sampling.md), the
+  [manifest](../eval/public-v1/manifest.json) and the [subject scope](../eval/public-v1/scope.json).
+- [public-v2](../eval/public-v2/results.md) (0.3.0 against 0.2.0): 40 questions over ten public repositories. The
+  [protocol](../eval/public-v2/protocol.md) and [sampling plan](../eval/public-v2/sampling.md).
+- public-v3 is held out for the next study.
 
 The preparation scripts (`scripts/prepare-public-eval.py`, `scripts/census-public-eval.py`,
 `scripts/scope-public-eval.py`, `scripts/sample-public-eval.py`, `scripts/plan-public-eval.py`,
