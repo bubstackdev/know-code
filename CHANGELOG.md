@@ -2,6 +2,16 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- A call through a typed field is judged by the field's type, not its name. `this.chromeStorageApi.remove(key)`,
+  with `chromeStorageApi: chrome.storage.StorageArea`, was read as a generated API client's operation because of
+  the field's name, and linked `ambiguous` to two server actions named `Remove`. A receiver's type, from a field, a
+  constructor parameter property or a local, now decides: a class of the repo's with that method is the repo's own
+  code (as for `new Client(…)` since 0.3.0), and a type named for no API client is no client. A generated client's
+  type (`ItemsApi`) and an external client the repo declares in a `.d.ts` still are. On the public-v1 workspace, 15
+  operation rows are gone, 2 of which had links (both the `remove` above); no other link changed.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its

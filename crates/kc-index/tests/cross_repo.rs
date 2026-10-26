@@ -994,6 +994,52 @@ fn only_generated_clients_link_by_operation_name() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A receiver reached through a typed field (`this.client` with `private client: Client`, a parameter property or a
+/// field, declared here or in a base class) is judged by the field's type: a class of the repo's is its own code, and
+/// a type named for no API client (`chrome.storage.StorageArea` behind `chromeStorageApi`) is no client, so neither
+/// is an operation; a generated client's type (`ItemsApi`) still is, and so is an external client the repo declares.
+#[test]
+fn typed_field_receivers_are_judged_by_their_type() {
+    let turn = turn();
+    let base = turn.dir("typed-fields");
+    let api = scratch(&base, "vault-api");
+    write(
+        &api,
+        "src/ItemsController.cs",
+        "[ApiController]\n[Route(\"items\")]\npublic class ItemsController : ControllerBase\n{\n    [HttpDelete(\"{id}\")]\n    public Task Remove(string id) => null;\n    [HttpGet]\n    public Task GetItems() => null;\n    [HttpPost(\"open\")]\n    public Task OpenVault() => null;\n    [HttpGet(\"profile\")]\n    public Task GetProfile() => null;\n}\n",
+    );
+    let web = scratch(&base, "vault-web");
+    write(&web, "src/client.ts", "export class Client {\n  openVault() { return this.rest.post('x'); }\n}\n");
+    write(&web, "src/vault.ts", "import { Client } from './client';\nexport class Vault {\n  private vaultClient: Client;\n  open() { return this.vaultClient.openVault(); }\n}\n");
+    write(
+        &web,
+        "src/storage.ts",
+        "export abstract class BaseStorage {\n  constructor(protected chromeStorageApi: chrome.storage.StorageArea) {}\n}\nexport class LocalStorage extends BaseStorage {\n  drop(key: string) { return this.chromeStorageApi.remove(key); }\n}\n",
+    );
+    write(&web, "src/apiclient.d.ts", "declare class ApiClient {\n  getProfile(): Promise<any>;\n}\n");
+    write(
+        &web,
+        "src/items.ts",
+        "import { ItemsApi } from '@media/sdk';\nexport class Items {\n  constructor(private itemsApi: ItemsApi, private apiClient: ApiClient) {}\n  load() { return this.itemsApi.getItems(); }\n  profile() { return this.apiClient.getProfile(); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let ops: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().filter(|r| r.side == "operation").cloned().collect();
+    let names: Vec<(&str, &str)> = ops.iter().map(|r| (r.symbol.as_str(), r.path.as_deref().unwrap_or_default())).collect();
+    assert_eq!(names, [("Items.load", "getItems"), ("Items.profile", "getProfile")]);
+    let link = |op: &str| -> Vec<(String, &'static str)> {
+        let r = ops.iter().find(|r| r.path.as_deref() == Some(op)).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("getItems"), [("ItemsController.GetItems".to_string(), "exact")]);
+    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "exact")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A call to an external client the repo only declares (`declare module 'media-apiclient'` in a `.d.ts`) whose
 /// method names no action: its route isn't in the workspace, and the answer says so, in a list too, instead of
 /// leaving the call out silently.

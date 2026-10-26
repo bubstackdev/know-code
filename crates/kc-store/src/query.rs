@@ -2808,14 +2808,23 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let declared: std::collections::HashSet<String> =
         out.iter().filter(|r| r.side == "client" && r.kind == "method").filter_map(|r| r.symbol.rsplit('.').next().map(str::to_ascii_lowercase)).collect();
     out.retain(|r| r.side != "operation" || r.path.as_deref().is_some_and(|op| !declared.contains(&op.to_ascii_lowercase())));
-    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
-    // `Client` a class of the repo's), reaches the repo's own code, not a generated client: no operation. A type the
-    // repo only declares (in a `.d.ts`, an external client's surface) doesn't count.
-    let mut implemented = conn.prepare_cached(
-        "SELECT EXISTS(SELECT 1 FROM refs r JOIN files f ON f.id = r.file_id
-           JOIN symbols s ON s.name = r.name AND s.container = r.receiver_type JOIN files sf ON sf.id = s.file_id
-         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND sf.path NOT LIKE '%.d.ts')",
+    // The type of a call's receiver, as the call site writes it (encoded), for an operation's client.
+    let mut receiver = conn.prepare_cached(
+        "SELECT r.receiver_type FROM refs r JOIN files f ON f.id = r.file_id
+         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND r.receiver_type IS NOT NULL LIMIT 1",
     )?;
+    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
+    // or `this.client` with `private client: Client`, `Client` a class of the repo's), reaches the repo's own code,
+    // not a generated client: no operation. A type the repo only declares (in a `.d.ts`, an external client's
+    // surface) doesn't count.
+    let mut implemented = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM symbols s JOIN files sf ON sf.id = s.file_id
+         WHERE s.name = ?1 AND s.container = ?2 AND sf.path NOT LIKE '%.d.ts')",
+    )?;
+    let mut declared_in_dts = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM symbols s JOIN files sf ON sf.id = s.file_id WHERE s.container = ?1 AND sf.path LIKE '%.d.ts')",
+    )?;
+    let mut oracle = TypeOracle::new(conn);
     // A method of that name the repo only declares (`markUnplayed` in a `.d.ts` for `jellyfin-apiclient`): the call
     // goes to an external client whose routes aren't in the workspace, which an answer says (`detail`). The receiver's
     // own type first, when the call site names it.
@@ -2829,8 +2838,29 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let mut kept = Vec::with_capacity(out.len());
     for mut r in out {
         if r.side == "operation" {
-            if implemented.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get::<_, bool>(0))? {
-                continue;
+            // The receiver's type, through a field's or a local's declaration where the call site doesn't name it.
+            let written: Option<String> = receiver.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get(0)).optional()?;
+            let typed = match written {
+                Some(enc) => {
+                    let caller = symbols_at(conn, &r.file, r.line)?.into_iter().find(|s| TYPE_KINDS.contains(&s.kind.as_str())).map(|s| s.qualified);
+                    oracle.file = Some(r.file.clone());
+                    match oracle.eval_encoded(&enc, caller.as_deref())? {
+                        Some(TypeExpr::Named(n) | TypeExpr::Generic { name: n, .. }) => Some(last_segment(&n).to_string()).filter(|n| !n.is_empty()),
+                        _ => None,
+                    }
+                }
+                None => None,
+            };
+            if let Some(t) = &typed {
+                if implemented.query_row(rusqlite::params![r.path, t], |x| x.get::<_, bool>(0))? {
+                    continue;
+                }
+                // A type named for no API client (`chrome.storage.StorageArea` behind a field named
+                // `chromeStorageApi`), and not an external client's surface the repo declares: the receiver's name
+                // made it look like a client, its type says it isn't one.
+                if kc_extract::api_tag(t).is_none() && !declared_in_dts.query_row([t], |x| x.get::<_, bool>(0))? {
+                    continue;
+                }
             }
             let found = declared_only
                 .query_map(rusqlite::params![r.path, r.file, r.line], |x| Ok((x.get::<_, String>(0)?, x.get::<_, String>(1)?, x.get::<_, u32>(2)?)))?
