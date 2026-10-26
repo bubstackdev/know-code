@@ -21,4 +21,8 @@
 # statements and checked notes for files read only as text (36213984, up 363776; measured on PR #39's dist build).
 # The re-check fix round: note precision, answer lists cut last with repo-prefixed places, and search hits with their
 # statement and parameters (36296656, up 82672; measured on main 96fac0c's dist build).
-36296656
+# 0.3 and the 0.4 build so far: background workspace indexing, adaptive throughput and the derived-data builder,
+# phase metering, HTTP linking precision (servers a client calls, conventional and per-app routes, default actions,
+# typed-field receivers, query-appending helpers), MS DI descriptors, statement cites, the session-start hook and the
+# single `kc` tool with its op mapping (36628208, up 331552; measured on main dd3589f's dist build).
+36628208
