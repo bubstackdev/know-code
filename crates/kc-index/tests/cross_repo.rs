@@ -951,6 +951,55 @@ fn a_conventionally_routed_controller_never_takes_a_namesakes_prefix() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// One repo, two apps, each with its own project and conventional routes: the admin app maps the default template,
+/// the tools app `tools/{controller}/{action}`. Each app's `ReportsController` takes its own app's template only, so a
+/// request to `/tools/Reports/Rebuild` links to the tools app's action, not the admin app's namesake.
+#[test]
+fn each_app_routes_its_controllers_by_its_own_conventional_template() {
+    let turn = turn();
+    let base = turn.dir("app-templates");
+    let server = scratch(&base, "store-server");
+    for dir in ["src/Admin", "src/Tools"] {
+        std::fs::create_dir_all(server.join(dir)).unwrap();
+    }
+    let project = "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n";
+    write(&server, "src/Admin/Admin.csproj", project);
+    write(&server, "src/Tools/Tools.csproj", project);
+    let controller = "public class ReportsController : Controller\n{\n    [HttpPost]\n    public Task<IActionResult> Rebuild() => null;\n}\n";
+    write(&server, "src/Admin/ReportsController.cs", controller);
+    write(&server, "src/Tools/ReportsController.cs", controller);
+    write(
+        &server,
+        "src/Admin/Startup.cs",
+        "public class Startup\n{\n    public void Configure(IApplicationBuilder app)\n    {\n        app.UseEndpoints(endpoints => endpoints.MapDefaultControllerRoute());\n    }\n}\n",
+    );
+    write(&server, "src/Tools/Program.cs", "var app = WebApplication.Create(args);\napp.MapControllerRoute(\"tools\", \"tools/{controller}/{action}\");\napp.Run();\n");
+    let web = scratch(&base, "store-web");
+    write(&web, "src/reports.ts", "export class Reports {\n  rebuild() { return fetch('/tools/Reports/Rebuild', { method: 'POST' }); }\n}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&server, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let served: Vec<(String, String)> = routes(0).into_iter().filter(|r| r.side == "server").map(|r| (r.file, r.path.unwrap_or_default())).collect();
+    let s = |file: &str, path: &str| (file.to_string(), path.to_string());
+    assert_eq!(
+        served,
+        [
+            s("src/Admin/ReportsController.cs", "Reports/Rebuild"),
+            s("src/Admin/ReportsController.cs", "Reports/Rebuild/{id}"),
+            s("src/Tools/ReportsController.cs", "tools/Reports/Rebuild"),
+        ]
+    );
+    let rebuild = routes(1).into_iter().find(|r| r.symbol == "Reports.rebuild").unwrap();
+    let links: Vec<(String, &'static str)> =
+        kc_index::http::handlers(&rebuild, &roots[1], &summaries).into_iter().map(|l| (l.route.file, l.confidence)).collect();
+    assert_eq!(links, [("src/Tools/ReportsController.cs".to_string(), "exact")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A conventional route's defaults, inline or given as `defaults: new { … }`: `Index`, the default action, is served
 /// at its controller's route (`Orders` as well as `Orders/Index`), and the default controller's at the root. A
 /// request to `/Orders` links to `OrdersController.Index`; one with a verb an action is constrained to links to that
