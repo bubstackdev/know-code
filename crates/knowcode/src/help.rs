@@ -886,8 +886,9 @@ is named only as blocked. An answer that may have drawn on blocked content is in
 kc_search, kc_more and kc_help. A client that loads every tool's schema on every turn carries only these. `all`
 (`KNOWCODE_TOOLS=all`, or `knowcode serve --tools all`) advertises every tool; a comma list adds tools by name
 (`core,kc_trace,kc_tests`). Tools left out are listed in the help index and can't be called until the server is
-started with them. The core tools are marked always loaded (`anthropic/alwaysLoad`), so Claude Code loads them up front
-under any profile and defers the rest to tool search."#,
+started with them. kc_find, kc_context, kc_refs, kc_impact and kc_search are marked always loaded
+(`anthropic/alwaysLoad`), so Claude Code loads them up front under any profile and defers the rest to tool search,
+among them kc_locate, kc_more and kc_help. A cut answer's `hint` names the kc_more call that continues it."#,
     },
 ];
 

@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Claude Code loads five tools up front instead of eight: `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and
+  `kc_search`. `kc_locate`, `kc_more` and `kc_help` are still advertised, and deferred to tool search: in 0.3's study
+  `kc_locate` and `kc_help` were never called and `kc_more` 3 times in 320 sessions, while every schema loaded up front
+  is paid on every turn. The always-loaded schemas go from 1,031 to 743 tokens (`count_tokens`); with the plugin's
+  `KNOWCODE_TOOLS=all`, KnowCode's upfront cost with tool search goes from 1,570 to 1,325 tokens, instructions and
+  deferred names included. A cut answer's `hint` already names the `kc_more` call that continues it, now checked by a
+  test for every core tool that pages. Clients that don't defer tools, such as Claude Code's bare mode, still
+  load all eight core tools.
 - Conventional routes are per app. A repo with several ASP.NET apps (an admin app and an API, each with its own
   project and `MapControllerRoute`) placed every controller with no `[Route]` under every app's templates. A
   controller now takes the templates of its own project (the nearest `.csproj` above it) and of the projects

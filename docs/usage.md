@@ -230,11 +230,14 @@ documented in `kc_help <tool>`, so a client that loads every schema on every tur
 server's instructions out (Claude Code's bare mode does), so each core tool's description says on its own which
 questions it answers.
 
-In Claude Code, the core tools are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from
-the start instead of waiting behind tool search; with `all`, the other tools stay deferred. A server-level
-`alwaysLoad` setting overrides the mark, and a profile that leaves a core tool out doesn't list it. The Claude Code
-plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=all` (unless you set it): Claude Code defers the
-non-core tools, and the plugin's skills use them.
+In Claude Code, the core tools that answer a first question, `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and
+`kc_search`, are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from the start instead
+of waiting behind tool search. Every other tool stays deferred, one tool search away, among them `kc_locate`,
+`kc_more` and `kc_help`: sessions rarely call them, and a schema loaded up front is paid on every turn. A cut answer's
+`hint` names the `kc_more` call that continues it. A client that doesn't defer tools loads all eight core tools. A
+server-level `alwaysLoad` setting overrides the mark, and a profile that leaves a core tool out doesn't list it. The
+Claude Code plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=all` (unless you set it): Claude Code
+defers the tools not marked, and the plugin's skills use them.
 
 ## MCP tools
 
