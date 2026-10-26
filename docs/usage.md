@@ -172,8 +172,10 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 settings. `setup codex` also adds a user-level `[[hooks.SessionStart]]` entry to `config.toml` that runs KnowCode's
 session-start hook, one line saying what KnowCode indexes here and which tools to call. Codex runs a hook only once
 you trust it: run `/hooks` in Codex and trust that entry. Its command names only the binary and KnowCode's directory
-overrides, so a new KnowCode version changes what it prints without asking for trust again. `knowcode uninstall`
-removes it and keeps your own hooks. `--print` prints the configuration without changing anything, `--client-dir DIR` targets an isolated
+overrides, so a new KnowCode version changes what it prints without asking for trust again. Codex also keys that
+trust to the entry's place among the `SessionStart` entries, so setup adds it last and, run again, updates it where
+it is. `knowcode uninstall` removes it and keeps your own hooks; if any follow it, it leaves an empty entry in its
+place so that Codex still trusts them. `--print` prints the configuration without changing anything, `--client-dir DIR` targets an isolated
 profile, and `--replace` replaces a different server already registered as `knowcode` (Codex, Cursor). Start a new
 client session afterwards.
 
