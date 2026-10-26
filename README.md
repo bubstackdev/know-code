@@ -154,7 +154,8 @@ routes, and languages such as Go, Java and Kotlin are not extracted at all. Deta
 - [Languages](docs/languages.md): what is extracted and resolved per language and framework, and the known gaps.
 - [Architecture](docs/architecture.md): crates, the index, freshness, the writer lock, the cache lifecycle.
 - [Evaluation](docs/evaluation.md): how KnowCode is checked.
-- [Public agent study results](eval/public-v1/results.md): the pre-registered study's outcome, criterion by criterion.
+- [Public agent study results, 0.3](eval/public-v2/results.md): the pre-registered public-v2 study, criterion by
+  criterion; [0.2's study](eval/public-v1/results.md).
 - [Claude Code integration](integrations/claude-code/README.md): the plugin, hook and skills.
 - [Decisions](docs/decisions.md), [releasing](docs/releasing.md),
   [first-run acceptance](docs/first-run-acceptance.md) and the [changelog](CHANGELOG.md).
