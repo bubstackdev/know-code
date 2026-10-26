@@ -300,7 +300,22 @@ pub const POLL: Duration = Duration::from_millis(20);
 /// Runs `cmd` to completion like [`Command::output`], with `input` on its standard input, within `kind`'s deadline:
 /// past it, or once this thread's operation is cancelled, the child is killed, the cut recorded (see [`take_cuts`])
 /// and a [`Cut`] returned as the error. `what` names the command in the cut's detail.
-pub fn output(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) -> anyhow::Result<Output> {
+pub fn output(cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) -> anyhow::Result<Output> {
+    let (out, cut) = run(cmd, kind, what, input, None)?;
+    match cut {
+        Some(cut) => Err(anyhow::Error::new(cut)),
+        None => Ok(out),
+    }
+}
+
+/// [`output`] for a child whose output is useful in part (a `git log` printing newest first): it stops at `until`
+/// too, when that comes before `kind`'s deadline, and a child stopped at either returns what it printed so far with
+/// the cut, which is recorded as [`output`] records it. A cancelled operation is still an error.
+pub fn output_until(cmd: Command, kind: Kind, what: &str, until: Option<Instant>) -> anyhow::Result<(Output, Option<Cut>)> {
+    run(cmd, kind, what, None, until)
+}
+
+fn run(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>, until: Option<Instant>) -> anyhow::Result<(Output, Option<Cut>)> {
     let op = current();
     op.check()?;
     // Update installers can spawn curl/tar. Give this explicitly requested child its own group, so a timeout
@@ -339,9 +354,16 @@ pub fn output(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) ->
     drop(closed_tx);
     let started = Instant::now();
     let deadline = kind.deadline();
-    let stopped = wait(&mut child, &closed, started, deadline, &op)?;
-    let status = match stopped {
-        Ok(status) => status,
+    // The earlier of the kind's deadline and `until`, as a duration from the start; `budget` says `until` came first.
+    let left = until.map(|u| u.saturating_duration_since(started));
+    let (limit, budget) = match (deadline, left) {
+        (Some(d), Some(l)) if l < d => (Some(l), true),
+        (None, Some(l)) => (Some(l), true),
+        (d, _) => (d, false),
+    };
+    let stopped = wait(&mut child, &closed, started, limit, &op)?;
+    let (status, cut) = match stopped {
+        Ok(status) => (status, None),
         Err(reason) => {
             if kind == Kind::UpdateInstall {
                 unsafe extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
@@ -349,18 +371,26 @@ pub fn output(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) ->
                 unsafe { kill(-(child.id() as i32), 9); }
             }
             let _ = child.kill();
-            let _ = child.wait();
+            let status = child.wait()?;
             let (var, _) = kind.setting();
             let cut = Cut {
                 reason,
                 detail: match reason {
+                    "deadline" if budget => format!("{what} stopped at the query's time budget ({} child)", kind.name()),
                     "deadline" => format!("{what} stopped at its {}s deadline ({} child)", deadline.map_or(0, |d| d.as_secs()), kind.name()),
                     _ => format!("{what} stopped: the request was cancelled"),
                 },
-                hint: if reason == "deadline" { format!("raise {var} (seconds; 0 for no deadline)") } else { String::new() },
+                hint: match reason {
+                    "deadline" if budget => "run it from the CLI, which has no time budget".to_string(),
+                    "deadline" => format!("raise {var} (seconds; 0 for no deadline)"),
+                    _ => String::new(),
+                },
             };
             record(cut.clone());
-            return Err(anyhow::Error::new(cut));
+            if reason != "deadline" || until.is_none() {
+                return Err(anyhow::Error::new(cut));
+            }
+            (status, Some(cut))
         }
     };
     if let Some(w) = writer {
@@ -368,7 +398,7 @@ pub fn output(mut cmd: Command, kind: Kind, what: &str, input: Option<&[u8]>) ->
     }
     let stdout = out.join().unwrap_or_default();
     let stderr = err.join().unwrap_or_default();
-    Ok(Output { status, stdout, stderr })
+    Ok((Output { status, stdout, stderr }, cut))
 }
 
 /// Waits for `child` to exit; `Err(reason)` when it must be stopped first.
@@ -451,6 +481,27 @@ mod tests {
         assert!(check().is_err());
         assert!(output(Command::new("true"), Kind::Search, "true", None).is_err());
         unsafe { std::env::remove_var("KNOWCODE_SEARCH_DEADLINE") };
+    }
+
+    /// A child stopped at the query's time budget gives back what it printed, with the cut; one that finishes in time
+    /// gives no cut.
+    #[test]
+    fn a_child_stopped_at_its_budget_keeps_what_it_printed() {
+        let _in = enter(Operation::new());
+        // One process printing then waiting: a shell would leave its `sleep` holding the pipe open after the kill.
+        let mut c = Command::new("perl");
+        c.args(["-e", "$| = 1; print qq(first\\n); sleep 30"]);
+        let t = Instant::now();
+        let (out, cut) = output_until(c, Kind::Git, "sh", Some(Instant::now() + Duration::from_millis(300))).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(10));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "first\n");
+        let cut = cut.expect("a cut");
+        assert!(cut.detail.contains("time budget"), "{}", cut.detail);
+        assert_eq!(take_cuts(), vec![cut]);
+
+        let (out, cut) = output_until(Command::new("true"), Kind::Git, "true", Some(Instant::now() + Duration::from_secs(30))).unwrap();
+        assert!(out.status.success() && cut.is_none());
+        assert!(take_cuts().is_empty());
     }
 
     /// The cached summaries a query read and the indexes it used are the query's: a worker entering it records into

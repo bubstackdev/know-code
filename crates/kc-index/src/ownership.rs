@@ -385,7 +385,16 @@ pub struct Survivor {
 /// where [`Knowledge`] counts history. Uncommitted lines and lines from automated commits are counted apart
 /// (`uncommitted`, `automated`). `None` when git can't blame the file (untracked, binary, outside a checkout).
 pub fn surviving(root: &Path, path: &str) -> Option<(Vec<Survivor>, u64, u64)> {
-    let out = git::run(root, &["blame", "--line-porcelain", "-w", "--", path]).ok()?;
+    surviving_in(root, path, None)
+}
+
+/// [`surviving`] over lines `start..=end` (1-based, of the working tree's file) only: one definition's lines.
+pub fn surviving_in(root: &Path, path: &str, lines: Option<(u32, u32)>) -> Option<(Vec<Survivor>, u64, u64)> {
+    let range = lines.map(|(a, b)| format!("-L{a},{b}"));
+    let mut args = vec!["blame", "--line-porcelain", "-w"];
+    args.extend(range.as_deref());
+    args.extend(["--", path]);
+    let out = git::run(root, &args).ok()?;
     let bots = vitals::Bots::load();
     let text = String::from_utf8_lossy(&out);
     let (mut name, mut email) = (String::new(), String::new());

@@ -26,7 +26,7 @@ const DAY: i64 = 86_400;
 
 /// Commits touching more files than this (bulk renames, formatting, dependency bumps) say nothing about which files
 /// belong together, so they don't count toward co-change.
-const COCHANGE_MAX_FILES: usize = 50;
+pub const COCHANGE_MAX_FILES: usize = 50;
 /// A partner counts toward `coupled_files` when it changed with the file in at least this many commits...
 const COUPLED_MIN_SHARED: u32 = 3;
 /// ...and in at least this share of the file's commits.
