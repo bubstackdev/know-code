@@ -69,7 +69,7 @@ knowcode workspace add ~/Code
 ```
 
 Update with `knowcode self-update` (`brew upgrade bubstackdev/tap/knowcode` for Homebrew). `knowcode uninstall`
-removes the client registrations and indexes. [Install and setup](docs/usage.md#setup-settings-and-updates) has the
+removes the client registrations and indexes. [Install](docs/install.md) has the
 details, and building from source is in [CONTRIBUTING.md](CONTRIBUTING.md). Windows is not supported yet.
 
 ## What your agent sees
@@ -166,7 +166,8 @@ other languages not listed are covered by text search and history only. Details 
 
 Using KnowCode:
 
-- [Usage](docs/usage.md): CLI commands and MCP tools, by task; setup, updates and uninstalling.
+- [Install](docs/install.md): installing, connecting a client, updating and uninstalling.
+- [Usage](docs/usage.md): CLI commands and MCP tools, by task.
 - [Answers](docs/answers.md): complete and incomplete, confidence, evidence, cursors, provenance.
 - [Configuration](docs/configuration.md): `config.toml`, environment variables, workspace roots, ignore rules, the
   privacy file, the update check.

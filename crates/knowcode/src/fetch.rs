@@ -1,5 +1,5 @@
 //! `knowcode fetch-deps`: clone the git repos a repo's manifests depend on into a directory the user names, so
-//! cross-repo answers can reach them. CLI only: the MCP server never clones (see docs/decisions.md). Running the
+//! cross-repo answers can reach them. CLI only: the MCP server never clones (see docs/plans/0.1.0-decisions.md). Running the
 //! command is the explicit request, so it clones; `--dry-run` prints the plan and clones nothing.
 //!
 //! What resolves to a git repo: manifest dependencies written as a git URL (SwiftPM, XcodeGen, Cargo `git =`, npm git
