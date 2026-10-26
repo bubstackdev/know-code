@@ -32,10 +32,10 @@ ARM_SPECS = {
 ARMS = ('plain', 'knowcode', 'knowcode-unprompted')
 KNOWCODE_ARMS = tuple(arm for arm, spec in ARM_SPECS.items() if spec['knowcode'])
 FULL_ARMS = tuple(arm for arm, spec in ARM_SPECS.items() if spec['client'] == 'full')
-# Built-in tools in every full arm: the study's Bash and Read, plus Skill and ToolSearch, which the plugin's skills and
-# its deferred tools need. Agent, Edit, Write and the rest stay off: sub-agents would hide research calls from the
-# audit, and the others aren't research tools.
-FULL_TOOLS = 'Bash,Read,Skill,ToolSearch'
+# Built-in tools in every full arm: Bash, Read, Grep and Glob, the search tools a user has, plus Skill and ToolSearch,
+# which the plugin's skills and its deferred tools need. Agent, Edit, Write and the rest stay off: sub-agents would
+# hide research calls from the audit, and the others aren't research tools.
+FULL_TOOLS = 'Bash,Read,Grep,Glob,Skill,ToolSearch'
 # Claude Code names a plugin's MCP tools mcp__plugin_<plugin>_<server>__<tool>.
 PLUGIN_TOOL_PREFIX = 'mcp__plugin_knowcode_knowcode'
 # How the client grants shell commands, the same in every arm. `patterns` (public-v1): one allow rule per program, so
@@ -195,7 +195,7 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
     if full:
         if shell != 'sandbox':
             raise ValueError('a full arm needs the sandbox shell mode')
-        allowed.extend(['Skill', 'ToolSearch'])
+        allowed.extend(['Grep', 'Glob', 'Skill', 'ToolSearch'])
         argv = [str(client), '--print', prompt, '--model', config['model'], '--effort', config['effort'],
                 '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
                 '--setting-sources', 'user', '--settings', str(settings_path), '--tools', FULL_TOOLS,

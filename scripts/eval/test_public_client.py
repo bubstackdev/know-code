@@ -272,7 +272,7 @@ class BareClientTests(unittest.TestCase):
                 self.assertEqual(result['client_mode'], 'full')
                 for flag in ['--bare', '--strict-mcp-config', '--mcp-config', '--disable-slash-commands']:
                     self.assertNotIn(flag, argv)
-                self.assertEqual(argv[argv.index('--tools')+1], 'Bash,Read,Skill,ToolSearch')
+                self.assertEqual(argv[argv.index('--tools')+1], 'Bash,Read,Grep,Glob,Skill,ToolSearch')
                 self.assertEqual(argv[argv.index('--setting-sources')+1], 'user')
                 prompt = argv[argv.index('--print')+1]
                 self.assertIn('example: '+str(index.resolve()), prompt)
