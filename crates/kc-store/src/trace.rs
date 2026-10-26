@@ -512,6 +512,8 @@ struct Tracer<'c> {
     precise: HashSet<(i64, String)>,
     /// What each reference edge rests on: (the symbol reached, the site) to the reference's evidence.
     evidence: HashMap<(i64, String), Evidence>,
+    /// (caller, target) → the caller's other sites reaching the target, past its edge's (see [`EdgeCache::also`]).
+    also: HashMap<(i64, i64), Vec<String>>,
     /// Label calls through a protocol requirement with several implementations `ambiguous`, as the forward
     /// `dispatch` edge is (for walks searching both ways).
     one_of: bool,
@@ -720,7 +722,16 @@ impl Tracer<'_> {
                 }
                 let Some(from) = &h.from else { continue };
                 // A foreign key makes one table name another; it doesn't make the table depend on the other's use.
-                if from.id == sym.id || (from.kind == "table" && crate::sql::is_sql_path(&h.file)) || !seen.insert(from.id) {
+                if from.id == sym.id || (from.kind == "table" && crate::sql::is_sql_path(&h.file)) {
+                    continue;
+                }
+                if !seen.insert(from.id) {
+                    // The caller's edge is listed once, at its first site; its other sites are kept beside it.
+                    let at = format!("{}:{}", h.file, h.line);
+                    let also = this.also.entry((from.id, sym.id)).or_default();
+                    if !also.contains(&at) {
+                        also.push(at);
+                    }
                     continue;
                 }
                 if let Some(caller) = this.symbol(from.id)? {
@@ -947,9 +958,16 @@ pub struct EdgeCache {
     bindings: HashMap<i64, String>,
     precise: HashSet<(i64, String)>,
     evidence: HashMap<(i64, String), Evidence>,
+    also: HashMap<(i64, i64), Vec<String>>,
 }
 
 impl EdgeCache {
+    /// The other sites in `caller` reaching `target` by the same kind of reference, past the one its edge carries
+    /// (`file:line`, in file order): a method calling another on several lines.
+    pub fn also(&self, caller: i64, target: i64) -> &[String] {
+        self.also.get(&(caller, target)).map_or(&[], Vec::as_slice)
+    }
+
     /// Whether the edge reaching `id` at `site` was resolved from a SCIP index.
     pub fn precise(&self, id: i64, site: Option<&str>) -> bool {
         site.is_some_and(|s| self.precise.contains(&(id, s.to_string())))
@@ -973,6 +991,7 @@ impl EdgeCache {
             bindings: std::mem::take(&mut self.bindings),
             precise: std::mem::take(&mut self.precise),
             evidence: std::mem::take(&mut self.evidence),
+            also: std::mem::take(&mut self.also),
             one_of: false,
         };
         let out = f(&mut t);
@@ -980,6 +999,7 @@ impl EdgeCache {
         self.bindings = t.bindings;
         self.precise = t.precise;
         self.evidence = t.evidence;
+        self.also = t.also;
         out
     }
 }
@@ -1101,6 +1121,10 @@ pub struct Affected {
     /// For a `module` edge, the Terraform module call crossed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<ModuleVia>,
+    /// The other sites in it reaching the symbol it was reached from, past `site` (`file:line`): a method calling
+    /// another on several lines.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
     /// For a SQL object dumped in several places, the other copies reached (`file:line`), listed once here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub copies: Vec<String>,
@@ -1184,7 +1208,7 @@ pub fn frontier(
     filter: &EdgeFilter,
     budget: usize,
 ) -> Result<(Vec<Frontier>, usize)> {
-    let mut t = Tracer { conn, refs_by_name: HashMap::new(), bindings: HashMap::new(), precise: HashSet::new(), evidence: HashMap::new(), one_of: false };
+    let mut t = Tracer { conn, refs_by_name: HashMap::new(), bindings: HashMap::new(), precise: HashSet::new(), evidence: HashMap::new(), also: HashMap::new(), one_of: false };
     let mut out = Vec::new();
     let mut checked = HashSet::new();
     let mut unchecked = 0;

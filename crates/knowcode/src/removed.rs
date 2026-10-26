@@ -217,6 +217,7 @@ pub fn dependents(
                 role: None,
                 deploy: None,
                 module: None,
+                also: Vec::new(),
                 copies: Vec::new(),
                 via_removed: true,
                 evidence,

@@ -200,6 +200,11 @@ impl<'a> Graph<'a> {
         self.caches.get(h.to.0).and_then(|c| c.evidence(h.sym.id, h.edge, h.confidence, h.site.as_deref()))
     }
 
+    /// The other sites in `caller` (of `repo`) reaching `target`, past the one its edge carries (`file:line`).
+    pub fn also(&self, repo: usize, caller: i64, target: i64) -> Vec<String> {
+        self.caches.get(repo).map(|c| c.also(caller, target).to_vec()).unwrap_or_default()
+    }
+
     /// The walk's edge filter, with its evidence policy.
     pub fn filter(&self) -> &trace::EdgeFilter {
         self.gate.filter()

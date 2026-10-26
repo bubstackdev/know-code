@@ -7941,6 +7941,28 @@ pub(crate) mod tests {
         assert!(c.env["items"][0].get("called_over_http").is_none(), "{}", c.env);
     }
 
+    /// A caller reaching the changed symbol on several lines lists them all: the label of a two-hop question counts
+    /// each call, and an agent shown one grepped for the rest.
+    #[test]
+    fn an_impact_row_names_every_line_its_caller_reaches_the_symbol_on() {
+        let cache = test_cache();
+        let base = cache.dir("also-lines");
+        let root = repo(
+            &base,
+            "app",
+            &[
+                ("src/Audit.cs", "public static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/Shop.cs", "public class Shop\n{\n    public void Run()\n    {\n        Audit.Log();\n        var x = 1;\n        Audit.Log(); Audit.Log();\n    }\n}\n"),
+            ],
+        );
+        let ip = ImpactParams { symbol: Some("Audit.Log".into()), depth: 1, limit: 50, ..Default::default() };
+        let i = impact(&ip, &Scope { repos: vec![root], no_sync: false }).unwrap();
+        let row = &i.env["items"][0]["affected"][0];
+        assert_eq!((row["site"].as_str(), row["also"].clone()), (Some("src/Shop.cs:5"), json!(["src/Shop.cs:7"])), "{}", i.env);
+        let text = crate::render::impact_text(&i.data, false);
+        assert!(text.contains("at src/Shop.cs:5 (also 7)"), "{text}");
+    }
+
     #[test]
     fn a_deleted_checkout_never_makes_an_http_link_ambiguous_and_is_named_missing() {
         let cache = test_cache();
