@@ -746,7 +746,7 @@ mod tests {
         };
         let note = bash(&root, "grep -rn \"CartStore\" --include=*.cs .").expect("a grep for a known type gets a note");
         assert!(note.starts_with("KnowCode index: `CartStore` is a class defined at src/Store.cs:2"), "{note}");
-        for t in ["kc_context", "kc_refs", "kc_impact", "kc_locate"] {
+        for t in ["kc_find", "kc_context", "kc_refs", "kc_impact", "kc_search"] {
             assert!(note.contains(&format!("{t} (mcp__plugin_knowcode_knowcode__{t})")), "{note}");
         }
         let note = bash(&base, "cd app && grep -rn \"CartStore\" .").expect("the search runs where `cd` went");

@@ -248,8 +248,8 @@ fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
                 manifest = Some((plugin.join(name), format!("{}\n", serde_json::to_string_pretty(&value)?)));
                 continue;
             }
-            // Claude Code defers the tools not marked always loaded (the core set) to tool search, and the plugin's
-            // skills use the others, so its server advertises every tool unless the user picked a profile.
+            // Claude Code defers the tools not marked always loaded (`mcp::ALWAYS_LOADED`) to tool search, and the
+            // plugin's skills use the others, so its server advertises every tool unless the user picked a profile.
             ".mcp.json" => {
                 let mut env = env.clone();
                 env.entry("KNOWCODE_TOOLS".into()).or_insert_with(|| "all".into());
