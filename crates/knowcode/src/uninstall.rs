@@ -44,13 +44,28 @@ fn remove_server(reg: &Registration) -> Result<()> {
     let Some(before) = read(&path)? else { return Ok(()) };
     let after = if reg.client == Client::Codex {
         let mut doc: DocumentMut = before.parse().with_context(|| format!("{} is not valid TOML; retained", path.display()))?;
-        let Some(servers) = doc.get_mut("mcp_servers") else { return Ok(()) };
-        let servers = servers.as_table_like_mut().context("mcp_servers must be a TOML table; retained")?;
-        let Some(server) = servers.get("knowcode") else { return Ok(()) };
-        let matches = server.get("command").and_then(|v| v.as_str()) == reg.command.to_str()
-            && server.get("args").and_then(|v| v.as_array()).is_some_and(|a| a.len() == 1 && a.get(0).and_then(|v| v.as_str()) == Some("serve"));
-        if !matches { bail!("{}: knowcode registration changed since setup; retained", path.display()); }
-        servers.remove("knowcode");
+        // The session-start hook setup added, and the tables it leaves empty; other hooks stay.
+        let mut hooks_empty = false;
+        if let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut())
+            && let Some(groups) = hooks.get_mut("SessionStart").and_then(|g| g.as_array_of_tables_mut())
+        {
+            let n = groups.len();
+            groups.retain(|g| !setup::is_codex_hook(g));
+            if groups.len() < n {
+                if groups.is_empty() { hooks.remove("SessionStart"); }
+                hooks_empty = hooks.is_empty();
+            }
+        }
+        if hooks_empty { doc.remove("hooks"); }
+        if let Some(servers) = doc.get_mut("mcp_servers") {
+            let servers = servers.as_table_like_mut().context("mcp_servers must be a TOML table; retained")?;
+            if let Some(server) = servers.get("knowcode") {
+                let matches = server.get("command").and_then(|v| v.as_str()) == reg.command.to_str()
+                    && server.get("args").and_then(|v| v.as_array()).is_some_and(|a| a.len() == 1 && a.get(0).and_then(|v| v.as_str()) == Some("serve"));
+                if !matches { bail!("{}: knowcode registration changed since setup; retained", path.display()); }
+                servers.remove("knowcode");
+            }
+        }
         doc.to_string()
     } else {
         let mut doc: Value = serde_json::from_str(&before).with_context(|| format!("{} is not valid JSON; retained", path.display()))?;
