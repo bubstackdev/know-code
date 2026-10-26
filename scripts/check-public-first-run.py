@@ -155,12 +155,17 @@ def run(args: argparse.Namespace) -> None:
                     call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                         "clientInfo": {"name": "public-first-run-acceptance", "version": "1"}})
                     send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    # The plugin's profile decides the tools: the separate kc_context, or the one `kc` tool's context op.
+                    names = {tool["name"] for tool in call("tools/list", {})["tools"]}
+                    tool, extra = ("kc_context", {}) if "kc_context" in names else ("kc", {"op": "context"})
+                    assert tool in names, sorted(names)
+                    report["tool"] = tool if not extra else f"{tool} {{op: context}}"
                     first_query = time.monotonic()
                     deadline = first_query + 300
                     while True:
                         query_start = time.monotonic()
-                        result = call("tools/call", {"name": "kc_context", "arguments": {
-                            "symbol": case["symbol"], "source": "full", "budget": 4000}})
+                        result = call("tools/call", {"name": tool, "arguments": {
+                            **extra, "symbol": case["symbol"], "source": "full", "budget": 4000}})
                         assert not result.get("isError"), result
                         answer = json.loads(result["content"][0]["text"])
                         report["answers"].append({"seconds": time.monotonic() - query_start, "answer": answer})
