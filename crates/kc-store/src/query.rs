@@ -3135,16 +3135,21 @@ impl Controllers {
 }
 
 /// A conventional route template filled for one action: `{controller=Home}/{action=Index}/{id?}` is `Orders/List`
-/// and `Orders/List/{id}` (trailing parameters may be left out). A template without `{action}` (Web API's
-/// `api/{controller}/{id}`) picks the action by verb: `api/Orders`, `api/Orders/{id}`.
+/// and `Orders/List/{id}` (trailing parameters may be left out). A trailing `{controller}` or `{action}` may be left
+/// out too when the action's value is the template's default for it: `Orders/Index` is also served at `Orders`, and
+/// `Home/Index` at `Home` and the root (``). A template without `{action}` (Web API's `api/{controller}/{id}`) picks
+/// the action by verb: `api/Orders`, `api/Orders/{id}`.
 fn conventional_paths(template: &str, controller: &str, action: &str) -> Vec<String> {
     let mut segs: Vec<(String, bool)> = Vec::new();
     for s in template.split('/').filter(|s| !s.is_empty()) {
         let inner = s.strip_prefix('{').and_then(|s| s.strip_suffix('}'));
         let name = inner.map(|i| i.trim_start_matches('*').split(['=', ':', '?']).next().unwrap_or_default());
+        // `{action=Index}`: the default, which a URL leaving the segment out stands for.
+        let default = inner.and_then(|i| i.split_once('=')).map(|(_, d)| d.split([':', '?']).next().unwrap_or_default());
+        let omitted = |value: &str| default.is_some_and(|d| d.eq_ignore_ascii_case(value));
         segs.push(match name {
-            Some("controller") => (controller.to_string(), false),
-            Some("action") => (action.to_string(), false),
+            Some("controller") => (controller.to_string(), omitted(controller)),
+            Some("action") => (action.to_string(), omitted(action)),
             Some(n) => (format!("{{{n}}}"), true),
             None => (s.to_string(), false),
         });
@@ -6390,6 +6395,14 @@ mod tests {
         assert_eq!(paths("HomeController", "Home.cs", "{^!SaveAsync}"), ["Home/Save", "Home/Save/{id}"]);
         assert_eq!(paths("HomeController", "Home.cs", "{^!About}/about"), ["about"]);
         assert_eq!(conventional_paths("api/{controller}/{id}", "Orders", "Get"), ["api/Orders", "api/Orders/{id}"]);
+        // Defaults: a trailing segment holding its default may be left out, and only then.
+        let default = "{controller=Home}/{action=Index}/{id?}";
+        assert_eq!(conventional_paths(default, "Orders", "Index"), ["Orders", "Orders/Index", "Orders/Index/{id}"]);
+        assert_eq!(conventional_paths(default, "Home", "Index"), ["", "Home", "Home/Index", "Home/Index/{id}"]);
+        assert_eq!(conventional_paths(default, "Home", "About"), ["Home/About", "Home/About/{id}"]);
+        assert_eq!(conventional_paths("{controller=Seed}/{action=Index}/{id?}", "Home", "Index"), ["Home", "Home/Index", "Home/Index/{id}"]);
+        assert_eq!(conventional_paths("admin/{controller}/{action=list}", "Orders", "List"), ["admin/Orders", "admin/Orders/List"]);
+        assert_eq!(conventional_paths("{controller}/{action}", "Orders", "Index"), ["Orders/Index"]);
     }
 
     fn route_row(side: &str, verb: &str, path: &str, path_ref: Option<&str>, name: &str, file: &str) -> RawRoute {
@@ -6431,7 +6444,7 @@ mod tests {
         let admin = "src/Admin/OrdersController.cs";
         let ok = |p: &[&str]| Ok(p.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!UnlinkAsync}").unwrap(), ok(&["Orders/Unlink", "Orders/Unlink/{id}"]));
-        assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&["Orders/Index", "Orders/Index/{id}"]));
+        assert_eq!(ctl.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&["Orders", "Orders/Index", "Orders/Index/{id}"]));
         // The API's own actions keep its prefix.
         assert_eq!(ctl.paths(&mut c, "OrdersController", "src/Api/OrdersController.cs", "{^Get}/{id}").unwrap(), ok(&["orders/{id}"]));
         // Bases of one name with different prefixes: unplaced, saying why.

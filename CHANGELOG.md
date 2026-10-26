@@ -34,6 +34,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   code (as for `new Client(…)` since 0.3.0), and a type named for no API client is no client. A generated client's
   type (`ItemsApi`) and an external client the repo declares in a `.d.ts` still are. On the public-v1 workspace, 15
   operation rows are gone, 2 of which had links (both the `remove` above); no other link changed.
+- Default actions are served at their controller's route. A conventional template's defaults
+  (`{controller=Home}/{action=Index}/{id?}`, or `defaults: new { action = "Index" }`) let a URL leave a trailing
+  segment out when it holds the default: `OrdersController.Index` is served at `Orders` as well as `Orders/Index`, and
+  the default controller's `Index` at the root. Where an action constrained to the request's verb serves the path,
+  an action answering every verb at the same path is no longer a candidate, as ASP.NET Core prefers the constrained
+  one. On the public-v1 workspace, bitwarden-server's admin app gained 7 routes (`Organizations`, `Providers`, `Users`,
+  `Login` ×2, `Home` and the root), and the admin test fixture's `GET /login` and `POST /login` now link, `exact`, to
+  `LoginController.Index`. C# files are re-extracted.
 
 ## 0.3.0 (2026-10-26)
 
