@@ -580,7 +580,8 @@ pub struct HttpRoute {
     /// The path as written, without leading or trailing `/`; empty when it comes from a constant. A request built in
     /// code, and a minimal API endpoint, are encoded by [`urls::encode`]: `{=Name}` for a constant, `{}` for any
     /// other value. A minimal API endpoint registered on a helper's parameter starts with `{@Helper#i}`: the
-    /// prefixes of the groups callers pass as its parameter `i` (see `group`).
+    /// prefixes of the groups callers pass as its parameter `i` (see `group`). A request whose URL is a `const` local
+    /// of its function ends `{~name@line}`: the local and the line declaring it.
     pub path: String,
     /// The constant naming the path (`Api.filters`), resolved at query time against [`StringConst`]s.
     pub path_ref: Option<String>,

@@ -774,6 +774,7 @@ pub fn routes(args: &Scope) -> Result<Out<Vec<(PathBuf, HttpOut)>>> {
             confidence: l.confidence,
             assumptions: l.assumptions,
             host: l.host,
+            local: l.route.local,
             source: None,
             source_truncated: false,
         };
@@ -794,6 +795,7 @@ pub fn routes(args: &Scope) -> Result<Out<Vec<(PathBuf, HttpOut)>>> {
                     path: if operation { None } else { r.path.clone() },
                     operation: if operation { r.path.clone() } else { None },
                     service: r.service.clone(),
+                    local: r.local.clone(),
                     note: if links.is_empty() && commented_out.is_empty() { kc_index::http::unlinked_note(r, &summaries, true) } else { None },
                     links,
                     unsent: false,
@@ -2501,6 +2503,10 @@ pub struct HttpOut {
     /// The service a gateway contract is sent to (`[ShopRequest]`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// A request whose URL is a `const` local of its function: the local and where it is declared (`url at
+    /// src/a.js:44`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<String>,
     pub links: Vec<HttpLinkOut>,
     /// The symbol is a contract that no code in the indexed repos creates, and whose route no other contract or call
     /// requests: likely left over.
@@ -2571,6 +2577,9 @@ pub struct HttpLinkOut {
     /// The host evidence the link rests on: the host, where the client names it, where it is mapped to the repo.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<kc_index::http::HostLink>,
+    /// For a link to a request whose URL is a `const` local of its function: the local and where it is declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<String>,
     /// The handler's source, capped, for links to actions that aren't ambiguous.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -2662,6 +2671,7 @@ fn http_for(o: &Opened, ctx: &Context, no_sync: bool) -> Result<Vec<HttpOut>> {
         confidence: l.confidence,
         assumptions: l.assumptions,
         host: l.host,
+        local: l.route.local,
         }
     };
     Ok(entries
@@ -2678,6 +2688,7 @@ fn http_for(o: &Opened, ctx: &Context, no_sync: bool) -> Result<Vec<HttpOut>> {
                 path: if e.verb.is_empty() { None } else { e.path },
                 verb: e.verb,
                 service: e.service,
+                local: e.route.local.clone(),
                 note: if no_links { kc_index::http::unlinked_note(&e.route, &summaries, false) } else { None },
             }
         })

@@ -271,6 +271,20 @@ fn may_host(repo: &Path, service: &str, summaries: &[RepoSummary]) -> bool {
 /// hosts is looked up only there; one naming a service no indexed repo hosts is never linked to a repo hosting
 /// other services.
 pub fn handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
+    let mut links = route_handlers(client, client_repo, summaries);
+    // A URL read from a local: as if written in the call, and saying so.
+    if client.local.is_some() {
+        for l in &mut links {
+            if !l.assumptions.contains(&Assumption::UrlLocal) {
+                l.assumptions.push(Assumption::UrlLocal);
+                l.assumptions.sort();
+            }
+        }
+    }
+    links
+}
+
+fn route_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
     if client.side == "operation" {
         return operation_handlers(client, client_repo, summaries);
     }

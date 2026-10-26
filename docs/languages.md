@@ -98,7 +98,13 @@ Resolved:
   `axios({ url, method })`, instances), jQuery (`$.ajax({ url, type })`, `$.get`, `$.getJSON`), superagent, and
   wrappers named for HTTP or API clients (`api.get('/orders')`). URLs are literals, template literals and
   concatenations, with constants resolved, a URL builder's path (`apiClient.getUrl('Items')`, `buildUrl(…)`) and
-  `new URL(path, base)` after a base address, and locals holding any of them. A call to a generated API client whose
+  `new URL(path, base)` after a base address, and locals holding any of them. A URL builder or a `{ url }` option
+  given a name (`apiClient.getUrl(url)`, `$.ajax({ url })`) reads it only from a `const` the same function declares
+  before the call, bound nowhere else in it (no parameter, no other declaration or assignment), whose initializer
+  names no other local holding URL text; a `let` or `var`, a parameter, or a `const` of an enclosing function or the
+  module isn't read. A request whose URL is such a `const`, given to the builder, the option or the call itself
+  (`fetch(url)`), names the local (`local: url at src/a.js:44`), and its links assume `url_local`. A call to a
+  generated API client whose
   code isn't indexed (`getItemsApi(api).getItems()`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`)
   is an operation, linked to the action of that name under the controller named like the client (`Items`), else
   under any controller, assuming `operation_name`. Only actions in the servers the client's repo is known to call

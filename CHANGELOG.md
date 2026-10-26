@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
+  written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
+  `const url = 'Videos/' + itemId + '/Subtitles/' + index` passed to `apiClient.getUrl(url)`, which weren't read
+  before. The request names the local (`local: url at src/a.js:44`) and its links assume `url_local`; requests
+  passing such a `const` straight to `fetch(url)` or `send("GET", path)`, linked before, now say so too. A URL
+  builder or `{ url }` option given a `let`, `var`, parameter, a `const` of an enclosing function or the module, a
+  name declared twice in the function, or a `const` built from another local holding URL text, isn't read.
 - C#: a conditional that splits a declaration (`ILogger ForContext(Type t)`, then `#if X` a body, `#else` a `;`,
   `#endif`) no longer loses it. tree-sitter reads a directive only between declarations or statements, and its
   error recovery lost the declaration and often its type's other members: Serilog's `ILogger` had no members, and

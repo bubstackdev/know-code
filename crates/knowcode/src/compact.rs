@@ -551,7 +551,7 @@ fn shared_link_fields(m: &mut Map<String, Value>) {
 /// A link row naming only its place and symbol as one text row (see [`shared_link_fields`]); `None` for any other.
 fn link_row(v: &Value) -> Option<String> {
     let m = v.as_object()?;
-    if !m.keys().all(|k| matches!(k.as_str(), "repo" | "file" | "line" | "kind" | "symbol" | "confidence" | "assumptions")) {
+    if !m.keys().all(|k| matches!(k.as_str(), "repo" | "file" | "line" | "kind" | "symbol" | "confidence" | "assumptions" | "local")) {
         return None;
     }
     let s = |k: &str| m.get(k).and_then(Value::as_str);
@@ -564,7 +564,12 @@ fn link_row(v: &Value) -> Option<String> {
         }
     }
     let assumptions: Vec<&str> = m.get("assumptions").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-    let said: Vec<String> = s("confidence").map(str::to_string).into_iter().chain((!assumptions.is_empty()).then(|| assumptions.join(", "))).collect();
+    let said: Vec<String> = s("confidence")
+        .map(str::to_string)
+        .into_iter()
+        .chain((!assumptions.is_empty()).then(|| assumptions.join(", ")))
+        .chain(s("local").map(|l| format!("URL from {l}")))
+        .collect();
     if !said.is_empty() {
         row.push_str(&format!(" [{}]", said.join("; ")));
     }

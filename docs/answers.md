@@ -171,6 +171,7 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 | `configured_host` | an HTTP client reaches the repo through a host its URL, base address or settings name, which deploy or proxy configuration maps to that repo (the link's `host` says where); which environment's configuration applies, and for settings which key the request reads |
 | `operation_name` | a generated API client's operation is the controller action of that name (under the controller named like the client); the API description it was generated from wasn't read |
 | `server_unverified` | nothing says which server a generated client's repo calls (no base address, configuration, client package or other request of its names one): every repo with an action of the operation's name is a candidate |
+| `url_local` | an HTTP request's URL is a `const` local of the function making it (`fetch(url)`, `{ url }`, `getUrl(url)`), read from its declaration (the request's `local` says which, `url at src/a.js:44`): that the name in the call is that local was read from the syntax, without a type checker |
 | `same_destination` | a message reaches the consumer on its virtual host or queue |
 | `same_database` | a SQL object matched by name is in the database the code uses |
 | `revision_unverified` | the dependency's checkout is the revision asked for (a Terraform `?ref=`, a CI include `ref:`, a registry version) |

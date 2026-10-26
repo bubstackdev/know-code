@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 21;
+pub const VERSION: u32 = 22;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -104,6 +104,8 @@ pub fn extract(source: &str, tsx: bool) -> FileFacts {
         scopes: Vec::new(),
         seen: HashSet::new(),
         url_locals: HashMap::new(),
+        const_urls: HashMap::new(),
+        plain: std::cell::Cell::new(false),
         globals: HashMap::new(),
         field: None,
         action_locals: HashMap::new(),
@@ -130,6 +132,11 @@ struct Cx<'a> {
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
     /// Locals holding a URL or part of one, by enclosing symbol and name (see `url_local`).
     url_locals: HashMap<(Option<usize>, String), Vec<Piece>>,
+    /// `const` locals holding a URL, by the node id of the function declaring them and name: what a request whose
+    /// URL is just the name reads (see `const_url`).
+    const_urls: HashMap<(usize, String), ConstUrl>,
+    /// Reading a `const` URL's initializer: names in it are plain values (see `const_url`).
+    plain: std::cell::Cell<bool>,
     /// Typed variables outside any function: module-level ones, and those a test suite declares in its `describe`
     /// callback (`let service: Service;`, or assigned `service = TestBed.inject(Service)` in `beforeEach`).
     globals: HashMap<String, TypeExpr>,
@@ -139,6 +146,19 @@ struct Cx<'a> {
     /// Locals holding an action a call created (`const action = Group.load(…)`), by enclosing symbol and name: the
     /// creator, its receiver as written, and the values its arguments are made of; dispatched later, perhaps.
     action_locals: HashMap<(Option<usize>, String), Created>,
+}
+
+/// A local a request's URL is read from: its name and the line declaring it.
+type Local = (String, u32);
+
+/// A `const` local holding a URL (see [`Cx::const_url`]).
+struct ConstUrl {
+    pieces: Vec<Piece>,
+    line: u32,
+    /// The block declaring it: a use outside it is another variable's.
+    scope: std::ops::Range<usize>,
+    /// Where the declaration ends: a use before it is another variable's.
+    after: usize,
 }
 
 /// An action a call creates: the creator, its receiver as written (empty for none), and the values its arguments are
@@ -942,6 +962,7 @@ impl<'a> Cx<'a> {
         if self.in_callable() {
             if let Some(v) = value {
                 self.url_local(&name, v);
+                self.const_url(d, &name, v);
                 if let Some(a) = self.created_action(v) {
                     self.action_locals.insert((self.current(), name.clone()), a);
                 }
@@ -1269,7 +1290,7 @@ impl Cx<'_> {
         let Some(verb) = verb else { return };
         let Some(sym) = self.current() else { return };
         let surely = fetch || direct || strong;
-        let pieces = self.url_pieces(url);
+        let Some((pieces, local)) = self.request_pieces(url) else { return };
         // A client named for an API passed no literal text (`this.ordersClient.delete(id)`): an operation, not a URL.
         let named = |p: &Piece| matches!(p, Piece::Text(t) if !t.is_empty()) || matches!(p, Piece::Ref(r) if starts_upper(r));
         if !surely && !pieces.iter().any(named) {
@@ -1285,8 +1306,37 @@ impl Cx<'_> {
         // A bare word (`api.get('orders')`) is a path only from a client that is surely HTTP.
         let bare = !path.contains(['/', '?', '{']) && surely && path.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
         if urls::looks_like_path(&path) || bare {
+            // A URL read from a local: the local and its line, after the path (`{~url@44}`), for the query to name.
+            let path = match local {
+                Some((name, at)) => format!("{path}{{~{name}@{at}}}"),
+                None => path,
+            };
             self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "client", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) });
         }
+    }
+
+    /// A request's URL as pieces, and the local it was read from (its name and line) when the URL is just a name
+    /// (`fetch(url)`, `{ url }`) or a URL builder given one (`apiClient.getUrl(url)`). Such a name is read only as a
+    /// `const` URL of the function making the request (see [`Self::const_url`]). Otherwise a name passed directly
+    /// is read as any URL is (a local of the method, a module constant named in capitals), and a URL builder or a
+    /// `{ url }` option given one isn't read (`None`).
+    fn request_pieces(&self, url: Node) -> Option<(Vec<Piece>, Option<Local>)> {
+        let named = |n: Node| self.const_url_at(n).map(|c| (c.pieces.clone(), (self.text(n).to_string(), c.line)));
+        if matches!(url.kind(), "identifier" | "shorthand_property_identifier") {
+            return match named(url) {
+                Some((pieces, local)) => Some((pieces, Some(local))),
+                None if url.kind() == "identifier" => Some((self.url_pieces(url), None)),
+                None => None,
+            };
+        }
+        if let Some(arg) = (url.kind() == "call_expression").then(|| self.url_builder_arg(url)).flatten().filter(|a| a.kind() == "identifier")
+            && let Some((pieces, local)) = named(arg)
+        {
+            let mut out = vec![Piece::Unknown, Piece::Text("/".to_string())];
+            out.extend(pieces);
+            return Some((out, Some(local)));
+        }
+        Some((self.url_pieces(url), None))
     }
 
     /// `getItemsApi(api).getItems(…)`, `new OrdersClient(base).list()`, `this.ordersApi.getOrder(id)`, `apiClient.getItems()`:
@@ -1361,15 +1411,13 @@ impl Cx<'_> {
                 Some(x) => self.push_pieces(x, out),
                 None => out.push(Piece::Unknown),
             },
-            "identifier" => {
+            "identifier" | "shorthand_property_identifier" => {
                 let name = self.text(e);
                 match self.url_locals.get(&(self.current(), name.to_string())) {
-                    Some(pieces) => out.extend(pieces.iter().cloned()),
-                    // A module constant is named in capitals (`API`, `BASE_URL`); other names are locals.
-                    None if name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') => {
-                        out.push(Piece::Ref(name.to_string()))
-                    }
-                    None => out.push(Piece::Unknown),
+                    // In a `const` URL's initializer, another local is a plain value.
+                    Some(pieces) if !self.plain.get() => out.extend(pieces.iter().cloned()),
+                    _ if is_constant_name(name) => out.push(Piece::Ref(name.to_string())),
+                    _ => out.push(Piece::Unknown),
                 }
             }
             // `apiClient.getUrl('Items/Latest', query)`, `buildUrl(`orders/${id}`)`: a base address and the path given.
@@ -1377,7 +1425,10 @@ impl Cx<'_> {
                 Some(path) => {
                     out.push(Piece::Unknown);
                     out.push(Piece::Text("/".to_string()));
-                    self.push_pieces(path, out);
+                    match self.const_url_at(path) {
+                        Some(c) => out.extend(c.pieces.iter().cloned()),
+                        None => self.push_pieces(path, out),
+                    }
                 }
                 None => match self.wrapped_path(e) {
                     // `addQuery('/events', start)`: the path given, and what the function adds, which the query
@@ -1431,7 +1482,8 @@ impl Cx<'_> {
     }
 
     /// The path argument of a call building a URL from a base address: a function named for a URL (`getUrl`,
-    /// `buildUrl`, `apiUrl`, `endpoint`) given a string first.
+    /// `buildUrl`, `apiUrl`, `endpoint`) given a string first, or a `const` URL of the function (see
+    /// [`Self::const_url`]).
     fn url_builder_arg<'t>(&self, call: Node<'t>) -> Option<Node<'t>> {
         let f = call.child_by_field_name("function")?;
         let name = self.text(f).rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
@@ -1443,7 +1495,7 @@ impl Cx<'_> {
             return None;
         }
         let first = call.child_by_field_name("arguments").and_then(|a| children(a).find(|c| c.is_named() && c.kind() != "comment"))?;
-        matches!(first.kind(), "string" | "template_string" | "binary_expression").then_some(first)
+        (matches!(first.kind(), "string" | "template_string" | "binary_expression") || self.const_url_at(first).is_some()).then_some(first)
     }
 
     /// `addQuery('/events', start, end)`: a plain function (not a method) given a path with literal text first, which
@@ -1531,6 +1583,71 @@ impl Cx<'_> {
 
     fn has_return(&self, n: Node) -> bool {
         n.kind() == "return_statement" || children(n).any(|c| !matches!(c.kind(), "function_expression" | "arrow_function" | "function_declaration") && self.has_return(c))
+    }
+
+    /// `const url = 'Videos/' + id + '/Subtitles/' + index;`, `const url = apiClient.getUrl('Collections', query);`: a
+    /// URL in a `const` of a function, remembered for a request in that function whose URL is just its name, or a URL
+    /// builder given it ([`Self::request_pieces`]). The function must bind the name only there (no parameter, no other
+    /// declaration, no assignment), and the request must come after it in its block. The initializer is a URL as
+    /// [`Self::url_local`] reads one, with other names in it plain values: one naming a local holding URL text (a
+    /// local built from another local) isn't read.
+    fn const_url(&mut self, d: Node, name: &str, value: Node) {
+        let Some(decl) = d.parent().filter(|p| p.kind() == "lexical_declaration") else { return };
+        if decl.child_by_field_name("kind").is_none_or(|k| self.text(k) != "const") {
+            return;
+        }
+        let (Some(f), Some(block)) = (enclosing_function(d), decl.parent()) else { return };
+        if binds(self.src, f, name) != 1 || f.child_by_field_name("body").is_some_and(|b| assigns(self.src, b, name)) {
+            return;
+        }
+        // The part of the initializer the URL is read from: a builder's path, or the whole of it.
+        let read = match value.kind() {
+            "string" | "template_string" | "member_expression" | "binary_expression" | "ternary_expression" => value,
+            "call_expression" => match self.url_builder_arg(value).or_else(|| self.wrapped_path(value).map(|(_, p)| p)) {
+                Some(p) => p,
+                None => return,
+            },
+            "new_expression" if value.child_by_field_name("constructor").is_some_and(|c| self.text(c) == "URL") => {
+                match value.child_by_field_name("arguments").and_then(|a| children(a).find(|c| c.is_named())) {
+                    Some(p) => p,
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        if self.names_url_text(read) {
+            return;
+        }
+        self.plain.set(true);
+        let pieces = self.url_pieces(value);
+        self.plain.set(false);
+        if pieces.iter().any(|p| !matches!(p, Piece::Unknown)) {
+            let c = ConstUrl { pieces, line: line(d), scope: block.byte_range(), after: d.end_byte() };
+            self.const_urls.insert((f.id(), name.to_string()), c);
+        }
+    }
+
+    /// Whether `e` names a local holding URL text (outside the functions in it).
+    fn names_url_text(&self, e: Node) -> bool {
+        match e.kind() {
+            "identifier" | "shorthand_property_identifier" => {
+                let text = |p: &[Piece]| p.iter().any(|p| matches!(p, Piece::Text(_)));
+                self.const_url_at(e).is_some_and(|c| text(&c.pieces))
+                    || self.url_locals.get(&(self.current(), self.text(e).to_string())).is_some_and(|p| text(p))
+            }
+            k if FUNCTION_KINDS.contains(&k) => false,
+            _ => children(e).any(|c| self.names_url_text(c)),
+        }
+    }
+
+    /// The `const` URL a name refers to where it is used (see [`Self::const_url`]).
+    fn const_url_at(&self, n: Node) -> Option<&ConstUrl> {
+        if !matches!(n.kind(), "identifier" | "shorthand_property_identifier") {
+            return None;
+        }
+        let f = enclosing_function(n)?;
+        let c = self.const_urls.get(&(f.id(), self.text(n).to_string()))?;
+        (n.start_byte() >= c.after && c.scope.contains(&n.start_byte())).then_some(c)
     }
 
     /// `const endpoint = Api.payouts;` in a function: remembered, for a URL built from it later in that function.
@@ -1828,7 +1945,9 @@ fn payload_tokens(src: &str, n: Node, out: &mut Vec<String>) {
 /// a literal) and URL.
 fn request_config<'t>(src: &str, obj: Node<'t>) -> Option<(Option<String>, Node<'t>)> {
     let pairs = object_pairs(src, obj);
-    let url = pairs.iter().find(|(k, _)| k == "url").map(|(_, v)| *v)?;
+    // `{ url: … }`, or `{ url }`.
+    let shorthand = || children(obj).find(|c| c.kind() == "shorthand_property_identifier" && &src[c.byte_range()] == "url");
+    let url = pairs.iter().find(|(k, _)| k == "url").map(|(_, v)| *v).or_else(shorthand)?;
     let verb = match pairs.iter().find(|(k, _)| k == "method" || k == "type") {
         Some(_) => config_verb(src, obj),
         None => Some("GET".to_string()),
@@ -1860,6 +1979,46 @@ pub fn api_tag(name: &str) -> Option<String> {
     }
     let mut c = stem.chars();
     Some(c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default())
+}
+
+/// A module constant is named in capitals (`API`, `BASE_URL`); other names are locals.
+fn is_constant_name(name: &str) -> bool {
+    name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+const FUNCTION_KINDS: &[&str] =
+    &["function_declaration", "function_expression", "function", "arrow_function", "method_definition", "generator_function_declaration", "generator_function"];
+
+/// The innermost function around `n`.
+fn enclosing_function(n: Node) -> Option<Node> {
+    std::iter::successors(n.parent(), |p| p.parent()).find(|p| FUNCTION_KINDS.contains(&p.kind()))
+}
+
+/// How many times the function `f` binds `name`: as a parameter, and in declarations in its body outside the
+/// functions in it (a function or class declared in it binds its own name there).
+fn binds(src: &str, f: Node, name: &str) -> usize {
+    // Every identifier in a parameter list or a declared pattern (a default value's too: counting more is safe).
+    fn idents(src: &str, n: Node, name: &str) -> usize {
+        let here = matches!(n.kind(), "identifier" | "shorthand_property_identifier_pattern") && &src[n.byte_range()] == name;
+        usize::from(here) + children(n).map(|c| idents(src, c, name)).sum::<usize>()
+    }
+    fn declared(src: &str, n: Node, name: &str) -> usize {
+        match n.kind() {
+            "variable_declarator" => {
+                n.child_by_field_name("name").map_or(0, |p| idents(src, p, name)) + n.child_by_field_name("value").map_or(0, |v| declared(src, v, name))
+            }
+            "catch_clause" => {
+                n.child_by_field_name("parameter").map_or(0, |p| idents(src, p, name)) + n.child_by_field_name("body").map_or(0, |b| declared(src, b, name))
+            }
+            "function_declaration" | "generator_function_declaration" | "class_declaration" => {
+                n.child_by_field_name("name").map_or(0, |p| usize::from(&src[p.byte_range()] == name))
+            }
+            k if FUNCTION_KINDS.contains(&k) => 0,
+            _ => children(n).map(|c| declared(src, c, name)).sum(),
+        }
+    }
+    let params = f.child_by_field_name("parameters").or_else(|| f.child_by_field_name("parameter")).map_or(0, |p| idents(src, p, name));
+    params + f.child_by_field_name("body").map_or(0, |b| declared(src, b, name))
 }
 
 /// An object literal's `key: value` pairs, keys unquoted.
@@ -2318,7 +2477,7 @@ export class ApiService {
         let consts: Vec<(&str, &str)> = f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect();
         assert_eq!(consts, [("addQuery()", "")]);
         let routes: Vec<(&str, &str)> = f.http_routes.iter().map(|r| (r.side, r.path.as_str())).collect();
-        assert_eq!(routes, [("client", "/events{=addQuery()}"), ("client", "/sync")]);
+        assert_eq!(routes, [("client", "/events{=addQuery()}"), ("client", "/sync{~path@28}")]);
     }
 
     #[test]
@@ -2623,7 +2782,7 @@ export class Library {
                 ("jquery", "client", "POST", "/Sessions/Playing", None),
                 ("wrapper", "client", "GET", "/accounts/profile", None),
                 ("helper", "client", "GET", "/Shows/{}/Episodes", None),
-                ("local", "client", "POST", "/Videos/Merge", None),
+                ("local", "client", "POST", "/Videos/Merge{~url@13}", None),
                 ("unknown", "client", "GET", "", None),
                 ("generated", "operation", "", "getItems", Some("Items")),
                 ("constructed", "operation", "", "listOrders", Some("Orders")),
@@ -2631,6 +2790,90 @@ export class Library {
                 ("untagged", "operation", "", "getPublicUsers", None),
                 ("byConst", "client", "GET", "{=Api.orders}", None),
                 ("listDelete", "operation", "", "delete", Some("Lists")),
+            ]
+        );
+    }
+
+    /// A request whose URL is just a name (`fetch(url)`, `{ url }`, `getUrl(url)`) reads it from a `const` the same
+    /// function declares before it, with the local after the path. A URL builder or a `{ url }` option given any
+    /// other name isn't read; a name passed directly is read as before.
+    #[test]
+    fn urls_in_const_locals_of_the_requesting_function() {
+        let f = extract(
+            r#"const url = 'Module';
+function createAlbum(apiClient, dlg) {
+    const url = apiClient.getUrl('Albums', {
+        Name: dlg.name,
+        Ids: dlg.ids || ''
+    });
+    apiClient.ajax({ type: 'POST', url, dataType: 'json' }).then(done);
+}
+function removeCaption(context, index) {
+    confirm(context).then(function () {
+        const trackId = currentTrack.Id;
+        const url = 'Tracks/' + trackId + '/Captions/' + index;
+        const apiClient = connections.getApiClient(currentTrack.ServerId);
+        apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+    });
+}
+function plain(id) {
+    const url = `/api/orders/${id}`;
+    return fetch(url, { method: 'DELETE' });
+}
+function reassigned(apiClient, id) {
+    let url = 'Tracks/' + id;
+    if (id) { url = 'Archive/' + id; }
+    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+}
+function viaVar(apiClient, id) { var url = apiClient.getUrl('Tracks/' + id); return apiClient.ajax({ type: 'DELETE', url }); }
+function captured(apiClient, id) {
+    const url = apiClient.getUrl('Tracks/' + id);
+    return load().then(() => apiClient.ajax({ type: 'DELETE', url }));
+}
+function parameter(apiClient, url) { return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) }); }
+function shadowed(apiClient, id) {
+    const url = 'Tracks/' + id;
+    if (id) { const url = 'Other'; }
+    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+}
+function inBlock(apiClient, id) {
+    if (id) { const url = 'Tracks/' + id; }
+    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+}
+function fromLocal(apiClient, id) {
+    const base = 'Tracks/';
+    const url = base + id;
+    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+}
+function joined(apiClient, id) {
+    const url = ['Tracks', id].join('/');
+    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+}
+function either(apiClient, a) {
+    const url = a ? 'Tracks' : 'Albums';
+    return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) });
+}
+function moduleLevel(apiClient) { return apiClient.ajax({ type: 'DELETE', url: apiClient.getUrl(url) }); }
+function direct(id) {
+    let url = '/api/orders/' + id;
+    return fetch(url);
+}
+"#,
+            false,
+        );
+        let routes: Vec<(&str, &str, &str)> =
+            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.as_str(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("createAlbum", "POST", "/Albums{~url@3}"),
+                // Another local in the URL is a value, as a parameter is.
+                ("removeCaption", "DELETE", "/Tracks/{}/Captions/{}{~url@12}"),
+                ("plain", "DELETE", "/api/orders/{}{~url@18}"),
+                // Not read: a `let` assigned again, a `var`, a `const` of the enclosing function, a parameter, a
+                // name declared twice, a `const` of a block the request isn't in, one built from another local, a
+                // joined array, a conditional with two paths, a module's. A name passed directly, as before.
+                ("direct", "GET", "/api/orders/{}"),
             ]
         );
     }
