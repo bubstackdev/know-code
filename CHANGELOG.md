@@ -2,6 +2,15 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- Conventional routes are per app. A repo with several ASP.NET apps (an admin app and an API, each with its own
+  project and `MapControllerRoute`) placed every controller with no `[Route]` under every app's templates. A
+  controller now takes the templates of its own project (the nearest `.csproj` above it) and of the projects
+  referencing it, never another app's; an action with no template that no app's templates reach is listed as
+  unsupported, saying so. On the public-v1 workspace, 18 routes of controllers declared in bitwarden-server's test
+  projects, which no app maps, are gone; nothing else changed.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
