@@ -17,9 +17,12 @@ The criteria follow the 0.4 plan's numbering:
 5. Re-checks that changed the answer, listed per run (descriptive).
 
 A full client's agent may search with Grep and Glob as well as Bash, and its KnowCode tools carry the plugin's names.
+0.4's default profile advertises one tool, `kc`, whose `op` names the tool it runs; 0.3.0 advertises separate tools.
 Before the re-check detector (recheck.py, unchanged) and recheck_cost.py read a transcript, both are put in the form
-the detector reads: plugin tool names become `mcp__knowcode__*`, a Grep call becomes the equivalent `grep -rn`, and a
-Glob call the equivalent `find -name`. Raw transcripts are never changed.
+the detector reads: every KnowCode call becomes `mcp__knowcode__<tool it runs>` with that tool's arguments
+(`kc {op: refs, q: X}` reads as `mcp__knowcode__kc_refs {name: X}`; public_transcript.knowcode_tool), a Grep call
+becomes the equivalent `grep -rn`, and a Glob call the equivalent `find -name`. Raw transcripts are never changed.
+KnowCode calls are tallied per arm by the tool they run, the same way for both builds.
 """
 from __future__ import annotations
 
@@ -33,6 +36,7 @@ import sys
 
 import public_v2
 import recheck
+from public_transcript import knowcode_tool
 from frozen_study import ROOT, load
 from public_v2 import bootstrap, mean, median, wilson
 
@@ -61,14 +65,27 @@ def detector_form(events):
             if not isinstance(block, dict) or block.get('type') != 'tool_use':
                 continue
             name, inp = block.get('name', ''), block.get('input') or {}
-            if name.startswith(PLUGIN_PREFIX):
-                block['name'] = recheck.KC_PREFIX + name[len(PLUGIN_PREFIX):]
+            tool = knowcode_tool(name, inp)
+            if tool is not None:
+                block['name'], block['input'] = recheck.KC_PREFIX + tool[0], tool[1]
             elif name == 'Grep' and isinstance(inp.get('pattern'), str):
                 block['name'], block['input'] = 'Bash', {'command': 'grep -rn ' + shlex.quote(inp['pattern']) + ' ' + shlex.quote(inp.get('path') or '.')}
             elif name == 'Glob' and isinstance(inp.get('pattern'), str):
                 base = inp['pattern'].rsplit('/', 1)[-1]
                 block['name'], block['input'] = 'Bash', {'command': 'find ' + shlex.quote(inp.get('path') or '.') + ' -name ' + shlex.quote(base)}
     return out
+
+
+def knowcode_tools(events):
+    """KnowCode calls in a detector-form transcript, counted by the tool they run."""
+    counts = {}
+    for event in events:
+        message = event.get('message') if isinstance(event, dict) else None
+        for block in message.get('content') if isinstance(message, dict) and isinstance(message.get('content'), list) else ():
+            if isinstance(block, dict) and block.get('type') == 'tool_use' and str(block.get('name', '')).startswith(recheck.KC_PREFIX):
+                tool = block['name'][len(recheck.KC_PREFIX):]
+                counts[tool] = counts.get(tool, 0) + 1
+    return counts
 
 
 def summarize(rows, questions, runs, baseline=None):
@@ -141,7 +158,10 @@ def summarize(rows, questions, runs, baseline=None):
                          uncached_input_median=median([x.get('uncached_input') for x in rs]),
                          fixed_overhead_median=median([x.get('fixed_overhead') for x in rs]),
                          research_calls_mean=mean([x.get('research_calls') for x in rs]),
-                         knowcode_calls_mean=mean([x.get('knowcode_calls') for x in rs]), cost_usd=sum(x.get('cost_usd') or 0 for x in rs),
+                         knowcode_calls_mean=mean([x.get('knowcode_calls') for x in rs]),
+                         knowcode_tools={t: sum((x.get('knowcode_tools') or {}).get(t, 0) for x in rs)
+                                         for t in sorted({t for x in rs for t in x.get('knowcode_tools') or {}})},
+                         cost_usd=sum(x.get('cost_usd') or 0 for x in rs),
                          refused_naming_binary=sum(x.get('refused_naming_binary') or 0 for x in rs),
                          refused_other=sum(x.get('refused_other') or 0 for x in rs))
         if arm != PLAIN:
@@ -170,6 +190,7 @@ def score(args):
         rows[(row['run'], row['arm'], row['question_id'])] = public_v2.score_session(
             scorer, questions[row['question_id']], labels[row['question_id']], result, events,
             study.config['knowcode_binary_name'], not row['arm'].startswith('plain'))
+        rows[(row['run'], row['arm'], row['question_id'])]['knowcode_tools'] = knowcode_tools(events)
     baseline = json.loads(Path(args.baseline).read_text()) if args.baseline else None
     summary = dict(format='public-v3-summary-1', freeze_sha256=study.freeze_sha256, runs=runs,
                    bootstrap=dict(seed=SEED, resamples=public_v2.RESAMPLES, unit='question'),
