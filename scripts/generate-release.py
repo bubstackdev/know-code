@@ -28,6 +28,9 @@ def gate(text: str) -> str:
         assert text.count(old) == 1, "cargo-dist publishing condition changed; review it"
         text = text.replace(old, new, 1)
     text = harden(text)
+    # Pull requests are gated by ci.yml alone (pr-run-mode = "skip"); the release workflow runs on tag pushes only, so
+    # its full CI call and macOS builds never queue behind, or ahead of, a pull request.
+    assert "\n  pull_request:\n" not in text, "release.yml runs on pull requests; keep pr-run-mode = \"skip\""
     note = "# Regenerate with scripts/generate-release.py; it adds the required successful-test gate on host.\n"
     if not text.startswith(note):
         text = note + text
