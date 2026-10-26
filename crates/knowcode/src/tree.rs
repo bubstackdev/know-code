@@ -155,6 +155,7 @@ fn cross_trace(g: &mut Graph, t: &mut Trace, depth: u8, max: usize, inward: bool
                 n.role = landing.via.role();
                 n.deploy = landing.via.deploy();
                 n.module = landing.via.module();
+                n.library = landing.via.library();
                 // A publisher's bus hop happens at the publish call, in the publisher's repo; the consumer is the node.
                 if downstream && let Some(publish) = &landing.publish {
                     let from = parent.repo.clone();
@@ -301,6 +302,7 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                     role: None,
                     deploy: None,
                     module: None,
+                    library: None,
                     also,
                     copies: Vec::new(),
                     via_removed: false,
@@ -452,6 +454,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                     role: landing.via.role(),
                     deploy: landing.via.deploy(),
                     module: landing.via.module(),
+                    library: landing.via.library(),
                     also: Vec::new(),
                     copies: Vec::new(),
                     via_removed: false,
