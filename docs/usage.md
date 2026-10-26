@@ -335,9 +335,15 @@ the compiler's answer (`precise: true`, evidence `scip`); where the heuristics p
 its coverage. To make one: `npx @sourcegraph/scip-typescript index` in a TypeScript repo, or
 `dotnet tool install -g scip-dotnet && scip-dotnet index` in a .NET one.
 
-## Claude Code hook
+## Claude Code hooks
 
-The Claude Code plugin adds a `PreToolUse` hook for Grep, Glob and Bash (for Bash, only code searches such as `grep`,
+At the start of a Claude Code session (and after `/clear` or a compaction) the plugin adds one line saying what
+KnowCode has indexed here and which tools answer callers, impact, HTTP and definitions:
+`KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.` It says nothing in a directory with no
+index or in a repo whose privacy file blocks KnowCode, reads no index and makes no network call. Turn it off with
+`knowcode config set hooks.session_start false`.
+
+The plugin also adds a `PreToolUse` hook for Grep, Glob and Bash (for Bash, only code searches such as `grep`,
 `rg`, `git grep` or `find -name`). When the pattern names a symbol in an existing index, it adds a short note beside
 the result: where the symbol is defined, its reference count by confidence, its top callers, and the `kc_context` call
 to make next. It never blocks the search and never indexes. The hook script decides first: a Bash command without a

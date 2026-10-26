@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The Claude Code plugin adds a `SessionStart` hook. At the start of a session, and after `/clear` or a compaction, it
+  adds one line of about 40 tokens where KnowCode has an index: `KnowCode indexes shop. Callers, impact, HTTP:
+  kc_impact; definitions: kc_find.` It says nothing in a directory with no index, in a repo whose privacy file blocks
+  KnowCode, or in a resumed session. It reads no index and makes no network call. `knowcode setup claude` installs it
+  with the plugin, `knowcode uninstall` removes it, and `knowcode config set hooks.session_start false` turns it off.
 - Claude Code loads five tools up front instead of eight: `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and
   `kc_search`. `kc_locate`, `kc_more` and `kc_help` are still advertised, and deferred to tool search: in 0.3's study
   `kc_locate` and `kc_help` were never called and `kc_more` 3 times in 320 sessions, while every schema loaded up front
