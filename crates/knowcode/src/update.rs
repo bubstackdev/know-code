@@ -17,6 +17,15 @@ macro_rules! release_repo { () => { "bubstackdev/knowcode" } }
 const REPO: &str = release_repo!();
 const API: &str = concat!("https://api.github.com/repos/", release_repo!(), "/releases/latest");
 const DOWNLOAD: &str = concat!("https://github.com/", release_repo!(), "/releases/download");
+/// The release pages. `latest` redirects to `tag/<tag>`; it is not the API, so the API's rate limit does not apply.
+const PAGES: &str = concat!("https://github.com/", release_repo!(), "/releases");
+/// This build's release archive (dist-workspace.toml's `targets`, checked by a test below), used when the API refuses.
+const TARGET: Option<&str> = if cfg!(all(target_os = "macos", target_arch = "aarch64")) { Some("aarch64-apple-darwin") }
+    else if cfg!(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64")) { Some("x86_64-unknown-linux-gnu") }
+    else if cfg!(all(target_os = "linux", target_env = "gnu", target_arch = "aarch64")) { Some("aarch64-unknown-linux-gnu") }
+    else { None };
+const METADATA_LIMIT: u64 = 2 * 1024 * 1024;
+const ARCHIVE_LIMIT: u64 = 64 * 1024 * 1024;
 /// The Homebrew tap releases publish the formula to (dist-workspace.toml's `tap`, checked by a test below), and the
 /// formula's name. Homebrew names a `<owner>/homebrew-<name>` repository `<owner>/<name>`.
 macro_rules! tap_repo { () => { "bubstackdev/homebrew-tap" } }
@@ -32,6 +41,8 @@ struct State {
     #[serde(default)] latest: Option<String>,
     #[serde(default)] notified_version: Option<String>,
     #[serde(default)] notified_at: u64,
+    /// When GitHub's API rate limit resets after it refused a request; until then checks read the release page.
+    #[serde(default)] api_retry_at: u64,
 }
 
 struct Cache { dir: PathBuf, _lock: File }
@@ -158,22 +169,74 @@ impl Scratch {
 }
 impl Drop for Scratch { fn drop(&mut self) { if !self.keep { let _ = fs::remove_dir_all(&self.path); } } }
 
-fn download(url: &str, destination: &Path, install: bool) -> Result<()> {
+/// One request. Redirects are followed only when `extra` asks with `--location`.
+fn curl(url: &str, destination: &Path, install: bool, limit: u64, extra: &[&std::ffi::OsStr]) -> Result<()> {
     let mut cmd = Command::new("curl");
     // --disable must be first: user curl configuration must not add credentials, bodies, or unrelated requests.
-    cmd.args(["--disable", "--fail", "--silent", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https",
-        "--connect-timeout", "2", "--max-time", if install { "120" } else { "5" }, "--max-filesize", "2097152", "--user-agent"])
-        .arg(format!("knowcode/{CURRENT}"))
-        .args(["--header", "Accept: application/vnd.github+json", "--output"]).arg(destination).arg(url)
+    cmd.args(["--disable", "--fail", "--silent", "--show-error", "--proto", "=https", "--proto-redir", "=https",
+        "--connect-timeout", "2", "--max-time", if install { "120" } else { "5" }, "--max-filesize"]).arg(limit.to_string())
+        .arg("--user-agent").arg(format!("knowcode/{CURRENT}"))
+        .args(extra).arg("--output").arg(destination).arg(url)
         .current_dir(destination.parent().context("download has no directory")?);
     let out = limits::output(cmd, if install { Kind::UpdateInstall } else { Kind::UpdateCheck }, "public release download", None)
         .context("running curl for the public release (curl is required)")?;
     if !out.status.success() { bail!("public release download failed: {}", String::from_utf8_lossy(&out.stderr).trim()); }
-    if fs::metadata(destination)?.len() > 2 * 1024 * 1024 { bail!("release response exceeds the size limit"); }
+    // A redirect with no body leaves no file.
+    if fs::metadata(destination).map_or(0, |m| m.len()) > limit { bail!("release response exceeds the size limit"); }
     Ok(())
 }
+fn download(url: &str, destination: &Path, install: bool) -> Result<()> {
+    curl(url, destination, install, METADATA_LIMIT, &["--location".as_ref(), "--header".as_ref(), "Accept: application/vnd.github+json".as_ref()])
+}
 
-struct Release { tag: String, version: Version, installer: String, digest: String }
+/// The status and header fields (names lowercased) of the last response in a curl `--dump-header` file.
+fn response(text: &str) -> Option<(u16, Vec<(String, String)>)> {
+    let mut last = None;
+    for line in text.lines().map(str::trim_end) {
+        if line.starts_with("HTTP/") {
+            last = Some((line.split_whitespace().nth(1)?.parse().ok()?, Vec::new()));
+        } else if let (Some((_, fields)), Some((name, value))) = (last.as_mut(), line.split_once(':')) {
+            let fields: &mut Vec<(String, String)> = fields;
+            fields.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+        }
+    }
+    last
+}
+fn field<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    fields.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+}
+
+/// GitHub's API declining a request: its status, whether a rate limit is why, and when to ask again if it said.
+#[derive(Debug, PartialEq)]
+struct Refusal { status: u16, limited: bool, reset: Option<u64> }
+fn refusal(headers: &str, clock: u64) -> Option<Refusal> {
+    let (status, fields) = response(headers)?;
+    let spent = field(&fields, "x-ratelimit-remaining") == Some("0");
+    if !(status == 403 || status == 429 || (status >= 400 && spent)) { return None; }
+    let retry = field(&fields, "retry-after").and_then(|s| s.parse::<u64>().ok()).map(|s| clock.saturating_add(s));
+    let reset = field(&fields, "x-ratelimit-reset").and_then(|s| s.parse::<u64>().ok());
+    Some(Refusal { status, limited: spent || status == 429 || retry.is_some(), reset: retry.into_iter().chain(reset).max() })
+}
+impl Refusal {
+    fn explain(&self) -> String {
+        let when = self.reset.map_or_else(|| "later".to_string(), |at| format!("after {}", local_time(at)));
+        if self.limited { format!("GitHub's API rate limit for this network is used up; try again {when}, or set KNOWCODE_GITHUB_TOKEN") }
+        else { format!("GitHub's API refused the release check (HTTP {}); try again {when}, or set KNOWCODE_GITHUB_TOKEN", self.status) }
+    }
+}
+/// `HH:MM` in local time.
+fn local_time(at: u64) -> String {
+    let time = at.min(i64::MAX as u64) as libc::time_t;
+    // SAFETY: localtime_r writes only into the `tm` it is given; a null return leaves it unused.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() { return format!("{at} (Unix time)"); }
+    format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+}
+
+struct Release { tag: String, version: Version, installer: Option<Installer> }
+/// The shell installer and GitHub's digest of it, from the API. A release read from the release page has none:
+/// its archive and the archive's published checksum are used instead.
+struct Installer { url: String, digest: String }
 fn parse_release(bytes: &[u8]) -> Result<Release> {
     let data: serde_json::Value = serde_json::from_slice(bytes).context("invalid public release metadata")?;
     if data["draft"] != false || data["prerelease"] != false { bail!("latest release is not a published stable release"); }
@@ -187,12 +250,114 @@ fn parse_release(bytes: &[u8]) -> Result<Release> {
     if url != expected && url != expected.replace('+', "%2B") { bail!("installer URL is outside the expected KnowCode release"); }
     let digest = asset["digest"].as_str().and_then(|s| s.strip_prefix("sha256:")).context("installer has no GitHub SHA-256 digest")?;
     if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit()) { bail!("invalid installer digest"); }
-    Ok(Release { tag: tag.into(), version: v, installer: url.into(), digest: digest.to_ascii_lowercase() })
+    Ok(Release { tag: tag.into(), version: v, installer: Some(Installer { url: url.into(), digest: digest.to_ascii_lowercase() }) })
 }
-fn fetch(scratch: &Scratch) -> Result<Release> {
+/// The tag `releases/latest` redirects to: only `<PAGES>/tag/<stable SemVer tag>`.
+fn latest_tag(headers: &str) -> Result<String> {
+    let (status, fields) = response(headers).context("the release page sent no response")?;
+    if !(300..400).contains(&status) { bail!("the latest release page did not redirect to a release (HTTP {status})"); }
+    let location = field(&fields, "location").context("the latest release page redirected nowhere")?;
+    let tag = location.strip_prefix(PAGES).and_then(|rest| rest.strip_prefix("/tag/"))
+        .context("the latest release page redirected outside KnowCode's releases")?;
+    if tag.is_empty() || !tag.bytes().all(|c| c.is_ascii_alphanumeric() || b".+-_".contains(&c)) { bail!("unrecognized release tag"); }
+    if !version(tag).context("release tag is not SemVer")?.pre.is_empty() { bail!("latest release is a prerelease"); }
+    Ok(tag.into())
+}
+
+enum Answer { Release(Release), Refused(Refusal) }
+fn ask_api(scratch: &Scratch) -> Result<Answer> {
     let json = scratch.path.join("release.json");
-    download(API, &json, false)?;
-    parse_release(&fs::read(json)?)
+    let headers = scratch.path.join("release.headers");
+    let mut extra: Vec<std::ffi::OsString> = ["--location", "--header", "Accept: application/vnd.github+json", "--dump-header"]
+        .map(Into::into).into();
+    extra.push(headers.clone().into());
+    if let Some(token) = std::env::var("KNOWCODE_GITHUB_TOKEN").ok().filter(|t| !t.trim().is_empty()) {
+        if token.chars().any(char::is_control) { bail!("KNOWCODE_GITHUB_TOKEN contains a control character"); }
+        // In a private file, not in curl's arguments, which other local users can list. curl drops the header on a
+        // redirect to another host.
+        let auth = scratch.path.join("authorization");
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new().create_new(true).write(true).mode(0o600).open(&auth)?
+            .write_all(format!("Authorization: Bearer {}\n", token.trim()).as_bytes())?;
+        extra.push("--header".into());
+        extra.push(format!("@{}", auth.display()).into());
+    }
+    let extra: Vec<&std::ffi::OsStr> = extra.iter().map(|s| s.as_os_str()).collect();
+    match curl(API, &json, false, METADATA_LIMIT, &extra) {
+        Ok(()) => Ok(Answer::Release(parse_release(&fs::read(json)?)?)),
+        Err(error) => match fs::read_to_string(&headers).ok().and_then(|h| refusal(&h, now())) {
+            Some(refused) => Ok(Answer::Refused(refused)),
+            None => Err(error),
+        },
+    }
+}
+fn ask_page(scratch: &Scratch) -> Result<Release> {
+    let body = scratch.path.join("latest.html");
+    let headers = scratch.path.join("latest.headers");
+    curl(&format!("{PAGES}/latest"), &body, false, METADATA_LIMIT, &["--dump-header".as_ref(), headers.as_os_str()])?;
+    let tag = latest_tag(&fs::read_to_string(&headers).context("the release page sent no headers")?)?;
+    Ok(Release { version: version(&tag)?, tag, installer: None })
+}
+
+/// When the API's refusal said to ask again, if that is still ahead (and not past a large clock change).
+fn api_held(clock: u64) -> Option<u64> {
+    let cache = Cache::open(true).ok().flatten()?;
+    let at = cache.read().ok()?.api_retry_at;
+    (at > clock && at <= clock.saturating_add(DAY)).then_some(at)
+}
+fn hold_api(until: u64) {
+    if let Some(cache) = Cache::open(true).ok().flatten() && let Ok(mut state) = cache.read() {
+        state.api_retry_at = until;
+        let _ = cache.write(&state);
+    }
+}
+
+/// The latest release from GitHub's API. When the API refuses, as it does once a network's unauthenticated rate
+/// limit is spent, the release page names the tag, and the API is not asked again until the limit resets.
+fn fetch(scratch: &Scratch) -> Result<Release> {
+    let clock = now();
+    let refused = match api_held(clock) {
+        Some(reset) => Refusal { status: 403, limited: true, reset: Some(reset) },
+        None => match ask_api(scratch)? {
+            Answer::Release(release) => return Ok(release),
+            Answer::Refused(refused) => {
+                if refused.limited { hold_api(refused.reset.unwrap_or(clock + 60 * 60).min(clock + DAY)); }
+                refused
+            },
+        },
+    };
+    ask_page(scratch).map_err(|error| anyhow!("{} (the release page could not be read either: {error:#})", refused.explain()))
+}
+
+/// The binary from this platform's release archive, checked against the checksum published beside it.
+fn from_archive(scratch: &Scratch, tag: &str) -> Result<PathBuf> {
+    let target = TARGET.context("no KnowCode release archive for this platform; re-run the shell installer")?;
+    let name = format!("knowcode-{target}.tar.gz");
+    let sums = scratch.path.join(format!("{name}.sha256"));
+    download(&format!("{DOWNLOAD}/{tag}/{name}.sha256"), &sums, true)?;
+    let digest = published_checksum(&fs::read_to_string(&sums)?, &name)?;
+    let archive = scratch.path.join(&name);
+    curl(&format!("{DOWNLOAD}/{tag}/{name}"), &archive, true, ARCHIVE_LIMIT, &["--location".as_ref()])?;
+    verify(&archive, &digest)?;
+    let dir = scratch.path.join("archive");
+    fs::create_dir(&dir)?;
+    let member = format!("knowcode-{target}/knowcode");
+    let mut tar = Command::new("tar");
+    tar.arg("-xzf").arg(&archive).arg("-C").arg(&dir).args(["--no-same-owner", &member]);
+    let out = limits::output(tar, Kind::UpdateInstall, "release archive", None)?;
+    if !out.status.success() { bail!("could not unpack the release archive: {}", String::from_utf8_lossy(&out.stderr).trim()); }
+    let binary = dir.join(member);
+    if !fs::symlink_metadata(&binary).is_ok_and(|m| m.is_file()) { bail!("the release archive has no knowcode binary"); }
+    Ok(binary)
+}
+/// The SHA-256 a `<name>.sha256` file gives for `name` (`<digest> *<name>` or `<digest>  <name>`).
+fn published_checksum(text: &str, name: &str) -> Result<String> {
+    let digest = text.lines().find_map(|line| {
+        let (digest, file) = line.trim().split_once(char::is_whitespace)?;
+        (file.trim_start().trim_start_matches('*') == name).then_some(digest)
+    }).context("the release's checksum file does not list its archive")?;
+    if digest.len() != 64 || !digest.bytes().all(|c| c.is_ascii_hexdigit()) { bail!("invalid archive checksum"); }
+    Ok(digest.to_ascii_lowercase())
 }
 
 /// Hidden one-shot helper. Failures are quiet to the caller and cannot mark a repository answer incomplete.
@@ -245,7 +410,7 @@ fn verify(path: &Path, expected: &str) -> Result<()> {
         },
         other => other?,
     };
-    if !out.status.success() || String::from_utf8_lossy(&out.stdout).split_whitespace().next() != Some(expected) { bail!("installer checksum mismatch; nothing installed"); }
+    if !out.status.success() || String::from_utf8_lossy(&out.stdout).split_whitespace().next() != Some(expected) { bail!("release checksum mismatch; nothing installed"); }
     Ok(())
 }
 
@@ -267,25 +432,43 @@ pub fn self_update(check_only: bool) -> Result<()> {
     }
     let (prefix, receipt, receipt_before) = installation.expect("checked above");
     let Some(_cache) = Cache::open(false)? else { bail!("another update check is running; retry shortly"); };
-    let installer = scratch.path.join("installer.sh");
     eprintln!("knowcode: downloading {}", release.tag);
-    download(&release.installer, &installer, true)?;
-    verify(&installer, &release.digest)?;
+    // Both are checked against a SHA-256 from GitHub before anything runs: the installer against the digest the API
+    // gave, the archive against the checksum file published beside it.
+    let payload = match &release.installer {
+        Some(Installer { url, digest }) => {
+            let installer = scratch.path.join("installer.sh");
+            download(url, &installer, true)?;
+            verify(&installer, digest)?;
+            Payload::Installer(installer)
+        },
+        None => Payload::Binary(from_archive(&scratch, &release.tag)?),
+    };
     let mut backup = Scratch::new(&prefix)?;
     let old = backup.path.join("knowcode");
     fs::copy(prefix.join("knowcode"), &old)?;
     let install = (|| -> Result<()> {
         eprintln!("knowcode: installing {}", release.tag);
+        let installer = match &payload {
+            Payload::Installer(installer) => installer,
+            Payload::Binary(binary) => {
+                // What the installer does with KNOWCODE_DISABLE_UPDATE set: the binary replaces the old one, and the
+                // receipt is left as it is.
+                let new = backup.path.join("knowcode.new");
+                fs::copy(binary, &new)?;
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&new, fs::Permissions::from_mode(0o755))?;
+                fs::rename(&new, prefix.join("knowcode"))?;
+                return check_installed(&prefix, &release.version);
+            },
+        };
         let mut cmd = Command::new("sh");
-        cmd.arg(&installer).current_dir(&scratch.path).env("KNOWCODE_INSTALL_DIR", &prefix)
+        cmd.arg(installer).current_dir(&scratch.path).env("KNOWCODE_INSTALL_DIR", &prefix)
             .env("KNOWCODE_NO_MODIFY_PATH", "1").env("KNOWCODE_DISABLE_UPDATE", "1");
         for key in ["KNOWCODE_DOWNLOAD_URL", "INSTALLER_DOWNLOAD_URL", "KNOWCODE_INSTALLER_GHE_BASE_URL", "KNOWCODE_INSTALLER_GITHUB_BASE_URL", "KNOWCODE_GITHUB_TOKEN", "KNOWCODE_UNMANAGED_INSTALL"] { cmd.env_remove(key); }
         let out = limits::output(cmd, Kind::UpdateInstall, "KnowCode installer", None)?;
         if !out.status.success() { bail!("installer failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)); }
-        let mut cmd = Command::new(prefix.join("knowcode")); cmd.arg("--version");
-        let out = limits::output(cmd, Kind::UpdateCheck, "installed version check", None)?;
-        if !out.status.success() || String::from_utf8_lossy(&out.stdout).trim() != format!("knowcode {}", release.version) { bail!("installed binary did not report the expected version"); }
-        Ok(())
+        check_installed(&prefix, &release.version)
     })();
     if let Err(error) = install {
         if let Err(rollback) = fs::rename(&old, prefix.join("knowcode")) {
@@ -297,6 +480,16 @@ pub fn self_update(check_only: bool) -> Result<()> {
     }
     println!("Installed KnowCode {}. Start a new client session to use it.", release.version);
     refresh_plugin(&prefix.join("knowcode"));
+    Ok(())
+}
+
+/// What self-update installs: a checked shell installer to run, or a checked binary from a release archive.
+enum Payload { Installer(PathBuf), Binary(PathBuf) }
+
+fn check_installed(prefix: &Path, expected: &Version) -> Result<()> {
+    let mut cmd = Command::new(prefix.join("knowcode")); cmd.arg("--version");
+    let out = limits::output(cmd, Kind::UpdateCheck, "installed version check", None)?;
+    if !out.status.success() || String::from_utf8_lossy(&out.stdout).trim() != format!("knowcode {expected}") { bail!("installed binary did not report the expected version"); }
     Ok(())
 }
 
@@ -326,6 +519,63 @@ mod tests {
         assert!(dist.contains(&format!("\npackages = [\"{FORMULA}\"]\n")) && !dist.contains("\nformula ="), "formula name");
         assert_eq!(FORMULA, env!("CARGO_PKG_NAME"));
         assert_eq!(brew_upgrade(), "brew upgrade bubstackdev/tap/knowcode");
+    }
+
+    #[test]
+    fn this_build_names_a_release_archive_target() {
+        let dist = include_str!("../../../dist-workspace.toml");
+        // A build for another platform (an Intel Mac, say) has no archive and keeps to the installer.
+        let Some(target) = TARGET else { return };
+        assert!(dist.lines().any(|l| l.starts_with("targets = [") && l.contains(&format!("\"{target}\""))), "{target}");
+    }
+
+    #[test]
+    fn the_latest_release_page_redirect_names_only_a_stable_tag_of_this_repository() {
+        let redirect = |location: &str| format!("HTTP/2 302 \r\ndate: Mon, 26 Oct 2026 10:00:00 GMT\r\nLocation: {location}\r\n\r\n");
+        assert_eq!(latest_tag(&redirect(&format!("{PAGES}/tag/v0.4.0"))).unwrap(), "v0.4.0");
+        assert_eq!(latest_tag(&redirect(&format!("{PAGES}/tag/v0.4.0+build.1"))).unwrap(), "v0.4.0+build.1");
+        for bad in [format!("{PAGES}/tag/v0.4.0-rc.1"), format!("{PAGES}/tag/latest"), format!("{PAGES}/tag/"),
+            format!("{PAGES}/tag/v0.4.0/../../x"), format!("{PAGES}/tag/v0.4.0?x=1"), format!("{PAGES}/v0.4.0"),
+            "https://github.com/someone/else/releases/tag/v9.0.0".into(), "https://example.com/releases/tag/v0.4.0".into(),
+            "/bubstackdev/knowcode/releases/tag/v0.4.0".into(), format!("{PAGES}tag/v0.4.0")] {
+            assert!(latest_tag(&redirect(&bad)).is_err(), "{bad}");
+        }
+        // Not a redirect, or a redirect with no location.
+        assert!(latest_tag("HTTP/2 200\r\ncontent-type: text/html\r\n\r\n").is_err());
+        assert!(latest_tag("HTTP/2 302\r\n\r\n").is_err());
+        assert!(latest_tag("").is_err());
+        // Only the last response counts when more than one is in the file.
+        let two = format!("HTTP/1.1 302 Found\r\nLocation: {PAGES}/tag/v0.1.0\r\n\r\n{}", redirect(&format!("{PAGES}/tag/v0.5.0")));
+        assert_eq!(latest_tag(&two).unwrap(), "v0.5.0");
+    }
+
+    #[test]
+    fn an_api_refusal_is_read_from_its_status_and_rate_limit_headers() {
+        let limited = "HTTP/2 403 \r\nx-ratelimit-limit: 60\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: 1790000000\r\n\r\n";
+        assert_eq!(refusal(limited, 1), Some(Refusal { status: 403, limited: true, reset: Some(1_790_000_000) }));
+        assert_eq!(refusal("HTTP/2 429\r\nretry-after: 60\r\n\r\n", 1000), Some(Refusal { status: 429, limited: true, reset: Some(1060) }));
+        assert_eq!(refusal("HTTP/2 403\r\nx-ratelimit-remaining: 12\r\n\r\n", 1), Some(Refusal { status: 403, limited: false, reset: None }));
+        assert_eq!(refusal("HTTP/2 503\r\nx-ratelimit-remaining: 0\r\n\r\n", 1).map(|r| r.limited), Some(true));
+        for other in ["HTTP/2 404\r\n\r\n", "HTTP/2 500\r\nx-ratelimit-remaining: 3\r\n\r\n", "HTTP/2 200\r\nx-ratelimit-remaining: 0\r\n\r\n", ""] {
+            assert_eq!(refusal(other, 1), None, "{other}");
+        }
+        let said = refusal(limited, 1).unwrap().explain();
+        assert!(said.starts_with("GitHub's API rate limit for this network is used up; try again after ")
+            && said.ends_with(", or set KNOWCODE_GITHUB_TOKEN"), "{said}");
+        let at = said.split("after ").nth(1).unwrap().split(',').next().unwrap();
+        assert!(at.len() == 5 && at.as_bytes()[2] == b':', "{at}");
+        assert!(Refusal { status: 403, limited: true, reset: None }.explain().contains("try again later"));
+    }
+
+    #[test]
+    fn an_archive_checksum_comes_only_from_its_own_line() {
+        let digest = "ab".repeat(32);
+        let name = "knowcode-aarch64-apple-darwin.tar.gz";
+        assert_eq!(published_checksum(&format!("{} *{name}\n", digest.to_uppercase()), name).unwrap(), digest);
+        assert_eq!(published_checksum(&format!("{} *other.tar.gz\n{digest}  {name}\n", "cd".repeat(32)), name).unwrap(), digest);
+        assert!(published_checksum(&format!("{digest} *{name}.sig\n"), name).is_err());
+        assert!(published_checksum(&format!("{} *{name}\n", &digest[..62]), name).is_err());
+        assert!(published_checksum("", name).is_err());
     }
 
     #[test]
