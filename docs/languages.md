@@ -78,7 +78,8 @@ Resolved:
   arguments, `params`, and the argument types the site shows; a primary constructor counts as one, and a struct's
   `new S()` is its implicit one. `: base(…)`, `: this(…)` and a primary constructor's base call reach the constructor
   they chain to. A creation more than one constructor fits is `ambiguous` to each, never a confident pick.
-- **HTTP.** ASP.NET controller actions (`[Route]` and `[Http*]` attributes, `nameof` and constants resolved) and
+- **HTTP.** ASP.NET controller actions (`[Route]` and `[Http*]` attributes, `nameof` and constants resolved; each
+  `[Http*]` on an action is a route of its own, and a named argument such as `Name = …` is no template) and
   minimal API endpoints are linked to the requests that reach them: C# `HttpClient` calls with a URL (base addresses
   dropped, constants resolved, interpolated values as route parameters; a base path in a `readonly string` field,
   a URL built in a local and `new Uri(base, path)` are read), RestSharp's `RestRequest`, request classes declaring a
