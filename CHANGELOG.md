@@ -10,7 +10,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `PropertyBinder` no class. A C# file that parses with errors is read again with each conditional's first branch
   (the others blanked, so every line and column still points at the file), and that reading is kept when it parses
   better. Files that parse are read as before. On the public-v1/v2 workspaces this changes 11 serilog files and
-  one bitwarden-server file, and no other repo's index.
+  one bitwarden-server file, and no other repo's index. An interface's static member (`private static readonly
+  object[] NoPropertyValues`, now read in `ILogger`) has no implementations: a class's field of the same name is its
+  own.
 - An impact row whose caller reaches the changed symbol on several lines lists them all: `at line 526 (also 532, 592,
   602)` in text, `also` in JSON. Before, one line per caller was named; agents in 0.3's study grepped for the rest,
   and a two-hop question's label counts each call line. Replaying that study's KnowCode calls, impact answers grow
