@@ -57,10 +57,14 @@ def policy_for(session,client,knowcode=None,git_toolchain=None,full=False):
 
 
 def open_study(freeze):
-    """A public-v1 freeze, or a public-v2 one (public_v2.Study), checked from content either way."""
-    if public_transcript.load_json(Path(freeze).read_bytes()).get('format')=='knowcode-public-v2-freeze-1':
+    """A public-v1 freeze, or a public-v2 or -v3 one (public_v2.Study, public_v3.Study), checked from content either way."""
+    form=public_transcript.load_json(Path(freeze).read_bytes()).get('format')
+    if form=='knowcode-public-v2-freeze-1':
         import public_v2
         return public_v2.Study(freeze)
+    if form=='knowcode-public-v3-freeze-1':
+        import public_v3
+        return public_v3.Study(freeze)
     return FrozenStudy(freeze)
 
 
