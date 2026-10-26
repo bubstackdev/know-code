@@ -4520,7 +4520,7 @@ impl<'a> HttpCrossing<'a> {
             .filter(|l| self.gate.allows(l.via.edge()))
             .map(|l| crate::graph::Crossing::new(l.root, l.via, l.publish, l.creators))
             .collect();
-        out.extend(self.library_crossings(root, id)?);
+        out.extend(self.library_crossings(root, id, qualified)?);
         Ok(out)
     }
 
@@ -4531,19 +4531,27 @@ impl<'a> HttpCrossing<'a> {
     /// landed in and way. Looked up for at most [`LIBRARY_CROSSINGS`] symbols an answer (then `library_cut` counts
     /// those left), and only where the workspace summary says a repo using it may name it, or its type names a supertype
     /// its repo doesn't define.
-    fn library_crossings(&mut self, root: &Path, id: i64) -> Result<Vec<crate::graph::Crossing>> {
+    fn library_crossings(&mut self, root: &Path, id: i64, qualified: &str) -> Result<Vec<crate::graph::Crossing>> {
         let uses = ["calls", "uses"].iter().any(|e| self.gate.allows(e));
         let through = self.gate.allows("via_protocol");
         if !self.library || (!uses && !through) {
             return Ok(Vec::new());
         }
-        let Some(sym) = trace::symbol(self.store(root).conn(), id)? else { return Ok(Vec::new()) };
-        if !matches!(sym.kind.as_str(), "method" | "function" | "property") {
+        // From the workspace summary and the name alone, before reading the symbol: most symbols cross nothing.
+        let (container, name) = match qualified.rsplit_once('.') {
+            Some((c, n)) => (Some(c), n),
+            None => (None, qualified),
+        };
+        let used = uses && self.lib_dependents(root)?.iter().any(|(r, changed)| *changed || self.lib_summary(r).is_some_and(|s| s.may_reference(name)));
+        let dispatch = through && match container {
+            Some(c) => self.lib_outside(root, c)?,
+            None => false,
+        };
+        if !used && !dispatch {
             return Ok(Vec::new());
         }
-        let used = uses && self.lib_dependents(root)?.iter().any(|(r, changed)| *changed || self.lib_summary(r).is_some_and(|s| s.may_reference(&sym.name)));
-        let dispatch = through && self.lib_outside(root, &sym)?;
-        if !used && !dispatch {
+        let Some(sym) = trace::symbol(self.store(root).conn(), id)? else { return Ok(Vec::new()) };
+        if !matches!(sym.kind.as_str(), "method" | "function" | "property") {
             return Ok(Vec::new());
         }
         if self.library_checked >= LIBRARY_CROSSINGS {
@@ -4630,10 +4638,7 @@ impl<'a> HttpCrossing<'a> {
     /// The workspace's summaries and repo graph, read once an answer.
     fn lib_workspace(&mut self) -> Result<(std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>, std::sync::Arc<kc_index::workspace::Graph>)> {
         if self.lib.workspace.is_none() {
-            if self.summaries.is_none() {
-                self.summaries = Some(full_summaries(self.home)?);
-            }
-            let summaries = self.summaries.clone().unwrap_or_default();
+            let summaries = planned_summaries(self.home)?;
             let graph = kc_index::workspace::graph(&summaries);
             self.lib.workspace = Some((summaries, graph));
         }
@@ -4686,14 +4691,17 @@ impl<'a> HttpCrossing<'a> {
         Ok(out)
     }
 
-    /// Whether `sym`'s type names a supertype its repo (at `root`) doesn't define, once per type.
-    fn lib_outside(&mut self, root: &Path, sym: &query::SymbolRow) -> Result<bool> {
-        let Some(container) = sym.container.clone() else { return Ok(false) };
-        if let Some(&b) = self.lib.outside.get(&(root.to_path_buf(), container.clone())) {
+    /// Whether the type `container` names a supertype its repo (at `root`) doesn't define, once per type; never when
+    /// the repo depends on no indexed repo.
+    fn lib_outside(&mut self, root: &Path, container: &str) -> Result<bool> {
+        if self.lib_dependencies(root)?.is_empty() {
+            return Ok(false);
+        }
+        if let Some(&b) = self.lib.outside.get(&(root.to_path_buf(), container.to_string())) {
             return Ok(b);
         }
-        let b = query::names_outside_supertypes(self.store(root).conn(), sym)?;
-        self.lib.outside.insert((root.to_path_buf(), container), b);
+        let b = query::type_names_outside_supertypes(self.store(root).conn(), container)?;
+        self.lib.outside.insert((root.to_path_buf(), container.to_string()), b);
         Ok(b)
     }
 

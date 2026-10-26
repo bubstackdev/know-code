@@ -5944,9 +5944,19 @@ pub fn names_outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<bo
     Ok(!outside_supertypes(conn, sym)?.0.is_empty())
 }
 
+/// [`names_outside_supertypes`] of a member of the type `container` (`Ns.Type`).
+pub fn type_names_outside_supertypes(conn: &Connection, container: &str) -> Result<bool> {
+    Ok(!outside_supertypes_of(conn, container)?.0.is_empty())
+}
+
 /// The supertypes of `sym`'s type its repo doesn't define, and the ones it does (the type's own name included).
 fn outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<(Vec<String>, HashSet<String>)> {
     let Some(container) = sym.container.as_deref() else { return Ok((Vec::new(), HashSet::new())) };
+    outside_supertypes_of(conn, container)
+}
+
+/// [`outside_supertypes`] of the type `container`.
+fn outside_supertypes_of(conn: &Connection, container: &str) -> Result<(Vec<String>, HashSet<String>)> {
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let mut seen = HashSet::from([short.clone()]);
     let mut queue = vec![short];
