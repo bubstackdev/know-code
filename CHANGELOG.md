@@ -2,7 +2,15 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.4.0 (2026-10-26)
+
+0.4 makes KnowCode cheaper to keep in a session and more exact across repositories. By default a client now loads one
+tool, `kc`, instead of eight: 502 tokens on every turn instead of 1,276, measured with the provider's token counter.
+Claude Code sessions, and Codex sessions once their hook is trusted, open with a line saying what KnowCode indexes there
+and which call answers callers and impact. HTTP links that pointed at the wrong server are gone, and the impact walk
+reaches further: replaying every call recorded in the published studies, two-hop impact answers find more of the
+labelled places (recall 0.587 to 0.628) with fewer wrong ones, and no question type got worse. From 0.4 on, releases ship on [checks that make no model calls](eval/release-gate/0.4.0.md); they
+measure what KnowCode returns, and make no claim about how agents use it.
 
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
