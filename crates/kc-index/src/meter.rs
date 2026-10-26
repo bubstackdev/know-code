@@ -7,7 +7,8 @@
 //! included), except a [`ThreadMark`]'s, which counts the calling thread alone: the writer, while parse workers run
 //! beside it. Child processes (`git ls-files`, `git log`) are counted apart, in CPU time only (`child_cpu_ms`), once
 //! they have exited. Instructions and cycles come from `proc_pid_rusage` and `PROC_PIDTHREADCOUNTS` on macOS; elsewhere
-//! only time is counted.
+//! only time is counted. A machine that offers the calls but doesn't count (a virtual Mac reads 0) reports them as
+//! unavailable, not as no work.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -182,8 +183,9 @@ mod sys {
         Counts {
             cpu_ns: clock_ns(libc::CLOCK_PROCESS_CPUTIME_ID),
             child_cpu_ns: children_ns(),
-            instructions: ok.then_some(info.ri_instructions),
-            cycles: ok.then_some(info.ri_cycles),
+            // A running process has retired instructions: a count of 0 means the machine doesn't count them.
+            instructions: (ok && info.ri_instructions > 0).then_some(info.ri_instructions),
+            cycles: (ok && info.ri_cycles > 0).then_some(info.ri_cycles),
         }
     }
 
@@ -224,10 +226,11 @@ mod sys {
             return Counts { cpu_ns, ..Counts::default() };
         }
         let levels = &buf.counts[..usize::from(buf.len).min(buf.counts.len())];
+        let (instructions, cycles): (u64, u64) = (levels.iter().map(|c| c.instructions).sum(), levels.iter().map(|c| c.cycles).sum());
         Counts {
             cpu_ns,
-            instructions: Some(levels.iter().map(|c| c.instructions).sum()),
-            cycles: Some(levels.iter().map(|c| c.cycles).sum()),
+            instructions: (instructions > 0).then_some(instructions),
+            cycles: (cycles > 0).then_some(cycles),
             child_cpu_ns: 0,
         }
     }
@@ -282,7 +285,9 @@ mod tests {
         let (process, thread) = (m.cost(), t.cost());
         assert!(process.cpu_ms > 0.0 && thread.cpu_ms > 0.0);
         if cfg!(target_os = "macos") {
-            assert!(process.instructions.is_some_and(|i| i > 2_000_000), "{process:?}");
+            // A virtual Mac offers the calls but doesn't count (CI runners): unavailable, never a count of 0.
+            assert!(process.instructions.is_none_or(|i| i > 2_000_000), "{process:?}");
+            assert_eq!(process.instructions.is_some(), process.cycles.is_some(), "{process:?}");
             // Some kernels don't offer per-thread counts; when they do, they count this loop.
             assert!(thread.instructions.is_none_or(|i| i > 2_000_000), "{thread:?}");
         }

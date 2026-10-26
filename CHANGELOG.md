@@ -2,6 +2,28 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- The Claude Code plugin adds a `SessionStart` hook. At the start of a session, and after `/clear` or a compaction, it
+  adds one line of about 40 tokens where KnowCode has an index: `KnowCode indexes shop. Callers, impact, HTTP:
+  kc_impact; definitions: kc_find.` It says nothing in a directory with no index, in a repo whose privacy file blocks
+  KnowCode, or in a resumed session. It reads no index and makes no network call. `knowcode setup claude` installs it
+  with the plugin, `knowcode uninstall` removes it, and `knowcode config set hooks.session_start false` turns it off.
+- Claude Code loads five tools up front instead of eight: `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and
+  `kc_search`. `kc_locate`, `kc_more` and `kc_help` are still advertised, and deferred to tool search: in 0.3's study
+  `kc_locate` and `kc_help` were never called and `kc_more` 3 times in 320 sessions, while every schema loaded up front
+  is paid on every turn. The always-loaded schemas go from 1,031 to 743 tokens (`count_tokens`); with the plugin's
+  `KNOWCODE_TOOLS=all`, KnowCode's upfront cost with tool search goes from 1,570 to 1,325 tokens, instructions and
+  deferred names included. A cut answer's `hint` already names the `kc_more` call that continues it, now checked by a
+  test for every core tool that pages. Clients that don't defer tools, such as Claude Code's bare mode, still
+  load all eight core tools.
+- Conventional routes are per app. A repo with several ASP.NET apps (an admin app and an API, each with its own
+  project and `MapControllerRoute`) placed every controller with no `[Route]` under every app's templates. A
+  controller now takes the templates of its own project (the nearest `.csproj` above it) and of the projects
+  referencing it, never another app's; an action with no template that no app's templates reach is listed as
+  unsupported, saying so. On the public-v1 workspace, 18 routes of controllers declared in bitwarden-server's test
+  projects, which no app maps, are gone; nothing else changed.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
@@ -12,6 +34,8 @@ rise is one session), sessions used about 3.5k more tokens than plain tools as i
 lower-bound question stayed below plain, and agents not told about KnowCode used it in 53 of 80 sessions against the
 67 required, up from 44. The results page reports every run, miss and failure.
 
+- `index --phases` says instructions and cycles weren't counted on a machine that offers the counters but doesn't
+  count (a virtual Mac reads 0), and shares phases by CPU time there, instead of reporting no work.
 - A call to an external client whose method the repo only declares (a `.d.ts` for a package such as
   `jellyfin-apiclient`), and which links to no action, now says so: its note names where the method is declared and
   that the client's code, and so its route, isn't in the workspace. Such calls (`apiClient.markUnplayed(…)`) were
