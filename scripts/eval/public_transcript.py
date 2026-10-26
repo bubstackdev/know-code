@@ -19,6 +19,8 @@ from pathlib import Path
 import re
 
 CONTEXT_FIELDS = ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')
+# KnowCode's tools through an explicit MCP config (bare client) or through its Claude Code plugin (full client).
+KNOWCODE_PREFIXES = ('mcp__knowcode__', 'mcp__plugin_knowcode_knowcode__')
 
 
 def unique_object(pairs):
@@ -128,7 +130,7 @@ def answer_from_result(result, question_id, source_root, two_hop):
 
 
 def audit(events, *, question_id, arm, research_call_budget, source_root, two_hop=False, parse_issues=()):
-    if arm not in ('plain', 'knowcode', 'knowcode-unprompted') or not isinstance(question_id, str) or not question_id:
+    if arm not in ('plain', 'knowcode', 'knowcode-unprompted', 'plain-full', 'knowcode-full', 'knowcode-unprompted-full') or not isinstance(question_id, str) or not question_id:
         raise ValueError('explicit question id and arm required')
     if type(research_call_budget) is not int or research_call_budget <= 0:
         raise ValueError('positive soft research-call budget required')
@@ -197,10 +199,12 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
                         issues.append('conflicting repeated tool id')
                     continue
                 calls[tool_id] = dict(id=tool_id, name=name, input=inp, identity=identity, event_position=position)
-                is_kc = name.startswith('mcp__knowcode__')
-                if name not in ('Bash', 'Read') and not (arm != 'plain' and is_kc):
+                is_kc = name.startswith(KNOWCODE_PREFIXES)
+                # A full-client arm (public-v3) also has Grep and Glob, and Skill and ToolSearch for the plugin.
+                interface = ('Bash', 'Read') + (('Grep', 'Glob', 'Skill', 'ToolSearch') if arm.endswith('-full') else ())
+                if name not in interface and not (not arm.startswith('plain') and is_kc):
                     flags.append('tool outside arm: ' + name)
-                if name == 'mcp__knowcode__kc_note_add':
+                if is_kc and name.endswith('__kc_note_add'):
                     flags.append('persistent note tool forbidden')
             elif kind == 'user' and block.get('type') == 'tool_result':
                 tool_id = block.get('tool_use_id')
@@ -264,10 +268,10 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
     answer, answer_issues = answer_from_result(terminal, question_id, source_root, two_hop)
     if issues:
         answer = {'id':question_id,'status':'error','items':[], 'notes':'Transcript integrity error; inspect audit and raw transcript.'}
-    kc_calls = sum(row['name'].startswith('mcp__knowcode__') for row in call_rows)
+    kc_calls = sum(row['name'].startswith(KNOWCODE_PREFIXES) for row in call_rows)
     return dict(format=1, id=question_id, arm=arm, answer=answer, answer_issues=answer_issues,
                 transcript_integrity=not issues, transcript_issues=sorted(set(issues)), policy_flags=sorted(set(flags)),
-                research_calls=len(call_rows), knowcode_calls=kc_calls, plain_calls=sum(row['name'] in ('Bash','Read') for row in call_rows),
+                research_calls=len(call_rows), knowcode_calls=kc_calls, plain_calls=sum(row['name'] in ('Bash','Read','Grep','Glob') for row in call_rows),
                 research_call_budget=research_call_budget, research_call_overrun=max(0,len(call_rows)-research_call_budget),
                 research_call_budget_enforced=False, refused_calls=len(refused),
                 heuristic_refusal_calls=len(refusal_candidates),
