@@ -214,12 +214,18 @@ def answers(q, lab, repo, binary, env):
             out[name] = score_set(ranked(files_in(repo, shas, s['file'], now), minimum), truth)
     elif fam == 'callers-history':
         truth = [i['file'] for i in lab['items']]
-        impact = knowcode(binary, env, repo, 'impact', f"{s['file']}:{s['line']}", '-n', '1000')
         # The label's callers are production code (public-v2's), as the question says: tests are left out on each side.
-        callers = {a['file'] for a in (impact.get('items') or [{}])[0].get('affected', [])
-                   if a.get('hop') == 1 and a.get('class') != 'test'}
-        changed = files_in(repo, full, s['file'], now)
-        out['knowcode'] = score_set(sorted(f for f in callers if f in changed), truth)
+        if 'callers_changed_with' in item:
+            # One call: `history` lists the direct callers changed in the symbol's commits.
+            found = {c['file'] for c in item['callers_changed_with'] if not c.get('test')}
+        else:
+            # A build without it: `impact`'s first hop, in `history`'s commits (two calls).
+            impact = knowcode(binary, env, repo, 'impact', f"{s['file']}:{s['line']}", '-n', '1000')
+            callers = {a['file'] for a in (impact.get('items') or [{}])[0].get('affected', [])
+                       if a.get('hop') == 1 and a.get('class') != 'test'}
+            changed = files_in(repo, full, s['file'], now)
+            found = {f for f in callers if f in changed}
+        out['knowcode'] = score_set(sorted(found), truth)
         grep, _ = git(repo, 'grep', '-lw', s['name'])
         candidates = {f for f in grep.splitlines() if f != s['file'] and not history_labels.TEST_PATH.search(f)}
         for name, shas in plain.items():
