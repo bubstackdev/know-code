@@ -21,6 +21,7 @@ mod removed;
 mod render;
 #[cfg(test)]
 mod repo_walks;
+mod session_hook;
 mod settings;
 mod setup;
 mod uninstall;
@@ -707,11 +708,12 @@ enum Cmd {
     #[command(name = "_refresh-plugin", hide = true)]
     RefreshPlugin,
     /// Run as an agent hook: `claude-code` reads a Claude Code PreToolUse event (Grep, Glob or Bash) on stdin and, when
-    /// the pattern names a symbol the index knows, prints context for the agent. Never fails: on any error it prints
-    /// nothing and exits 0. See integrations/claude-code.
+    /// the pattern names a symbol the index knows, prints context for the agent; `session-start` reads a SessionStart
+    /// event and, where KnowCode has an index, prints a line saying so. Never fails: on any error it prints nothing and
+    /// exits 0. See integrations/claude-code.
     #[command(hide = true)]
     Hook {
-        /// The agent: `claude-code`.
+        /// The hook: `claude-code` or `session-start`.
         agent: String,
     },
     /// Measure index and query latency on indexed repos (for development measurements).
@@ -1266,6 +1268,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         // Any agent but a known one: nothing to add, and the tool runs.
         Cmd::Hook { agent } if agent == "claude-code" => hook::run(),
+        Cmd::Hook { agent } if agent == "session-start" => hook::run_with(session_hook::answer),
         Cmd::Hook { .. } => Ok(()),
         Cmd::Bench { repo, samples } => bench::run(&ops::target_repos(&repo.repos)?, samples, repo.json),
     }

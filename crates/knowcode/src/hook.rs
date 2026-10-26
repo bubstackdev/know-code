@@ -26,6 +26,12 @@ const MAX_NAMES: usize = 3;
 
 /// Runs the hook: reads the PreToolUse JSON on stdin and prints the hook's JSON answer, or nothing. Always exits 0.
 pub fn run() -> ! {
+    run_with(answer)
+}
+
+/// Runs a hook: reads its event's JSON on stdin and prints `answer`'s JSON, or nothing, within the time budget.
+/// Always exits 0.
+pub fn run_with(answer: fn(&Value) -> Option<Value>) -> ! {
     let budget = std::env::var("KNOWCODE_HOOK_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_BUDGET_MS);
     // Fail open on a slow answer: the watchdog ends the process, silently, when the budget runs out.
     std::thread::spawn(move || {
