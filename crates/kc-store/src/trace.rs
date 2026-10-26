@@ -829,7 +829,7 @@ impl Tracer<'_> {
                 let short = container.rsplit('.').next().unwrap_or(container).to_string();
                 let mut stmt = self.conn.prepare_cached(
                     "SELECT DISTINCT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id
-                     WHERE s.name = ?1 COLLATE BINARY ORDER BY r.target_name",
+                     WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY ORDER BY r.target_name",
                 )?;
                 let protocols: Vec<String> = stmt.query_map([&short], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
                 // The members walked through already, so none is walked twice.
@@ -939,7 +939,7 @@ fn through_one_of(conn: &Connection, req: i64, hits: Vec<RefHit>) -> Result<Vec<
 fn supertype_names(conn: &Connection, ty: &str) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare_cached(
         "SELECT DISTINCT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id
-         WHERE s.name = ?1 COLLATE BINARY AND s.kind IN ('class', 'struct', 'protocol', 'extension')",
+         WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('class', 'struct', 'protocol', 'extension')",
     )?;
     let mut out = HashSet::new();
     let mut queue = vec![ty.to_string()];

@@ -6032,7 +6032,7 @@ pub fn conformers_named(conn: &Connection, name: &str, ns: Option<&str>) -> Resu
 fn supertypes(conn: &Connection, ty: &str) -> Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
         "SELECT DISTINCT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id
-         WHERE s.name = ?1 COLLATE BINARY AND s.kind IN ('class', 'struct', 'protocol') ORDER BY r.target_name",
+         WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('class', 'struct', 'protocol') ORDER BY r.target_name",
     )?;
     Ok(stmt.query_map([ty], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
 }
