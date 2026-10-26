@@ -21,7 +21,8 @@ PLUGIN = "knowcode@knowcode-local"
 MARKETPLACE = "knowcode-local"
 # The only settings entries `knowcode setup claude` adds: everything else must survive uninstall unchanged.
 KNOWCODE_ENTRIES = (("enabledPlugins", PLUGIN), ("extraKnownMarketplaces", MARKETPLACE))
-NAMED_PROMPT = "Use the KnowCode kc_context tool to answer: {question}"
+# Names the product, not a tool: the tools a session sees depend on the profile, and change between releases.
+NAMED_PROMPT = "Use KnowCode to answer: {question}"
 
 
 # ---------------------------------------------------------------------------------------------------------- machine

@@ -71,7 +71,7 @@ work), then:
    started with `-l` and stdin from `/dev/null`, never `-i`, and source the rc file an interactive shell reads.
 5. Runs `knowcode setup claude` in each case clone. No index command and no configuration edit.
 6. Asks the operator for two real Claude Code sessions per case, each in a new terminal: unprompted (the manifest's
-   question) and named ("Use the KnowCode kc_context tool to answer: …"). From the client's transcripts it reports,
+   question) and named ("Use KnowCode to answer: …", naming the product rather than a tool, since the tools depend on the profile). From the client's transcripts it reports,
    per session, the prompt, `used_knowcode`, KnowCode calls, other tool calls and seconds to the final answer. These
    numbers are recorded, not gated. `report/knowcode-use.json` holds the same counts in machine-readable form: one row
    per case and session with KnowCode calls by tool, and a total for the unprompted sessions.
