@@ -2,11 +2,6 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
-
-- `index --phases` says instructions and cycles weren't counted on a machine that offers the counters but doesn't
-  count (a virtual Mac reads 0), and shares phases by CPU time there, instead of reporting no work.
-
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
@@ -17,6 +12,8 @@ rise is one session), sessions used about 3.5k more tokens than plain tools as i
 lower-bound question stayed below plain, and agents not told about KnowCode used it in 53 of 80 sessions against the
 67 required, up from 44. The results page reports every run, miss and failure.
 
+- `index --phases` says instructions and cycles weren't counted on a machine that offers the counters but doesn't
+  count (a virtual Mac reads 0), and shares phases by CPU time there, instead of reporting no work.
 - A call to an external client whose method the repo only declares (a `.d.ts` for a package such as
   `jellyfin-apiclient`), and which links to no action, now says so: its note names where the method is declared and
   that the client's code, and so its route, isn't in the workspace. Such calls (`apiClient.markUnplayed(…)`) were
