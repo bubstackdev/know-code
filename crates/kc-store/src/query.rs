@@ -4389,7 +4389,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // the declaring static class's, never the extended type's: `M(a, b)` there calls the class's overload.
             let extended = match &hit.from {
                 Some(f) if cs && f.kind == "method" => {
-                    if !declaring.contains_key(&f.id) {
+                    if let std::collections::hash_map::Entry::Vacant(e) = declaring.entry(f.id) {
                         let d: Option<String> = conn
                             .prepare_cached(
                                 "SELECT CASE WHEN p.container IS NULL THEN p.name ELSE p.container || '.' || p.name END
@@ -4398,7 +4398,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                             .query_map([f.id], |r| r.get(0))?
                             .next()
                             .transpose()?;
-                        declaring.insert(f.id, d);
+                        e.insert(d);
                     }
                     declaring[&f.id].clone()
                 }
