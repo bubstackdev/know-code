@@ -25,4 +25,8 @@
 # phase metering, HTTP linking precision (servers a client calls, conventional and per-app routes, default actions,
 # typed-field receivers, query-appending helpers), MS DI descriptors, statement cites, the session-start hook and the
 # single `kc` tool with its op mapping (36628208, up 331552; measured on main dd3589f's dist build).
-36628208
+# 0.4.1's fixes and the 0.5 build so far: the freshness re-wait and indexed name lookups, SDK type reading from
+# declared clients' node_modules, symbol history, coupled-file ranking, more route forms, the Codex hook's trust status,
+# and the workspace and replay gates' tool fallback (36975376, up 347168; measured on integration/0.5 d2642c8's dist
+# build).
+36975376
