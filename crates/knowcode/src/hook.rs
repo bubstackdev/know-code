@@ -26,6 +26,12 @@ const MAX_NAMES: usize = 3;
 
 /// Runs the hook: reads the PreToolUse JSON on stdin and prints the hook's JSON answer, or nothing. Always exits 0.
 pub fn run() -> ! {
+    run_with(answer)
+}
+
+/// Runs a hook: reads its event's JSON on stdin and prints `answer`'s JSON, or nothing, within the time budget.
+/// Always exits 0.
+pub fn run_with(answer: fn(&Value) -> Option<Value>) -> ! {
     let budget = std::env::var("KNOWCODE_HOOK_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_BUDGET_MS);
     // Fail open on a slow answer: the watchdog ends the process, silently, when the budget runs out.
     std::thread::spawn(move || {
@@ -740,7 +746,7 @@ mod tests {
         };
         let note = bash(&root, "grep -rn \"CartStore\" --include=*.cs .").expect("a grep for a known type gets a note");
         assert!(note.starts_with("KnowCode index: `CartStore` is a class defined at src/Store.cs:2"), "{note}");
-        for t in ["kc_context", "kc_refs", "kc_impact", "kc_locate"] {
+        for t in ["kc_find", "kc_context", "kc_refs", "kc_impact", "kc_search"] {
             assert!(note.contains(&format!("{t} (mcp__plugin_knowcode_knowcode__{t})")), "{note}");
         }
         let note = bash(&base, "cd app && grep -rn \"CartStore\" .").expect("the search runs where `cd` went");

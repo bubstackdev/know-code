@@ -201,9 +201,11 @@ fn claude_removal_is_user_scoped_preserves_extra_bundle_files_and_retries_failur
     assert!(!out.status.success());
     assert!(p.path("config/integrations.json").exists());
     assert!(marketplace.join("knowcode/.mcp.json").exists());
+    assert!(marketplace.join("knowcode/hooks/knowcode-session-start.sh").exists());
     success(c.command(&["uninstall", "--delete-config"]).output().unwrap());
     assert!(!p.path("config/integrations.json").exists());
     assert!(!marketplace.join("knowcode/.mcp.json").exists());
+    assert!(!marketplace.join("knowcode/hooks").exists(), "both hooks go with the bundle");
     assert_eq!(fs::read_to_string(marketplace.join("keep.txt")).unwrap(), "user addition");
     let log = c.log();
     assert!(log.lines().any(|l| l == "plugin uninstall knowcode@knowcode-local --scope user"), "{log}");

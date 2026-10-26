@@ -1844,7 +1844,7 @@ fn config_verb(src: &str, obj: Node) -> Option<String> {
 
 /// The tag a generated API client is named for: `getItemsApi` and `ItemsApi` are `Items`, `OrdersClient` is
 /// `Orders`, `apiClient` and `api` name none (`""`). `None` for a name that isn't an API client's.
-fn api_tag(name: &str) -> Option<String> {
+pub fn api_tag(name: &str) -> Option<String> {
     let lower = name.to_ascii_lowercase();
     let lower = lower.strip_suffix("factory").unwrap_or(&lower);
     let suffix = ["apiclient", "api", "client"].iter().find(|s| lower.ends_with(*s))?;
