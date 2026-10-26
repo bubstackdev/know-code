@@ -6065,7 +6065,7 @@ fn is_repo_file(conn: &rusqlite::Connection, rel: &str) -> Result<bool> {
         || conn.prepare_cached("SELECT 1 FROM cfiles WHERE path = ?1")?.exists([rel])?)
 }
 
-/// Files that historically change in the same commits as `file`, ranked by recency-weighted shared commits. `file`
+/// Files that historically change in the same commits as `file`, ranked by shared commits, then recency. `file`
 /// may be any file of the repo, indexed or not: co-change needs only its history.
 pub fn coupled(file: &str, limit: usize, span: &vitals::Span, args: &Scope) -> Result<Out<Vec<CoupledRepo>>> {
     let roots = target_repos(&args.repos)?;

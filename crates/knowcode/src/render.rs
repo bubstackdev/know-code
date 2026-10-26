@@ -973,7 +973,7 @@ fn coupled_partners(r: &crate::ops::CoupledRepo, root: Option<&Path>) {
         return;
     };
     println!(
-        "{}: {} commits ({}); changed with it, most first by shared commits weighted by age (half per 90 days):",
+        "{}: {} commits ({}); changed with it, most shared commits first (recency: weighted by age, half per 90 days):",
         loc_file(root, &r.file),
         first.coupled.commits,
         r.history
@@ -994,7 +994,7 @@ fn coupled_partners(r: &crate::ops::CoupledRepo, root: Option<&Path>) {
         }
         let tags = if tags.is_empty() { String::new() } else { format!("  ({})", tags.join(", ")) };
         println!(
-            "  {:>3} of {:<3} {:>4.0}%  weight {:<5.2} {}{tags}",
+            "  {:>3} of {:<3} {:>4.0}%  recency {:<5.2} {}{tags}",
             p.coupled.support,
             p.coupled.commits,
             p.coupled.confidence * 100.0,
