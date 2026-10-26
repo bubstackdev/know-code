@@ -2,6 +2,11 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- `index --phases` says instructions and cycles weren't counted on a machine that offers the counters but doesn't
+  count (a virtual Mac reads 0), and shares phases by CPU time there, instead of reporting no work.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
