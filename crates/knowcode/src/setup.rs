@@ -225,8 +225,24 @@ pub(crate) fn is_codex_hook(group: &Table) -> bool {
     })
 }
 
-/// Adds the user-level `[[hooks.SessionStart]]` entry that runs KnowCode's session-start hook, in place of any
-/// earlier one of ours, with the overrides the knowcode server entry ends up with. Other hooks are left alone.
+/// Which session sources the hook runs for. A resumed or forked session already has the line from its first start.
+const CODEX_MATCHER: &str = "^(startup|clear|compact)$";
+
+/// Above the empty entry uninstall leaves where our hook was when the user's own hooks follow it. Codex keys a hook's
+/// trust by its entry's position (`config.toml:session_start:<entry>:<hook>`), so removing an entry would move every
+/// later one and Codex would ask the user to trust them again. An entry with no hooks runs nothing.
+const CODEX_PLACEHOLDER: &str = "# Left by `knowcode uninstall` where its hook was. It runs nothing. It keeps the hooks after it in place, so\n# Codex still trusts them; deleting it makes Codex ask you to trust those hooks again.\n";
+
+/// The empty entry uninstall leaves (or one like it): our matcher and no hooks.
+fn is_codex_placeholder(group: &Table) -> bool {
+    group.get("matcher").and_then(Item::as_str) == Some(CODEX_MATCHER)
+        && group.get("hooks").is_none_or(|h| h.as_array_of_tables().is_some_and(|a| a.is_empty()) || h.as_array().is_some_and(|a| a.is_empty()))
+}
+
+/// Adds the user-level `[[hooks.SessionStart]]` entry that runs KnowCode's session-start hook, with the overrides the
+/// knowcode server entry ends up with. An entry of ours, or the empty one uninstall left, is updated where it is; a new
+/// one goes last. Moving an entry would move the user's hooks after it, and Codex would ask to trust them again. An
+/// entry already as it should be is left as it is, and other hooks are left alone.
 fn codex_hook(doc: &mut DocumentMut, command: &Path) -> Result<()> {
     let env: BTreeMap<String, String> = doc.get("mcp_servers").and_then(|s| s.get("knowcode")).and_then(|k| k.get("env"))
         .and_then(Item::as_table_like).into_iter().flat_map(|t| t.iter())
@@ -240,19 +256,54 @@ fn codex_hook(doc: &mut DocumentMut, command: &Path) -> Result<()> {
     }).as_table_like_mut().context("hooks must be a TOML table")?;
     let groups = hooks.entry("SessionStart").or_insert(Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
         .as_array_of_tables_mut().context("hooks.SessionStart must be an array of tables")?;
-    groups.retain(|g| !is_codex_hook(g));
+    let line = codex_hook_command(command, &env);
+    let ours = (0..groups.len()).find(|&i| groups.get(i).is_some_and(is_codex_hook))
+        .or_else(|| (0..groups.len()).find(|&i| groups.get(i).is_some_and(is_codex_placeholder)));
+    let as_it_should_be = |g: &Table| g.len() == 2 && g.get("matcher").and_then(Item::as_str) == Some(CODEX_MATCHER)
+        && g.get("hooks").and_then(Item::as_array_of_tables).is_some_and(|hooks| hooks.len() == 1 && hooks.get(0).is_some_and(|h| {
+            h.len() == 3 && h.get("type").and_then(Item::as_str) == Some("command")
+                && h.get("command").and_then(Item::as_str) == Some(line.as_str()) && h.get("timeout").and_then(Item::as_integer) == Some(5)
+        }));
+    if ours.and_then(|i| groups.get(i)).is_some_and(as_it_should_be) { return Ok(()); }
     let mut hook = Table::new();
     hook.insert("type", toml_edit::value("command"));
-    hook.insert("command", toml_edit::value(codex_hook_command(command, &env)));
+    hook.insert("command", toml_edit::value(line.as_str()));
     hook.insert("timeout", toml_edit::value(5));
     let mut list = toml_edit::ArrayOfTables::new();
     list.push(hook);
     let mut group = Table::new();
-    // A resumed or forked session already has the line from its first start.
-    group.insert("matcher", toml_edit::value("^(startup|clear|compact)$"));
+    group.insert("matcher", toml_edit::value(CODEX_MATCHER));
     group.insert("hooks", Item::ArrayOfTables(list));
-    groups.push(group);
+    match ours {
+        Some(i) => *groups.get_mut(i).expect("found above") = group,
+        None => groups.push(group),
+    }
     Ok(())
+}
+
+/// Takes out the entry `codex_hook` added. When the user's own hooks follow it, the entry stays, emptied, so they keep
+/// their place and Codex's trust in them (see `CODEX_PLACEHOLDER`). Empty entries of ours left last are removed, and
+/// so are the `[hooks]` tables that leaves empty. Returns whether an emptied entry was left.
+pub(crate) fn remove_codex_hook(doc: &mut DocumentMut) -> bool {
+    let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut()) else { return false };
+    let Some(groups) = hooks.get_mut("SessionStart").and_then(|g| g.as_array_of_tables_mut()) else { return false };
+    let mut changed = false;
+    for i in 0..groups.len() {
+        let group = groups.get_mut(i).expect("in range");
+        if is_codex_hook(group) {
+            let mut placeholder = Table::new();
+            placeholder.insert("matcher", toml_edit::value(CODEX_MATCHER));
+            placeholder.decor_mut().set_prefix(format!("\n{CODEX_PLACEHOLDER}"));
+            *group = placeholder;
+            changed = true;
+        }
+    }
+    if !changed { return false; }
+    while let Some(last) = groups.len().checked_sub(1) && groups.get(last).is_some_and(is_codex_placeholder) { groups.remove(last); }
+    let left = groups.iter().any(is_codex_placeholder);
+    if groups.is_empty() { hooks.remove("SessionStart"); }
+    if hooks.is_empty() { doc.remove("hooks"); }
+    left
 }
 
 fn cursor(directory: &Path, command: &Path, env: &BTreeMap<String, String>, replace: bool) -> Result<()> {
