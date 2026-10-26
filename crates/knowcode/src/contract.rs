@@ -48,11 +48,12 @@ fn entries_of(env: &Value) -> Vec<Incomplete> {
 }
 
 /// Lists around what an answer is about rather than the answer: a symbol's callers, callees and members, the tables its
-/// calls reach, the candidate targets of one reference, its source, the repos read, and strings the size cap shortened
-/// (`…`). Cut, they leave the answer whole and the rest is a call away (`more`). The lists an answer is about (its
-/// `items`, implementations, DI registrations, links, a walk's nodes) are cut last by the size cap (`mcp::answer_list`),
-/// and cut, they make it incomplete.
-const SIDE_LISTS: &[&str] = &["callers", "callees", "members", "touches_tables", "touches", "targets", "source", "repos", "…"];
+/// calls reach, the candidate targets of one reference, its source, the repos read, the files changed with a symbol
+/// (`history`), and strings the size cap shortened (`…`). Cut, they leave the answer whole and the rest is a call away
+/// (`more`). The lists an answer is about (its `items`, implementations, DI registrations, links, a walk's nodes) are
+/// cut last by the size cap (`mcp::answer_list`), and cut, they make it incomplete.
+const SIDE_LISTS: &[&str] =
+    &["callers", "callees", "members", "touches_tables", "touches", "targets", "source", "repos", "changed_with", "…"];
 
 /// Whether `i` says a list on the side of what was asked was cut, by a limit or to fit the size budget: one of
 /// [`SIDE_LISTS`], cites past the first few quoting only their place, or the answer's own `items` cut by their limit

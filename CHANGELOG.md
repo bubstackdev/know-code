@@ -56,6 +56,14 @@ measure what KnowCode returns, and make no claim about how agents use it.
   false hop-2 rows). In an extension method an unqualified call is the declaring class's (its overload, or an
   extension called in static form), never the extended type's member; an extension whose `this` parameter starts a
   line is recognised as one.
+- `history SYMBOL` (`kc_history`; `kc {op: history, q: …}`): one definition's git history, read over the lines the
+  index says it spans. It lists the commits that changed those lines (`git log -L`, through edits and renames of the
+  file), the newest and, when the whole history was read, the oldest, who last changed its current lines (`git blame
+  -w` over the definition), and the files changed in the same commits (commits of more than 50 files left out). A
+  method's history is its own, not its file's. Uncommitted edits that move it are allowed for. It reads at most 200
+  commits, and the MCP server stops git at the call's time budget, keeping what it read; the answer says when
+  either happened. `history deepen` is unchanged. On the history-v1 development questions (public repositories at
+  full history, labels from git alone), it answers the 10 method-level questions exactly.
 - A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
   written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
   `const url = 'Videos/' + itemId + '/Subtitles/' + index` passed to `apiClient.getUrl(url)`, which weren't read

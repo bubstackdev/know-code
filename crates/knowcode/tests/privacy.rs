@@ -196,6 +196,7 @@ const QUESTIONS: &[&[&str]] = &[
     &["status"],
     &["files"],
     &["fetch-deps", "--into", "../fetched", "--dry-run"],
+    &["history", "shared_helper"],
     &["history", "deepen"],
 ];
 
@@ -559,6 +560,7 @@ fn invariant_no_mcp_tool_shows_blocked_content() {
         ("kc_hotspots", json!({ "workspace": true })),
         ("kc_ownership", json!({})),
         ("kc_reviewers", json!({ "files": ["src/helpers.py"] })),
+        ("kc_history", json!({ "symbol": "shared_helper" })),
         ("kc_overview", json!({})),
         ("kc_overview", json!({ "workspace": true })),
         ("kc_areas", json!({})),

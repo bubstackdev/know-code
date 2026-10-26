@@ -655,10 +655,24 @@ enum Cmd {
     /// remotes; DIR must be outside every repo. Uses your git credentials; the MCP server never clones.
     #[command(name = "fetch-deps")]
     FetchDeps(fetch::Options),
-    /// Git history for the history-based answers (hotspots, coupled, ownership, reviewers).
+    /// One definition's git history, read over the lines it spans: the commits that changed it (`git log -L`), its
+    /// first and last change, who wrote its current lines (`git blame -w`) and the files changed in the same commits.
+    /// `history deepen` fetches more history into a shallow clone instead.
+    #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
     History {
         #[command(subcommand)]
-        action: HistoryCmd,
+        action: Option<HistoryCmd>,
+        /// A name, `Type.member`, `file:line` or `path#name`.
+        #[arg(required = true)]
+        symbol: Option<String>,
+        /// Commits listed at most (the rest are counted).
+        #[arg(long, short = 'n', default_value_t = 10)]
+        limit: usize,
+        /// Only commits since this date (`2025-01-01`, `90 days ago`).
+        #[arg(long)]
+        since: Option<String>,
+        #[command(flatten)]
+        repo: RepoArgs,
     },
     /// Index coverage, freshness and schema.
     Status {
@@ -1224,7 +1238,12 @@ fn run(cli: Cli) -> Result<()> {
             served
         }
         Cmd::FetchDeps(options) => fetch::run(options),
-        Cmd::History { action: HistoryCmd::Deepen(options) } => history::deepen(options),
+        Cmd::History { action: Some(HistoryCmd::Deepen(options)), .. } => history::deepen(options),
+        Cmd::History { action: None, symbol, limit, since, repo } => {
+            let p = history::HistoryParams { symbol: symbol.unwrap_or_default(), limit, since };
+            let out = history::symbol_history(&p, &repo.scope())?;
+            emit(&repo, &out.env, || render::history(&out.data, &p))
+        }
         Cmd::Deps { repo } => {
             let out = ops::deps(&repo.scope(), true)?;
             emit(&repo, &out.env, || render::deps(&out.data.packages, &out.data.edges))

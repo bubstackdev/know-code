@@ -29,7 +29,8 @@ ONE_OPS = {'impact': ('symbol', ''), 'find': ('query', ''), 'refs': ('name', 'na
            'search': ('pattern', ''), 'locate': ('query', 'queries'), 'more': ('cursor', ''), 'help': ('topic', ''),
            'trace': ('symbol', ''), 'path': ('from', ''), 'flow': ('entry', ''), 'symbol_at': ('file', ''),
            'unused': ('', ''), 'rename_preview': ('symbol', ''), 'coupled': ('file', ''), 'tests': ('targets', 'targets'),
-           'hotspots': ('', ''), 'ownership': ('path', ''), 'reviewers': ('files', 'files'), 'overview': ('focus', ''),
+           'hotspots': ('', ''), 'ownership': ('path', ''), 'reviewers': ('files', 'files'), 'history': ('symbol', ''),
+           'overview': ('focus', ''),
            'areas': ('area', ''), 'notes': ('symbol', ''), 'note_add': ('symbol', ''), 'grep_ast': ('pattern', ''),
            'status': ('', '')}
 ONE_LISTS = ('targets', 'files')

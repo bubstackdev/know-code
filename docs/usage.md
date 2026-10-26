@@ -95,13 +95,19 @@ base commit (`removed`), and warns about usual partners the diff leaves alone (`
 | --- | --- | --- |
 | Files that keep hurting: churn, fix commits, complexity, coupling, health; one file's code-health biomarkers | `knowcode hotspots [FILE]` | `kc_hotspots` |
 | Historical contribution: top contributor, truck factor, share of lines by former authors; surviving lines for a file | `knowcode ownership [PATH]` | `kc_ownership` |
+| One symbol's history: the commits that changed its lines, its first and last change, who wrote its current lines, the files changed in the same commits | `knowcode history SYMBOL` | `kc_history` |
 
 These read local git history only. They measure history, not who understands the code today.
+
+`history` reads a definition's history over the lines the index says it spans, with `git log -L`, so a method's
+history is its own, not its file's: `git log -L :Name:file` needs a function-name rule that git's default doesn't
+have for indented C# members, and `git log -S Name` counts calls and other overloads. It reads at most 200 commits;
+in the MCP server it stops at the call's time budget and keeps what it read. Either is said in the answer.
 
 A shallow clone (`git clone --depth 1`, common in CI and in `fetch-deps`) has little or no history to read.
 `knowcode history deepen` fetches more: `git fetch --deepen=1000` by default, `--by N` for another number of
 commits, or `--since DATE` (`git fetch --shallow-since`). It reports the commits before and after and, for each of
-`hotspots`, `coupled` (their 365-day window), `ownership` and `reviewers` (all history), whether it now has
+`hotspots`, `coupled` (their 365-day window), `ownership`, `reviewers` and `history` (all history), whether it now has
 everything it reads (`complete`), some (`partial`) or nothing (`none`). It writes nothing but what that fetch writes,
 and leaves a clone that isn't shallow alone. It is a CLI command only: the MCP server never fetches.
 
@@ -240,7 +246,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 25 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 26 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
@@ -281,6 +287,7 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_hotspots` | `hotspots` | `kc_hotspots` |
 | `kc_ownership` | `ownership` | `kc_ownership` |
 | `kc_reviewers` | `reviewers` | `kc_reviewers` |
+| `kc_history` | `history` | `kc_history` |
 | `kc_overview` | `overview`, `deps` | `kc_overview` |
 | `kc_areas` | `areas` | `kc_areas` |
 | `kc_notes` | `note list` | `kc_notes` |
@@ -333,6 +340,7 @@ Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not re
 | `tables` | `--all-callers` |
 | `routes`, `events`, `deps` | |
 | `fetch-deps` | `--into DIR` (required), `--dry-run`, `--full`, `--add-root`, `--include-blocked` |
+| `history` | `-n/--limit`, `--since DATE` |
 | `history deepen` | `--by N`, `--since DATE` |
 | `note add` | `--tag` |
 | `note export`, `note import` | `--repo` |

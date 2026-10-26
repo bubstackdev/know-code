@@ -386,6 +386,20 @@ pub struct OwnershipParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryParams {
+    /// A name, `Type.member` or [repo/]file:line.
+    pub symbol: String,
+    /// Commits to list (default 10).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Only commits since this date (`2025-01-01`, `90 days ago`).
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReviewersParams {
     /// Changed files.
     #[serde(default)]
@@ -614,6 +628,7 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("hotspots", "", ""),
     ("ownership", "path", ""),
     ("reviewers", "files", "files"),
+    ("history", "symbol", ""),
     ("overview", "focus", ""),
     ("areas", "area", ""),
     ("notes", "symbol", ""),
@@ -793,6 +808,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_hotspots", &[]),
     ("kc_ownership", &[("path", "")]),
     ("kc_reviewers", &[("files", ""), ("diff", "`working` or a git revision.")]),
+    ("kc_history", &[("symbol", "")]),
     ("kc_overview", &[]),
     ("kc_areas", &[("area", "")]),
     ("kc_notes", &[("symbol", "")]),
@@ -2289,6 +2305,17 @@ impl KnowcodeServer {
         .await
     }
 
+    #[tool(description = "A symbol's git history: commits that changed it, first and last, who wrote it, files changed with it.")]
+    async fn kc_history(&self, Parameters(p): Parameters<HistoryParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = format!("no definition {}", p.symbol);
+            let params = crate::history::HistoryParams { symbol: p.symbol, limit: p.limit.unwrap_or(10), since: p.since };
+            Ok(explain(crate::history::symbol_history(&params, &scope)?.env, &what, "limit"))
+        })
+        .await
+    }
+
     #[tool(description = "Who could review a change (files or a diff), by recent lines written.")]
     async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
@@ -2453,6 +2480,7 @@ impl KnowcodeServer {
             "kc_hotspots" => self.kc_hotspots(a(t, args)?).await,
             "kc_ownership" => self.kc_ownership(a(t, args)?).await,
             "kc_reviewers" => self.kc_reviewers(a(t, args)?).await,
+            "kc_history" => self.kc_history(a(t, args)?).await,
             "kc_overview" => self.kc_overview(a(t, args)?).await,
             "kc_areas" => self.kc_areas(a(t, args)?).await,
             "kc_notes" => self.kc_notes(a(t, args)?).await,
@@ -2758,6 +2786,7 @@ mod tests {
             "kc_hotspots" => as_::<HotspotsParams>(args),
             "kc_ownership" => as_::<OwnershipParams>(args),
             "kc_reviewers" => as_::<ReviewersParams>(args),
+            "kc_history" => as_::<HistoryParams>(args),
             "kc_overview" => as_::<OverviewParams>(args),
             "kc_areas" => as_::<AreasParams>(args),
             "kc_notes" => as_::<NotesParams>(args),
@@ -3305,6 +3334,7 @@ mod tests {
                 ("kc_hotspots", s.kc_hotspots(p(json!({}))).await),
                 ("kc_ownership", s.kc_ownership(p(json!({}))).await),
                 ("kc_reviewers", s.kc_reviewers(p(json!({ "files": ["src/Orders.cs"] }))).await),
+                ("kc_history", s.kc_history(p(json!({ "symbol": "Orders.Place" }))).await),
                 ("kc_overview", s.kc_overview(p(json!({}))).await),
                 ("kc_areas", s.kc_areas(p(json!({}))).await),
                 ("kc_notes", s.kc_notes(p(json!({}))).await),

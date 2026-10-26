@@ -616,6 +616,23 @@ leaving: the files they are top contributor of (`top_contributor_files`, `top_co
 since its boundary (coverage.shallow)."#,
     },
     Topic {
+        name: "kc_history",
+        summary: "one symbol's git history: its commits, first and last change, writers, files changed with it",
+        text: r#"One definition's git history, read over the lines the index says it spans (the method, not its file):
+`commits`, every commit that changed those lines, newest first (`git log -L`, which follows them through edits and
+renames of the file; whitespace changes count), each with sha, date, author (after .mailmap) and subject; `last`, the
+newest; `first`, the oldest, given only when the whole history was read; `commits_total`. `writers`: who last changed
+its current lines (git blame of the working tree, whitespace ignored; `writers_uncommitted` and `writers_automated`
+counted apart). `changed_with`: the files changed in those commits, by shared commits (`changed_with_total`; commits of
+more than 50 files left out and counted in `sweeps`). `since` keeps commits since a date (`2025-01-01`, `90 days ago`).
+
+Give the symbol as a name, `Type.member` or file:line; when several definitions match (overloads), the first is read
+and `others` lists the rest: ask with file:line for another. Uncommitted edits that move the lines are allowed for
+(`lines_at_head`); a definition whose declaration line isn't committed as it is has no history. Bounded: at most 200
+commits, and the MCP server stops git at the call's time budget, keeping what it read; either is said in
+`incomplete`. A shallow clone only knows history since its boundary (`knowcode history deepen`)."#,
+    },
+    Topic {
         name: "kc_reviewers",
         summary: "who could review a change",
         text: r#"Who could review a change: give files or diff ("working" or a git revision). Authors ranked by recent
@@ -754,10 +771,10 @@ repos blocked whole. `workspace` for every indexed repo."#,
         summary: "the one tool of the default profile: every tool as an `op`",
         text: r#"The default profile (`one`) advertises a single tool, `kc`, so a client carries one schema on every turn.
 `op` names the tool to run, without `kc_`: impact, find, refs, context, search, locate, more and help, and every other
-tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, overview,
-areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
+tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, history,
+overview, areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
 
-- impact, context, trace, rename_preview, notes, note_add: `symbol`; context: `symbols` from `qs`
+- impact, context, trace, rename_preview, history, notes, note_add: `symbol`; context: `symbols` from `qs`
 - find: `query`; locate: `query`, `queries` from `qs`
 - refs: `name`, `names` from `qs`
 - search, grep_ast: `pattern`
