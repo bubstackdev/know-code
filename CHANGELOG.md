@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A query that joined indexing already under way could answer from the index as it was before a file's latest
+  edit, and call that answer complete: the edit's new symbol was missing with nothing said. When the job it joined
+  finishes and the working tree still differs from the index, the query now waits on a new one, within the same
+  budget, or says the repo is still being indexed.
 - `history` lists a symbol's direct callers whose files changed in its commits (`callers_changed_with`), each with
   how many of its commits and the newest few, tests marked; `callers_total` counts every direct caller. Callers come
   from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits

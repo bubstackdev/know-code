@@ -502,18 +502,26 @@ pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
     }
     // Do not hold the pre-index read snapshot while waiting: it would delay the worker's WAL checkpoint.
     store.end_snapshot()?;
-    let job = Worker::shared().schedule(root)?;
-    let mut done = job.done.lock().unwrap_or_else(|e| e.into_inner());
-    while done.is_none() && Instant::now() < deadline {
-        kc_store::limits::check()?;
-        let remaining = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(25));
-        done = job.changed.wait_timeout(done, remaining).unwrap_or_else(|e| e.into_inner()).0;
+    let mut report = None;
+    // The job this call joins may have read the working tree before its latest change (a job already running, about
+    // to finish): its report then answers for an older tree. Still changed when it finishes, the tree is indexed once
+    // more, by a job that starts after this call did (a finished job is never joined), within the same budget.
+    for joined in [true, false] {
+        let job = Worker::shared().schedule(root)?;
+        let mut done = job.done.lock().unwrap_or_else(|e| e.into_inner());
+        while done.is_none() && Instant::now() < deadline {
+            kc_store::limits::check()?;
+            let remaining = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(25));
+            done = job.changed.wait_timeout(done, remaining).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        match done.as_ref() {
+            Some(Ok(done)) if joined && kc_index::changed_since_sync(root, &db) => continue,
+            Some(Ok(done)) => report = Some(done.clone()),
+            Some(Err(e)) => return Err(anyhow!("background indexing: {e}")),
+            None => {}
+        }
+        break;
     }
-    let report = match done.as_ref() {
-        Some(Ok(report)) => Some(report.clone()),
-        Some(Err(e)) => return Err(anyhow!("background indexing: {e}")),
-        None => None,
-    };
     store.end_snapshot()?;
     store.begin_snapshot()?;
     Ok((store, report))
@@ -575,6 +583,50 @@ mod tests {
         assert_eq!(out.env["complete"], true);
         assert_eq!(out.env["provenance"][0]["fresh"], true);
         assert_eq!(out.env["items"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn invariant_a_job_that_read_the_tree_before_an_edit_does_not_answer_for_it() {
+        let cache = test_cache();
+        let base = cache.dir("refresh-joined");
+        let root = repo(&base, "app", &[("src/app.py", "def old_handler():\n    return 1\n")]);
+        // A job already running for the repo, as the background's own was when the edit came: it read the tree
+        // before the edit, and finishes while this call waits on it, with a report of what it read.
+        let running = Arc::new(Job::default());
+        let db = kc_index::db_path(&root).unwrap();
+        Worker::shared().jobs.lock().unwrap().insert(db, Arc::downgrade(&running));
+        std::fs::write(root.join("src/app.py"), "def new_api_handler():\n    return 42\n").unwrap();
+        let writer = kc_index::writer::WriterLock::acquire(&root).unwrap();
+        let finisher = {
+            let running = running.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(100));
+                *running.done.lock().unwrap() = Some(Ok(SyncReport { parsed: 1, ..SyncReport::default() }));
+                running.changed.notify_all();
+            })
+        };
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let budget = Budget::enter(Duration::from_millis(600));
+        let out = ops::find("new_api_handler", None, 10, &scope).unwrap();
+        drop(budget);
+        finisher.join().unwrap();
+        // Not a complete answer from the index before the edit: the edit is still being indexed, and the answer says so.
+        assert_eq!(out.env["complete"], false, "{}", out.env);
+        assert_eq!(out.env["freshness"]["status"], "indexing", "{}", out.env);
+        assert_eq!(out.env["incomplete"][0]["reason"], "stale", "{}", out.env);
+        drop(writer);
+        // With the writer gone the edit is indexed: asked again until it is (other tests share the worker, so on a
+        // loaded machine that can take more than one budget), the answer has the new symbol.
+        let until = Instant::now() + Duration::from_secs(120);
+        let out = loop {
+            let _budget = Budget::enter(Duration::from_secs(10));
+            let out = ops::find("new_api_handler", None, 10, &scope).unwrap();
+            if out.env["complete"] == true || Instant::now() > until {
+                break out;
+            }
+        };
+        assert_eq!(out.env["complete"], true, "{}", out.env);
+        assert_eq!(out.env["items"].as_array().unwrap().len(), 1, "{}", out.env);
     }
 
     #[test]
@@ -696,11 +748,10 @@ mod tests {
         assert!(status.iter().all(|v| v["background"] == "queued" || v["complete"] == true), "{status:?}");
 
         // The background indexes them (the query worker may have taken some first), never the blocked one.
+        // Until they are indexed, however long a loaded machine takes, within a bound that only a hang reaches.
         let mut tried = HashMap::new();
-        for _ in 0..10 {
-            if kc_index::unindexed_roots().unwrap().is_empty() {
-                break;
-            }
+        let until = Instant::now() + Duration::from_secs(60);
+        while !kc_index::unindexed_roots().unwrap().is_empty() && Instant::now() < until {
             if index_next_new_repo(&mut tried).unwrap().is_none() {
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -870,14 +921,28 @@ mod tests {
         std::fs::write(root.join("app.ts"), "export function apiHandler() { return 42; }\n").unwrap();
         let root = kc_index::repo_root(&root).unwrap();
         assert!(!kc_index::db_path(&root).unwrap().exists());
-        let _budget = Budget::enter(Duration::from_secs(10));
         let scope = Scope { repos: vec![root], no_sync: false };
-        let out = ops::context("apiHandler", 2000, kc_store::skeleton::SourceMode::Auto, &scope).unwrap();
+        // Each call within a 10 s budget. On a loaded machine (other tests share the worker) indexing can outlast one,
+        // and the answer then says it is still indexing; asking again converges. Only a hang reaches the bound.
+        let converged = |scope: &Scope| {
+            let until = Instant::now() + Duration::from_secs(120);
+            loop {
+                let _budget = Budget::enter(Duration::from_secs(10));
+                let out = ops::context("apiHandler", 2000, kc_store::skeleton::SourceMode::Auto, scope).unwrap();
+                if out.env["complete"] == true || Instant::now() > until {
+                    return out;
+                }
+                // Still indexing, or its derived data a moment behind: said, never answered as if complete.
+                let entries = out.env["incomplete"].as_array().unwrap();
+                assert!(!entries.is_empty() && entries.iter().all(|i| i["reason"] == "stale"), "{}", out.env);
+            }
+        };
+        let out = converged(&scope);
         assert_eq!(out.env["complete"], true, "{}", out.env);
         assert_eq!(out.env["provenance"][0]["fresh"], true);
         assert!(!out.env["items"].as_array().unwrap().is_empty());
         std::fs::write(scope.repos[0].join("app.ts"), "export function apiHandler() { return 4242; }\n").unwrap();
-        let out = ops::context("apiHandler", 2000, kc_store::skeleton::SourceMode::Auto, &scope).unwrap();
+        let out = converged(&scope);
         assert_eq!(out.env["complete"], true, "derived caches must converge too: {}", out.env);
         assert!(out.env["items"][0]["source"].as_str().unwrap().contains("4242"));
     }

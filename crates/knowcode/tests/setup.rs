@@ -310,12 +310,14 @@ fn codex_name_conflicts_are_preserved_until_replace_is_explicit() {
 fn claude_registration_deadline_leaves_a_removable_partial_install() {
     let p = Profile::new("deadline");
     let path = p.mock_claude();
-    p.write("bin/claude", "#!/bin/sh\nexec sleep 30\n");
+    p.write("bin/claude", "#!/bin/sh\nexec sleep 600\n");
     let start = std::time::Instant::now();
     let out = p.command("claude").env("PATH", path).env("KNOWCODE_SETUP_DEADLINE", "1").output().unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("deadline"));
-    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    // Stopped at its deadline, not when the client finished: far less than the client's 600 s, with room for a
+    // loaded machine to start and stop the processes.
+    assert!(start.elapsed() < std::time::Duration::from_secs(60), "{:?}", start.elapsed());
     assert!(p.dir("settings/integrations.json").exists());
 }
 

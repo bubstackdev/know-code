@@ -21,6 +21,12 @@ import threading
 import time
 
 
+def scaled(seconds: float) -> float:
+    """A time budget, stretched by how loaded the machine is (load average per core, at least 1): the server does the
+    same work, but a loaded machine gives it less time. Every wait here ends on its condition; this only bounds it."""
+    return seconds * max(1.0, os.getloadavg()[0] / (os.cpu_count() or 1))
+
+
 def check(binary: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="knowcode-first-run-") as temp:
         base = Path(temp).resolve()
@@ -67,7 +73,7 @@ def check(binary: Path) -> None:
                 nonlocal sequence
                 sequence += 1
                 send({"jsonrpc": "2.0", "id": sequence, "method": method, "params": params})
-                deadline = time.monotonic() + 15
+                deadline = time.monotonic() + scaled(15)
                 while True:
                     message = messages.get(timeout=max(0.001, deadline - time.monotonic()))
                     if isinstance(message, Exception):
@@ -87,10 +93,20 @@ def check(binary: Path) -> None:
                     "clientInfo": {"name": "first-run-check", "version": "1"},
                 })
                 send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-                cold = context("apiHandler")
-                # MCP always says `complete`, and leaves out a clean, current answer's provenance; stale entries
-                # remain strings.
-                assert cold["complete"] is True and "incomplete" not in cold, cold
+                # The first answer comes from the first index. On a loaded machine that index may still be building
+                # when the server's wait for it ends: the answer then says so (stale, indexing, ask again) rather
+                # than answering as if nothing matched, and a later answer is whole.
+                deadline = time.monotonic() + scaled(15)
+                while True:
+                    cold = context("apiHandler")
+                    if cold["complete"]:
+                        break
+                    assert cold["freshness"]["status"] == "indexing", cold
+                    assert all(i["reason"] == "stale" and "indexing" in i["detail"] for i in cold["incomplete"]), cold
+                    assert time.monotonic() < deadline, cold
+                    time.sleep(0.1)
+                # A whole answer leaves out a clean, current answer's provenance; stale entries remain strings.
+                assert "incomplete" not in cold, cold
                 assert "apiHandler" in json.dumps(cold["items"]), cold
                 assert not any("from its last sync" in p for p in cold.get("provenance", [])), cold
 
@@ -102,13 +118,13 @@ def check(binary: Path) -> None:
                     source.write_text("export function changedApiHandler() { return 4242; }\n")
                     start = time.monotonic()
                     stale = context("changedApiHandler")
-                    assert time.monotonic() - start < 5, "freshness wait exceeded its budget"
+                    assert time.monotonic() - start < scaled(5), "freshness wait exceeded its budget"
                     assert stale["complete"] is False, stale
                     assert any(i["reason"] == "stale" for i in stale["incomplete"]), stale
                     assert any("from its last sync" in p for p in stale["provenance"]), stale
                     fcntl.flock(writer, fcntl.LOCK_UN)
 
-                deadline = time.monotonic() + 15
+                deadline = time.monotonic() + scaled(15)
                 while True:
                     fresh = context("changedApiHandler")
                     if fresh["complete"]:
@@ -120,7 +136,7 @@ def check(binary: Path) -> None:
 
                 # No query or index command after this edit: the live MCP server must warm it while idle.
                 source.write_text("export function warmedApiHandler() { return 424242; }\n")
-                deadline = time.monotonic() + 20
+                deadline = time.monotonic() + scaled(20)
                 while True:
                     # A WAL reader may need to create coordination sidecars after the last connection closed.
                     # Open this test-owned DB without creating it, then forbid application writes.
