@@ -8,17 +8,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import io
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
 
 API = "https://api.github.com/repos/bubstackdev/knowcode/releases/latest"
 RELEASES = "https://github.com/bubstackdev/knowcode/releases/download"
+LATEST = "https://github.com/bubstackdev/knowcode/releases/latest"
+# The release archive self-update falls back to on this platform, as dist-workspace.toml names its targets.
+TARGET = {("Darwin", "arm64"): "aarch64-apple-darwin", ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
+          ("Linux", "aarch64"): "aarch64-unknown-linux-gnu"}.get((platform.system(), platform.machine()))
 
 
 def check(binary: Path) -> None:
@@ -27,6 +34,7 @@ def check(binary: Path) -> None:
                                      check=True).stdout.split()[-1].split(".")
     new = f"{major}.{int(minor) + 1}.0"
     download = f"{RELEASES}/v{new}/knowcode-installer.sh"
+    archive_url = f"{RELEASES}/v{new}/knowcode-{TARGET}.tar.gz"
     with tempfile.TemporaryDirectory(prefix="knowcode-update-check-") as temp:
         root = Path(temp).resolve()
         subprocess.run(["git", "init", "--quiet", str(root)], check=True)
@@ -35,24 +43,47 @@ def check(binary: Path) -> None:
         tools.mkdir()
         curl = tools / "curl"
         # The production endpoint is never overridden. A local executable intercepts every request and
-        # rejects any URL other than the two public release URLs this fixture explicitly permits.
+        # rejects any URL other than the public release URLs this fixture explicitly permits. `api-reset` makes the
+        # API refuse as it does once a network's rate limit is spent; `page-down` makes the release page fail too.
         curl.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, sys, time
 args = sys.argv[1:]
 assert args[0] == "--disable", args
 url = args[-1]
 base = pathlib.Path(os.environ["UPDATE_FIXTURE"])
+headers = pathlib.Path(args[args.index("--dump-header") + 1]) if "--dump-header" in args else None
+auth = [a[1:] for i, a in enumerate(args) if i and args[i - 1] == "--header" and a.startswith("@")]
 with (base / "requests").open("a") as f:
-    f.write(json.dumps({"url": url, "args": args, "cwd": os.getcwd()}) + "\\n")
+    f.write(json.dumps({"url": url, "args": args, "cwd": os.getcwd(),
+                        "auth": pathlib.Path(auth[0]).read_text() if auth else None}) + "\\n")
 if os.environ.get("MOCK_CURL_SLEEP"):
     time.sleep(float(os.environ["MOCK_CURL_SLEEP"]))
+def fail(status, code):
+    sys.stderr.write(f"curl: ({code}) The requested URL returned error: {status}\\n")
+    raise SystemExit(code)
 if url == "https://api.github.com/repos/bubstackdev/knowcode/releases/latest":
+    if (base / "api-reset").exists():
+        headers.write_text("HTTP/2 403 \\r\\nx-ratelimit-limit: 60\\r\\nx-ratelimit-remaining: 0\\r\\n"
+                           f"x-ratelimit-reset: {(base / 'api-reset').read_text()}\\r\\n\\r\\n")
+        fail(403, 56)
     source = base / "release.json"
+elif url == "@LATEST@":
+    assert "--location" not in args and not auth, args
+    if (base / "page-down").exists():
+        fail(503, 22)
+    headers.write_text("HTTP/2 302 \\r\\nlocation: @TAG@\\r\\ncontent-length: 0\\r\\n\\r\\n")
+    raise SystemExit(0)
 elif url == "@DOWNLOAD@":
     source = base / "installer.sh"
+elif url == "@ARCHIVE@":
+    source = base / "archive.tar.gz"
+elif url == "@ARCHIVE@.sha256":
+    source = base / "archive.sha256"
 else:
     raise SystemExit("unexpected URL: " + url)
+assert not auth or url.startswith("https://api.github.com/"), "the token goes only to the API"
 pathlib.Path(args[args.index("--output") + 1]).write_bytes(source.read_bytes())
-'''.replace("@DOWNLOAD@", download))
+'''.replace("@DOWNLOAD@", download).replace("@ARCHIVE@", archive_url).replace("@LATEST@", LATEST)
+            .replace("@TAG@", f"https://github.com/bubstackdev/knowcode/releases/tag/v{new}"))
         curl.chmod(0o700)
         env = dict(os.environ)
         env.update(PATH=str(tools) + os.pathsep + env["PATH"], UPDATE_FIXTURE=str(root),
@@ -223,7 +254,85 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         state_path.write_text(known)
         notice = run("status", extra={"KNOWCODE_UPDATE_CHECK": "1"})
         assert f"v{new} is available; run `knowcode self-update`." in notice.stderr, notice.stderr
-    print("update checks passed: isolated metadata, opt-out, daily coordination, receipt ownership, checksum rejection, rollback, deadlines, Homebrew installs")
+
+        # A token, when set, goes to the API in a private header file, never in curl's arguments.
+        state_path.unlink(missing_ok=True)
+        requests.unlink()
+        token = "fixture-token-not-a-secret"
+        checked = run("self-update", "--check", extra={"KNOWCODE_GITHUB_TOKEN": token})
+        assert new in checked.stdout and [c["url"] for c in calls()] == [API], calls()
+        assert calls()[0]["auth"] == f"Authorization: Bearer {token}\n" and token not in json.dumps(calls()[0]["args"])
+        assert not list((root / "cache/updates").glob(".knowcode-update-*")), "scratch with the token header was kept"
+
+        # GitHub's API refuses once a network's unauthenticated rate limit is spent. The release page names the
+        # latest tag, the archive is checked against the checksum published beside it, and the API is not asked
+        # again until the limit resets.
+        if TARGET is None:
+            print(f"skipping the release archive fallback: no release archive for {platform.system()} {platform.machine()}")
+        else:
+            reset_at = int(time.time()) + 1800
+            (root / "api-reset").write_text(str(reset_at))
+            binary_script = f'#!/bin/sh\necho "${{1:-}}" >> "$UPDATE_FIXTURE/invoked"\nprintf "knowcode {new}\\n"\n'
+            def archive(script: str, digest: str | None = None) -> None:
+                buffer = io.BytesIO()
+                with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+                    for name, text, mode in ((f"knowcode-{TARGET}/knowcode", script, 0o755), (f"knowcode-{TARGET}/README.md", "x", 0o644)):
+                        info = tarfile.TarInfo(name)
+                        info.size, info.mode = len(text.encode()), mode
+                        tar.addfile(info, io.BytesIO(text.encode()))
+                (root / "archive.tar.gz").write_bytes(buffer.getvalue())
+                digest = digest or hashlib.sha256(buffer.getvalue()).hexdigest()
+                (root / "archive.sha256").write_text(f"{digest} *knowcode-{TARGET}.tar.gz\n")
+            archive(binary_script)
+            release(good_script)
+            reset()
+            state_path.unlink(missing_ok=True)
+            checked = run("self-update", "--check", executable=installed)
+            assert new in checked.stdout and [c["url"] for c in calls()] == [API, LATEST], calls()
+            assert json.loads(state_path.read_text())["api_retry_at"] == reset_at
+            requests.unlink()
+            (root / "invoked").unlink(missing_ok=True)
+            run("self-update", executable=installed)
+            assert [c["url"] for c in calls()] == [LATEST, archive_url + ".sha256", archive_url], calls()
+            assert (root / "invoked").read_text().split() == ["--version", "_refresh-plugin"]
+            assert run("--version", executable=installed).stdout.strip() == f"knowcode {new}"
+            assert receipt.read_text() == receipt_text
+
+            # The fallback never installs without its checksum: a mismatch, or no line for the archive, installs nothing.
+            for digest in ("0" * 64, None):
+                reset()
+                archive(binary_script, digest)
+                if digest is None:
+                    (root / "archive.sha256").write_text(f"{'0' * 64} *knowcode-other.tar.gz\n")
+                bad = run("self-update", executable=installed, ok=False)
+                assert ("checksum mismatch" if digest else "does not list its archive") in bad.stderr, bad.stderr
+                assert installed.read_bytes() == original and receipt.read_text() == receipt_text
+
+            # Both refused: say why, and when to try again.
+            state_path.unlink(missing_ok=True)
+            requests.unlink()
+            (root / "page-down").write_text("")
+            failed = run("self-update", "--check", ok=False)
+            expected = (f"GitHub's API rate limit for this network is used up; try again after "
+                        f"{time.strftime('%H:%M', time.localtime(reset_at))}, or set KNOWCODE_GITHUB_TOKEN")
+            assert expected in failed.stderr and [c["url"] for c in calls()] == [API, LATEST], failed.stderr
+            (root / "page-down").unlink()
+
+            # The automatic check reads the release page too, says nothing about the refusal, and holds the API.
+            state_path.unlink(missing_ok=True)
+            requests.unlink()
+            quiet = run("status", extra={"KNOWCODE_UPDATE_CHECK": "1"})
+            until = time.monotonic() + 10
+            while time.monotonic() < until:
+                state = json.loads(state_path.read_text()) if state_path.exists() else {}
+                if state.get("last_success"):
+                    break
+                time.sleep(0.02)
+            assert state.get("latest") == f"v{new}" and state.get("api_retry_at") == reset_at, state
+            assert [c["url"] for c in calls()] == [API, LATEST], calls()
+            assert "rate limit" not in quiet.stderr and "403" not in quiet.stderr, quiet.stderr
+            (root / "api-reset").unlink()
+    print("update checks passed: isolated metadata, opt-out, daily coordination, receipt ownership, checksum rejection, rollback, deadlines, Homebrew installs, API rate limits")
 
 
 if __name__ == "__main__":

@@ -64,6 +64,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   workspace, bitwarden-clients gained 11 requests, all linked `exact`: `ApiService.getSync` and the nine
   `ApiService.getEvents*` that #89 left unread, and `EventLogApiService.getEventsSend`. TypeScript files are
   re-extracted.
+- `knowcode self-update` and the daily update check work when GitHub's API refuses them. The API allows 60
+  unauthenticated requests an hour per network, and on a shared address self-update failed with `curl: (56) The
+  requested URL returned error: 403`. When the API refuses, KnowCode reads the latest tag from the release page
+  (`releases/latest` redirects to it) and installs this platform's release archive, checked against the SHA-256
+  published beside it; nothing is installed without that check. The API is not asked again until its limit resets.
+  When the release page fails too, self-update says so: `GitHub's API rate limit for this network is used up; try
+  again after 14:05, or set KNOWCODE_GITHUB_TOKEN`. With `KNOWCODE_GITHUB_TOKEN` set, the API request uses it (passed
+  to curl in a private file, not on its command line); it is never required. The daily check never mentions a
+  refusal.
 
 ## 0.3.0 (2026-10-26)
 
