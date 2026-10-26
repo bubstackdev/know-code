@@ -148,6 +148,9 @@ struct Cx<'a> {
     action_locals: HashMap<(Option<usize>, String), Created>,
 }
 
+/// A local a request's URL is read from: its name and the line declaring it.
+type Local = (String, u32);
+
 /// A `const` local holding a URL (see [`Cx::const_url`]).
 struct ConstUrl {
     pieces: Vec<Piece>,
@@ -1317,7 +1320,7 @@ impl Cx<'_> {
     /// `const` URL of the function making the request (see [`Self::const_url`]). Otherwise a name passed directly
     /// is read as any URL is (a local of the method, a module constant named in capitals), and a URL builder or a
     /// `{ url }` option given one isn't read (`None`).
-    fn request_pieces(&self, url: Node) -> Option<(Vec<Piece>, Option<(String, u32)>)> {
+    fn request_pieces(&self, url: Node) -> Option<(Vec<Piece>, Option<Local>)> {
         let named = |n: Node| self.const_url_at(n).map(|c| (c.pieces.clone(), (self.text(n).to_string(), c.line)));
         if matches!(url.kind(), "identifier" | "shorthand_property_identifier") {
             return match named(url) {
