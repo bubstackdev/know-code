@@ -234,11 +234,14 @@ documented in `kc_help <tool>`, so a client that loads every schema on every tur
 server's instructions out (Claude Code's bare mode does), so each core tool's description says on its own which
 questions it answers.
 
-In Claude Code, the core tools are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from
-the start instead of waiting behind tool search; with `all`, the other tools stay deferred. A server-level
-`alwaysLoad` setting overrides the mark, and a profile that leaves a core tool out doesn't list it. The Claude Code
-plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=all` (unless you set it): Claude Code defers the
-non-core tools, and the plugin's skills use them.
+In Claude Code, the core tools that answer a first question, `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and
+`kc_search`, are marked always loaded (`_meta` `anthropic/alwaysLoad`), so they are in context from the start instead
+of waiting behind tool search. Every other tool stays deferred, one tool search away, among them `kc_locate`,
+`kc_more` and `kc_help`: sessions rarely call them, and a schema loaded up front is paid on every turn. A cut answer's
+`hint` names the `kc_more` call that continues it. A client that doesn't defer tools loads all eight core tools. A
+server-level `alwaysLoad` setting overrides the mark, and a profile that leaves a core tool out doesn't list it. The
+Claude Code plugin that `knowcode setup claude` installs sets `KNOWCODE_TOOLS=all` (unless you set it): Claude Code
+defers the tools not marked, and the plugin's skills use them.
 
 ## MCP tools
 
@@ -336,9 +339,15 @@ the compiler's answer (`precise: true`, evidence `scip`); where the heuristics p
 its coverage. To make one: `npx @sourcegraph/scip-typescript index` in a TypeScript repo, or
 `dotnet tool install -g scip-dotnet && scip-dotnet index` in a .NET one.
 
-## Claude Code hook
+## Claude Code hooks
 
-The Claude Code plugin adds a `PreToolUse` hook for Grep, Glob and Bash (for Bash, only code searches such as `grep`,
+At the start of a Claude Code session (and after `/clear` or a compaction) the plugin adds one line saying what
+KnowCode has indexed here and which tools answer callers, impact, HTTP and definitions:
+`KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.` It says nothing in a directory with no
+index or in a repo whose privacy file blocks KnowCode, reads no index and makes no network call. Turn it off with
+`knowcode config set hooks.session_start false`.
+
+The plugin also adds a `PreToolUse` hook for Grep, Glob and Bash (for Bash, only code searches such as `grep`,
 `rg`, `git grep` or `find -name`). When the pattern names a symbol in an existing index, it adds a short note beside
 the result: where the symbol is defined, its reference count by confidence, its top callers, and the `kc_context` call
 to make next. It never blocks the search and never indexes. The hook script decides first: a Bash command without a

@@ -17,8 +17,8 @@ it through a local marketplace named `knowcode-local`. This works without clonin
 the KnowCode repository or downloading plugin files. It records the executable's
 path and any explicit `KNOWCODE_CACHE_DIR`, `KNOWCODE_CONFIG_DIR`, `KNOWCODE_DATA_DIR`,
 and `KNOWCODE_TOOLS` overrides. The plugin's server advertises every tool (`KNOWCODE_TOOLS=all`) unless you set
-`KNOWCODE_TOOLS`: Claude Code loads the core tools up front and defers the rest to tool search, and the skills use
-them. Start a new Claude Code session in your repository.
+`KNOWCODE_TOOLS`: Claude Code loads the tools that answer a first question up front (`kc_find`, `kc_context`,
+`kc_refs`, `kc_impact`, `kc_search`) and defers the rest to tool search, and the skills use them. Start a new Claude Code session in your repository.
 Each Claude registration command has a deadline of 120 seconds, configurable with
 `KNOWCODE_SETUP_DEADLINE`. A failed or partial attempt can be retried.
 
@@ -45,7 +45,7 @@ registration and copies when migrating; setup does not delete them.
 ## Components
 
 - `.mcp.json` starts `knowcode serve` on stdio.
-- `hooks/hooks.json` registers a `PreToolUse` hook for Grep, Glob and Bash.
+- `hooks/hooks.json` registers a `SessionStart` hook and a `PreToolUse` hook for Grep, Glob and Bash.
 - `skills/knowcode-explore` covers overview, locate, context, and flow.
 - `skills/knowcode-before-edit` covers impact, tests, coupled files, and reviewers.
 - `skills/knowcode-debug-stack-trace` maps file/line frames to symbols and callers.
@@ -57,7 +57,26 @@ tool names. Each tells the agent to check `complete` on every answer, read every
 matters, and never treat a missing, stale, sampled or withheld result as proof of
 absence. The answer contract is in [docs/answers.md](../../docs/answers.md).
 
-## Hook behavior
+## Session-start hook
+
+At the start of a session, after `/clear` and after a compaction, `hooks/knowcode-session-start.sh` runs the
+binary's session-start hook, which adds one line for the agent when KnowCode has something here:
+
+```text
+KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.
+```
+
+In a repo under a workspace root that isn't indexed yet it says `KnowCode indexes shop on first use.`; in a workspace
+root that isn't a repo, `KnowCode indexes 12 repos here.` It says nothing in a directory with no index, in a repo whose
+privacy file blocks KnowCode, when the cache holds no index at all, and in a resumed or forked session, whose transcript
+already has the line. The line is about 40 tokens, paid on every later turn of the session.
+
+It reads only `config.toml`, the repo's privacy file and the cache's directory listing: it never opens or creates an
+index and makes no network call. Like the search hook, it fails open: on any error or after `KNOWCODE_HOOK_MS` it
+prints nothing. Turn it off with `knowcode config set hooks.session_start false`; `knowcode uninstall` removes it with
+the plugin.
+
+## Search hook behavior
 
 The hook adds a short context note when a Grep or Glob pattern names a symbol in
 an existing index and its definition still matches the working tree. It does not

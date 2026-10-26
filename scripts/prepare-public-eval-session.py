@@ -17,6 +17,8 @@ import shutil
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
+# Every arm the runner knows (eval/bare_client.py ARM_SPECS): bare public-v1/-v2 arms and public-v3's full-client arms.
+ARMS = ('plain', 'knowcode', 'knowcode-unprompted', 'plain-full', 'knowcode-full', 'knowcode-unprompted-full')
 
 
 def digest(data):
@@ -57,7 +59,7 @@ def prepare(manifest, source, plan_root, session_id, out):
             raise ValueError('plan '+name+' hash differs')
     orders = [json.loads(line) for line in captured[plan_root/'order.jsonl'].decode().splitlines() if line.strip()]
     matches = [row for row in orders if row.get('session') == session_id]
-    if len(matches) != 1 or matches[0].get('arm') not in ('plain', 'knowcode', 'knowcode-unprompted'):
+    if len(matches) != 1 or matches[0].get('arm') not in ARMS:
         raise ValueError('session is absent, duplicated or has an unknown arm')
     selected = matches[0]
     questions = [json.loads(line) for line in captured[plan_root/'questions.jsonl'].decode().splitlines() if line.strip()]

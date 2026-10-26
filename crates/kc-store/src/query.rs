@@ -2808,14 +2808,23 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let declared: std::collections::HashSet<String> =
         out.iter().filter(|r| r.side == "client" && r.kind == "method").filter_map(|r| r.symbol.rsplit('.').next().map(str::to_ascii_lowercase)).collect();
     out.retain(|r| r.side != "operation" || r.path.as_deref().is_some_and(|op| !declared.contains(&op.to_ascii_lowercase())));
-    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
-    // `Client` a class of the repo's), reaches the repo's own code, not a generated client: no operation. A type the
-    // repo only declares (in a `.d.ts`, an external client's surface) doesn't count.
-    let mut implemented = conn.prepare_cached(
-        "SELECT EXISTS(SELECT 1 FROM refs r JOIN files f ON f.id = r.file_id
-           JOIN symbols s ON s.name = r.name AND s.container = r.receiver_type JOIN files sf ON sf.id = s.file_id
-         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND sf.path NOT LIKE '%.d.ts')",
+    // The type of a call's receiver, as the call site writes it (encoded), for an operation's client.
+    let mut receiver = conn.prepare_cached(
+        "SELECT r.receiver_type FROM refs r JOIN files f ON f.id = r.file_id
+         WHERE f.path = ?1 AND r.line = ?2 AND r.name = ?3 AND r.kind = 'call' AND r.receiver_type IS NOT NULL LIMIT 1",
     )?;
+    // A call whose receiver's type the repo implements, with a method of that name (`const client = new Client(…)`,
+    // or `this.client` with `private client: Client`, `Client` a class of the repo's), reaches the repo's own code,
+    // not a generated client: no operation. A type the repo only declares (in a `.d.ts`, an external client's
+    // surface) doesn't count.
+    let mut implemented = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM symbols s JOIN files sf ON sf.id = s.file_id
+         WHERE s.name = ?1 AND s.container = ?2 AND sf.path NOT LIKE '%.d.ts')",
+    )?;
+    let mut declared_in_dts = conn.prepare_cached(
+        "SELECT EXISTS(SELECT 1 FROM symbols s JOIN files sf ON sf.id = s.file_id WHERE s.container = ?1 AND sf.path LIKE '%.d.ts')",
+    )?;
+    let mut oracle = TypeOracle::new(conn);
     // A method of that name the repo only declares (`markUnplayed` in a `.d.ts` for `jellyfin-apiclient`): the call
     // goes to an external client whose routes aren't in the workspace, which an answer says (`detail`). The receiver's
     // own type first, when the call site names it.
@@ -2829,8 +2838,29 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
     let mut kept = Vec::with_capacity(out.len());
     for mut r in out {
         if r.side == "operation" {
-            if implemented.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get::<_, bool>(0))? {
-                continue;
+            // The receiver's type, through a field's or a local's declaration where the call site doesn't name it.
+            let written: Option<String> = receiver.query_row(rusqlite::params![r.file, r.line, r.path], |x| x.get(0)).optional()?;
+            let typed = match written {
+                Some(enc) => {
+                    let caller = symbols_at(conn, &r.file, r.line)?.into_iter().find(|s| TYPE_KINDS.contains(&s.kind.as_str())).map(|s| s.qualified);
+                    oracle.file = Some(r.file.clone());
+                    match oracle.eval_encoded(&enc, caller.as_deref())? {
+                        Some(TypeExpr::Named(n) | TypeExpr::Generic { name: n, .. }) => Some(last_segment(&n).to_string()).filter(|n| !n.is_empty()),
+                        _ => None,
+                    }
+                }
+                None => None,
+            };
+            if let Some(t) = &typed {
+                if implemented.query_row(rusqlite::params![r.path, t], |x| x.get::<_, bool>(0))? {
+                    continue;
+                }
+                // A type named for no API client (`chrome.storage.StorageArea` behind a field named
+                // `chromeStorageApi`), and not an external client's surface the repo declares: the receiver's name
+                // made it look like a client, its type says it isn't one.
+                if kc_extract::api_tag(t).is_none() && !declared_in_dts.query_row([t], |x| x.get::<_, bool>(0))? {
+                    continue;
+                }
             }
             let found = declared_only
                 .query_map(rusqlite::params![r.path, r.file, r.line], |x| Ok((x.get::<_, String>(0)?, x.get::<_, String>(1)?, x.get::<_, u32>(2)?)))?
@@ -2847,11 +2877,12 @@ pub fn http_routes(conn: &Connection) -> Result<Vec<RouteRow>> {
 
 /// What places a controller action whose class writes no `[Route]` out (`{^Action}/rest`, `{^*Action}` for a public
 /// method with no route attribute; `{^!…}` when the class has no `[Route]` in any part; see `kc_extract::csharp`):
-/// the classes' `[Route]` templates, their bases, and the repo's conventional route templates.
+/// the classes' `[Route]` templates, their bases, and the conventional route templates of the app serving the class.
 ///
 /// Classes are known by name only, and one repo may have several of a name (an admin app's `OrdersController` and an
 /// API's): a class with no `[Route]` of its own never takes another's, and a prefix same-named classes disagree on
-/// places nothing.
+/// places nothing. One repo may also hold several apps, each mapping its own conventional routes: a controller takes
+/// those of its own project (the nearest `.csproj` above it) and of the projects referencing it, never another app's.
 struct Controllers {
     /// Class name → its `[Route]` templates, or the constants naming them, each with the file it is written in.
     prefixes: HashMap<String, Vec<(String, String, Option<String>)>>,
@@ -2859,8 +2890,70 @@ struct Controllers {
     bases: HashMap<String, Vec<String>>,
     /// (class name, file) → the names of the bases written on that class in that file.
     bases_at: HashMap<(String, String), Vec<String>>,
-    /// The conventional route templates, each with the method mapping it (`MapControllerRoute`).
-    conventional: Vec<(String, String)>,
+    /// The conventional route templates, each with the method mapping it (`MapControllerRoute`) and the project
+    /// mapping it.
+    conventional: Vec<(String, String, Option<String>)>,
+    /// The repo's C# projects and their references.
+    projects: Projects,
+}
+
+/// A repo's C# projects: the directories holding a `.csproj`, and which reference which (`<ProjectReference>`).
+#[derive(Default)]
+struct Projects {
+    /// Project directories, deepest first.
+    dirs: Vec<String>,
+    /// Project directory → the directories of the projects referencing it.
+    referenced_by: HashMap<String, Vec<String>>,
+}
+
+impl Projects {
+    fn load(conn: &Connection) -> Result<Self> {
+        let files: Vec<String> =
+            conn.prepare_cached("SELECT path FROM files WHERE path LIKE '%.csproj'")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        if files.is_empty() {
+            return Ok(Projects::default());
+        }
+        let mut dirs: Vec<String> = files.iter().map(|p| crate::scip::parent_dir(p).to_string()).collect();
+        dirs.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+        dirs.dedup();
+        let mut referenced_by: HashMap<String, Vec<String>> = HashMap::new();
+        let mut stmt = conn.prepare_cached(
+            "SELECT f.path, d.location FROM package_deps d JOIN packages p ON p.id = d.package_id JOIN files f ON f.id = p.file_id
+             WHERE f.path LIKE '%.csproj' AND d.source = 'path'",
+        )?;
+        for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (file, location) = row?;
+            let from = crate::scip::parent_dir(&file);
+            let Some(target) = crate::scip::join_rel(from, &location) else { continue };
+            let to = referenced_by.entry(crate::scip::parent_dir(&target).to_string()).or_default();
+            if !to.iter().any(|d| d == from) {
+                to.push(from.to_string());
+            }
+        }
+        Ok(Projects { dirs, referenced_by })
+    }
+
+    /// The project of the file at `path`: the nearest directory above it holding a `.csproj`; `None` under none.
+    fn of(&self, path: &str) -> Option<String> {
+        self.dirs.iter().find(|d| crate::scip::under(path, d)).cloned()
+    }
+
+    /// The projects whose apps may serve the code of `project`: itself and those referencing it, transitively.
+    fn serving(&self, project: &Option<String>) -> Vec<Option<String>> {
+        let mut out = vec![project.clone()];
+        let mut i = 0;
+        while i < out.len() {
+            if let Some(d) = &out[i] {
+                for by in self.referenced_by.get(d).into_iter().flatten() {
+                    if !out.iter().any(|o| o.as_deref() == Some(by.as_str())) {
+                        out.push(Some(by.clone()));
+                    }
+                }
+            }
+            i += 1;
+        }
+        out
+    }
 }
 
 /// How many bases up a class's route prefix is looked for.
@@ -2875,7 +2968,8 @@ const CORE_CONVENTIONAL: &[&str] = &["MapControllerRoute", "MapDefaultController
 impl Controllers {
     fn new(conn: &Connection, rows: &[RawRoute]) -> Result<Self> {
         let mut prefixes: HashMap<String, Vec<(String, String, Option<String>)>> = HashMap::new();
-        let mut conventional: Vec<(String, String)> = Vec::new();
+        let projects = Projects::load(conn)?;
+        let mut conventional: Vec<(String, String, Option<String>)> = Vec::new();
         for ((side, verb, path, path_ref), _, (name, _, _, file), _) in rows {
             match side.as_str() {
                 "prefix" => {
@@ -2887,7 +2981,12 @@ impl Controllers {
                         }
                     }
                 }
-                "conventional" if !conventional.iter().any(|(t, _)| t == path) => conventional.push((path.clone(), verb.clone())),
+                "conventional" => {
+                    let c = (path.clone(), verb.clone(), projects.of(file));
+                    if !conventional.iter().any(|(t, _, p)| *t == c.0 && *p == c.2) {
+                        conventional.push(c);
+                    }
+                }
                 _ => {}
             }
         }
@@ -2905,7 +3004,7 @@ impl Controllers {
             }
             bases_at.entry((class, file)).or_default().push(base);
         }
-        Ok(Controllers { prefixes, bases, bases_at, conventional })
+        Ok(Controllers { prefixes, bases, bases_at, conventional, projects })
     }
 
     /// The `[Route]` template of the classes named `class`: the one written in `file` when there is one, else the one
@@ -2958,7 +3057,7 @@ impl Controllers {
     }
 
     /// The paths of an action of `class` (declared in `file`) encoded `{^Action}rest` (see [`Controllers`]): under the
-    /// inherited prefix, else, for an action without a template, each conventional route's, else the action's own
+    /// inherited prefix, else, for an action without a template, each conventional route of its app's, else its own
     /// template. None for a method no route serves. `Err`, saying why, for an action that can't be placed: same-named
     /// classes disagree on its prefix, or it has no template and no conventional route was read.
     fn paths(&self, consts: &mut Constants, class: &str, file: &str, encoded: &str) -> Result<std::result::Result<Vec<String>, String>> {
@@ -3003,9 +3102,12 @@ impl Controllers {
             let joined = [fill(&template), rest.to_string()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/");
             return Ok(Ok(vec![joined]));
         }
-        if rest.is_empty() && !self.conventional.is_empty() {
+        // The conventional routes of the apps serving the controller's project.
+        let serving = self.projects.serving(&self.projects.of(file));
+        let conventional: Vec<&(String, String, Option<String>)> = self.conventional.iter().filter(|(_, _, p)| serving.contains(p)).collect();
+        if rest.is_empty() && !conventional.is_empty() {
             let mut out: Vec<String> = Vec::new();
-            for (t, method) in &self.conventional {
+            for (t, method, _) in conventional {
                 let action = if CORE_CONVENTIONAL.contains(&method.as_str()) { action.strip_suffix("Async").filter(|a| !a.is_empty()).unwrap_or(action) } else { action };
                 for p in conventional_paths(t, controller, action) {
                     if !out.contains(&p) {
@@ -3019,7 +3121,13 @@ impl Controllers {
             return Ok(Ok(Vec::new()));
         }
         if rest.is_empty() {
-            // Conventional routes would place it, and none was read: no path rather than a guessed one.
+            // Conventional routes would place it, and none was read for its app: no path rather than a guessed one.
+            if !self.conventional.is_empty() {
+                let project = self.projects.of(file).unwrap_or_default();
+                return Ok(Err(format!(
+                    "an action with no route template, in a controller with no [Route], and no conventional route template read in its project ({project}) or one referencing it"
+                )));
+            }
             return Ok(Err("an action with no route template, in a controller with no [Route], and no conventional route template read".to_string()));
         }
         Ok(Ok(vec![rest.to_string()]))
@@ -6335,6 +6443,44 @@ mod tests {
         assert!(unplaced.as_ref().is_err_and(|why| why.contains("no conventional route")), "{unplaced:?}");
         assert_eq!(alone.paths(&mut c, "OrdersController", admin, "{^!*Index}").unwrap(), ok(&[]));
         assert_eq!(alone.paths(&mut c, "OrdersController", admin, "{^!Find}/find").unwrap(), ok(&["find"]));
+    }
+
+    /// Two apps in one repo, each mapping its own conventional routes: a controller takes those of its own project
+    /// and of the projects referencing it (a library of controllers), never the other app's; a controller no app's
+    /// routes reach is unplaced, saying so.
+    #[test]
+    fn conventional_routes_are_per_app() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE constants (file_id INTEGER, qualified TEXT, value TEXT, line INTEGER);
+             CREATE TABLE files (id INTEGER, path TEXT);
+             INSERT INTO files VALUES (1, 'src/Admin/Admin.csproj'), (2, 'src/Tools/Tools.csproj'), (3, 'src/Shared/Shared.csproj'),
+               (4, 'src/Lone/Lone.csproj'), (5, 'src/Admin/Controllers/OrdersController.cs');
+             CREATE TABLE packages (id INTEGER, file_id INTEGER, kind TEXT, name TEXT, line INTEGER);
+             INSERT INTO packages VALUES (1, 1, 'csproj', 'Admin', 1), (2, 2, 'csproj', 'Tools', 1), (3, 3, 'csproj', 'Shared', 1),
+               (4, 4, 'csproj', 'Lone', 1);
+             CREATE TABLE package_deps (file_id INTEGER, package_id INTEGER, name TEXT, source TEXT, location TEXT, requirement TEXT,
+               resolved_repo TEXT, line INTEGER);
+             INSERT INTO package_deps VALUES (1, 1, 'Shared', 'path', '../Shared/Shared.csproj', NULL, NULL, 3);
+             CREATE TABLE symbols (id INTEGER, name TEXT, kind TEXT);
+             CREATE TABLE relations (file_id INTEGER, from_id INTEGER, target TEXT, target_name TEXT, kind TEXT, line INTEGER);",
+        )
+        .unwrap();
+        let rows = [
+            route_row("conventional", "MapDefaultControllerRoute", "{controller=Home}/{action=Index}/{id?}", None, "Configure", "src/Admin/Startup.cs"),
+            route_row("conventional", "MapControllerRoute", "tools/{controller}/{action}", None, "Configure", "src/Tools/Program.cs"),
+        ];
+        let ctl = Controllers::new(&conn, &rows).unwrap();
+        let mut c = Constants::new(&conn).unwrap();
+        let ok = |p: &[&str]| Ok(p.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(ctl.paths(&mut c, "OrdersController", "src/Admin/Controllers/OrdersController.cs", "{^!List}").unwrap(), ok(&["Orders/List", "Orders/List/{id}"]));
+        assert_eq!(ctl.paths(&mut c, "JobsController", "src/Tools/JobsController.cs", "{^!Run}").unwrap(), ok(&["tools/Jobs/Run"]));
+        // A library of controllers is served by the app referencing it.
+        assert_eq!(ctl.paths(&mut c, "PingController", "src/Shared/PingController.cs", "{^!Get}").unwrap(), ok(&["Ping/Get", "Ping/Get/{id}"]));
+        // No app's conventional routes reach it: unplaced, saying why.
+        let lone = ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!Get}").unwrap();
+        assert!(lone.as_ref().is_err_and(|why| why.contains("src/Lone")), "{lone:?}");
+        assert_eq!(ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!*Help}").unwrap(), ok(&[]));
     }
 
     #[test]

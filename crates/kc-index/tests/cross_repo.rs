@@ -950,6 +950,55 @@ fn a_conventionally_routed_controller_never_takes_a_namesakes_prefix() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// One repo, two apps, each with its own project and conventional routes: the admin app maps the default template,
+/// the tools app `tools/{controller}/{action}`. Each app's `ReportsController` takes its own app's template only, so a
+/// request to `/tools/Reports/Rebuild` links to the tools app's action, not the admin app's namesake.
+#[test]
+fn each_app_routes_its_controllers_by_its_own_conventional_template() {
+    let turn = turn();
+    let base = turn.dir("app-templates");
+    let server = scratch(&base, "store-server");
+    for dir in ["src/Admin", "src/Tools"] {
+        std::fs::create_dir_all(server.join(dir)).unwrap();
+    }
+    let project = "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n";
+    write(&server, "src/Admin/Admin.csproj", project);
+    write(&server, "src/Tools/Tools.csproj", project);
+    let controller = "public class ReportsController : Controller\n{\n    [HttpPost]\n    public Task<IActionResult> Rebuild() => null;\n}\n";
+    write(&server, "src/Admin/ReportsController.cs", controller);
+    write(&server, "src/Tools/ReportsController.cs", controller);
+    write(
+        &server,
+        "src/Admin/Startup.cs",
+        "public class Startup\n{\n    public void Configure(IApplicationBuilder app)\n    {\n        app.UseEndpoints(endpoints => endpoints.MapDefaultControllerRoute());\n    }\n}\n",
+    );
+    write(&server, "src/Tools/Program.cs", "var app = WebApplication.Create(args);\napp.MapControllerRoute(\"tools\", \"tools/{controller}/{action}\");\napp.Run();\n");
+    let web = scratch(&base, "store-web");
+    write(&web, "src/reports.ts", "export class Reports {\n  rebuild() { return fetch('/tools/Reports/Rebuild', { method: 'POST' }); }\n}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&server, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let served: Vec<(String, String)> = routes(0).into_iter().filter(|r| r.side == "server").map(|r| (r.file, r.path.unwrap_or_default())).collect();
+    let s = |file: &str, path: &str| (file.to_string(), path.to_string());
+    assert_eq!(
+        served,
+        [
+            s("src/Admin/ReportsController.cs", "Reports/Rebuild"),
+            s("src/Admin/ReportsController.cs", "Reports/Rebuild/{id}"),
+            s("src/Tools/ReportsController.cs", "tools/Reports/Rebuild"),
+        ]
+    );
+    let rebuild = routes(1).into_iter().find(|r| r.symbol == "Reports.rebuild").unwrap();
+    let links: Vec<(String, &'static str)> =
+        kc_index::http::handlers(&rebuild, &roots[1], &summaries).into_iter().map(|l| (l.route.file, l.confidence)).collect();
+    assert_eq!(links, [("src/Tools/ReportsController.cs".to_string(), "exact")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A call through a class the client repo implements itself (`new Client(…).login()`) is no generated client's
 /// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is. An untagged
 /// client's one-word operation (`update`) links `ambiguous` at most: the name alone doesn't say whose method it is.
@@ -991,6 +1040,52 @@ fn only_generated_clients_link_by_operation_name() {
     };
     assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "exact")]);
     assert_eq!(link("update"), [("AccountsController.Update".to_string(), "ambiguous")]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A receiver reached through a typed field (`this.client` with `private client: Client`, a parameter property or a
+/// field, declared here or in a base class) is judged by the field's type: a class of the repo's is its own code, and
+/// a type named for no API client (`chrome.storage.StorageArea` behind `chromeStorageApi`) is no client, so neither
+/// is an operation; a generated client's type (`ItemsApi`) still is, and so is an external client the repo declares.
+#[test]
+fn typed_field_receivers_are_judged_by_their_type() {
+    let turn = turn();
+    let base = turn.dir("typed-fields");
+    let api = scratch(&base, "vault-api");
+    write(
+        &api,
+        "src/ItemsController.cs",
+        "[ApiController]\n[Route(\"items\")]\npublic class ItemsController : ControllerBase\n{\n    [HttpDelete(\"{id}\")]\n    public Task Remove(string id) => null;\n    [HttpGet]\n    public Task GetItems() => null;\n    [HttpPost(\"open\")]\n    public Task OpenVault() => null;\n    [HttpGet(\"profile\")]\n    public Task GetProfile() => null;\n}\n",
+    );
+    let web = scratch(&base, "vault-web");
+    write(&web, "src/client.ts", "export class Client {\n  openVault() { return this.rest.post('x'); }\n}\n");
+    write(&web, "src/vault.ts", "import { Client } from './client';\nexport class Vault {\n  private vaultClient: Client;\n  open() { return this.vaultClient.openVault(); }\n}\n");
+    write(
+        &web,
+        "src/storage.ts",
+        "export abstract class BaseStorage {\n  constructor(protected chromeStorageApi: chrome.storage.StorageArea) {}\n}\nexport class LocalStorage extends BaseStorage {\n  drop(key: string) { return this.chromeStorageApi.remove(key); }\n}\n",
+    );
+    write(&web, "src/apiclient.d.ts", "declare class ApiClient {\n  getProfile(): Promise<any>;\n}\n");
+    write(
+        &web,
+        "src/items.ts",
+        "import { ItemsApi } from '@media/sdk';\nexport class Items {\n  constructor(private itemsApi: ItemsApi, private apiClient: ApiClient) {}\n  load() { return this.itemsApi.getItems(); }\n  profile() { return this.apiClient.getProfile(); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let ops: Vec<kc_store::query::RouteRow> = summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().filter(|r| r.side == "operation").cloned().collect();
+    let names: Vec<(&str, &str)> = ops.iter().map(|r| (r.symbol.as_str(), r.path.as_deref().unwrap_or_default())).collect();
+    assert_eq!(names, [("Items.load", "getItems"), ("Items.profile", "getProfile")]);
+    let link = |op: &str| -> Vec<(String, &'static str)> {
+        let r = ops.iter().find(|r| r.path.as_deref() == Some(op)).unwrap();
+        kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    assert_eq!(link("getItems"), [("ItemsController.GetItems".to_string(), "exact")]);
+    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "exact")]);
     let _ = std::fs::remove_dir_all(&base);
 }
 
