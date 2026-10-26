@@ -90,6 +90,11 @@ class TranscriptTest(unittest.TestCase):
         entries[2]["message"]["content"] = [{"type": "text", "text": "  " + QUESTION + "\n"}]
         self.assertEqual(cm.parse_transcript(self.write("c", entries))["prompt"], QUESTION)
 
+    def test_script_asks_the_named_prompt_the_parser_looks_for(self):
+        script = (Path(__file__).resolve().parent / "clean-machine.sh").read_text()
+        self.assertIn('prompt="' + cm.NAMED_PROMPT.format(question="$question") + '"', script)
+        self.assertNotIn("kc_", cm.NAMED_PROMPT)
+
     def test_find_sessions_matches_prompt_dir_and_time(self):
         named = cm.NAMED_PROMPT.format(question=QUESTION)
         self.write("unprompted", self.session(QUESTION, [tool("Grep", pattern="mitt")], "u"))
