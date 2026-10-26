@@ -547,13 +547,15 @@ by default; a file unchanged in that year is read over its own last 50 commits, 
 at a commit, with its ancestors, or a date, so an answer can't see later commits (partners are the files of that
 commit's tree; one gone since has `exists_now: false`); `since` sets how far back: `<n>d`, a date or `all`; `history`
 in the answer says which span was read; following renames; commits of more than 50 files, automated commits (CI jobs,
-bots, nightly dumps) and pairs only ever created together don't count), ranked by shared commits with recent ones
-weighted more. The file can be any file git tracks, indexed or not (a Dockerfile, Terraform, a shell script, YAML,
-Markdown), and so can its partners, except generated files (lockfiles, minified bundles), binaries and hubs (a file
-that isn't code, changed in 10+ commits and half the repo's, changing with this one in under a fifth of its own commits
-and under half of this one's, like a changelog). Each partner: kind (its language, or template, style, javascript,
-config, docs, script, infra or other), support (shared commits), confidence (the share of the file's commits that also
-changed it), commits (the file's), test, and static_link (false: kc_impact doesn't reach it and the file names none of
+bots, nightly dumps) and pairs only ever created together don't count), ranked by shared commits, the most recent
+first among equals; a partner that isn't code and shared under a fifth of its own commits with the file (a rule or
+settings file that sweeps touched) comes after the rest. The file can be any file git tracks, indexed or not (a
+Dockerfile, Terraform, a shell script, YAML, Markdown), and so can its partners, except generated files (lockfiles,
+minified bundles), binaries and hubs (a file that isn't code, changed in 10+ commits and half the repo's, changing with
+this one in under a fifth of its own commits and under half of this one's, like a changelog). Each partner: kind (its
+language, or template, style, javascript, config, docs, script, infra or other), support (shared commits), confidence
+(the share of the file's commits that also changed it), commits (the file's), weight (recency: the shared commits
+weighted by age, half per 90 days), test, and static_link (false: kc_impact doesn't reach it and the file names none of
 its types: a hidden coupling), and basis `history`. Use it to find the files a change to this one usually needs.
 
 When history has nothing to rank (no partner shares two commits with the file: a new file, a quiet one, or `as_of`

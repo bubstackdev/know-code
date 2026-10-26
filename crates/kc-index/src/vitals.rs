@@ -41,7 +41,7 @@ const SUBJECT_MAX_FILES: usize = 20;
 /// Subject words kept per file, the most frequent first.
 const SUBJECT_WORDS_PER_FILE: usize = 48;
 /// Bumped when the cached walk's shape changes, so a cache from an older build is redone even at the same HEAD.
-const CHURN_FORMAT: u32 = 7;
+const CHURN_FORMAT: u32 = 8;
 /// A partner that isn't code (config, docs, scripts…) is a hub when it has at least this many commits of its own...
 const HUB_MIN_COMMITS: u32 = 10;
 /// ...and changed in at least this share of the repo's co-change commits: a changelog, or a settings file that
@@ -312,8 +312,8 @@ struct Churn {
     /// Commits small enough to count for co-change.
     cc_commits: u32,
     /// Files changed in the same commits: (path, shared commits, recency-weighted shared commits, the partner's own
-    /// co-change commits), best weight first. Pairs whose only shared commits created both files are left out
-    /// (CodeScene's rule: files added in one commit say nothing yet about changing together).
+    /// co-change commits), most shared commits first, then the most recent. Pairs whose only shared commits created
+    /// both files are left out (CodeScene's rule: files added in one commit say nothing yet about changing together).
     partners: Vec<(String, u32, f64, u32)>,
     /// Single-commit partners left out of `partners` past [`MAX_PARTNERS`]: a count of partners is short by these.
     #[serde(default)]
@@ -334,8 +334,8 @@ pub struct Coupled {
     pub confidence: f64,
     /// The other file's commits counted for co-change (the denominator of `confidence`).
     pub commits: u32,
-    /// What partners are ranked by: shared commits weighted by age, each counting half as much per 90 days before
-    /// HEAD, so one recent shared commit can outrank three old ones.
+    /// Recency: the shared commits weighted by age, each counting half as much per 90 days before the end of the
+    /// history read. Partners are ranked by `support`; this breaks ties, and says how recent the coupling is.
     pub weight: f64,
     /// False for a partner of an `--as-of` answer that existed then but is gone now (deleted, or renamed since).
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -496,7 +496,7 @@ fn is_code_kind(kind: &str) -> bool {
 }
 
 /// Files that changed in the same commits as each of `files` (repo-relative) over the 365 days before HEAD, ranked
-/// by recency-weighted shared commits: at most `limit` per file, other than the file itself, each a current file of
+/// by shared commits, then recency: at most `limit` per file, other than the file itself, each a current file of
 /// any kind ([`partner_kind`]): indexed source, or any other file discovery lists that the content index doesn't skip
 /// as generated or binary. With `code_only`, partners are only source files and the templates, stylesheets and
 /// scripts beside them. A file of `files` needs only history: it may be any tracked file, indexed or not. Generated
@@ -755,6 +755,9 @@ fn partners_of(
     let mut lang_of = conn.prepare_cached("SELECT lang FROM files WHERE path = ?1")?;
     let mut listed = conn.prepare_cached("SELECT 1 FROM cfiles WHERE path = ?1 AND (skip IS NULL OR skip = 'large')")?;
     let mut list = Vec::new();
+    // Partners that aren't code and shared under a fifth of their own commits with the file: what sweeps of tooling,
+    // settings or rule files left behind. Listed, after the rest.
+    let mut swept = Vec::new();
     for (p, n, w, pc) in &c.partners {
         if list.len() >= limit {
             break;
@@ -781,8 +784,15 @@ fn partners_of(
             continue;
         }
         let confidence = if c.cc_commits == 0 { 0.0 } else { round2(*n as f64 / c.cc_commits as f64) };
-        list.push(Coupled { file: p.clone(), kind: kind.to_string(), support: *n, confidence, commits: c.cc_commits, weight: round2(*w), exists_now });
+        let partner = Coupled { file: p.clone(), kind: kind.to_string(), support: *n, confidence, commits: c.cc_commits, weight: round2(*w), exists_now };
+        if !is_code_kind(kind) && (*n as f64) < HUB_MIN_SHARE * *pc as f64 {
+            swept.push(partner);
+        } else {
+            list.push(partner);
+        }
     }
+    list.extend(swept);
+    list.truncate(limit);
     Ok(list)
 }
 
@@ -1426,7 +1436,7 @@ fn parse_log(log: &str, w: &Window) -> (HashMap<String, Churn>, WalkStats, Subje
     }
     for (id, mut list) in partners {
         list.sort_by(|x, y| {
-            y.2.partial_cmp(&x.2).unwrap().then(y.1.cmp(&x.1)).then_with(|| names[x.0 as usize].cmp(&names[y.0 as usize]))
+            y.1.cmp(&x.1).then(y.2.partial_cmp(&x.2).unwrap()).then_with(|| names[x.0 as usize].cmp(&names[y.0 as usize]))
         });
         // Every partner sharing two or more commits; single-commit ones only while there is room.
         let mut kept = 0;
@@ -1602,17 +1612,19 @@ mod tests {
     }
 
     #[test]
-    fn recent_shared_commits_rank_first() {
+    fn more_shared_commits_rank_first_and_recency_breaks_ties() {
         let t = 1_000 * DAY;
-        // a.rs changed with old.rs twice a year ago, and with new.rs once yesterday.
+        // a.rs changed with old.rs twice a year ago, with new.rs once yesterday, and with mid.rs once 100 days ago.
         let mut log = String::new();
         for d in [360, 350] {
             log += &format!("@@h\t{}\tann@x\tdev\tx\n\n1\t1\ta.rs\n1\t1\told.rs\n", t - d * DAY);
         }
+        log += &format!("@@h\t{}\tann@x\tdev\tx\n\n1\t1\ta.rs\n1\t1\tmid.rs\n", t - 100 * DAY);
         log += &format!("@@h\t{}\tann@x\tdev\tx\n\n1\t1\ta.rs\n1\t1\tnew.rs\n", t - DAY);
         let c = parse_log(&log, &win(t)).0;
         let order: Vec<&str> = c["a.rs"].partners.iter().map(|(p, _, _, _)| p.as_str()).collect();
-        assert_eq!(order, ["new.rs", "old.rs"]);
+        // Two old shared commits outrank one recent one; between single ones, the recent one comes first.
+        assert_eq!(order, ["old.rs", "new.rs", "mid.rs"]);
     }
 
     #[test]

@@ -48,6 +48,14 @@ reaches further: replaying every call recorded in the published studies, two-hop
 labelled places (recall 0.587 to 0.628) with fewer wrong ones, and no question type got worse. From 0.4 on, releases ship on [checks that make no model calls](eval/release-gate/0.4.0.md); they
 measure what KnowCode returns, and make no claim about how agents use it.
 
+- `coupled` ranks partners by shared commits, the most recent first among equals, where it ranked them by shared
+  commits weighted by age (half per 90 days). Over a long span the weighting buried the strongest partners: with
+  `--since all`, Autofac's `ResolveOperation.cs` listed one of the ten files sharing the most commits with it in its
+  top ten, and a rule file touched by tooling sweeps first. Now its top ten holds nine of them, and the tenth is next.
+  The age weighting is still in each partner (`weight`, shown as `recency`). A partner that isn't code and shared under
+  a fifth of its own commits with the file (a rule or settings file that sweeps touched) comes after the others.
+  Against history-v1's two file co-change questions (labels from git alone, renames followed), `coupled --since all`
+  lists 51 of 55 and 14 of 14 of the labelled files at the label's size.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
