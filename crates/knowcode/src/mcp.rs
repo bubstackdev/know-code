@@ -570,28 +570,178 @@ pub struct Common {
     pub max_chars: Option<usize>,
 }
 
-/// The `kc` tool's parameters (the `one` profile, a prototype): the core tool to run (`op`) and its main input (`q`,
-/// or several in `qs`). Any other parameter of that tool is passed by its own name.
+/// The `kc` tool's parameters (the `one` profile, the default): the tool to run (`op`, its name without `kc_`) and
+/// its main input (`q`, or several in `qs`). Any other parameter of that tool is passed by its own name.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct OneParams {
-    /// impact, find, refs, context, search, locate, more or help.
+    /// The tool to run, by its name without `kc_`: impact, find, refs, context, search, locate, more, help, or any other
+    /// (trace, path, flow, tests, …).
     pub op: String,
-    /// A name, `Type.member`, [repo/]file:line, text, concept, cursor or help topic.
+    /// The op's main input: a name, `Type.member`, [repo/]file:line, text, a concept, a cursor or a help topic (see
+    /// `ONE_OPS` for the parameter it fills).
     #[serde(default)]
     pub q: Option<String>,
-    /// Several `q` (refs, context, locate).
+    /// Several `q` at once (refs, context, locate; tests' targets, reviewers' files).
     #[serde(default)]
     pub qs: Vec<String>,
-    /// impact: 2 for callers' callers.
+    /// How many hops (impact: 2 for callers' callers; trace).
     #[serde(default)]
     pub depth: Option<u32>,
-    /// Any other parameter of the op's tool, by its name.
+    /// Any other parameter of the op's tool, by its name (`repo`, `limit`, `regex`, `diff`, …).
     #[serde(flatten)]
     pub rest: serde_json::Map<String, Value>,
 }
 
-/// The ops of the `kc` tool: the core tools, by name without `kc_`.
-const ONE_OPS: &[&str] = &["impact", "find", "refs", "context", "search", "locate", "more", "help"];
+/// The ops of the `kc` tool, one per tool: (op, the parameter `q` fills, the one `qs` fills). The core tools come
+/// first, in the order the tool's description names them. A parameter that takes a list gets `q` as a list of one.
+pub const ONE_OPS: &[(&str, &str, &str)] = &[
+    ("impact", "symbol", ""),
+    ("find", "query", ""),
+    ("refs", "name", "names"),
+    ("context", "symbol", "symbols"),
+    ("search", "pattern", ""),
+    ("locate", "query", "queries"),
+    ("more", "cursor", ""),
+    ("help", "topic", ""),
+    ("trace", "symbol", ""),
+    ("path", "from", ""),
+    ("flow", "entry", ""),
+    ("symbol_at", "file", ""),
+    ("unused", "", ""),
+    ("rename_preview", "symbol", ""),
+    ("coupled", "file", ""),
+    ("tests", "targets", "targets"),
+    ("hotspots", "", ""),
+    ("ownership", "path", ""),
+    ("reviewers", "files", "files"),
+    ("overview", "focus", ""),
+    ("areas", "area", ""),
+    ("notes", "symbol", ""),
+    ("note_add", "symbol", ""),
+    ("grep_ast", "pattern", ""),
+    ("status", "", ""),
+];
+
+/// The parameters that take a list, among those `q` fills.
+const ONE_LISTS: &[&str] = &["targets", "files"];
+
+/// A `kc` call as the tool it runs and that tool's arguments.
+pub fn one_call(p: OneParams) -> Result<(String, serde_json::Map<String, Value>), String> {
+    let op = p.op.trim().trim_start_matches("kc_").to_string();
+    let Some((_, main, many)) = ONE_OPS.iter().find(|(o, _, _)| *o == op) else {
+        let ops: Vec<&str> = ONE_OPS.iter().map(|(o, _, _)| *o).collect();
+        return Err(format!("no op {op:?}: one of {}", ops.join(", ")));
+    };
+    let mut args = p.rest;
+    if let Some(q) = p.q {
+        if main.is_empty() {
+            return Err(format!("op {op} takes no `q`; pass its parameters by name (kc {{op: help, q: {op}}})"));
+        }
+        let value = if ONE_LISTS.contains(main) { Value::from(vec![q]) } else { Value::from(q) };
+        args.insert(main.to_string(), value);
+    }
+    if !p.qs.is_empty() {
+        if many.is_empty() {
+            return Err(format!("op {op} takes one `q`, not `qs`"));
+        }
+        args.insert(many.to_string(), Value::from(p.qs));
+    }
+    if let Some(d) = p.depth {
+        args.insert("depth".into(), Value::from(d));
+    }
+    Ok((format!("kc_{op}"), args))
+}
+
+/// Tool calls an answer or a text names (`kc_more {cursor: …}`, `kc_refs Save`, `kc_context(symbol: "X")`,
+/// `kc_trace`) as the `kc` tool takes them: `kc {op: more, cursor: …}`, `kc {op: refs, q: Save}`,
+/// `kc {op: context, symbol: "X"}`, `kc {op: trace}`. In `prose` (help topics, notes), a bare name followed by a
+/// word is never read as a call with an argument, and `kc_help topic` names the topic as `q`; a topic's section
+/// (`kc_impact.crossings`) loses its prefix.
+pub fn one_text(text: &str, prose: bool) -> String {
+    // Words that follow a tool's name in an answer without being its argument (`kc_search finds them`).
+    const NOT_ARGS: &[&str] = &["finds", "lists", "answers", "and", "or", "for", "on", "with", "to", "is", "takes"];
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len() + 32);
+    let mut rest = text;
+    while let Some(at) = rest.find("kc_") {
+        let before = &rest[..at];
+        let prev_ok = !before.chars().next_back().is_some_and(ident);
+        let after = &rest[at + 3..];
+        let name_len = after.find(|c: char| !ident(c)).unwrap_or(after.len());
+        let name = &after[..name_len];
+        out.push_str(before);
+        if !prev_ok || !ONE_OPS.iter().any(|(o, _, _)| *o == name) {
+            out.push_str("kc_");
+            rest = after;
+            continue;
+        }
+        let mut tail = &after[name_len..];
+        if let Some(section) = tail.strip_prefix('.').filter(|s| s.starts_with(|c: char| c.is_ascii_lowercase())) {
+            // A help topic's section.
+            out.push_str(name);
+            out.push('.');
+            rest = section;
+            continue;
+        }
+        if let Some(inner) = tail.strip_prefix(" {").or_else(|| tail.strip_prefix('{')) {
+            // `kc_more {cursor: …}`, `kc_impact {"depth":2,…}`, `kc_help {topic}`.
+            if let Some(close) = inner.strip_prefix('}') {
+                out.push_str(&format!("kc {{op: {name}}}"));
+                tail = close;
+            } else {
+                out.push_str(&format!("kc {{op: {name}, "));
+                tail = inner;
+            }
+        } else if let Some(inner) = tail.strip_prefix('(') {
+            // `kc_context(symbol: "X")`: up to the matching parenthesis, outside quotes.
+            let (mut depth, mut quoted, mut end) = (1, false, None);
+            for (i, c) in inner.char_indices() {
+                match c {
+                    '"' => quoted = !quoted,
+                    '(' if !quoted => depth += 1,
+                    ')' if !quoted => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            match end {
+                Some(0) => out.push_str(&format!("kc {{op: {name}}}")),
+                Some(i) => out.push_str(&format!("kc {{op: {name}, {}}}", &inner[..i])),
+                None => {
+                    out.push_str(&format!("kc {{op: {name}}}("));
+                    rest = inner;
+                    continue;
+                }
+            }
+            tail = &inner[end.unwrap() + 1..];
+        } else if let Some(word) = tail.strip_prefix(' ').map(|t| t.split(char::is_whitespace).next().unwrap_or(""))
+            && (!prose || name == "help")
+            && !word.is_empty()
+            && !NOT_ARGS.contains(&word)
+            && !word.starts_with(['(', '`', '"', '<'])
+        {
+            // `kc_refs Save lists them all`, `(kc_refs isValid)`, `kc_help kc_impact`.
+            let raw = word.trim_end_matches([')', ',', ';', ':', '.']);
+            let arg = if name == "help" { raw.trim_start_matches("kc_") } else { raw };
+            if arg.is_empty() {
+                out.push_str(&format!("kc {{op: {name}}}"));
+            } else {
+                out.push_str(&format!("kc {{op: {name}, q: {arg}}}"));
+                tail = &tail[1 + raw.len()..];
+            }
+        } else {
+            out.push_str(&format!("kc {{op: {name}}}"));
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
 
 #[derive(Clone)]
 pub struct KnowcodeServer {
@@ -601,8 +751,8 @@ pub struct KnowcodeServer {
     schemas: std::sync::Arc<std::collections::BTreeMap<String, rmcp::model::JsonObject>>,
     /// Tools the profile leaves out (see [`profile`]).
     hidden: std::sync::Arc<Vec<String>>,
-    /// The server's instructions, for its profile.
-    instructions: &'static str,
+    /// The `one` profile: every tool is reached through `kc`, and answers name calls as its ops.
+    one: bool,
 }
 
 /// The tools of the `core` profile, the default: the ones that answer the first questions about code (where X is
@@ -651,7 +801,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_grep_ast", &[("pattern", ""), ("lang", "csharp, typescript, javascript, python, rust or swift.")]),
     ("kc_more", &[("cursor", "")]),
     ("kc_status", &[]),
-    ("kc", &[("op", "impact, find, refs, context, search, locate, more or help."), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
+    ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
 /// `schema` (a tool's full input schema) cut to the parameters [`ADVERTISED`] lists for `tool`, each with its line
@@ -676,11 +826,24 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
     out
 }
 
-/// The tools a profile spec names, out of `all`: `all`, `core`, and tool names (with or without `kc_`), comma
-/// separated. `kc_help` is always in.
+/// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
+pub const DEFAULT_PROFILE: &str = "one";
+
+/// The profile from `KNOWCODE_TOOLS`, or the default.
+pub fn profile_spec() -> String {
+    std::env::var("KNOWCODE_TOOLS").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| DEFAULT_PROFILE.into())
+}
+
+/// Whether a profile spec advertises the single `kc` tool, so that calls are named as its ops.
+pub fn is_one(spec: &str) -> bool {
+    spec.split(',').any(|p| p.trim() == "one")
+}
+
+/// The tools a profile spec names, out of `all`: `one` (the `kc` tool), `all`, `core`, and tool names (with or
+/// without `kc_`), comma separated. `kc_help` is always in, unless `kc` is, whose `help` op stands in for it.
 pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
-    // `one` (a prototype): the single `kc` tool, whose `help` op stands in for kc_help.
-    let one = spec.split(',').any(|p| p.trim() == "one");
+    // `one`: the single `kc` tool, whose ops reach every tool, kc_help included.
+    let one = is_one(spec);
     let mut out: Vec<String> = if one { Vec::new() } else { vec!["kc_help".into()] };
     for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         let names: Vec<String> = match part {
@@ -690,7 +853,7 @@ pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
             name => {
                 let n = if name.starts_with("kc_") { name.to_string() } else { format!("kc_{name}") };
                 if !all.contains(&n) {
-                    return Err(format!("KNOWCODE_TOOLS: no tool or profile {name:?}; profiles are all and core, tools {}", all.join(", ")));
+                    return Err(format!("KNOWCODE_TOOLS: no tool or profile {name:?}; profiles are one, core and all, tools {}", all.join(", ")));
                 }
                 vec![n]
             }
@@ -769,7 +932,9 @@ impl KnowcodeServer {
 
     /// A help topic as text (with a tool's parameters from its schema), or the index without one.
     fn help(&self, topic: Option<&str>) -> Result<String, String> {
-        let Some(name) = topic.map(str::trim).filter(|t| !t.is_empty()) else { return Ok(crate::help::index(&self.hidden)) };
+        // Under `one` every tool is reachable, as an op of `kc`.
+        let hidden: &[String] = if self.one { &[] } else { &self.hidden };
+        let Some(name) = topic.map(str::trim).filter(|t| !t.is_empty()) else { return Ok(crate::help::index(hidden)) };
         let t = crate::help::topic(name).ok_or_else(|| format!("no help topic {name:?}; kc_help without a topic lists them"))?;
         let mut text = crate::help::render(t, self.schemas.get(t.name));
         if let Some((_, keep)) = ADVERTISED.iter().find(|(n, _)| *n == t.name) {
@@ -777,7 +942,7 @@ impl KnowcodeServer {
             let shown = if names.is_empty() { "none of them".to_string() } else { names.join(", ") };
             text.push_str(&format!("\nThe tool's schema lists {shown}; every parameter above is accepted.\n"));
         }
-        if self.hidden.iter().any(|h| h == t.name) {
+        if hidden.iter().any(|h| h == t.name) {
             text.push_str("\nThis server doesn't advertise this tool (see `profiles`).\n");
         }
         Ok(text)
@@ -1749,8 +1914,8 @@ impl KnowcodeServer {
         for t in &hidden {
             router.disable_route(t.clone());
         }
-        let instructions = if on.iter().any(|t| t == "kc") { ONE_INSTRUCTIONS } else { INSTRUCTIONS };
-        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden), instructions })
+        let one = on.iter().any(|t| t == "kc");
+        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden), one })
     }
 
     #[tool(description = "Docs on any tool, parameter or concept; no topic: the index.")]
@@ -2263,48 +2428,40 @@ impl KnowcodeServer {
 
     #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, more, help.")]
     async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, String> {
-        let op = p.op.trim().trim_start_matches("kc_").to_string();
-        let mut args = p.rest;
-        let mut put = |key: &str, v: Option<Value>| {
-            if let Some(v) = v {
-                args.insert(key.into(), v);
-            }
-        };
-        let q = p.q.map(Value::from);
-        let qs = (!p.qs.is_empty()).then(|| Value::from(p.qs));
-        let main = match op.as_str() {
-            "impact" | "context" => "symbol",
-            "find" | "locate" => "query",
-            "refs" => "name",
-            "search" => "pattern",
-            "more" => "cursor",
-            "help" => "topic",
-            other => return Err(format!("no op {other:?}: {}", ONE_OPS.join(", "))),
-        };
-        // A help topic named by its op is its tool's.
-        let q = match (op.as_str(), q) {
-            ("help", Some(Value::String(t))) if ONE_OPS.contains(&t.as_str()) => Some(Value::from(format!("kc_{t}"))),
-            (_, q) => q,
-        };
-        put(main, q);
-        put(match op.as_str() { "refs" => "names", "locate" => "queries", _ => "symbols" }, qs);
-        if op == "impact" {
-            put("depth", p.depth.map(Value::from));
+        let (tool, args) = one_call(p)?;
+        fn a<T: serde::de::DeserializeOwned>(tool: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
+            serde_json::from_value(Value::Object(args)).map(Parameters).map_err(|e| format!("op {}: {e}", &tool[3..]))
         }
-        fn args_for<T: serde::de::DeserializeOwned>(op: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
-            serde_json::from_value(Value::Object(args)).map(Parameters).map_err(|e| format!("op {op}: {e}"))
-        }
-        let out = match op.as_str() {
-            "impact" => self.kc_impact(args_for(&op, args)?).await,
-            "find" => self.kc_find(args_for(&op, args)?).await,
-            "refs" => self.kc_refs(args_for(&op, args)?).await,
-            "context" => self.kc_context(args_for(&op, args)?).await,
-            "search" => self.kc_search(args_for(&op, args)?).await,
-            "locate" => self.kc_locate(args_for(&op, args)?).await,
-            "more" => self.kc_more(args_for(&op, args)?).await,
-            _ => self.kc_help(args_for(&op, args)?).await,
-        }?;
-        Ok(one_calls(&out))
+        let t = tool.as_str();
+        let out = match t {
+            "kc_impact" => self.kc_impact(a(t, args)?).await,
+            "kc_find" => self.kc_find(a(t, args)?).await,
+            "kc_refs" => self.kc_refs(a(t, args)?).await,
+            "kc_context" => self.kc_context(a(t, args)?).await,
+            "kc_search" => self.kc_search(a(t, args)?).await,
+            "kc_locate" => self.kc_locate(a(t, args)?).await,
+            "kc_more" => self.kc_more(a(t, args)?).await,
+            "kc_help" => return self.kc_help(a(t, args)?).await.map(|h| one_text(&h, true)).map_err(|e| one_text(&e, true)),
+            "kc_trace" => self.kc_trace(a(t, args)?).await,
+            "kc_path" => self.kc_path(a(t, args)?).await,
+            "kc_flow" => self.kc_flow(a(t, args)?).await,
+            "kc_symbol_at" => self.kc_symbol_at(a(t, args)?).await,
+            "kc_unused" => self.kc_unused(a(t, args)?).await,
+            "kc_rename_preview" => self.kc_rename_preview(a(t, args)?).await,
+            "kc_coupled" => self.kc_coupled(a(t, args)?).await,
+            "kc_tests" => self.kc_tests(a(t, args)?).await,
+            "kc_hotspots" => self.kc_hotspots(a(t, args)?).await,
+            "kc_ownership" => self.kc_ownership(a(t, args)?).await,
+            "kc_reviewers" => self.kc_reviewers(a(t, args)?).await,
+            "kc_overview" => self.kc_overview(a(t, args)?).await,
+            "kc_areas" => self.kc_areas(a(t, args)?).await,
+            "kc_notes" => self.kc_notes(a(t, args)?).await,
+            "kc_note_add" => self.kc_note_add(a(t, args)?).await,
+            "kc_grep_ast" => self.kc_grep_ast(a(t, args)?).await,
+            "kc_status" => self.kc_status(a(t, args)?).await,
+            other => Err(format!("no op {other}")),
+        };
+        out.map(|o| one_text(&o, false)).map_err(|e| one_text(&e, false))
     }
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
@@ -2366,7 +2523,7 @@ impl ServerHandler for KnowcodeServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("knowcode", concat!(env!("CARGO_PKG_VERSION"), "+", env!("KNOWCODE_BUILD"))))
-            .with_instructions(self.instructions)
+            .with_instructions(if self.one { ONE_INSTRUCTIONS } else { INSTRUCTIONS })
     }
 
     /// The help topics, as resources (`knowcode://help/<topic>`), for clients that read resources.
@@ -2409,23 +2566,13 @@ kc_refs; what X is kc_context; files for a concept or bug kc_locate; text kc_sea
 and parameter kc_help. Tools take `repo`. Each edge has a confidence; an incomplete answer says why. `withheld`: a \
 privacy file blocks it; don't read it another way.";
 
-/// An answer as the `kc` tool gives it: the calls it names (a cut list's `kc_more {cursor: …}`, `kc_refs X`) as ops
-/// of `kc`.
-fn one_calls(text: &str) -> String {
-    let mut out = text.replace("kc_more {cursor: ", "kc {op: more, q: ");
-    for op in ONE_OPS {
-        out = out.replace(&format!("kc_{op} "), &format!("kc op={op} "));
-    }
-    out
-}
-
-/// The `one` profile's instructions (a prototype): the same map, as ops of the one tool.
+/// The `one` profile's instructions, the default: the same map, as ops of the one tool.
 const ONE_INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use its \
 `kc` tool instead of grep and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what \
-breaks if X changes: op impact, q X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X is defined \
-op find; every use refs; what X is context; files for a concept or bug locate; text search; the next page more (q: the \
-cursor); every op and parameter help. `repo` picks a repo. Each edge has a confidence; an incomplete answer says why. \
-`withheld`: a privacy file blocks it; don't read it another way.";
+breaks if X changes: kc {op: impact, q: X}, X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X \
+is defined op find; every use refs; what X is context; files for a concept or bug locate; text search; the next page \
+more; any other KnowCode tool by its name, and every op's parameters, help. `repo` picks a repo. Each edge has a \
+confidence; an incomplete answer says why. `withheld`: a privacy file blocks it; don't read it another way.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2516,6 +2663,10 @@ mod tests {
         let core = serde_json::to_string(&server("core").tool_router.list_all()).unwrap().len();
         assert!(core * 2 < bytes, "core {core} of all {bytes}");
         assert!(core + INSTRUCTIONS.len() <= CORE_BUDGET, "core schema and instructions {} bytes, budget {CORE_BUDGET}", core + INSTRUCTIONS.len());
+        // The default, `one`: its tool and instructions together, 1,250 bytes and 502 tokens (count_tokens) when
+        // set; at most 510 tokens is the bar.
+        let one = serde_json::to_string(&server("one").tool_router.list_all()).unwrap().len();
+        assert!(one + ONE_INSTRUCTIONS.len() <= 1_300, "one schema and instructions {} bytes, budget 1300", one + ONE_INSTRUCTIONS.len());
     }
 
     /// "What calls X", "who calls this HTTP endpoint" and "what breaks if X changes" go to kc_impact with a `file:line`
@@ -2545,7 +2696,9 @@ mod tests {
     #[test]
     fn invariant_every_parameter_is_documented_where_an_agent_can_reach_it() {
         let s = server("all");
-        let tools = s.tool_router.list_all();
+        let one = server("one");
+        let mut tools = s.tool_router.list_all();
+        tools.extend(one.tool_router.list_all());
         for t in &tools {
             let topic = crate::help::topic(&t.name).unwrap_or_else(|| panic!("{} has no help topic", t.name));
             let text = s.help(Some(&t.name)).unwrap();
@@ -2562,6 +2715,7 @@ mod tests {
         // Topics named in descriptions, the instructions and topics themselves exist.
         let mut texts: Vec<String> = tools.iter().filter_map(|t| t.description.as_deref().map(str::to_string)).collect();
         texts.push(INSTRUCTIONS.to_string());
+        texts.push(ONE_INSTRUCTIONS.to_string());
         texts.extend(crate::help::TOPICS.iter().map(|t| t.text.to_string()));
         for text in &texts {
             for (i, _) in text.match_indices("kc_help ") {
@@ -2612,6 +2766,7 @@ mod tests {
             "kc_grep_ast" => as_::<GrepAstParams>(args),
             "kc_more" => as_::<MoreParams>(args),
             "kc_status" => as_::<RepoOnlyParams>(args),
+            "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
     }
@@ -2623,7 +2778,8 @@ mod tests {
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
         let s = server("all");
-        let tools = s.tool_router.list_all();
+        let mut tools = s.tool_router.list_all();
+        tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
         let mut unadvertised = 0;
         for t in &tools {
@@ -2658,6 +2814,131 @@ mod tests {
         }
         // `repo`, `max_chars` and the rare ones: the bulk of what a tool takes.
         assert!(unadvertised > 60, "{unadvertised}");
+    }
+
+    /// Under `one`, every tool is reachable as an op of `kc`, with every parameter it takes: `q` and `qs` fill the
+    /// op's main parameters, and any other is passed by its own name and reaches the tool.
+    #[test]
+    fn every_op_reaches_its_tool_with_every_parameter() {
+        let s = server("all");
+        let tools = s.tool_router.list_all();
+        assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
+        let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
+        for (op, main, many) in ONE_OPS {
+            let tool = format!("kc_{op}");
+            let full = s.schemas.get(&tool).unwrap_or_else(|| panic!("op {op}: no tool {tool}"));
+            let all = full.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
+            let mut required = serde_json::Map::new();
+            for r in full.get("required").and_then(Value::as_array).into_iter().flatten() {
+                let r = r.as_str().unwrap();
+                required.insert(r.into(), sample(&all[r], r));
+            }
+            for (name, p) in &all {
+                let mut args = required.clone();
+                let value = sample(p, name);
+                args.insert(name.clone(), value.clone());
+                args.insert("op".into(), json!(op));
+                let (t, args) = kc(Value::Object(args)).unwrap_or_else(|e| panic!("{op}.{name}: {e}"));
+                assert_eq!(t, tool);
+                let read = parse(&t, Value::Object(args)).unwrap_or_else(|e| panic!("{op}.{name}: {e}"));
+                let want = match &value {
+                    Value::String(v) => v.clone(),
+                    Value::Array(a) => a[0].as_str().unwrap().to_string(),
+                    other => other.to_string(),
+                };
+                assert!(read.contains(&want), "{op}.{name}: {value} was dropped: {read}");
+            }
+            if !main.is_empty() {
+                assert!(all.contains_key(*main), "{op}: q fills {main}, which {tool} doesn't take");
+                let mut args = required.clone();
+                args.remove(*main);
+                args.insert("op".into(), json!(op));
+                args.insert("q".into(), json!("zq-main"));
+                let (t, args) = kc(Value::Object(args)).unwrap();
+                assert!(parse(&t, Value::Object(args)).unwrap().contains("zq-main"), "{op}: q");
+            } else {
+                assert!(kc(json!({ "op": op, "q": "x" })).is_err(), "{op} takes no q");
+            }
+            if !many.is_empty() {
+                assert!(all.contains_key(*many), "{op}: qs fills {many}, which {tool} doesn't take");
+                let mut args = required.clone();
+                args.remove(*many);
+                args.insert("op".into(), json!(op));
+                args.insert("qs".into(), json!(["zq-many"]));
+                let (t, args) = kc(Value::Object(args)).unwrap();
+                assert!(parse(&t, Value::Object(args)).unwrap().contains("zq-many"), "{op}: qs");
+            }
+        }
+        // With or without the prefix; an unknown op is refused, naming the ops.
+        assert_eq!(kc(json!({ "op": "kc_find", "q": "A" })).unwrap().0, "kc_find");
+        assert!(kc(json!({ "op": "nope" })).unwrap_err().contains("impact, find, refs"));
+        // A help topic named by its op is its tool's.
+        for (q, topic) in [("impact", "kc_impact"), ("impact.crossings", "kc_impact.crossings"), ("contract", "contract")] {
+            let (_, args) = kc(json!({ "op": "help", "q": q })).unwrap();
+            assert_eq!(crate::help::topic(args["topic"].as_str().unwrap()).unwrap().name, topic);
+        }
+    }
+
+    /// Calls a text names, as `kc` ops: in answers (a word after the name is its argument unless it is prose) and in
+    /// prose (help topics, skills).
+    #[test]
+    fn calls_are_named_as_ops_of_kc() {
+        let cases = [
+            ("continue: kc_more {cursor: \"kc~1f\"}", "continue: kc {op: more, cursor: \"kc~1f\"}"),
+            ("kc_more {cursor: <`items[0].callers_cursor`>}", "kc {op: more, cursor: <`items[0].callers_cursor`>}"),
+            ("continue: kc_impact {\"depth\":2,\"symbol\":\"a.cs#B\"}", "continue: kc {op: impact, \"depth\":2,\"symbol\":\"a.cs#B\"}"),
+            ("callers: 1 of 4 shown; kc_refs Save lists them all", "callers: 1 of 4 shown; kc {op: refs, q: Save} lists them all"),
+            ("a use: 2 references (kc_refs isValid)", "a use: 2 references (kc {op: refs, q: isValid})"),
+            ("kc_search finds them as text", "kc {op: search} finds them as text"),
+            ("ask again later (kc_status lists what is left)", "ask again later (kc {op: status} lists what is left)"),
+            ("use kc_context(symbol: \"A (b)\"); every reference: kc_refs(name: \"A\").", "use kc {op: context, symbol: \"A (b)\"}; every reference: kc {op: refs, name: \"A\"}."),
+            ("kc_overview()", "kc {op: overview}"),
+            ("kc_index and xkc_find and kc_nope stay", "kc_index and xkc_find and kc_nope stay"),
+        ];
+        for (text, want) in cases {
+            assert_eq!(one_text(text, false), want, "{text}");
+        }
+        let prose = [
+            ("get the rest with `kc_refs` or the cursor", "get the rest with `kc {op: refs}` or the cursor"),
+            ("`kc_overview` with no arguments", "`kc {op: overview}` with no arguments"),
+            ("see kc_help kc_context.http, and kc_impact.crossings", "see kc {op: help, q: context.http}, and impact.crossings"),
+            ("KnowCode help topics (kc_help {topic}):", "KnowCode help topics (kc {op: help, topic}):"),
+        ];
+        for (text, want) in prose {
+            assert_eq!(one_text(text, true), want, "{text}");
+        }
+    }
+
+    /// The default profile is `one`: a single always-loaded tool, its instructions naming calls as ops, and every
+    /// answer, help topic and error naming calls as ops too; `core` and `all` keep the separate tools and their names.
+    #[test]
+    fn the_one_profile_names_every_call_as_an_op() {
+        assert_eq!(DEFAULT_PROFILE, "one");
+        let s = server("one");
+        let tools = s.tool_router.list_all();
+        assert_eq!(tools.iter().map(|t| t.name.to_string()).collect::<Vec<_>>(), ["kc"]);
+        assert_eq!(serde_json::to_value(&tools[0]).unwrap()["_meta"], json!({ "anthropic/alwaysLoad": true }));
+        assert_eq!(s.get_info().instructions.as_deref(), Some(ONE_INSTRUCTIONS));
+        assert_eq!(server("core").get_info().instructions.as_deref(), Some(INSTRUCTIONS));
+        assert!(!ONE_INSTRUCTIONS.contains("kc_") && ONE_INSTRUCTIONS.contains("kc {op: impact, q: X}"), "{ONE_INSTRUCTIONS}");
+        let d = tools[0].description.as_deref().unwrap();
+        for word in ["impact", "who calls", "HTTP endpoint", "any repo", "hop", "find", "refs", "context", "search", "locate", "more", "help"] {
+            assert!(d.contains(word), "{word}: {d}");
+        }
+        // Help reaches every tool's topic, by op name too, naming calls as ops, and says nothing is unadvertised.
+        let rt = runtime();
+        let help = |q: &str| rt.block_on(s.kc(Parameters(serde_json::from_value(json!({ "op": "help", "q": q })).unwrap()))).unwrap();
+        let topic = help("more");
+        assert!(topic.starts_with("kc {op: more}") && !topic.contains("doesn't advertise"), "{topic}");
+        let index = rt.block_on(s.kc(Parameters(serde_json::from_value(json!({ "op": "help" })).unwrap()))).unwrap();
+        assert!(!index.contains("not advertised"), "{index}");
+        assert!(help("kc").contains("- `op` (string, required): "), "the kc topic lists its parameters");
+        // Profiles: one is kc alone, mixed with tools by name too; kc is never in `all` or `core`.
+        assert!(server("all").tool_router.list_all().iter().all(|t| t.name != "kc"));
+        assert!(server("core").tool_router.list_all().iter().all(|t| t.name != "kc"));
+        let mixed: Vec<String> = server("one,kc_trace").tool_router.list_all().into_iter().map(|t| t.name.to_string()).collect();
+        assert_eq!(mixed, ["kc", "kc_trace"]);
+        assert!(is_one("core,one") && !is_one("core") && !is_one("all,kc_tests"));
     }
 
     /// A value of `p`'s type, distinct enough to find in the parameters it was read into.
@@ -3160,6 +3441,30 @@ mod tests {
             }
         }
         assert!(paged >= 5, "{paged} of the answers were cut");
+
+        // Under `one` (the default), the same answers name the calls that continue them as ops of `kc`.
+        let one = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("one") };
+        let kc = |args: Value| rt.block_on(one.kc(p(args.clone()))).unwrap_or_else(|e| panic!("{args}: {e}"));
+        for (what, text) in [
+            ("refs", kc(json!({ "op": "refs", "q": "Audit.Log" }))),
+            ("context", kc(json!({ "op": "context", "q": "Audit.Log" }))),
+            ("impact", kc(json!({ "op": "impact", "q": "Audit.Log" }))),
+            ("trace", kc(json!({ "op": "trace", "q": "Audit.Log", "direction": "in" }))),
+        ] {
+            assert!(!text.contains("kc_"), "{what} names a tool `one` doesn't advertise: {text}");
+        }
+        let v: Value = serde_json::from_str(&kc(json!({ "op": "refs", "q": "Audit.Log" }))).unwrap();
+        let hint = v["incomplete"].as_array().unwrap().iter().find(|i| i["reason"] == "capped").unwrap()["hint"].as_str().unwrap().to_string();
+        assert_eq!(hint, "kc {op: more, cursor: <`cursor`>}");
+        // The call the hint names is one `kc` takes: it pages on.
+        let cursor = v["cursor"].as_str().unwrap();
+        // (kc_more runs in a child process, so the call is checked as kc reads it, and the page as kc_more makes it.)
+        let (tool, args) = one_call(serde_json::from_value(json!({ "op": "more", "cursor": cursor })).unwrap()).unwrap();
+        assert_eq!((tool.as_str(), args["cursor"].as_str()), ("kc_more", Some(cursor)));
+        let page = crate::cursor::more(&crate::compact::resolve(cursor).unwrap()).unwrap();
+        assert_eq!(page["items"].as_array().unwrap().len(), 20, "{page}");
+        let impact = kc(json!({ "op": "impact", "q": "Audit.Log" }));
+        assert!(impact.contains("kc {op: more, cursor: \"kc~"), "{impact}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
