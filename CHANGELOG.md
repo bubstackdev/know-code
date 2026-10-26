@@ -2,6 +2,18 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- Requests whose path is given to a function building the URL are read when the function is known to add only a
+  query string. `this.send("GET", addEventParameters("/ciphers/" + id + "/events", start, end, token))`, with
+  `addEventParameters` (in another file) appending `?start=…&end=…` to its first parameter, requests
+  `ciphers/{}/events`. A function that may change the path leaves the request unread, and the answer names it
+  ("its URL is built by withVersion(…), which KnowCode doesn't read"), never a guessed path. A URL chosen by a
+  condition (`all ? "/sync?all=true" : "/sync"`) is read when both choices have one path. On the public-v1
+  workspace, bitwarden-clients gained 11 requests, all linked `exact`: `ApiService.getSync` and the nine
+  `ApiService.getEvents*` that #89 left unread, and `EventLogApiService.getEventsSend`. TypeScript files are
+  re-extracted.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its

@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 20;
+pub const VERSION: u32 = 21;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -247,6 +247,9 @@ impl<'a> Cx<'a> {
             "function_declaration" | "generator_function_declaration" | "function_signature" => {
                 let Some(n) = node.child_by_field_name("name") else { return };
                 let name = self.text(n).to_string();
+                if !self.in_callable() && self.enclosing_type().is_none() {
+                    self.query_appender(node, &name);
+                }
                 self.callable(node, outer, name, SymbolKind::Function, None, node);
             }
             "lexical_declaration" | "variable_declaration" => {
@@ -1376,8 +1379,39 @@ impl Cx<'_> {
                     out.push(Piece::Text("/".to_string()));
                     self.push_pieces(path, out);
                 }
-                None => out.push(Piece::Call),
+                None => match self.wrapped_path(e) {
+                    // `addQuery('/events', start)`: the path given, and what the function adds, which the query
+                    // reads from its declaration (see `query_appender`) or reports as unread.
+                    Some((f, path)) => {
+                        self.push_pieces(path, out);
+                        out.push(Piece::Ref(format!("{f}()")));
+                    }
+                    None => out.push(Piece::Call),
+                },
             },
+            // `isAdmin ? '/sync?all=true' : '/sync'`: one path when both give the same one, its query aside.
+            "ternary_expression" => {
+                let (Some(a), Some(b)) = (e.child_by_field_name("consequence"), e.child_by_field_name("alternative")) else {
+                    return out.push(Piece::Unknown);
+                };
+                let (pa, pb) = (self.url_pieces(a), self.url_pieces(b));
+                let path = |p: &[Piece]| urls::encode(p, true).map(|u| u.split('?').next().unwrap_or_default().to_string());
+                match (path(&pa), path(&pb)) {
+                    (Some(x), Some(y)) if x == y => {
+                        // The pieces up to the query.
+                        for p in pa {
+                            if let Piece::Text(t) = &p
+                                && let Some((before, _)) = t.split_once('?')
+                            {
+                                out.push(Piece::Text(before.to_string()));
+                                break;
+                            }
+                            out.push(p);
+                        }
+                    }
+                    _ => out.push(Piece::Unknown),
+                }
+            }
             // `new URL('orders', base)`: the path.
             "new_expression" if e.child_by_field_name("constructor").is_some_and(|c| self.text(c) == "URL") => {
                 match e.child_by_field_name("arguments").and_then(|a| children(a).find(|c| c.is_named())) {
@@ -1412,6 +1446,93 @@ impl Cx<'_> {
         matches!(first.kind(), "string" | "template_string" | "binary_expression").then_some(first)
     }
 
+    /// `addQuery('/events', start, end)`: a plain function (not a method) given a path with literal text first, which
+    /// may build a URL from it: the function's name and that argument.
+    fn wrapped_path<'t>(&self, call: Node<'t>) -> Option<(String, Node<'t>)> {
+        let f = call.child_by_field_name("function").filter(|f| f.kind() == "identifier")?;
+        let first = call.child_by_field_name("arguments").and_then(|a| children(a).find(|c| c.is_named() && c.kind() != "comment"))?;
+        let text = self.url_pieces(first).iter().any(|p| matches!(p, Piece::Text(t) if t.contains('/')));
+        text.then(|| (self.text(f).to_string(), first))
+    }
+
+    /// `function addQuery(base: string, …) { if (start) base += "?start=" + start; …; return base; }`: a function
+    /// returning its first parameter with only a query string appended (each append starting with `?` or `&`, or
+    /// following one in its block). Recorded as the constant `addQuery()` with no value, so a URL it builds from a
+    /// path is that path (see [`Self::wrapped_path`]); any other function's URL is left unread.
+    fn query_appender(&mut self, node: Node, name: &str) {
+        let first = node
+            .child_by_field_name("parameters")
+            .and_then(|ps| children(ps).find(|c| matches!(c.kind(), "required_parameter" | "optional_parameter")))
+            .and_then(|p| p.child_by_field_name("pattern"))
+            .filter(|p| p.kind() == "identifier");
+        let (Some(p), Some(body)) = (first, node.child_by_field_name("body")) else { return };
+        let p = self.text(p).to_string();
+        let mut returns = 0;
+        if body.kind() == "statement_block" && self.appends_query(body, &p, false, &mut returns) && returns > 0 {
+            self.facts.constants.push(StringConst { qualified: format!("{name}()"), value: String::new(), line: line(node) });
+        }
+    }
+
+    /// Whether the statements of `block` change `p` only by appending a query string, and return it unchanged.
+    fn appends_query(&self, block: Node, p: &str, mut query: bool, returns: &mut u32) -> bool {
+        // `?…`, `&…`, or `cond ? "&" : "?"`.
+        let starts_query = |e: Node| -> bool {
+            let begins = |e: Node| matches!(self.url_pieces(e).first(), Some(Piece::Text(t)) if t.starts_with(['?', '&']));
+            begins(e)
+                || (e.kind() == "ternary_expression"
+                    && [e.child_by_field_name("consequence"), e.child_by_field_name("alternative")].iter().all(|b| b.is_some_and(begins)))
+        };
+        for s in children(block).filter(|c| c.is_named() && c.kind() != "comment") {
+            match s.kind() {
+                "expression_statement" => {
+                    let Some(e) = children(s).find(|c| c.is_named()) else { continue };
+                    let target = e.child_by_field_name("left").is_some_and(|l| self.text(l) == p);
+                    match e.kind() {
+                        "augmented_assignment_expression" if target => {
+                            let op = e.child_by_field_name("operator").map(|o| self.text(o));
+                            let Some(r) = e.child_by_field_name("right") else { return false };
+                            if op != Some("+=") || !(query || starts_query(r)) {
+                                return false;
+                            }
+                            query = true;
+                        }
+                        _ if assigns(self.src, s, p) => return false,
+                        _ => {}
+                    }
+                }
+                "if_statement" => {
+                    let parts = [s.child_by_field_name("consequence"), s.child_by_field_name("alternative").and_then(|a| children(a).find(|c| c.is_named()))];
+                    for b in parts.into_iter().flatten() {
+                        let ok = match b.kind() {
+                            "statement_block" => self.appends_query(b, p, query, returns),
+                            _ => !assigns(self.src, b, p) && !self.has_return(b),
+                        };
+                        if !ok {
+                            return false;
+                        }
+                    }
+                    if s.child_by_field_name("condition").is_some_and(|c| assigns(self.src, c, p)) {
+                        return false;
+                    }
+                }
+                "return_statement" => {
+                    let returned = children(s).find(|c| c.is_named());
+                    if !returned.is_some_and(|r| r.kind() == "identifier" && self.text(r) == p) {
+                        return false;
+                    }
+                    *returns += 1;
+                }
+                _ if assigns(self.src, s, p) || self.has_return(s) => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
+    fn has_return(&self, n: Node) -> bool {
+        n.kind() == "return_statement" || children(n).any(|c| !matches!(c.kind(), "function_expression" | "arrow_function" | "function_declaration") && self.has_return(c))
+    }
+
     /// `const endpoint = Api.payouts;` in a function: remembered, for a URL built from it later in that function.
     fn url_local(&mut self, name: &str, value: Node) {
         let builder = |v: Node| match v.kind() {
@@ -1419,7 +1540,8 @@ impl Cx<'_> {
             "new_expression" => v.child_by_field_name("constructor").is_some_and(|c| self.text(c) == "URL"),
             _ => false,
         };
-        if matches!(value.kind(), "string" | "template_string" | "member_expression" | "binary_expression") || builder(value) {
+        let wrapped = |v: Node| v.kind() == "call_expression" && self.wrapped_path(v).is_some();
+        if matches!(value.kind(), "string" | "template_string" | "member_expression" | "binary_expression" | "ternary_expression") || builder(value) || wrapped(value) {
             let pieces = self.url_pieces(value);
             if pieces.iter().any(|p| !matches!(p, Piece::Unknown)) {
                 self.url_locals.insert((self.current(), name.to_string()), pieces);
@@ -1923,6 +2045,17 @@ fn string_literal(src: &str, n: Node) -> Option<String> {
     }
 }
 
+/// Whether `n` assigns the variable `name` anywhere in it (`name = …`, `name += …`, `name++`).
+fn assigns(src: &str, n: Node, name: &str) -> bool {
+    let target = |t: Option<Node>| t.is_some_and(|t| &src[t.byte_range()] == name);
+    let here = match n.kind() {
+        "assignment_expression" | "augmented_assignment_expression" => target(n.child_by_field_name("left")),
+        "update_expression" => target(n.child_by_field_name("argument")),
+        _ => false,
+    };
+    here || children(n).any(|c| assigns(src, c, name))
+}
+
 /// `Foo`, `Foo<T>`, `ns.Foo`, `ns.Foo<T>` → `Foo`.
 fn base_type_name(src: &str, t: Node) -> String {
     match t.kind() {
@@ -2139,6 +2272,53 @@ export abstract class BaseComponent {}
         assert!(!type_refs.contains(&"Promise"), "{type_refs:?}");
         assert!(f.refs.iter().any(|r| r.name == "items" && r.kind == RefKind::Member));
         assert_eq!(f.parse_errors, 0);
+    }
+
+    /// A function returning its first parameter with only a query string appended is recorded (`addQuery()`), so a
+    /// URL it builds is the path given; one that may change the path, or returns something else, is not. A request
+    /// building its URL so, or choosing between two URLs with one path, keeps the path with the function marked.
+    #[test]
+    fn query_appending_functions_and_conditional_urls() {
+        let f = extract(
+            r#"
+export function addQuery(base: string, start: string, end: string): string {
+  if (start != null) {
+    base += "?start=" + start;
+  }
+  if (end != null) {
+    base += base.indexOf("?") > -1 ? "&" : "?";
+    base += "end=" + end;
+  }
+  return base;
+}
+export function addSegment(base: string, id: string): string {
+  if (id) {
+    base += "/" + id;
+  }
+  return base;
+}
+export function reset(base: string): string {
+  base = "/home";
+  return base;
+}
+export function other(base: string): string {
+  return base.trim();
+}
+export class ApiService {
+  getEvents(start: string) { return this.send("GET", addQuery("/events", start, null)); }
+  getSync(all: boolean) {
+    const path = all ? "/sync?all=true" : "/sync";
+    return this.send("GET", path);
+  }
+  getEither(a: boolean) { return this.send("GET", a ? "/one" : "/two"); }
+}
+"#,
+            false,
+        );
+        let consts: Vec<(&str, &str)> = f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect();
+        assert_eq!(consts, [("addQuery()", "")]);
+        let routes: Vec<(&str, &str)> = f.http_routes.iter().map(|r| (r.side, r.path.as_str())).collect();
+        assert_eq!(routes, [("client", "/events{=addQuery()}"), ("client", "/sync")]);
     }
 
     #[test]
