@@ -1288,7 +1288,7 @@ impl Cx<'_> {
             }
         };
         let Some(verb) = verb else { return };
-        let Some(sym) = self.current() else { return };
+        let sym = self.current();
         let surely = fetch || direct || strong;
         let Some((pieces, local)) = self.request_pieces(url) else { return };
         // A client named for an API passed no literal text (`this.ordersClient.delete(id)`): an operation, not a URL.
@@ -1299,7 +1299,7 @@ impl Cx<'_> {
         let Some(path) = urls::encode(&pieces, true) else {
             // A request whose URL is only known at run time: kept with no path, so an answer can say it wasn't read.
             if surely {
-                self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "client", verb, path: String::new(), path_ref: None, service: None, service_ref: None, line: line(node) });
+                self.facts.http_routes.push(HttpRoute { sym, side: "client", verb, path: String::new(), path_ref: None, service: None, service_ref: None, line: line(node) });
             }
             return;
         };
@@ -1311,7 +1311,7 @@ impl Cx<'_> {
                 Some((name, at)) => format!("{path}{{~{name}@{at}}}"),
                 None => path,
             };
-            self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "client", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) });
+            self.facts.http_routes.push(HttpRoute { sym, side: "client", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) });
         }
     }
 
@@ -1361,9 +1361,9 @@ impl Cx<'_> {
         };
         let Some(client) = client else { return };
         let Some(tag) = api_tag(&client) else { return };
-        let Some(sym) = self.current() else { return };
+        let sym = self.current();
         self.facts.http_routes.push(HttpRoute {
-            sym: Some(sym),
+            sym,
             side: "operation",
             verb: String::new(),
             path: method.to_string(),
@@ -2729,6 +2729,46 @@ export class MessageBus {
                 ("getProfile", "GET", "/accounts/profile"),
                 // The wrapper's own `fetch` of a path known only at run time.
                 ("send", "GET", ""),
+            ]
+        );
+    }
+
+    /// A request or operation in code no named symbol encloses (an anonymous default export, a callback in it, a
+    /// function assigned to a property) is kept, the file's (`sym` none), as top-level statements' are: the global
+    /// client's `ApiClient.getLiveTvSeriesTimers(query)` there was dropped.
+    #[test]
+    fn requests_outside_any_symbol_are_the_files() {
+        let f = extract(
+            r#"
+const query = { SortBy: 'SortName' };
+export default function (view, params, tabContent) {
+    let timersPromise;
+    const self = this;
+    const userId = params.userId || ApiClient.getCurrentUserId();
+    self.preRender = function () {
+        timersPromise = ApiClient.getLiveTvSeriesTimers(query);
+    };
+    view.addEventListener('viewshow', function () {
+        ApiClient.getItem(ApiClient.getCurrentUserId(), params.id).then(function (item) { view.title = item.Name; });
+        fetch('/Library/Refresh', { method: 'POST' });
+    });
+}
+"#,
+            false,
+        );
+        let routes: Vec<(Option<&str>, &str, &str, &str, u32)> = f
+            .http_routes
+            .iter()
+            .map(|r| (r.sym.map(|s| f.symbols[s].name.as_str()), r.side, r.verb.as_str(), r.path.as_str(), r.line))
+            .collect();
+        assert_eq!(
+            routes,
+            [
+                (Some("userId"), "operation", "", "getCurrentUserId", 6),
+                (None, "operation", "", "getLiveTvSeriesTimers", 8),
+                (None, "operation", "", "getItem", 11),
+                (None, "operation", "", "getCurrentUserId", 11),
+                (None, "client", "POST", "/Library/Refresh", 12),
             ]
         );
     }

@@ -23,6 +23,11 @@ measure what KnowCode returns, and make no claim about how agents use it.
   `[HttpPost(Name = "…")]`) is no longer taken for the template when it comes first. On the public-v2 workspace this
   adds 42 server routes (34 in jellyfin-server, 8 in bitwarden-server) and links one more request
   (`LiveTv/Tuners/Discover`).
+- TypeScript and JavaScript: a request or generated-client call in code no named function or class encloses (an
+  anonymous `export default function`, a callback inside it, a function assigned to a property) is kept as the
+  file's, as top-level statements are, where it was dropped: jellyfin-web's `ApiClient.getLiveTvSeriesTimers(query)`
+  in `self.preRender = function () {…}`. On the public-v1 workspace this adds 25 request rows (21 in jellyfin-web,
+  4 in bitwarden-clients' specs), 9 of them linked.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
