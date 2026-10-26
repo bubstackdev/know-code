@@ -3,8 +3,11 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import errno
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC=importlib.util.spec_from_file_location('public_census',Path(__file__).resolve().parents[1]/'census-public-eval.py')

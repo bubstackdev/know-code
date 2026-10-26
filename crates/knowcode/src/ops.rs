@@ -9252,6 +9252,27 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn an_interfaces_static_member_has_no_implementations() {
+        let cache = test_cache();
+        let base = cache.dir("iface-static");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                ("src/IShelf.cs", "namespace Shelf;\npublic interface IShelf\n{\n    private static readonly object[] NoValues = new object[0];\n    int Count();\n}\n"),
+                ("src/Shelf.cs", "namespace Shelf;\npublic class Shelf : IShelf\n{\n    private static readonly object[] NoValues = new object[0];\n    public int Count() => NoValues.Length;\n}\n"),
+            ],
+        );
+        // The class's field of the same name is its own, not an implementation of the interface's.
+        let r = impact_of(&root, "src/IShelf.cs:4");
+        assert!(r.impact.affected.iter().all(|a| a.edge != "witness"), "{:?}", rows(&r.impact));
+        // An instance member still has its implementation.
+        let r = impact_of(&root, "src/IShelf.cs:5");
+        assert_eq!(r.impact.affected.iter().map(|a| (a.qualified.as_str(), a.edge)).collect::<Vec<_>>(), [("Shelf.Count", "witness")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn bus_messages_link_publishers_to_consumers_across_repos() {
         let cache = test_cache();
         let base = cache.dir("bus");

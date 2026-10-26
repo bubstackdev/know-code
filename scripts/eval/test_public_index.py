@@ -130,20 +130,35 @@ class PublicIndexTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             manifest, receipt, session = self.fixture(Path(temp))
             original = session/'source/example-client/api.ts'
-            copy = index.shutil.copyfileobj
-            def changing(src, dst):
-                result = copy(src, dst)
-                if Path(src.name).resolve() == original.resolve():
-                    original.chmod(0o644)
-                    original.write_text('changed after copy')
-                    original.chmod(0o444)
-                return result
-            with patch.object(index.shutil, 'copyfileobj', changing):
+            real_load = index.load_census
+            def load_census():
+                m = real_load()
+                real = m.clone_or_copy
+                def changing(src, dst):
+                    if Path(src).resolve() == original.resolve():
+                        original.chmod(0o644)
+                        original.write_text('changed before its copy\n')
+                        original.chmod(0o444)
+                    return real(src, dst)
+                m.clone_or_copy = changing
+                return m
+            with patch.object(index, 'load_census', load_census):
                 with self.assertRaisesRegex(ValueError, 'pinned receipt'):
                     index.prepare(manifest, receipt, session)
             self.assertFalse((session/'control/index').exists())
             self.assertFalse(list((session/'control').glob('.knowcode-neutral-*')))
 
+    def test_same_size_source_change_is_refused_by_the_workspace_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            manifest, receipt, session = self.fixture(Path(temp))
+            file = session/'source/example-client/api.ts'
+            data = file.read_bytes()
+            file.chmod(0o644)
+            file.write_bytes(data.replace(b'42', b'43'))
+            file.chmod(0o444)
+            with self.assertRaisesRegex(ValueError, 'pinned receipt'):
+                index.prepare(manifest, receipt, session)
+            self.assertFalse((session/'control/index').exists())
 
 if __name__ == '__main__':
     unittest.main()

@@ -11,6 +11,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   passing such a `const` straight to `fetch(url)` or `send("GET", path)`, linked before, now say so too. A URL
   builder or `{ url }` option given a `let`, `var`, parameter, a `const` of an enclosing function or the module, a
   name declared twice in the function, or a `const` built from another local holding URL text, isn't read.
+- C#: a conditional that splits a declaration (`ILogger ForContext(Type t)`, then `#if X` a body, `#else` a `;`,
+  `#endif`) no longer loses it. tree-sitter reads a directive only between declarations or statements, and its
+  error recovery lost the declaration and often its type's other members: Serilog's `ILogger` had no members, and
+  `PropertyBinder` no class. A C# file that parses with errors is read again with each conditional's first branch
+  (the others blanked, so every line and column still points at the file), and that reading is kept when it parses
+  better. Files that parse are read as before. On the public-v1/v2 workspaces this changes 11 serilog files and
+  one bitwarden-server file, and no other repo's index. An interface's static member (`private static readonly
+  object[] NoPropertyValues`, now read in `ILogger`) has no implementations: a class's field of the same name is its
+  own.
 - An impact row whose caller reaches the changed symbol on several lines lists them all: `at line 526 (also 532, 592,
   602)` in text, `also` in JSON. Before, one line per caller was named; agents in 0.3's study grepped for the rest,
   and a two-hop question's label counts each call line. Replaying that study's KnowCode calls, impact answers grow
