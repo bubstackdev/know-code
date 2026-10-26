@@ -21,7 +21,7 @@ mod tsconfig;
 mod typescript;
 
 pub use manifest::implicit_usings;
-pub use typescript::{action_name, api_tag};
+pub use typescript::{action_name, api_tag, is_minified};
 pub mod types;
 pub mod urls;
 mod yaml;
@@ -913,6 +913,12 @@ pub fn extract(lang: Lang, source: &str) -> FileFacts {
 }
 
 /// [`extract`] for a file at `path` (repo-relative), for formats whose facts depend on the file name.
+/// The facts of a package's JavaScript or TypeScript source (`tsx` for JavaScript and `.tsx`), read for the requests
+/// its methods make: a package's own code is a library by definition, so a license banner doesn't leave it out.
+pub fn extract_package_source(source: &str, tsx: bool) -> FileFacts {
+    typescript::extract(source, tsx)
+}
+
 pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
     match lang {
         Lang::Swift => swift::extract(source),

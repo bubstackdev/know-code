@@ -49,7 +49,8 @@ knowcode setup claude     # or: knowcode setup codex, knowcode setup cursor
 
 `setup claude` installs the bundled Claude Code plugin: the MCP server, a Grep/Glob hook and four workflow skills.
 `setup codex` and `setup cursor` add the MCP server to the client's user settings; `setup codex` also adds a
-session-start hook, which Codex runs once you trust it in `/hooks`. `--print` shows the configuration without changing
+session-start hook, which Codex runs once you trust it (setup says how, and `knowcode status` says whether you have).
+`--print` shows the configuration without changing
 anything. Start a new client session afterwards.
 
 The server advertises one tool, `kc`, whose `op` names what to run (`impact`, `find`, `refs`, `context`, `search`, …,
@@ -159,6 +160,7 @@ routes, and languages such as Go, Java and Kotlin are not extracted at all. Deta
 - [Languages](docs/languages.md): what is extracted and resolved per language and framework, and the known gaps.
 - [Architecture](docs/architecture.md): crates, the index, freshness, the writer lock, the cache lifecycle.
 - [Evaluation](docs/evaluation.md): how KnowCode is checked.
+- [Release gate, 0.4](eval/release-gate/0.4.0.md): what 0.4.0 shipped on, measured without model calls.
 - [Public agent study results, 0.3](eval/public-v2/results.md): the pre-registered public-v2 study, criterion by
   criterion; [0.2's study](eval/public-v1/results.md).
 - [Claude Code integration](integrations/claude-code/README.md): the plugin, hook and skills.

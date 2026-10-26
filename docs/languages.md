@@ -78,7 +78,8 @@ Resolved:
   arguments, `params`, and the argument types the site shows; a primary constructor counts as one, and a struct's
   `new S()` is its implicit one. `: base(…)`, `: this(…)` and a primary constructor's base call reach the constructor
   they chain to. A creation more than one constructor fits is `ambiguous` to each, never a confident pick.
-- **HTTP.** ASP.NET controller actions (`[Route]` and `[Http*]` attributes, `nameof` and constants resolved) and
+- **HTTP.** ASP.NET controller actions (`[Route]` and `[Http*]` attributes, `nameof` and constants resolved; each
+  `[Http*]` on an action is a route of its own, and a named argument such as `Name = …` is no template) and
   minimal API endpoints are linked to the requests that reach them: C# `HttpClient` calls with a URL (base addresses
   dropped, constants resolved, interpolated values as route parameters; a base path in a `readonly string` field,
   a URL built in a local and `new Uri(base, path)` are read), RestSharp's `RestRequest`, request classes declaring a
@@ -111,7 +112,15 @@ Resolved:
   count: the repo itself, a repo it depends on, the one repo serving another of its requests or a host its settings
   name, the one repo a tagged operation of its links to. With none known, an untagged operation links to every
   action of its name, `ambiguous`, assuming `server_unverified`. A client the repo declares itself is read through its
-  own requests instead.
+  own requests instead. A method of an external client the repo only declares in a `.d.ts` (`declare module
+  'media-apiclient'`), called with no tag (`apiClient.getItem(…)`), makes its request in code that isn't read: it
+  links to the action of its name and that action's `…Legacy` twin, `ambiguous`, assuming `client_unread`. When the
+  package is installed in the repo's `node_modules` at the version its lockfile pins, its code is read instead (see
+  [configuration](configuration.md#ignoring-paths)): the call links through the request the package's method makes
+  (its own, or that of a method of its class it calls, one call deep), as the repo's own request of that verb and
+  path would, assuming `package_code`, with `package` naming the package, version, method and where it is (a
+  minified bundle's original source, from its source map). A method making two requests links `ambiguous`; one
+  making none that KnowCode reads, or whose URL is built at run time, keeps the name guess, saying so.
 - **Minimal APIs.** `MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`, `MapMethods` and `Map` (every verb)
   are server routes, under their `MapGroup` prefixes: groups held in locals or chained, nested, and passed to helper
   methods (`app.MapGroup("api/catalog").MapCatalogApi()`, `MapOrders(group)`, up to four helpers deep). Templates may

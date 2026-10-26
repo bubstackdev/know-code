@@ -9,6 +9,63 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits
   changes that file. On history-v1's two caller questions it names the one production caller of each label that
   `impact` reaches; the other, a call through Serilog's `ILogger` inside Serilog.Extensions.Hosting, isn't reached.
+- A call to an external client the repo declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`) links
+  through the client package's own code when it is installed in the repo's `node_modules` at the version the
+  lockfile pins: to the action serving the request the package's method makes, assuming `package_code`, with
+  `package` naming the package, version, method and its file and line (a minified bundle is read from its source
+  map's original sources). Only declared packages are read, the repo's privacy file applies, links aren't followed,
+  nothing is fetched or written into the repo; `index.node_modules = false` turns it off. On the public-v1
+  workspace, with jellyfin-web's lockfile-pinned packages installed, 194 calls link through the package (87 that
+  linked nothing, 43 to other actions than the name guess, among them 11 to the `…Legacy` twin), and public-v1's
+  http-cross-repo-005 finds its one missed file.
+- A call to an external client the repo only declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`), with
+  no tag (`apiClient.updateUserConfiguration(…)`), no longer links `exact` by the method's name: the client's code,
+  where the request is made, isn't read, and it may request the action's `…Legacy` twin instead (on public-v1's
+  workspace, at least 10 of 179 such links went to the wrong one of the two). These links are now `ambiguous`,
+  include the `…Legacy` twin, and assume `client_unread`.
+- C#: an action with several `[Http*]` attributes serves each of their routes, where only the first was read:
+  `LibraryController.GetSimilarItems`'s `[HttpGet("Items/{itemId}/Similar")]` and four more, and the
+  `[HttpHead]` of actions answering GET and HEAD. A named argument (`[HttpGet("Css.css", Name = "…")]`,
+  `[HttpPost(Name = "…")]`) is no longer taken for the template when it comes first. On the public-v2 workspace this
+  adds 42 server routes (34 in jellyfin-server, 8 in bitwarden-server) and links one more request
+  (`LiveTv/Tuners/Discover`).
+- TypeScript and JavaScript: a request or generated-client call in code no named function or class encloses (an
+  anonymous `export default function`, a callback inside it, a function assigned to a property) is kept as the
+  file's, as top-level statements are, where it was dropped: jellyfin-web's `ApiClient.getLiveTvSeriesTimers(query)`
+  in `self.preRender = function () {…}`. On the public-v1 workspace this adds 25 request rows (21 in jellyfin-web,
+  4 in bitwarden-clients' specs), 9 of them linked.
+- `knowcode setup codex` says whether Codex runs KnowCode's session-start hook yet, read from Codex's own record of
+  the hooks you trusted: if not, the one step left ("Hooks need review" → "Review hooks" when Codex starts, or
+  `/hooks`), and if it changed since you trusted it, why. `knowcode status` gives the same line for each Codex
+  profile set up (`codex_hooks` in `--json`). KnowCode only reads that record; trusting the hook stays yours to do in
+  Codex. `knowcode uninstall` also removes Codex's record of trusting KnowCode's hook.
+- For a Homebrew install, setup names `opt/knowcode/bin/knowcode` when it would otherwise name the versioned keg,
+  which `brew upgrade` removes: the client configuration, and the Codex hook you trusted, keep working across
+  upgrades.
+
+## 0.4.0 (2026-10-26)
+
+0.4 makes KnowCode cheaper to keep in a session and more exact across repositories. By default a client now loads one
+tool, `kc`, instead of eight: 502 tokens on every turn instead of 1,276, measured with the provider's token counter.
+Claude Code sessions, and Codex sessions once their hook is trusted, open with a line saying what KnowCode indexes there
+and which call answers callers and impact. HTTP links that pointed at the wrong server are gone, and the impact walk
+reaches further: replaying every call recorded in the published studies, two-hop impact answers find more of the
+labelled places (recall 0.587 to 0.628) with fewer wrong ones, and no question type got worse. From 0.4 on, releases ship on [checks that make no model calls](eval/release-gate/0.4.0.md); they
+measure what KnowCode returns, and make no claim about how agents use it.
+
+- `coupled` ranks partners by shared commits, the most recent first among equals, where it ranked them by shared
+  commits weighted by age (half per 90 days). Over a long span the weighting buried the strongest partners: with
+  `--since all`, Autofac's `ResolveOperation.cs` listed one of the ten files sharing the most commits with it in its
+  top ten, and a rule file touched by tooling sweeps first. Now its top ten holds nine of them, and the tenth is next.
+  The age weighting is still in each partner (`weight`, shown as `recency`). A partner that isn't code and shared under
+  a fifth of its own commits with the file (a rule or settings file that sweeps touched) comes after the others.
+  Against history-v1's two file co-change questions (labels from git alone, renames followed), `coupled --since all`
+  lists 51 of 55 and 14 of 14 of the labelled files at the label's size.
+- The default `kc` tool names the history questions: its description lists `history`, and the server's instructions
+  say which op answers a symbol's commits and authors (`history`) and the files changing with a file (`coupled`).
+  Before, agents learned of them only from `help`. To stay within the 1,300-byte budget, the instructions no longer
+  say answers are read from the working tree. The tool and instructions are 1,290 bytes and 501 tokens
+  (count_tokens), from 1,283 and 502.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an

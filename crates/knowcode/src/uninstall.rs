@@ -45,7 +45,7 @@ fn remove_server(reg: &Registration) -> Result<()> {
     let after = if reg.client == Client::Codex {
         let mut doc: DocumentMut = before.parse().with_context(|| format!("{} is not valid TOML; retained", path.display()))?;
         // The session-start hook setup added, and the tables it leaves empty; other hooks stay, in their place.
-        if setup::remove_codex_hook(&mut doc) {
+        if setup::remove_codex_hook(&mut doc, &reg.directory) {
             eprintln!("knowcode: left an empty [[hooks.SessionStart]] entry in {} where KnowCode's hook was, so your hooks after it keep their place and Codex still trusts them", path.display());
         }
         if let Some(servers) = doc.get_mut("mcp_servers") {

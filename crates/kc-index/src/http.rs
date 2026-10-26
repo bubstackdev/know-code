@@ -52,6 +52,23 @@ pub struct RouteLink {
     pub assumptions: Vec<Assumption>,
     /// The host evidence the link rests on, when there is any.
     pub host: Option<HostLink>,
+    /// For a call to an external client the repo declares: the package method whose request the link follows.
+    pub package: Option<PackageLink>,
+}
+
+/// The package code a link from a declared client's call rests on (see [`crate::sdk`]): the package and version
+/// installed in the client repo's `node_modules`, the method called, where it is, and the request it makes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PackageLink {
+    pub package: String,
+    pub version: String,
+    /// `ApiClient.getSimilarItems`.
+    pub method: String,
+    /// `src/apiClient.js:812 (from node_modules/jellyfin-apiclient/dist/jellyfin-apiclient.js.map)`.
+    pub at: String,
+    /// The request it makes: `GET Items/{itemId}/Similar`, through `ApiClient.getJSON` when the method makes it
+    /// through another of its class's methods.
+    pub request: String,
 }
 
 /// Why a link's requests are taken to reach the repo it goes to: the client names `host`, and configuration maps it
@@ -309,6 +326,7 @@ fn route_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummar
                     confidence: "exact",
                     assumptions: assumed(true),
                     host: None,
+                    package: None,
                 })
                 .collect();
         }
@@ -335,6 +353,7 @@ fn route_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummar
                         client: client.host_at.as_ref().map_or_else(|| "the request's URL".to_string(), |at| format!("the client's base address ({at})")),
                         server: server.clone(),
                     }),
+                    package: None,
                 })
                 .collect();
             if !mine.is_empty() {
@@ -397,9 +416,27 @@ fn action_of(r: &RouteRow) -> (&str, &str) {
 /// `ambiguous` when several do, or when the client has no tag and the operation is one word (`update`): nothing then
 /// says the receiver is the API's client rather than another of the name. When no server is known, an untagged operation links to every action of that name,
 /// `ambiguous`, assuming `server_unverified`: nothing says which server the client sends to.
+///
+/// An untagged method of an external client the repo only declares (a `.d.ts`, see [`RouteRow::detail`]) makes its
+/// request inside code that wasn't read, so its URL isn't known: the server's `…Legacy` twin of the action (the same
+/// operation under its older route) is as likely, and the links are `ambiguous` at most, assuming `client_unread`.
 fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Vec<RouteLink> {
     let Some(op) = client.path.as_deref() else { return Vec::new() };
-    let named = named_actions(op, summaries);
+    // The package's own code, read from the client repo's `node_modules`, says which request the method makes.
+    // When it doesn't (no request read, a URL known only at run time, a route no repo serves), the name guess stands,
+    // saying what the package showed.
+    let pkg = package_method(client, client_repo, summaries);
+    if let Some((p, m)) = pkg {
+        let links = package_handlers(client, client_repo, summaries, p, m);
+        if !links.is_empty() {
+            return links;
+        }
+    }
+    let unread = declared_untagged(client);
+    let mut named = named_actions(op, summaries);
+    if unread {
+        named.extend(named_actions(&format!("{op}Legacy"), summaries));
+    }
     let tagged: Vec<(&Path, &RouteRow)> = match client.service.as_deref() {
         Some(tag) => named.iter().filter(|(_, r)| squash(action_of(r).1) == squash(tag)).copied().collect(),
         None => Vec::new(),
@@ -414,17 +451,123 @@ fn operation_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSu
     // A one-word operation (`update`, `login`) not under the controller its tag names is a name many APIs' methods
     // share: never `exact`.
     let specific = by_tag || op.chars().skip(1).any(|c| c.is_ascii_uppercase() || c == '_');
-    let confidence = if cands.len() == 1 && !unverified && specific { "exact" } else { "ambiguous" };
+    let confidence = if cands.len() == 1 && !unverified && specific && !unread { "exact" } else { "ambiguous" };
     let mut assumptions = vec![Assumption::SameDeployment, Assumption::OperationName];
     if unverified {
         assumptions.push(Assumption::ServerUnverified);
     }
+    if unread {
+        assumptions.push(Assumption::ClientUnread);
+    }
+    assumptions.sort();
     let mut links: Vec<RouteLink> = cands
         .into_iter()
-        .map(|(repo, route)| RouteLink { repo: repo.to_path_buf(), route: route.clone(), confidence, assumptions: assumptions.clone(), host: None })
+        .map(|(repo, route)| RouteLink { repo: repo.to_path_buf(), route: route.clone(), confidence, assumptions: assumptions.clone(), host: None, package: None })
         .collect();
     links.sort_by(|a, b| (&a.repo, &a.route.symbol).cmp(&(&b.repo, &b.route.symbol)));
+    if let Some((p, m)) = pkg {
+        let evidence = PackageLink { package: p.name.clone(), version: p.version.clone(), method: format!("{}.{}", m.class, m.method), at: m.at(), request: package_says(m) };
+        for l in &mut links {
+            l.package = Some(evidence.clone());
+        }
+    }
     links
+}
+
+/// What a package method that links nothing through its own requests was found to request, in a few words.
+fn package_says(m: &crate::sdk::SdkMethod) -> String {
+    let paths: Vec<String> = m.requests.iter().filter_map(|q| q.path.as_ref().map(|p| format!("{} {p}", q.verb))).collect();
+    if m.requests.is_empty() {
+        "no request KnowCode reads".to_string()
+    } else if paths.is_empty() {
+        "a request whose URL is known only at run time".to_string()
+    } else {
+        format!("{}, which no indexed repo serves", paths.join(", "))
+    }
+}
+
+/// The class an operation of a declared client is called on: `ApiClient` in `ApiClient.getItems is declared at …`.
+fn declared_class(op: &RouteRow) -> Option<&str> {
+    let name = op.path.as_deref()?;
+    op.detail.as_deref()?.split(" is declared at ").next()?.strip_suffix(name)?.strip_suffix('.')
+}
+
+/// The method of a package the client repo declares, read from its `node_modules`, that a declared client's untagged
+/// operation calls: the package's class and method of the names the call site's declaration gives, when exactly one
+/// package read has it.
+fn package_method<'a>(op: &RouteRow, client_repo: &Path, summaries: &'a [RepoSummary]) -> Option<(&'a crate::sdk::SdkPackage, &'a crate::sdk::SdkMethod)> {
+    if !declared_untagged(op) {
+        return None;
+    }
+    let (class, name) = (declared_class(op)?, op.path.as_deref()?);
+    let mine = summaries.iter().find(|s| s.root == client_repo)?;
+    let mut found = mine.sdk.iter().flat_map(|p| p.methods.iter().filter(|m| m.class == class && m.method == name).map(move |m| (p, m)));
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
+/// Links through a package method's requests (see [`package_method`]): each request linked as the repo's own request
+/// of that verb and path would be, assuming `package_code` instead of `operation_name` and carrying the package
+/// evidence; `ambiguous` when the method makes more than one request. None when it makes none KnowCode reads.
+fn package_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummary], pkg: &crate::sdk::SdkPackage, m: &crate::sdk::SdkMethod) -> Vec<RouteLink> {
+    let several = m.requests.len() > 1;
+    let mut out: Vec<RouteLink> = Vec::new();
+    for q in &m.requests {
+        let Some(path) = q.path.clone() else { continue };
+        let request = RouteRow { side: "client".to_string(), verb: q.verb.clone(), path: Some(path.clone()), service: None, detail: None, local: None, host: None, host_at: None, ..client.clone() };
+        let evidence = PackageLink {
+            package: pkg.name.clone(),
+            version: pkg.version.clone(),
+            method: format!("{}.{}", m.class, m.method),
+            at: m.at(),
+            request: match &q.via {
+                Some(v) => format!("{} {path} (through {v})", q.verb),
+                None => format!("{} {path}", q.verb),
+            },
+        };
+        for mut l in route_handlers(&request, client_repo, summaries) {
+            if several {
+                l.confidence = "ambiguous";
+            }
+            if !l.assumptions.contains(&Assumption::PackageCode) {
+                l.assumptions.push(Assumption::PackageCode);
+                l.assumptions.sort();
+            }
+            l.package = Some(evidence.clone());
+            if !out.iter().any(|o| o.repo == l.repo && o.route == l.route) {
+                out.push(l);
+            }
+        }
+    }
+    out
+}
+
+/// The package keys (verb, path) a declared client's operation requests, when its package was read: what
+/// [`callers`] matches a server route against.
+fn package_keys(op: &RouteRow, client_repo: &Path, summaries: &[RepoSummary]) -> Option<Vec<(String, String)>> {
+    let (_, m) = package_method(op, client_repo, summaries)?;
+    Some(
+        m.requests
+            .iter()
+            .filter_map(|q| key(&RouteRow { side: "client".into(), verb: q.verb.clone(), path: q.path.clone(), ..op.clone() }))
+            .collect(),
+    )
+}
+
+/// Whether an operation is an untagged call to an external client the repo only declares (`detail` says where): its
+/// request is made in code that wasn't read.
+fn declared_untagged(op: &RouteRow) -> bool {
+    op.side == "operation" && op.service.is_none() && op.detail.is_some()
+}
+
+/// Whether the operation `op` may be the action named `action`: of its name, or, for an external client the repo only
+/// declares, its `…Legacy` twin (see [`operation_handlers`]).
+fn may_be_action(op: &RouteRow, action: &str) -> bool {
+    let Some(name) = op.path.as_deref() else { return false };
+    action.eq_ignore_ascii_case(name)
+        || declared_untagged(op)
+            && action.get(..name.len()).is_some_and(|a| a.eq_ignore_ascii_case(name))
+            && action.get(name.len()..).is_some_and(|rest| rest.eq_ignore_ascii_case("Legacy"))
 }
 
 /// The actions named `op` in any repo, one per action (an action routed under several paths is one action).
@@ -552,6 +695,7 @@ fn rank<'a>(
             },
             assumptions: assumed(false),
             host: None,
+            package: None,
         })
         .collect();
     links.sort_by_key(|l| (l.confidence == "ambiguous", l.repo.clone()));
@@ -568,7 +712,10 @@ pub fn callers(server: &RouteRow, server_repo: &Path, summaries: &[RepoSummary])
     for s in distinct(summaries) {
         let requests = |r: &&RouteRow| match r.side.as_str() {
             "client" => key(r).is_some_and(|ck| serves_key(&k, &ck)),
-            "operation" => r.path.as_deref().is_some_and(|op| op.eq_ignore_ascii_case(action)),
+            "operation" => match package_keys(r, &s.root, summaries) {
+                Some(keys) => keys.iter().any(|ck| serves_key(&k, ck)),
+                None => may_be_action(r, action),
+            },
             _ => false,
         };
         for c in s.routes.iter().filter(requests) {
@@ -581,7 +728,7 @@ pub fn callers(server: &RouteRow, server_repo: &Path, summaries: &[RepoSummary])
                     && l.route.start_line == server.start_line
                     && (c.side == "operation" || key(&l.route) == key(server))
             }) {
-                out.push(RouteLink { repo: s.root.clone(), route: c.clone(), confidence: l.confidence, assumptions: l.assumptions, host: l.host });
+                out.push(RouteLink { repo: s.root.clone(), route: c.clone(), confidence: l.confidence, assumptions: l.assumptions, host: l.host, package: l.package });
             }
         }
     }
@@ -610,7 +757,7 @@ pub fn commented(client: &RouteRow, summaries: &[RepoSummary]) -> Vec<RouteLink>
             continue;
         }
         for r in s.routes.iter().filter(|r| r.side == "commented" && key(r).as_ref() == Some(&k)) {
-            out.push(RouteLink { repo: s.root.clone(), route: r.clone(), confidence: "exact", assumptions: assumed(host.is_some()), host: None });
+            out.push(RouteLink { repo: s.root.clone(), route: r.clone(), confidence: "exact", assumptions: assumed(host.is_some()), host: None, package: None });
         }
     }
     out
@@ -751,7 +898,35 @@ pub fn unlinked_note(route: &RouteRow, summaries: &[RepoSummary], brief: bool) -
     if route.side == "operation"
         && let Some(d) = route.detail.as_deref()
     {
-        parts.push(format!("an external client: {d}; its code isn't in the workspace, so which route it requests, if any, isn't known"));
+        let owner = distinct(summaries).into_iter().find(|s| s.routes.iter().any(|r| r == route)).map(|s| s.root.clone());
+        match owner.as_deref().and_then(|o| package_method(route, o, summaries)) {
+            Some((pkg, m)) if m.requests.iter().all(|q| q.path.is_none()) && !m.requests.is_empty() => parts.push(format!(
+                "an external client: {d}; {} {}'s {}.{} ({}) makes a request whose URL is known only at run time",
+                pkg.name, pkg.version, m.class, m.method, m.at()
+            )),
+            Some((pkg, m)) if m.requests.is_empty() => parts.push(format!(
+                "an external client: {d}; {} {}'s {}.{} ({}) makes no request KnowCode reads",
+                pkg.name, pkg.version, m.class, m.method, m.at()
+            )),
+            Some((pkg, m)) => parts.push(format!(
+                "an external client: {d}; {} {}'s {}.{} ({}) requests {}, which no indexed repo serves",
+                pkg.name,
+                pkg.version,
+                m.class,
+                m.method,
+                m.at(),
+                m.requests.iter().filter_map(|q| q.path.as_ref().map(|p| format!("{} {p}", q.verb))).collect::<Vec<_>>().join(", ")
+            )),
+            None => {
+                let why = owner
+                    .as_deref()
+                    .and_then(|o| summaries.iter().find(|s| s.root == o))
+                    .and_then(|s| declared_class(route).and_then(|c| s.sdk.iter().find(|p| p.unread.is_some() && p.methods.is_empty() && !c.is_empty())))
+                    .map(|p| format!(" ({} wasn't read: {})", p.name, p.unread.as_deref().unwrap_or_default()))
+                    .unwrap_or_default();
+                parts.push(format!("an external client: {d}; its code isn't in the workspace, so which route it requests, if any, isn't known{why}"));
+            }
+        }
     }
     let near = nearest(route, if server { "client" } else { "server" }, summaries);
     if !near.is_empty() {

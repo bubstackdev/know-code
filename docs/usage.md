@@ -177,11 +177,19 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 `claude` CLI. `setup codex` and `setup cursor` add the server to the client's user settings and keep unrelated
 settings. `setup codex` also adds a user-level `[[hooks.SessionStart]]` entry to `config.toml` that runs KnowCode's
 session-start hook, one line saying what KnowCode indexes here and which tools to call. Codex runs a hook only once
-you trust it: run `/hooks` in Codex and trust that entry. Its command names only the binary and KnowCode's directory
-overrides, so a new KnowCode version changes what it prints without asking for trust again. Codex also keys that
+you trust it. That step is yours, in Codex, and KnowCode never takes it for you: start Codex, and at "Hooks need
+review" choose "Review hooks" and trust the hook (or use `/hooks` later). Setup reads Codex's record of that and says
+whether it is still to do, and `knowcode status` says the same for each Codex profile set up (`codex_hooks` in
+`--json`): trusted, not yet trusted, changed since you trusted it, turned off in `/hooks`, or hooks turned off in
+Codex's config.
+
+You trust the hook once. Its command names only the binary and KnowCode's directory overrides, so a new KnowCode
+version changes what it prints without asking for trust again. `self-update` replaces the binary at the same path, and
+for a Homebrew install setup names `opt/knowcode/bin/knowcode`, which `brew upgrade` keeps, rather than the versioned
+keg. Running setup with different directory overrides changes the hook, and Codex asks again. Codex also keys that
 trust to the entry's place among the `SessionStart` entries, so setup adds it last and, run again, updates it where
-it is. `knowcode uninstall` removes it and keeps your own hooks; if any follow it, it leaves an empty entry in its
-place so that Codex still trusts them. `--print` prints the configuration without changing anything, `--client-dir DIR` targets an isolated
+it is. `knowcode uninstall` removes it and Codex's record of trusting it, and keeps your own hooks; if any follow it,
+it leaves an empty entry in its place so that Codex still trusts them. `--print` prints the configuration without changing anything, `--client-dir DIR` targets an isolated
 profile, and `--replace` replaces a different server already registered as `knowcode` (Codex, Cursor). Start a new
 client session afterwards.
 
@@ -226,8 +234,9 @@ KnowCode's own configuration directory is a different one; `--delete-config` rem
 By default `serve` advertises one tool, `kc` (profile `one`). Its `op` names the tool to run, without `kc_`:
 `impact` for what calls a symbol or an HTTP endpoint, hop by hop and from any repo, or breaks if it changes; `find`
 for where a name is defined; `refs` for every use; `context` for what a symbol is; `search` for text; `locate` for
-where a concept lives; `more` for the next page of a cut list; `help` for the documentation; and every other tool by
-its name (`trace`, `tests`, `reviewers`, …). `q` fills the op's main parameter, `qs` several, and any other parameter
+where a concept lives; `history` for who changed a symbol, when and with what; `coupled` for the files that change
+with a file; `more` for the next page of a cut list; `help` for the documentation; and every other tool by its name
+(`trace`, `tests`, `reviewers`, …). `q` fills the op's main parameter, `qs` several, and any other parameter
 of that tool is passed by its own name: `kc {op: impact, q: OrderService.Place, depth: 2}`. `kc_help kc` lists which
 parameter `q` fills for each op. Answers, the server's instructions and the Claude Code plugin's notes, skills and
 session-start line then name calls as ops: a cut list says `kc {op: more, cursor: …}`.
