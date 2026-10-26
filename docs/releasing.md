@@ -38,7 +38,9 @@ Use this wrapper instead of running `dist generate` directly. The generated
 release workflow calls the existing CI gates before builds and additionally
 requires their success and successful local/global builds at the publishing step.
 That explicit condition prevents failed gates from being mistaken for intentionally skipped builds. The config's
-`allow-dirty = ["ci"]` exists solely to preserve this reviewed customization.
+`allow-dirty = ["ci"]` exists solely to preserve this reviewed customization. The release workflow runs on release
+tags only (`pr-run-mode = "skip"`): pull requests are gated by `ci.yml`, whose `release-plan` job checks this
+workflow and runs `dist plan`, and the wrapper refuses a generated workflow that would run on pull requests.
 
 The wrapper also hardens the generated workflow: contents are read-only except in the job that creates the
 GitHub Release (the build job's attestation permissions are cargo-dist's own); cargo-dist is installed by
