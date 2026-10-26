@@ -2,6 +2,13 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- `knowcode setup codex` adds a user-level `[[hooks.SessionStart]]` entry to Codex's `config.toml`, beside the MCP
+  server, that runs KnowCode's session-start hook (the line Claude Code's plugin adds). Codex runs it only once you
+  trust it in `/hooks`, and setup says so. The entry names only the binary and KnowCode's directory overrides, so the
+  line can change without trusting it again. `knowcode uninstall` removes it and keeps your own hooks.
+
 ## 0.3.0 (2026-10-26)
 
 0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its

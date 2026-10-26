@@ -169,7 +169,11 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 
 `setup claude` installs the bundled Claude Code plugin (MCP server, Grep/Glob hook and skills) through the local
 `claude` CLI. `setup codex` and `setup cursor` add the server to the client's user settings and keep unrelated
-settings. `--print` prints the configuration without changing anything, `--client-dir DIR` targets an isolated
+settings. `setup codex` also adds a user-level `[[hooks.SessionStart]]` entry to `config.toml` that runs KnowCode's
+session-start hook, one line saying what KnowCode indexes here and which tools to call. Codex runs a hook only once
+you trust it: run `/hooks` in Codex and trust that entry. Its command names only the binary and KnowCode's directory
+overrides, so a new KnowCode version changes what it prints without asking for trust again. `knowcode uninstall`
+removes it and keeps your own hooks. `--print` prints the configuration without changing anything, `--client-dir DIR` targets an isolated
 profile, and `--replace` replaces a different server already registered as `knowcode` (Codex, Cursor). Start a new
 client session afterwards.
 

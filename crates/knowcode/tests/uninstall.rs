@@ -48,6 +48,30 @@ fn note_count(path: &Path) -> i64 {
     rusqlite::Connection::open(path).unwrap().query_row("SELECT count(*) FROM notes", [], |r| r.get(0)).unwrap()
 }
 
+/// Uninstall takes out the Codex session-start hook setup added, and the `[hooks]` tables it leaves empty, keeping the
+/// user's own hooks.
+#[test]
+fn codex_session_start_hook_is_removed_and_other_hooks_kept() {
+    let p = Profile::new("codex-hook");
+    p.setup("codex");
+    let doc: DocumentMut = fs::read_to_string(p.path("codex/config.toml")).unwrap().parse().unwrap();
+    assert_eq!(doc["hooks"]["SessionStart"].as_array_of_tables().unwrap().len(), 1);
+    success(p.run(&["uninstall"]));
+    let text = fs::read_to_string(p.path("codex/config.toml")).unwrap();
+    assert!(!text.contains("hooks") && !text.contains("knowcode"), "nothing of ours is left: {text}");
+
+    let q = Profile::new("codex-hook-mine");
+    let mine = "[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo mine\"\n";
+    q.write("codex/config.toml", mine);
+    q.setup("codex");
+    success(q.run(&["uninstall"]));
+    let doc: DocumentMut = fs::read_to_string(q.path("codex/config.toml")).unwrap().parse().unwrap();
+    let groups = doc["hooks"]["SessionStart"].as_array_of_tables().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups.get(0).unwrap()["hooks"][0]["command"].as_str(), Some("echo mine"));
+    assert!(doc["mcp_servers"].get("knowcode").is_none());
+}
+
 #[test]
 fn invariant_uninstall_preserves_settings_notes_and_unrelated_files_by_default() {
     let p = Profile::new("preserve");
