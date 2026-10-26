@@ -106,7 +106,7 @@ pub struct RepoSummary {
 /// Bumped whenever [`RepoSummary`] changes. With the index schema version, it names the summary file's format: a
 /// file in any other format (written by an older or newer build sharing the cache) is rebuilt, not trusted, since
 /// its entries' stamps would still match while their contents lack what this build reads.
-const SUMMARY_FORMAT: u32 = 18;
+const SUMMARY_FORMAT: u32 = 19;
 
 #[derive(Serialize, Deserialize)]
 struct SummaryFile {

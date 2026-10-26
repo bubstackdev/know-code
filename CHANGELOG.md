@@ -42,6 +42,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   one. On the public-v1 workspace, bitwarden-server's admin app gained 7 routes (`Organizations`, `Providers`, `Users`,
   `Login` ×2, `Home` and the root), and the admin test fixture's `GET /login` and `POST /login` now link, `exact`, to
   `LoginController.Index`. C# files are re-extracted.
+- Requests whose path is given to a function building the URL are read when the function is known to add only a
+  query string. `this.send("GET", addEventParameters("/ciphers/" + id + "/events", start, end, token))`, with
+  `addEventParameters` (in another file) appending `?start=…&end=…` to its first parameter, requests
+  `ciphers/{}/events`. A function that may change the path leaves the request unread, and the answer names it
+  ("its URL is built by withVersion(…), which KnowCode doesn't read"), never a guessed path. A URL chosen by a
+  condition (`all ? "/sync?all=true" : "/sync"`) is read when both choices have one path. On the public-v1
+  workspace, bitwarden-clients gained 11 requests, all linked `exact`: `ApiService.getSync` and the nine
+  `ApiService.getEvents*` that #89 left unread, and `EventLogApiService.getEventsSend`. TypeScript files are
+  re-extracted.
 
 ## 0.3.0 (2026-10-26)
 
