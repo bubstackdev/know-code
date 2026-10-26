@@ -2453,7 +2453,7 @@ impl KnowcodeServer {
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 
-    #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, more, help.")]
+    #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, history, more, help.")]
     async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, String> {
         let (tool, args) = one_call(p)?;
         fn a<T: serde::de::DeserializeOwned>(tool: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
@@ -2595,12 +2595,12 @@ and parameter kc_help. Tools take `repo`. Each edge has a confidence; an incompl
 privacy file blocks it; don't read it another way.";
 
 /// The `one` profile's instructions, the default: the same map, as ops of the one tool.
-const ONE_INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use its \
-`kc` tool instead of grep and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what \
-breaks if X changes: kc {op: impact, q: X}, X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X \
-is defined op find; every use refs; what X is context; files for a concept or bug locate; text search; the next page \
-more; any other KnowCode tool by its name, and every op's parameters, help. `repo` picks a repo. Each edge has a \
-confidence; an incomplete answer says why. `withheld`: a privacy file blocks it; don't read it another way.";
+const ONE_INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos. Use its `kc` tool instead of grep \
+and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what breaks if X changes: \
+kc {op: impact, q: X}, X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X is defined op find; \
+every use refs; what X is context; files for a concept or bug locate; text search; X's commits and authors history; \
+files changing with a file coupled; next page more; other ops and parameters help. `repo` picks a repo. Each edge \
+has a confidence; an incomplete answer says why. `withheld`: a privacy file blocks it; don't read it another way.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2691,7 +2691,7 @@ mod tests {
         let core = serde_json::to_string(&server("core").tool_router.list_all()).unwrap().len();
         assert!(core * 2 < bytes, "core {core} of all {bytes}");
         assert!(core + INSTRUCTIONS.len() <= CORE_BUDGET, "core schema and instructions {} bytes, budget {CORE_BUDGET}", core + INSTRUCTIONS.len());
-        // The default, `one`: its tool and instructions together, 1,250 bytes and 502 tokens (count_tokens) when
+        // The default, `one`: its tool and instructions together, 1,290 bytes and 501 tokens (count_tokens) when
         // set; at most 510 tokens is the bar.
         let one = serde_json::to_string(&server("one").tool_router.list_all()).unwrap().len();
         assert!(one + ONE_INSTRUCTIONS.len() <= 1_300, "one schema and instructions {} bytes, budget 1300", one + ONE_INSTRUCTIONS.len());

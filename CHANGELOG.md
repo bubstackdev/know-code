@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The default `kc` tool names the history questions: its description lists `history`, and the server's instructions
+  say which op answers a symbol's commits and authors (`history`) and the files changing with a file (`coupled`).
+  Before, agents learned of them only from `help`. To stay within the 1,300-byte budget, the instructions no longer
+  say answers are read from the working tree. The tool and instructions are 1,290 bytes and 501 tokens
+  (count_tokens), from 1,283 and 502.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
