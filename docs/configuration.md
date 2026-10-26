@@ -97,6 +97,7 @@ or `[ignore]`. `knowcode config migrate` folds them into `config.toml` and renam
 | `KNOWCODE_SETUP_DEADLINE` | Seconds each client registration command in `setup` may run (default 120). |
 | `KNOWCODE_UPDATE_CHECK_DEADLINE` | Seconds the update check may run (default 8). |
 | `KNOWCODE_UPDATE_DEADLINE` | Seconds `self-update` may spend downloading and installing (default 180). |
+| `KNOWCODE_GITHUB_TOKEN` | A GitHub token the update check and `self-update` send to GitHub's API, which then allows more requests than its unauthenticated 60 an hour per network. Never required. |
 | `KNOWCODE_HOOK_MS` | Milliseconds a Claude Code hook (session start, or Grep/Glob/Bash) may take before it gives up silently (default 1500). |
 | `KNOWCODE_BIN` | The binary the Claude Code hook runs, when it isn't `knowcode` on `PATH`. |
 
@@ -277,6 +278,10 @@ installs anything.
   updates with `brew upgrade bubstackdev/tap/knowcode`: there `self-update` refuses and names that command, and the
   notice and `self-update --check` name it too. Other installations (a source build, for example) update the way
   they were installed.
+- The check asks GitHub's API. When the API refuses because a network's unauthenticated rate limit is spent, the
+  check and `self-update` read the latest tag from the release page instead, and `self-update` installs this
+  platform's release archive after checking it against the SHA-256 published beside it. The API is not asked again
+  until its limit resets. Setting `KNOWCODE_GITHUB_TOKEN` raises the limit.
 
 Indexing and queries make no network calls, and there is no telemetry.
 
