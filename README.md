@@ -96,7 +96,8 @@ incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}
 
 Each line is one call site: file, line and column, the method it is in, and how it resolved. Here it is `exact`, to
 the interface method, and through the dependency-injection registration to the implementation that runs. The last
-line says the list was cut and how to get the rest.
+line says the list was cut and how to get the rest. The command line names the separate tool, `kc_more`; your agent,
+on the default `kc` tool, is told `kc {op: more, cursor: …}` instead.
 
 ## Reading an answer
 
