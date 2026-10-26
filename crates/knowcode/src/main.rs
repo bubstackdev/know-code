@@ -1230,13 +1230,36 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || render::deps(&out.data.packages, &out.data.edges))
         }
         Cmd::Status { path, repos, no_sync: _, verify, json } => {
-            let out = ops::status_with(&ops::Scope { repos: path.into_iter().chain(repos).collect(), no_sync: false }, verify)?;
+            // Each Codex profile setup registered: whether Codex runs KnowCode's session-start hook there.
+            let codex: Vec<_> = setup::registrations().unwrap_or_default().into_iter().filter(|r| r.client == setup::Client::Codex)
+                .map(|r| (setup::codex_hook_state(&r.directory).map_err(|e| format!("{e:#}")), r.directory)).collect();
+            let codex_lines = || {
+                for (state, dir) in &codex {
+                    match state {
+                        Ok(state) => println!("codex    {}: {}", dir.display(), state.advice()),
+                        Err(e) => println!("codex    {}: {e}", dir.display()),
+                    }
+                }
+                if !codex.is_empty() { println!(); }
+            };
+            let mut out = match ops::status_with(&ops::Scope { repos: path.into_iter().chain(repos).collect(), no_sync: false }, verify) {
+                Ok(out) => out,
+                // Nothing to report on here, but the client setup is still worth knowing.
+                Err(e) => { if !json { codex_lines(); } return Err(e); }
+            };
             if json {
+                if !codex.is_empty() {
+                    out.env["codex_hooks"] = serde_json::Value::Array(codex.iter().map(|(state, dir)| match state {
+                        Ok(state) => serde_json::json!({"codex_home": dir, "state": state, "advice": state.advice()}),
+                        Err(e) => serde_json::json!({"codex_home": dir, "error": e}),
+                    }).collect());
+                }
                 println!("{}", serde_json::to_string_pretty(&out.env)?);
             } else {
                 if let Some(config) = out.data.first().map(|v| &v["config"]) {
                     render::config_status(config);
                 }
+                codex_lines();
                 out.data.iter().for_each(render::status);
             }
             Ok(())

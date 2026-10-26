@@ -104,7 +104,7 @@ fn codex_setup_adds_a_session_start_hook_to_trust() {
         success(cmd.output().unwrap())
     };
     let out = setup("cache");
-    assert!(out.contains("/hooks") && out.contains("trust"), "setup says the hook needs trust: {out}");
+    assert!(out.contains("One step left") && out.contains("Review hooks") && out.contains("/hooks"), "setup says the hook needs trust, and how: {out}");
     let hooks = |doc: &DocumentMut| -> Vec<(String, String)> {
         doc["hooks"]["SessionStart"].as_array_of_tables().unwrap().iter()
             .map(|g| (g["matcher"].as_str().unwrap().to_string(), g["hooks"].as_array_of_tables().unwrap().get(0).unwrap()["command"].as_str().unwrap().to_string()))
@@ -127,6 +127,36 @@ fn codex_setup_adds_a_session_start_hook_to_trust() {
     assert_eq!(h.len(), 2, "{h:?}");
     assert!(h[1].1.starts_with(&format!("KNOWCODE_CACHE_DIR='{}' ", p.dir("moved").display())), "{h:?}");
     assert_eq!(h[0].1, "echo mine");
+}
+
+/// `status` says, for each Codex profile setup registered, whether Codex runs the hook there and what is left to do.
+/// It reads Codex's records and never writes them: trusting the hook is the user's step, in Codex.
+#[test]
+fn status_says_whether_codex_runs_the_hook() {
+    let p = Profile::new("codex-status");
+    fs::create_dir_all(p.dir("home")).unwrap();
+    fs::create_dir_all(p.dir("repo")).unwrap();
+    assert!(Command::new("git").args(["init", "-q"]).arg(p.dir("repo")).status().unwrap().success());
+    let kc = |args: &[&str]| {
+        let mut cmd = Command::new(KC);
+        cmd.args(args).env("CODEX_HOME", p.dir("home")).env("KNOWCODE_CONFIG_DIR", p.dir("settings"))
+            .env("KNOWCODE_CACHE_DIR", p.dir("cache")).env("KNOWCODE_DATA_DIR", p.dir("data"));
+        cmd.output().unwrap()
+    };
+    success(kc(&["setup", "codex"]));
+    let before = fs::read_to_string(p.dir("home/config.toml")).unwrap();
+    let repo = p.dir("repo");
+    let out = success(kc(&["status", repo.to_str().unwrap()]));
+    let line = out.lines().find(|l| l.starts_with("codex ")).unwrap_or_else(|| panic!("{out}"));
+    assert!(line.contains(p.dir("home").to_str().unwrap()) && line.contains("One step left"), "{line}");
+    let json: Value = serde_json::from_str(&success(kc(&["status", repo.to_str().unwrap(), "--json"]))).unwrap();
+    assert_eq!(json["codex_hooks"][0]["state"], "not_trusted", "{json}");
+    // Turned off in Codex's /hooks: Codex records `enabled = false` under the hook's key.
+    let key = format!("{}:session_start:0:0", fs::canonicalize(p.dir("home")).unwrap().join("config.toml").display());
+    fs::write(p.dir("home/config.toml"), format!("{before}\n[hooks.state.\"{key}\"]\nenabled = false\n")).unwrap();
+    let json: Value = serde_json::from_str(&success(kc(&["status", repo.to_str().unwrap(), "--json"]))).unwrap();
+    assert_eq!(json["codex_hooks"][0]["state"], "off", "{json}");
+    assert!(fs::read_to_string(p.dir("home/config.toml")).unwrap().ends_with("enabled = false\n"), "status changes nothing");
 }
 
 /// The commands of each `[[hooks.SessionStart]]` entry, in order (an empty list for an entry with no hooks).

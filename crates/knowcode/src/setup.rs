@@ -94,23 +94,40 @@ fn user_dir(client: Client) -> Result<PathBuf> {
 }
 
 /// Prefer the invocation's symlink (a package manager's stable bin path) to the versioned executable it points at.
+/// The path goes into client configuration, and into the Codex hook Codex trusts by its text, so it must not change
+/// when KnowCode is updated.
 fn executable() -> Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let same = |p: &Path| fs::canonicalize(p).is_ok_and(|p| p == exe);
-    if let Some(arg) = std::env::args_os().next() {
-        let given = PathBuf::from(arg);
-        if given.components().count() > 1 {
-            let given = std::path::absolute(given)?;
-            if same(&given) { return Ok(given); }
+    let chosen = (|| -> Result<PathBuf> {
+        if let Some(arg) = std::env::args_os().next() {
+            let given = PathBuf::from(arg);
+            if given.components().count() > 1 {
+                let given = std::path::absolute(given)?;
+                if same(&given) { return Ok(given); }
+            }
         }
-    }
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = std::path::absolute(dir.join("knowcode"))?;
-            if same(&candidate) { return Ok(candidate); }
+        if let Some(paths) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&paths) {
+                let candidate = std::path::absolute(dir.join("knowcode"))?;
+                if same(&candidate) { return Ok(candidate); }
+            }
         }
-    }
-    Ok(exe)
+        Ok(exe.clone())
+    })()?;
+    Ok(homebrew_opt(&chosen).unwrap_or(chosen))
+}
+
+/// For a binary in a Homebrew keg (`<prefix>/Cellar/knowcode/<version>/bin/knowcode`), which `brew upgrade` removes,
+/// the keg-independent `<prefix>/opt/knowcode/bin/knowcode` that Homebrew keeps pointing at the current version.
+fn homebrew_opt(path: &Path) -> Option<PathBuf> {
+    let bin = path.parent()?;
+    let keg = bin.parent()?;
+    let formula = keg.parent()?;
+    let cellar = formula.parent()?;
+    if bin.file_name()? != "bin" || formula.file_name()? != "knowcode" || cellar.file_name()? != "Cellar" { return None; }
+    let opt = cellar.parent()?.join("opt/knowcode/bin").join(path.file_name()?);
+    (fs::canonicalize(&opt).ok()? == fs::canonicalize(path).ok()?).then_some(opt)
 }
 
 fn overrides() -> BTreeMap<String, String> {
@@ -281,12 +298,29 @@ fn codex_hook(doc: &mut DocumentMut, command: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Takes out the entry `codex_hook` added. When the user's own hooks follow it, the entry stays, emptied, so they keep
-/// their place and Codex's trust in them (see `CODEX_PLACEHOLDER`). Empty entries of ours left last are removed, and
-/// so are the `[hooks]` tables that leaves empty. Returns whether an emptied entry was left.
-pub(crate) fn remove_codex_hook(doc: &mut DocumentMut) -> bool {
+/// Takes out the entry `codex_hook` added, and the record of the user trusting it. When the user's own hooks follow
+/// it, the entry stays, emptied, so they keep their place and Codex's trust in them (see `CODEX_PLACEHOLDER`). Empty
+/// entries of ours left last are removed, and so are the `[hooks]` tables that leaves empty. Returns whether an
+/// emptied entry was left.
+pub(crate) fn remove_codex_hook(doc: &mut DocumentMut, directory: &Path) -> bool {
+    // Codex's records for our entry's place: the user trusting our hook (this or an earlier version of it), or turning
+    // it off. Setup never moves its entry, so nothing else was there; and with no record, a hook later put there
+    // would be reviewed, never trusted unseen.
+    let records: Vec<String> = codex_hook_index(doc).into_iter().flat_map(|(index, _)| {
+        let state = codex_hook_states(doc);
+        codex_state_keys(directory, index).into_iter().filter(|key| state.is_some_and(|s| s.contains_key(key))).collect::<Vec<_>>()
+    }).collect();
+    if !records.is_empty()
+        && let Some(state) = doc.get_mut("hooks").and_then(|h| h.get_mut("state")).and_then(Item::as_table_like_mut)
+    {
+        for key in &records { state.remove(key); }
+        if state.is_empty() && let Some(hooks) = doc.get_mut("hooks").and_then(Item::as_table_like_mut) { hooks.remove("state"); }
+    }
     let Some(hooks) = doc.get_mut("hooks").and_then(|h| h.as_table_like_mut()) else { return false };
-    let Some(groups) = hooks.get_mut("SessionStart").and_then(|g| g.as_array_of_tables_mut()) else { return false };
+    let Some(groups) = hooks.get_mut("SessionStart").and_then(|g| g.as_array_of_tables_mut()) else {
+        if hooks.is_empty() { doc.remove("hooks"); }
+        return false;
+    };
     let mut changed = false;
     for i in 0..groups.len() {
         let group = groups.get_mut(i).expect("in range");
@@ -304,6 +338,144 @@ pub(crate) fn remove_codex_hook(doc: &mut DocumentMut) -> bool {
     if groups.is_empty() { hooks.remove("SessionStart"); }
     if hooks.is_empty() { doc.remove("hooks"); }
     left
+}
+
+/// Whether Codex will run KnowCode's session-start hook, read from Codex's `config.toml` without changing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexHook {
+    /// No entry of ours in `config.toml`.
+    Missing,
+    /// `[features] hooks = false`: Codex runs no hooks.
+    HooksOff,
+    /// The user turned it off in Codex's `/hooks`.
+    Off,
+    /// Codex has no record of the user trusting it, so it skips it.
+    NotTrusted,
+    /// The user trusted an earlier definition; Codex skips it until they review it again.
+    Changed,
+    /// Codex runs it.
+    Trusted,
+}
+
+impl CodexHook {
+    /// The one line `setup codex` and `status` give for this state, with the step that is left, if any.
+    pub fn advice(self) -> &'static str {
+        match self {
+            CodexHook::Missing => "KnowCode's session-start hook is not in Codex's config.toml; run `knowcode setup codex` to add it.",
+            CodexHook::HooksOff => "Hooks are turned off in Codex's config.toml (`[features] hooks = false`), so Codex doesn't run KnowCode's session-start hook.",
+            CodexHook::Off => "You turned KnowCode's session-start hook off in Codex's /hooks; turn it on there to have it run.",
+            CodexHook::NotTrusted => "One step left: Codex runs a hook only once you trust it. Start Codex; at \"Hooks need review\", choose \"Review hooks\" and trust the SessionStart hook that runs `knowcode hook session-start` (or do it later in /hooks). KnowCode updates don't change the hook, so you do this once.",
+            CodexHook::Changed => "KnowCode's session-start hook is not the one you trusted (setup wrote a different binary path or directories), so Codex skips it until you review it again: start Codex and, at \"Hooks need review\", choose \"Review hooks\" (or use /hooks).",
+            CodexHook::Trusted => "Codex trusts KnowCode's session-start hook; it runs when a session starts.",
+        }
+    }
+}
+
+/// The state of our hook in the Codex profile at `directory` (`CODEX_HOME`).
+pub fn codex_hook_state(directory: &Path) -> Result<CodexHook> {
+    let path = config_path(directory, "config.toml")?;
+    let doc: DocumentMut = read(&path)?.unwrap_or_default().parse().with_context(|| format!("{} is not valid TOML", path.display()))?;
+    Ok(codex_hook_state_in(&doc, directory))
+}
+
+fn codex_hook_state_in(doc: &DocumentMut, directory: &Path) -> CodexHook {
+    let Some((index, hash)) = codex_hook_index(doc) else { return CodexHook::Missing };
+    let features = doc.get("features").and_then(Item::as_table_like);
+    // `codex_hooks` is the setting's older name.
+    let feature = |name: &str| features.and_then(|f| f.get(name)).and_then(Item::as_bool);
+    if feature("hooks").or(feature("codex_hooks")) == Some(false) { return CodexHook::HooksOff; }
+    let state = codex_hook_states(doc);
+    let records: Vec<&dyn toml_edit::TableLike> = codex_state_keys(directory, index).iter()
+        .filter_map(|key| state.and_then(|s| s.get(key)).and_then(Item::as_table_like)).collect();
+    if records.iter().any(|r| r.get("enabled").and_then(Item::as_bool) == Some(false)) { return CodexHook::Off; }
+    let trusted: Vec<&str> = records.iter().filter_map(|r| r.get("trusted_hash").and_then(Item::as_str)).collect();
+    if trusted.contains(&hash.as_str()) { CodexHook::Trusted }
+    else if trusted.is_empty() { CodexHook::NotTrusted }
+    else { CodexHook::Changed }
+}
+
+/// `[hooks.state]`, where Codex records which hooks the user trusted or turned off, by key.
+fn codex_hook_states(doc: &DocumentMut) -> Option<&dyn toml_edit::TableLike> {
+    doc.get("hooks").and_then(|h| h.get("state")).and_then(Item::as_table_like)
+}
+
+/// Our entry's place among the `SessionStart` entries, and the hash Codex gives its hook.
+fn codex_hook_index(doc: &DocumentMut) -> Option<(usize, String)> {
+    let groups = doc.get("hooks")?.get("SessionStart")?.as_array_of_tables()?;
+    let (index, group) = groups.iter().enumerate().find(|(_, g)| is_codex_hook(g))?;
+    Some((index, codex_hook_hash(group)?))
+}
+
+/// The keys Codex may record our hook's state under: `<config.toml>:session_start:<entry>:<hook>`, where the path is
+/// `CODEX_HOME` with symlinks resolved when that is set, and `~/.codex` as it is otherwise.
+fn codex_state_keys(directory: &Path, index: usize) -> Vec<String> {
+    let mut dirs = vec![directory.to_path_buf()];
+    if let Ok(real) = fs::canonicalize(directory) && real != directory { dirs.push(real); }
+    dirs.iter().map(|d| format!("{}:session_start:{index}:0", d.join("config.toml").display())).collect()
+}
+
+/// The hash Codex trusts a SessionStart hook by: SHA-256 over the compact JSON, keys sorted, of the event, the
+/// entry's matcher and the hook as Codex reads it (its timeout filled in). Codex's `hook_hash` and `version_for_toml`
+/// (openai/codex, codex-rs/hooks/src/engine/discovery.rs and codex-rs/config/src/fingerprint.rs). Only the first hook
+/// of the entry, the one setup writes; `None` for anything but a command hook.
+fn codex_hook_hash(group: &Table) -> Option<String> {
+    let hook = group.get("hooks")?.as_array_of_tables()?.get(0)?;
+    if hook.get("type").and_then(Item::as_str) != Some("command") { return None; }
+    // Keys are inserted in sorted order, so the JSON is sorted whether or not serde_json keeps insertion order.
+    let mut handler = serde_json::Map::new();
+    let limit = hook.get("additionalContextLimit").and_then(Item::as_integer).filter(|l| *l != 2500);
+    if let Some(limit) = limit { handler.insert("additionalContextLimit".into(), json!(limit)); }
+    handler.insert("async".into(), json!(hook.get("async").and_then(Item::as_bool).unwrap_or(false)));
+    handler.insert("command".into(), json!(hook.get("command")?.as_str()?));
+    if let Some(message) = hook.get("statusMessage").and_then(Item::as_str) { handler.insert("statusMessage".into(), json!(message)); }
+    handler.insert("timeout".into(), json!(hook.get("timeout").and_then(Item::as_integer).unwrap_or(600).max(1)));
+    handler.insert("type".into(), json!("command"));
+    let mut identity = serde_json::Map::new();
+    identity.insert("event_name".into(), json!("session_start"));
+    identity.insert("hooks".into(), json!([handler]));
+    if let Some(matcher) = group.get("matcher").and_then(Item::as_str) { identity.insert("matcher".into(), json!(matcher)); }
+    let digest = sha256(serde_json::to_string(&Value::Object(identity)).ok()?.as_bytes());
+    Some(format!("sha256:{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+}
+
+/// SHA-256 (FIPS 180-4), for `codex_hook_hash`.
+fn sha256(data: &[u8]) -> [u8; 32] {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    let mut message = data.to_vec();
+    message.push(0x80);
+    while message.len() % 64 != 56 { message.push(0); }
+    message.extend_from_slice(&((data.len() as u64) * 8).to_be_bytes());
+    for block in message.chunks(64) {
+        let mut w = [0u32; 64];
+        for (i, word) in block.chunks(4).enumerate() { w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]); }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+        for i in 0..64 {
+            let t1 = hh.wrapping_add(e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25))
+                .wrapping_add((e & f) ^ (!e & g)).wrapping_add(K[i]).wrapping_add(w[i]);
+            let t2 = (a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22)).wrapping_add((a & b) ^ (a & c) ^ (b & c));
+            hh = g; g = f; f = e; e = d.wrapping_add(t1); d = c; c = b; b = a; a = t1.wrapping_add(t2);
+        }
+        for (x, y) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) { *x = x.wrapping_add(y); }
+    }
+    let mut out = [0u8; 32];
+    for (i, word) in h.iter().enumerate() { out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes()); }
+    out
 }
 
 fn cursor(directory: &Path, command: &Path, env: &BTreeMap<String, String>, replace: bool) -> Result<()> {
@@ -549,7 +721,88 @@ pub fn run(options: Options) -> Result<()> {
     remember(Registration { client: options.client, directory: directory.clone(), command, marketplace: installed_marketplace })?;
     println!("KnowCode is configured for {:?} in {}. Start a new client session; the first query indexes automatically.", options.client, directory.display());
     if options.client == Client::Codex {
-        println!("Codex runs KnowCode's session-start hook only once you trust it: in Codex, run /hooks and trust the SessionStart hook that runs `{CODEX_HOOK}`.");
+        // Read back from what Codex will read; nothing here records trust, which is the user's to give in Codex.
+        match codex_hook_state(&directory) {
+            Ok(state) => println!("{}", state.advice()),
+            Err(e) => println!("Codex runs KnowCode's session-start hook only once you trust it, in Codex's /hooks ({e:#})."),
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+
+    #[test]
+    fn sha256_matches_the_standard_vectors() {
+        assert_eq!(hex(&sha256(b"")), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(hex(&sha256(b"abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        // Two blocks: the padding does not fit after 56 bytes.
+        assert_eq!(hex(&sha256(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+        assert_eq!(hex(&sha256(&[b'a'; 1000])), "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
+    }
+
+    /// The hashes codex-cli 0.163.0 reported for these entries (its app-server's `hooks/list`, `currentHash`).
+    #[test]
+    fn the_hook_hash_is_the_one_codex_reports() {
+        let doc: DocumentMut = "[[hooks.SessionStart]]\nmatcher = \"^(startup|clear|compact)$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"'/opt/example/bin/knowcode' hook session-start\"\ntimeout = 5\n\n[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"echo before\"\n".parse().unwrap();
+        let groups = doc["hooks"]["SessionStart"].as_array_of_tables().unwrap();
+        assert_eq!(codex_hook_hash(groups.get(0).unwrap()).unwrap(), "sha256:dade3b57ce42a5807f905fc8ea008b27f97a170616c2e2d4fbf29746a45379b8");
+        // No timeout: Codex fills in its default of 600 seconds.
+        assert_eq!(codex_hook_hash(groups.get(1).unwrap()).unwrap(), "sha256:255dd5e27df1666494531350237b79a97128e3217bf71a8f0d540cf2977eba72");
+    }
+
+    #[test]
+    fn the_hook_state_is_read_from_codexs_own_records() {
+        let dir = std::env::temp_dir().join(format!("knowcode-codex-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let dir = fs::canonicalize(&dir).unwrap();
+        let entry = |command: &str| format!("[[hooks.SessionStart]]\nmatcher = \"^startup$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"{command}\"\n\n");
+        let ours = "[[hooks.SessionStart]]\nmatcher = \"^(startup|clear|compact)$\"\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"'/opt/example/bin/knowcode' hook session-start\"\ntimeout = 5\n\n";
+        let hash = "sha256:dade3b57ce42a5807f905fc8ea008b27f97a170616c2e2d4fbf29746a45379b8";
+        let key = |index: usize| format!("{}:session_start:{index}:0", dir.join("config.toml").display());
+        let state = |text: &str| codex_hook_state_in(&text.parse().unwrap(), &dir);
+        assert_eq!(state(&entry("echo mine")), CodexHook::Missing);
+        // Ours is the second entry: its record is under index 1; the record under 0 is the user's hook's.
+        let base = format!("{}{ours}", entry("echo mine"));
+        assert_eq!(state(&base), CodexHook::NotTrusted);
+        assert_eq!(state(&format!("{base}[hooks.state.\"{}\"]\ntrusted_hash = \"{hash}\"\n", key(0))), CodexHook::NotTrusted);
+        let trusted = format!("{base}[hooks.state.\"{}\"]\ntrusted_hash = \"{hash}\"\n", key(1));
+        assert_eq!(state(&trusted), CodexHook::Trusted);
+        assert_eq!(state(&format!("{base}[hooks.state.\"{}\"]\ntrusted_hash = \"sha256:{}\"\n", key(1), "0".repeat(64))), CodexHook::Changed);
+        assert_eq!(state(&format!("{trusted}enabled = false\n")), CodexHook::Off);
+        assert_eq!(state(&format!("[features]\nhooks = false\n\n{trusted}")), CodexHook::HooksOff);
+        assert_eq!(state(&format!("[features]\ncodex_hooks = false\n\n{trusted}")), CodexHook::HooksOff);
+        // Uninstall drops our record with the entry and keeps the user's.
+        let mut doc: DocumentMut = format!("{trusted}[hooks.state.\"{}\"]\ntrusted_hash = \"sha256:mine\"\n", key(0)).parse().unwrap();
+        assert!(!remove_codex_hook(&mut doc, &dir));
+        let records: Vec<String> = doc["hooks"]["state"].as_table_like().unwrap().iter().map(|(k, _)| k.to_string()).collect();
+        assert_eq!(records, [key(0)]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_homebrew_keg_path_becomes_the_opt_path_that_survives_upgrades() {
+        let root = std::env::temp_dir().join(format!("knowcode-brew-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Cellar/knowcode/0.4.0/bin")).unwrap();
+        fs::create_dir_all(root.join("opt")).unwrap();
+        fs::write(root.join("Cellar/knowcode/0.4.0/bin/knowcode"), "").unwrap();
+        std::os::unix::fs::symlink("../Cellar/knowcode/0.4.0", root.join("opt/knowcode")).unwrap();
+        assert_eq!(homebrew_opt(&root.join("Cellar/knowcode/0.4.0/bin/knowcode")), Some(root.join("opt/knowcode/bin/knowcode")));
+        // Already stable, or not a keg of ours: left as it is.
+        assert_eq!(homebrew_opt(&root.join("opt/knowcode/bin/knowcode")), None);
+        fs::create_dir_all(root.join("Cellar/other/1.0/bin")).unwrap();
+        fs::write(root.join("Cellar/other/1.0/bin/knowcode"), "").unwrap();
+        assert_eq!(homebrew_opt(&root.join("Cellar/other/1.0/bin/knowcode")), None);
+        // An opt link to another version does not stand for this binary.
+        fs::create_dir_all(root.join("Cellar/knowcode/0.3.0/bin")).unwrap();
+        fs::write(root.join("Cellar/knowcode/0.3.0/bin/knowcode"), "").unwrap();
+        assert_eq!(homebrew_opt(&root.join("Cellar/knowcode/0.3.0/bin/knowcode")), None);
+        let _ = fs::remove_dir_all(&root);
+    }
 }
