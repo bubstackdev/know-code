@@ -117,8 +117,27 @@ def files_of(repo: Path, sha: str) -> list[str] | None:
     return None if len(files) > MAX_FILES else files
 
 
-def cochange(repo: Path, shas: list[str], own: set[str], now: set[str]) -> list[dict]:
-    """Files changed in `shas` other than `own`, existing at HEAD, by shared commits, most first then by path."""
+def current_names(repo: Path) -> dict[str, str]:
+    """Every path a file had, to the path it has at HEAD, from the renames git detects (`log -M`)."""
+    later: dict[str, str] = {}
+    out = git(repo, 'log', '--reverse', '--no-merges', '-M', '--diff-filter=R', '--name-status', '--format=')
+    for l in out.splitlines():
+        parts = l.split('\t')
+        if len(parts) == 3 and parts[0].startswith('R'):
+            later[parts[1]] = parts[2]
+
+    def resolve(p: str) -> str:
+        seen = set()
+        while p in later and p not in seen:
+            seen.add(p)
+            p = later[p]
+        return p
+    return {p: resolve(p) for p in later}
+
+
+def cochange(repo: Path, shas: list[str], own: set[str], now: set[str], names: dict[str, str] | None = None) -> list[dict]:
+    """Files changed in `shas` other than `own`, existing at HEAD, by shared commits, most first then by path. With
+    `names`, each file counts under the name it has now."""
     counts: Counter = Counter()
     used = 0
     for sha in shas:
@@ -126,7 +145,8 @@ def cochange(repo: Path, shas: list[str], own: set[str], now: set[str]) -> list[
         if files is None:
             continue
         used += 1
-        for f in set(files) - own:
+        current = {names.get(f, f) for f in files} if names is not None else set(files)
+        for f in current - own:
             if f in now:
                 counts[f] += 1
     return [{'file': f, 'shared': c} for f, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))], used
@@ -153,8 +173,15 @@ def label(q: dict, repos: Path) -> dict:
     p = q.get('params', {})
     now = set(git(repo, 'ls-files').splitlines())
     if q['family'] == 'file-cochange':
-        shas = git(repo, 'log', '--no-merges', '--format=%H', *([f"--since={p['since']}"] if p.get('since') else []), '--', s['file']).split()
-        ranked, used = cochange(repo, shas, {s['file']}, now)
+        since = [f"--since={p['since']}"] if p.get('since') else []
+        if p.get('follow'):
+            # Renames followed on both sides: the file's commits under any name it had, and each partner counted
+            # under the name it has now.
+            shas = git(repo, 'log', '--follow', '--no-merges', '--format=%H', *since, '--', s['file']).split()
+            ranked, used = cochange(repo, shas, {s['file']}, now, current_names(repo))
+        else:
+            shas = git(repo, 'log', '--no-merges', '--format=%H', *since, '--', s['file']).split()
+            ranked, used = cochange(repo, shas, {s['file']}, now)
         if p.get('tests'):
             ranked = [r for r in ranked if TEST_PATH.search(r['file'])]
         out.update(commits=len(shas), commits_counted=used, items=[r for r in ranked if r['shared'] >= p.get('min_shared', 2)])
