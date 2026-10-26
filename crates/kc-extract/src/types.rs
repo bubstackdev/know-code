@@ -157,6 +157,32 @@ impl TypeExpr {
             TypeExpr::Call { .. } => self.clone(),
         }
     }
+
+    /// This expression with each nominal type `f` gives a replacement for replaced (a type parameter by its
+    /// constraint), wherever it appears.
+    pub fn replace_named(&self, f: &impl Fn(&str) -> Option<TypeExpr>) -> TypeExpr {
+        let m = |t: &TypeExpr| Box::new(t.replace_named(f));
+        match self {
+            TypeExpr::Named(n) => f(n).unwrap_or_else(|| self.clone()),
+            TypeExpr::Array(e) => TypeExpr::Array(m(e)),
+            TypeExpr::Dict(k, v) => TypeExpr::Dict(m(k), m(v)),
+            TypeExpr::Elem(e) => TypeExpr::Elem(m(e)),
+            TypeExpr::Delegate(e) => TypeExpr::Delegate(m(e)),
+            TypeExpr::Generic { name, args } => {
+                TypeExpr::Generic { name: name.clone(), args: args.iter().map(|a| a.as_ref().map(|a| a.replace_named(f))).collect() }
+            }
+            TypeExpr::Tuple(es) => TypeExpr::Tuple(es.iter().map(|(n, e)| (n.clone(), e.as_ref().map(|e| e.replace_named(f)))).collect()),
+            TypeExpr::Path { root: PathRoot::Expr(e), segs } => TypeExpr::Path { root: PathRoot::Expr(m(e)), segs: segs.clone() },
+            TypeExpr::LambdaParam { recv, name, args, arg, param } => TypeExpr::LambdaParam {
+                recv: recv.as_ref().map(|r| m(r)),
+                name: name.clone(),
+                args: *args,
+                arg: *arg,
+                param: *param,
+            },
+            TypeExpr::Path { .. } | TypeExpr::Call { .. } => self.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

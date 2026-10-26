@@ -834,10 +834,26 @@ impl Tracer<'_> {
                 let protocols: Vec<String> = stmt.query_map([&short], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
                 // The members walked through already, so none is walked twice.
                 let mut through: HashSet<i64> = HashSet::new();
+                let conn = self.conn;
+                let arity = |id: i64| -> Result<(Option<u32>, Option<u32>)> {
+                    Ok(conn
+                        .prepare_cached("SELECT min_args, max_args FROM symbols WHERE id = ?1")?
+                        .query_row([id], |r| Ok((r.get(0)?, r.get(1)?)))?)
+                };
+                let own = arity(sym.id)?;
                 for p in protocols {
-                    let req = query::definitions(self.conn, &format!("{p}.{}", sym.name))?
-                        .into_iter()
-                        .find(|d| d.kind == sym.kind && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}"))));
+                    // The requirement taking the arguments it does: a `Find(query, parent)` overload doesn't implement
+                    // the interface's `Find(query)`, and calls of that one don't reach it.
+                    let mut req = None;
+                    for d in query::definitions(self.conn, &format!("{p}.{}", sym.name))? {
+                        if d.kind == sym.kind && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}"))) {
+                            let theirs = arity(d.id)?;
+                            if theirs == own || theirs.0.is_none() || own.0.is_none() {
+                                req = Some(d);
+                                break;
+                            }
+                        }
+                    }
                     let Some(req) = req else { continue };
                     let is_protocol = query::definitions(self.conn, &p)?.iter().any(|d| d.kind == "protocol");
                     if !is_protocol {

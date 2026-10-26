@@ -9404,6 +9404,68 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn impact_reaches_calls_on_a_constrained_type_parameter() {
+        let cache = test_cache();
+        let base = cache.dir("constrained");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                ("src/Item.cs", "namespace Shelf;\npublic class Item\n{\n    public void Attach(Item parent) { }\n}\n"),
+                // Another `Attach`: a call on an unknown receiver can't be told from a call of this one.
+                ("src/Rack.cs", "namespace Shelf;\npublic class Rack\n{\n    public void Attach(Item parent) { }\n}\n"),
+                (
+                    "src/Finder.cs",
+                    "namespace Shelf;\npublic class Finder\n{\n    public void Find() => Search<Item>(null);\n\
+                     \x20   private void Search<T>(Item? reference) where T : Item, new()\n    {\n        var probe = new T();\n        probe.Attach(new Item());\n    }\n}\n",
+                ),
+            ],
+        );
+        let r = impact_of(&root, "Item.Attach");
+        let found: Vec<(u8, String, &str, Option<String>)> =
+            r.impact.affected.iter().map(|a| (a.hop, a.qualified.clone(), a.confidence, a.site.clone())).collect();
+        assert_eq!(
+            found,
+            [
+                (1, "Finder.Search".to_string(), "unique_name", Some("src/Finder.cs:8".to_string())),
+                (2, "Finder.Find".to_string(), "exact", Some("src/Finder.cs:4".to_string()))
+            ],
+            "the call on a `T : Item` is Item's, not Rack's, so the walk goes on to its caller"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn an_extension_methods_unqualified_call_is_its_classs_overload() {
+        let cache = test_cache();
+        let base = cache.dir("ext-overload");
+        let root = repo(
+            &base,
+            "shelf",
+            &[(
+                "src/Builders.cs",
+                "namespace Shelf;\npublic interface IBuilder<T> { int Id { get; } }\npublic static class Builders\n{\n\
+                 \x20   public static string Build<T>(\n        this IBuilder<T> builder)\n    {\n        return Build(builder.Id, \"x\");\n    }\n\
+                 \x20   public static string Build(int id, string name)\n    {\n        return name;\n    }\n\
+                 \x20   public static string Use(IBuilder<int> b) => Build(b);\n}\n",
+            )],
+        );
+        // `Build(id, name)` in the extension method calls the class's two-argument overload, not the extension itself;
+        // `Build(b)` calls the extension (its `this` parameter on a line of its own), passing the receiver.
+        let r = impact_of(&root, "src/Builders.cs:10");
+        let found: Vec<(u8, String, &str, Option<String>)> =
+            r.impact.affected.iter().map(|a| (a.hop, a.qualified.clone(), a.confidence, a.site.clone())).collect();
+        assert_eq!(
+            found,
+            [
+                (1, "IBuilder.Build".to_string(), "exact", Some("src/Builders.cs:8".to_string())),
+                (2, "Builders.Use".to_string(), "exact", Some("src/Builders.cs:14".to_string()))
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn bus_messages_link_publishers_to_consumers_across_repos() {
         let cache = test_cache();
         let base = cache.dir("bus");
