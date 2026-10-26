@@ -3,7 +3,7 @@
   "files": {
     "config": {
       "path": "config.json",
-      "sha256": "e6969a57a305f12274305fe548fa306152d1abf4f70c3a0b908b4adc63d0858d"
+      "sha256": "9e617c2b49df7e7842403c69c9f71c5f30daeb67b437be3cd4fe88f4673c2a9a"
     },
     "labels": {
       "path": "labels.jsonl",
@@ -19,11 +19,11 @@
     },
     "plan": {
       "path": "plan.json",
-      "sha256": "e1f762b425cba6253e33c0ade250445c355976071dd22f909d2bafaf266d4e34"
+      "sha256": "b5805dcd14442051c0beb8cc9a32893e1308504d816f09b13a4aa64bcd636245"
     },
     "protocol": {
       "path": "../protocol.md",
-      "sha256": "421c8dda4cb83e1c61f6ec4fc76428dde01e5d2207e0b2ef01a87f51e974c415"
+      "sha256": "2fbf379faf8a87fa8999a07a946a5fc217d9f18ce42a87de2fa57b301be28f62"
     },
     "questions": {
       "path": "questions.jsonl",
