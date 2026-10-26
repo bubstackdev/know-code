@@ -31,6 +31,9 @@ for line in sys.stdin:
         p = m['params']
         if p['name'] == 'kc_search' and p['arguments'].get('pattern') == 'boom':
             result = {{'isError': True, 'content': [{{'type': 'text', 'text': 'bad pattern'}}]}}
+        elif p['name'] == 'kc_search' and p['arguments'].get('pattern') == 'elsewhere':
+            text = 'paths matched 0 files (vendor/**): in app; nothing was searched'
+            result = {{'isError': True, 'content': [{{'type': 'text', 'text': text}}]}}
         else:
             text = 'method Api.Save  src/api.cs:3\\n  called by request  web:src/client.ts:7\\n    7 | fetch(url)'
             result = {{'content': [{{'type': 'text', 'text': text}}]}}
@@ -100,6 +103,7 @@ class ReplayGateTests(unittest.TestCase):
             corpus = base/'corpus.jsonl'
             rows = [dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_refs', args={'name': 'Save'}, sessions=2),
                     dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'boom'}, sessions=1),
+                    dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'elsewhere'}, sessions=1),
                     dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_more', args={'cursor': 'c1'}, sessions=1)]
             corpus.write_text(''.join(json.dumps(r) + '\n' for r in rows))
             args = types.SimpleNamespace(knowcode=str(binary), label='fake', source=str(source), work=str(base/'work'),
@@ -110,10 +114,13 @@ class ReplayGateTests(unittest.TestCase):
                 again = replay_gate.run(args)
             self.assertEqual(summary['knowcode_version'], 'knowcode 9.9.9')
             self.assertEqual(summary['skipped'], {'kc_more': 1})
-            self.assertEqual(summary['calls'], 2)
+            self.assertEqual(summary['calls'], 3)
             self.assertEqual(summary['strata']['http-cross-repo']['recall'], 0.5)
             self.assertEqual(summary['errors'], [dict(question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'boom'})])
             self.assertEqual(summary['tools']['kc_search']['errors'], 1)
+            # A refusal by design is counted as one, not as an error.
+            self.assertEqual(summary['tools']['kc_search']['refusals'], 1)
+            self.assertEqual(summary['refusals'], [dict(question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'elsewhere'})])
             self.assertEqual(summary['schemas']['default']['always_loaded'], 1)
             self.assertNotIn('always_loaded_tokens', summary['schemas']['default'])
             for key in ('strata', 'tools', 'errors', 'questions', 'schemas'):
@@ -139,6 +146,12 @@ class ReplayGateTests(unittest.TestCase):
         worse['schemas']['default']['always_loaded_bytes'] = 2300
         found = replay_gate.compare(base, worse)
         self.assertEqual(len(found), 5, found)
+        # A refusal may stay one, and an error may become one; a call answered before must not.
+        refusing = copy.deepcopy(base)
+        refusing['refusals'] = [dict(question='q1', tool='kc_search', args={'pattern': 'a'}),
+                                dict(question='q3', tool='kc_find', args={'query': 'Y'})]
+        refusing['errors'] = []
+        self.assertEqual(replay_gate.compare(base, refusing), ["newly refused: kc_find {\"query\": \"Y\"} (q3)"])
 
 
 if __name__ == '__main__':

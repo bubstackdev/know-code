@@ -40,6 +40,7 @@ fifth, final, rerun) and public-v2 runs (baseline, release candidate). That is 1
 | Recall per question type | drops by more than 0.02 |
 | Precision per question type | drops by more than 0.05 |
 | Errors | errors on a call the base answered |
+| Refusals | refuses a call the base answered (a refusal by design, such as `paths matched 0 files`, is not an error) |
 | Answer bytes per tool | grow more than 10% |
 | Always-loaded schemas and instructions | grow more than 5% |
 
@@ -94,7 +95,9 @@ v0.3.0 is the release asset (sha256 `b7ab63ba…`); main is d82fa18, built with 
 | HTTP callers across repositories | 16 | 0.312 | 0.019 → 0.020 |
 | two-hop impact | 16 | 0.587 → 0.628 | 0.175 → 0.203 |
 
-**Errors:** the same 15 `kc_search` calls error on both builds.
+**Errors:** the same 15 `kc_search` calls error on both builds. 11 of them are refusals by design: their `paths`
+name files the public cohort doesn't have (`bitwarden_license/`, which the manifest excludes, and `node_modules/`).
+The gate now counts such a refusal in its own column. The other 4 used look-around, which `search` now takes.
 
 **Answer bytes:** `kc_impact` grew 5.1%, `kc_status` 0.2%, and `kc_context` shrank 0.1%; the rest are unchanged.
 

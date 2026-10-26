@@ -21,8 +21,11 @@ Calls are replayed as the separate tool they run, which every build serves under
 is the one `kc` tool runs the same code for its ops. Recorded `kc_more` calls are skipped (their cursors belong to the
 recorded session), and so is `kc_note_add` (it writes).
 
+A call KnowCode refuses by design, saying why (a `paths` filter that matches no file of the cohort), is a refusal, not
+an error: it is counted in its own column.
+
 `compare` fails (exit 1) when the candidate regresses beyond a tolerance: recall or precision per question type, calls
-that error, answer bytes per tool, or always-loaded schema bytes.
+that error, calls the base answered and the candidate refuses, answer bytes per tool, or always-loaded schema bytes.
 """
 from __future__ import annotations
 
@@ -57,6 +60,8 @@ SKIPPED = {'kc_more': 'its cursor belongs to the recorded session', 'kc_note_add
 PLACE = re.compile(r'(?<![\w@./-])(?:([A-Za-z0-9][\w.-]*):)?((?:[\w@.+-]+/)*[\w@+-][\w@.+-]*\.(?:'
                    + recheck.EXTENSIONS + r')):(\d+)(?![\w/])')
 PROFILES = ('one', 'core', 'all')
+# Refusals by design: the answer says what the call asked for doesn't exist here, rather than failing.
+REFUSALS = (re.compile(r'\bmatched 0 files \('),)
 GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
 TOLERANCES = {'recall': 0.02, 'precision': 0.05, 'bytes': 0.10, 'schema': 0.05}
@@ -296,10 +301,12 @@ def run(args):
             question = banks[row['study']][0][row['question']]
             try:
                 error, text = server.call(row['tool'], row['args'])
+                refused = error and any(r.search(text) for r in REFUSALS)
+                error = error and not refused
             except TimeoutError:
-                error, text = True, 'timeout'
+                error, refused, text = True, False, 'timeout'
             calls.append(dict(study=row['study'], question=row['question'], stratum=question['stratum'], tool=row['tool'],
-                              args=row['args'], error=error, bytes=len(text.encode()),
+                              args=row['args'], error=error, refused=refused, bytes=len(text.encode()),
                               places=[] if error else places(text, question['repos'], roots)))
     finally:
         server.close()
@@ -334,14 +341,16 @@ def run(args):
         t = tools.setdefault(call['tool'], dict(calls=0, errors=0, bytes=[]))
         t['calls'] += 1
         t['errors'] += call['error']
+        t['refusals'] = t.get('refusals', 0) + call['refused']
         t['bytes'].append(call['bytes'])
-    tools = {k: dict(calls=v['calls'], errors=v['errors'], bytes_total=sum(v['bytes']),
+    tools = {k: dict(calls=v['calls'], errors=v['errors'], refusals=v['refusals'], bytes_total=sum(v['bytes']),
                      bytes_median=statistics.median(v['bytes'])) for k, v in sorted(tools.items())}
     timing['total_s'] = round(time.monotonic() - started, 1)
     summary = dict(format='replay-gate-1', label=args.label, knowcode_version=version,
                    knowcode_sha256=digest(binary.read_bytes()), corpus_rows=len(corpus), calls=len(calls),
                    skipped=skipped, repos=sorted(roots), strata=strata, tools=tools,
                    errors=[dict(question=c['question'], tool=c['tool'], args=c['args']) for c in calls if c['error']],
+                   refusals=[dict(question=c['question'], tool=c['tool'], args=c['args']) for c in calls if c['refused']],
                    schemas=profile_schemas, timing=timing, questions=per_question)
     out = Path(args.out) if args.out else base/'summary.json'
     out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
@@ -363,10 +372,16 @@ def compare(base, cand, tolerances=TOLERANCES):
             out.append(f"{stratum}: recall {b['recall']:.3f} -> {c['recall']:.3f}")
         if b['precision'] is not None and (c['precision'] or 0) < b['precision'] - tolerances['precision']:
             out.append(f"{stratum}: precision {b['precision']:.3f} -> {c['precision']}")
-    failed = {(e['question'], e['tool'], json.dumps(e['args'], sort_keys=True)) for e in base['errors']}
+    key = lambda e: (e['question'], e['tool'], json.dumps(e['args'], sort_keys=True))
+    failed = {key(e) for e in base['errors']}
     for e in cand['errors']:
-        if (e['question'], e['tool'], json.dumps(e['args'], sort_keys=True)) not in failed:
+        if key(e) not in failed:
             out.append(f"new error: {e['tool']} {json.dumps(e['args'], sort_keys=True)} ({e['question']})")
+    # A call the base refused by design may stay refused; one it answered must not become a refusal.
+    refused = {key(e) for e in base.get('refusals', [])} | failed
+    for e in cand.get('refusals', []):
+        if key(e) not in refused:
+            out.append(f"newly refused: {e['tool']} {json.dumps(e['args'], sort_keys=True)} ({e['question']})")
     for tool, b in base['tools'].items():
         c = cand['tools'].get(tool)
         if c and b['bytes_total'] and c['bytes_total'] > b['bytes_total'] * (1 + tolerances['bytes']):
@@ -387,10 +402,10 @@ def table(base, cand):
         fmt = lambda v: '—' if v is None else f'{v:.3f}'
         lines.append(f"| {stratum} | {b['questions']} | {fmt(b['recall'])} → {fmt(c.get('recall'))} | "
                      f"{fmt(b['precision'])} → {fmt(c.get('precision'))} |")
-    lines += ['', '| Tool | Calls | Errors | Answer bytes (total) | Median |', '| --- | ---: | ---: | ---: | ---: |']
+    lines += ['', '| Tool | Calls | Errors | Refusals | Answer bytes (total) | Median |', '| --- | ---: | ---: | ---: | ---: | ---: |']
     for tool, b in base['tools'].items():
         c = cand['tools'].get(tool, {})
-        lines.append(f"| {tool} | {b['calls']} | {b['errors']} → {c.get('errors')} | {b['bytes_total']} → "
+        lines.append(f"| {tool} | {b['calls']} | {b['errors']} → {c.get('errors')} | {b.get('refusals', 0)} → {c.get('refusals', 0)} | {b['bytes_total']} → "
                      f"{c.get('bytes_total')} | {b['bytes_median']} → {c.get('bytes_median')} |")
     lines += ['', '| Profile | Tools listed | Always loaded | Always-loaded bytes | Instructions bytes | Tokens |',
               '| --- | ---: | ---: | ---: | ---: | ---: |']
