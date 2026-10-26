@@ -72,6 +72,14 @@ repository.
   `prepare-public-eval.py` does. That is about 12 MB, and cacheable by commit.
 - **Not yet wired:** the export step's CI cost and caching aren't measured yet.
 
+## History questions
+
+The replay's workspaces are exported without history, so history questions have their own gate:
+[history-v1](../history-v1/README.md) and [history_gate.py](../../scripts/eval/history_gate.py). It clones its four
+repositories with their full history at public-v2's pins (about 250 MB; local only, or its 75 MB Serilog subset in
+CI), recomputes the labels with git, and scores KnowCode against the plain-git approaches on the same labels, with no
+model calls.
+
 ## First replay: v0.3.0 against main
 
 v0.3.0 is the release asset (sha256 `b7ab63ba…`); main is d82fa18, built with `cargo build --release`. Both report

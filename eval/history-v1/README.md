@@ -1,8 +1,9 @@
-# History questions (draft)
+# History questions
 
 Questions about a symbol's or a file's git history: which commits changed this method, when it last changed, who
-wrote its current lines, what changes with it, and which of its callers changed with it. A development set for 0.5;
-no agent has run on it, and nothing here is a result.
+wrote its current lines, what changes with it, and which of its callers changed with it. A development set for 0.5,
+and 0.5's history gate: [history_gate.py](../../scripts/eval/history_gate.py) scores KnowCode and the plain-git
+approaches against the same labels, with no model calls. No agent has run on it.
 
 ## Repositories
 
@@ -13,8 +14,7 @@ export these without history, so their studies hold no history questions.
 ## Labels
 
 [history_labels.py](../../scripts/eval/history_labels.py) computes every label from the clone with git alone; no
-KnowCode answer is read. The same clones and git version give the same labels, so the set can join the release
-replay gate.
+KnowCode answer is read. The same clones and git version give the same labels.
 
 | Family | Question | Label |
 | --- | --- | --- |
@@ -22,12 +22,13 @@ replay gate.
 | `symbol-last` | When did M last change, and who changed it? | the newest of those |
 | `symbol-blame` | Who wrote M's current lines? | `git blame -w -L START,END`, authors by lines |
 | `symbol-cochange` | What else changes when M changes? | files in M's commits (at most 50 files each), at least two shared |
-| `callers-history` | Which of M's callers changed with M? | hop-1 callers' files from a published public-v2 label, in M's commits |
-| `file-cochange` | What usually changes with file F? | files in F's non-merge commits (at most 50 files each), by shared commits |
+| `callers-history` | Which of M's production callers changed with M? | hop-1 callers' files from a published public-v2 label, in M's commits |
+| `file-cochange` | What usually changes with file F? | files in F's non-merge commits (`--follow`; at most 50 files each), by shared commits, each under its current name |
 
 A member's span runs from its declaration line to its closing brace, matched outside strings, characters and
 comments. Each label records the span's first and last lines and the file's sha256. `git log -L` follows lines
-by git's own diff, so a different git version can move a label; rerun the labeller after upgrading git.
+by git's own diff, so a different git version can move a label; the gate recomputes every label and stops when one
+differs from labels.jsonl.
 
 ## How plain tools answer
 
@@ -39,25 +40,20 @@ An agent with grep, find, read and git would reach for these:
 | `git log -S M -- FILE` | Commits that changed how many times the name appears: misses body edits, and counts calls and overloads. |
 | `git log --follow -- FILE` | Every commit to the file: full recall, low precision (729 commits for a 4-line method in BaseItem.cs). |
 | `git blame -L :M: FILE` | Same matching as `-L`: no lines, or more lines than the method. |
-| `git log --format= --name-only -- FILE \| sort \| uniq -c` | The file co-change label, almost exactly. |
+| `git log --format= --name-only -- FILE \| sort \| uniq -c` | The file co-change label, short of the renames. |
 
 So an exact answer to a method-level question needs the method's line range first: a search, then a read to find
 the closing brace, then `git log -L` or `git blame -L` over that range. A file-level question is one pipeline.
 
-Measured over this set's labels at the pins (plain_baseline.py, kept with the evidence, not in this repository):
-
-| Question | `-L :M:` | `-S M` | `--follow` file log |
-| --- | --- | --- | --- |
-| symbol-commits-001 | 6/6 recall, 6 listed | 0/6 | 6/6, 33 listed |
-| symbol-commits-002 | no match | 1/5, 3 listed | 5/5, 729 listed |
-| symbol-commits-003 | no match | 0/6, 1 listed | 6/6, 19 listed |
-| symbol-commits-004 | no match | 2/2, 3 listed | 2/2, 8 listed |
-| symbol-last-001, -002 | no match | wrong commit | wrong commit |
-
-## Running it
+## The gate
 
 ```sh
-python3 scripts/eval/history_labels.py --repos DIR > labels.jsonl
+python3 scripts/eval/history_gate.py fetch --work WORK
+python3 scripts/eval/history_gate.py run --knowcode BIN --work WORK --out summary.json
 ```
 
-`DIR` holds one full clone per repository name, each checked out at its pin. A clone at another commit is refused.
+`fetch` clones the four repositories into `WORK/clones` and checks out their pins: about 250 MB, so it runs locally,
+not in CI. `--repos serilog,serilog-extensions-hosting` keeps five questions and about 75 MB, small enough for CI if
+the clones are cached by pin. `run` exits 1 when KnowCode doesn't beat each plain approach on the method-level and
+caller questions (recall and precision at least equal, one higher), or falls more than 0.05 short of the best plain
+approach's recall on the two file co-change controls.
