@@ -274,6 +274,7 @@ class BareClientTests(unittest.TestCase):
                     self.assertNotIn(flag, argv)
                 self.assertEqual(argv[argv.index('--tools')+1], 'Bash,Read,Grep,Glob,Skill,ToolSearch')
                 self.assertEqual(argv[argv.index('--setting-sources')+1], 'user')
+                self.assertIn('--include-hook-events', argv)  # records each hook in the stream; requests are unchanged
                 prompt = argv[argv.index('--print')+1]
                 self.assertIn('example: '+str(index.resolve()), prompt)
                 self.assertNotIn(str(root.resolve()/'source'), prompt)

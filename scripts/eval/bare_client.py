@@ -198,7 +198,7 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
         allowed.extend(['Grep', 'Glob', 'Skill', 'ToolSearch'])
         argv = [str(client), '--print', prompt, '--model', config['model'], '--effort', config['effort'],
                 '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
-                '--setting-sources', 'user', '--settings', str(settings_path), '--tools', FULL_TOOLS,
+                '--setting-sources', 'user', '--settings', str(settings_path), '--tools', FULL_TOOLS, '--include-hook-events',
                 '--permission-mode', 'dontAsk', '--allowedTools', *allowed]
     else:
         argv = [str(client), '--bare', '--print', prompt, '--model', config['model'], '--effort', config['effort'],
