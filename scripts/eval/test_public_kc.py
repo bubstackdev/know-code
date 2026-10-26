@@ -7,12 +7,16 @@ re-check fixtures (recheck_fixtures/), rewritten as `kc` calls, must give the de
 import json
 from pathlib import Path
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import public_transcript
 import public_v3
 import recheck
 import recheck_cost
+import session_runner
 
 HERE = Path(__file__).parent
 FIXTURES = HERE / 'kc_fixtures'
@@ -132,6 +136,43 @@ class KcCallTests(unittest.TestCase):
             self.assertEqual(as_one, original, case.name)
             self.assertEqual(recheck.detect(as_one), recheck.detect(original), case.name)
         self.assertEqual(rewritten, 60)
+
+
+TOOLCHAIN = Path('/Library/Developer/CommandLineTools')
+
+
+@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file() and (TOOLCHAIN / 'usr/bin/git').is_file(),
+                     'needs macOS sandbox-exec and the command line tools')
+class NotesWriteTests(unittest.TestCase):
+    """No note is written in a KnowCode session, whichever tool or `kc` op asks: the sandbox refuses the database."""
+    def session(self, base):
+        session = Path(base) / 'session'
+        for name in ('source', 'control', 'profile'):
+            (session / name).mkdir(parents=True)
+        (session / 'session.json').write_text(json.dumps(
+            {'source_root': 'source', 'required_client_cwd': 'control', 'empty_profile_directory': 'profile'}))
+        return session
+
+    def write(self, policy):
+        data = policy.paths['CONTROL'] / 'kc-data'
+        data.mkdir(exist_ok=True)
+        results = {}
+        for suffix in session_runner.NOTES_SUFFIXES + ('-other',):
+            argv = ['/bin/bash', '-c', 'echo x > "$1"', 'sh', str(data / ('notes.sqlite' + suffix))]
+            results[suffix] = subprocess.run(policy.command(argv), capture_output=True).returncode
+        return results
+
+    def test_a_knowcode_session_cannot_write_its_notes_database_and_a_plain_one_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as base:
+            session = self.session(base)
+            knowcode = session_runner.policy_for(session, Path('/bin/bash'), knowcode=Path('/bin/echo'), git_toolchain=TOOLCHAIN)
+            written = self.write(knowcode)
+            self.assertTrue(all(written[s] != 0 for s in session_runner.NOTES_SUFFIXES), written)
+            self.assertEqual(written['-other'], 0)  # the rest of the data directory stays writable
+            plain = session_runner.policy_for(session, Path('/bin/bash'))
+            self.assertNotIn('NOTES0', plain.parameters)
+            self.assertEqual(set(self.write(plain).values()), {0})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -36,6 +36,9 @@ def verify_source(study,session):
         census.inspect_view(source/repo['name'],repo)
 
 
+NOTES_SUFFIXES=('','-journal','-wal','-shm')
+
+
 def policy_for(session,client,knowcode=None,git_toolchain=None,full=False):
     # A full client runs plugin hooks through sh; every full arm gets it, so their executables differ only by KnowCode.
     executables=[client,Path('/bin/bash'),*bare_client.PROGRAMS.values(),*([Path('/bin/sh')] if full else [])]
@@ -53,6 +56,13 @@ def policy_for(session,client,knowcode=None,git_toolchain=None,full=False):
         key='GIT_SUPPORT'+str(number);policy.parameters[key]=path
         operations='file-read-data file-map-executable' if path.is_file() else 'file-read-data'
         policy.profile+='(allow '+operations+' (literal (param "'+key+'")))\n'
+    if knowcode is not None:
+        # No note is written in a study session, whichever tool or `kc` op asks: the session's notes database
+        # (KNOWCODE_DATA_DIR/notes.sqlite) and its journals cannot be created or written. The audit flags the call.
+        notes=policy.paths['CONTROL']/'kc-data'/'notes.sqlite'
+        for number,suffix in enumerate(NOTES_SUFFIXES):
+            policy.parameters['NOTES'+str(number)]=Path(str(notes)+suffix)
+        policy.profile+='(deny file-write* '+' '.join('(literal (param "NOTES'+str(n)+'"))' for n in range(len(NOTES_SUFFIXES)))+')\n'
     return policy
 
 

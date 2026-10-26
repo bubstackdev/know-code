@@ -12,8 +12,8 @@ The criteria follow the 0.4 plan's numbering:
    the 0.3.0 baseline's on the same bank.
 3. F1 and recall at least equal, named-full minus plain-full: mean paired F1 difference ≥ 0 over exhaustive labels
    with items, and mean paired recall difference ≥ 0 over every label with items.
-4. Unprompted use: unprompted-full sessions with a KnowCode call, at least 20 of every 24. The bare unprompted arm
-   is reported alongside, as a descriptive figure.
+4. Unprompted use: unprompted-full sessions with a KnowCode call, pooled over every run and question, at least 20 of
+   every 24 (83%: 67 of 80 for two runs of 40 questions). The bare unprompted arm is reported alongside, descriptively.
 5. Re-checks that changed the answer, listed per run (descriptive).
 
 A full client's agent may search with Grep and Glob as well as Bash, and its KnowCode tools carry the plugin's names.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 from pathlib import Path
 import random
 import shlex
@@ -141,9 +142,11 @@ def summarize(rows, questions, runs, baseline=None):
         return dict(sessions=len(sessions), sessions_with_call=used, share=used / len(sessions) if sessions else None,
                     ci95=wilson(used, len(sessions)))
     full, bare = use(UNPROMPTED), use(BARE)
-    criteria['4_unprompted_use'] = dict(rule='knowcode-unprompted-full sessions with a KnowCode call >= 20 of every 24', **full,
-                                        met=full['share'] is not None and full['share'] >= public_v2.UNPROMPTED_SHARE,
-                                        bare_descriptive=bare)
+    criteria['4_unprompted_use'] = dict(
+        rule='knowcode-unprompted-full sessions with a KnowCode call, pooled over every run and question: share >= 20/24 '
+             '(83%; 67 of 80 for two runs of 40 questions)', **full,
+        required=math.ceil(public_v2.UNPROMPTED_SHARE * full['sessions'] - 1e-9),
+        met=full['share'] is not None and full['share'] >= public_v2.UNPROMPTED_SHARE, bare_descriptive=bare)
     changed = [dict(run=r, arm=a, question=q, calls=row['changed']) for (r, a, q), row in sorted(rows.items())
                if r in runs and a in (NAMED, UNPROMPTED, BARE) and row.get('changed')]
     criteria['5_rechecks_that_changed_the_answer'] = dict(
