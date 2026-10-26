@@ -177,7 +177,7 @@ fn session_start_says_what_is_indexed_only_where_there_is_an_index() {
 
     let shop = indexed_repo(&f, "shop");
     let note = f.session(&shop.join("src"), "startup");
-    assert_eq!(note, "KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: kc {op: find}.");
+    assert_eq!(note, "KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: op find.");
     assert_eq!(f.session(&shop, "clear"), note);
     assert_eq!(f.session(&shop, "compact"), note);
     // A resumed or forked session has the line in its transcript already.
@@ -194,7 +194,7 @@ fn session_start_says_what_is_indexed_only_where_there_is_an_index() {
     assert!(out.contains("KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find."), "{out}");
 
     let api = indexed_repo(&f, "api");
-    assert_eq!(f.session(&api, "startup"), "KnowCode indexes api. Callers, impact, HTTP: kc {op: impact}; definitions: kc {op: find}.");
+    assert_eq!(f.session(&api, "startup"), "KnowCode indexes api. Callers, impact, HTTP: kc {op: impact}; definitions: op find.");
     // A repo with no index says nothing, or, under a workspace root, that its first query indexes it.
     assert_eq!(f.session(&first, "startup"), "");
     assert_eq!(f.session(&f.dir.join("nowhere"), "startup"), "");

@@ -761,7 +761,7 @@ mod tests {
         // Under `core` or `all`, the separate tools, as the plugin loads them.
         let line = note.lines().next().unwrap().replace("kc {op: context, symbol: \"CartStore\"}", "kc_context(symbol: \"CartStore\")");
         for spec in ["core", "all", "core,kc_trace"] {
-            let other = notes_for(&[line.clone()], spec).unwrap();
+            let other = notes_for(std::slice::from_ref(&line), spec).unwrap();
             assert!(other.contains("kc_context(symbol: \"CartStore\")"), "{other}");
             for t in ["kc_find", "kc_context", "kc_refs", "kc_impact", "kc_search"] {
                 assert!(other.contains(&format!("{t} (mcp__plugin_knowcode_knowcode__{t})")), "{other}");

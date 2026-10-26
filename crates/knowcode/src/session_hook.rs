@@ -82,8 +82,12 @@ pub fn text(here: &Here, indexes: usize, one: bool) -> Option<String> {
         Here::Workspace if indexes == 0 => return None,
         Here::Workspace => format!("KnowCode indexes {indexes} repo{} here.", if indexes == 1 { "" } else { "s" }),
     };
-    let line = format!("{first} Callers, impact, HTTP: kc_impact; definitions: kc_find.");
-    Some(if one { crate::mcp::one_text(&line, false) } else { line })
+    // Under `one`, the ops of `kc`: 44 tokens for a workspace of 12 repos (count_tokens), against 45 allowed.
+    Some(if one {
+        format!("{first} Callers, impact, HTTP: kc {{op: impact}}; definitions: op find.")
+    } else {
+        format!("{first} Callers, impact, HTTP: kc_impact; definitions: kc_find.")
+    })
 }
 
 /// How many repo indexes the cache holds, from its directory listing alone; `None` when it holds none.
@@ -108,7 +112,7 @@ mod tests {
         assert_eq!(t(Here::Workspace, 1), "KnowCode indexes 1 repo here. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
         assert_eq!(text(&Here::Workspace, 0, false), None);
         // Under `one`, the default: the same tools, as ops of `kc`.
-        assert_eq!(text(&repo(true), 1, true).unwrap(), "KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: kc {op: find}.");
+        assert_eq!(text(&repo(true), 1, true).unwrap(), "KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: op find.");
         assert_eq!(text(&Here::Workspace, 0, true), None);
     }
 

@@ -4,9 +4,22 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- **Changed default: one MCP tool.** `knowcode serve`, and so `setup claude`, `setup codex` and `setup cursor`,
+  now advertise a single tool, `kc`, instead of the eight core tools. Its `op` names the tool to run, without `kc_`
+  (`impact`, `find`, `refs`, `context`, `search`, `locate`, `more`, `help`, and every other tool by name); `q` fills
+  the op's main parameter and any other parameter is passed by its own name: `kc {op: impact, q: Orders.Place,
+  depth: 2}`. `kc` and its instructions cost 502 tokens on every turn (`count_tokens`), against 1,276 for the core
+  tools in a client that loads every schema and 1,325 for the plugin's tools in Claude Code. Answers' hints and
+  cursors, the server's instructions, the Claude Code plugin's skills, its search note and its session-start line
+  name calls as ops (`kc {op: more, cursor: …}`). On a small development set in Claude Code, sessions with KnowCode
+  named in the prompt used `kc` in 12 of 12; differences in whole-session tokens there were within run-to-run
+  spread, so no saving per session is claimed before the 0.4 study. **To keep the separate tools**, set
+  `KNOWCODE_TOOLS=core` or `all` (`KNOWCODE_TOOLS=all knowcode setup claude` for the plugin, or in the environment
+  `setup codex` and `setup cursor` run in); everything then reads as before. A plugin updated from 0.3, which wrote
+  `KNOWCODE_TOOLS=all` as its default, takes `one`; one you set by hand is kept.
 - The Claude Code plugin adds a `SessionStart` hook. At the start of a session, and after `/clear` or a compaction, it
   adds one line of about 40 tokens where KnowCode has an index: `KnowCode indexes shop. Callers, impact, HTTP:
-  kc_impact; definitions: kc_find.` It says nothing in a directory with no index, in a repo whose privacy file blocks
+  kc {op: impact}; definitions: op find.` (with `KNOWCODE_TOOLS=core` or `all`: `kc_impact` and `kc_find`) It says nothing in a directory with no index, in a repo whose privacy file blocks
   KnowCode, or in a resumed session. It reads no index and makes no network call. `knowcode setup claude` installs it
   with the plugin, `knowcode uninstall` removes it, and `knowcode config set hooks.session_start false` turns it off.
 - Claude Code loads five tools up front instead of eight: `kc_find`, `kc_context`, `kc_refs`, `kc_impact` and

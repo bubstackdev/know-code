@@ -51,6 +51,10 @@ knowcode setup claude     # or: knowcode setup codex, knowcode setup cursor
 `setup codex` and `setup cursor` add the MCP server to the client's user settings. `--print` shows the configuration
 without changing anything. Start a new client session afterwards.
 
+The server advertises one tool, `kc`, whose `op` names what to run (`impact`, `find`, `refs`, `context`, `search`, …,
+or any other KnowCode tool), so a session pays for one short schema on every turn. `KNOWCODE_TOOLS=all` (or `core`),
+set when you run `setup`, gives the separate `kc_*` tools instead; see [usage](docs/usage.md).
+
 No index command or configuration is needed. The first query indexes the repository. If indexing takes longer than
 about two seconds, the answer comes from what is indexed so far, says it is stale, and the rest is finished in the
 background.
@@ -61,7 +65,7 @@ In your agent, inside a repository, ask a question about the code:
 
 > Where is `IRequestProvider.GetAsync` called, and which implementation runs?
 
-The agent calls `kc_refs`. On the command line the same question is:
+The agent calls `kc {op: refs}` (`kc_refs` under `KNOWCODE_TOOLS=all`). On the command line the same question is:
 
 ```sh
 knowcode refs IRequestProvider.GetAsync -n 3
@@ -159,7 +163,7 @@ routes, and languages such as Go, Java and Kotlin are not extracted at all. Deta
 - [Claude Code integration](integrations/claude-code/README.md): the plugin, hook and skills.
 - [Decisions](docs/decisions.md), [releasing](docs/releasing.md),
   [first-run acceptance](docs/first-run-acceptance.md) and the [changelog](CHANGELOG.md).
-- In an agent session, `kc_help` lists the per-tool reference topics.
+- In an agent session, `kc {op: help}` (or `kc_help`) lists the per-tool reference topics.
 
 ## License
 

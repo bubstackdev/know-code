@@ -34,7 +34,7 @@ from pathlib import Path
 
 ENDPOINT = "https://api.anthropic.com/v1/messages/count_tokens"
 SERVER = "knowcode"
-PROFILES = ["all", "core"]
+PROFILES = ["one", "all", "core"]
 BASE_SYSTEM = "You are a coding agent working in a repository."
 BASE_USER = "Which files call the HTTP endpoint for GET /orders?"
 # A client tool, so the tool-use preamble is part of every count, including the base.

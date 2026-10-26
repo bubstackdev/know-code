@@ -16,9 +16,11 @@ Setup extracts the bundled plugin into KnowCode's user data directory and instal
 it through a local marketplace named `knowcode-local`. This works without cloning
 the KnowCode repository or downloading plugin files. It records the executable's
 path and any explicit `KNOWCODE_CACHE_DIR`, `KNOWCODE_CONFIG_DIR`, `KNOWCODE_DATA_DIR`,
-and `KNOWCODE_TOOLS` overrides. The plugin's server advertises every tool (`KNOWCODE_TOOLS=all`) unless you set
-`KNOWCODE_TOOLS`: Claude Code loads the tools that answer a first question up front (`kc_find`, `kc_context`,
-`kc_refs`, `kc_impact`, `kc_search`) and defers the rest to tool search, and the skills use them. Start a new Claude Code session in your repository.
+and `KNOWCODE_TOOLS` overrides. The plugin's server advertises one tool, `kc`, whose `op` names the tool to run
+(`KNOWCODE_TOOLS=one`), unless you set `KNOWCODE_TOOLS`; the skills, the search note and the session-start line name
+calls as its ops. `KNOWCODE_TOOLS=all knowcode setup claude` keeps the separate tools: Claude Code then loads the
+tools that answer a first question up front (`kc_find`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`) and defers
+the rest to tool search. Start a new Claude Code session in your repository.
 Each Claude registration command has a deadline of 120 seconds, configurable with
 `KNOWCODE_SETUP_DEADLINE`. A failed or partial attempt can be retried.
 
@@ -63,7 +65,7 @@ At the start of a session, after `/clear` and after a compaction, `hooks/knowcod
 binary's session-start hook, which adds one line for the agent when KnowCode has something here:
 
 ```text
-KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.
+KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: op find.
 ```
 
 In a repo under a workspace root that isn't indexed yet it says `KnowCode indexes shop on first use.`; in a workspace

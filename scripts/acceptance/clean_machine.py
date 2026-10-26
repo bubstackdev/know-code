@@ -195,7 +195,7 @@ def _normalize(text: str) -> str:
 
 def is_knowcode_tool(name: str, tool_input) -> str | None:
     """'mcp' for a KnowCode MCP tool, 'cli' for a Bash call that runs knowcode, otherwise None."""
-    if re.match(r"^mcp__.*knowcode.*__kc_\w+$", name or ""):
+    if re.match(r"^mcp__.*knowcode.*__kc(_\w+)?$", name or ""):
         return "mcp"
     if name == "Bash" and isinstance(tool_input, dict) and re.search(r"(^|[\s;&|(/])knowcode(\s|$)", str(tool_input.get("command", ""))):
         return "cli"
