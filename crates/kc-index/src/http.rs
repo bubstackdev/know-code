@@ -78,13 +78,17 @@ fn serves_key(server: &(String, String), client: &(String, String)) -> bool {
     server.1 == client.1 && (server.0 == client.0 || server.0 == "*")
 }
 
-/// The server routes serving key `k`: those of its verb, and those answering every verb.
+/// The server routes serving key `k`: those of its verb, and those answering every verb in repos with none of its
+/// verb. ASP.NET Core prefers an endpoint constrained to the request's verb over one answering every verb (a
+/// conventionally routed action with no `[Http*]`, an admin app's `Orders/Index` at `Orders`), so the latter is no
+/// candidate where the former serves the path.
 fn candidates<'a>(served: &HashMap<(String, String), Vec<(&'a Path, &'a RouteRow)>>, k: &(String, String)) -> Vec<(&'a Path, &'a RouteRow)> {
     let mut out = served.get(k).cloned().unwrap_or_default();
     if k.0 != "*"
         && let Some(any) = served.get(&("*".to_string(), k.1.clone()))
     {
-        out.extend(any.iter().copied());
+        let explicit: Vec<&Path> = out.iter().map(|(p, _)| *p).collect();
+        out.extend(any.iter().copied().filter(|(p, _)| !explicit.contains(p)));
     }
     out
 }
