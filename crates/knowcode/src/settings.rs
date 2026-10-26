@@ -43,6 +43,10 @@ fn settings() -> Result<Vec<Setting>> {
             let (value, source) = config::update_check()?;
             Setting { key: "update.check".into(), value: json!(value), source: source.describe("KNOWCODE_UPDATE_CHECK", "") }
         },
+        {
+            let (value, source) = config::session_hook()?;
+            Setting { key: "hooks.session_start".into(), value: json!(value), source: source.describe("", "") }
+        },
         Setting {
             key: "cache.dir".into(),
             value: json!(cache),

@@ -137,14 +137,22 @@ fn claude_installs_embedded_plugin_and_records_partial_install_for_removal() {
     let config: Value = serde_json::from_slice(&fs::read(plugin.join(".mcp.json")).unwrap()).unwrap();
     assert_eq!(config["mcpServers"]["knowcode"]["command"], KC);
     assert_eq!(config["mcpServers"]["knowcode"]["args"], json!(["serve"]));
-    // Claude Code defers the non-core tools, and the skills use them: the plugin's server advertises them all.
-    assert_eq!(config["mcpServers"]["knowcode"]["env"]["KNOWCODE_TOOLS"], "all");
+    // The default profile, the single `kc` tool; the skills call every tool as its ops.
+    assert_eq!(config["mcpServers"]["knowcode"]["env"]["KNOWCODE_TOOLS"], "one");
     for skill in ["knowcode-explore", "knowcode-before-edit", "knowcode-debug-stack-trace", "knowcode-safe-refactor"] {
         let text = fs::read_to_string(plugin.join(format!("skills/{skill}/SKILL.md"))).unwrap();
         assert!(text.contains("incomplete") && text.contains("assumptions"));
+        assert!(text.contains("KnowCode's `kc` tool") && text.contains("kc {op: "), "{skill}: {text}");
+        assert!(!text.contains("kc_"), "{skill} names a tool `one` doesn't advertise: {text}");
     }
     let hook: Value = serde_json::from_slice(&fs::read(plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     assert_eq!(hook["hooks"]["PreToolUse"][0]["matcher"], "Grep|Glob|Bash");
+    // The session-start note: a new session, /clear and compaction, which leave the context without it.
+    assert_eq!(hook["hooks"]["SessionStart"][0]["matcher"], "startup|clear|compact");
+    let command = hook["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
+    let script = command.split('"').nth(1).unwrap().replace("${CLAUDE_PLUGIN_ROOT}", plugin.to_str().unwrap());
+    let text = fs::read_to_string(&script).unwrap();
+    assert!(text.starts_with(&format!("#!/bin/sh\nexport KNOWCODE_BIN='{KC}'\n")) && text.contains("hook session-start"), "{text}");
     let mut cmd = p.command("claude");
     cmd.env("PATH", path).env("KNOWCODE_TEST_CLAUDE_LOG", &log);
     success(cmd.output().unwrap());
@@ -168,10 +176,12 @@ fn bundled_hook_quotes_a_binary_path_with_shell_metacharacters() {
         .env("KNOWCODE_CACHE_DIR", p.dir("cache")).env("PATH", path)
         .env("KNOWCODE_TEST_CLAUDE_LOG", p.dir("claude.log"));
     success(cmd.output().unwrap());
-    let hook = p.dir("data/integrations/claude-marketplace/knowcode/hooks/knowcode-grep-hint.sh");
-    let out = Command::new("sh").arg(hook).current_dir(&p.root).stdin(Stdio::null()).output().unwrap();
-    success(out);
-    assert!(!p.dir("injected").exists());
+    for script in ["knowcode-grep-hint.sh", "knowcode-session-start.sh"] {
+        let hook = p.dir(&format!("data/integrations/claude-marketplace/knowcode/hooks/{script}"));
+        let out = Command::new("sh").arg(hook).current_dir(&p.root).stdin(Stdio::null()).output().unwrap();
+        success(out);
+        assert!(!p.dir("injected").exists(), "{script}");
+    }
 }
 
 #[test]

@@ -36,8 +36,9 @@ def verify_source(study,session):
         census.inspect_view(source/repo['name'],repo)
 
 
-def policy_for(session,client,knowcode=None,git_toolchain=None):
-    executables=[client,Path('/bin/bash'),*bare_client.PROGRAMS.values()]
+def policy_for(session,client,knowcode=None,git_toolchain=None,full=False):
+    # A full client runs plugin hooks through sh; every full arm gets it, so their executables differ only by KnowCode.
+    executables=[client,Path('/bin/bash'),*bare_client.PROGRAMS.values(),*([Path('/bin/sh')] if full else [])]
     dependencies=[]
     if knowcode is not None:
         if git_toolchain is None:
@@ -121,19 +122,35 @@ def _execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_co
     write(out/'started.json',dict(format=1,freeze_sha256=study.freeze_sha256,session=selected,
                                  stage='validated study; execution started',process_timeout_seconds=timeout))
     roots=None
-    if selected['arm'] in bare_client.KNOWCODE_ARMS:
+    full=selected['arm'] in bare_client.FULL_ARMS
+    served=selected['arm'] in bare_client.KNOWCODE_ARMS
+    if served or full:
         preparer=load('runner_neutral_index',ROOT/'scripts/prepare-public-eval-index.py')
         preparer.prepare(study.inputs['manifest'],study.inputs['source_receipt'],session)
         roots={r['name']:session/'control/index'/r['name'] for r in study.receipt['repos']}
-    plan=bare_client.prepare(session,study.config,client,knowcode=knowcode if roots else None,index_repos=roots)
-    policy=policy_for(session,client,knowcode if roots else None,git_toolchain)
+    plan=bare_client.prepare(session,study.config,client,knowcode=knowcode if served else None,index_repos=roots)
+    policy=policy_for(session,client,knowcode if served else None,git_toolchain,full)
+    if plan.get('setup'):
+        # Install the plugin as shipped into the session's own profile, with the pinned client as `claude`. This is
+        # preparation, like the neutral workspaces: no model call, and nothing outside the session is written.
+        shim=session/'control/setup-bin';shim.mkdir();(shim/'claude').symlink_to(client)
+        setup_env={**plan['setup']['env'],'PATH':str(shim)+':'+plan['setup']['env']['PATH']}
+        (session/'control/home').mkdir(exist_ok=True)
+        installed=owned_process.run(plan['setup']['argv'],cwd=plan['cwd'],env=setup_env,
+                                    stdout=out/'setup.stdout',stderr=out/'setup.stderr',timeout=timeout)
+        (shim/'claude').unlink();shim.rmdir()
+        write(out/'setup-process.json',installed)
+        if installed.get('returncode')!=0 or not installed['cleanup_complete']:
+            raise ValueError('plugin setup failed; client not started')
     version=owned_process.run(policy.command([client,'--version']),cwd=plan['cwd'],env=plan['env'],
                               stdout=out/'client-version.stdout',stderr=out/'client-version.stderr',timeout=15)
     if (version.get('returncode')!=0 or not version['cleanup_complete']
             or (out/'client-version.stdout').read_text().strip()!=study.config['client_version']+' (Claude Code)'):
         raise ValueError('actual client version differs from frozen configuration')
-    if roots:
-        server=json.loads((session/'control/mcp.json').read_text())['mcpServers']['knowcode']
+    if served:
+        server={'env':{'KNOWCODE_CACHE_DIR':str(session/'control/kc-cache'),'KNOWCODE_CONFIG_DIR':str(session/'control/kc-config'),
+                       'KNOWCODE_DATA_DIR':str(session/'control/kc-data'),'KNOWCODE_UPDATE_CHECK':'0','ANTHROPIC_API_KEY':'',
+                       'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_SYSTEM':'/dev/null','GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0'}}
         # Warm indexing is preparation, outside the agent research interval. The
         # same isolated roots/cache are used by the subsequent MCP server.
         indexed=owned_process.run(policy.command([knowcode,'index','--threads','1','--verify','--json',*map(str,roots.values())]),
@@ -160,8 +177,10 @@ def _execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_co
         relay_closed=relay.close()
         records=relay.records();write(out/'relay.json',dict(records=records,cleanup_complete=relay_closed))
     events,parse_issues=public_transcript.read_events((out/'transcript.jsonl').read_bytes())
+    # A full arm's agent works in the neutral workspaces, so its answers' absolute paths are under control/index.
     measured=public_transcript.audit(events,question_id=question['id'],arm=selected['arm'],
-                                      research_call_budget=study.config['research_call_budget'],source_root=session/'source',
+                                      research_call_budget=study.config['research_call_budget'],
+                                      source_root=session/('control/index' if full else 'source'),
                                       two_hop=question['stratum']=='two-hop-impact',parse_issues=parse_issues)
     transport=public_transcript.audit_transport(measured,events,records,expected_model=study.config['model'],relay_cleanup_complete=relay_closed)
     problems=[]

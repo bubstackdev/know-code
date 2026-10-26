@@ -98,6 +98,17 @@ class TranscriptTests(unittest.TestCase):
         events[0]['message']['content'][0]['name']='mcp__knowcode__kc_note_add'
         self.assertIn('persistent note tool forbidden',self.run_audit(events,arm='knowcode')['policy_flags'])
 
+    def test_full_client_arms_count_plugin_tools_and_allow_skill_and_tool_search(self):
+        events=self.valid();events[0]['message']['content'][0]['name']='mcp__plugin_knowcode_knowcode__kc_find'
+        full=self.run_audit(events,arm='knowcode-full')
+        self.assertEqual((full['knowcode_calls'],full['policy_flags']),(1,[]))
+        self.assertTrue(self.run_audit(events,arm='plain-full')['policy_flags'])
+        events[0]['message']['content'][0]['name']='ToolSearch'
+        self.assertEqual(self.run_audit(events,arm='plain-full')['policy_flags'],[])
+        self.assertTrue(self.run_audit(events,arm='plain')['policy_flags'])
+        events[0]['message']['content'][0]['name']='mcp__plugin_knowcode_knowcode__kc_note_add'
+        self.assertIn('persistent note tool forbidden',self.run_audit(events,arm='knowcode-full')['policy_flags'])
+
     def test_missing_or_multiple_terminals_cannot_become_answered_empty(self):
         for events in [self.valid()[:-1],self.valid()+[result()],[]]:
             out=self.run_audit(events)

@@ -48,6 +48,9 @@ message_attributes = ["BusMessage"]
 
 [update]
 check = true                     # the daily update check
+
+[hooks]
+session_start = true             # the line a client's session-start hook adds
 ```
 
 | Key | Default | Meaning |
@@ -66,6 +69,7 @@ check = true                     # the daily update check
 | `privacy.path_key` | `"path"` | A rule's key for its path. |
 | `privacy.level_key` | `"level"` | A rule's key for its level. |
 | `update.check` | `true` | Whether to run the daily update check. |
+| `hooks.session_start` | `true` | Whether the Claude Code plugin's session-start hook adds its line (what is indexed here, and which tools to call). |
 
 The `[conventions.*]` keys are in [Conventions](#conventions).
 
@@ -93,7 +97,7 @@ or `[ignore]`. `knowcode config migrate` folds them into `config.toml` and renam
 | `KNOWCODE_SETUP_DEADLINE` | Seconds each client registration command in `setup` may run (default 120). |
 | `KNOWCODE_UPDATE_CHECK_DEADLINE` | Seconds the update check may run (default 8). |
 | `KNOWCODE_UPDATE_DEADLINE` | Seconds `self-update` may spend downloading and installing (default 180). |
-| `KNOWCODE_HOOK_MS` | Milliseconds the Claude Code Grep/Glob hook may take before it gives up silently (default 1500). |
+| `KNOWCODE_HOOK_MS` | Milliseconds a Claude Code hook (session start, or Grep/Glob/Bash) may take before it gives up silently (default 1500). |
 | `KNOWCODE_BIN` | The binary the Claude Code hook runs, when it isn't `knowcode` on `PATH`. |
 
 A deadline that passes is reported in the answer as `incomplete` with reason `deadline`, naming the variable to raise.

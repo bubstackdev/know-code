@@ -459,17 +459,17 @@ fn is_build_file(family: &str, name: &str) -> bool {
 }
 
 /// The parent directory of a repo path (`""` at the root).
-fn parent_dir(path: &str) -> &str {
+pub(crate) fn parent_dir(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(d, _)| d)
 }
 
 /// Whether `path` lies in directory `dir` (the root holds everything).
-fn under(path: &str, dir: &str) -> bool {
+pub(crate) fn under(path: &str, dir: &str) -> bool {
     dir.is_empty() || (path.len() > dir.len() && path.starts_with(dir) && path.as_bytes()[dir.len()] == b'/')
 }
 
 /// `dir/rel` with `.` and `..` resolved; `None` when it leaves the repo.
-fn join_rel(dir: &str, rel: &str) -> Option<String> {
+pub(crate) fn join_rel(dir: &str, rel: &str) -> Option<String> {
     let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
     for p in rel.split('/') {
         match p {

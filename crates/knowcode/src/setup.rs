@@ -21,6 +21,7 @@ const FILES: &[(&str, &str)] = &[
     (".mcp.json", include_str!("../../../integrations/claude-code/.mcp.json")),
     ("hooks/hooks.json", include_str!("../../../integrations/claude-code/hooks/hooks.json")),
     ("hooks/knowcode-grep-hint.sh", include_str!("../../../integrations/claude-code/hooks/knowcode-grep-hint.sh")),
+    ("hooks/knowcode-session-start.sh", include_str!("../../../integrations/claude-code/hooks/knowcode-session-start.sh")),
     ("skills/knowcode-explore/SKILL.md", include_str!("../../../integrations/claude-code/skills/knowcode-explore/SKILL.md")),
     ("skills/knowcode-before-edit/SKILL.md", include_str!("../../../integrations/claude-code/skills/knowcode-before-edit/SKILL.md")),
     ("skills/knowcode-debug-stack-trace/SKILL.md", include_str!("../../../integrations/claude-code/skills/knowcode-debug-stack-trace/SKILL.md")),
@@ -254,7 +255,7 @@ fn bundle(command: &Path, env: &BTreeMap<String, String>) -> Result<PathBuf> {
                 env.entry("KNOWCODE_TOOLS".into()).or_insert_with(|| crate::mcp::DEFAULT_PROFILE.into());
                 format!("{}\n", serde_json::to_string_pretty(&json!({"mcpServers": {"knowcode": server(command, &env)}}))?)
             }
-            "hooks/knowcode-grep-hint.sh" => {
+            "hooks/knowcode-grep-hint.sh" | "hooks/knowcode-session-start.sh" => {
                 let mut prefix = format!("#!/bin/sh\nexport KNOWCODE_BIN={}\n", shell_quote(&command.to_string_lossy()));
                 for (key, value) in env { prefix.push_str(&format!("export {key}={}\n", shell_quote(value))); }
                 prefix + text
