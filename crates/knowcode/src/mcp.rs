@@ -3309,6 +3309,9 @@ mod tests {
             ],
         );
         crate::ops::tests::commit_and_tag(&root, "v1");
+        // Indexed before the answers are taken (no budget: the sync finishes): a cold first call on a loaded machine
+        // can outlast the server's freshness budget and say it is still indexing, which this test isn't about.
+        drop(crate::refresh::open(&root, false).unwrap());
         let s = server("all");
         let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..s };
         fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {

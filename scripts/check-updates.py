@@ -170,7 +170,12 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
             "owner": "bubstackdev", "name": "knowcode", "app_name": "knowcode"},
             "install_layout": "flat", "install_prefix": str(prefix)})
         def reset() -> None:
-            shutil.copy2(binary, installed)
+            # A new file renamed into place, as self-update installs one: rewriting the installed file where it is
+            # makes macOS kill the next run of it (SIGKILL, no output), the kernel holding the signature of the
+            # binary that file held before. Under load that came up in about half the runs.
+            fresh = prefix / ".knowcode.reset"
+            shutil.copy2(binary, fresh)
+            os.replace(fresh, installed)
             receipt.write_text(receipt_text)
             requests.unlink(missing_ok=True)
         reset()
