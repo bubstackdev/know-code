@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 34;
+pub const VERSION: u32 = 35;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -3384,6 +3384,11 @@ impl<'a> Cx<'a> {
     }
 
     fn add(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) {
+        // A value of a constrained type parameter (`where T : BaseItem`) has the constraint's members.
+        let receiver_type = receiver_type.map(|enc| match TypeExpr::decode(&enc) {
+            Some(t) => t.replace_named(&|n: &str| if starts_upper(n) { constraint_type(self.src, at, n) } else { None }).encode(),
+            None => enc,
+        });
         let from = self.current();
         let (l, col) = (line(at), name_col(self.src, at, &name));
         if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry((from, name.clone(), kind, l, col)) {
@@ -3730,6 +3735,31 @@ fn type_params_of(src: &str, decl: Node) -> Vec<String> {
         .filter_map(|p| p.child_by_field_name("name").or_else(|| children(p).find(|c| c.kind() == "identifier")))
         .map(|n| src[n.byte_range()].to_string())
         .collect()
+}
+
+/// What a value of type parameter `name`, in scope at `node`, has its members looked up on: the one type its nearest
+/// declaration constrains it to (`where T : BaseItem, new()` → `BaseItem`). `None` when `name` isn't a type parameter
+/// there, or it has no type constraint, or several (the member may be any one's), or one naming another type parameter.
+fn constraint_type(src: &str, node: Node, name: &str) -> Option<TypeExpr> {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if type_params_of(src, n).iter().any(|p| p == name) {
+            let types: Vec<Node> = children(n)
+                .filter(|c| c.kind() == "type_parameter_constraints_clause")
+                .filter(|c| children(*c).find(|t| t.kind() == "identifier").is_some_and(|t| &src[t.byte_range()] == name))
+                .flat_map(children)
+                .filter(|c| c.kind() == "type_parameter_constraint")
+                .filter_map(|c| c.child_by_field_name("type"))
+                // `where T : notnull`, `unmanaged`, `default`: keywords the grammar reads as type names.
+                .filter(|t| !matches!(&src[t.byte_range()], "notnull" | "unmanaged" | "default"))
+                .collect();
+            let [t] = types.as_slice() else { return None };
+            let around = type_params_around(src, n);
+            return type_expr(src, *t).filter(|e| !matches!(e, TypeExpr::Named(c) if around.contains(c) || type_params_of(src, n).contains(c)));
+        }
+        cur = n.parent();
+    }
+    None
 }
 
 /// `A.B.Name<X>` → `Name<X>`; any other type node as it is.
@@ -5724,6 +5754,42 @@ public class CartServiceTests
         let blanked = first_branches("a\n#if X\nb\n#elif Y\nc é\n#else\nd\n#endif\ne\n").unwrap();
         assert_eq!(blanked.len(), "a\n#if X\nb\n#elif Y\nc é\n#else\nd\n#endif\ne\n".len());
         assert_eq!(blanked.lines().map(str::trim).collect::<Vec<_>>(), ["a", "", "b", "", "", "", "", "", "e"]);
+    }
+
+    #[test]
+    fn a_constrained_type_parameter_has_its_constraints_members() {
+        let f = extract(
+            r#"
+public class Catalog<TEntry> where TEntry : Entry
+{
+    public void Load(TEntry e) => e.Attach();
+    public T Make<T, TArg>(TArg arg, IList<T> all) where T : Item, new() where TArg : class, notnull, IArgs
+    {
+        var item = new T { Name = "x" };
+        item.Attach(arg);
+        all.First().Detach();
+        arg.Read();
+        return item;
+    }
+    public void Both<T>(T x) where T : Item, IOther => x.Attach();
+    public void Bare<T>(T x) => x.Attach();
+    public void Chained<T, U>(U u) where T : Item where U : T => u.Attach();
+}
+"#,
+        );
+        let rt = |name: &str, line: u32| {
+            f.refs.iter().find(|r| r.name == name && r.line == line && r.kind == RefKind::Call).unwrap_or_else(|| panic!("{name}:{line}")).receiver_type.clone()
+        };
+        // The class's own type parameter, a local made from a method's, and one beside `class` and `notnull`.
+        assert_eq!(rt("Attach", 4), Some("Entry".into()));
+        assert_eq!(rt("Attach", 8), Some("Item".into()));
+        assert_eq!(rt("Read", 10), Some("IArgs".into()));
+        // Inside another type: the element of a list of `T` is an `Item`.
+        assert!(rt("Detach", 9).unwrap().contains("Item"), "{:?}", rt("Detach", 9));
+        // Several type constraints, none, or another type parameter: the member may be any one's, so left as it is.
+        assert_eq!(rt("Attach", 13), Some("T".into()));
+        assert_eq!(rt("Attach", 14), Some("T".into()));
+        assert_eq!(rt("Attach", 15), Some("U".into()));
     }
 
     #[test]
