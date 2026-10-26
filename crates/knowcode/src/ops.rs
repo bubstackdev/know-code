@@ -4425,7 +4425,7 @@ pub(crate) struct HttpCrossing<'a> {
 /// The most symbols a walk looks up library crossings for (see [`HttpCrossing::library_crossings`]): each opens the
 /// repos using the symbol's (and, for an implementation of a dependency's member, the dependency's), and resolves
 /// their references.
-pub(crate) const LIBRARY_CROSSINGS: usize = 64;
+pub(crate) const LIBRARY_CROSSINGS: usize = if cfg!(test) { 3 } else { 64 };
 
 impl<'a> HttpCrossing<'a> {
     pub(crate) fn new(home: &'a Opened, no_sync: bool) -> Self {
@@ -9476,10 +9476,15 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let p = ImpactParams { symbol: Some("src/IPayClient.cs:4".into()), depth: 1, limit: 100, ..Default::default() };
         let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
         let r = &out.data[0];
-        let implementations: Vec<(String, u32)> = r.impact.affected.iter().map(|a| (a.qualified.clone(), a.line)).collect();
-        assert_eq!(implementations, [("PayClient.Submit".to_string(), 4)], "the one-argument overload's implementation only");
-        let cross: Vec<(Option<&str>, u32)> = r.cross_repo.iter().map(|h| (h.repo.as_deref(), h.line)).collect();
-        assert_eq!(cross, [(Some("app"), 6)], "the dependent's call through the interface, by arity");
+        let found: Vec<(Option<&str>, String, Option<&str>)> =
+            r.impact.affected.iter().map(|a| (a.repo.as_deref(), a.qualified.clone(), a.site.as_deref())).collect();
+        // The one-argument overload's implementation, and the dependent's call through the interface, by arity, across
+        // the library boundary (listed in the walk, so not again in `cross_repo`).
+        assert_eq!(
+            found,
+            [(None, "PayClient.Submit".to_string(), None), (Some("app"), "Checkout.Run".to_string(), Some("src/Checkout.cs:6"))]
+        );
+        assert!(r.cross_repo.is_empty(), "{:?}", r.cross_repo);
         let _ = app;
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -9502,6 +9507,117 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         // An instance member still has its implementation.
         let r = impact_of(&root, "src/IShelf.cs:5");
         assert_eq!(r.impact.affected.iter().map(|a| (a.qualified.as_str(), a.edge)).collect::<Vec<_>>(), [("Shelf.Count", "witness")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A library declaring `INotes` and a static `Note` calling through it; a host implementing it; a web app calling
+    /// `Note.Tagged<T>()` from `Middleware.Log`, which `Middleware.Run` calls.
+    fn library_repos(base: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let lib = repo(
+            base,
+            "notes",
+            &[
+                ("src/Notes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/INotes.cs", "namespace Notes;\npublic interface INotes\n{\n    INotes Tagged<T>();\n}\n"),
+                ("src/Plain.cs", "namespace Notes;\npublic class Plain : INotes\n{\n    public INotes Tagged<T>() => this;\n}\n"),
+                ("src/Note.cs", "namespace Notes;\npublic static class Note\n{\n    public static INotes Root { get; set; } = new Plain();\n    public static INotes Tagged<T>() => Root.Tagged<T>();\n}\n"),
+            ],
+        );
+        let host = repo(
+            base,
+            "notes-host",
+            &[
+                ("src/Notes.Host.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Swappable.cs", "using Notes;\nnamespace Notes.Host;\npublic sealed class Swappable : INotes\n{\n    public INotes Tagged<T>() => this;\n}\n"),
+            ],
+        );
+        let web = repo(
+            base,
+            "notes-web",
+            &[
+                ("src/Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\">\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                (
+                    "src/Middleware.cs",
+                    "using Notes;\nnamespace Web;\npublic class Middleware\n{\n    public INotes Log() => Note.Tagged<Middleware>();\n    public void Run() { Log(); }\n}\n",
+                ),
+            ],
+        );
+        (lib, host, web)
+    }
+
+    #[test]
+    fn impact_walks_on_across_a_library_boundary() {
+        let cache = test_cache();
+        let base = cache.dir("lib-walk");
+        let (lib, host, _web) = library_repos(&base);
+        let rows = |r: &ImpactRepo| -> Vec<(u8, String, &str, String)> {
+            r.impact
+                .affected
+                .iter()
+                .map(|a| (a.hop, format!("{}/{}", a.repo.as_deref().unwrap_or("-"), a.qualified), a.confidence, a.edge.to_string()))
+                .collect()
+        };
+        // From the library's own method: its caller in the web app (exact, resolved into the library), and that
+        // caller's caller there, walked on.
+        let p = ImpactParams { symbol: Some("src/Note.cs:5".into()), depth: 2, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        assert_eq!(
+            rows(&out.data[0]),
+            [(1, "notes-web/Middleware.Log".to_string(), "exact", "calls".to_string()), (2, "notes-web/Middleware.Run".to_string(), "exact", "calls".to_string())]
+        );
+        assert_eq!(out.data[0].impact.affected[0].library.as_ref().map(|l| l.library.as_str()), Some("notes"));
+        // From the host's implementation: the library's call through `INotes`, one implementation of several, listed
+        // but not walked past; the frontier names it with the call going on, by line (`Tagged` has no overload here,
+        // so by name).
+        let p = ImpactParams { symbol: Some("src/Swappable.cs:5".into()), depth: 2, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        let r = &out.data[0];
+        assert_eq!(rows(r), [(1, "notes/Note.Tagged".to_string(), "ambiguous", "via_protocol".to_string())]);
+        let stop = r.frontier.iter().find(|f| f.qualified == "Note.Tagged").expect("a stop at Note.Tagged");
+        assert_eq!(stop.repo.as_deref(), Some("notes"));
+        assert!(stop.next.contains("\"repo\":\"notes\""), "{}", stop.next);
+        // Walking past ambiguous edges: on into the web app, through the library's own method.
+        let p = ImpactParams { filter: WalkFilter { evidence: "all".into(), ..Default::default() }, ..p };
+        let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        assert_eq!(
+            rows(&out.data[0]),
+            [(1, "notes/Note.Tagged".to_string(), "ambiguous", "via_protocol".to_string()), (2, "notes-web/Middleware.Log".to_string(), "exact", "calls".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn library_crossings_stop_at_their_budget_and_say_so() {
+        let cache = test_cache();
+        let base = cache.dir("lib-budget");
+        // Five library methods, each calling the next, each called from the app: the walk looks up three (the budget
+        // under test) and says how many it left.
+        let mut chain = String::from("namespace Steps;\npublic static class Step\n{\n");
+        for i in 1..=5 {
+            let next = if i < 5 { format!("S{}(); ", i + 1) } else { String::new() };
+            chain.push_str(&format!("    public static void S{i}() {{ {next}}}\n"));
+        }
+        chain.push_str("}\n");
+        let lib = repo(
+            &base,
+            "steps",
+            &[("src/Steps.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Steps</PackageId></PropertyGroup>\n</Project>\n"), ("src/Step.cs", &chain)],
+        );
+        let calls: String = (1..=5).map(|i| format!("    public void C{i}() => Step.S{i}();\n")).collect();
+        let _app = repo(
+            &base,
+            "steps-app",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Steps\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/App.cs", &format!("using Steps;\nnamespace App;\npublic class App\n{{\n{calls}}}\n")),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("src/Step.cs:8".into()), depth: 5, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let r = &out.data[0];
+        assert_eq!((r.library_checked, r.library_cut), (3, 2));
+        let notes = out.env["incomplete"].to_string();
+        assert!(notes.contains("looked up for 3 of 5 walked symbols"), "{notes}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -9549,20 +9665,26 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let p = ImpactParams { symbol: Some("src/Swappable.cs:6".into()), depth: 2, limit: 100, ..Default::default() };
         let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
         let r = &out.data[0];
-        let cross: Vec<(String, &str, Option<&str>)> = r
-            .cross_repo
+        let rows: Vec<(String, &str, Option<String>)> = r
+            .impact
+            .affected
             .iter()
-            .map(|h| (format!("{}/{}:{}", h.repo.as_deref().unwrap_or(""), h.file, h.line), h.confidence, h.through.as_deref()))
+            .filter(|a| a.library.is_some())
+            .map(|a| {
+                let site = format!("{}/{}", a.repo.as_deref().unwrap_or(""), a.site.as_deref().unwrap_or(""));
+                (site, a.confidence, a.library.as_ref().and_then(|l| l.through.clone()))
+            })
             .collect();
         // The library's call and the other user's call through `INotes.Tagged<T>()`, each one implementation of
         // several. Not the one-argument overload's call, not a call on the library's own `Plain`, not its own body's.
         assert_eq!(
-            cross,
+            rows,
             [
-                ("notes/src/Note.cs:5".to_string(), "ambiguous", Some("INotes")),
-                ("notes-web/src/Middleware.cs:7".to_string(), "ambiguous", Some("INotes"))
+                ("notes/src/Note.cs:5".to_string(), "ambiguous", Some("INotes".to_string())),
+                ("notes-web/src/Middleware.cs:7".to_string(), "ambiguous", Some("INotes".to_string()))
             ]
         );
+        assert!(r.cross_repo.is_empty(), "listed in the walk, not again: {:?}", r.cross_repo);
         let _ = (lib, web);
         let _ = std::fs::remove_dir_all(&base);
     }

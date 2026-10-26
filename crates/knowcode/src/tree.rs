@@ -186,9 +186,14 @@ fn cross_trace(g: &mut Graph, t: &mut Trace, depth: u8, max: usize, inward: bool
 
 /// The name a walk takes for symbol `qualified` declared at `file` in a repo: the qualified name, or `file#Name` when
 /// other definitions share it (so the call goes on from this one).
-pub fn symbol_arg(conn: &rusqlite::Connection, qualified: &str, file: &str) -> Result<String> {
-    if kc_store::query::definitions(conn, qualified)?.len() <= 1 {
+pub fn symbol_arg(conn: &rusqlite::Connection, qualified: &str, file: &str, line: u32) -> Result<String> {
+    let defs = kc_store::query::definitions(conn, qualified)?;
+    if defs.len() <= 1 {
         return Ok(qualified.to_string());
+    }
+    // Overloads in one file (`Log.ForContext<T>()` beside `Log.ForContext(Type)`): the line tells them apart.
+    if defs.iter().filter(|d| d.file == file).count() > 1 {
+        return Ok(format!("{file}:{line}"));
     }
     let name = qualified.rsplit('.').next().unwrap_or(qualified);
     Ok(format!("{file}#{name}"))
@@ -212,7 +217,7 @@ pub fn continuations(
                 None => continue,
             },
         };
-        let symbol = symbol_arg(g.crossing().store(&root).conn(), &f.qualified, &f.file)?;
+        let symbol = symbol_arg(g.crossing().store(&root).conn(), &f.qualified, &f.file, f.line)?;
         let mut call = serde_json::Map::new();
         call.insert("symbol".into(), symbol.into());
         call.insert("repo".into(), repo_name(&root).into());
@@ -428,6 +433,18 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                     continue;
                 }
                 let (s, confidence) = (arrival.sym(), arrival.confidence);
+                // A symbol reaching it again at another line, by the same way and hop: one of its lines (`also`).
+                if let Some(&i) = rows.get(&(label.clone(), s.id))
+                    && let Some(site) = arrival.site()
+                {
+                    let row = &mut impact.affected[i];
+                    if row.hop == hop + 1 && row.via == qualified && row.edge == landing.via.edge() && row.site.as_ref() != Some(site) {
+                        if !row.also.contains(site) {
+                            row.also.push(site.clone());
+                        }
+                        continue;
+                    }
+                }
                 let new = !rows.contains_key(&(label.clone(), s.id));
                 if new && impact.affected.len() >= max {
                     impact.truncated = true;
