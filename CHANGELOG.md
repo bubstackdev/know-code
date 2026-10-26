@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.4.1 (date TBD)
 
+- A query that joined indexing already under way could answer from the index as it was before a file's latest
+  edit, and call that answer complete: the edit's new symbol was missing with nothing said. When the job it joined
+  finishes and the working tree still differs from the index, the query now waits on a new one, within the same
+  budget, or says the repo is still being indexed.
 - Faster `impact`, `trace` and `context` on code implementing interfaces: four lookups of a symbol by its name (the
   supertype walk run for every implementation member reached among them) compared names case-sensitively in a way
   SQLite couldn't serve from the name index, so each scanned every symbol. They now use the index, as the other
