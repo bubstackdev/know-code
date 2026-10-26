@@ -5867,7 +5867,17 @@ impl Implemented {
     /// `hit` as a call through this member, for an implementation outside the repo `hit` was resolved in (a
     /// dependency's base class calling its own virtual member). `None` for the override calling its base.
     pub fn through_member(&self, hit: &RefHit) -> Option<RefHit> {
-        if !hit.may_target(self.id) || hit.receiver.as_deref() == Some("base") {
+        self.through_member_of(hit, None)
+    }
+
+    /// [`Self::through_member`] for `hit` resolved in a repo depending on `repo` (the repo declaring this member):
+    /// its target is this member there.
+    pub fn through_member_of(&self, hit: &RefHit, repo: Option<&str>) -> Option<RefHit> {
+        let reaches = match repo {
+            None => hit.may_target(self.id),
+            Some(r) => hit.targets.iter().any(|t| t.id == self.id && t.repo.as_deref() == Some(r)),
+        };
+        if !reaches || hit.receiver.as_deref() == Some("base") {
             return None;
         }
         let mut h = hit.clone();
@@ -5894,7 +5904,22 @@ pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Imp
 /// `sym`'s type names in its own repo (`conn`) that no type there defines, looked up in `dep`, and theirs there,
 /// transitively. Any repo's implementation may run for a call in `dep`, so each is `shared`.
 pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolRow) -> Result<Vec<Implemented>> {
-    let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
+    let (outside, seen) = outside_supertypes(conn, sym)?;
+    if outside.is_empty() {
+        return Ok(Vec::new());
+    }
+    implemented_in(conn, dep, sym, outside, seen, true)
+}
+
+/// Whether `sym`'s type names a supertype, directly or through its own repo's types, that its repo (`conn`) doesn't
+/// define: a dependency's base class or interface it may implement a member of (see [`implemented_members_in`]).
+pub fn names_outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<bool> {
+    Ok(!outside_supertypes(conn, sym)?.0.is_empty())
+}
+
+/// The supertypes of `sym`'s type its repo doesn't define, and the ones it does (the type's own name included).
+fn outside_supertypes(conn: &Connection, sym: &SymbolRow) -> Result<(Vec<String>, HashSet<String>)> {
+    let Some(container) = sym.container.as_deref() else { return Ok((Vec::new(), HashSet::new())) };
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let mut seen = HashSet::from([short.clone()]);
     let mut queue = vec![short];
@@ -5911,11 +5936,8 @@ pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolR
             }
         }
     }
-    if outside.is_empty() {
-        return Ok(Vec::new());
-    }
     seen.retain(|n| !outside.contains(n));
-    implemented_in(conn, dep, sym, outside, seen, true)
+    Ok((outside, seen))
 }
 
 /// The type a DI factory registered at `file`:`line` makes, from `made` (an encoded type expression, see

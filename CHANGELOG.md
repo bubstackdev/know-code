@@ -11,6 +11,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   passing such a `const` straight to `fetch(url)` or `send("GET", path)`, linked before, now say so too. A URL
   builder or `{ url }` option given a `let`, `var`, parameter, a `const` of an enclosing function or the module, a
   name declared twice in the function, or a `const` built from another local holding URL text, isn't read.
+- `impact` on an implementation of an interface member declared in a dependency (Serilog.Extensions.Hosting's
+  `ReloadableLogger.ForContext<T>()`, implementing Serilog's `ILogger.ForContext<T>()`) lists, in `cross_repo`, the
+  calls through that member in the dependency and in the other repos using it (`Log.ForContext<T>()` in serilog,
+  `RequestLoggingMiddleware` in serilog-aspnetcore), `through ILogger`. Another implementation may run for each, so
+  they are `ambiguous`: listed, not walked past. Before, an implementation's interface members were looked up only
+  in its own repo, and these calls were missing.
 - C#: a conditional that splits a declaration (`ILogger ForContext(Type t)`, then `#if X` a body, `#else` a `;`,
   `#endif`) no longer loses it. tree-sitter reads a directive only between declarations or statements, and its
   error recovery lost the declaration and often its type's other members: Serilog's `ILogger` had no members, and

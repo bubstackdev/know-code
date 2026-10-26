@@ -3953,18 +3953,20 @@ pub fn dependency_refs(deps: &[OpenedDep]) -> Vec<query::Dependency<'_>> {
         .collect()
 }
 
-/// The repos depending on `o` (indexes into `summaries`) whose summary `may` accepts, or that changed since their
-/// summary was written (unless `no_sync`): a summary rules a repo out only while it still describes the repo.
+/// The repos depending on the repo at `root` (`o`'s, or one it consults; indexes into `summaries`) whose summary
+/// `may` accepts, or that changed since their summary was written (unless `no_sync`): a summary rules a repo out only
+/// while it still describes the repo.
 fn dependents_to_open(
     o: &Opened,
+    root: &Path,
     summaries: &[kc_index::workspace::RepoSummary],
     graph: &kc_index::workspace::Graph,
     may: impl Fn(&kc_index::workspace::RepoSummary) -> bool,
     no_sync: bool,
 ) -> Vec<usize> {
-    let me = kc_index::workspace::identity_of(&o.root, summaries);
+    let me = kc_index::workspace::identity_of(root, summaries);
     let (gone, dependents): (Vec<usize>, Vec<usize>) =
-        graph.dependents(&me).into_iter().filter(|&i| summaries[i].root != o.root).partition(|&i| summaries[i].gone);
+        graph.dependents(&me).into_iter().filter(|&i| summaries[i].root != root).partition(|&i| summaries[i].gone);
     // A dependent whose checkout is gone, that may use what is asked for: what it would have said is missing.
     for i in gone.into_iter().filter(|&i| may(&summaries[i])) {
         o.consulted.missing(&summaries[i].root);
@@ -3979,24 +3981,30 @@ fn dependents_to_open(
 /// `name` isn't opened (unless it changed since: see [`dependents_to_open`]), and in the others only references in
 /// files importing `o` are resolved.
 pub fn dependent_refs(o: &Opened, name: &str, kinds: &[&str], no_sync: bool) -> Result<Vec<query::RefHit>> {
-    let me_name = repo_name(&o.root);
+    refs_into(o, &o.root, o.store.conn(), name, kinds, no_sync)
+}
+
+/// [`dependent_refs`] of the repo at `root` (index `conn`): `o`'s, or a repo it consults, such as a dependency. The
+/// repos depending on it may include `o`'s own.
+fn refs_into(o: &Opened, root: &Path, conn: &rusqlite::Connection, name: &str, kinds: &[&str], no_sync: bool) -> Result<Vec<query::RefHit>> {
+    let me_name = repo_name(root);
     let summaries = planned_summaries(o)?;
     let graph = kc_index::workspace::graph(&summaries);
     let mut modules = None;
     let mut out = Vec::new();
-    for i in dependents_to_open(o, &summaries, &graph, |s| s.may_reference(name.trim()), no_sync) {
+    for i in dependents_to_open(o, root, &summaries, &graph, |s| s.may_reference(name.trim()), no_sync) {
         let s = &summaries[i];
         let dependent = open_synced(o, &s.root, no_sync)?;
         let modules = match &modules {
             Some(m) => m,
-            None => modules.insert(query::provided_modules(o.store.conn())?),
+            None => modules.insert(query::provided_modules(conn)?),
         };
         // What the dependent asks for of this repo, against the version this checkout declares.
         let mut edges = manifests::repo_edges(&s.packages, &s.root.to_string_lossy(), &s.identity(), graph.owners());
-        edges.retain(|e| Path::new(&e.to_repo) == o.root);
+        edges.retain(|e| Path::new(&e.to_repo) == root);
         kc_index::revision::check_edges(&mut edges, &summaries);
-        let assumptions = kc_index::revision::assumptions_into(&edges, &o.root);
-        let dep = query::Dependency { repo: me_name.clone(), conn: o.store.conn(), modules: modules.clone(), assumptions };
+        let assumptions = kc_index::revision::assumptions_into(&edges, root);
+        let dep = query::Dependency { repo: me_name.clone(), conn, modules: modules.clone(), assumptions };
         for mut h in query::refs_importing(dependent.conn(), name, kinds, std::slice::from_ref(&dep))? {
             if h.targets.iter().any(|t| t.repo.as_deref() == Some(me_name.as_str())) {
                 h.repo = Some(repo_name(&s.root));
@@ -4019,7 +4027,7 @@ pub fn dependent_conformers(o: &Opened, ty: &query::SymbolRow, member: Option<&q
     let summaries = planned_summaries(o)?;
     let graph = kc_index::workspace::graph(&summaries);
     let mut out = Vec::new();
-    for i in dependents_to_open(o, &summaries, &graph, |s| s.may_reference(&ty.name), no_sync) {
+    for i in dependents_to_open(o, &o.root, &summaries, &graph, |s| s.may_reference(&ty.name), no_sync) {
         let s = &summaries[i];
         let dependent = open_synced(o, &s.root, no_sync)?;
         for c in query::conformers_named(dependent.conn(), &ty.name, ns.as_deref())? {
@@ -4031,6 +4039,55 @@ pub fn dependent_conformers(o: &Opened, ty: &query::SymbolRow, member: Option<&q
                     .collect(),
             };
             out.extend(found.into_iter().map(|symbol| query::Elsewhere { repo: repo_name(&s.root), symbol }));
+        }
+    }
+    Ok(out)
+}
+
+/// Calls that may run `sym` (a method or property of `o`) through a member it implements or overrides in a
+/// dependency: a call of the dependency's interface or base class member, in the dependency or in a repo depending on
+/// it (`o`'s own included), as a call of `sym` through it (`through` names the member's type). Another implementation
+/// may run for any of them, the dependency's own or another repo's, so each is `ambiguous`. `sym`'s own body calling
+/// the member (on another instance) isn't listed.
+fn through_dependencies(o: &Opened, sym: &query::SymbolRow, no_sync: bool) -> Result<Vec<RefHit>> {
+    if !matches!(sym.kind.as_str(), "method" | "property") || sym.container.is_none() || !query::names_outside_supertypes(o.store.conn(), sym)? {
+        return Ok(Vec::new());
+    }
+    let me = repo_name(&o.root);
+    let mut out: Vec<RefHit> = Vec::new();
+    for d in open_dependencies(o, None, no_sync)? {
+        let theirs = query::implemented_members_in(o.store.conn(), d.store.conn(), sym)?;
+        if theirs.is_empty() {
+            continue;
+        }
+        let there = repo_name(&d.root);
+        // A call reaches this implementation only through a receiver of the member's type: `log.ForContext()` on an
+        // `ILogger`, or an unqualified call in the interface itself (a default body). On a class of the dependency
+        // (`dict.Clear()` on its own cache class, a class calling its own `Clear()`), that class's member runs.
+        let bare = |t: &str| t.split('<').next().unwrap_or(t).trim().rsplit('.').next().unwrap_or("").to_string();
+        let owners: HashSet<String> = theirs.iter().map(|m| bare(&m.owner)).collect();
+        let through_owner = |h: &RefHit| match h.receiver.as_deref() {
+            None | Some("this") => h.from.as_ref().and_then(|f| f.container.as_deref()).is_some_and(|c| owners.contains(&bare(c))),
+            Some(_) => h.receiver_type.as_deref().is_some_and(|t| owners.contains(&bare(t))),
+        };
+        // The dependency's own calls, resolved there; then those of the repos using it, resolved into it.
+        let own = query::refs(d.store.conn(), &sym.name, &["call", "member"], usize::MAX)?.0.into_iter().map(|mut h| {
+            h.repo = Some(there.clone());
+            (h, None)
+        });
+        let using = refs_into(o, &d.root, d.store.conn(), &sym.name, &["call", "member"], no_sync)?.into_iter().map(|h| (h, Some(there.as_str())));
+        for (h, into) in own.chain(using).collect::<Vec<_>>() {
+            if h.confidence == "external_likely"
+                || !through_owner(&h)
+                || (h.repo.as_deref() == Some(me.as_str()) && h.from.as_ref().is_some_and(|f| f.id == sym.id))
+            {
+                continue;
+            }
+            if let Some(t) = theirs.iter().find_map(|m| m.through_member_of(&h, into))
+                && !out.iter().any(|x| x.repo == t.repo && x.file == t.file && x.line == t.line && x.col == t.col)
+            {
+                out.push(t);
+            }
         }
     }
     Ok(out)
@@ -5657,6 +5714,18 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
                     && edges.judge((&h.repo, &h.file, h.line, s.id, edge), h.confidence, h.evidence.as_ref()) != Verdict::Exclude
                 {
                     cross_repo.push(h);
+                }
+            }
+            // An implementation of a dependency's interface member (or an override of its base class member): the
+            // calls through that member, in the dependency and the repos using it. One implementation of several may
+            // run, so they are ambiguous: listed, not walked past.
+            if edges.allows("via_protocol")
+                && let Some(sym) = trace::symbol(conn, s.id)?
+            {
+                for h in through_dependencies(&o, &sym, args.no_sync)? {
+                    if edges.judge((&h.repo, &h.file, h.line, s.id, "via_protocol"), h.confidence, h.evidence.as_ref()) != Verdict::Exclude {
+                        cross_repo.push(h);
+                    }
                 }
             }
         }
@@ -9269,6 +9338,68 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         // An instance member still has its implementation.
         let r = impact_of(&root, "src/IShelf.cs:5");
         assert_eq!(r.impact.affected.iter().map(|a| (a.qualified.as_str(), a.edge)).collect::<Vec<_>>(), [("Shelf.Count", "witness")]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn impact_on_an_implementation_of_a_dependencys_interface_lists_the_calls_through_it() {
+        let cache = test_cache();
+        let base = cache.dir("dep-dispatch");
+        // A library declaring an interface, implementing it, and calling through it.
+        let lib = repo(
+            &base,
+            "notes",
+            &[
+                ("src/Notes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/INotes.cs", "namespace Notes;\npublic interface INotes\n{\n    INotes Tagged<T>();\n    INotes Tagged(string tag);\n}\n"),
+                ("src/Plain.cs", "namespace Notes;\npublic class Plain : INotes\n{\n    public INotes Tagged<T>() => this;\n    public INotes Tagged(string tag) => this;\n}\n"),
+                ("src/Note.cs", "namespace Notes;\npublic static class Note\n{\n    public static INotes Root { get; set; } = new Plain();\n    public static INotes Tagged<T>() => Root.Tagged<T>();\n    public static INotes ByName(string tag) => Root.Tagged(tag);\n}\n"),
+            ],
+        );
+        // A repo implementing the library's interface.
+        let host = repo(
+            &base,
+            "notes-host",
+            &[
+                ("src/Notes.Host.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes.Host</PackageId></PropertyGroup>\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                (
+                    "src/Swappable.cs",
+                    "using Notes;\nnamespace Notes.Host;\npublic sealed class Swappable : INotes\n{\n    private readonly Plain _inner = new Plain();\n\
+                     \x20   public INotes Tagged<T>() => _inner.Tagged<T>();\n    public INotes Tagged(string tag) => this;\n}\n",
+                ),
+            ],
+        );
+        // Another repo using the library: a call through the interface, and one on the library's own class.
+        let web = repo(
+            &base,
+            "notes-web",
+            &[
+                ("src/Web.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\">\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                (
+                    "src/Middleware.cs",
+                    "using Notes;\nnamespace Web;\npublic class Middleware\n{\n    private readonly INotes _notes;\n    private readonly Plain _plain = new Plain();\n\
+                     \x20   public Middleware(INotes notes) { _notes = notes.Tagged<Middleware>(); }\n    public INotes Plainly() => _plain.Tagged<Middleware>();\n}\n",
+                ),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("src/Swappable.cs:6".into()), depth: 2, limit: 100, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        let r = &out.data[0];
+        let cross: Vec<(String, &str, Option<&str>)> = r
+            .cross_repo
+            .iter()
+            .map(|h| (format!("{}/{}:{}", h.repo.as_deref().unwrap_or(""), h.file, h.line), h.confidence, h.through.as_deref()))
+            .collect();
+        // The library's call and the other user's call through `INotes.Tagged<T>()`, each one implementation of
+        // several. Not the one-argument overload's call, not a call on the library's own `Plain`, not its own body's.
+        assert_eq!(
+            cross,
+            [
+                ("notes/src/Note.cs:5".to_string(), "ambiguous", Some("INotes")),
+                ("notes-web/src/Middleware.cs:7".to_string(), "ambiguous", Some("INotes"))
+            ]
+        );
+        let _ = (lib, web);
         let _ = std::fs::remove_dir_all(&base);
     }
 
