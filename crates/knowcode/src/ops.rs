@@ -9404,6 +9404,103 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn calls_through_an_interface_reach_the_overload_taking_their_arguments() {
+        let cache = test_cache();
+        let base = cache.dir("iface-arity");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "src/IShelf.cs",
+                    "namespace Shelf;\npublic interface IShelf\n{\n    int Find(string q);\n    int Find(string q, bool deep);\n    int Find(string q, int[] ids);\n}\n",
+                ),
+                (
+                    "src/Shelf.cs",
+                    "namespace Shelf;\npublic class Shelf : IShelf\n{\n    public int Find(string q) => Find(q, false);\n    public int Find(string q, bool deep) => 1;\n\
+                     \x20   public int Find(string q, int[] ids) => 2;\n    private int Find(string q, bool deep, int depth) => 3;\n}\n",
+                ),
+                ("src/Desk.cs", "namespace Shelf;\npublic class Desk\n{\n    private readonly IShelf _shelf;\n    public int One() => _shelf.Find(\"a\");\n    public int Two() => _shelf.Find(\"a\", true);\n}\n"),
+            ],
+        );
+        let callers = |at: &str| -> Vec<(String, &str)> {
+            let r = impact_of(&root, at);
+            r.impact.affected.iter().filter(|a| a.hop == 1).map(|a| (a.qualified.clone(), a.edge)).collect()
+        };
+        // The private three-argument overload implements nothing: calls through the interface don't reach it.
+        assert_eq!(callers("src/Shelf.cs:7"), Vec::<(String, &str)>::new());
+        // `Find(q, deep)`: the call through the interface taking a `bool`, and the class's own call; not `One`.
+        let deep = callers("src/Shelf.cs:5");
+        assert!(deep.contains(&("Desk.Two".to_string(), "via_protocol")), "{deep:?}");
+        assert!(!deep.iter().any(|(q, _)| q == "Desk.One"), "{deep:?}");
+        // `Find(q, ids)`, as many arguments of other types: not `Two`.
+        assert!(!callers("src/Shelf.cs:6").iter().any(|(q, _)| q == "Desk.Two"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn impact_reaches_calls_on_a_constrained_type_parameter() {
+        let cache = test_cache();
+        let base = cache.dir("constrained");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                ("src/Item.cs", "namespace Shelf;\npublic class Item\n{\n    public void Attach(Item parent) { }\n}\n"),
+                // Another `Attach`: a call on an unknown receiver can't be told from a call of this one.
+                ("src/Rack.cs", "namespace Shelf;\npublic class Rack\n{\n    public void Attach(Item parent) { }\n}\n"),
+                (
+                    "src/Finder.cs",
+                    "namespace Shelf;\npublic class Finder\n{\n    public void Find() => Search<Item>(null);\n\
+                     \x20   private void Search<T>(Item? reference) where T : Item, new()\n    {\n        var probe = new T();\n        probe.Attach(new Item());\n    }\n}\n",
+                ),
+            ],
+        );
+        let r = impact_of(&root, "Item.Attach");
+        let found: Vec<(u8, String, &str, Option<String>)> =
+            r.impact.affected.iter().map(|a| (a.hop, a.qualified.clone(), a.confidence, a.site.clone())).collect();
+        assert_eq!(
+            found,
+            [
+                (1, "Finder.Search".to_string(), "unique_name", Some("src/Finder.cs:8".to_string())),
+                (2, "Finder.Find".to_string(), "exact", Some("src/Finder.cs:4".to_string()))
+            ],
+            "the call on a `T : Item` is Item's, not Rack's, so the walk goes on to its caller"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn an_extension_methods_unqualified_call_is_its_classs_overload() {
+        let cache = test_cache();
+        let base = cache.dir("ext-overload");
+        let root = repo(
+            &base,
+            "shelf",
+            &[(
+                "src/Builders.cs",
+                "namespace Shelf;\npublic interface IBuilder<T> { int Id { get; } }\npublic static class Builders\n{\n\
+                 \x20   public static string Build<T>(\n        this IBuilder<T> builder)\n    {\n        return Build(builder.Id, \"x\");\n    }\n\
+                 \x20   public static string Build(int id, string name)\n    {\n        return name;\n    }\n\
+                 \x20   public static string Use(IBuilder<int> b) => Build(b);\n}\n",
+            )],
+        );
+        // `Build(id, name)` in the extension method calls the class's two-argument overload, not the extension itself;
+        // `Build(b)` calls the extension (its `this` parameter on a line of its own), passing the receiver.
+        let r = impact_of(&root, "src/Builders.cs:10");
+        let found: Vec<(u8, String, &str, Option<String>)> =
+            r.impact.affected.iter().map(|a| (a.hop, a.qualified.clone(), a.confidence, a.site.clone())).collect();
+        assert_eq!(
+            found,
+            [
+                (1, "IBuilder.Build".to_string(), "exact", Some("src/Builders.cs:8".to_string())),
+                (2, "Builders.Use".to_string(), "exact", Some("src/Builders.cs:14".to_string()))
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn bus_messages_link_publishers_to_consumers_across_repos() {
         let cache = test_cache();
         let base = cache.dir("bus");

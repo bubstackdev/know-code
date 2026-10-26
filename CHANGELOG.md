@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
+  `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
+  call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
+  interface member reach only an implementation taking the same arguments: a private `Find(query, parent)` overload
+  is no longer reached by calls of the interface's `Find(query)` (on public-v2's two-hop-impact-007 this removed 7
+  false hop-2 rows). In an extension method an unqualified call is the declaring class's (its overload, or an
+  extension called in static form), never the extended type's member; an extension whose `this` parameter starts a
+  line is recognised as one.
 - A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
   written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
   `const url = 'Videos/' + itemId + '/Subtitles/' + index` passed to `apiClient.getUrl(url)`, which weren't read
