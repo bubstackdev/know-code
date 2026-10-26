@@ -92,6 +92,19 @@ class PublicSampleTests(unittest.TestCase):
         self.assertEqual((group['provisional_ids'], group['shortfall']), (['2', '3'], 0))
         self.assertEqual(sum(sample.excluded(row, earlier) for row in candidates), 2)
 
+    def test_symbols_can_be_excluded_across_tasks_and_lookups_take_family_quotas(self):
+        rows = [dict(task='two-hop-impact', family='shop', repo='shop-server', file='src/A.cs', key='Build', rank='0', identity='0', id='0'),
+                dict(task='two-hop-impact', family='shop', repo='shop-server', file='src/B.cs', key='Render', rank='1', identity='1', id='1'),
+                dict(task='definition-lookup', family='shop', repo='shop-web', file='src/c.ts', key='Cart', rank='2', identity='2', id='2'),
+                dict(task='definition-lookup', family='shop', repo='shop-server', file='src/D.cs', key='Order', rank='3', identity='3', id='3')]
+        earlier = [{'task': 'definition-lookup', 'repo': 'shop-server', 'file': 'src/Z.cs', 'key': 'Build'}]
+        self.assertFalse(sample.excluded(rows[0], earlier))
+        self.assertTrue(sample.excluded(rows[0], earlier, across_tasks=True))
+        quotas = {'http-cross-repo': {}, 'di-implementations': {}, 'two-hop-impact': {'shop': 1}, 'definition-lookup': {'shop': 2}}
+        groups = sample.provisional_picks(rows, {'shop-server', 'shop-web'}, quotas, earlier, across_tasks=True)
+        picks = {g['task']: g['provisional_ids'] for g in groups if g['provisional_ids']}
+        self.assertEqual(picks, {'two-hop-impact': ['1'], 'definition-lookup': ['2', '3']})
+
     def test_integrated_sampling_rechecks_source_and_retains_existing_outputs(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

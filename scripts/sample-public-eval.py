@@ -3,7 +3,7 @@
 
 No builds, source execution, indexing, KnowCode queries or model calls. public-v1's seed, quotas and server
 repositories are the defaults; a later bank passes its own with --plan, a JSON file with `seed`, `quotas`
-({task: {family: n}}), `server_repos` and `exclude`: earlier banks' subjects ({task, repo, file, key}). A candidate is
+({task: {family: n}}; lookups default to one per repository), `server_repos` and `exclude`: earlier banks' subjects ({task, repo, file, key}). A candidate is
 excluded when an earlier subject has its task and either its file or its symbol name, so a new bank asks nothing an
 earlier one asked, nor about the same file for the same task.
 """
@@ -66,9 +66,15 @@ def declarations(text, language):
                'line': text.count('\n', 0, match.start(2))+1}
 
 
-def excluded(row, subjects):
-    return any(row['task'] == s['task'] and ((row['repo'], row['file']) == (s['repo'], s['file']) or row['key'] == s['key'])
-               for s in subjects)
+def symbol(key):
+    return key.split()[-1].split('.')[-1]
+
+
+def excluded(row, subjects, across_tasks=False):
+    """An earlier subject with this task and file or symbol; with across_tasks, also any earlier subject naming the
+    same symbol under another task."""
+    return any((row['task'] == s['task'] and ((row['repo'], row['file']) == (s['repo'], s['file']) or row['key'] == s['key']))
+               or (across_tasks and symbol(row['key']) == symbol(s['key'])) for s in subjects)
 
 
 def rank_candidates(rows, views, seed=SEED, server_repos=SERVER_REPOS):
@@ -105,19 +111,20 @@ def rank_candidates(rows, views, seed=SEED, server_repos=SERVER_REPOS):
                   row['repo'] if row['task'] == 'definition-lookup' else '', row['rank'], row['identity']))
 
 
-def provisional_picks(candidates, repos, quotas=QUOTAS, exclude=()):
+def provisional_picks(candidates, repos, quotas=QUOTAS, exclude=(), across_tasks=False):
     groups = defaultdict(list)
     for row in candidates:
-        group = row['repo'] if row['task'] == 'definition-lookup' else row['family']
+        # Lookups take one per repository unless the plan gives them per-family quotas.
+        group = row['repo'] if row['task'] == 'definition-lookup' and 'definition-lookup' not in quotas else row['family']
         groups[(row['task'], group)].append(row)
     result = []
     for task in TASKS:
-        wanted = {repo: 1 for repo in sorted(repos)} if task == 'definition-lookup' else quotas[task]
+        wanted = quotas[task] if task in quotas else {repo: 1 for repo in sorted(repos)}
         for group, quota in sorted(wanted.items()):
             seen = set()
             picks = []
             for row in sorted(groups[(task, group)], key=lambda row: (row['rank'], row['identity'])):
-                if excluded(row, exclude):
+                if excluded(row, exclude, across_tasks):
                     continue
                 file = (row['repo'], row['file'])
                 if file in seen:
@@ -138,6 +145,7 @@ def sample(manifest, source, census, scope_root, policy, out, seed=SEED, plan=No
     quotas = settings.get('quotas', QUOTAS)
     server_repos = set(settings.get('server_repos', SERVER_REPOS))
     exclude = settings.get('exclude', [])
+    across_tasks = settings.get('exclude_symbols_across_tasks', False)
     scope_bytes = (scope_root/'scope.json').read_bytes()
     previous = json.loads(scope_bytes)
     rows_bytes = (scope_root/'files.jsonl').read_bytes()
@@ -162,11 +170,11 @@ def sample(manifest, source, census, scope_root, policy, out, seed=SEED, plan=No
         raise ValueError('source changed during candidate extraction')
     check_producers()
     encoded = ''.join(json.dumps(row, sort_keys=True)+'\n' for row in candidates).encode()
-    picks = provisional_picks(candidates, {row['repo'] for row in rows}, quotas, exclude)
+    picks = provisional_picks(candidates, {row['repo'] for row in rows}, quotas, exclude, across_tasks)
     picks_bytes = (json.dumps(picks, indent=2)+'\n').encode()
     result = {'format': 1, 'stage': 'source candidates ranked; provisional picks unreviewed; no questions or labels frozen; no scored runs',
               'seed': seed, 'plan_sha256': digest(plan.read_bytes()) if plan else None,
-              'excluded_candidates': sum(excluded(row, exclude) for row in candidates), 'scope_sha256': digest(scope_bytes), 'candidates_sha256': digest(encoded),
+              'excluded_candidates': sum(excluded(row, exclude, across_tasks) for row in candidates), 'scope_sha256': digest(scope_bytes), 'candidates_sha256': digest(encoded),
               'provisional_sha256': digest(picks_bytes), 'tool_sha256': digest(Path(__file__).read_bytes()),
               'neutral_sampler_sha256': digest((ROOT/'scripts/eval/neutral/sample.py').read_bytes()),
               'producer_hashes': PRODUCER_HASHES, 'python_version': sys.version,
