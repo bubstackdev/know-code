@@ -747,6 +747,29 @@ privacy file blocks anything or is malformed): the file's state (read, empty, ma
 repos blocked whole. `workspace` for every indexed repo."#,
     },
     Topic {
+        name: "kc",
+        summary: "the one tool of the default profile: every tool as an `op`",
+        text: r#"The default profile (`one`) advertises a single tool, `kc`, so a client carries one schema on every turn.
+`op` names the tool to run, without `kc_`: impact, find, refs, context, search, locate, more and help, and every other
+tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, overview,
+areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
+
+- impact, context, trace, rename_preview, notes, note_add: `symbol`; context: `symbols` from `qs`
+- find: `query`; locate: `query`, `queries` from `qs`
+- refs: `name`, `names` from `qs`
+- search, grep_ast: `pattern`
+- more: `cursor`; help: `topic` (an op's name is its tool's topic: `impact`, `impact.crossings`)
+- path: `from`; flow: `entry`; symbol_at: `file`; coupled: `file`; ownership: `path`; overview: `focus`; areas: `area`
+- tests: `targets`, reviewers: `files` (`q` as a list of one, or `qs`)
+- unused, hotspots, status: no `q`
+
+Every other parameter of the op's tool is passed by its own name, as that tool's topic lists it (`kc {op: impact,
+q: Orders.Place, depth: 2, repo: shop}`, `kc {op: search, q: "retry", regex: true}`, `kc {op: path, q: A, to: B}`).
+Answers name the calls that continue them as ops (`kc {op: more, cursor: "kc~1f"}`); the other topics name tools
+as `kc_<op>`, which is `kc {op: <op>}` here. `KNOWCODE_TOOLS=core` or `all` advertises the separate tools instead (see
+`profiles`)."#,
+    },
+    Topic {
         name: "kc_help",
         summary: "this documentation",
         text: r#"KnowCode's documentation by topic: each tool (`kc_context`, `kc_impact`, …) with every parameter, sections of
@@ -882,13 +905,15 @@ is named only as blocked. An answer that may have drawn on blocked content is in
     Topic {
         name: "profiles",
         summary: "which tools the server advertises",
-        text: r#"The server advertises the `core` tools by default: kc_find, kc_locate, kc_context, kc_refs, kc_impact,
-kc_search, kc_more and kc_help. A client that loads every tool's schema on every turn carries only these. `all`
-(`KNOWCODE_TOOLS=all`, or `knowcode serve --tools all`) advertises every tool; a comma list adds tools by name
-(`core,kc_trace,kc_tests`). Tools left out are listed in the help index and can't be called until the server is
-started with them. kc_find, kc_context, kc_refs, kc_impact and kc_search are marked always loaded
-(`anthropic/alwaysLoad`), so Claude Code loads them up front under any profile and defers the rest to tool search,
-among them kc_locate, kc_more and kc_help. A cut answer's `hint` names the kc_more call that continues it."#,
+        text: r#"The server advertises one tool by default, `kc` (profile `one`): every tool is an `op` of it (see `kc`),
+so a client carries one schema and short instructions on every turn, whether or not it defers tools. Answers, the
+instructions and the Claude Code plugin's notes and skills then name calls as ops (`kc {op: refs, q: Save}`).
+`KNOWCODE_TOOLS=core` (or `knowcode serve --tools core`) advertises the separate core tools instead: kc_find,
+kc_locate, kc_context, kc_refs, kc_impact, kc_search, kc_more and kc_help. `all` advertises every tool; a comma list
+adds tools by name (`core,kc_trace,kc_tests`). Under those, tools left out are listed in the help index and can't be
+called until the server is started with them; kc_find, kc_context, kc_refs, kc_impact and kc_search are marked always
+loaded (`anthropic/alwaysLoad`), so Claude Code loads them up front and defers the rest to tool search, among them
+kc_locate, kc_more and kc_help. A cut answer's `hint` names the call that continues it."#,
     },
 ];
 

@@ -520,7 +520,16 @@ pub fn notes(root: &Path, names: &[String]) -> Option<String> {
     if lines.is_empty() {
         return None;
     }
+    notes_for(&lines, &crate::mcp::profile_spec())
+}
+
+/// The notes' text under the profile `spec` the plugin's server runs with: the calls they name and the tools loaded.
+fn notes_for(lines: &[String], spec: &str) -> Option<String> {
     let prefix = plugin_tool_prefix();
+    if crate::mcp::is_one(spec) {
+        let lines: Vec<String> = lines.iter().map(|l| crate::mcp::one_text(l, false)).collect();
+        return Some(format!("{}\nAlready loaded through the KnowCode plugin: kc ({prefix}kc).", lines.join("\n")));
+    }
     let tools: Vec<String> = crate::mcp::ALWAYS_LOADED.iter().map(|t| format!("{t} ({prefix}{t})")).collect();
     Some(format!(
         "{}\nAlready loaded through the KnowCode plugin: {}. If one isn't listed yet, load it by that name with tool search.",
@@ -723,7 +732,9 @@ mod tests {
         assert_eq!(out["hookSpecificOutput"]["hookEventName"], "PreToolUse");
         let note = out["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
         assert!(note.starts_with("KnowCode index: `CartStore` is a class defined at src/Store.cs:2"), "{note}");
-        assert!(note.contains("kc_context(symbol: \"CartStore\")"), "{note}");
+        // The default profile, `one`: calls named as ops of `kc`.
+        assert!(note.contains("kc {op: context, symbol: \"CartStore\"}") && note.contains("kc {op: refs, name: \"CartStore\"}"), "{note}");
+        assert!(!note.contains("kc_"), "{note}");
         let note = answer(&event("Grep", "CartStore.Save")).unwrap()["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_string();
         assert!(note.contains("2 references resolve to it (2 exact)") && note.contains("top callers: Worker.Again"), "{note}");
 
@@ -746,8 +757,15 @@ mod tests {
         };
         let note = bash(&root, "grep -rn \"CartStore\" --include=*.cs .").expect("a grep for a known type gets a note");
         assert!(note.starts_with("KnowCode index: `CartStore` is a class defined at src/Store.cs:2"), "{note}");
-        for t in ["kc_find", "kc_context", "kc_refs", "kc_impact", "kc_search"] {
-            assert!(note.contains(&format!("{t} (mcp__plugin_knowcode_knowcode__{t})")), "{note}");
+        assert!(note.ends_with("Already loaded through the KnowCode plugin: kc (mcp__plugin_knowcode_knowcode__kc)."), "{note}");
+        // Under `core` or `all`, the separate tools, as the plugin loads them.
+        let line = note.lines().next().unwrap().replace("kc {op: context, symbol: \"CartStore\"}", "kc_context(symbol: \"CartStore\")");
+        for spec in ["core", "all", "core,kc_trace"] {
+            let other = notes_for(std::slice::from_ref(&line), spec).unwrap();
+            assert!(other.contains("kc_context(symbol: \"CartStore\")"), "{other}");
+            for t in ["kc_find", "kc_context", "kc_refs", "kc_impact", "kc_search"] {
+                assert!(other.contains(&format!("{t} (mcp__plugin_knowcode_knowcode__{t})")), "{other}");
+            }
         }
         let note = bash(&base, "cd app && grep -rn \"CartStore\" .").expect("the search runs where `cd` went");
         assert!(note.contains("src/Store.cs:2"), "{note}");

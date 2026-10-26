@@ -26,7 +26,8 @@ impl Fixture {
         cmd.env("KNOWCODE_CACHE_DIR", self.dir.join("cache"))
             .env("KNOWCODE_DATA_DIR", self.dir.join("data"))
             .env("KNOWCODE_CONFIG_DIR", self.dir.join("config"))
-            .env("KNOWCODE_UPDATE_CHECK", "0");
+            .env("KNOWCODE_UPDATE_CHECK", "0")
+            .env_remove("KNOWCODE_TOOLS");
         cmd
     }
 
@@ -80,7 +81,9 @@ fn bash_searches_get_a_note_and_other_commands_nothing() {
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
     let note = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
     assert!(note.contains("`GetItemById`") && note.contains("src/Catalog.API/Apis/CatalogApi.cs:4"), "{note}");
-    assert!(note.contains("kc_context(symbol: \"GetItemById\")") && note.contains("mcp__plugin_knowcode_knowcode__kc_context"), "{note}");
+    // The default profile, `one`: the calls as ops of the one tool the plugin loads.
+    assert!(note.contains("kc {op: context, symbol: \"GetItemById\"}") && note.contains("(mcp__plugin_knowcode_knowcode__kc)"), "{note}");
+    assert!(!note.contains("kc_"), "{note}");
     assert!(!f.bash(&f.dir, "cd shop && grep -rn \"CatalogApi\" .").is_empty(), "a `cd` chain searches where it went");
 
     for command in ["cargo build", "git status", "sed -n 1,20p src/Catalog.API/Apis/CatalogApi.cs", "cat x | grep -c foo"] {
@@ -174,15 +177,24 @@ fn session_start_says_what_is_indexed_only_where_there_is_an_index() {
 
     let shop = indexed_repo(&f, "shop");
     let note = f.session(&shop.join("src"), "startup");
-    assert_eq!(note, "KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
+    assert_eq!(note, "KnowCode indexes shop. Callers, impact, HTTP: kc {op: impact}; definitions: op find.");
     assert_eq!(f.session(&shop, "clear"), note);
     assert_eq!(f.session(&shop, "compact"), note);
     // A resumed or forked session has the line in its transcript already.
     assert_eq!(f.session(&shop, "resume"), "");
     assert_eq!(f.session(&shop, "fork"), "");
 
+    // Under the separate tools' profiles, their names.
+    let mut cmd = f.command();
+    cmd.env("KNOWCODE_TOOLS", "core").args(["hook", "session-start"]).stdin(Stdio::piped()).stdout(Stdio::piped());
+    let mut child = cmd.spawn().unwrap();
+    let event = json!({"session_id": "t", "hook_event_name": "SessionStart", "source": "startup", "cwd": shop, "transcript_path": "/dev/null"});
+    child.stdin.take().unwrap().write_all(event.to_string().as_bytes()).unwrap();
+    let out = String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap();
+    assert!(out.contains("KnowCode indexes shop. Callers, impact, HTTP: kc_impact; definitions: kc_find."), "{out}");
+
     let api = indexed_repo(&f, "api");
-    assert_eq!(f.session(&api, "startup"), "KnowCode indexes api. Callers, impact, HTTP: kc_impact; definitions: kc_find.");
+    assert_eq!(f.session(&api, "startup"), "KnowCode indexes api. Callers, impact, HTTP: kc {op: impact}; definitions: op find.");
     // A repo with no index says nothing, or, under a workspace root, that its first query indexes it.
     assert_eq!(f.session(&first, "startup"), "");
     assert_eq!(f.session(&f.dir.join("nowhere"), "startup"), "");

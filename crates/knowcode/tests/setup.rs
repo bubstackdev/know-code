@@ -177,11 +177,13 @@ fn claude_installs_embedded_plugin_and_records_partial_install_for_removal() {
     let config: Value = serde_json::from_slice(&fs::read(plugin.join(".mcp.json")).unwrap()).unwrap();
     assert_eq!(config["mcpServers"]["knowcode"]["command"], KC);
     assert_eq!(config["mcpServers"]["knowcode"]["args"], json!(["serve"]));
-    // Claude Code defers the non-core tools, and the skills use them: the plugin's server advertises them all.
-    assert_eq!(config["mcpServers"]["knowcode"]["env"]["KNOWCODE_TOOLS"], "all");
+    // The default profile, the single `kc` tool; the skills call every tool as its ops.
+    assert_eq!(config["mcpServers"]["knowcode"]["env"]["KNOWCODE_TOOLS"], "one");
     for skill in ["knowcode-explore", "knowcode-before-edit", "knowcode-debug-stack-trace", "knowcode-safe-refactor"] {
         let text = fs::read_to_string(plugin.join(format!("skills/{skill}/SKILL.md"))).unwrap();
         assert!(text.contains("incomplete") && text.contains("assumptions"));
+        assert!(text.contains("KnowCode's `kc` tool") && text.contains("kc {op: "), "{skill}: {text}");
+        assert!(!text.contains("kc_"), "{skill} names a tool `one` doesn't advertise: {text}");
     }
     let hook: Value = serde_json::from_slice(&fs::read(plugin.join("hooks/hooks.json")).unwrap()).unwrap();
     assert_eq!(hook["hooks"]["PreToolUse"][0]["matcher"], "Grep|Glob|Bash");
