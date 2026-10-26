@@ -4,7 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.3.0 (date TBD)
 
-SUMMARY TBD: the lead writes this paragraph once the public-v2 study results are in.
+0.3 makes KnowCode keep up with a whole workspace on its own and measures what agents spend re-checking its
+answers. Repositories under the workspace roots are found and indexed in the background, several at once and sized to
+the machine, and answers say which ones aren't indexed yet. The [public, pre-registered study](eval/public-v2/results.md)
+on a new question bank missed all four of its decided criteria: re-check cost rose instead of halving (most of the
+rise is one session), sessions used about 3.5k more tokens than plain tools as in 0.2.0, recall on the bank's one
+lower-bound question stayed below plain, and agents not told about KnowCode used it in 53 of 80 sessions against the
+67 required, up from 44. The results page reports every run, miss and failure.
 
 - A call to an external client whose method the repo only declares (a `.d.ts` for a package such as
   `jellyfin-apiclient`), and which links to no action, now says so: its note names where the method is declared and
