@@ -570,6 +570,29 @@ pub struct Common {
     pub max_chars: Option<usize>,
 }
 
+/// The `kc` tool's parameters (the `one` profile, a prototype): the core tool to run (`op`) and its main input (`q`,
+/// or several in `qs`). Any other parameter of that tool is passed by its own name.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OneParams {
+    /// impact, find, refs, context, search, locate, more or help.
+    pub op: String,
+    /// A name, `Type.member`, [repo/]file:line, text, concept, cursor or help topic.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// Several `q` (refs, context, locate).
+    #[serde(default)]
+    pub qs: Vec<String>,
+    /// impact: 2 for callers' callers.
+    #[serde(default)]
+    pub depth: Option<u32>,
+    /// Any other parameter of the op's tool, by its name.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, Value>,
+}
+
+/// The ops of the `kc` tool: the core tools, by name without `kc_`.
+const ONE_OPS: &[&str] = &["impact", "find", "refs", "context", "search", "locate", "more", "help"];
+
 #[derive(Clone)]
 pub struct KnowcodeServer {
     default: Scope,
@@ -578,6 +601,8 @@ pub struct KnowcodeServer {
     schemas: std::sync::Arc<std::collections::BTreeMap<String, rmcp::model::JsonObject>>,
     /// Tools the profile leaves out (see [`profile`]).
     hidden: std::sync::Arc<Vec<String>>,
+    /// The server's instructions, for its profile.
+    instructions: &'static str,
 }
 
 /// The tools of the `core` profile, the default: the ones that answer the first questions about code (where X is
@@ -626,6 +651,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_grep_ast", &[("pattern", ""), ("lang", "csharp, typescript, javascript, python, rust or swift.")]),
     ("kc_more", &[("cursor", "")]),
     ("kc_status", &[]),
+    ("kc", &[("op", "impact, find, refs, context, search, locate, more or help."), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
 /// `schema` (a tool's full input schema) cut to the parameters [`ADVERTISED`] lists for `tool`, each with its line
@@ -653,11 +679,14 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
 /// The tools a profile spec names, out of `all`: `all`, `core`, and tool names (with or without `kc_`), comma
 /// separated. `kc_help` is always in.
 pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
-    let mut out: Vec<String> = vec!["kc_help".into()];
+    // `one` (a prototype): the single `kc` tool, whose `help` op stands in for kc_help.
+    let one = spec.split(',').any(|p| p.trim() == "one");
+    let mut out: Vec<String> = if one { Vec::new() } else { vec!["kc_help".into()] };
     for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         let names: Vec<String> = match part {
             "all" => all.to_vec(),
             "core" => CORE.iter().map(|s| s.to_string()).collect(),
+            "one" => vec!["kc".into()],
             name => {
                 let n = if name.starts_with("kc_") { name.to_string() } else { format!("kc_{name}") };
                 if !all.contains(&n) {
@@ -1705,7 +1734,7 @@ impl KnowcodeServer {
             // The full schema documents every parameter in help; the advertised one only the common ones.
             let full = slim(&route.attr.input_schema);
             route.attr.input_schema = std::sync::Arc::new(advertised(&route.attr.name, &full));
-            if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) {
+            if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) || route.attr.name == "kc" {
                 let mut meta = rmcp::model::JsonObject::new();
                 meta.insert("anthropic/alwaysLoad".into(), Value::Bool(true));
                 route.attr.meta = Some(rmcp::model::MetaObject(meta));
@@ -1713,13 +1742,15 @@ impl KnowcodeServer {
             schemas.insert(route.attr.name.to_string(), full);
             router.add_route(route);
         }
-        let all: Vec<String> = schemas.keys().cloned().collect();
+        // `kc` is the `one` profile's alone: `all` is every other tool.
+        let all: Vec<String> = schemas.keys().filter(|k| *k != "kc").cloned().collect();
         let on = profile(tools, &all)?;
-        let hidden: Vec<String> = all.into_iter().filter(|t| !on.contains(t)).collect();
+        let hidden: Vec<String> = schemas.keys().filter(|t| !on.contains(t)).cloned().collect();
         for t in &hidden {
             router.disable_route(t.clone());
         }
-        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden) })
+        let instructions = if on.iter().any(|t| t == "kc") { ONE_INSTRUCTIONS } else { INSTRUCTIONS };
+        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden), instructions })
     }
 
     #[tool(description = "Docs on any tool, parameter or concept; no topic: the index.")]
@@ -2230,6 +2261,52 @@ impl KnowcodeServer {
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 
+    #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, more, help.")]
+    async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, String> {
+        let op = p.op.trim().trim_start_matches("kc_").to_string();
+        let mut args = p.rest;
+        let mut put = |key: &str, v: Option<Value>| {
+            if let Some(v) = v {
+                args.insert(key.into(), v);
+            }
+        };
+        let q = p.q.map(Value::from);
+        let qs = (!p.qs.is_empty()).then(|| Value::from(p.qs));
+        let main = match op.as_str() {
+            "impact" | "context" => "symbol",
+            "find" | "locate" => "query",
+            "refs" => "name",
+            "search" => "pattern",
+            "more" => "cursor",
+            "help" => "topic",
+            other => return Err(format!("no op {other:?}: {}", ONE_OPS.join(", "))),
+        };
+        // A help topic named by its op is its tool's.
+        let q = match (op.as_str(), q) {
+            ("help", Some(Value::String(t))) if ONE_OPS.contains(&t.as_str()) => Some(Value::from(format!("kc_{t}"))),
+            (_, q) => q,
+        };
+        put(main, q);
+        put(match op.as_str() { "refs" => "names", "locate" => "queries", _ => "symbols" }, qs);
+        if op == "impact" {
+            put("depth", p.depth.map(Value::from));
+        }
+        fn args_for<T: serde::de::DeserializeOwned>(op: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
+            serde_json::from_value(Value::Object(args)).map(Parameters).map_err(|e| format!("op {op}: {e}"))
+        }
+        let out = match op.as_str() {
+            "impact" => self.kc_impact(args_for(&op, args)?).await,
+            "find" => self.kc_find(args_for(&op, args)?).await,
+            "refs" => self.kc_refs(args_for(&op, args)?).await,
+            "context" => self.kc_context(args_for(&op, args)?).await,
+            "search" => self.kc_search(args_for(&op, args)?).await,
+            "locate" => self.kc_locate(args_for(&op, args)?).await,
+            "more" => self.kc_more(args_for(&op, args)?).await,
+            _ => self.kc_help(args_for(&op, args)?).await,
+        }?;
+        Ok(one_calls(&out))
+    }
+
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
     async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, String> {
         // Every repo of the workspace, those not indexed yet included.
@@ -2289,7 +2366,7 @@ impl ServerHandler for KnowcodeServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
             .with_server_info(Implementation::new("knowcode", concat!(env!("CARGO_PKG_VERSION"), "+", env!("KNOWCODE_BUILD"))))
-            .with_instructions(INSTRUCTIONS)
+            .with_instructions(self.instructions)
     }
 
     /// The help topics, as resources (`knowcode://help/<topic>`), for clients that read resources.
@@ -2331,6 +2408,24 @@ kc_impact, X as file:line or `Type.member`, `depth` 2 for callers' callers. Wher
 kc_refs; what X is kc_context; files for a concept or bug kc_locate; text kc_search; the next page kc_more; every tool \
 and parameter kc_help. Tools take `repo`. Each edge has a confidence; an incomplete answer says why. `withheld`: a \
 privacy file blocks it; don't read it another way.";
+
+/// An answer as the `kc` tool gives it: the calls it names (a cut list's `kc_more {cursor: …}`, `kc_refs X`) as ops
+/// of `kc`.
+fn one_calls(text: &str) -> String {
+    let mut out = text.replace("kc_more {cursor: ", "kc {op: more, q: ");
+    for op in ONE_OPS {
+        out = out.replace(&format!("kc_{op} "), &format!("kc op={op} "));
+    }
+    out
+}
+
+/// The `one` profile's instructions (a prototype): the same map, as ops of the one tool.
+const ONE_INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use its \
+`kc` tool instead of grep and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what \
+breaks if X changes: op impact, q X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X is defined \
+op find; every use refs; what X is context; files for a concept or bug locate; text search; the next page more (q: the \
+cursor); every op and parameter help. `repo` picks a repo. Each edge has a confidence; an incomplete answer says why. \
+`withheld`: a privacy file blocks it; don't read it another way.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
