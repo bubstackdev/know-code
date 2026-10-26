@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -103,23 +104,77 @@ class PublicSessionTests(unittest.TestCase):
                 session.prepare(manifest, source, plan, 'plain-public-lookup-001', base/'out')
             self.assertEqual((base/'out/retained').read_text(), 'keep')
 
-    def test_source_mutation_during_copy_does_not_promote_a_mixed_session(self):
+    def census_with(self, clone):
+        """census_module, with clone_or_copy replaced by clone(real, source, destination)."""
+        real_module = session.census_module
+        def module():
+            m = real_module()
+            real = m.clone_or_copy
+            m.clone_or_copy = lambda src, dst: clone(real, src, dst)
+            return m
+        return patch.object(session, 'census_module', module)
+
+    def test_source_mutation_before_its_copy_is_refused_and_after_it_leaves_the_session_exact(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             manifest, source, plan, original = self.fixture(base)
-            copy = session.shutil.copyfileobj
-            def changing(src, dst):
-                result = copy(src, dst)
-                if Path(src.name).resolve() == original.resolve():
-                    original.chmod(0o644)
-                    original.write_text('changed after copying')
-                    original.chmod(0o444)
-                return result
-            with patch.object(session.shutil, 'copyfileobj', changing):
-                with self.assertRaisesRegex(ValueError, 'pinned receipt'):
-                    session.prepare(manifest, source, plan, 'plain-public-lookup-001', base/'out')
+            pinned = original.read_bytes()
+            def change():
+                original.chmod(0o644)
+                original.write_text('changed during preparation')
+                original.chmod(0o444)
+            def before(real, src, dst):
+                if src.resolve() == original.resolve():
+                    change()
+                return real(src, dst)
+            with self.census_with(before), self.assertRaisesRegex(ValueError, 'pinned receipt'):
+                session.prepare(manifest, source, plan, 'plain-public-lookup-001', base/'out')
             self.assertFalse((base/'out').exists())
             self.assertFalse(list(base.glob('.knowcode-session-*')))
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            manifest, source, plan, original = self.fixture(base)
+            pinned = original.read_bytes()
+            def after(real, src, dst):
+                result = real(src, dst)
+                if src.resolve() == original.resolve():
+                    change()
+                return result
+            with self.census_with(after):
+                session.prepare(manifest, source, plan, 'plain-public-lookup-001', base/'out')
+            # The session's own copy, which the agent reads, holds the pinned bytes.
+            self.assertEqual((base/'out/source/example-client/api.ts').read_bytes(), pinned)
+
+    def test_the_session_census_is_byte_identical_to_the_source_census_and_copies_match_clones(self):
+        census = load('public_session_census_check', 'scripts/census-public-eval.py')
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            manifest, source, plan, _ = self.fixture(base)
+            shared = census.census(manifest, source, base/'census')
+            results, trees = {}, {}
+            for mode in ['clone', 'copy']:
+                out = base/mode
+                force_copy = mode == 'copy'
+                def clone(real, src, dst):
+                    # The copy fallback, as on a file system or platform without clones.
+                    with patch.object(sys, 'platform', 'linux' if force_copy else sys.platform):
+                        return real(src, dst)
+                with self.census_with(clone):
+                    results[mode] = session.prepare(manifest, source, plan, 'plain-public-lookup-001', out)
+                repo = json.loads((source/'source-receipt.json').read_text())['repos'][0]
+                rows = census.inspect_view(out/'source/example-client', repo)
+                self.assertEqual(''.join(json.dumps(r, sort_keys=True)+'\n' for r in rows),
+                                 (base/'census/files.jsonl').read_text())
+                self.assertEqual(results[mode]['source_files_sha256'], shared['files_sha256'])
+                trees[mode] = {p.relative_to(out).as_posix(): (p.stat().st_mode, p.read_bytes() if p.is_file() else None)
+                               for p in sorted((out/'source').rglob('*'))}
+            self.assertEqual(trees['clone'], trees['copy'])
+            self.assertEqual(results['copy']['cloned_files'], 0)
+            if session.census_module().sys.platform == 'darwin':
+                self.assertEqual(results['clone']['cloned_files'], 2)
+            for r in results.values():
+                r.pop('cloned_files')
+            self.assertEqual(results['clone'], results['copy'])
 
     def test_session_output_cannot_enter_source_or_plan(self):
         with tempfile.TemporaryDirectory() as temp:

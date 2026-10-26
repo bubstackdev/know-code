@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import ctypes
+import errno
+import functools
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import stat
+import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,7 +68,60 @@ def safe_relative(value: str) -> PurePosixPath:
 PRIVACY_FILE=re.compile(r'^\.[\w.-]*privacy[\w.-]*\.(?:ya?ml|toml)$', re.I)
 
 
-def inspect_view(root: Path, repo: dict) -> list[dict]:
+@functools.cache
+def _libc():
+    return ctypes.CDLL(None, use_errno=True)
+
+
+def clone_or_copy(source: Path, destination: Path) -> bool:
+    """A new file at destination with source's bytes: an APFS clone (copy-on-write, its own inode) where the file
+    system supports it, otherwise a copy. True when cloned. Never a hard link; destination must not exist."""
+    if sys.platform == 'darwin':
+        # clonefile(2), CLONE_NOFOLLOW | CLONE_NOOWNERCOPY.
+        if _libc().clonefile(os.fsencode(source), os.fsencode(destination), ctypes.c_uint32(0x0001 | 0x0002)) == 0:
+            return True
+        code = ctypes.get_errno()
+        if code not in (errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV, errno.ENOSYS):
+            raise OSError(code, os.strerror(code), str(destination))
+    with source.open('rb') as src, destination.open('xb') as dst:
+        shutil.copyfileobj(src, dst)
+    return False
+
+
+def rows_digest(rows: list[dict]) -> str:
+    """The census's files_sha256: its files.jsonl, one sorted-key JSON row per file."""
+    return digest(''.join(json.dumps(row,sort_keys=True)+'\n' for row in rows).encode())
+
+
+def view_metadata(root: Path, repo: dict) -> None:
+    """A view's entry set, entry types, sizes and read-only files against the receipt, without reading content: for a
+    view inspect_view already verified, checked again before use."""
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('source view is not a real directory')
+    expected={safe_relative(item['path']).as_posix(): item for item in repo['files']}
+    seen=set()
+    def fail(error):
+        raise error
+    for directory, children, files in os.walk(root,followlinks=False,onerror=fail):
+        for name in children+files:
+            path=Path(directory)/name
+            relative=path.relative_to(root).as_posix()
+            mode=path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                continue
+            item=expected.get(relative)
+            if item is None or stat.S_ISLNK(mode)!=item['symlink']:
+                raise ValueError('source entry set differs from pinned receipt')
+            if not item['symlink'] and (not stat.S_ISREG(mode) or mode & 0o222 or path.lstat().st_size!=item['bytes']):
+                raise ValueError('source entry differs from pinned receipt or is writable')
+            seen.add(relative)
+    if seen!=set(expected):
+        raise ValueError('source entry set differs from pinned receipt')
+
+
+def inspect_view(root: Path, repo: dict, reread: bool = True) -> list[dict]:
+    """Every entry of a view against the receipt, as census rows. Each file is read twice, so a view that changes during
+    the census is refused; reread=False reads once, for a private copy no other process writes."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError('source view is not a real directory')
     expected={}
@@ -132,16 +190,15 @@ def inspect_view(root: Path, repo: dict) -> list[dict]:
     # Recheck after all reads; a census must not silently combine two different source states.
     if entries()!=set(expected):
         raise ValueError('source entries changed during census')
-    for name,item in sorted(expected.items()):
-        read(name,item)
+    if reread:
+        for name,item in sorted(expected.items()):
+            read(name,item)
     return rows
 
 
-def census(manifest_path: Path, source_root: Path, destination: Path) -> dict:
-    manifest_bytes=manifest_path.read_bytes()
+def expected_repos(manifest_bytes: bytes, receipt: dict) -> dict:
+    """The manifest's repositories, checked against the prepared source receipt."""
     manifest=json.loads(manifest_bytes)
-    receipt_bytes=(source_root/'source-receipt.json').read_bytes()
-    receipt=json.loads(receipt_bytes)
     if manifest.get('format')!=1 or receipt.get('manifest_sha256')!=digest(manifest_bytes):
         raise ValueError('manifest differs from prepared source receipt')
     if not receipt.get('stage','').startswith('source-ready;'):
@@ -155,6 +212,17 @@ def census(manifest_path: Path, source_root: Path, destination: Path) -> dict:
             expected[name]=dict(repo,family=family['name'])
     if len(receipt['repos'])!=len(expected) or {r['name'] for r in receipt['repos']}!=set(expected):
         raise ValueError('repository set differs from manifest')
+    for repo in receipt['repos']:
+        if any(repo.get(k)!=v for k,v in expected[repo['name']].items()):
+            raise ValueError('source repository metadata differs from manifest')
+    return expected
+
+
+def census(manifest_path: Path, source_root: Path, destination: Path) -> dict:
+    manifest_bytes=manifest_path.read_bytes()
+    receipt_bytes=(source_root/'source-receipt.json').read_bytes()
+    receipt=json.loads(receipt_bytes)
+    expected=expected_repos(manifest_bytes,receipt)
     view=source_root/'view'
     if view.is_symlink() or not view.is_dir() or {p.name for p in view.iterdir()}!=set(expected):
         raise ValueError('source view repository entries differ from manifest')
@@ -166,8 +234,6 @@ def census(manifest_path: Path, source_root: Path, destination: Path) -> dict:
     rows=[]
     summaries=[]
     for repo in sorted(receipt['repos'],key=lambda item:item['name']):
-        if any(repo.get(k)!=v for k,v in expected[repo['name']].items()):
-            raise ValueError('source repository metadata differs from manifest')
         files=inspect_view(view/repo['name'],repo)
         rows.extend(files)
         summaries.append({'name':repo['name'],'family':repo['family'],'commit':repo['commit'],
@@ -177,7 +243,7 @@ def census(manifest_path: Path, source_root: Path, destination: Path) -> dict:
     output=''.join(json.dumps(row,sort_keys=True)+'\n' for row in rows)
     result={'format':1,'stage':'file census; scope review and question sampling pending; no scored runs',
             'manifest_sha256':digest(manifest_bytes),'source_receipt_sha256':digest(receipt_bytes),
-            'tool_sha256':digest(Path(__file__).read_bytes()),'files_sha256':digest(output.encode()),
+            'tool_sha256':digest(Path(__file__).read_bytes()),'files_sha256':rows_digest(rows),
             'repos':summaries,'files':len(rows),'automatic_exclusions':[],
             'scope_policy':'Every exported file is retained. Review flags annotate possible test/generated/vendor/build sources; they are not exclusions. lib, libs and packages are not excluded by directory name.'}
     destination.mkdir(parents=True,exist_ok=True,mode=0o700)

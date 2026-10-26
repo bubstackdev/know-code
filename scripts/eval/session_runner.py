@@ -27,13 +27,18 @@ def write(path,value):
         json.dump(value,stream,indent=2);stream.write('\n')
 
 
-def verify_source(study,session):
+def verify_source(study,session,content=False):
+    """The session's source against the frozen receipt. Preparation hashed it moments before, so before the client runs
+    its entries, types, sizes and read-only modes are rechecked; after the client (content=True) every byte is."""
     census=load('runner_source_census',ROOT/'scripts/census-public-eval.py')
     source=session/'source'
     if source.is_symlink() or not source.is_dir() or {p.name for p in source.iterdir()}!={r['name'] for r in study.receipt['repos']}:
         raise ValueError('session source repository set differs')
     for repo in study.receipt['repos']:
-        census.inspect_view(source/repo['name'],repo)
+        if content:
+            census.inspect_view(source/repo['name'],repo,reread=False)
+        else:
+            census.view_metadata(source/repo['name'],repo)
 
 
 NOTES_SUFFIXES=('','-journal','-wal','-shm')
@@ -199,7 +204,7 @@ def _execute(freeze,session,client,knowcode,out,*,api_key,git_toolchain=None,_co
     transport=public_transcript.audit_transport(measured,events,records,expected_model=study.config['model'],relay_cleanup_complete=relay_closed)
     problems=[]
     try:
-        study.unchanged();study.binaries(client,knowcode);verify_source(study,session)
+        study.unchanged();study.binaries(client,knowcode);verify_source(study,session,content=True)
         if roots:
             for repo in study.receipt['repos']:
                 preparer.verify_payload(roots[repo['name']],repo)
