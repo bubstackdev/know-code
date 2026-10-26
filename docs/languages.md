@@ -318,7 +318,7 @@ decorator, a gateway DTO attribute and gateway calls naming a service and path, 
 message-type attribute, consumer base classes, registration helpers and publish helpers naming a destination, DI scope
 values, the CI variables naming a deployed application, and the names Ansible linking leaves out or compares without.
 The defaults are the public libraries' names, so repos without conventions of their own get the framework-level
-linking described above. KnowCode was also validated on a private multi-repo codebase, through these settings.
+linking described above.
 
 ## Constructs recognised but not read
 

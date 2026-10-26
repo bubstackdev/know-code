@@ -53,8 +53,10 @@ registration and copies when migrating; setup does not delete them.
 - `skills/knowcode-debug-stack-trace` maps file/line frames to symbols and callers.
 - `skills/knowcode-safe-refactor` covers unused-code investigation and rename previews.
 
-Claude may namespace plugin MCP tools. The skills refer to the advertised `kc_*`
-tool names. Each tells the agent to check `complete` on every answer, read every
+Claude may namespace plugin MCP tools. The skills in this directory name the
+separate `kc_*` tools; setup writes them for the profile it records, so under the
+default `one` profile they name calls as ops of `kc` (`kc {op: context, symbol: …}`).
+Each tells the agent to check `complete` on every answer, read every
 `incomplete` entry, follow `hint`s and cursors (`kc_more`) when the rest of a list
 matters, and never treat a missing, stale, sampled or withheld result as proof of
 absence. The answer contract is in [docs/answers.md](../../docs/answers.md).
@@ -83,11 +85,11 @@ the plugin.
 The hook adds a short context note when a Grep or Glob pattern names a symbol in
 an existing index and its definition still matches the working tree. It does not
 block the search. It never creates or refreshes an index; the MCP query does that.
-The note names `kc_context`, `kc_refs`, `kc_impact` and `kc_locate` both by
-their short names and as Claude sees them from the plugin
-(`mcp__plugin_knowcode_knowcode__kc_context`). The server marks those four always
-loaded (about 0.8k tokens up front), and the full name lets tool search load one in
-a single step if a client still defers it.
+The note names the next call (`kc {op: context, symbol: …}`) and the tool as
+Claude sees it from the plugin (`mcp__plugin_knowcode_knowcode__kc`). Under `core`
+or `all` it names the separate tools instead, `kc_find`, `kc_context`, `kc_refs`,
+`kc_impact` and `kc_search`, which the server marks always loaded; the full name
+lets tool search load one in a single step if a client still defers it.
 
 For Bash, it reads the command and acts only on code searches: `grep`, `egrep`,
 `rg`, `ag`, `ack`, `git grep` and `find -name`, also in pipelines and in
