@@ -208,6 +208,8 @@ def prepare(session, config, client, *, knowcode=None, index_repos=None):
                 '--mcp-config', str(mcp_path), '--allowedTools', *allowed]
     denied = [f'Bash(*{binary_name}*)'] if shell == 'sandbox' else []
     if knowcode_arm:
+        # 0.4's one-tool profile runs note_add as an op of `kc`, which no rule can deny: the audit flags it instead,
+        # and each session's KnowCode data directory is its own, so a note never reaches another session.
         denied.append(server + '__kc_note_add')
     if denied:
         argv += ['--disallowedTools', *denied]

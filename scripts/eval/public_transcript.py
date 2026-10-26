@@ -21,6 +21,40 @@ import re
 CONTEXT_FIELDS = ('input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens')
 # KnowCode's tools through an explicit MCP config (bare client) or through its Claude Code plugin (full client).
 KNOWCODE_PREFIXES = ('mcp__knowcode__', 'mcp__plugin_knowcode_knowcode__')
+# 0.4's default profile advertises one tool, `kc`, whose `op` names the tool it runs. Each op: (the parameter `q`
+# fills, the one `qs` fills), as the knowcode crate's mcp.rs ONE_OPS has them. A `kc` call is scored as the tool it
+# runs, so a build with separate tools and a build with `kc` are scored the same way.
+ONE_OPS = {'impact': ('symbol', ''), 'find': ('query', ''), 'refs': ('name', 'names'), 'context': ('symbol', 'symbols'),
+           'search': ('pattern', ''), 'locate': ('query', 'queries'), 'more': ('cursor', ''), 'help': ('topic', ''),
+           'trace': ('symbol', ''), 'path': ('from', ''), 'flow': ('entry', ''), 'symbol_at': ('file', ''),
+           'unused': ('', ''), 'rename_preview': ('symbol', ''), 'coupled': ('file', ''), 'tests': ('targets', 'targets'),
+           'hotspots': ('', ''), 'ownership': ('path', ''), 'reviewers': ('files', 'files'), 'overview': ('focus', ''),
+           'areas': ('area', ''), 'notes': ('symbol', ''), 'note_add': ('symbol', ''), 'grep_ast': ('pattern', ''),
+           'status': ('', '')}
+ONE_LISTS = ('targets', 'files')
+
+
+def knowcode_tool(name, inp):
+    """A KnowCode call as (the tool it runs, that tool's arguments): `kc_refs` for `mcp__knowcode__kc_refs` or for
+    `kc {op: refs, q: X}`, with `q` as `name: X`. None for any other call. A `kc` call with no known op stays `kc`."""
+    if not isinstance(name, str) or not name.startswith(KNOWCODE_PREFIXES):
+        return None
+    tool = name.split('__', 2)[2]
+    inp = inp if isinstance(inp, dict) else {}
+    if tool != 'kc':
+        return tool, inp
+    op = inp.get('op').strip().removeprefix('kc_') if isinstance(inp.get('op'), str) else None
+    if op not in ONE_OPS:
+        return 'kc', inp
+    main, many = ONE_OPS[op]
+    args = {k: v for k, v in inp.items() if k not in ('op', 'q', 'qs', 'depth')}
+    if inp.get('q') is not None and main:
+        args[main] = [inp['q']] if main in ONE_LISTS else inp['q']
+    if inp.get('qs') and many:
+        args[many] = inp['qs']
+    if inp.get('depth') is not None:
+        args['depth'] = inp['depth']
+    return 'kc_' + op, args
 
 
 def unique_object(pairs):
@@ -204,7 +238,7 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
                 interface = ('Bash', 'Read') + (('Grep', 'Glob', 'Skill', 'ToolSearch') if arm.endswith('-full') else ())
                 if name not in interface and not (not arm.startswith('plain') and is_kc):
                     flags.append('tool outside arm: ' + name)
-                if is_kc and name.endswith('__kc_note_add'):
+                if is_kc and knowcode_tool(name, inp)[0] == 'kc_note_add':
                     flags.append('persistent note tool forbidden')
             elif kind == 'user' and block.get('type') == 'tool_result':
                 tool_id = block.get('tool_use_id')
@@ -268,10 +302,15 @@ def audit(events, *, question_id, arm, research_call_budget, source_root, two_ho
     answer, answer_issues = answer_from_result(terminal, question_id, source_root, two_hop)
     if issues:
         answer = {'id':question_id,'status':'error','items':[], 'notes':'Transcript integrity error; inspect audit and raw transcript.'}
-    kc_calls = sum(row['name'].startswith(KNOWCODE_PREFIXES) for row in call_rows)
+    kc_tools = [knowcode_tool(row['name'], row['input']) for row in call_rows]
+    kc_calls = sum(t is not None for t in kc_tools)
+    by_tool = {}
+    for t in kc_tools:
+        if t is not None:
+            by_tool[t[0]] = by_tool.get(t[0], 0) + 1
     return dict(format=1, id=question_id, arm=arm, answer=answer, answer_issues=answer_issues,
                 transcript_integrity=not issues, transcript_issues=sorted(set(issues)), policy_flags=sorted(set(flags)),
-                research_calls=len(call_rows), knowcode_calls=kc_calls, plain_calls=sum(row['name'] in ('Bash','Read','Grep','Glob') for row in call_rows),
+                research_calls=len(call_rows), knowcode_calls=kc_calls, knowcode_tools=by_tool, plain_calls=sum(row['name'] in ('Bash','Read','Grep','Glob') for row in call_rows),
                 research_call_budget=research_call_budget, research_call_overrun=max(0,len(call_rows)-research_call_budget),
                 research_call_budget_enforced=False, refused_calls=len(refused),
                 heuristic_refusal_calls=len(refusal_candidates),

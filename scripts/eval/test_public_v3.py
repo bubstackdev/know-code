@@ -65,5 +65,19 @@ class PublicV3Tests(unittest.TestCase):
         self.assertEqual(events[0]['message']['content'][1]['name'], 'Grep')  # the transcript itself is unchanged
 
 
+    def test_unprompted_use_is_83_percent_of_every_session_pooled(self):
+        questions = [{'id': f'q{n:02}', 'stratum': list(public_v3.COUNTS)[n % 4]} for n in range(40)]
+        def sessions(used):
+            out = {}
+            for i, (r, q) in enumerate((r, q['id']) for r in ('b1', 'b2') for q in questions):
+                for arm in public_v3.ARMS:
+                    out[(r, arm, q)] = dict(status='answered', label='exhaustive', f1=1.0, recall=1.0, tokens=1,
+                                            knowcode_calls=int(i < used) if arm == public_v3.UNPROMPTED else 1, changed=[])
+            return out
+        for used, met in ((67, True), (66, False)):
+            c4 = public_v3.summarize(sessions(used), questions, ['b1', 'b2'])['criteria']['4_unprompted_use']
+            self.assertEqual((c4['sessions'], c4['sessions_with_call'], c4['required'], c4['met']), (80, used, 67, met))
+
+
 if __name__ == '__main__':
     unittest.main()
