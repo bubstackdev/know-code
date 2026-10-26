@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- C#: an action with several `[Http*]` attributes serves each of their routes, where only the first was read:
+  `LibraryController.GetSimilarItems`'s `[HttpGet("Items/{itemId}/Similar")]` and four more, and the
+  `[HttpHead]` of actions answering GET and HEAD. A named argument (`[HttpGet("Css.css", Name = "…")]`,
+  `[HttpPost(Name = "…")]`) is no longer taken for the template when it comes first. On the public-v2 workspace this
+  adds 42 server routes (34 in jellyfin-server, 8 in bitwarden-server) and links one more request
+  (`LiveTv/Tuners/Discover`).
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an

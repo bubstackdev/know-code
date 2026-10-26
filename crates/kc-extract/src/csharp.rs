@@ -1305,6 +1305,9 @@ impl<'a> Cx<'a> {
     /// action without a template is conventionally routed, and so is a public method with no route attribute in a
     /// controller with no `[Route]` (`{^*Action}`, any verb), when the repo maps conventional routes. `{^!…}`: the
     /// class has no `[Route]` of its own (see [`ControllerScope::unrouted`]), so the query looks from its bases.
+    ///
+    /// Each verb attribute is a route of its own (`[HttpGet("Items/{itemId}/Similar")]` and `[HttpGet("Shows/{itemId}/
+    /// Similar", Name = "GetSimilarShows")]` on one action); a named argument (`Name = …`, `Order = …`) is no template.
     fn action_route(&mut self, sym: usize, node: Node) {
         const VERBS: &[&str] = &["HttpGet", "HttpPost", "HttpPut", "HttpDelete", "HttpPatch", "HttpHead", "HttpOptions"];
         let attrs = attribute_args(self.src, node, &[VERBS, &["Route", "NonAction", "ActionName"]].concat());
@@ -1317,20 +1320,38 @@ impl<'a> Cx<'a> {
             .find(|(n, _)| n == "ActionName")
             .and_then(|(_, a)| a.first().and_then(|a| self.const_value(*a)))
             .unwrap_or_else(|| self.facts.symbols[sym].name.clone());
-        let route_args = attrs.iter().find(|(n, _)| n == "Route").map(|(_, a)| a.first().copied());
-        let (verb, template_arg) = match (attrs.iter().find(|(n, _)| VERBS.contains(&n.as_str())), route_args) {
-            (Some((v, args)), r) => (v.trim_start_matches("Http").to_ascii_uppercase(), args.first().copied().or(r.flatten())),
-            // `[Route("x")]` alone: every verb.
-            (None, Some(r)) => ("*".to_string(), r),
-            (None, None) => {
-                // A public method of a conventionally routed controller is an action.
-                if scope.conventional && has_modifier(self.src, node, "public") && !has_modifier(self.src, node, "static") && !has_modifier(self.src, node, "override") {
-                    let path = format!("{{^{}*{action}}}", if scope.unrouted { "!" } else { "" });
-                    self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb: "*".to_string(), path, path_ref: None, service: None, service_ref: None, line: line(node) });
+        // An attribute's template: its first positional argument.
+        fn template<'t>(args: &[Node<'t>]) -> Option<Node<'t>> {
+            args.iter().copied().find(|a| !a.parent().is_some_and(|p| children(p).any(|c| c.kind() == "=")))
+        }
+        let route_args = attrs.iter().find(|(n, _)| n == "Route").map(|(_, a)| template(a));
+        let mut verbs: Vec<(String, Option<Node>)> = attrs
+            .iter()
+            .filter(|(n, _)| VERBS.contains(&n.as_str()))
+            .map(|(v, args)| (v.trim_start_matches("Http").to_ascii_uppercase(), template(args).or(route_args.flatten())))
+            .collect();
+        if verbs.is_empty() {
+            match route_args {
+                // `[Route("x")]` alone: every verb.
+                Some(r) => verbs.push(("*".to_string(), r)),
+                None => {
+                    // A public method of a conventionally routed controller is an action.
+                    if scope.conventional && has_modifier(self.src, node, "public") && !has_modifier(self.src, node, "static") && !has_modifier(self.src, node, "override") {
+                        let path = format!("{{^{}*{action}}}", if scope.unrouted { "!" } else { "" });
+                        self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb: "*".to_string(), path, path_ref: None, service: None, service_ref: None, line: line(node) });
+                    }
+                    return;
                 }
-                return;
             }
-        };
+        }
+        for (verb, template_arg) in verbs {
+            self.action_template(sym, node, &scope, &action, verb, template_arg);
+        }
+    }
+
+    /// One route of an action (see [`Self::action_route`]): `verb` at the template `template_arg`, under the
+    /// controller's prefix.
+    fn action_template(&mut self, sym: usize, node: Node, scope: &ControllerScope, action: &str, verb: String, template_arg: Option<Node>) {
         let (template, path_ref) = match template_arg {
             Some(a) => match self.route_template(a) {
                 Some(t) => t,
@@ -1347,12 +1368,15 @@ impl<'a> Cx<'a> {
         } else {
             [prefix.clone().unwrap_or_default(), template.clone()].iter().map(|s| s.trim_matches('/')).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("/")
         };
-        let mut path = joined.replace("[controller]", &controller).replace("[action]", &action).trim_matches('/').to_string();
+        let mut path = joined.replace("[controller]", &controller).replace("[action]", action).trim_matches('/').to_string();
         // No prefix written on the class: the query places it (see above), unless a constant names the template.
         if !absolute && prefix.is_none() && path_ref.is_none() && (scope.routed || scope.conventional && template.is_empty()) {
             path = format!("{{^{}{action}}}{}{path}", if scope.unrouted { "!" } else { "" }, if path.is_empty() { "" } else { "/" });
         }
-        self.facts.http_routes.push(HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref, service: None, service_ref: None, line: line(node) });
+        let route = HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref, service: None, service_ref: None, line: line(node) };
+        if !self.facts.http_routes.contains(&route) {
+            self.facts.http_routes.push(route);
+        }
     }
 
     /// `// [HttpPost(nameof(Filters))]` in a controller, above or among a method's attributes or where a whole action
@@ -5968,6 +5992,19 @@ public class GroupController : Controller
     [HttpGet($"Find/{Version}")]
     public Task Find() => null;
 }
+
+[Route("")]
+public class LibraryController : ControllerBase
+{
+    [HttpGet("Artists/{itemId}/Similar", Name = "GetSimilarArtists")]
+    [HttpGet("Items/{itemId}/Similar")]
+    [HttpGet("Shows/{itemId}/Similar", Name = "GetSimilarShows")]
+    public Task GetSimilarItems(string itemId) => null;
+
+    [HttpPost(Name = "Refresh")]
+    [Route("Library/Refresh")]
+    public Task Refresh() => null;
+}
 "#,
         );
         let routes: Vec<(&str, &str, &str, &str, Option<&str>)> = f
@@ -5996,6 +6033,12 @@ public class GroupController : Controller
                 ("GroupController", "prefix", "", "Infra/Group", None),
                 ("AddRolesToGroup", "server", "POST", "Infra/Group/AddRolesToGroup", None),
                 // `Find`'s template interpolates something other than `nameof`: unknown, so no route.
+                ("LibraryController", "prefix", "", "", None),
+                // Each verb attribute is a route; `Name = …` is no template.
+                ("GetSimilarItems", "server", "GET", "Artists/{itemId}/Similar", None),
+                ("GetSimilarItems", "server", "GET", "Items/{itemId}/Similar", None),
+                ("GetSimilarItems", "server", "GET", "Shows/{itemId}/Similar", None),
+                ("Refresh", "server", "POST", "Library/Refresh", None),
             ]
         );
         assert_eq!(f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect::<Vec<_>>(), [("Routes.Legacy", "legacy/find")]);
