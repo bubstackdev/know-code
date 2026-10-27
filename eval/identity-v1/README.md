@@ -191,12 +191,12 @@ label the same. Descriptive figures.
 
 The gate fails in all three languages. The 452 wrong `exact` rows, by what went wrong:
 
-| Cause | Swift | C# | TypeScript |
-| --- | ---: | ---: | ---: |
-| Several declarations under one `exact` row, the label among them (overloads, same-named members in scope) | 161 | 132 | 28 |
-| Several declarations, the label not among them (a protocol requirement called: its witnesses listed instead) | 23 | 0 | 17 |
-| Linked inside where the toolchain resolves outside (stdlib names a local declaration shadows, or doesn't) | 31 | 18 | 15 |
-| One declaration, the wrong one (a requirement for a concrete receiver's member, a property for a same-named type) | 19 | 7 | 1 |
+| Cause | What went wrong | Swift | C# | TypeScript |
+| --- | --- | ---: | ---: | ---: |
+| `several_with_label` | Several declarations under one `exact` row, the label among them (overloads, same-named members in scope) | 161 | 132 | 28 |
+| `several_without_label` | Several declarations, the label not among them (a protocol requirement called: its witnesses listed instead) | 23 | 0 | 17 |
+| `linked_outside` | Linked inside where the toolchain resolves outside (stdlib names a local declaration shadows, or doesn't) | 31 | 18 | 15 |
+| `one_wrong` | One declaration, the wrong one (a requirement for a concrete receiver's member, a property for a same-named type) | 19 | 7 | 1 |
 
 Some of them:
 
@@ -238,4 +238,23 @@ python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/id
 # scoring (the Mac; KnowCode only)
 python3 scripts/eval/identity_gate.py fetch --work WORK
 python3 scripts/eval/identity_gate.py run --knowcode BIN --work WORK --out summary.json
+python3 scripts/eval/identity_gate.py check summary.json      # exits 1 unless the gate passes
 ```
+
+`run` writes the summary, each label's judgement (`summary.judged.jsonl`), and one file per cause
+(`summary.causes/<cause>.md`) listing its wrong `exact` rows. These are generated output: keep them with the
+evaluation's evidence, not in the repository.
+
+**A change to resolution** shows which causes it moves: run the base build and the change on the same labels, each
+into its own summary, and put `compare`'s table in the pull request. It gives the gate's figures and each cause per
+language, base → candidate, and lists every label the change makes newly wrong.
+
+```sh
+python3 scripts/eval/identity_gate.py run --knowcode BASE_BIN --work WORK --out base.json
+python3 scripts/eval/identity_gate.py run --knowcode target/release/knowcode --work WORK --out change.json
+python3 scripts/eval/identity_gate.py compare base.json change.json
+```
+
+**A release** runs it against the previous release and the candidate, publishes the two summaries' figures and the
+`compare` table in its release gate (eval/release-gate/), and ships only when `check` passes on the candidate
+([releasing.md](../../docs/releasing.md#before-tagging)).

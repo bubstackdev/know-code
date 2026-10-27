@@ -106,6 +106,38 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(len(summary['outside_candidates']), 1)
 
 
+class CauseTest(unittest.TestCase):
+    def judge(self, l, *targets):
+        return identity_gate.judge(l, dict(confidence='exact', targets=[dict(file=f, line=n) for f, n in targets]),
+                                   lines_of)
+
+    def test_each_wrong_exact_row_has_one_cause(self):
+        out = label(id='r:a.swift:4:5', line=4, where='outside', bucket='1+', locs=[], origin='stdlib')
+        rows = {
+            'several_with_label': self.judge(label(id='a'), ('b.swift', 2), ('b.swift', 5)),
+            'several_without_label': self.judge(label(id='b'), ('b.swift', 5), ('b.swift', 8)),
+            'linked_outside': self.judge(out, ('b.swift', 2)),
+            'one_wrong': self.judge(label(id='c'), ('b.swift', 5)),
+        }
+        for want, j in rows.items():
+            self.assertEqual(identity_gate.cause(j), want)
+        labels = [label(id='a'), label(id='b'), out, label(id='c')]
+        summary = identity_gate.summarize(list(rows.values()), labels)
+        self.assertEqual(summary['causes']['swift'], {c: 1 for c in identity_gate.CAUSES})
+        with tempfile.TemporaryDirectory() as temp:
+            identity_gate.write_causes(summary, temp)
+            self.assertIn('(1)', (Path(temp)/'one_wrong.md').read_text())
+
+    def test_compare_says_what_moved(self):
+        base_rows = [self.judge(label(id='a'), ('b.swift', 2), ('b.swift', 5)), self.judge(label(id='c'), ('b.swift', 2))]
+        cand_rows = [self.judge(label(id='a'), ('b.swift', 2)), self.judge(label(id='c'), ('b.swift', 5))]
+        labels = [label(id='a'), label(id='c')]
+        text = identity_gate.compare(identity_gate.summarize(base_rows, labels), identity_gate.summarize(cand_rows, labels))
+        self.assertIn('| swift | wrong `exact`: several_with_label | 1 | 0 |', text)
+        self.assertIn('| swift | wrong `exact`: one_wrong | 0 | 1 |', text)
+        self.assertIn('fixed: 1; newly wrong: 1', text)
+
+
 def ref(file, line, key, name='load', inside=True, kind='call'):
     return dict(t='ref', repo='r', file=file, line=line, col=1, name=name, kind=kind, key=key, symbol=name,
                 inside=inside, locs=[['b.swift', 2]] if inside else [], origin=None if inside else 'stdlib')

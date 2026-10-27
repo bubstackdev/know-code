@@ -5,6 +5,7 @@
     identity_gate.py run --knowcode BIN --work WORK [--labels FILE] [--repos a,b] [--out SUMMARY] [--jobs N]
     identity_gate.py report SUMMARY [--wrong N]
     identity_gate.py check SUMMARY
+    identity_gate.py compare BASE_SUMMARY CANDIDATE_SUMMARY
 
 `fetch` clones each repository of scripts/eval/identity/repos.txt at its pin into WORK/clones (a shallow fetch of the
 pinned commit). Nothing is built and no repository code runs: labelling happens in a container
@@ -22,7 +23,9 @@ judged by the rule in eval/identity-v1/README.md:
 
 The summary has, per language, repository and stratum: precision per confidence tag, the ambiguous rows' hit rate
 and size, recall (linked, and among candidates), outside labels linked to an indexed declaration, and every wrong
-`exact` row. `check` exits 1 unless, in every language, `exact` precision is at least EXACT_PRECISION and no outside
+`exact` row, each with its cause (CAUSES), written one file per cause beside the summary (SUMMARY.causes/). `compare`
+shows how a candidate moves the figures and each cause from a base, and the labels it fixed and broke. `check` exits 1
+unless, in every language, `exact` precision is at least EXACT_PRECISION and no outside
 label is linked.
 """
 from __future__ import annotations
@@ -46,6 +49,13 @@ LABELS = ROOT/'eval/identity-v1/labels.jsonl'
 EXACT_PRECISION = 0.99
 NAME_WINDOW = 10
 LINKS = ('exact', 'unique_name')
+# What went wrong in a wrong `exact` row, so a fix can show which it moves (cause()).
+CAUSES = {
+    'several_with_label': 'several declarations, the label among them',
+    'several_without_label': 'several declarations, the label not among them',
+    'linked_outside': 'linked inside where the toolchain resolves outside',
+    'one_wrong': 'one declaration, the wrong one',
+}
 GIT_ENV = {'PATH': '/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
 
@@ -182,6 +192,15 @@ def metrics(judged):
         outside_candidates=sum(1 for j in outside if j['confidence'] not in LINKS and j['targets']))
 
 
+def cause(j):
+    """Why a wrong `exact` (or `unique_name`) row is wrong: one of CAUSES."""
+    if j['where'] == 'outside':
+        return 'linked_outside'
+    if j['targets'] > 1:
+        return 'several_with_label' if j['among'] else 'several_without_label'
+    return 'one_wrong'
+
+
 def summarize(judged, labels):
     by_id = {l['id']: l for l in labels}
     groups = defaultdict(list)
@@ -197,10 +216,15 @@ def summarize(judged, labels):
         l = by_id[j['id']]
         want = 'outside (' + str(l['origin']) + ')' if l['where'] == 'outside' else \
             ', '.join(f'{f}:{n}' for f, n in l['locs'])
-        return dict(at=f"{l['repo']}/{l['file']}:{l['line']}:{l['col']}", name=l['name'], kind=l['kind'],
-                    bucket=l['bucket'], confidence=j['confidence'], knowcode=j.get('got', []), toolchain=want,
-                    symbol=l['symbol'])
-    out['wrong_exact'] = [listing(j) for j in judged if j['confidence'] == 'exact' and not j['right']]
+        return dict(id=j['id'], lang=j['lang'], at=f"{l['repo']}/{l['file']}:{l['line']}:{l['col']}", name=l['name'],
+                    kind=l['kind'], bucket=l['bucket'], confidence=j['confidence'], knowcode=j.get('got', []),
+                    toolchain=want, symbol=l['symbol'], cause=cause(j) if j['targets'] else 'none_named')
+    wrong = [j for j in judged if j['confidence'] == 'exact' and not j['right']]
+    out['wrong_exact'] = [listing(j) for j in wrong]
+    out['causes'] = {lang: {c: 0 for c in CAUSES} for lang in sorted({j['lang'] for j in judged})}
+    for w in out['wrong_exact']:
+        bucket = out['causes'][w['lang']]
+        bucket[w['cause']] = bucket.get(w['cause'], 0) + 1
     out['outside_linked'] = [listing(j) for j in judged
                              if j['where'] == 'outside' and j['confidence'] in LINKS and j['targets']]
     out['outside_candidates'] = [listing(j) for j in judged
@@ -320,7 +344,41 @@ def run(args):
     if args.out:
         Path(args.out).write_text(text)
         (Path(args.out).with_suffix('.judged.jsonl')).write_text(''.join(json.dumps(j, sort_keys=True) + '\n' for j in judged))
+        write_causes(summary, Path(args.out).with_suffix('.causes'))
     print(report(summary, args.wrong))
+
+
+def write_causes(summary, directory):
+    """One file per cause in DIRECTORY: its wrong `exact` rows, each with KnowCode's targets and the label's."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    for c in list(CAUSES) + ['none_named']:
+        rows = [w for w in summary['wrong_exact'] if w['cause'] == c]
+        lines = [f"# {c}: {CAUSES.get(c, 'exact with no declaration named')} ({len(rows)})", '']
+        lines += [f"- `{w['at']}` {w['name']} ({w['kind']}, {w['bucket']}): KnowCode {', '.join(w['knowcode']) or 'none'}; "
+                  f"toolchain {w['toolchain']}" for w in rows]
+        (directory/f'{c}.md').write_text('\n'.join(lines) + '\n')
+
+
+def compare(base, cand):
+    """How a candidate's summary moves from a base's: the gate's figures and the causes per language, and the labels
+    each fixed and broke (a label is fixed when the base's row was wrong `exact` and the candidate's isn't)."""
+    out = ['| Language | Figure | Base | Candidate |', '| --- | --- | ---: | ---: |']
+    for lang in sorted(set(base['lang']) | set(cand['lang'])):
+        b, c = base['lang'].get(lang, {}), cand['lang'].get(lang, {})
+        for key, label in (('exact_precision', '`exact` precision'), ('recall_linked', 'recall, linked'),
+                           ('recall_among', 'recall, among candidates'), ('outside_linked', 'outside linked')):
+            out.append(f"| {lang} | {label} | {fmt(b.get(key))} | {fmt(c.get(key))} |")
+        bc, cc = base.get('causes', {}).get(lang, {}), cand.get('causes', {}).get(lang, {})
+        for key in sorted(set(bc) | set(cc), key=lambda k: list(CAUSES).index(k) if k in CAUSES else len(CAUSES)):
+            out.append(f"| {lang} | wrong `exact`: {key} | {bc.get(key, 0)} | {cc.get(key, 0)} |")
+    was = {w['id'] for w in base['wrong_exact']}
+    now = {w['id'] for w in cand['wrong_exact']}
+    out += ['', f'Wrong `exact` labels fixed: {len(was - now)}; newly wrong: {len(now - was)}.']
+    for w in cand['wrong_exact']:
+        if w['id'] not in was:
+            out.append(f"- newly wrong `{w['at']}` {w['name']} ({w['cause']}): KnowCode {', '.join(w['knowcode']) or 'none'}")
+    return '\n'.join(out)
 
 
 def fmt(x):
@@ -342,6 +400,10 @@ def report(summary, wrong=50):
     for key, m in sorted(summary['stratum'].items()):
         tags = ', '.join(f"{t} {v['rows']} ({fmt(v['precision'])})" for t, v in sorted(m['tags'].items()))
         out.append(f"| {key} | {m['labels']} | {tags} | {fmt(m['recall_linked'])} | {m['outside_linked']} |")
+    if summary.get('causes'):
+        out += ['', '| Language | ' + ' | '.join(CAUSES) + ' |', '| --- |' + ' ---: |' * len(CAUSES)]
+        for lang, counts in sorted(summary['causes'].items()):
+            out.append(f'| {lang} | ' + ' | '.join(str(counts.get(c, 0)) for c in CAUSES) + ' |')
     if summary['wrong_exact']:
         out += ['', f"Wrong `exact` links ({len(summary['wrong_exact'])}):", '']
         for w in summary['wrong_exact'][:wrong]:
@@ -379,6 +441,9 @@ def main():
     p.add_argument('--wrong', type=int, default=50)
     c = sub.add_parser('check')
     c.add_argument('summary')
+    m = sub.add_parser('compare')
+    m.add_argument('base')
+    m.add_argument('candidate')
     args = ap.parse_args()
     if args.cmd == 'fetch':
         fetch(args.work, args.repos)
@@ -386,6 +451,8 @@ def main():
         run(args)
     elif args.cmd == 'report':
         print(report(json.loads(Path(args.summary).read_text()), args.wrong))
+    elif args.cmd == 'compare':
+        print(compare(json.loads(Path(args.base).read_text()), json.loads(Path(args.candidate).read_text())))
     else:
         failures = verdict(json.loads(Path(args.summary).read_text()))
         print('\n'.join(failures) or 'pass')
