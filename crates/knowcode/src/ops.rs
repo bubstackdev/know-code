@@ -5184,7 +5184,8 @@ impl<'a> HttpCrossing<'a> {
             };
             // In the order of their places, not of their row ids: which stops fit the budget, and the order they are
             // listed in, never depend on the order files were stored in.
-            let mut group: Vec<(Option<(String, u32, String)>, trace::Stop)> = Vec::new();
+            type Placed = (Option<(String, u32, String)>, trace::Stop);
+            let mut group: Vec<Placed> = Vec::new();
             for s in stops.iter().filter(|s| s.repo == label) {
                 let at = trace::symbol(self.store(&root).conn(), s.id)?.map(|sym| (sym.file.clone(), sym.line, sym.qualified()));
                 group.push((at, s.clone()));
