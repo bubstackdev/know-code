@@ -1,6 +1,7 @@
 //! `knowcode`: index local repos and answer code-graph questions about them.
 
 mod bench;
+mod capabilities;
 mod cite;
 mod contract;
 mod compact;
@@ -644,6 +645,15 @@ enum Cmd {
         #[arg(long)]
         tools: Option<String>,
     },
+    /// Every MCP op as JSON: its parameters with ranges and choices, whether it writes, its answer's shape (what
+    /// `kc {op: capabilities}` answers), for a client building its own tool surface.
+    Capabilities {
+        /// One op to describe (`impact`); default: every op.
+        of: Option<String>,
+        /// The profile whose advertised tools it names, as `serve --tools` takes it.
+        #[arg(long)]
+        tools: Option<String>,
+    },
     /// Packages, targets and dependencies from manifests, and repo-to-repo edges across indexed repos.
     Deps {
         #[command(flatten)]
@@ -847,6 +857,12 @@ fn main() {
     if notify { update::start(); }
     if let Err(e) = guard_privacy().and_then(|_| run(cli)) {
         eprintln!("knowcode: {e:#}");
+        // For the server running this as its child (a search): the refusal's code, on a line of its own.
+        if std::env::var_os(KEEP_RESUME).is_some()
+            && let Some(r) = e.chain().find_map(|c| c.downcast_ref::<kc_store::answer::Refusal>())
+        {
+            eprintln!("{}{}", mcp::REFUSAL_LINE, serde_json::json!({ "code": r.code, "privacy": r.privacy }));
+        }
         std::process::exit(1);
     }
     kc_index::cache::after_command();
@@ -1029,7 +1045,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Flow { entry, depth, limit, max_repos, edges, children, evidence, cite, repo } => {
             cite.enter();
-            let opts = flow::FlowOptions { depth: depth.clamp(1, 16), max_steps: limit, max_repos, edges: ops::edge_filter(&edges, &evidence)?, children };
+            let opts = flow::FlowOptions { depth: depth.clamp(1, flow::MAX_DEPTH), max_steps: limit, max_repos, edges: ops::edge_filter(&edges, &evidence)?, children };
             let out = flow::flow(&entry, &opts, &repo.scope())?;
             emit(&repo, &out.env, || render::flow(&entry, out.data.as_ref()))
         }
@@ -1236,6 +1252,13 @@ fn run(cli: Cli) -> Result<()> {
             let served = mcp::serve(ops::Scope { repos, no_sync: false }, &tools);
             let _ = refresh.join();
             served
+        }
+        Cmd::Capabilities { of, tools } => {
+            let tools = tools.unwrap_or_else(mcp::profile_spec);
+            let server = mcp::KnowcodeServer::new(ops::Scope { repos: Vec::new(), no_sync: true }, &tools).map_err(anyhow::Error::msg)?;
+            let doc = capabilities::document(&server.surface(), of.as_deref()).map_err(anyhow::Error::msg)?;
+            println!("{}", serde_json::to_string_pretty(&doc)?);
+            Ok(())
         }
         Cmd::FetchDeps(options) => fetch::run(options),
         Cmd::History { action: Some(HistoryCmd::Deepen(options)), .. } => history::deepen(options),
@@ -1583,4 +1606,27 @@ fn purge() -> Result<()> {
     }
     println!("coordination locks and unrelated cache files are retained");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_cli_says_the_bounds_the_tools_apply() {
+        let cli = super::Cli::command();
+        for (cmd, arg, r) in [
+            ("trace", "depth", &crate::mcp::TRACE_DEPTH),
+            ("impact", "depth", &crate::mcp::IMPACT_DEPTH),
+            ("flow", "depth", &crate::mcp::FLOW_DEPTH),
+            ("path", "max_hops", &crate::mcp::PATH_HOPS),
+            ("path", "paths", &crate::mcp::PATH_COUNT),
+        ] {
+            let sub = cli.find_subcommand(cmd).unwrap_or_else(|| panic!("no command {cmd}"));
+            let a = sub.get_arguments().find(|a| a.get_id() == arg).unwrap_or_else(|| panic!("{cmd}: no {arg}"));
+            let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
+            let said = help.split_once(&format!(", {} to {}", r.min, r.max)).is_some_and(|(_, after)| !after.starts_with(|c: char| c.is_ascii_digit()));
+            assert!(said, "{cmd} --{arg}: {help}");
+        }
+    }
 }

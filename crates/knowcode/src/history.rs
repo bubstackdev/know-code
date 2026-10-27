@@ -271,15 +271,19 @@ pub struct CallerHistory {
     /// The caller is test code.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub test: bool,
+    /// The call may run another implementation instead: it goes through an interface or base class member several
+    /// types implement, a library's among them.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ambiguous: bool,
     /// The definition's commits that changed the caller's file too.
     pub shared: u32,
     /// The newest of them.
     pub commits: Vec<String>,
 }
 
-/// The definition's direct callers (hop 1 of `impact`, in this repo) whose files changed in its commits, with those
-/// commits, most shared first; and how many direct callers it has. Callers in its own file aren't listed: every
-/// commit of the definition changes that file.
+/// The definition's direct callers (hop 1 of `impact`, in this repo, calls through an interface it implements
+/// included) whose files changed in its commits, with those commits, most shared first; and how many direct callers it
+/// has. Callers in its own file aren't listed: every commit of the definition changes that file.
 fn callers_changed_with(o: &ops::Opened, def: &kc_store::query::SymbolRow, changed: &[ChangedWith], no_sync: bool) -> Result<(Vec<CallerHistory>, usize)> {
     let walk = crate::tree::impact(&mut crate::walk::Graph::new(o, &[], no_sync, usize::MAX), &[def.id], 1, CALLERS_WALKED)?;
     let direct: Vec<_> = walk.affected.iter().filter(|a| a.hop == 1 && a.repo.is_none()).collect();
@@ -295,6 +299,7 @@ fn callers_changed_with(o: &ops::Opened, def: &kc_store::query::SymbolRow, chang
                 file: a.file.clone(),
                 line: a.line,
                 test: a.class == "test",
+                ambiguous: a.confidence == "ambiguous",
                 shared: c.shared,
                 commits: c.commits.iter().take(CALLER_COMMITS_SHOWN).cloned().collect(),
             })
@@ -567,6 +572,43 @@ mod tests {
         assert_eq!(listed, [("Checkout.Pay", 2)]);
         assert_eq!(r.callers[0].commits, r.commits.iter().map(|c| c.sha.clone()).collect::<Vec<_>>());
         assert_eq!(out.env["items"][0]["callers_changed_with"][0]["file"], "src/Checkout.cs");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A caller through a library's interface the definition's type implements is a direct caller too, one of several
+    /// implementations: listed `ambiguous`. A call of another overload, or on another library type, isn't one.
+    #[test]
+    fn callers_through_a_librarys_interface_changed_in_its_commits() {
+        let cache = test_cache();
+        let base = cache.dir("symbol-history-library-callers");
+        let _ = std::fs::remove_dir_all(&base);
+        let swappable = |n: &str| {
+            format!(
+                "using Notes;\nnamespace Host;\npublic sealed class Swappable : INotes\n{{\n    public INotes Tagged<T>() => {n};\n    public INotes Tagged(string tag) => this;\n}}\n"
+            )
+        };
+        let relay = |n: i32| {
+            format!(
+                "using Notes;\nnamespace Host;\npublic class Relay\n{{\n    private readonly INotes _notes;\n    private readonly IClock _clock;\n\
+                 \x20   public INotes Forward<T>() => _notes.Tagged<T>();\n    public INotes Named() => _notes.Tagged(\"r{n}\");\n\
+                 \x20   public INotes Timed<T>() => _clock.Tagged<T>();\n}}\n"
+            )
+        };
+        let csproj = "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes.Host</PackageId></PropertyGroup>\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n";
+        let host = repo(&base, "notes-host", &[("src/Host.csproj", csproj), ("src/Swappable.cs", &swappable("this")), ("src/Relay.cs", &relay(1))]);
+        commit_as(&host, "ann", "start");
+        write(&host, "src/Swappable.cs", &swappable("this as INotes"));
+        write(&host, "src/Relay.cs", &relay(2));
+        commit_as(&host, "bob", "swappable and relay");
+        let listed = |out: &ops::Out<Vec<HistoryRepo>>| -> Vec<(String, u32, bool)> {
+            out.data[0].callers.iter().map(|c| (c.qualified.clone(), c.shared, c.ambiguous)).collect()
+        };
+
+        // `INotes` is a library's: no indexed repo defines it.
+        let out = ask(&host, "src/Swappable.cs:5", None);
+        assert_eq!(listed(&out), [("Relay.Forward".to_string(), 2, true)], "{}", out.env);
+        assert_eq!(out.env["items"][0]["callers_changed_with"][0]["ambiguous"], true);
+
         let _ = std::fs::remove_dir_all(&base);
     }
 

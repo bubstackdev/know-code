@@ -1,0 +1,706 @@
+{
+ "autofac/call/inside/1": {
+  "available": 849,
+  "drawn": 20
+ },
+ "autofac/call/inside/2-4": {
+  "available": 314,
+  "drawn": 40
+ },
+ "autofac/call/inside/5+": {
+  "available": 1155,
+  "drawn": 40
+ },
+ "autofac/call/outside/0": {
+  "available": 2846,
+  "drawn": 10
+ },
+ "autofac/call/outside/1+": {
+  "available": 807,
+  "drawn": 40
+ },
+ "autofac/dispatch/inside/2-4": {
+  "available": 502,
+  "drawn": 40
+ },
+ "autofac/dispatch/inside/5+": {
+  "available": 1857,
+  "drawn": 40
+ },
+ "autofac/dispatch/outside/0": {
+  "available": 229,
+  "drawn": 10
+ },
+ "autofac/dispatch/outside/1+": {
+  "available": 289,
+  "drawn": 40
+ },
+ "autofac/extension/inside/1": {
+  "available": 519,
+  "drawn": 20
+ },
+ "autofac/extension/inside/2-4": {
+  "available": 1297,
+  "drawn": 40
+ },
+ "autofac/extension/inside/5+": {
+  "available": 1865,
+  "drawn": 40
+ },
+ "autofac/extension/outside/0": {
+  "available": 397,
+  "drawn": 10
+ },
+ "autofac/extension/outside/1+": {
+  "available": 144,
+  "drawn": 27
+ },
+ "autofac/member/inside/1": {
+  "available": 1547,
+  "drawn": 20
+ },
+ "autofac/member/inside/2-4": {
+  "available": 1012,
+  "drawn": 40
+ },
+ "autofac/member/inside/5+": {
+  "available": 1191,
+  "drawn": 40
+ },
+ "autofac/member/outside/0": {
+  "available": 798,
+  "drawn": 10
+ },
+ "autofac/member/outside/1+": {
+  "available": 238,
+  "drawn": 40
+ },
+ "autofac/type/inside/1": {
+  "available": 5762,
+  "drawn": 20
+ },
+ "autofac/type/inside/2-4": {
+  "available": 2134,
+  "drawn": 40
+ },
+ "autofac/type/inside/5+": {
+  "available": 1757,
+  "drawn": 40
+ },
+ "autofac/type/outside/0": {
+  "available": 5060,
+  "drawn": 10
+ },
+ "autofac/type/outside/1+": {
+  "available": 498,
+  "drawn": 9
+ },
+ "hono/call/inside/1": {
+  "available": 2771,
+  "drawn": 20
+ },
+ "hono/call/inside/2-4": {
+  "available": 1631,
+  "drawn": 40
+ },
+ "hono/call/inside/5+": {
+  "available": 670,
+  "drawn": 40
+ },
+ "hono/call/outside/0": {
+  "available": 79,
+  "drawn": 10
+ },
+ "hono/call/outside/1+": {
+  "available": 95,
+  "drawn": 32
+ },
+ "hono/dispatch/inside/1": {
+  "available": 1397,
+  "drawn": 20
+ },
+ "hono/dispatch/inside/2-4": {
+  "available": 1152,
+  "drawn": 40
+ },
+ "hono/dispatch/inside/5+": {
+  "available": 993,
+  "drawn": 40
+ },
+ "hono/dispatch/outside/0": {
+  "available": 11711,
+  "drawn": 10
+ },
+ "hono/dispatch/outside/1+": {
+  "available": 5596,
+  "drawn": 40
+ },
+ "hono/member/inside/1": {
+  "available": 1635,
+  "drawn": 20
+ },
+ "hono/member/inside/2-4": {
+  "available": 1541,
+  "drawn": 40
+ },
+ "hono/member/inside/5+": {
+  "available": 4416,
+  "drawn": 40
+ },
+ "hono/member/outside/0": {
+  "available": 11824,
+  "drawn": 10
+ },
+ "hono/member/outside/1+": {
+  "available": 127,
+  "drawn": 20
+ },
+ "hono/type/inside/1": {
+  "available": 4939,
+  "drawn": 20
+ },
+ "hono/type/inside/2-4": {
+  "available": 639,
+  "drawn": 40
+ },
+ "hono/type/inside/5+": {
+  "available": 1152,
+  "drawn": 40
+ },
+ "hono/type/outside/0": {
+  "available": 2439,
+  "drawn": 10
+ },
+ "hono/type/outside/1+": {
+  "available": 390,
+  "drawn": 40
+ },
+ "jellyfin-server/call/inside/1": {
+  "available": 5785,
+  "drawn": 20
+ },
+ "jellyfin-server/call/inside/2-4": {
+  "available": 3008,
+  "drawn": 40
+ },
+ "jellyfin-server/call/inside/5+": {
+  "available": 2043,
+  "drawn": 40
+ },
+ "jellyfin-server/call/outside/0": {
+  "available": 15284,
+  "drawn": 10
+ },
+ "jellyfin-server/call/outside/1+": {
+  "available": 10000,
+  "drawn": 40
+ },
+ "jellyfin-server/dispatch/inside/1": {
+  "available": 12,
+  "drawn": 12
+ },
+ "jellyfin-server/dispatch/inside/2-4": {
+  "available": 2731,
+  "drawn": 40
+ },
+ "jellyfin-server/dispatch/inside/5+": {
+  "available": 1742,
+  "drawn": 40
+ },
+ "jellyfin-server/dispatch/outside/0": {
+  "available": 1353,
+  "drawn": 10
+ },
+ "jellyfin-server/dispatch/outside/1+": {
+  "available": 1731,
+  "drawn": 40
+ },
+ "jellyfin-server/extension/inside/1": {
+  "available": 1199,
+  "drawn": 20
+ },
+ "jellyfin-server/extension/inside/2-4": {
+  "available": 890,
+  "drawn": 40
+ },
+ "jellyfin-server/extension/inside/5+": {
+  "available": 129,
+  "drawn": 24
+ },
+ "jellyfin-server/extension/outside/0": {
+  "available": 7433,
+  "drawn": 10
+ },
+ "jellyfin-server/extension/outside/1+": {
+  "available": 2492,
+  "drawn": 40
+ },
+ "jellyfin-server/member/inside/1": {
+  "available": 12945,
+  "drawn": 20
+ },
+ "jellyfin-server/member/inside/2-4": {
+  "available": 14614,
+  "drawn": 40
+ },
+ "jellyfin-server/member/inside/5+": {
+  "available": 28331,
+  "drawn": 40
+ },
+ "jellyfin-server/member/outside/0": {
+  "available": 9533,
+  "drawn": 10
+ },
+ "jellyfin-server/member/outside/1+": {
+  "available": 6645,
+  "drawn": 40
+ },
+ "jellyfin-server/type/inside/1": {
+  "available": 20095,
+  "drawn": 20
+ },
+ "jellyfin-server/type/inside/2-4": {
+  "available": 5224,
+  "drawn": 40
+ },
+ "jellyfin-server/type/inside/5+": {
+  "available": 2786,
+  "drawn": 40
+ },
+ "jellyfin-server/type/outside/0": {
+  "available": 23155,
+  "drawn": 10
+ },
+ "jellyfin-server/type/outside/1+": {
+  "available": 6801,
+  "drawn": 40
+ },
+ "jellyfin-web/call/inside/1": {
+  "available": 1725,
+  "drawn": 20
+ },
+ "jellyfin-web/call/inside/2-4": {
+  "available": 280,
+  "drawn": 40
+ },
+ "jellyfin-web/call/inside/5+": {
+  "available": 91,
+  "drawn": 40
+ },
+ "jellyfin-web/call/outside/0": {
+  "available": 1329,
+  "drawn": 10
+ },
+ "jellyfin-web/call/outside/1+": {
+  "available": 81,
+  "drawn": 40
+ },
+ "jellyfin-web/dispatch/inside/1": {
+  "available": 543,
+  "drawn": 20
+ },
+ "jellyfin-web/dispatch/inside/2-4": {
+  "available": 376,
+  "drawn": 40
+ },
+ "jellyfin-web/dispatch/inside/5+": {
+  "available": 177,
+  "drawn": 40
+ },
+ "jellyfin-web/dispatch/outside/0": {
+  "available": 4223,
+  "drawn": 10
+ },
+ "jellyfin-web/dispatch/outside/1+": {
+  "available": 1261,
+  "drawn": 40
+ },
+ "jellyfin-web/member/inside/1": {
+  "available": 1289,
+  "drawn": 20
+ },
+ "jellyfin-web/member/inside/2-4": {
+  "available": 406,
+  "drawn": 40
+ },
+ "jellyfin-web/member/inside/5+": {
+  "available": 151,
+  "drawn": 40
+ },
+ "jellyfin-web/member/outside/0": {
+  "available": 2614,
+  "drawn": 10
+ },
+ "jellyfin-web/member/outside/1+": {
+  "available": 496,
+  "drawn": 40
+ },
+ "jellyfin-web/type/inside/1": {
+  "available": 1757,
+  "drawn": 20
+ },
+ "jellyfin-web/type/inside/2-4": {
+  "available": 149,
+  "drawn": 40
+ },
+ "jellyfin-web/type/inside/5+": {
+  "available": 33,
+  "drawn": 29
+ },
+ "jellyfin-web/type/outside/0": {
+  "available": 2390,
+  "drawn": 10
+ },
+ "jellyfin-web/type/outside/1+": {
+  "available": 198,
+  "drawn": 27
+ },
+ "serilog/call/inside/1": {
+  "available": 692,
+  "drawn": 20
+ },
+ "serilog/call/inside/2-4": {
+  "available": 478,
+  "drawn": 40
+ },
+ "serilog/call/inside/5+": {
+  "available": 833,
+  "drawn": 40
+ },
+ "serilog/call/outside/0": {
+  "available": 1239,
+  "drawn": 10
+ },
+ "serilog/call/outside/1+": {
+  "available": 370,
+  "drawn": 40
+ },
+ "serilog/dispatch/inside/1": {
+  "available": 2,
+  "drawn": 2
+ },
+ "serilog/dispatch/inside/2-4": {
+  "available": 33,
+  "drawn": 16
+ },
+ "serilog/dispatch/inside/5+": {
+  "available": 271,
+  "drawn": 40
+ },
+ "serilog/dispatch/outside/0": {
+  "available": 124,
+  "drawn": 10
+ },
+ "serilog/dispatch/outside/1+": {
+  "available": 99,
+  "drawn": 27
+ },
+ "serilog/extension/inside/1": {
+  "available": 61,
+  "drawn": 3
+ },
+ "serilog/extension/inside/2-4": {
+  "available": 5,
+  "drawn": 3
+ },
+ "serilog/extension/inside/5+": {
+  "available": 2,
+  "drawn": 2
+ },
+ "serilog/extension/outside/0": {
+  "available": 220,
+  "drawn": 10
+ },
+ "serilog/extension/outside/1+": {
+  "available": 20,
+  "drawn": 12
+ },
+ "serilog/member/inside/1": {
+  "available": 934,
+  "drawn": 20
+ },
+ "serilog/member/inside/2-4": {
+  "available": 998,
+  "drawn": 40
+ },
+ "serilog/member/inside/5+": {
+  "available": 677,
+  "drawn": 40
+ },
+ "serilog/member/outside/0": {
+  "available": 385,
+  "drawn": 10
+ },
+ "serilog/member/outside/1+": {
+  "available": 275,
+  "drawn": 40
+ },
+ "serilog/type/inside/1": {
+  "available": 1892,
+  "drawn": 20
+ },
+ "serilog/type/inside/2-4": {
+  "available": 496,
+  "drawn": 35
+ },
+ "serilog/type/inside/5+": {
+  "available": 31,
+  "drawn": 8
+ },
+ "serilog/type/outside/0": {
+  "available": 1916,
+  "drawn": 10
+ },
+ "serilog/type/outside/1+": {
+  "available": 311,
+  "drawn": 21
+ },
+ "swift-argument-parser/call/inside/1": {
+  "available": 834,
+  "drawn": 20
+ },
+ "swift-argument-parser/call/inside/2-4": {
+  "available": 299,
+  "drawn": 40
+ },
+ "swift-argument-parser/call/inside/5+": {
+  "available": 73,
+  "drawn": 40
+ },
+ "swift-argument-parser/call/outside/0": {
+  "available": 659,
+  "drawn": 10
+ },
+ "swift-argument-parser/call/outside/1+": {
+  "available": 224,
+  "drawn": 40
+ },
+ "swift-argument-parser/dispatch/inside/2-4": {
+  "available": 33,
+  "drawn": 23
+ },
+ "swift-argument-parser/dispatch/inside/5+": {
+  "available": 85,
+  "drawn": 38
+ },
+ "swift-argument-parser/extension/inside/1": {
+  "available": 630,
+  "drawn": 20
+ },
+ "swift-argument-parser/extension/inside/2-4": {
+  "available": 312,
+  "drawn": 40
+ },
+ "swift-argument-parser/extension/inside/5+": {
+  "available": 446,
+  "drawn": 40
+ },
+ "swift-argument-parser/member/inside/1": {
+  "available": 1078,
+  "drawn": 20
+ },
+ "swift-argument-parser/member/inside/2-4": {
+  "available": 1526,
+  "drawn": 40
+ },
+ "swift-argument-parser/member/inside/5+": {
+  "available": 2449,
+  "drawn": 40
+ },
+ "swift-argument-parser/member/outside/0": {
+  "available": 153,
+  "drawn": 10
+ },
+ "swift-argument-parser/member/outside/1+": {
+  "available": 468,
+  "drawn": 40
+ },
+ "swift-argument-parser/type/inside/1": {
+  "available": 4463,
+  "drawn": 20
+ },
+ "swift-argument-parser/type/inside/2-4": {
+  "available": 407,
+  "drawn": 40
+ },
+ "swift-argument-parser/type/inside/5+": {
+  "available": 922,
+  "drawn": 40
+ },
+ "swift-argument-parser/type/outside/0": {
+  "available": 2404,
+  "drawn": 10
+ },
+ "swift-argument-parser/type/outside/1+": {
+  "available": 325,
+  "drawn": 15
+ },
+ "swift-collections/call/inside/1": {
+  "available": 1897,
+  "drawn": 20
+ },
+ "swift-collections/call/inside/2-4": {
+  "available": 4077,
+  "drawn": 40
+ },
+ "swift-collections/call/inside/5+": {
+  "available": 116,
+  "drawn": 40
+ },
+ "swift-collections/call/outside/0": {
+  "available": 2251,
+  "drawn": 10
+ },
+ "swift-collections/call/outside/1+": {
+  "available": 1631,
+  "drawn": 40
+ },
+ "swift-collections/dispatch/inside/2-4": {
+  "available": 59,
+  "drawn": 12
+ },
+ "swift-collections/dispatch/inside/5+": {
+  "available": 220,
+  "drawn": 40
+ },
+ "swift-collections/extension/inside/1": {
+  "available": 2758,
+  "drawn": 20
+ },
+ "swift-collections/extension/inside/2-4": {
+  "available": 3453,
+  "drawn": 40
+ },
+ "swift-collections/extension/inside/5+": {
+  "available": 7425,
+  "drawn": 40
+ },
+ "swift-collections/member/inside/1": {
+  "available": 1800,
+  "drawn": 20
+ },
+ "swift-collections/member/inside/2-4": {
+  "available": 2365,
+  "drawn": 40
+ },
+ "swift-collections/member/inside/5+": {
+  "available": 3861,
+  "drawn": 40
+ },
+ "swift-collections/member/outside/0": {
+  "available": 926,
+  "drawn": 10
+ },
+ "swift-collections/member/outside/1+": {
+  "available": 1819,
+  "drawn": 40
+ },
+ "swift-collections/type/inside/1": {
+  "available": 6121,
+  "drawn": 20
+ },
+ "swift-collections/type/inside/2-4": {
+  "available": 1172,
+  "drawn": 40
+ },
+ "swift-collections/type/inside/5+": {
+  "available": 1722,
+  "drawn": 40
+ },
+ "swift-collections/type/outside/0": {
+  "available": 9092,
+  "drawn": 10
+ },
+ "swift-collections/type/outside/1+": {
+  "available": 129,
+  "drawn": 36
+ },
+ "swift-nio/call/inside/1": {
+  "available": 3094,
+  "drawn": 20
+ },
+ "swift-nio/call/inside/2-4": {
+  "available": 6766,
+  "drawn": 40
+ },
+ "swift-nio/call/inside/5+": {
+  "available": 5749,
+  "drawn": 40
+ },
+ "swift-nio/call/outside/0": {
+  "available": 10176,
+  "drawn": 10
+ },
+ "swift-nio/call/outside/1+": {
+  "available": 5869,
+  "drawn": 40
+ },
+ "swift-nio/dispatch/inside/2-4": {
+  "available": 123,
+  "drawn": 40
+ },
+ "swift-nio/dispatch/inside/5+": {
+  "available": 2567,
+  "drawn": 40
+ },
+ "swift-nio/extension/inside/1": {
+  "available": 3731,
+  "drawn": 20
+ },
+ "swift-nio/extension/inside/2-4": {
+  "available": 8196,
+  "drawn": 40
+ },
+ "swift-nio/extension/inside/5+": {
+  "available": 3857,
+  "drawn": 40
+ },
+ "swift-nio/extension/outside/0": {
+  "available": 575,
+  "drawn": 10
+ },
+ "swift-nio/extension/outside/1+": {
+  "available": 341,
+  "drawn": 40
+ },
+ "swift-nio/member/inside/1": {
+  "available": 8584,
+  "drawn": 20
+ },
+ "swift-nio/member/inside/2-4": {
+  "available": 9344,
+  "drawn": 40
+ },
+ "swift-nio/member/inside/5+": {
+  "available": 12710,
+  "drawn": 40
+ },
+ "swift-nio/member/outside/0": {
+  "available": 2918,
+  "drawn": 10
+ },
+ "swift-nio/member/outside/1+": {
+  "available": 3488,
+  "drawn": 40
+ },
+ "swift-nio/type/inside/1": {
+  "available": 20422,
+  "drawn": 20
+ },
+ "swift-nio/type/inside/2-4": {
+  "available": 3873,
+  "drawn": 40
+ },
+ "swift-nio/type/inside/5+": {
+  "available": 513,
+  "drawn": 40
+ },
+ "swift-nio/type/outside/0": {
+  "available": 19163,
+  "drawn": 10
+ },
+ "swift-nio/type/outside/1+": {
+  "available": 1141,
+  "drawn": 40
+ }
+}

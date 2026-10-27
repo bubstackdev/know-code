@@ -57,6 +57,9 @@ const INJECTION_DEPTH: u8 = 2;
 /// Levels of child components a flow follows unless told otherwise.
 pub const DEFAULT_CHILDREN: u8 = 2;
 
+/// Steps deep a flow goes at most.
+pub const MAX_DEPTH: u8 = 16;
+
 #[derive(Clone)]
 pub struct FlowOptions {
     /// Steps deep a branch goes.
@@ -578,7 +581,7 @@ fn stop_incomplete(f: &Flow, opts: &FlowOptions) -> Vec<kc_store::answer::Incomp
             names.push(format!("… {} more", stopped.len() - 5));
         }
         let beyond: usize = stopped.iter().filter_map(|s| s.stop.as_ref()).map(|s| s.beyond).sum();
-        let deeper = if opts.depth < 16 { format!("pass depth {} (up to 16), or ", opts.depth + 1) } else { String::new() };
+        let deeper = if opts.depth < MAX_DEPTH { format!("pass depth {} (up to {MAX_DEPTH}), or ", opts.depth + 1) } else { String::new() };
         out.push(
             Incomplete::new(
                 Reason::Depth,

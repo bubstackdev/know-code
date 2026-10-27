@@ -134,8 +134,14 @@ fn cross_trace(g: &mut Graph, t: &mut Trace, depth: u8, max: usize, inward: bool
                 repos.insert(l.clone(), there);
             }
             for a in &landing.arrivals {
-                // Code already in the tree (a test calling the action directly, say) isn't listed again.
-                if t.nodes.iter().any(|n| n.id == a.sym().id && n.repo == label) {
+                // Code already in the tree (a test calling the action directly, say) isn't listed again. One the repo's
+                // own walk reached through the library's interface without the library (see trace's `in_edges`) takes
+                // the crossing's library and member.
+                if let Some(n) = t.nodes.iter_mut().find(|n| n.id == a.sym().id && n.repo == label) {
+                    if n.library.is_none() && n.parent == Some(at) && n.edge == landing.via.edge() && landing.via.library().is_some() {
+                        n.library = landing.via.library();
+                        n.evidence.clone_from(&a.evidence);
+                    }
                     continue;
                 }
                 if landing.judge(g.gate(), &root, id, a) == Verdict::Exclude {
@@ -285,10 +291,21 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                 if verdict == Verdict::Exclude {
                     continue;
                 }
-                let Some(grow) = seen.offer_as(dep.id, hop, confidence, verdict == Verdict::Follow) else { continue };
                 // Its other sites reaching `sym`: another reference on the site's own line says nothing new.
                 let mut also: Vec<String> = g.also(repo, dep.id, sym.id).into_iter().filter(|a| Some(a) != site.as_ref()).collect();
                 also.sort_by_key(|a| a.rsplit_once(':').map(|(f, l)| (f.to_string(), l.parse::<u32>().unwrap_or(0))));
+                let Some(grow) = seen.offer_as(dep.id, hop, confidence, verdict == Verdict::Follow) else {
+                    // Listed by a better way: this one is another of its ways.
+                    let listed = match slots.get(&dep.id) {
+                        Some(&Slot::Found(i)) => Some(&mut found[i].0),
+                        Some(&Slot::Listed(i)) => Some(&mut affected[i]),
+                        None => None,
+                    };
+                    if let Some(r) = listed {
+                        r.add_way(&sym.qualified(), hop, confidence, site.as_ref(), &also);
+                    }
+                    continue;
+                };
                 let row = Affected {
                     id: dep.id,
                     qualified: dep.qualified(),
@@ -312,6 +329,7 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                     library: None,
                     also,
                     copies: Vec::new(),
+                    ways: Vec::new(),
                     via_removed: false,
                     evidence,
                     cite: None,
@@ -338,11 +356,11 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                 // A better way to a symbol already listed replaces its row.
                 match slots.get(&row.id) {
                     Some(&Slot::Found(i)) => {
-                        found[i].0 = row;
+                        found[i].0 = std::mem::replace(&mut found[i].0, row.clone()).replaced_by(row);
                         found[i].1.extend(onward);
                     }
                     Some(&Slot::Listed(i)) => {
-                        affected[i] = row;
+                        affected[i] = std::mem::replace(&mut affected[i], row.clone()).replaced_by(row);
                         late.extend(onward);
                     }
                     None => {
@@ -404,7 +422,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
     let mut rows: HashMap<(Option<String>, i64), usize> = impact.affected.iter().enumerate().map(|(i, a)| ((a.repo.clone(), a.id), i)).collect();
     let mut changed = false;
     let place = |impact: &mut Impact, rows: &mut HashMap<(Option<String>, i64), usize>, a: Affected| match rows.get(&(a.repo.clone(), a.id)) {
-        Some(&i) => impact.affected[i] = a,
+        Some(&i) => impact.affected[i] = std::mem::replace(&mut impact.affected[i], a.clone()).replaced_by(a),
         None => {
             rows.insert((a.repo.clone(), a.id), impact.affected.len());
             impact.affected.push(a);
@@ -447,12 +465,30 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                         continue;
                     }
                 }
+                // The repo's own walk reached it through the library's interface without the library (see trace's
+                // `in_edges`): the crossing says which library and member it goes through.
+                if let Some(&i) = rows.get(&(label.clone(), s.id))
+                    && landing.via.library().is_some()
+                {
+                    let row = &mut impact.affected[i];
+                    if row.library.is_none() && row.hop == hop + 1 && row.edge == landing.via.edge() {
+                        row.library = landing.via.library();
+                        row.evidence = arrival.evidence.clone();
+                        changed = true;
+                        continue;
+                    }
+                }
                 let new = !rows.contains_key(&(label.clone(), s.id));
                 if new && impact.affected.len() >= max {
                     impact.truncated = true;
                     break;
                 }
-                let Some(grow) = seen_there.offer_as(s.id, hop + 1, confidence, verdict == Verdict::Follow) else { continue };
+                let Some(grow) = seen_there.offer_as(s.id, hop + 1, confidence, verdict == Verdict::Follow) else {
+                    if let Some(&i) = rows.get(&(label.clone(), s.id)) {
+                        impact.affected[i].add_way(&qualified, hop + 1, confidence, arrival.site().as_ref(), &[]);
+                    }
+                    continue;
+                };
                 let a = Affected {
                     id: s.id,
                     qualified: s.qualified(),
@@ -476,6 +512,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                     library: landing.via.library(),
                     also: Vec::new(),
                     copies: Vec::new(),
+                    ways: Vec::new(),
                     via_removed: false,
                     evidence: arrival.evidence.clone(),
                     cite: None,

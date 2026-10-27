@@ -548,7 +548,9 @@ pub fn pending(root: &Path) -> kc_store::answer::Incomplete {
     kc_store::answer::Incomplete::new(
         kc_store::answer::Reason::Stale,
         format!("{}: changed since its last index, and indexing is queued or running; this answer uses the available committed snapshot and may be empty or incomplete", crate::ops::repo_name(root)),
-    ).with_hint("indexing continues in the background; ask again after it finishes")
+    )
+    .with_code(kc_store::answer::Code::Indexing)
+    .with_hint("indexing continues in the background; ask again after it finishes")
 }
 
 #[cfg(test)]

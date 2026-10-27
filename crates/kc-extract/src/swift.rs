@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -51,9 +51,7 @@ const NEST_KINDS: &[&str] = &[
 ];
 
 pub fn extract(source: &str) -> FileFacts {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_swift::LANGUAGE.into()).expect("tree-sitter-swift ABI matches tree-sitter");
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(tree) = parse(source) else {
         return FileFacts { parse_errors: 1, ..Default::default() };
     };
     let mut cx = Cx {
@@ -76,6 +74,304 @@ pub fn extract(source: &str) -> FileFacts {
             )
     });
     cx.facts
+}
+
+/// Parses Swift `source`. When the tree has errors, constructs tree-sitter-swift doesn't read are blanked out of a
+/// copy (spaces of the same length, so every position stays) and the copy parsed again; the tree with fewer errors is
+/// kept. Blanked first: the underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`),
+/// `@_lifetime(…)` attributes, module selectors (`Mod::name`, `#Mod::macro`), `nonisolated(unsafe)`, and `unsafe` and
+/// `sending` before an operand (`if unsafe p.pointee > 0`, `() -> sending T`); then, also, `#if`, `#elseif`,
+/// `#else` and `#endif` lines, which the grammar doesn't read around attributes or between a switch's cases. With
+/// those lines blank, every branch's code is read, as the grammar reads branches elsewhere. A copy wins only when
+/// less of the file is in errors (then fewer errors): branches that don't read as one (`#if` around half a
+/// declaration) can leave fewer, larger errors. A copy is parsed incrementally from the first tree, edited where
+/// the copy differs, so only the blanked spans and what they change are read again.
+pub(crate) fn parse(source: &str) -> Option<tree_sitter::Tree> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_swift::LANGUAGE.into()).expect("tree-sitter-swift ABI matches tree-sitter");
+    let mut tree = parser.parse(source, None)?;
+    let mut damage = errors(tree.root_node());
+    if damage == (0, 0) {
+        return Some(tree);
+    }
+    let modifiers = blank_modifiers(source);
+    let directives = blank_directives(modifiers.as_deref().unwrap_or(source));
+    for copy in [modifiers.as_deref(), directives.as_deref()].into_iter().flatten() {
+        // Only blanked spans changed: parsing again from the first tree, edited there, reuses the rest of it.
+        let mut old = tree.clone();
+        let mut lines = LineIndex::default();
+        for (start, end) in changed(source, copy) {
+            let (at, to) = (lines.point(source, start), lines.point(source, end));
+            old.edit(&tree_sitter::InputEdit {
+                start_byte: start,
+                old_end_byte: end,
+                new_end_byte: end,
+                start_position: at,
+                old_end_position: to,
+                new_end_position: to,
+            });
+        }
+        if let Some(t) = parser.parse(copy, Some(&old)) {
+            let d = errors(t.root_node());
+            if d < damage {
+                (tree, damage) = (t, d);
+            }
+        }
+        if damage == (0, 0) {
+            break;
+        }
+    }
+    Some(tree)
+}
+
+/// The byte ranges where `copy` (of the same length) differs from `source`, in order.
+fn changed(source: &str, copy: &str) -> Vec<(usize, usize)> {
+    let (a, b) = (source.as_bytes(), copy.as_bytes());
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for i in (0..a.len()).filter(|&i| a[i] != b[i]) {
+        match out.last_mut() {
+            Some((_, end)) if *end == i => *end = i + 1,
+            _ => out.push((i, i + 1)),
+        }
+    }
+    out
+}
+
+/// Rows and columns of byte offsets asked for in increasing order, counting lines once.
+#[derive(Default)]
+struct LineIndex {
+    at: usize,
+    row: usize,
+    line_start: usize,
+}
+
+impl LineIndex {
+    /// The row and column of byte `at` of `source`, at or after the last one asked for.
+    fn point(&mut self, source: &str, at: usize) -> tree_sitter::Point {
+        for (i, &c) in source.as_bytes()[self.at..at].iter().enumerate() {
+            if c == b'\n' {
+                self.row += 1;
+                self.line_start = self.at + i + 1;
+            }
+        }
+        self.at = at;
+        tree_sitter::Point { row: self.row, column: at - self.line_start }
+    }
+}
+
+/// Whether `node` is a parse error. A missing `!` isn't: the grammar inserts one, zero-width, to read an empty tuple
+/// (`f(())`) or a member named by a keyword (`case .try:`), and the tree around it is whole.
+fn is_parse_error(node: Node) -> bool {
+    node.is_error() || node.is_missing() && node.kind() != "!"
+}
+
+/// The bytes in the outermost parse errors under `node`, and how many parse errors there are.
+fn errors(node: Node) -> (usize, u32) {
+    if !node.has_error() && !is_parse_error(node) {
+        return (0, 0);
+    }
+    let (mut bytes, mut n) = (0, 0);
+    if is_parse_error(node) {
+        bytes = node.byte_range().len();
+        n = 1;
+    }
+    for c in children(node) {
+        let (b, k) = errors(c);
+        if !is_parse_error(node) {
+            bytes += b;
+        }
+        n += k;
+    }
+    (bytes, n)
+}
+
+/// The outermost parse errors of Swift `source`, at most `limit`, in source order, as [`parse`] reads the file (see
+/// [`crate::parse_error_sites`]).
+pub fn error_sites(source: &str, limit: usize) -> Vec<(u32, u32, String)> {
+    let Some(tree) = parse(source) else { return vec![(1, 1, String::new())] };
+    let mut out = Vec::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(n) = stack.pop() {
+        if out.len() == limit {
+            break;
+        }
+        if is_parse_error(n) {
+            out.push(crate::error_site(n, source));
+            continue;
+        }
+        let mut kids: Vec<Node> = children(n).filter(|c| c.has_error() || c.is_missing()).collect();
+        kids.reverse();
+        stack.extend(kids);
+    }
+    out
+}
+
+/// `source` with the underscored ownership modifiers, `@_lifetime(…)` attributes, module selectors,
+/// `nonisolated(unsafe)` and `unsafe` and `sending` before an operand blanked (see [`parse`]), or `None` when it has
+/// none of them.
+fn blank_modifiers(source: &str) -> Option<String> {
+    let b = source.as_bytes();
+    let mut out = b.to_vec();
+    let mut changed = false;
+    let word = |i: usize| i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_');
+    let mut i = 0;
+    while i < b.len() {
+        if word(i) && (i == 0 || !word(i - 1)) {
+            let start = i;
+            while word(i) {
+                i += 1;
+            }
+            let w = &source[start..i];
+            let spaced = b.get(i).is_some_and(u8::is_ascii_whitespace);
+            // What follows the space starts a type or an expression: `unsafe x`, `sending T`, never `unsafe = 1`.
+            let operand = || {
+                let mut j = i;
+                while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
+                    j += 1;
+                }
+                j > i && b.get(j).is_some_and(|&c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'&' | b'(' | b'[' | b'@'))
+            };
+            let member = start > 0 && b[start - 1] == b'.';
+            if matches!(w, "__shared" | "__owned" | "__consuming" | "_const") && spaced
+                || matches!(w, "unsafe" | "sending") && !member && operand()
+            {
+                out[start..i].fill(b' ');
+                changed = true;
+            } else if w == "nonisolated" && source[i..].starts_with("(unsafe)") {
+                out[start..i + "(unsafe)".len()].fill(b' ');
+                changed = true;
+                i += "(unsafe)".len();
+            } else if b.get(i) == Some(&b':') && b.get(i + 1) == Some(&b':') && (word(i + 2) || b.get(i + 2) == Some(&b'#')) {
+                // `Mod::name` reads `name`; `#Mod::macro` reads `#macro`, its `#` moved next to the name.
+                let hash = start > 0 && b[start - 1] == b'#';
+                let from = if hash { start - 1 } else { start };
+                out[from..i + 2].fill(b' ');
+                if hash {
+                    out[i + 1] = b'#';
+                }
+                changed = true;
+                i += 2;
+            } else if w == "_lifetime" && start > 0 && b[start - 1] == b'@' && b.get(i) == Some(&b'(') {
+                let mut depth = 0;
+                let mut end = i;
+                while end < b.len() && b[end] != b'\n' {
+                    match b[end] {
+                        b'(' => depth += 1,
+                        b')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    end += 1;
+                }
+                if depth == 0 && end < b.len() {
+                    out[start - 1..=end].fill(b' ');
+                    changed = true;
+                    i = end + 1;
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    // Only ASCII bytes were replaced, each by a space, so the text stays UTF-8.
+    changed.then(|| String::from_utf8(out).expect("ASCII replaced by ASCII"))
+}
+
+/// `source` with the `#if`, `#elseif`, `#else` and `#endif` lines of each conditional block whose branches are whole
+/// blanked, or `None` when there is none. A branch is whole when its brackets balance: its code reads as a run of
+/// complete items (switch cases, attributes, declarations), so the branches read one after another. A block around
+/// half a declaration (`#if` choosing between two signatures for one body) is left as it is.
+fn blank_directives(source: &str) -> Option<String> {
+    let lines: Vec<&str> = source.split_inclusive('\n').collect();
+    // Per open block: its directive lines, the bracket depth at its last directive, and whether every branch so far
+    // came back to that depth.
+    let mut open: Vec<(Vec<usize>, i64, bool)> = Vec::new();
+    let mut blank: Vec<usize> = Vec::new();
+    let mut depth: i64 = 0;
+    let mut in_text = false;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        let is = |d: &str| t.strip_prefix(d).is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'));
+        if !in_text && is("#if") {
+            open.push((vec![i], depth, true));
+        } else if !in_text && (is("#elseif") || is("#else")) {
+            if let Some((at, d, whole)) = open.last_mut() {
+                *whole &= depth == *d;
+                depth = *d;
+                at.push(i);
+            }
+        } else if !in_text && is("#endif") {
+            if let Some((mut at, d, whole)) = open.pop() {
+                if whole && depth == d {
+                    at.push(i);
+                    blank.extend(at);
+                }
+                depth = d;
+            }
+        } else {
+            depth += bracket_balance(line, &mut in_text);
+        }
+    }
+    if blank.is_empty() {
+        return None;
+    }
+    blank.sort_unstable();
+    let mut out = String::with_capacity(source.len());
+    for (i, line) in lines.iter().enumerate() {
+        if blank.binary_search(&i).is_ok() {
+            out.extend(line.chars().map(|c| if c == '\n' || c == '\r' { c } else { ' ' }));
+        } else {
+            out.push_str(line);
+        }
+    }
+    Some(out)
+}
+
+/// The opening brackets less the closing ones on `line`, outside comments and string literals; `in_text` carries a
+/// multi-line string or block comment over from line to line.
+fn bracket_balance(line: &str, in_text: &mut bool) -> i64 {
+    let b = line.as_bytes();
+    let mut n = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if *in_text {
+            if b[i..].starts_with(b"\"\"\"") || b[i..].starts_with(b"*/") {
+                *in_text = false;
+                i += if b[i] == b'"' { 3 } else { 2 };
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => break,
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                *in_text = true;
+                i += 2;
+                continue;
+            }
+            b'"' if b[i..].starts_with(b"\"\"\"") => {
+                *in_text = true;
+                i += 3;
+                continue;
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'{' | b'(' | b'[' => n += 1,
+            b'}' | b')' | b']' => n -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    n
 }
 
 struct Scope {
@@ -108,7 +404,7 @@ impl<'a> Cx<'a> {
     }
 
     fn visit(&mut self, node: Node) {
-        if node.is_error() || node.is_missing() {
+        if is_parse_error(node) {
             self.facts.parse_errors += 1;
         }
         if BRANCH_KINDS.contains(&node.kind()) {
@@ -1039,6 +1335,83 @@ pub(crate) fn collapse(s: &str, cap: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `(kind, qualified name)` of each symbol of `f`.
+    fn decls(f: &FileFacts) -> Vec<(SymbolKind, String)> {
+        f.symbols.iter().map(|s| (s.kind, s.container.as_ref().map_or(s.name.clone(), |c| format!("{c}.{}", s.name)))).collect()
+    }
+
+    #[test]
+    fn an_empty_tuple_or_a_keyword_member_is_no_parse_error() {
+        let f = extract("func f(_ k: Kind) -> Int {\n    done(.success(()))\n    switch k { case .try: return 1 default: return 2 }\n}\n");
+        assert_eq!(f.parse_errors, 0);
+        assert!(error_sites("let x = ()\n", 5).is_empty());
+    }
+
+    #[test]
+    fn constructs_the_grammar_misses_are_read_around() {
+        let src = "struct Grid {
+    init(_ node: __shared Probe, _ other: __owned Probe) {}
+    @_lifetime(borrow self)
+    func span() -> Span<Int> { fatalError() }
+    func run() {
+        nonisolated(unsafe) let shared = Box()
+        if unsafe shared.value > 0 { use(#Widgets::origin) }
+        let make: () -> sending Probe = { Probe() }
+        let k = Kits::Probe()
+    }
+    func render(_ v: Int) -> Int {
+        switch v {
+        #if DEBUG
+        case 0: return 1
+        #endif
+        default: return 2
+        }
+    }
+}
+
+#if os(macOS)
+@MainActor
+#endif
+final class Widget {
+    func draw() {}
+}
+";
+        let f = extract(src);
+        assert_eq!(f.parse_errors, 0, "{:?}", error_sites(src, 5));
+        assert_eq!(
+            decls(&f),
+            [
+                (SymbolKind::Struct, "Grid".into()),
+                (SymbolKind::Init, "Grid.init".into()),
+                (SymbolKind::Method, "Grid.span".into()),
+                (SymbolKind::Method, "Grid.run".into()),
+                (SymbolKind::Method, "Grid.render".into()),
+                (SymbolKind::Class, "Widget".into()),
+                (SymbolKind::Method, "Widget.draw".into()),
+            ]
+        );
+        // Text comes from the file as written.
+        assert!(f.symbols[1].signature.contains("__shared Probe"), "{}", f.symbols[1].signature);
+    }
+
+    #[test]
+    fn a_conditional_around_half_a_declaration_is_left_alone() {
+        // Read one after another, the branches would open two bodies for one close: they stay as written.
+        let src = "#if os(Linux)\nfunc load() -> Int {\n#else\nfunc load() -> Int? {\n#endif\n    return 1\n}\n\nfunc after() {}\n";
+        assert_eq!(blank_directives(src), None);
+        let f = extract(src);
+        assert!(decls(&f).contains(&(SymbolKind::Function, "after".into())), "{:?}", decls(&f));
+    }
+
+    #[test]
+    fn error_sites_say_where_the_first_errors_are() {
+        let src = "func ok() {}\n\nfunc broken( {\n    let x = 1\n}\n";
+        let sites = error_sites(src, 5);
+        assert!(!sites.is_empty());
+        assert_eq!(sites[0].0, 3, "{sites:?}");
+        assert_eq!(crate::parse_error_sites(crate::Lang::Swift, src, 5), sites);
+    }
 
     const SAMPLE: &str = r#"
 import SwiftUI

@@ -25,6 +25,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
+use kc_store::answer::{Code, Refusal};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -458,7 +459,7 @@ fn encode(c: &Cursor) -> String {
 }
 
 fn decode(s: &str) -> Result<Cursor> {
-    let bad = || anyhow::anyhow!("not a cursor this KnowCode made: pass the `cursor` (or `<list>_cursor`) of an answer as it is");
+    let bad = || anyhow::anyhow!(Refusal::new(Code::InvalidArgument, "not a cursor this KnowCode made: pass the `cursor` (or `<list>_cursor`) of an answer as it is"));
     let body = s.trim().strip_prefix(PREFIX).ok_or_else(bad)?;
     let bytes = unb64(body).ok_or_else(bad)?;
     serde_json::from_slice(&bytes).map_err(|_| bad())
@@ -621,7 +622,10 @@ fn check_gens(c: &Cursor, now: &Value) -> Result<()> {
     let have = gens_of(now);
     if let Some(gone) = c.g.iter().find(|g| !have.contains(g)) {
         let what = if gone.starts_with('c') { "a searched file" } else { "a repo the answer read" };
-        bail!("stale cursor: {what} changed since this cursor was made (the index is at a newer generation); start again with the original call");
+        bail!(Refusal::new(
+            Code::StaleCursor,
+            format!("stale cursor: {what} changed since this cursor was made (the index is at a newer generation); start again with the original call")
+        ));
     }
     Ok(())
 }
@@ -671,7 +675,7 @@ pub fn more(cursor: &str) -> Result<Value> {
     };
     let delivered = full.get(c.b.min(full.len())..c.o.min(full.len())).unwrap_or_default();
     if c.o > full.len() || format!("{:016x}", chain(FNV_BASIS, delivered)) != c.h {
-        bail!("stale cursor: the list changed since this cursor was made (its order or rows differ); start again with the original call");
+        bail!(Refusal::new(Code::StaleCursor, "stale cursor: the list changed since this cursor was made (its order or rows differ); start again with the original call"));
     }
     let page: Vec<Value> = full[c.o..].iter().take(c.n).cloned().collect();
     let more = full.len() > c.o + page.len();

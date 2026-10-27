@@ -190,7 +190,9 @@ fn derive(env: &Value, sampled: &mut Vec<String>) -> Vec<Incomplete> {
         let i = Incomplete::new(reason, format!("deploy chains: {why}"));
         out.push(match reason {
             Reason::Capped => i.with_hint("the chains past the limit aren't listed; ask about the job or playbook directly"),
-            Reason::MissingRepo => i.with_hint("clone and index the repo holding it (its project path and ref are named); chains through it aren't listed"),
+            Reason::MissingRepo => i
+                .with_code(kc_store::answer::Code::NotIndexed)
+                .with_hint("clone and index the repo holding it (its project path and ref are named); chains through it aren't listed"),
             Reason::Unsupported => i.with_hint("GitLab's own template or a generated file: read it on the GitLab instance"),
             _ => i.with_hint("set the variable its path needs, or check the file it names is there"),
         });

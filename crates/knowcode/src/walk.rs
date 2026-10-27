@@ -135,6 +135,21 @@ impl<'a> Graph<'a> {
         &mut self.crossing
     }
 
+    /// [`HttpCrossing::frontier`] of a walk's stops, with the home repo's edge cache: what the walk resolved is read
+    /// once.
+    pub(crate) fn frontier(
+        &mut self,
+        stops: &[kc_store::trace::Stop],
+        listed: &dyn Fn(Option<&str>, i64) -> bool,
+        budget: usize,
+    ) -> Result<(Vec<kc_store::trace::Frontier>, usize)> {
+        let Graph { crossing, caches, .. } = self;
+        match caches.first_mut() {
+            Some(home) => crossing.frontier(home, stops, listed, budget),
+            None => crossing.frontier(&mut EdgeCache::default(), stops, listed, budget),
+        }
+    }
+
     /// The root of repo `repo`.
     pub fn root(&self, repo: usize) -> &Path {
         &self.roots[repo]
@@ -1584,8 +1599,8 @@ impl Search<'_, '_> {
 /// the second.
 pub fn search(g: &mut Graph, from: Vec<(Key, SymbolRow)>, to: Vec<(Key, SymbolRow)>, opts: &PathOptions) -> Result<PathAnswer> {
     let max_hops = opts.max_hops.clamp(1, MAX_PATH_HOPS);
-    // At most 5 paths an answer, unless all are asked for (a cursor continuing them).
-    let want = if opts.paths == usize::MAX { usize::MAX } else { opts.paths.clamp(1, 5) };
+    // At most `MAX_PATHS` an answer, unless all are asked for (a cursor continuing them).
+    let want = if opts.paths == usize::MAX { usize::MAX } else { opts.paths.clamp(1, MAX_PATHS) };
     let syms: HashMap<Key, SymbolRow> = from.iter().chain(&to).cloned().collect();
     let (starts, ends): (Vec<Key>, Vec<Key>) = (from.iter().map(|f| f.0).collect(), to.iter().map(|t| t.0).collect());
     let placed = |all: &[(Key, SymbolRow)]| -> Vec<(Key, Pos)> { all.iter().map(|(k, s)| (*k, pos(g, k.0, s))).collect() };
@@ -1711,6 +1726,9 @@ const ALTERNATIVE_SLACK: u32 = 8;
 
 /// The most hops a path may have.
 pub const MAX_PATH_HOPS: u8 = 12;
+
+/// Paths a `path` answer lists at most.
+pub const MAX_PATHS: usize = 5;
 
 /// The most other repos a path without `--to-repo` ends in when the queried repo doesn't define its end.
 pub const MAX_END_REPOS: usize = 8;
