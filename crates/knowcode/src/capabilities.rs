@@ -57,6 +57,8 @@ pub struct Surface<'a> {
     pub descriptions: &'a BTreeMap<String, String>,
     pub hidden: &'a [String],
     pub one: bool,
+    /// Restricted mode's scope, when the server runs in it.
+    pub restriction: Option<&'a crate::restricted::Restriction>,
 }
 
 /// The capabilities document; `of` narrows it to one op.
@@ -86,11 +88,17 @@ pub fn document(s: &Surface, of: Option<&str>) -> Result<Value, String> {
         },
         "reasons": kc_store::answer::REASONS.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
         "codes": kc_store::answer::CODES.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+        "partial": {
+            "completeness": ["graph", "source", "lists"],
+            "size": ["max_chars", "chars", "source", "continue"],
+            "continue": ["list", "cursor", "rest", "chars"],
+        },
         "errors": {
             "at": "structuredContent.error",
             "keys": ["code", "message"],
             "privacy": ["repo", "file", "block_at", "blocks"],
         },
+        "scope": s.restriction.map_or_else(|| json!({ "restricted": false }), |r| r.scope()),
         "ops": ops,
     }))
 }
@@ -101,6 +109,11 @@ fn common() -> Value {
     json!({
         "repo": { "type": "string", "description": crate::help::COMMON.iter().find(|(n, _)| *n == "repo").map(|(_, d)| *d).unwrap_or_default() },
         "max_chars": { "type": "integer", "minimum": r.min, "maximum": r.max, "default": r.default, "description": r.line() },
+        "provenance": {
+            "type": "boolean",
+            "default": false,
+            "description": "true: the answer is unchanged, and a second content block holds {\"record\": …}, the provenance record for durable records (kc_help contract). Taken by every call; in no tool's schema, so it costs nothing up front.",
+        },
     })
 }
 
@@ -129,6 +142,7 @@ fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
         "description": s.descriptions.get(&tool).cloned().unwrap_or_default(),
         "help": format!("knowcode://help/{tool}"),
         "advertised": s.one || !s.hidden.contains(&tool),
+        "allowed": s.restriction.is_none_or(|r| r.allows(&tool)),
         "access": if WRITES.contains(&tool.as_str()) { "write" } else { "read" },
         "takes_query": !q.is_empty(),
         "q": if q.is_empty() { Value::Null } else { Value::from(q) },

@@ -684,6 +684,7 @@ fn workspace_envelope(opened: &[Opened], workspace: bool, items: serde_json::Val
         push_incomplete(&mut env, i);
     }
     add_missing(&mut env);
+    parse_coverage(opened, &mut env);
     let mut seen = HashSet::new();
     for r in held.iter().filter(|r| seen.insert(r.to_path_buf())) {
         if let Some(i) = withheld(r) {
@@ -692,6 +693,96 @@ fn workspace_envelope(opened: &[Opened], workspace: bool, items: serde_json::Val
     }
     finish(&mut env);
     env
+}
+
+/// Files of an answer looked up for parse errors at most, and named at most.
+const COVERAGE_FILES: usize = 64;
+const COVERAGE_NAMED: usize = 5;
+
+/// Says in the answer which of the files it names the extractor couldn't read whole (parse errors, see
+/// `kc_extract::parse_error_sites`): `coverage`, each `{repo, file, errors, first, inside}` (`first` the first
+/// error's `line:col`, `inside` the answer's own symbol when the error lies in its span, so its body's edges are
+/// suspect), and an `unsupported` entry naming them, since declarations, members, calls and references there may be
+/// missing. A file the privacy file blocks gives no place.
+fn parse_coverage(opened: &[Opened], env: &mut Value) {
+    // The (repo, file) pairs the items name, and the symbols they are about (file, start, end, name).
+    fn walk(v: &Value, repo: Option<&str>, files: &mut Vec<(Option<String>, String)>, spans: &mut Vec<(String, u64, u64, String)>) {
+        match v {
+            Value::Object(m) => {
+                let repo = m.get("repo").and_then(Value::as_str).or(repo);
+                if let Some(f) = m.get("file").and_then(Value::as_str)
+                    && !files.iter().any(|(r, x)| x == f && r.as_deref() == repo)
+                {
+                    files.push((repo.map(str::to_string), f.to_string()));
+                }
+                if let (Some(f), Some(l), Some(e)) = (m.get("file").and_then(Value::as_str), m.get("line").and_then(Value::as_u64), m.get("end_line").and_then(Value::as_u64)) {
+                    let name = match (m.get("qualified").and_then(Value::as_str), m.get("container").and_then(Value::as_str), m.get("name").and_then(Value::as_str)) {
+                        (Some(q), _, _) => q.to_string(),
+                        (None, Some(c), Some(n)) => format!("{c}.{n}"),
+                        (None, None, Some(n)) => n.to_string(),
+                        _ => String::new(),
+                    };
+                    spans.push((f.to_string(), l, e, name));
+                }
+                m.iter().filter(|(k, _)| !matches!(k.as_str(), "cite" | "incomplete" | "more")).for_each(|(_, x)| walk(x, repo, files, spans));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, repo, files, spans)),
+            _ => {}
+        }
+    }
+    let (mut files, mut spans) = (Vec::new(), Vec::new());
+    walk(&env["items"], None, &mut files, &mut spans);
+    let mut found: Vec<Value> = Vec::new();
+    let mut flagged = 0;
+    for (repo, file) in files.into_iter().take(COVERAGE_FILES) {
+        let o = match (&repo, opened) {
+            (_, [one]) => Some(one),
+            (Some(r), many) => many.iter().find(|o| repo_name(&o.root) == *r || o.root.to_string_lossy() == *r),
+            (None, _) => None,
+        };
+        let Some(o) = o else { continue };
+        let errors: u32 = o.store.conn().query_row("SELECT parse_errors FROM files WHERE path = ?1", [&file], |r| r.get(0)).unwrap_or(0);
+        if errors == 0 {
+            continue;
+        }
+        flagged += 1;
+        if found.len() >= COVERAGE_NAMED {
+            continue;
+        }
+        let privacy = kc_index::privacy::Privacy::load(&o.root);
+        let mut row = worst_parse_errors(&o.root, &privacy, &file, errors);
+        row["repo"] = Value::from(repo_name(&o.root));
+        // The first error, and the answer's symbol whose span holds it.
+        let first = row["first"].as_array().and_then(|f| f.first()).and_then(|f| f["at"].as_str()).map(str::to_string);
+        if let Some(at) = &first {
+            let line: u64 = at.split(':').next().and_then(|l| l.parse().ok()).unwrap_or(0);
+            if let Some((_, _, _, name)) = spans.iter().find(|(f, l, e, _)| *f == file && (*l..=*e).contains(&line)) {
+                row["inside"] = Value::from(name.as_str());
+            }
+            row["first"] = Value::from(at.as_str());
+        } else if let Some(r) = row.as_object_mut() {
+            r.remove("first");
+        }
+        found.push(row);
+    }
+    if found.is_empty() {
+        return;
+    }
+    let named: Vec<String> = found
+        .iter()
+        .map(|r| {
+            let at = r["first"].as_str().map(|a| format!(", first at {a}")).unwrap_or_default();
+            let inside = r["inside"].as_str().map(|s| format!(", inside {s}")).unwrap_or_default();
+            format!("{} ({} parse error{}{at}{inside})", r["file"].as_str().unwrap_or(""), r["errors"], if r["errors"] == 1 { "" } else { "s" })
+        })
+        .collect();
+    let more = if flagged > found.len() { format!(" and {} more", flagged - found.len()) } else { String::new() };
+    let detail = format!(
+        "files the answer names that the extractor couldn't read whole: {}{more}; declarations, members, calls and references there may be missing",
+        named.join(", ")
+    );
+    env["coverage"] = Value::Array(found);
+    push_incomplete(env, Incomplete::new(Reason::Unsupported, detail).with_hint("kc_search reads them as text; kc_status lists every file with parse errors"));
 }
 
 /// Which KnowCode answered: its version, the git commit it was built from, and the index schema.
@@ -8101,6 +8192,31 @@ pub(crate) mod tests {
 
     /// A fan-out's workers run as the query that started it: what they note is the query's, and its cancellation
     /// stops them.
+    /// An answer naming a file the extractor couldn't read whole says so: the file, its first error, and the
+    /// answer's symbol whose span holds it, as `coverage` and an `unsupported` entry. One without errors says nothing.
+    #[test]
+    fn an_answer_says_which_of_its_files_have_parse_errors() {
+        let cache = test_cache();
+        let base = cache.dir("parse-coverage");
+        let root = repo(
+            &base,
+            "till",
+            &[(
+                "Sources/Till.swift",
+                "class Till {\n    func ring() {\n        log()\n    }\n    func broken() {\n        let x = [1, 2\n        log()\n    }\n}\nfunc log() {}\n",
+            ), ("Sources/Clean.swift", "func clean() {}\n")],
+        );
+        let s = Scope { repos: vec![root], no_sync: false };
+        let env = context("Till.broken", 2000, Default::default(), &s).unwrap().env;
+        let c = &env["coverage"][0];
+        assert_eq!((c["file"].as_str(), c["errors"].as_u64(), c["inside"].as_str()), (Some("Sources/Till.swift"), Some(1), Some("Till.broken")), "{env}");
+        assert!(c["first"].as_str().is_some_and(|a| a.starts_with("6:")), "{env}");
+        let entry = crate::contract::incomplete_of(&env).into_iter().find(|i| i.reason == Reason::Unsupported).expect("an unsupported entry");
+        assert!(entry.detail.contains("Sources/Till.swift (1 parse error, first at 6:") && entry.detail.contains("inside Till.broken"), "{}", entry.detail);
+        let clean = context("clean", 2000, Default::default(), &s).unwrap().env;
+        assert!(clean.get("coverage").is_none(), "{clean}");
+    }
+
     #[test]
     fn pool_workers_run_as_the_query() {
         let query = kc_store::limits::Operation::new();

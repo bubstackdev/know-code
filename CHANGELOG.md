@@ -11,7 +11,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
   commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
   `cache.shared_bases` turns it off.
+- **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
+  for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
+  hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
+  commit, a digest of its uncommitted content, index generation, the base it was cloned from and its privacy policy's
+  digests. Compact answers are unchanged.
 - `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
+- An answer naming a file the extractor couldn't read whole says so: `coverage` lists each such file with its count of
+  parse errors, the first error's line and column, and the answer's own symbol when the error lies in its span, with an
+  `unsupported` entry saying declarations, members, calls and references there may be missing. `status` still lists
+  them all.
 - Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
   describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
   schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
@@ -21,6 +30,19 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
   topic's list of what `q` fills is now made from the same table.
 - `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Restricted mode: `knowcode serve --restricted --repo DIR --ops find,refs,… --cache-dir DIR --config-dir DIR`, for an
+  automated pipeline. The server is bound to the repos given: nothing else is discovered or indexed, and another repo,
+  or a path outside them, is refused with the new code `not_allowed`, as is any op not in the allowlist. It needs
+  explicit cache and config directories and writes nothing outside the cache. It runs no update check or plugin
+  refresh, and keeps git off the network. It states its scope in the `initialize` reply
+  (`capabilities.experimental["knowcode/scope"]`), on stderr and in the capabilities. docs/usage.md has a headless
+  recipe, with the real git for macOS's `/usr/bin/git` shim. An acceptance test runs it under a macOS sandbox
+  profile that kills it on any write outside the cache or any network connection.
+- Completeness said apart: a partial JSON answer adds `completeness` (`graph`: the graph it read was whole; `source`:
+  its quoted source is whole, not a skeleton or cut; `lists`: no list cut or continuing) and `size` (`max_chars` asked,
+  `chars` returned, the source mode in effect, and each continuation's cursor, rows left and about how many
+  characters they take), in the room the size cap leaves, never a row's. A whole answer, and every text answer, is as
+  it was.
 - Stable codes: every refused call carries a machine code beside its English, in the tool result's
   `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
   `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
@@ -29,6 +51,55 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
   blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
   replay gate fails a build that codes its refusals if any refusal it replays has none.
+- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
+  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
+  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
+  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
+  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
+  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
+  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
+  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
+
+## 0.5.1 (2026-10-27)
+
+0.5.1 meets the two checks 0.5.0 missed, and moves the repository to bubstackdev/know-code. Rows of `impact` and `trace`
+lead with their call site as `file:line`: on the recorded calls of the public studies, two-hop impact recall is 0.833
+read as `file:line` alone, where 0.5.0 had 0.607. `history` reaches a caller that calls through a library's interface,
+and history-v1's caller label now carries the `optional` flag it dropped; KnowCode meets plain git on the caller
+questions either way. `impact` also stops calling some answers complete that weren't (an override leaving out a default
+parameter), and keeps every way a row was reached; constructors are found by the names their source gives them; Swift
+files with constructs the parser misses lose less code, and a Swift member added to a standard-library type no longer
+captures others' uses. Shell installs of 0.3.0 through 0.5.0 must re-run the installer once to update. The [release
+gate](eval/release-gate/0.5.1.md) makes no model calls; `impact` answers grew 10.4% there, past its 10% tolerance, most
+of it one answer that 0.5.0 left wrongly empty.
+
+- A query opening a repo whose AI privacy file had just changed, while another query or a background link step was
+  still reading that repo's index, failed with "index is in use: …; close its readers and retry". Removing the index
+  made under the old policy now waits up to 30 seconds for those readers to finish. `knowcode forget` still refuses
+  at once while the index is in use.
+- The repository moved to [bubstackdev/know-code](https://github.com/bubstackdev/know-code); the binary, crate and
+  plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 through 0.5.0 get no update notice,
+  and their `self-update` fails** ("installer URL is outside the expected KnowCode release"): they accept releases
+  only under the old name. Re-run the installer once:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
+  ```
+
+  From then on `self-update` works, accepting installer receipts that name either repository. The Claude Code plugin
+  stays at 0.5.0 until you run `knowcode setup claude` again. Homebrew installs are unaffected.
+- A member a Swift repo adds to a standard-library struct (`extension Int32 { var isFinite … }`) no longer captures
+  uses of the same name on other library types. On a value of another library type (`v: Float`), or of a generic
+  parameter, it is never linked: the fallback that links a framework type's member to the repo's extension of a
+  framework protocol skips library structs, which nothing conforms to. On an untyped value (`for (x, y) in zip(a, b)`,
+  `x.isFinite`), a use reached in a dependency is `external_likely`, not `unique_name`, when the name is a common
+  library member's or the member is there to satisfy one of the dependency's protocol requirements, as it is within a
+  repo. `isFinite`, `isNaN`, `magnitude`, `rounded` and other number members join the common library members, and
+  more sized number types count as standard-library types (`Int8` to `UInt64`, `Float16` to `Float80`, `Decimal`).
+- A member reached on a library type through a protocol it conforms to (`v.isFinite`, `v: Float`, resolving to
+  `GridScalar.isFinite`) says so: the reference's `basis` is `via protocol`, since the member that runs is the
+  type's own, outside the repo. When the conformance (`extension Float: GridScalar {}`) is in a SwiftPM target the
+  code neither is in nor imports, the use is the library member's alone and stays unresolved.
 - A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
   mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
   sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the
@@ -36,7 +107,6 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `unused` counted another worktree (or clone) of the same repo as a user of the repo's packages, so its answer
   changed with how many checkouts of the repo were indexed: their public API turned `possibly unused` and
   `published` named the packages. Checkouts of one origin are one repo here too.
-
 - Swift files with constructs tree-sitter-swift doesn't read lose less of their code. When a file has parse errors,
   it is parsed again with them blanked (positions kept), and the tree with less of the file in errors is used: the
   underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`), `@_lifetime(…)`, module
@@ -61,14 +131,6 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
   row (`(also via Store.Drop [exact] at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
   and says how many, so no row is cut for them.
-- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
-  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
-  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
-  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
-  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
-  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
-  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
-  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
 - A C# override or implementation that leaves out its base member's default parameter value
   (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
   member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -84,11 +84,24 @@ pub(crate) fn reader(db: &Path) -> Result<File> {
 
 /// Cache eviction never waits for another session's readers.
 pub(crate) fn idle(db: &Path) -> Result<Option<File>> {
+    idle_within(db, Duration::ZERO)
+}
+
+/// [`idle`], waiting up to `wait` for the index's readers to close it (a query or a cross-repo link step reading it
+/// for a moment). A cancelled operation (see `kc_store::limits`) stops waiting.
+pub(crate) fn idle_within(db: &Path, wait: Duration) -> Result<Option<File>> {
     let file = lock_file(&lock_path(&db.with_extension("use"))?)?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(e)) => Err(e).context("locking idle index"),
+    let until = Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(TryLockError::WouldBlock) if Instant::now() >= until => return Ok(None),
+            Err(TryLockError::WouldBlock) => {
+                kc_store::limits::check()?;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(TryLockError::Error(e)) => return Err(e).context("locking idle index"),
+        }
     }
 }
 

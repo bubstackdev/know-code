@@ -33,11 +33,14 @@ You need macOS (Apple silicon) or Linux (x86_64 or arm64), `git`, and the client
 1. Install:
 
    ```sh
-   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
+   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
    ```
 
    or `brew install bubstackdev/tap/knowcode`. The shell installer puts `knowcode` in `~/.local/bin`; open a new
    terminal if your shell doesn't find it yet.
+
+   Installed 0.3.0 to 0.5.0 with the shell installer? The repository moved to `bubstackdev/know-code`, so those
+   versions show no update notice and `self-update` fails. Run the installer above once; Homebrew is unaffected.
 
 2. Connect your agent:
 
@@ -121,12 +124,12 @@ lists what it doesn't. The full contract is in [docs/answers.md](docs/answers.md
 KnowCode is checked on public repositories, and every result is published with its misses.
 
 - **Cost per turn.** The default `kc` tool and the server's instructions take 501 tokens of every turn's context,
-  where 0.3's eight tools took 1,276 ([0.5 release gate](eval/release-gate/0.5.0.md),
+  where 0.3's eight tools took 1,276 ([0.5.1 release gate](eval/release-gate/0.5.1.md),
   [0.4's](eval/release-gate/0.4.0.md)).
 - **History questions.** On [history-v1](eval/history-v1/README.md)'s 10 method-level questions, labelled from git
   alone, `history` has recall 1.0 at precision 1.0; of the plain-git approaches, `git log -L :name:` has 0.526 at 1.0
-  and `git log --follow` 0.965 at 0.062. On its two caller questions it finds 1 of 2, where `git log -S` finds both
-  ([0.5 release gate](eval/release-gate/0.5.0.md)).
+  and `git log --follow` 0.965 at 0.062. On its caller questions it matches `git log -S`'s recall at higher precision
+  ([0.5.1 release gate](eval/release-gate/0.5.1.md); 0.5.0 missed one, [stated](eval/release-gate/0.5.0.md)).
 - **Answers on recorded questions.** The release gate replays the 1,092 KnowCode calls agents made in the public studies
   and scores the answers against the studies' labels, with no model calls. The gate reports recall per question type
   and compares builds; it says nothing about how agents use the answers

@@ -35,6 +35,12 @@ include or Angular lazy route in a form not read, an HTTP endpoint registration 
 as a `MapGet` template that isn't a constant or `MapControllerRoute`). The entry names them with `file:line` and says what the answer
 may lack because of them; [languages.md](languages.md#constructs-recognised-but-not-read) lists them all.
 
+A file the extractor couldn't read whole (parse errors) that the answer names is an `unsupported` entry too: the
+answer's `coverage` lists each such file (`{repo, file, errors, first, inside}`, at most 5): `first` is its first
+error's `line:col`, and `inside` the answer's own symbol when the error lies in its span, so that symbol's calls and
+members are the ones most likely missing. Declarations, members, calls and references in those files may be missing.
+`status` lists every file with parse errors.
+
 Files KnowCode doesn't read as code (Razor markup, vendored or built JavaScript) are checked as text before an
 answer says uses there may be missing. `refs` names the lines there that name the symbol, as an `unsupported` entry;
 when no Razor file names a C# symbol, `checked` says so (`"none of 59 Razor files (.razor, .cshtml), checked as text,
@@ -50,6 +56,30 @@ an assembly scan exposing only other services.
 
 The text rendering ends with one line per entry, for example
 `incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}`.
+
+### Completeness and size
+
+`complete` says whether the answer is partial for what was asked. A JSON answer that is partial in any way also says
+how, in three parts that call for different things, and what it cost:
+
+```json
+"completeness": {"graph": true, "source": false, "lists": false},
+"size": {"max_chars": 8000, "chars": 7914, "source": "skeleton",
+         "continue": [{"list": "items[0].callers", "cursor": "kc~3", "rest": 37, "chars": 6290}]}
+```
+
+- `graph`: the graph the answer read was whole: no `incomplete` entry saying a walk stopped at its depth, the
+  evidence policy left edges out, or data was stale, unreadable, missing, unmodelled, withheld or out of time. When
+  it is false, a cursor won't help: ask deeper, with another policy, or later.
+- `source`: the source it quotes is whole, not a skeleton or cut short. Ask for `source: full` or a larger budget.
+- `lists`: every list is all there. When it is false, `size.continue` names each list that continues, with its
+  cursor, the rows left (`rest`) and about how many characters they would take (`chars`, at the rate of the rows
+  shown), so a client can tell whether the next page is worth its cost.
+- `size` gives `max_chars` as asked, `chars` returned (the summary included), and the `source` mode in effect.
+
+They take only the room `max_chars` leaves, never a row's: when they don't fit, `continue` is left out first, then
+`size`. A whole answer has neither, and is as it was. A text answer (a tree) says the same in its header lines: one per
+`incomplete` and `more` entry, with the call that continues it.
 
 ### Codes
 
@@ -79,6 +109,7 @@ The English stays, for people.
 | `unsupported` | a construct or language the analysis doesn't model (a rename of a member the index can't see too) |
 | `collision` | a rename's new name is taken where the symbol is in scope |
 | `cut` | a rename preview cut to fit `max_chars`, which can't be applied as it is |
+| `not_allowed` | a restricted server (`serve --restricted`) isn't allowed to answer it: an op outside its allowlist, or a repo or path outside the repos it is bound to |
 | `cancelled` | the client cancelled the call |
 | `failed` | files, the index or git could not be read |
 | `internal` | anything else: a fault in KnowCode, worth reporting |
@@ -161,6 +192,29 @@ item. Each entry is `{repo, commit, generation, dirty, fresh}`:
 The text rendering prints an `also consulted:` line for other repos, marking those read `from its last sync`.
 
 Every JSON answer also carries `knowcode`: the version, the commit the binary was built from, and the index schema.
+
+### The provenance record
+
+For a durable record of an answer, ask for its provenance record: `--provenance` on the command line (the JSON
+envelope gains `record`), or `provenance: true` on any MCP tool call (the answer is unchanged and a second content
+block holds `{"record": …}`). Compact answers in a conversation don't carry it. The record (`format` 1) holds:
+
+- `knowcode`: the version, the commit the binary was built from, the index schema, the resolver, and every
+  extractor's version;
+- `call`: the call as given (the command's arguments; the tool and its arguments) and the hash of its canonical JSON;
+- `answer`: the hash of the bytes returned without the record, their length, and `evidence`: the hash of the answer's
+  content without what names or measures one index or one moment (row ids, cursors, generations, timings, how much a
+  sync reparsed, a search's work counters, how long ago a cached value was computed). The same question asked again of
+  the same code gives the same `evidence`, from another index, process or worktree;
+- `repos`: for each repo the answer read, its `repo`, the full `commit` and the `generation`, `dirty` and `fresh` the
+  answer read; its `worktree` (git directory, common directory and identity: the normalized origin, else the common
+  directory); `uncommitted`, the number of files that differ from the commit (changed, deleted, untracked) and a digest
+  of their paths, statuses and contents, leaving out the paths the privacy file blocks; `base`, the
+  shared base the index was cloned from, with its `commit` and whether any file differs from it yet (`unchanged`;
+  see [architecture](architecture.md#the-cache-lifecycle)); and `privacy`, the
+  digests of the policy's key (what it blocks, absent when nothing is) and of the privacy file, and `block_at`.
+
+Hashes are `blake3:<hex>`.
 
 ## Confidence and evidence
 

@@ -793,10 +793,13 @@ The document has `capabilities` (its own version, raised when a field changes me
 version), `protocol` (the MCP version the server speaks), `index_schema` (the graph schema it reads), `profile`
 (`one`, or the tools advertised), `common` (the parameters every op takes), `evidence` (the presets, mechanisms and
 assumptions an evidence policy is written with), `reasons` and `codes` (the closed sets an `incomplete` entry and a
-refused call are coded with; see `contract`), `errors` (where a refused call's code is) and `ops`, one entry per op:
+refused call are coded with; see `contract`), `partial` (the keys a partial JSON answer adds: `completeness`, `size`),
+`errors` (where a refused call's code is), `scope` (`restricted`, and for a server started with `serve --restricted`
+its repos, ops and directories) and `ops`, one entry per op:
 
 - `op` and `tool` (`impact`, `kc_impact`), `summary`, `description` (the tool's), `help` (its topic's resource), and
-  `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`).
+  `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`), and `allowed`
+  (false for an op a restricted server refuses).
 - `access`: `read`, or `write` (note_add: notes are the only writes).
 - `q` and `qs`: the parameters they fill as `kc` ops, or null; `takes_query` false for an op taking no `q`.
 - `input`: the full JSON schema of its parameters: `minimum`, `maximum` and `default` for a bounded number,
@@ -862,7 +865,9 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   links and named where it would have joined one, or where the answer spans it), `unsupported` (a
   construct the analysis doesn't model, where known to be present: also one an extractor recognises but doesn't read,
   named with file:line, such as a DI assembly scan, SQL naming its table at run time, a publish of a message of unknown
-  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read),
+  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read; and
+  a file the answer names with parse errors, listed in `coverage` with its first error and the answer's symbol holding
+  it, `inside`),
   `policy` (the evidence policy left edges out; see
   `evidence`), `withheld` (an AI privacy file blocks content; see `privacy`), `depth` (a walk stopped at its depth,
   asked or the deepest it goes, where symbols lead further: its `frontier` names them).
@@ -872,6 +877,10 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - `provenance`: the repos the answer consulted besides its own (dependencies and dependents opened, repos crossed over
   HTTP, the bus, SQL or Terraform, repos whose workspace summary an item came from), each `{repo, commit, generation,
   dirty, fresh}`; `fresh` says the index was checked against the working tree for this answer and matched it.
+- `provenance: true` on any call adds a second content block, `{"record": …}`, for durable records: the build and
+  extractor versions, the call's hash, the answer's hash and its `evidence` hash (the same for the same answer from any
+  index), and per repo read its worktree, full commit, uncommitted content's digest, generation, base and privacy
+  policy's digests.
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
 - `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
@@ -886,10 +895,17 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),
   `moved` (`at` is where it is now, `was` where the index had it), `gone`, or `unchecked`; `drift` says what moved,
   and any drift makes the answer `stale`.
+- `completeness` and `size` (JSON answers, only when something is partial): `completeness` says apart whether the
+  graph the answer read was whole (`graph`: no `depth`, `policy`, `stale`, `failed`, `missing_repo`, `unsupported`,
+  `withheld` or `deadline` entry), whether the source it quotes is (`source`: no skeleton or cut source), and whether
+  its lists are all there (`lists`: none cut or continuing). `size` gives `max_chars` asked, `chars` returned, the
+  `source` mode in effect, and `continue`: each list that continues, `{list, cursor, rest, chars}`, the rows left and
+  about how many characters they take at the rate of the rows shown, to decide whether the next page is worth it.
+  They take only the room `max_chars` leaves (`continue` goes first, then `size`), never a row's.
 - Codes: an entry's code is its `reason`, or its `code` where that says more (`indexing`: ask again after it
   finishes; `not_indexed`, `gone`). A refused call's code is in the tool result's `structuredContent.error.code`
   (invalid_argument, not_found, ambiguous, no_files, not_indexed, indexing, gone, withheld, stale_cursor,
-  unsupported, collision, cut, cancelled, failed, internal); a rename refused says `codes` beside its `reasons`.
+  unsupported, collision, cut, not_allowed, cancelled, failed, internal); a rename refused says `codes` beside its `reasons`.
   Anything `withheld` carries `privacy`: `{repo, file, block_at, blocks}`. Branch on codes, not on the English.
 - An empty answer says what was searched (`note`). Older fields agree with `incomplete`: `truncated`, `total`,
   `capped`, `freshness.failed`, `left_out` and `hint`.

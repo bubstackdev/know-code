@@ -370,6 +370,24 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
         let (text, got) = mcp.kc_coded(op, &args);
         assert_eq!(got.as_deref(), Some(code), "{op} {args}: {text}");
     }
+    // A partial answer says how apart from `complete`, and what continuing costs: the cursor named continues to
+    // exactly the rows left. A whole one says neither.
+    let (text, _) = mcp.kc_coded("refs", &json!({ "q": "Log", "limit": 1 }));
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["completeness"], json!({ "graph": true, "source": true, "lists": false }), "{text}");
+    let c = &v["size"]["continue"][0];
+    assert_eq!((&c["list"], &c["cursor"]), (&json!("items"), &v["cursor"]), "{text}");
+    assert_eq!(v["size"]["chars"].as_u64(), Some(text.len() as u64), "{text}");
+    let (page, _) = mcp.kc_coded("more", &json!({ "q": c["cursor"] }));
+    let page: Value = serde_json::from_str(&page).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len() as u64, c["rest"].as_u64().unwrap(), "{page}");
+    let (whole, _) = mcp.kc_coded("find", &json!({ "q": "Checkout" }));
+    let whole: Value = serde_json::from_str(&whole).unwrap();
+    assert!(whole.get("completeness").is_none() && whole.get("size").is_none(), "{whole}");
+    let (deep, _) = mcp.kc_coded("impact", &json!({ "q": "Audit.Log", "format": "json" }));
+    let deep: Value = serde_json::from_str(&deep).unwrap();
+    assert_eq!(deep["completeness"]["graph"], json!(false), "a walk stopped at its depth: {deep}");
+
     // A rename refused says why in codes beside its reasons.
     let (text, _) = mcp.kc_coded("rename_preview", &json!({ "q": "Checkout.Run", "new_name": "_orders" }));
     let v: Value = serde_json::from_str(&text).unwrap();

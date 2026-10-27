@@ -16,14 +16,17 @@ mod history;
 mod hook;
 mod mcp;
 mod ops;
+mod record;
 mod refactor;
 mod refresh;
 mod removed;
 mod render;
 #[cfg(test)]
 mod repo_walks;
+mod restricted;
 mod session_hook;
 mod settings;
+mod summary;
 mod setup;
 mod uninstall;
 mod update;
@@ -61,6 +64,11 @@ struct RepoArgs {
     /// Emit the JSON envelope instead of text.
     #[arg(long)]
     json: bool,
+    /// Emit the JSON envelope with a provenance record, for durable records: the build, the call's and the answer's
+    /// hashes, and per repo read its worktree, full commit, uncommitted content's digest, index generation and base,
+    /// and privacy policy (see docs/answers.md, "The provenance record").
+    #[arg(long)]
+    provenance: bool,
 }
 
 /// Whether an answer's rows quote the source lines they rest on.
@@ -644,6 +652,23 @@ enum Cmd {
         /// comma-separated (`core,kc_tests`). `KNOWCODE_TOOLS` does the same.
         #[arg(long)]
         tools: Option<String>,
+        /// Answer about the `--repo`s only and run only the `--ops` allowed, with explicit cache and config
+        /// directories, no workspace discovery, update checks, plugin refresh or git network (docs/usage.md,
+        /// "Restricted mode").
+        #[arg(long)]
+        restricted: bool,
+        /// Restricted mode's op allowlist, comma-separated (`find,refs,context`); `capabilities` is always allowed.
+        #[arg(long, requires = "restricted")]
+        ops: Option<String>,
+        /// Restricted mode's cache directory (or `KNOWCODE_CACHE_DIR`): indexes, and everything the server writes.
+        #[arg(long, requires = "restricted")]
+        cache_dir: Option<PathBuf>,
+        /// Restricted mode's config directory (or `KNOWCODE_CONFIG_DIR`).
+        #[arg(long, requires = "restricted")]
+        config_dir: Option<PathBuf>,
+        /// Restricted mode's data directory, for notes (or `KNOWCODE_DATA_DIR`; default: `data` in the cache).
+        #[arg(long, requires = "restricted")]
+        data_dir: Option<PathBuf>,
     },
     /// Every MCP op as JSON: its parameters with ranges and choices, whether it writes, its answer's shape (what
     /// `kc {op: capabilities}` answers), for a client building its own tool surface.
@@ -852,7 +877,7 @@ fn main() {
         use kc_index::machine::{Mode, plan, rank_threads, sniff};
         rank_threads(plan(&sniff(), Mode::Explicit, 1, 0))
     });
-    let notify = !matches!(&cli.command, Cmd::Config { .. } | Cmd::Workspace { .. } | Cmd::Setup(_) | Cmd::Uninstall(_) | Cmd::SelfUpdate { .. } | Cmd::CheckUpdate | Cmd::RefreshPlugin | Cmd::Hook { .. });
+    let notify = !matches!(&cli.command, Cmd::Serve { restricted: true, .. } | Cmd::Config { .. } | Cmd::Workspace { .. } | Cmd::Setup(_) | Cmd::Uninstall(_) | Cmd::SelfUpdate { .. } | Cmd::CheckUpdate | Cmd::RefreshPlugin | Cmd::Hook { .. });
     // Once per command, before it runs: a long-lived `serve` would otherwise check only when it exits.
     if notify { update::start(); }
     if let Err(e) = guard_privacy().and_then(|_| run(cli)) {
@@ -1245,7 +1270,13 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Serve { repos, tools } => {
+        Cmd::Serve { repos, tools, restricted: true, ops, cache_dir, config_dir, data_dir } => {
+            let r = restricted::prepare(restricted::Args { repos, ops, cache_dir, config_dir, data_dir })?;
+            eprintln!("knowcode: restricted: {}", r.scope());
+            let tools = tools.unwrap_or_else(|| mcp::DEFAULT_PROFILE.into());
+            mcp::serve_restricted(r, &tools)
+        }
+        Cmd::Serve { repos, tools, .. } => {
             let tools = tools.unwrap_or_else(mcp::profile_spec);
             // A plugin bundle an older version wrote is refreshed beside the server, never in its way.
             let refresh = std::thread::spawn(setup::refresh_claude_plugin);
@@ -1358,6 +1389,15 @@ fn emit(args: &RepoArgs, env: &serde_json::Value, text: impl FnOnce()) -> Result
     // them (see `mcp::search_in_child`).
     if std::env::var_os(KEEP_RESUME).is_none() {
         cursor::seal(&mut env);
+    }
+    if args.provenance {
+        let answer = serde_json::to_string_pretty(&env)?;
+        // The call as given, less the flags that only choose this output.
+        let call: Vec<String> = std::env::args().skip(1).filter(|a| a != "--provenance" && a != "--json").collect();
+        let record = record::record(&serde_json::json!(call), answer.as_bytes(), std::slice::from_ref(&env));
+        env["record"] = record;
+        println!("{}", serde_json::to_string_pretty(&env)?);
+        return Ok(());
     }
     let env = &env;
     if args.json {
