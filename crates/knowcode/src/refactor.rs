@@ -1497,9 +1497,13 @@ impl Projects {
             list.push((p.name.clone(), dir, refs));
         }
         let mut proj = Projects { list, consumed: Vec::new(), reachable: HashSet::new(), any_app: false };
+        // Other checkouts of this repo (worktrees, clones) are the same repo, not users of its packages: an answer
+        // never depends on how many of them are indexed.
+        let mine = summaries.iter().find(|s| s.root == o.root).map(|s| s.identity());
+        let others = || summaries.iter().filter(|s| s.root != o.root && mine.as_ref().is_none_or(|m| s.identity() != *m));
         for (i, (name, dir, _)) in proj.list.iter().enumerate() {
             let last = dir.rsplit('/').next().unwrap_or(dir);
-            let used = summaries.iter().filter(|s| s.root != o.root).flat_map(|s| &s.packages).flat_map(|q| &q.deps).any(|d| {
+            let used = others().flat_map(|s| &s.packages).flat_map(|q| &q.deps).any(|d| {
                 (d.source == "registry" && d.name.eq_ignore_ascii_case(name))
                     || (d.resolved_repo.as_deref() == Some(me.as_str()) && !last.is_empty() && d.location.contains(last))
             });
