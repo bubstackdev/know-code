@@ -1,10 +1,10 @@
 {
  "autofac/call/inside/1": {
-  "available": 850,
+  "available": 849,
   "drawn": 20
  },
  "autofac/call/inside/2-4": {
-  "available": 315,
+  "available": 314,
   "drawn": 40
  },
  "autofac/call/inside/5+": {
@@ -44,7 +44,7 @@
   "drawn": 40
  },
  "autofac/extension/inside/5+": {
-  "available": 1975,
+  "available": 1865,
   "drawn": 40
  },
  "autofac/extension/outside/0": {
@@ -64,7 +64,7 @@
   "drawn": 40
  },
  "autofac/member/inside/5+": {
-  "available": 1231,
+  "available": 1191,
   "drawn": 40
  },
  "autofac/member/outside/0": {
@@ -76,7 +76,7 @@
   "drawn": 40
  },
  "autofac/type/inside/1": {
-  "available": 5914,
+  "available": 5762,
   "drawn": 20
  },
  "autofac/type/inside/2-4": {
@@ -84,7 +84,7 @@
   "drawn": 40
  },
  "autofac/type/inside/5+": {
-  "available": 1777,
+  "available": 1757,
   "drawn": 40
  },
  "autofac/type/outside/0": {

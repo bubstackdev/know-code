@@ -21,6 +21,9 @@ HERE = Path(__file__).resolve().parent
 QUOTA = {('inside', '1'): 20, ('inside', '2-4'): 40, ('inside', '5+'): 40, ('outside', '0'): 10, ('outside', '1+'): 40}
 SPREAD = 3
 KINDS = ('extension', 'dispatch', 'call', 'member', 'type')
+# Files whose references aren't drawn: a project the labeller loaded without its framework references, so its
+# references to the base class library were never bound (eval/identity-v1/README.md).
+EXCLUDED = {'autofac': ('test/Autofac.Test.CodeGen/',)}
 
 
 def languages():
@@ -51,7 +54,7 @@ def draw(rows, lang=None):
             names[r['name']].add(r['key'])
     sites = defaultdict(list)
     for r in rows:
-        if r['t'] == 'ref':
+        if r['t'] == 'ref' and not r['file'].startswith(EXCLUDED.get(r['repo'], ())):
             sites[(r['repo'], r['file'], r['line'], r['col'])].append(r)
     strata = defaultdict(list)
     for site, found in sites.items():

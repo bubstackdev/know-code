@@ -29,7 +29,9 @@ def label(**kw):
 
 SOURCES = {
     'a.swift': ['import Foo', '', '    x.load() + y.load()', '    load()'],
-    'b.swift': ['struct B {', '    func load() {}', '}', '@discardableResult', 'func load() -> Int { 0 }'],
+    'b.swift': ['struct B {', '    func load() {}', '}', '@discardableResult', 'func load() -> Int { 0 }',
+                '/// Calls load once.', '@available(*, deprecated, message: "use load")', '@inlinable func load(x: Int) {}',
+                '    [Obsolete("load")]', '    public void load() {}'],
 }
 
 
@@ -52,9 +54,22 @@ class RowTest(unittest.TestCase):
     def test_a_target_matches_at_its_name_line(self):
         self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 4, 'load'), 5)
         self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 2, 'load'), 2)
+        # Comments and attributes naming it come before the name.
+        self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 6, 'load'), 8)
+        self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 9, 'load'), 10)
         self.assertTrue(identity_gate.target_matches(dict(file='b.swift', line=4), label(locs=[['b.swift', 5]]), lines_of))
         self.assertFalse(identity_gate.target_matches(dict(file='b.swift', line=2), label(locs=[['b.swift', 5]]), lines_of))
         self.assertFalse(identity_gate.target_matches(dict(file='c.swift', line=2), label(), lines_of))
+
+
+class OverloadTest(unittest.TestCase):
+    def test_a_rows_overloads_are_its_targets(self):
+        overloads = ['1: load() at b.swift:2 (3 sites)', '2: load(x: Int) at b.swift:5 (test) (2 sites)', '3: load(y:) at Parsable Types/b.swift:9 (1 site)']
+        rows = identity_gate.with_overloads([dict(overload=2), dict(overload=[1, 3]), dict(targets=[dict(file='c', line=1)])],
+                                            overloads)
+        self.assertEqual(rows[0]['targets'], [dict(file='b.swift', line=5)])
+        self.assertEqual([(t['file'], t['line']) for t in rows[1]['targets']], [('b.swift', 2), ('Parsable Types/b.swift', 9)])
+        self.assertEqual(rows[2]['targets'], [dict(file='c', line=1)])
 
 
 class JudgeTest(unittest.TestCase):
@@ -108,6 +123,11 @@ class DrawTest(unittest.TestCase):
         # The draw depends on the enumeration alone.
         again, _ = sample.draw(list(reversed(decls + refs)), {'r': 'swift'})
         self.assertEqual(labels, again)
+
+    def test_an_excluded_projects_references_are_left_out(self):
+        row = dict(ref('test/Autofac.Test.CodeGen/A.cs', 1, 'k1'), repo='autofac')
+        labels, _ = sample.draw([row])
+        self.assertEqual(labels, [])
 
     def test_a_site_bound_two_ways_is_left_out(self):
         labels, _ = sample.draw([ref('a.swift', 1, 'k1'), ref('a.swift', 1, 'k2')])

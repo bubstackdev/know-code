@@ -39,6 +39,19 @@ the repository's own source files, and every declaration it sees there.
 | C# | Roslyn's semantic model over `MSBuildWorkspace` | the solution, after `dotnet restore` | every project's compile items |
 | TypeScript | the compiler API's type checker | the repository's `tsconfig.json`, after `npm ci --ignore-scripts` (pnpm for hono) | the program's files |
 
+The toolchains, pinned in run.sh by image digest:
+
+| Language | Image | Toolchain |
+| --- | --- | --- |
+| Swift | `swift:6.3-noble` (`sha256:1038d54c…`) | Swift 6.3.3, its `libIndexStore` |
+| C# | `ubuntu:26.04` (`sha256:19fcd1bf…`) | Ubuntu's `dotnet-sdk-10.0` (SDK 10.0.113), Roslyn 5.0.0 (Microsoft.CodeAnalysis), Microsoft.Build.Locator 1.9.1 |
+| TypeScript | `node:24-bookworm` (`sha256:6449e19d…`) | Node 24.22.1; each repository's own TypeScript (5.9.3 for jellyfin-web, 6.0.3 for hono) |
+
+serilog and autofac load with one framework per project (`TargetFrameworks=net10.0`,
+[properties.txt](../../scripts/eval/identity/csharp/properties.txt)). In autofac, Autofac.Test.CodeGen (net8.0 only) loads
+without its framework references, so its references to the base class library were never bound: the draw leaves out
+every reference in its files (`EXCLUDED` in sample.py), so none becomes a label or a gap KnowCode is scored against.
+
 Files under build output (`.build`, `bin`, `obj`), dependency checkouts and `node_modules` are not the repository's
 source, and generated files (`*.g.cs`, `*.Designer.cs`, macro expansions) are left out.
 
@@ -121,9 +134,10 @@ reference's row in it:
 
 - **Its row:** the row of the same file, line and name whose column is the label's; failing that, the only row of
   that name on the line, when the name appears once on the line. No row means KnowCode has no reference there.
-- **Its targets:** a KnowCode target matches the label when it is in the same file and its name line is one of the
-  label's lines. The name line is the target's line when the name is on it, else the first of the next 10 lines that
-  has the name as a word (a declaration that starts at an attribute or a doc comment).
+- **Its targets:** the row's `targets`, or, for a call of an overloaded name, the entries of the answer's numbered
+  `overloads` list that its `overload` names. A KnowCode target matches the label when it is in the same file and its name line is one of the
+  label's lines. The name line is the first of the target's line and the next 10 that has the name as a word outside
+  comments, attributes and decorators (a declaration that starts at one of those).
 
 Reported, per language, per repository and per stratum:
 
@@ -138,12 +152,89 @@ Reported, per language, per repository and per stratum:
 
 The gate passes when `exact` precision is at least 0.99 in each language and no outside label is linked.
 
+## The set
+
+4943 references: 1864 Swift, 1931 C#, 1148 TypeScript. Per language, kind and stratum (inside by bucket, outside
+by bucket):
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Swift | extension | 60 | 120 | 120 | 10 | 40 | 350 |
+| Swift | dispatch | 0 | 75 | 118 | 0 | 0 | 193 |
+| Swift | call | 60 | 120 | 120 | 30 | 120 | 450 |
+| Swift | member | 60 | 120 | 120 | 30 | 120 | 450 |
+| Swift | type | 60 | 120 | 120 | 30 | 91 | 421 |
+| C# | extension | 43 | 83 | 66 | 30 | 79 | 301 |
+| C# | dispatch | 14 | 96 | 120 | 30 | 107 | 367 |
+| C# | call | 60 | 120 | 120 | 30 | 120 | 450 |
+| C# | member | 60 | 120 | 120 | 30 | 120 | 450 |
+| C# | type | 60 | 115 | 88 | 30 | 70 | 363 |
+| TypeScript | dispatch | 40 | 80 | 80 | 20 | 80 | 300 |
+| TypeScript | call | 40 | 80 | 80 | 20 | 72 | 292 |
+| TypeScript | member | 40 | 80 | 80 | 20 | 60 | 280 |
+| TypeScript | type | 40 | 80 | 69 | 20 | 67 | 276 |
+
+A protocol requirement is always declared alongside its witnesses, so Swift has no `dispatch` reference in bucket `1`,
+and an outside Swift `dispatch` or `extension` target outside a package has no declaration to classify it by. A
+stratum short of its quota held fewer references.
+
+## Baseline: 0.5.0
+
+The release binary (`knowcode-aarch64-apple-darwin`, checksum verified) and integration/0.6 at ef9cdd3 judge every
+label the same. Descriptive figures.
+
+| Language | Labels | Inside | `exact` rows | `exact` precision | `unique_name` precision | Recall, linked | Recall, among candidates | Outside linked |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Swift | 1864 | 1393 | 719 | 0.674 | 0.776 | 0.450 | 0.775 | 52 |
+| C# | 1931 | 1285 | 976 | 0.839 | 0.844 | 0.730 | 0.873 | 37 |
+| TypeScript | 1148 | 789 | 475 | 0.872 | 0.342 | 0.575 | 0.720 | 84 |
+
+The gate fails in all three languages. The 452 wrong `exact` rows, by what went wrong:
+
+| Cause | Swift | C# | TypeScript |
+| --- | ---: | ---: | ---: |
+| Several declarations under one `exact` row, the label among them (overloads, same-named members in scope) | 161 | 132 | 28 |
+| Several declarations, the label not among them (a protocol requirement called: its witnesses listed instead) | 23 | 0 | 17 |
+| Linked inside where the toolchain resolves outside (stdlib names a local declaration shadows, or doesn't) | 31 | 18 | 15 |
+| One declaration, the wrong one (a requirement for a concrete receiver's member, a property for a same-named type) | 19 | 7 | 1 |
+
+Some of them:
+
+- swift-nio: `pipeline`, `isActive` and `localAddress` on an `EmbeddedChannel` link to the `Channel` protocol's
+  requirements, not to `EmbeddedChannel`'s own members.
+- swift-collections: `next()` in `BigSubstring`'s iterators links to five other types' `next()` in other modules.
+- RopeModule's generic code calls `RopeSummary` requirements (`maxNodeSize`, `nodeSizeBitWidth`); they link to the
+  two conformances' members instead.
+- jellyfin-server: `SourceType` used as a type in `BaseItem` links to `BaseItem`'s property of that name, not the enum.
+- swift-argument-parser: `append` on a standard library string in the completion and help generators links to the manual
+  tool's own `append`.
+
+Outside labels linked `unique_name`: 21 Swift, 19 C#, 69 TypeScript. Most of TypeScript's are DOM types hono names
+(`MouseEvent`, `KeyboardEvent`) linked to its JSX module's same-named types, and jellyfin-web's calls of its API
+client package linked to a local declaration file's same-named members.
+
+The full list, the identity work's to-do, is 452 wrong `exact` links and 109 outside labels linked `unique_name`, each
+with its place, KnowCode's targets and the label. It is generated output, kept with the evaluation's evidence rather
+than here; the committed scorer makes it again from the committed labels:
+
+```sh
+python3 scripts/eval/identity_gate.py run --knowcode BIN --work WORK --out summary.json
+python3 scripts/eval/identity_gate.py report summary.json --wrong 100000
+```
+
+Scoring takes under a minute on a loaded development Mac (8 indexes, 2462 `refs` answers); the budget is 30 minutes.
+
+**The scorer was corrected after its first run**, before these figures: it read only a row's `targets`, not the
+numbered `overloads` an answer lists once for every row that calls one, and it took a doc comment or attribute naming
+the declaration as the declaration's name line. Neither touched the labels or the rule for them.
+
 ## Running it
 
 ```sh
 # labels (slow; Docker; only label files come out)
-scripts/eval/identity/run.sh REPO OUT
-python3 scripts/eval/identity/sample.py OUT/*.jsonl.gz --out eval/identity-v1/labels.jsonl
+scripts/eval/identity/run.sh REPO CLONE IO   # each repository; OUT is IO/out
+python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/identity-v1/labels.jsonl \
+  --strata eval/identity-v1/strata.json
 # scoring (the Mac; KnowCode only)
 python3 scripts/eval/identity_gate.py fetch --work WORK
 python3 scripts/eval/identity_gate.py run --knowcode BIN --work WORK --out summary.json

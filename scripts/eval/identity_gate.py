@@ -14,10 +14,11 @@ pinned commit). Nothing is built and no repository code runs: labelling happens 
 in a clone. Then, per repository and name in the labels, one `refs NAME --json --cite none` answer, and each label is
 judged by the rule in eval/identity-v1/README.md:
 
+- its targets: the row's `targets`, or the entries of the answer's numbered `overloads` its `overload` names;
 - its row: the row of the same file, line and name at the label's column; failing that, the only row of that name on
   the line, when the name appears once on the line;
-- a target matches when it is in a file of the label's and its name line (the target's line, else the first of the
-  next NAME_WINDOW lines with the name as a word) is one of the label's lines.
+- a target matches when it is in a file of the label's and its name line (the first of the target's line and the next
+  NAME_WINDOW lines with the name as a word outside comments and attributes) is one of the label's lines.
 
 The summary has, per language, repository and stratum: precision per confidence tag, the ambiguous rows' hit rate
 and size, recall (linked, and among candidates), outside labels linked to an indexed declaration, and every wrong
@@ -97,11 +98,13 @@ def word(name):
 
 
 def name_line(lines, line, name):
-    """The line of a declaration's name: `line` when the name is on it, else the first of the next NAME_WINDOW lines
-    that has it as a word (a declaration that starts at an attribute or a doc comment); `line` when none does."""
+    """The line of a declaration's name: the first of `line` and the next NAME_WINDOW lines that has the name as a
+    word outside comments, attributes and decorators (a declaration that starts at one); `line` when none does."""
     pattern = word(name)
     for n in range(line, min(line + NAME_WINDOW, len(lines)) + 1):
-        if 1 <= n <= len(lines) and pattern.search(lines[n - 1]):
+        if n < 1 or COMMENT.match(lines[n - 1]):
+            continue
+        if pattern.search(ATTRIBUTES.sub('', lines[n - 1], count=1)):
             return n
     return line
 
@@ -160,6 +163,9 @@ def metrics(judged):
     for tag, rows in sorted(by_tag.items()):
         right = sum(j['right'] for j in rows)
         tags[tag] = dict(rows=len(rows), right=right, precision=ratio(right, len(rows)))
+        if tag in LINKS:
+            # Wrong rows naming several declarations, the label among them (a call's overloads, say).
+            tags[tag]['several_with_label'] = sum(1 for j in rows if not j['right'] and j['targets'] > 1 and j['among'])
         if tag not in LINKS and any(j['targets'] for j in rows):
             with_targets = [j for j in rows if j['targets']]
             tags[tag].update(contains=ratio(sum(j['among'] for j in with_targets), len(with_targets)),
@@ -225,19 +231,43 @@ def kc_env(base):
                 KNOWCODE_CONFIG_DIR=str(base/'config'), KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
 
 
+OVERLOAD = re.compile(r'^(\d+): .* at (.+?):(\d+)(?: \([^)]*\))*$')
+# What a declaration's first lines can hold before its name: comments, and attributes or decorators.
+COMMENT = re.compile(r'^\s*(//|/\*|\*|#)')
+ATTRIBUTES = re.compile(r'^\s*(?:\[[^\]]*\]\s*|@\w+(?:\.\w+)*(?:\([^)]*\))?\s*)+')
+
+
+def with_overloads(rows, overloads):
+    """Rows whose `overload` names entries of the answer's numbered `overloads` list (`3: Sink(…) at FILE:LINE`), given
+    those entries as their `targets`: the answer lists a call's overloads once instead of in each row."""
+    numbered = {}
+    for entry in overloads or []:
+        m = OVERLOAD.match(entry)
+        if m:
+            numbered[int(m.group(1))] = dict(file=m.group(2), line=int(m.group(3)))
+    out = []
+    for r in rows:
+        if 'overload' in r:
+            ns = r['overload'] if isinstance(r['overload'], list) else [r['overload']]
+            r = dict(r, targets=[numbered[n] for n in ns if n in numbered])
+        out.append(r)
+    return out
+
+
 def refs(binary, clone, env, name):
     """Every row of `refs NAME` in the clone's repository, following a cut answer's cursor."""
     args = [str(binary), 'refs', name, '--json', '--cite', 'none', '--limit', '1000000', '--no-sync']
-    rows = []
+    rows, overloads = [], None
     while True:
         p = subprocess.run(args, cwd=clone, env=env, capture_output=True, text=True)
         if p.returncode != 0:
-            return rows, (p.stderr.strip() or p.stdout.strip())[:300]
+            return with_overloads(rows, overloads), (p.stderr.strip() or p.stdout.strip())[:300]
         answer = json.loads(p.stdout)
         rows += answer.get('items') or []
+        overloads = overloads or answer.get('overloads')
         cursor = answer.get('cursor')
         if not cursor or answer.get('complete', True):
-            return rows, None
+            return with_overloads(rows, overloads), None
         args = [str(binary), 'more', cursor, '--json']
 
 
@@ -319,6 +349,14 @@ def report(summary, wrong=50):
                        f"toolchain {w['toolchain']}")
         if len(summary['wrong_exact']) > wrong:
             out.append(f"- … {len(summary['wrong_exact']) - wrong} more in the summary")
+    linked = [w for w in summary['outside_linked'] if w['confidence'] != 'exact']
+    if linked:
+        out += ['', f"Outside labels linked `unique_name` ({len(linked)}; the `exact` ones are above):", '']
+        for w in linked[:wrong]:
+            out.append(f"- `{w['at']}` {w['name']} ({w['kind']}, {w['bucket']}): KnowCode {', '.join(w['knowcode'])}; "
+                       f"toolchain {w['toolchain']}")
+        if len(linked) > wrong:
+            out.append(f"- … {len(linked) - wrong} more in the summary")
     return '\n'.join(out)
 
 
