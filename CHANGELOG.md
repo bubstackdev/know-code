@@ -28,8 +28,8 @@ of it one answer that 0.5.0 left wrongly empty.
   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
   ```
 
-  From then on `self-update` works, accepting installer receipts that name either repository. Homebrew installs are
-  unaffected.
+  From then on `self-update` works, accepting installer receipts that name either repository. The Claude Code plugin
+  stays at 0.5.0 until you run `knowcode setup claude` again. Homebrew installs are unaffected.
 - A member a Swift repo adds to a standard-library struct (`extension Int32 { var isFinite … }`) no longer captures
   uses of the same name on other library types. On a value of another library type (`v: Float`), or of a generic
   parameter, it is never linked: the fallback that links a framework type's member to the repo's extension of a
