@@ -768,7 +768,8 @@ every cursor gives each row of the list once, in its order. See `cursors`."#,
         name: "kc_status",
         summary: "index status, coverage, config and SCIP",
         text: r#"Index status: graph schema, file coverage (symbolic links skipped: `coverage.skipped_symlinks`), files with
-parse errors, freshness (`freshness.failed`: unreadable files, answered as last indexed), extractor versions, HEAD
+parse errors (the worst, `coverage.worst_parse_errors`, each with its `first` errors: `at` line:col and the text there),
+freshness (`freshness.failed`: unreadable files, answered as last indexed), extractor versions, HEAD
 commit and dirty flag. `config`: the config file (`file`, `exists`), the cache directory with its `source` (env,
 config, legacy or default), `notes` (where notes live: `path`, `source`, `count`), the `workspace_roots` (none: the workspace is every indexed repo) and where user-level
 ignore rules come from. `scip` (when the repo has a SCIP index): its file and indexer, documents covered (stale:
