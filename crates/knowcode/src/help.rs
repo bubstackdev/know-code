@@ -865,7 +865,9 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   links and named where it would have joined one, or where the answer spans it), `unsupported` (a
   construct the analysis doesn't model, where known to be present: also one an extractor recognises but doesn't read,
   named with file:line, such as a DI assembly scan, SQL naming its table at run time, a publish of a message of unknown
-  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read),
+  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read; and
+  a file the answer names with parse errors, listed in `coverage` with its first error and the answer's symbol holding
+  it, `inside`),
   `policy` (the evidence policy left edges out; see
   `evidence`), `withheld` (an AI privacy file blocks content; see `privacy`), `depth` (a walk stopped at its depth,
   asked or the deepest it goes, where symbols lead further: its `frontier` names them).

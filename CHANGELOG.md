@@ -12,6 +12,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
   `cache.shared_bases` turns it off.
 - `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
+- An answer naming a file the extractor couldn't read whole says so: `coverage` lists each such file with its count of
+  parse errors, the first error's line and column, and the answer's own symbol when the error lies in its span, with an
+  `unsupported` entry saying declarations, members, calls and references there may be missing. `status` still lists
+  them all.
 - Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
   describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
   schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,

@@ -35,6 +35,12 @@ include or Angular lazy route in a form not read, an HTTP endpoint registration 
 as a `MapGet` template that isn't a constant or `MapControllerRoute`). The entry names them with `file:line` and says what the answer
 may lack because of them; [languages.md](languages.md#constructs-recognised-but-not-read) lists them all.
 
+A file the extractor couldn't read whole (parse errors) that the answer names is an `unsupported` entry too: the
+answer's `coverage` lists each such file (`{repo, file, errors, first, inside}`, at most 5): `first` is its first
+error's `line:col`, and `inside` the answer's own symbol when the error lies in its span, so that symbol's calls and
+members are the ones most likely missing. Declarations, members, calls and references in those files may be missing.
+`status` lists every file with parse errors.
+
 Files KnowCode doesn't read as code (Razor markup, vendored or built JavaScript) are checked as text before an
 answer says uses there may be missing. `refs` names the lines there that name the symbol, as an `unsupported` entry;
 when no Razor file names a C# symbol, `checked` says so (`"none of 59 Razor files (.razor, .cshtml), checked as text,
