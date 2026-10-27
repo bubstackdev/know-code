@@ -182,6 +182,20 @@ pub fn run_with_input(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>
     run_inner(dir, &[], args, Some(input))
 }
 
+/// [`run_walk`] for a walk whose output is useful in part (`git log` prints newest first): it stops at `until` too
+/// (a query's time budget), and a walk stopped at either returns what it printed so far with the cut, which is
+/// recorded for the answer to say it is incomplete.
+pub fn run_walk_until(dir: &Path, args: &[&str], until: Option<std::time::Instant>) -> Result<(Vec<u8>, Option<kc_store::limits::Cut>)> {
+    let mut cmd = Command::new("git");
+    cmd.args(WALK_MEMORY).arg("--no-optional-locks").arg("-C").arg(dir).args(args);
+    let what = format!("git {}", args.first().copied().unwrap_or_default());
+    let (out, cut) = kc_store::limits::output_until(cmd, kc_store::limits::Kind::Git, &what, until).context("running git")?;
+    if cut.is_none() && !out.status.success() {
+        bail!("git {} failed in {}: {}", args.join(" "), dir.display(), String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok((out.stdout, cut))
+}
+
 fn run_inner(dir: &Path, config: &[&str], args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
     let mut cmd = Command::new("git");
     // Read-only: `--no-optional-locks` keeps `git status` from refreshing and rewriting the repo's `.git/index`.

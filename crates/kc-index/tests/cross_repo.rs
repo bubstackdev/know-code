@@ -1067,8 +1067,9 @@ fn default_actions_are_served_at_their_controllers_route() {
 }
 
 /// A call through a class the client repo implements itself (`new Client(…).login()`) is no generated client's
-/// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is. An untagged
-/// client's one-word operation (`update`) links `ambiguous` at most: the name alone doesn't say whose method it is.
+/// operation, so it links to no action of its name; a client the repo only declares (`.d.ts`) still is, `ambiguous`
+/// (its code isn't read). An untagged client's one-word operation (`update`) links `ambiguous` at most: the name alone
+/// doesn't say whose method it is.
 #[test]
 fn only_generated_clients_link_by_operation_name() {
     let turn = turn();
@@ -1105,7 +1106,7 @@ fn only_generated_clients_link_by_operation_name() {
         let r = ops.iter().find(|r| r.path.as_deref() == Some(op)).unwrap();
         kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
     };
-    assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "exact")]);
+    assert_eq!(link("getProfile"), [("AccountsController.GetProfile".to_string(), "ambiguous")]);
     assert_eq!(link("update"), [("AccountsController.Update".to_string(), "ambiguous")]);
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1152,7 +1153,8 @@ fn typed_field_receivers_are_judged_by_their_type() {
         kc_index::http::handlers(r, &roots[1], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
     };
     assert_eq!(link("getItems"), [("ItemsController.GetItems".to_string(), "exact")]);
-    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "exact")]);
+    // An external client the repo only declares: its code isn't read, so never `exact`.
+    assert_eq!(link("getProfile"), [("ItemsController.GetProfile".to_string(), "ambiguous")]);
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -1256,7 +1258,8 @@ fn urls_in_const_locals_link_naming_the_local() {
 
 /// A call to an external client the repo only declares (`declare module 'media-apiclient'` in a `.d.ts`) whose
 /// method names no action: its route isn't in the workspace, and the answer says so, in a list too, instead of
-/// leaving the call out silently.
+/// leaving the call out silently. One named like an action links to it and to its `…Legacy` twin, `ambiguous`: the
+/// client's code, which would say which route it requests, isn't read.
 #[test]
 fn an_external_clients_unlinked_call_says_where_it_is_declared() {
     let turn = turn();
@@ -1265,7 +1268,7 @@ fn an_external_clients_unlinked_call_says_where_it_is_declared() {
     write(
         &api,
         "src/PlaystateController.cs",
-        "[ApiController]\n[Route(\"UserPlayedItems\")]\npublic class PlaystateController : ControllerBase\n{\n    [HttpDelete(\"{itemId}\")]\n    public Task MarkUnplayedItem(string itemId) => null;\n    [HttpGet(\"{itemId}\")]\n    public Task GetPlayedState(string itemId) => null;\n}\n",
+        "[ApiController]\n[Route(\"UserPlayedItems\")]\npublic class PlaystateController : ControllerBase\n{\n    [HttpDelete(\"{itemId}\")]\n    public Task MarkUnplayedItem(string itemId) => null;\n    [HttpGet(\"{itemId}\")]\n    public Task GetPlayedState(string itemId) => null;\n    [HttpGet(\"/Users/{userId}/PlayedItems/{itemId}\")]\n    public Task GetPlayedStateLegacy(string userId, string itemId) => null;\n}\n",
     );
     let web = scratch(&base, "media-web");
     write(
@@ -1287,14 +1290,114 @@ fn an_external_clients_unlinked_call_says_where_it_is_declared() {
     let op = |name: &str| {
         summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().find(|r| r.side == "operation" && r.path.as_deref() == Some(name)).cloned().unwrap()
     };
-    // A method named like an action still links by name.
+    // A method named like an action still links by name, to its `…Legacy` twin too, neither `exact`.
+    use kc_store::answer::Assumption::{ClientUnread, OperationName, SameDeployment, ServerUnverified};
+    let unread = vec![SameDeployment, OperationName, ServerUnverified, ClientUnread];
     let played = kc_index::http::handlers(&op("getPlayedState"), &roots[1], &summaries);
-    assert_eq!(played.iter().map(|l| l.route.symbol.as_str()).collect::<Vec<_>>(), ["PlaystateController.GetPlayedState"]);
+    assert_eq!(
+        played.iter().map(|l| (l.route.symbol.as_str(), l.confidence, l.assumptions.clone())).collect::<Vec<_>>(),
+        [
+            ("PlaystateController.GetPlayedState", "ambiguous", unread.clone()),
+            ("PlaystateController.GetPlayedStateLegacy", "ambiguous", unread),
+        ]
+    );
+    // From the twin's side, the same call.
+    let server = summaries.iter().find(|s| s.root == roots[0]).unwrap();
+    let twin = server.routes.iter().find(|r| r.symbol == "PlaystateController.GetPlayedStateLegacy").unwrap();
+    let back: Vec<_> = kc_index::http::callers(twin, &roots[0], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect();
+    assert_eq!(back, [("Menu.played".to_string(), "ambiguous")]);
     let unplay = op("markUnplayed");
     assert!(kc_index::http::handlers(&unplay, &roots[1], &summaries).is_empty());
     for brief in [true, false] {
         let note = kc_index::http::unlinked_note(&unplay, &summaries, brief).unwrap();
         assert!(note.contains("an external client: ApiClient.markUnplayed is declared at src/apiclient.d.ts:4"), "{note}");
     }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A declared external client's package installed in `node_modules` at the version the lockfile pins is read (a
+/// minified bundle through its source map's original sources): a call links through the package method's request,
+/// assuming `package_code` and citing the package, its version and the method, even where no action is named like
+/// the method; from the action's side, the same call. A method making two requests links `ambiguous`; one making
+/// none says so. Installed at another version than the lockfile pins, the package isn't read, and the answer says
+/// why.
+#[test]
+fn declared_clients_link_through_their_installed_package() {
+    let turn = turn();
+    let base = turn.dir("sdk-package");
+    let api = scratch(&base, "media-api");
+    write(
+        &api,
+        "src/PlaystateController.cs",
+        "[ApiController]\n[Route(\"\")]\npublic class PlaystateController : ControllerBase\n{\n    [HttpPost(\"UserPlayedItems/{itemId}\")]\n    public Task MarkPlayedItem(string itemId) => null;\n    [HttpPost(\"Users/{userId}/PlayedItems/{itemId}\")]\n    public Task MarkPlayedItemLegacy(string userId, string itemId) => null;\n    [HttpGet(\"LiveTv/SeriesTimers\")]\n    public Task GetSeriesTimers() => null;\n    [HttpGet(\"LiveTv/Programs\")]\n    public Task GetLiveTvPrograms() => null;\n    [HttpPost(\"LiveTv/Programs\")]\n    public Task GetPrograms() => null;\n}\n",
+    );
+    let web = scratch(&base, "media-web");
+    write(
+        &web,
+        "src/apiclient.d.ts",
+        "declare module 'media-apiclient' {\n    class ApiClient {\n        markPlayed(userId: string, itemId: string): Promise<any>;\n        getLiveTvSeriesTimers(query: any): Promise<any>;\n        getLiveTvPrograms(query: any): Promise<any>;\n        serverId(): string;\n    }\n}\n",
+    );
+    write(
+        &web,
+        "src/menu.ts",
+        "export class Menu {\n  play(apiClient: ApiClient, id: string) { return apiClient.markPlayed(this.userId, id); }\n  timers(apiClient: ApiClient) { return apiClient.getLiveTvSeriesTimers({}); }\n  guide(apiClient: ApiClient) { return apiClient.getLiveTvPrograms({}); }\n  server(apiClient: ApiClient) { return apiClient.serverId(); }\n}\n",
+    );
+    let source = "export default class ApiClient {\n  getUrl(name) { return this._base + '/' + name; }\n  getJSON(url) { return this.ajax({ type: 'GET', url: url, dataType: 'json' }); }\n  markPlayed(userId, itemId) {\n    const url = this.getUrl(`Users/${userId}/PlayedItems/${itemId}`);\n    return this.ajax({ type: 'POST', url: url });\n  }\n  getLiveTvSeriesTimers(options) {\n    const url = this.getUrl('LiveTv/SeriesTimers');\n    return this.getJSON(url);\n  }\n  getLiveTvPrograms(options) {\n    if (options.long) {\n      return this.ajax({ type: 'POST', url: this.getUrl('LiveTv/Programs') });\n    }\n    return this.getJSON(this.getUrl('LiveTv/Programs'));\n  }\n  serverId() { return this._serverInfo.Id; }\n}\n";
+    let pkg = web.join("node_modules/media-apiclient");
+    std::fs::create_dir_all(pkg.join("dist")).unwrap();
+    std::fs::write(pkg.join("package.json"), r#"{ "name": "media-apiclient", "version": "1.2.0", "main": "dist/media-apiclient.js" }"#).unwrap();
+    // A bundle on one long line, as a minifier writes it, and its map with the original source.
+    std::fs::write(pkg.join("dist/media-apiclient.js"), format!("!function(){{{}}}();\n//# sourceMappingURL=media-apiclient.js.map\n", "var a=1;".repeat(200))).unwrap();
+    let map = serde_json::json!({ "version": 3, "sources": ["webpack://media-apiclient/webpack/bootstrap", "webpack://media-apiclient/./src/apiClient.js"], "sourcesContent": ["(function(){})", source], "mappings": "" });
+    std::fs::write(pkg.join("dist/media-apiclient.js.map"), map.to_string()).unwrap();
+    let lock = |v: &str| write(&web, "package-lock.json", &format!(r#"{{ "lockfileVersion": 3, "packages": {{ "": {{}}, "node_modules/media-apiclient": {{ "version": "{v}" }} }} }}"#));
+    lock("1.2.0");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    // The package's files are no files of the repo's.
+    assert!(!summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().any(|r| r.file.contains("node_modules")));
+    let op = |summaries: &[kc_index::workspace::RepoSummary], name: &str| {
+        summaries.iter().find(|s| s.root == roots[1]).unwrap().routes.iter().find(|r| r.side == "operation" && r.path.as_deref() == Some(name)).cloned().unwrap()
+    };
+    use kc_store::answer::Assumption::{PackageCode, SameDeployment};
+    let links = |summaries: &[kc_index::workspace::RepoSummary], name: &str| -> Vec<(String, &'static str, Vec<kc_store::answer::Assumption>)> {
+        kc_index::http::handlers(&op(summaries, name), &roots[1], summaries).into_iter().map(|l| (l.route.symbol, l.confidence, l.assumptions)).collect()
+    };
+    let one = |sym: &str| vec![(sym.to_string(), "exact", vec![SameDeployment, PackageCode])];
+    // The request the package makes, not the action named like the method.
+    assert_eq!(links(&summaries, "markPlayed"), one("PlaystateController.MarkPlayedItemLegacy"));
+    // No action is named like `getLiveTvSeriesTimers`: the package's request links it.
+    assert_eq!(links(&summaries, "getLiveTvSeriesTimers"), one("PlaystateController.GetSeriesTimers"));
+    let l = kc_index::http::handlers(&op(&summaries, "getLiveTvSeriesTimers"), &roots[1], &summaries).remove(0);
+    let p = l.package.unwrap();
+    assert_eq!((p.package.as_str(), p.version.as_str(), p.method.as_str()), ("media-apiclient", "1.2.0", "ApiClient.getLiveTvSeriesTimers"));
+    assert_eq!(p.at, "src/apiClient.js:8 (from node_modules/media-apiclient/dist/media-apiclient.js.map)");
+    assert_eq!(p.request, "GET LiveTv/SeriesTimers");
+    // Two requests: both, neither sure.
+    let mut guide: Vec<_> = links(&summaries, "getLiveTvPrograms").into_iter().map(|(s, c, _)| (s, c)).collect();
+    guide.sort();
+    assert_eq!(guide, [("PlaystateController.GetLiveTvPrograms".to_string(), "ambiguous"), ("PlaystateController.GetPrograms".to_string(), "ambiguous")]);
+    // From the action's side.
+    let server = summaries.iter().find(|s| s.root == roots[0]).unwrap();
+    let timers = server.routes.iter().find(|r| r.symbol == "PlaystateController.GetSeriesTimers").unwrap();
+    let back: Vec<_> = kc_index::http::callers(timers, &roots[0], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect();
+    assert_eq!(back, [("Menu.timers".to_string(), "exact")]);
+    // No request: said so, never "requests nothing".
+    let server_id = op(&summaries, "serverId");
+    assert!(kc_index::http::handlers(&server_id, &roots[1], &summaries).is_empty());
+    let note = kc_index::http::unlinked_note(&server_id, &summaries, true).unwrap();
+    assert!(note.contains("media-apiclient 1.2.0's ApiClient.serverId (src/apiClient.js:18 (from node_modules/media-apiclient/dist/media-apiclient.js.map)) makes no request KnowCode reads"), "{note}");
+
+    // Another version than the lockfile pins: not read, and the answer says why.
+    lock("1.1.0");
+    sync(&roots[1], &mut kc_index::open(&roots[1]).unwrap(), &opts).unwrap();
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    assert!(links(&summaries, "getLiveTvSeriesTimers").is_empty());
+    let note = kc_index::http::unlinked_note(&op(&summaries, "getLiveTvSeriesTimers"), &summaries, true).unwrap();
+    assert!(note.contains("media-apiclient wasn't read: installed 1.2.0, but package-lock.json pins 1.1.0"), "{note}");
     let _ = std::fs::remove_dir_all(&base);
 }

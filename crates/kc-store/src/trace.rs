@@ -77,6 +77,9 @@ pub struct TraceNode {
     /// For a `module` edge, the Terraform module call crossed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<ModuleVia>,
+    /// For an edge into a repo using a library, the library crossed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<LibraryVia>,
     /// The edge's reference was resolved from a SCIP index (see [`crate::scip`]).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub precise: bool,
@@ -111,6 +114,25 @@ pub struct ModuleVia {
     /// What the link did not check (see [`Assumption`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<Assumption>,
+}
+
+/// A library crossed from the repo defining a symbol to a repo using it: a call of the symbol there (resolved into the
+/// library), or, for an implementation of a dependency's interface member, a call through that member in the
+/// dependency or a repo using it.
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryVia {
+    /// The repo whose code the call resolves into: the symbol's own, or the dependency declaring the member called
+    /// through.
+    pub library: String,
+    /// For a call through a dependency's interface or base class member, its type (`ILogger`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub through: Option<String>,
+    /// The edge as within a repo: `calls`, `instantiates`, `uses`, or `via_protocol` through `through`.
+    #[serde(skip)]
+    pub edge: &'static str,
+    /// How sure the link is: `exact` for a call resolved to the symbol; `ambiguous` through a member another
+    /// implementation may answer.
+    pub link: &'static str,
 }
 
 /// A deploy chain crossed from a shared CI template, an Ansible playbook or a role to an application's CI job
@@ -203,6 +225,7 @@ pub enum Via {
     Role(RoleVia),
     Deploy(DeployVia),
     Module(ModuleVia),
+    Library(LibraryVia),
 }
 
 impl Via {
@@ -215,6 +238,7 @@ impl Via {
             Via::Role(_) => "role",
             Via::Deploy(_) => "deploy",
             Via::Module(_) => "module",
+            Via::Library(l) => l.edge,
         }
     }
 
@@ -227,6 +251,7 @@ impl Via {
             Via::Role(r) => r.link,
             Via::Deploy(d) => d.link,
             Via::Module(m) => m.link,
+            Via::Library(l) => l.link,
         }
     }
 
@@ -260,6 +285,11 @@ impl Via {
         if let Via::Module(m) = self { Some(m.clone()) } else { None }
     }
 
+    /// The library crossed, for a `library` hop.
+    pub fn library(&self) -> Option<LibraryVia> {
+        if let Via::Library(l) = self { Some(l.clone()) } else { None }
+    }
+
     /// What the link did not check.
     pub fn assumptions(&self) -> &[Assumption] {
         match self {
@@ -269,6 +299,7 @@ impl Via {
             Via::Role(_) => &[],
             Via::Deploy(d) => &d.assumptions,
             Via::Module(m) => &m.assumptions,
+            Via::Library(_) => &[],
         }
     }
 
@@ -550,6 +581,7 @@ pub fn node(
         role: None,
         deploy: None,
         module: None,
+        library: None,
         precise: false,
         evidence: None,
         cite: None,
@@ -1144,6 +1176,9 @@ pub struct Affected {
     /// For a `module` edge, the Terraform module call crossed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module: Option<ModuleVia>,
+    /// For an edge into a repo using a library, the library crossed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<LibraryVia>,
     /// The other sites in it reaching the symbol it was reached from, past `site` (`file:line`): a method calling
     /// another on several lines.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1694,6 +1729,7 @@ mod tests {
             role: None,
             deploy: None,
             module: None,
+            library: None,
             precise: false,
             evidence: None,
             cite: None,

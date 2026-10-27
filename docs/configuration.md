@@ -15,7 +15,7 @@ KnowCode works with no configuration. Everything here is optional.
 Nothing is written into the repos you index. `knowcode config path` prints the config file's path, and
 `knowcode status` shows the config file, the cache directory, the notes database and the workspace roots, each with
 where its setting came from. `knowcode uninstall` removes what KnowCode wrote; removing a shell-installer
-installation is in [usage](usage.md#setup-settings-and-updates).
+installation is in [install](install.md#uninstall).
 
 ## config.toml
 
@@ -51,6 +51,9 @@ check = true                     # the daily update check
 
 [hooks]
 session_start = true             # the line a client's session-start hook adds
+
+[index]
+node_modules = true              # read declared SDK clients' code from node_modules (see "Ignoring paths")
 ```
 
 | Key | Default | Meaning |
@@ -70,6 +73,7 @@ session_start = true             # the line a client's session-start hook adds
 | `privacy.level_key` | `"level"` | A rule's key for its level. |
 | `update.check` | `true` | Whether to run the daily update check. |
 | `hooks.session_start` | `true` | Whether the Claude Code plugin's session-start hook adds its line (what is indexed here, and which tools to call). |
+| `index.node_modules` | `true` | Whether the code of an SDK package a repo declares as an external client is read from its `node_modules` (see [Ignoring paths](#ignoring-paths)). |
 
 The `[conventions.*]` keys are in [Conventions](#conventions).
 
@@ -154,6 +158,16 @@ Also left out:
 - Search skips binary files, files over 1 MB, and generated files (lockfiles, minified files, files marked
   `@generated` or `DO NOT EDIT`).
 - Minified and bundled JavaScript (`*.min.js`, bundles, `dist/`, a line over 1,000 characters).
+
+One deliberate exception reads beyond the repo's own files: the code of an SDK package the repo declares as an
+external client, so a call to the client links to the route its method requests rather than by the method's name.
+A package qualifies only when a `.d.ts` file of the repo writes `declare module '<package>'` (the repo's own typing
+of an untyped client), and only the copy installed at the nearest `node_modules/<package>`, when its `package.json`
+version is the one the nearest lockfile (`package-lock.json`, `npm-shrinkwrap.json` or `yarn.lock`) pins. The
+repo's privacy file applies to `node_modules` as to any path; a symbolic link isn't followed; a minified file is
+read from its source map's original sources. Nothing is fetched and nothing is written into the repo: what is read
+is kept in the repo's index, in the cache, and answers cite the package, its version and the method's file and line.
+Turn it off with `knowcode config set index.node_modules false`.
 
 ## Privacy file
 

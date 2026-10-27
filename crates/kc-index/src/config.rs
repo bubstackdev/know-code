@@ -73,6 +73,7 @@ pub const KEYS: &[&str] = &[
     "privacy.level_key",
     "update.check",
     "hooks.session_start",
+    "index.node_modules",
     "conventions.csharp.bus.message_attributes",
     "conventions.csharp.bus.consumer_bases",
     "conventions.csharp.bus.consumer_registrations",
@@ -89,7 +90,7 @@ pub const KEYS: &[&str] = &[
     "conventions.ansible.name_prefixes",
 ];
 /// The `[conventions.*]` keys among [`KEYS`]: each a list (`scope_lifetimes` a table) replacing its default.
-pub const CONVENTION_KEYS: &[&str] = KEYS.split_at(14).1;
+pub const CONVENTION_KEYS: &[&str] = KEYS.split_at(15).1;
 /// The notes database's file name, in the data directory by default.
 pub const NOTES_FILE: &str = "notes.sqlite";
 
@@ -100,6 +101,9 @@ pub struct Config {
     pub update_check: Option<bool>,
     /// `[hooks] session_start`: whether a client's session-start hook adds KnowCode's note; on by default.
     pub session_hook: Option<bool>,
+    /// `[index] node_modules`: whether SDK packages a repo declares as external clients are read from its
+    /// `node_modules` (see [`crate::sdk`]); on by default.
+    pub node_modules: Option<bool>,
     /// `[cache] dir`.
     pub cache_dir: Option<PathBuf>,
     /// `[cache] max_size`, in bytes; zero disables size eviction.
@@ -153,6 +157,14 @@ impl Config {
                         match k.as_str() {
                             "session_start" => c.session_hook = Some(v.as_bool().ok_or_else(|| bad("hooks.session_start", "must be true or false"))?),
                             _ => c.unknown.push(format!("hooks.{k}")),
+                        }
+                    }
+                }
+                "index" => {
+                    for (k, v) in table("index", item)? {
+                        match k.as_str() {
+                            "node_modules" => c.node_modules = Some(v.as_bool().ok_or_else(|| bad("index.node_modules", "must be true or false"))?),
+                            _ => c.unknown.push(format!("index.{k}")),
                         }
                     }
                 }
@@ -395,6 +407,15 @@ pub fn update_check() -> Result<(bool, Source)> {
 /// Whether the session-start hook says anything (`hooks.session_start`, on by default).
 pub fn session_hook() -> Result<(bool, Source)> {
     Ok(match load()?.config.session_hook {
+        Some(value) => (value, Source::Config),
+        None => (true, Source::Default),
+    })
+}
+
+/// Whether SDK packages a repo declares as external clients are read from its `node_modules` (`index.node_modules`,
+/// on by default; see [`crate::sdk`]).
+pub fn node_modules() -> Result<(bool, Source)> {
+    Ok(match load()?.config.node_modules {
         Some(value) => (value, Source::Config),
         None => (true, Source::Default),
     })
@@ -965,6 +986,8 @@ mod tests {
         assert!(parse("[update]\ncheck = \"false\"\n").unwrap_err().to_string().contains("update.check"));
         assert_eq!(parse("[hooks]\nsession_start = false\n").unwrap().session_hook, Some(false));
         assert!(parse("[hooks]\nsession_start = 0\n").unwrap_err().to_string().contains("hooks.session_start"));
+        assert_eq!(parse("[index]\nnode_modules = false\n").unwrap().node_modules, Some(false));
+        assert!(parse("[index]\nnode_modules = \"no\"\n").unwrap_err().to_string().contains("index.node_modules"));
     }
 
     #[test]

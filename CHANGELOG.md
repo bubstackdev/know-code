@@ -2,6 +2,92 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## 0.5.0 (2026-10-27)
+
+0.5 answers questions about a method's history and walks across library boundaries. `history` reads one definition's git
+history over the lines it spans: the commits that changed it, who wrote its current lines, and the files and direct
+callers that changed with it. On history-v1's public questions, labelled from git alone, it answers the 10 method-level
+questions exactly, at least as high in recall and precision as each plain-git approach, and higher in one. On the two
+caller questions it falls short of `git log -S` (1 of 2, against 2 of 2 with one wrong commit): it misses a caller that
+calls through a dependency's interface (Serilog's `ILogger`), which `impact` doesn't reach; fixing that is 0.5.1 work.
+`coupled` lists more of the files that change with a file than git's own log does. `impact` and `trace` walk from a
+library's method on to its callers in the repos using it, where they stopped one hop across. Calls through a declared
+client package link through the package's own code, C# actions serve every route they declare, and recorded `search`
+calls no longer fail. The [release gate](eval/release-gate/0.5.0.md) makes no model calls; it measures what KnowCode
+returns, and makes no claim about how agents use it.
+
+- `impact` and `trace` (callers) walk on across a library boundary: from a method or property, to its calls in the repos
+  depending on its repo (resolved into it) and on to their callers there; from an implementation of an interface
+  member a dependency declares, to the calls through that member in the dependency and the repos using it. A row
+  across the boundary has its `repo` and `library` (`{library, through}`). Calls through an interface are
+  `ambiguous` (another implementation may run): listed, not walked past under the default policy, with the frontier's
+  call going on from them; `evidence: all` walks past them. Before, these were one hop deep, in `cross_repo` only.
+  **`cross_repo` changes:** it no longer lists a site the walk lists, so its count drops where the walk reaches
+  across. Library crossings are looked up for at most 64 walked symbols an answer (then `incomplete` says how many
+  were left). A continue call names a symbol by `file:line` when overloads share its file.
+- `history SYMBOL` (`kc_history`; `kc {op: history, q: …}`): one definition's git history, read over the lines the
+  index says it spans. It lists the commits that changed those lines (`git log -L`, through edits and renames of the
+  file), the newest and, when the whole history was read, the oldest, who last changed its current lines (`git blame
+  -w` over the definition), and the files changed in the same commits (commits of more than 50 files left out). A
+  method's history is its own, not its file's. Uncommitted edits that move it are allowed for. It reads at most 200
+  commits, and the MCP server stops git at the call's time budget, keeping what it read; the answer says when
+  either happened. `history deepen` is unchanged. On the history-v1 development questions (public repositories at
+  full history, labels from git alone), it answers the 10 method-level questions exactly.
+- `history` lists a symbol's direct callers whose files changed in its commits (`callers_changed_with`), each with
+  how many of its commits and the newest few, tests marked; `callers_total` counts every direct caller. Callers come
+  from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits
+  changes that file. On history-v1's two caller questions it names the one production caller of each label that
+  `impact` reaches; the other, a call through Serilog's `ILogger` inside Serilog.Extensions.Hosting, isn't reached.
+- `coupled` ranks partners by shared commits, the most recent first among equals, where it ranked them by shared
+  commits weighted by age (half per 90 days). Over a long span the weighting buried the strongest partners: with
+  `--since all`, Autofac's `ResolveOperation.cs` listed one of the ten files sharing the most commits with it in its
+  top ten, and a rule file touched by tooling sweeps first. Now its top ten holds nine of them, and the tenth is next.
+  The age weighting is still in each partner (`weight`, shown as `recency`). A partner that isn't code and shared under
+  a fifth of its own commits with the file (a rule or settings file that sweeps touched) comes after the others.
+  Against history-v1's two file co-change questions (labels from git alone, renames followed), `coupled --since all`
+  lists 51 of 55 and 14 of 14 of the labelled files at the label's size.
+- The default `kc` tool names the history questions: its description lists `history`, and the server's instructions
+  say which op answers a symbol's commits and authors (`history`) and the files changing with a file (`coupled`).
+  Before, agents learned of them only from `help`. To stay within the 1,300-byte budget, the instructions no longer
+  say answers are read from the working tree. The tool and instructions are 1,290 bytes and 501 tokens
+  (count_tokens), from 1,283 and 502.
+- `search` takes a look-ahead at the end of a regex or a look-behind at its start, which agents write to find uses
+  that aren't calls: `\bSetParent\b(?!\()`, `(?<!\.)Save`. The rest of the pattern finds each match and the
+  look-around is checked on its line. Such patterns were refused as invalid; look-around anywhere else still is.
+- A call to an external client the repo declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`) links
+  through the client package's own code when it is installed in the repo's `node_modules` at the version the
+  lockfile pins: to the action serving the request the package's method makes, assuming `package_code`, with
+  `package` naming the package, version, method and its file and line (a minified bundle is read from its source
+  map's original sources). Only declared packages are read, the repo's privacy file applies, links aren't followed,
+  nothing is fetched or written into the repo; `index.node_modules = false` turns it off. On the public-v1
+  workspace, with jellyfin-web's lockfile-pinned packages installed, 194 calls link through the package (87 that
+  linked nothing, 43 to other actions than the name guess, among them 11 to the `…Legacy` twin), and public-v1's
+  http-cross-repo-005 finds its one missed file.
+- A call to an external client the repo only declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`), with
+  no tag (`apiClient.updateUserConfiguration(…)`), no longer links `exact` by the method's name: the client's code,
+  where the request is made, isn't read, and it may request the action's `…Legacy` twin instead (on public-v1's
+  workspace, at least 10 of 179 such links went to the wrong one of the two). These links are now `ambiguous`,
+  include the `…Legacy` twin, and assume `client_unread`.
+- C#: an action with several `[Http*]` attributes serves each of their routes, where only the first was read:
+  `LibraryController.GetSimilarItems`'s `[HttpGet("Items/{itemId}/Similar")]` and four more, and the
+  `[HttpHead]` of actions answering GET and HEAD. A named argument (`[HttpGet("Css.css", Name = "…")]`,
+  `[HttpPost(Name = "…")]`) is no longer taken for the template when it comes first. On the public-v2 workspace this
+  adds 42 server routes (34 in jellyfin-server, 8 in bitwarden-server) and links one more request
+  (`LiveTv/Tuners/Discover`).
+- TypeScript and JavaScript: a request or generated-client call in code no named function or class encloses (an
+  anonymous `export default function`, a callback inside it, a function assigned to a property) is kept as the
+  file's, as top-level statements are, where it was dropped: jellyfin-web's `ApiClient.getLiveTvSeriesTimers(query)`
+  in `self.preRender = function () {…}`. On the public-v1 workspace this adds 25 request rows (21 in jellyfin-web,
+  4 in bitwarden-clients' specs), 9 of them linked.
+- `knowcode setup codex` says whether Codex runs KnowCode's session-start hook yet, read from Codex's own record of
+  the hooks you trusted: if not, the one step left ("Hooks need review" → "Review hooks" when Codex starts, or
+  `/hooks`), and if it changed since you trusted it, why. `knowcode status` gives the same line for each Codex
+  profile set up (`codex_hooks` in `--json`). KnowCode only reads that record; trusting the hook stays yours to do in
+  Codex. `knowcode uninstall` also removes Codex's record of trusting KnowCode's hook.
+- For a Homebrew install, setup names `opt/knowcode/bin/knowcode` when it would otherwise name the versioned keg,
+  which `brew upgrade` removes: the client configuration, and the Codex hook you trusted, keep working across
+  upgrades.
+
 ## 0.4.1 (2026-10-26)
 
 0.4.1 fixes two faults in 0.4.0, found by its own checks: one that could make an answer claim to be complete while

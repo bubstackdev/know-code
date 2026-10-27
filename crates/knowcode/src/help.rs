@@ -185,7 +185,9 @@ every verb, under MapGroup prefixes, through helper methods); the handler owns t
 Requested: also request classes with a path and verb in an attribute ([Endpoint("/orders", HttpMethod.Get)]). A link
 with `host` rests on a host: the client's URL, base address or settings name it, and launch profiles, compose,
 Aspire, ingress or proxy configuration map it to the repo (assumption configured_host). A registration KnowCode can't
-place (a template that isn't a constant) makes the answer incomplete with reason `unsupported`."#,
+place (a template that isn't a constant) makes the answer incomplete with reason `unsupported`. A call to an
+external client the repo declares in a .d.ts links through its SDK package's code when that is installed at the
+version the lockfile pins: `package` {package, version, method, at, request} (assumption package_code)."#,
     },
     Topic {
         name: "kc_context.angular",
@@ -433,9 +435,13 @@ class; `low_confidence` counts the dependents reached through an edge that isn't
 release): `nearest` in the old names (critical, high, medium, low), kept for scripts that read it; it never measured
 risk either.
 
-Also: cross-repo dependents (`cross_repo`; for an interface or base class, or an interface member, also its
+Across a library boundary the walk goes on: a method's or property's calls in repos depending on its repo, and for an
+implementation of an interface member a dependency declares, the calls through that member in the dependency and the
+repos using it (ambiguous: another implementation may run), each with its `repo` and `library` (the repo crossed, and
+`through` the interface). Looked up for at most 64 walked symbols (then `incomplete` says how many it left). Also:
+cross-repo dependents the walk doesn't list (`cross_repo`; for an interface or base class, or an interface member, its
 implementations and subclasses, or implementing members, in repos depending on its repo: kind `inherits` or
-`implements`). Each dependent is listed once, by its best way: a confident edge over an ambiguous one, then the nearest
+`implements`; a type's uses and creations). Each dependent is listed once, by its best way: a confident edge over an ambiguous one, then the nearest
 hop; when an ambiguous way reaches it nearer, `nearest_ambiguous_hop` says so and its class goes by that hop. An
 ambiguous link counts as low-confidence and, under the default evidence policy, isn't walked past (`evidence: all`
 walks past it, marked ambiguous). A dependent reaching what it was reached from on several lines gives the first as
@@ -545,13 +551,15 @@ by default; a file unchanged in that year is read over its own last 50 commits, 
 at a commit, with its ancestors, or a date, so an answer can't see later commits (partners are the files of that
 commit's tree; one gone since has `exists_now: false`); `since` sets how far back: `<n>d`, a date or `all`; `history`
 in the answer says which span was read; following renames; commits of more than 50 files, automated commits (CI jobs,
-bots, nightly dumps) and pairs only ever created together don't count), ranked by shared commits with recent ones
-weighted more. The file can be any file git tracks, indexed or not (a Dockerfile, Terraform, a shell script, YAML,
-Markdown), and so can its partners, except generated files (lockfiles, minified bundles), binaries and hubs (a file
-that isn't code, changed in 10+ commits and half the repo's, changing with this one in under a fifth of its own commits
-and under half of this one's, like a changelog). Each partner: kind (its language, or template, style, javascript,
-config, docs, script, infra or other), support (shared commits), confidence (the share of the file's commits that also
-changed it), commits (the file's), test, and static_link (false: kc_impact doesn't reach it and the file names none of
+bots, nightly dumps) and pairs only ever created together don't count), ranked by shared commits, the most recent
+first among equals; a partner that isn't code and shared under a fifth of its own commits with the file (a rule or
+settings file that sweeps touched) comes after the rest. The file can be any file git tracks, indexed or not (a
+Dockerfile, Terraform, a shell script, YAML, Markdown), and so can its partners, except generated files (lockfiles,
+minified bundles), binaries and hubs (a file that isn't code, changed in 10+ commits and half the repo's, changing with
+this one in under a fifth of its own commits and under half of this one's, like a changelog). Each partner: kind (its
+language, or template, style, javascript, config, docs, script, infra or other), support (shared commits), confidence
+(the share of the file's commits that also changed it), commits (the file's), weight (recency: the shared commits
+weighted by age, half per 90 days), test, and static_link (false: kc_impact doesn't reach it and the file names none of
 its types: a hidden coupling), and basis `history`. Use it to find the files a change to this one usually needs.
 
 When history has nothing to rank (no partner shares two commits with the file: a new file, a quiet one, or `as_of`
@@ -614,6 +622,26 @@ leaving: the files they are top contributor of (`top_contributor_files`, `top_co
 since its boundary (coverage.shallow)."#,
     },
     Topic {
+        name: "kc_history",
+        summary: "one symbol's git history: its commits, first and last change, writers, files changed with it",
+        text: r#"One definition's git history, read over the lines the index says it spans (the method, not its file):
+`commits`, every commit that changed those lines, newest first (`git log -L`, which follows them through edits and
+renames of the file; whitespace changes count), each with sha, date, author (after .mailmap) and subject; `last`, the
+newest; `first`, the oldest, given only when the whole history was read; `commits_total`. `writers`: who last changed
+its current lines (git blame of the working tree, whitespace ignored; `writers_uncommitted` and `writers_automated`
+counted apart). `changed_with`: the files changed in those commits, by shared commits (`changed_with_total`; commits of
+more than 50 files left out and counted in `sweeps`). `callers_changed_with`: its direct callers (kc_impact's hop 1,
+in this repo) whose files changed in those commits, each with how many (`shared`), the newest few and `test` for test
+code; `callers_total` counts every direct caller, those in its own file included (they aren't listed: each of its
+commits changes that file). `since` keeps commits since a date (`2025-01-01`, `90 days ago`).
+
+Give the symbol as a name, `Type.member` or file:line; when several definitions match (overloads), the first is read
+and `others` lists the rest: ask with file:line for another. Uncommitted edits that move the lines are allowed for
+(`lines_at_head`); a definition whose declaration line isn't committed as it is has no history. Bounded: at most 200
+commits, and the MCP server stops git at the call's time budget, keeping what it read; either is said in
+`incomplete`. A shallow clone only knows history since its boundary (`knowcode history deepen`)."#,
+    },
+    Topic {
         name: "kc_reviewers",
         summary: "who could review a change",
         text: r#"Who could review a change: give files or diff ("working" or a git revision). Authors ranked by recent
@@ -673,7 +701,8 @@ kc_context picks it. Answers the note as kc_notes does. Notes are removed with `
     Topic {
         name: "kc_search",
         summary: "ranked text and regex search",
-        text: r#"Search file contents across repos (literal by default, or regex: Rust syntax, matches never span lines),
+        text: r#"Search file contents across repos (literal by default, or regex: Rust syntax, plus a look-ahead ending the
+pattern or a look-behind starting it, `\bSave\b(?!\()`, `(?<!\.)Save`; matches never span lines),
 like a ranked grep over an index: definitions of matching symbols first, then declarations, other code, then tests,
 comments and docs. Matches are per line. Each item is a text row, `repo/file:line kind symbol | text`: `repo/` when
 the answer spans repos; kind def, decl, code, test, comment or doc; the symbol a def or decl declares, or `in X` for
@@ -752,10 +781,10 @@ repos blocked whole. `workspace` for every indexed repo."#,
         summary: "the one tool of the default profile: every tool as an `op`",
         text: r#"The default profile (`one`) advertises a single tool, `kc`, so a client carries one schema on every turn.
 `op` names the tool to run, without `kc_`: impact, find, refs, context, search, locate, more and help, and every other
-tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, overview,
-areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
+tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, history,
+overview, areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
 
-- impact, context, trace, rename_preview, notes, note_add: `symbol`; context: `symbols` from `qs`
+- impact, context, trace, rename_preview, history, notes, note_add: `symbol`; context: `symbols` from `qs`
 - find: `query`; locate: `query`, `queries` from `qs`
 - refs: `name`, `names` from `qs`
 - search, grep_ast: `pattern`
@@ -870,7 +899,10 @@ dependency's checkout is the revision asked for, unchecked), `configured_host` (
 host configuration maps to it; which environment's applies, unchecked), `operation_name` (a generated client's operation
 is the action of that name; the API description wasn't read), `server_unverified` (nothing says which server the
 client calls: every action of the operation's name is a candidate), `url_local` (a request's URL is a `const` of its
-function, read from its declaration; the request's `local` says where).
+function, read from its declaration; the request's `local` says where), `client_unread` (a method of an external client
+the repo only declares, in a `.d.ts`: its code wasn't read, so the route is matched by the method's name, its
+`…Legacy` twin too), `package_code` (a declared client's method requests the route its package's code shows, read
+from the repo's node_modules at the version its lockfile pins; the link's `package` says which method, where).
 
 Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which edges to follow:
 - `default`: exact and unique_name edges followed, ambiguous ones listed, not followed;

@@ -31,6 +31,9 @@ for line in sys.stdin:
         p = m['params']
         if p['name'] == 'kc_search' and p['arguments'].get('pattern') == 'boom':
             result = {{'isError': True, 'content': [{{'type': 'text', 'text': 'bad pattern'}}]}}
+        elif p['name'] == 'kc_search' and p['arguments'].get('pattern') == 'elsewhere':
+            text = 'paths matched 0 files (vendor/**): in app; nothing was searched'
+            result = {{'isError': True, 'content': [{{'type': 'text', 'text': text}}]}}
         else:
             text = 'method Api.Save  src/api.cs:3\\n  called by request  web:src/client.ts:7\\n    7 | fetch(url)'
             result = {{'content': [{{'type': 'text', 'text': text}}]}}
@@ -90,6 +93,34 @@ class ReplayGateTests(unittest.TestCase):
             self.assertEqual(replay_gate.places(text, ['app', 'web'], roots),
                              ['app/src/api.cs:3', 'web/src/client.ts:7', 'app/src/api.cs:4', 'src/nowhere.cs:1'])
 
+    def test_places_read_a_tree_rows_call_sites_in_its_callers_file(self):
+        # The row shapes of public2-two-hop-impact-009's answer: a walked row across a library boundary, one with two
+        # call sites, and a cross-repo row of the older form.
+        with tempfile.TemporaryDirectory() as temp:
+            roots = {r: Path(temp)/r for r in ('serilog', 'serilog-aspnetcore', 'serilog-extensions-hosting')}
+            for root in roots.values():
+                root.mkdir()
+            (roots['serilog-extensions-hosting']/'src').mkdir()
+            (roots['serilog-extensions-hosting']/'src/CachingReloadableLogger.cs').write_text('x')
+            text = '\n'.join([
+                '  called through the interface by constructor RequestLoggingMiddleware.init  '
+                'serilog-aspnetcore/src/Serilog.AspNetCore/AspNetCore/RequestLoggingMiddleware.cs:37  [ambiguous] direct at line 46',
+                '      46 | _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();',
+                '  called through the interface by method CachingReloadableLogger.ForContext  '
+                'src/CachingReloadableLogger.cs:144  [ambiguous] direct at line 147 (also 153)',
+                '  direct   cross-repo serilog/src/Serilog/Log.cs:112:59  call Logger.ForContext  in Log.ForContext  '
+                'through ILogger  [ambiguous → ILogger.ForContext (src/Serilog/ILogger.cs:105)]',
+                '  stopped at method serilog: Log.ForContext  src/Serilog/Log.cs:112  [reached only by ambiguous edges]'])
+            self.assertEqual(replay_gate.places(text, ['serilog-extensions-hosting'], roots), [
+                'serilog-aspnetcore/src/Serilog.AspNetCore/AspNetCore/RequestLoggingMiddleware.cs:37',
+                'serilog-aspnetcore/src/Serilog.AspNetCore/AspNetCore/RequestLoggingMiddleware.cs:46',
+                'serilog-extensions-hosting/src/CachingReloadableLogger.cs:144',
+                'serilog-extensions-hosting/src/CachingReloadableLogger.cs:147',
+                'serilog-extensions-hosting/src/CachingReloadableLogger.cs:153',
+                'serilog/src/Serilog/Log.cs:112',
+                'src/Serilog/ILogger.cs:105',
+                'src/Serilog/Log.cs:112'])
+
     def test_a_replay_against_a_build_scores_places_counts_errors_and_reads_schemas(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -100,6 +131,7 @@ class ReplayGateTests(unittest.TestCase):
             corpus = base/'corpus.jsonl'
             rows = [dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_refs', args={'name': 'Save'}, sessions=2),
                     dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'boom'}, sessions=1),
+                    dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'elsewhere'}, sessions=1),
                     dict(study='public-v2', question='public2-http-cross-repo-001', tool='kc_more', args={'cursor': 'c1'}, sessions=1)]
             corpus.write_text(''.join(json.dumps(r) + '\n' for r in rows))
             args = types.SimpleNamespace(knowcode=str(binary), label='fake', source=str(source), work=str(base/'work'),
@@ -110,10 +142,13 @@ class ReplayGateTests(unittest.TestCase):
                 again = replay_gate.run(args)
             self.assertEqual(summary['knowcode_version'], 'knowcode 9.9.9')
             self.assertEqual(summary['skipped'], {'kc_more': 1})
-            self.assertEqual(summary['calls'], 2)
+            self.assertEqual(summary['calls'], 3)
             self.assertEqual(summary['strata']['http-cross-repo']['recall'], 0.5)
             self.assertEqual(summary['errors'], [dict(question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'boom'})])
             self.assertEqual(summary['tools']['kc_search']['errors'], 1)
+            # A refusal by design is counted as one, not as an error.
+            self.assertEqual(summary['tools']['kc_search']['refusals'], 1)
+            self.assertEqual(summary['refusals'], [dict(question='public2-http-cross-repo-001', tool='kc_search', args={'pattern': 'elsewhere'})])
             self.assertEqual(summary['schemas']['default']['always_loaded'], 1)
             self.assertNotIn('always_loaded_tokens', summary['schemas']['default'])
             for key in ('strata', 'tools', 'errors', 'questions', 'schemas'):
@@ -139,6 +174,34 @@ class ReplayGateTests(unittest.TestCase):
         worse['schemas']['default']['always_loaded_bytes'] = 2300
         found = replay_gate.compare(base, worse)
         self.assertEqual(len(found), 5, found)
+        # A refusal may stay one, and an error may become one; a call answered before must not.
+        refusing = copy.deepcopy(base)
+        refusing['refusals'] = [dict(question='q1', tool='kc_search', args={'pattern': 'a'}),
+                                dict(question='q3', tool='kc_find', args={'query': 'Y'})]
+        refusing['errors'] = []
+        self.assertEqual(replay_gate.compare(base, refusing), ["newly refused: kc_find {\"query\": \"Y\"} (q3)"])
+
+
+    def test_fetch_exports_only_the_named_repositories_with_their_pins_and_exclusions(self):
+        seen = {}
+        class Prepare:
+            @staticmethod
+            def prepare(manifest, out):
+                seen['manifest'], seen['out'] = json.loads(Path(manifest).read_text()), out
+        with tempfile.TemporaryDirectory() as temp, patch.object(replay_gate, 'load', lambda *a: Prepare):
+            replay_gate.fetch(['autofac', 'serilog'], Path(temp)/'source')
+            with self.assertRaises(SystemExit):
+                replay_gate.fetch(['autofac', 'no-such-repo'], Path(temp)/'other')
+        published = json.loads((replay_gate.ROOT/'eval/public-v2/manifest.json').read_text())
+        pins = {r['name']: r for f in published['families'] for r in f['repos']}
+        repos = [r for f in seen['manifest']['families'] for r in f['repos']]
+        self.assertEqual(sorted(r['name'] for r in repos), ['autofac', 'serilog'])
+        self.assertTrue(all(r == pins[r['name']] for r in repos))
+        self.assertEqual(seen['out'], Path(temp)/'source')
+
+    def test_the_fast_subset_is_the_ci_jobs(self):
+        workflow = (replay_gate.ROOT/'.github/workflows/ci.yml').read_text()
+        self.assertIn('SUBSET: ' + ','.join(replay_gate.SUBSET), workflow)
 
 
 if __name__ == '__main__':

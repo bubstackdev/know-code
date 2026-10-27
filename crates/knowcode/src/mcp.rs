@@ -386,6 +386,20 @@ pub struct OwnershipParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct HistoryParams {
+    /// A name, `Type.member` or [repo/]file:line.
+    pub symbol: String,
+    /// Commits to list (default 10).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Only commits since this date (`2025-01-01`, `90 days ago`).
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReviewersParams {
     /// Changed files.
     #[serde(default)]
@@ -614,6 +628,7 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("hotspots", "", ""),
     ("ownership", "path", ""),
     ("reviewers", "files", "files"),
+    ("history", "symbol", ""),
     ("overview", "focus", ""),
     ("areas", "area", ""),
     ("notes", "symbol", ""),
@@ -793,6 +808,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_hotspots", &[]),
     ("kc_ownership", &[("path", "")]),
     ("kc_reviewers", &[("files", ""), ("diff", "`working` or a git revision.")]),
+    ("kc_history", &[("symbol", "")]),
     ("kc_overview", &[]),
     ("kc_areas", &[("area", "")]),
     ("kc_notes", &[("symbol", "")]),
@@ -2289,6 +2305,17 @@ impl KnowcodeServer {
         .await
     }
 
+    #[tool(description = "A symbol's git history: commits that changed it, first and last, who wrote it, files changed with it.")]
+    async fn kc_history(&self, Parameters(p): Parameters<HistoryParams>) -> Result<String, String> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = format!("no definition {}", p.symbol);
+            let params = crate::history::HistoryParams { symbol: p.symbol, limit: p.limit.unwrap_or(10), since: p.since };
+            Ok(explain(crate::history::symbol_history(&params, &scope)?.env, &what, "limit"))
+        })
+        .await
+    }
+
     #[tool(description = "Who could review a change (files or a diff), by recent lines written.")]
     async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, String> {
         let scope = self.scope(&p.common, false)?;
@@ -2426,7 +2453,7 @@ impl KnowcodeServer {
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 
-    #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, more, help.")]
+    #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, history, more, help.")]
     async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, String> {
         let (tool, args) = one_call(p)?;
         fn a<T: serde::de::DeserializeOwned>(tool: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
@@ -2453,6 +2480,7 @@ impl KnowcodeServer {
             "kc_hotspots" => self.kc_hotspots(a(t, args)?).await,
             "kc_ownership" => self.kc_ownership(a(t, args)?).await,
             "kc_reviewers" => self.kc_reviewers(a(t, args)?).await,
+            "kc_history" => self.kc_history(a(t, args)?).await,
             "kc_overview" => self.kc_overview(a(t, args)?).await,
             "kc_areas" => self.kc_areas(a(t, args)?).await,
             "kc_notes" => self.kc_notes(a(t, args)?).await,
@@ -2567,12 +2595,12 @@ and parameter kc_help. Tools take `repo`. Each edge has a confidence; an incompl
 privacy file blocks it; don't read it another way.";
 
 /// The `one` profile's instructions, the default: the same map, as ops of the one tool.
-const ONE_INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos, read from the working tree. Use its \
-`kc` tool instead of grep and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what \
-breaks if X changes: kc {op: impact, q: X}, X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X \
-is defined op find; every use refs; what X is context; files for a concept or bug locate; text search; the next page \
-more; any other KnowCode tool by its name, and every op's parameters, help. `repo` picks a repo. Each edge has a \
-confidence; an incomplete answer says why. `withheld`: a privacy file blocks it; don't read it another way.";
+const ONE_INSTRUCTIONS: &str = "KnowCode: a code graph of your workspace's repos. Use its `kc` tool instead of grep \
+and reading files. Who calls a method or an HTTP endpoint, from any repo, by hop, and what breaks if X changes: \
+kc {op: impact, q: X}, X as file:line or `Type.member`, `depth` 2 for callers' callers. Where X is defined op find; \
+every use refs; what X is context; files for a concept or bug locate; text search; X's commits and authors history; \
+files changing with a file coupled; next page more; other ops and parameters help. `repo` picks a repo. Each edge \
+has a confidence; an incomplete answer says why. `withheld`: a privacy file blocks it; don't read it another way.";
 
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
@@ -2663,7 +2691,7 @@ mod tests {
         let core = serde_json::to_string(&server("core").tool_router.list_all()).unwrap().len();
         assert!(core * 2 < bytes, "core {core} of all {bytes}");
         assert!(core + INSTRUCTIONS.len() <= CORE_BUDGET, "core schema and instructions {} bytes, budget {CORE_BUDGET}", core + INSTRUCTIONS.len());
-        // The default, `one`: its tool and instructions together, 1,250 bytes and 502 tokens (count_tokens) when
+        // The default, `one`: its tool and instructions together, 1,290 bytes and 501 tokens (count_tokens) when
         // set; at most 510 tokens is the bar.
         let one = serde_json::to_string(&server("one").tool_router.list_all()).unwrap().len();
         assert!(one + ONE_INSTRUCTIONS.len() <= 1_300, "one schema and instructions {} bytes, budget 1300", one + ONE_INSTRUCTIONS.len());
@@ -2758,6 +2786,7 @@ mod tests {
             "kc_hotspots" => as_::<HotspotsParams>(args),
             "kc_ownership" => as_::<OwnershipParams>(args),
             "kc_reviewers" => as_::<ReviewersParams>(args),
+            "kc_history" => as_::<HistoryParams>(args),
             "kc_overview" => as_::<OverviewParams>(args),
             "kc_areas" => as_::<AreasParams>(args),
             "kc_notes" => as_::<NotesParams>(args),
@@ -3280,6 +3309,9 @@ mod tests {
             ],
         );
         crate::ops::tests::commit_and_tag(&root, "v1");
+        // Indexed before the answers are taken (no budget: the sync finishes): a cold first call on a loaded machine
+        // can outlast the server's freshness budget and say it is still indexing, which this test isn't about.
+        drop(crate::refresh::open(&root, false).unwrap());
         let s = server("all");
         let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..s };
         fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
@@ -3305,6 +3337,7 @@ mod tests {
                 ("kc_hotspots", s.kc_hotspots(p(json!({}))).await),
                 ("kc_ownership", s.kc_ownership(p(json!({}))).await),
                 ("kc_reviewers", s.kc_reviewers(p(json!({ "files": ["src/Orders.cs"] }))).await),
+                ("kc_history", s.kc_history(p(json!({ "symbol": "Orders.Place" }))).await),
                 ("kc_overview", s.kc_overview(p(json!({}))).await),
                 ("kc_areas", s.kc_areas(p(json!({}))).await),
                 ("kc_notes", s.kc_notes(p(json!({}))).await),

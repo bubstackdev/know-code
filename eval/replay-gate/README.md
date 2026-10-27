@@ -26,7 +26,9 @@ fifth, final, rerun) and public-v2 runs (baseline, release candidate). That is 1
 3. **Replay:** each call is sent to `knowcode serve --tools all` over MCP. Recorded `kc_more` calls are skipped,
    because their cursors belong to the recorded session; `kc_note_add` is skipped, because it writes.
 4. **Scoring:** per question, the places (`repo/path:line`) its calls' answers name are scored against the study's
-   published label with [score.py](../../scripts/eval/neutral/score.py).
+   published label with [score.py](../../scripts/eval/neutral/score.py). A tree row's call sites count as places in
+   its caller's file: `RequestLoggingMiddleware.cs:37 [ambiguous] direct at line 46` names lines 37 and 46. Until
+   0.5.0's gate only `path:line` was read, which missed call sites once impact's walk listed them as tree rows.
 5. **Report:** recall and precision per question type, answer bytes and errors per tool, and the tool schemas per
    profile:
    - tools listed and always loaded, and the instructions, in bytes;
@@ -40,6 +42,7 @@ fifth, final, rerun) and public-v2 runs (baseline, release candidate). That is 1
 | Recall per question type | drops by more than 0.02 |
 | Precision per question type | drops by more than 0.05 |
 | Errors | errors on a call the base answered |
+| Refusals | refuses a call the base answered (a refusal by design, such as `paths matched 0 files`, is not an error) |
 | Answer bytes per tool | grow more than 10% |
 | Always-loaded schemas and instructions | grow more than 5% |
 
@@ -66,11 +69,18 @@ repository.
 - **Fast subset:** `--repos autofac,autofac-di,serilog,serilog-extensions-hosting,serilog-aspnetcore` keeps the 22
   questions whose repositories are all small (about 12 MB of source, 119 calls). It takes about 6 s per build.
 
-**Proposed for CI:** the fast subset, comparing the v0.3.0 release asset with the PR's build.
+**In CI:** the `replay` job of [ci.yml](../../.github/workflows/ci.yml) runs the fast subset on every pull request, on
+Linux. It compares the latest release's `x86_64-unknown-linux-gnu` asset, checked against its published checksum, with
+the change's debug build. `replay_gate.py fetch` exports the five repositories' pinned public source, cached by the
+manifest that pins them. The comparison goes in the job summary, and the job fails on a regression beyond tolerance.
 
-- **Source:** CI would fetch those five repositories at their pinned commits and export them as
-  `prepare-public-eval.py` does. That is about 12 MB, and cacheable by commit.
-- **Not yet wired:** the export step's CI cost and caching aren't measured yet.
+## History questions
+
+The replay's workspaces are exported without history, so history questions have their own gate:
+[history-v1](../history-v1/README.md) and [history_gate.py](../../scripts/eval/history_gate.py). It clones its four
+repositories with their full history at public-v2's pins (about 250 MB; local only, or its 75 MB Serilog subset in
+CI), recomputes the labels with git, and scores KnowCode against the plain-git approaches on the same labels, with no
+model calls.
 
 ## First replay: v0.3.0 against main
 
@@ -86,7 +96,9 @@ v0.3.0 is the release asset (sha256 `b7ab63ba…`); main is d82fa18, built with 
 | HTTP callers across repositories | 16 | 0.312 | 0.019 → 0.020 |
 | two-hop impact | 16 | 0.587 → 0.628 | 0.175 → 0.203 |
 
-**Errors:** the same 15 `kc_search` calls error on both builds.
+**Errors:** the same 15 `kc_search` calls error on both builds. 11 of them are refusals by design: their `paths`
+name files the public cohort doesn't have (`bitwarden_license/`, which the manifest excludes, and `node_modules/`).
+The gate now counts such a refusal in its own column. The other 4 used look-around, which `search` now takes.
 
 **Answer bytes:** `kc_impact` grew 5.1%, `kc_status` 0.2%, and `kc_context` shrank 0.1%; the rest are unchanged.
 

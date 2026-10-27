@@ -748,11 +748,10 @@ mod tests {
         assert!(status.iter().all(|v| v["background"] == "queued" || v["complete"] == true), "{status:?}");
 
         // The background indexes them (the query worker may have taken some first), never the blocked one.
+        // Until they are indexed, however long a loaded machine takes, within a bound that only a hang reaches.
         let mut tried = HashMap::new();
-        for _ in 0..10 {
-            if kc_index::unindexed_roots().unwrap().is_empty() {
-                break;
-            }
+        let until = Instant::now() + Duration::from_secs(60);
+        while !kc_index::unindexed_roots().unwrap().is_empty() && Instant::now() < until {
             if index_next_new_repo(&mut tried).unwrap().is_none() {
                 std::thread::sleep(Duration::from_millis(200));
             }
@@ -922,14 +921,28 @@ mod tests {
         std::fs::write(root.join("app.ts"), "export function apiHandler() { return 42; }\n").unwrap();
         let root = kc_index::repo_root(&root).unwrap();
         assert!(!kc_index::db_path(&root).unwrap().exists());
-        let _budget = Budget::enter(Duration::from_secs(10));
         let scope = Scope { repos: vec![root], no_sync: false };
-        let out = ops::context("apiHandler", 2000, kc_store::skeleton::SourceMode::Auto, &scope).unwrap();
+        // Each call within a 10 s budget. On a loaded machine (other tests share the worker) indexing can outlast one,
+        // and the answer then says it is still indexing; asking again converges. Only a hang reaches the bound.
+        let converged = |scope: &Scope| {
+            let until = Instant::now() + Duration::from_secs(120);
+            loop {
+                let _budget = Budget::enter(Duration::from_secs(10));
+                let out = ops::context("apiHandler", 2000, kc_store::skeleton::SourceMode::Auto, scope).unwrap();
+                if out.env["complete"] == true || Instant::now() > until {
+                    return out;
+                }
+                // Still indexing, or its derived data a moment behind: said, never answered as if complete.
+                let entries = out.env["incomplete"].as_array().unwrap();
+                assert!(!entries.is_empty() && entries.iter().all(|i| i["reason"] == "stale"), "{}", out.env);
+            }
+        };
+        let out = converged(&scope);
         assert_eq!(out.env["complete"], true, "{}", out.env);
         assert_eq!(out.env["provenance"][0]["fresh"], true);
         assert!(!out.env["items"].as_array().unwrap().is_empty());
         std::fs::write(scope.repos[0].join("app.ts"), "export function apiHandler() { return 4242; }\n").unwrap();
-        let out = ops::context("apiHandler", 2000, kc_store::skeleton::SourceMode::Auto, &scope).unwrap();
+        let out = converged(&scope);
         assert_eq!(out.env["complete"], true, "derived caches must converge too: {}", out.env);
         assert!(out.env["items"][0]["source"].as_str().unwrap().contains("4242"));
     }

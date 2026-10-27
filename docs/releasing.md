@@ -1,9 +1,7 @@
 # Releasing KnowCode
 
-This procedure prepares a release; it does not authorize the first public push.
-The audited snapshot must pass the private-vocabulary scan and manual review by
-both the assistant and the user before publication. Private development history
-must never be pushed to the new public repository.
+How a KnowCode release is built, checked and published. Every change reaching the
+public repository, release or not, passes the private-vocabulary scan first.
 
 ## Build and distribution
 
@@ -111,15 +109,17 @@ After installation, run `knowcode setup claude`, `knowcode setup codex`, or
 
 Add the release's entry to [CHANGELOG.md](../CHANGELOG.md) before tagging.
 
-## Publication and evaluation gates
+## Before tagging
 
-Keep public content descriptive, without comparative claims or evaluation
-numbers, until the supporting public evaluation exists. Publishing version 0.1.0
-does not close the release goal: the reproducible public evaluation, including
-failures and losses, must also be published.
+A release ships on its release gate, measured with no model calls against the
+previous release and published with it under [`eval/release-gate/`](../eval/release-gate)
+([0.5.0](../eval/release-gate/0.5.0.md), [0.4.0](../eval/release-gate/0.4.0.md)): tool cost per turn, the
+[replay gate](../eval/replay-gate/README.md), the workspace gate, clean-machine
+acceptance ([first-run-acceptance.md](first-run-acceptance.md)) and the update
+from the previous release. Public material makes no comparative or performance
+claim beyond what a published evaluation shows.
 
-Before creating the release tag, verify the clean-machine first-run checks,
-following [first-run-acceptance.md](first-run-acceptance.md),
-the audited snapshot and user review, all local gates ([evaluation.md](evaluation.md#gates-per-change)), and
-the public CI run. Public Actions execution remains unverified until the approved repository exists. Tagging `v0.1.0` triggers publication through
-the workflow, so do not push that tag until those gates are satisfied.
+Then check all local gates ([evaluation.md](evaluation.md#gates-per-change)), the
+public CI run, the binary scan for private terms and the changelog entry. Pushing
+the `v<version>` tag triggers publication through the workflow, so push it only
+when those pass.

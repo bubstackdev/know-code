@@ -2,12 +2,17 @@
 """Release replay gate: KnowCode's answers on recorded calls, with no model calls.
 
     replay_gate.py extract --study public-v2 --transcripts DIR [DIR ...] --out corpus.jsonl
+    replay_gate.py fetch --repos a,b --out SOURCE
     replay_gate.py run --knowcode BIN --label NAME --source SOURCE --work WORK [--corpus FILE ...] [--repos a,b]
     replay_gate.py compare BASE_SUMMARY CANDIDATE_SUMMARY [--recall-tolerance …]
 
 `extract` collects every KnowCode call in a study's raw transcripts as the tool it runs and that tool's arguments
 (a `kc {op: …}` call reads as its op's tool, public_transcript.knowcode_tool), one row per question and distinct
 call, with session paths made repository-relative. eval/replay-gate/corpus.jsonl holds public-v1's and public-v2's.
+
+`fetch` exports the pinned public source of some of public-v2's repositories, as prepare-public-eval.py does for all of
+them: a shallow fetch of each pinned commit, exported with the manifest's exclusions. CI uses it for the fast subset
+(SUBSET), cached by those commits.
 
 `run` replays a corpus against one build. It prepares neutral Git workspaces from the pinned public source once
 (APFS clones, each hashed against the source receipt), indexes them with the build into the build's own cache, starts
@@ -21,8 +26,11 @@ Calls are replayed as the separate tool they run, which every build serves under
 is the one `kc` tool runs the same code for its ops. Recorded `kc_more` calls are skipped (their cursors belong to the
 recorded session), and so is `kc_note_add` (it writes).
 
+A call KnowCode refuses by design, saying why (a `paths` filter that matches no file of the cohort), is a refusal, not
+an error: it is counted in its own column.
+
 `compare` fails (exit 1) when the candidate regresses beyond a tolerance: recall or precision per question type, calls
-that error, answer bytes per tool, or always-loaded schema bytes.
+that error, calls the base answered and the candidate refuses, answer bytes per tool, or always-loaded schema bytes.
 """
 from __future__ import annotations
 
@@ -56,9 +64,15 @@ SKIPPED = {'kc_more': 'its cursor belongs to the recorded session', 'kc_note_add
 # A place an answer names: `path:line`, optionally `repo:path:line` or `repo/path:line`.
 PLACE = re.compile(r'(?<![\w@./-])(?:([A-Za-z0-9][\w.-]*):)?((?:[\w@.+-]+/)*[\w@+-][\w@.+-]*\.(?:'
                    + recheck.EXTENSIONS + r')):(\d+)(?![\w/])')
+# A tree row's call sites, after its caller's place: `… src/a.cs:37  [ambiguous] direct at line 46 (also 53)`.
+CALL_SITES = re.compile(r'\] \w+ at line (\d+)(?: \(also ([\d, ]+)\))?')
 PROFILES = ('one', 'core', 'all')
+# Refusals by design: the answer says what the call asked for doesn't exist here, rather than failing.
+REFUSALS = (re.compile(r'\bmatched 0 files \('),)
 GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+# The fast subset: the questions whose repositories are all small. About 12 MB of source, 22 questions, 119 calls.
+SUBSET = ('autofac', 'autofac-di', 'serilog', 'serilog-aspnetcore', 'serilog-extensions-hosting')
 TOLERANCES = {'recall': 0.02, 'precision': 0.05, 'bytes': 0.10, 'schema': 0.05}
 
 
@@ -103,6 +117,21 @@ def extract(study, transcript_dirs):
                     key = (match.group(1), tool[0], json.dumps(args, sort_keys=True))
                     rows[key] = rows.get(key, 0) + 1
     return [dict(study=study, question=q, tool=t, args=json.loads(a), sessions=n) for (q, t, a), n in sorted(rows.items())]
+
+
+def fetch(repos, out, manifest=ROOT/'eval/public-v2/manifest.json'):
+    """The pinned public source of `repos` (names in the manifest) in OUT: objects/, view/ and source-receipt.json."""
+    spec = json.loads(Path(manifest).read_text())
+    families = [dict(family, repos=[r for r in family['repos'] if r['name'] in repos]) for family in spec['families']]
+    families = [f for f in families if f['repos']]
+    found = {r['name'] for f in families for r in f['repos']}
+    if found != set(repos):
+        raise SystemExit('not in the manifest: ' + ', '.join(sorted(set(repos) - found)))
+    prepare = load('replay_gate_prepare', ROOT/'scripts/prepare-public-eval.py')
+    with tempfile.TemporaryDirectory(prefix='replay-gate-manifest-') as temp:
+        subset = Path(temp)/'manifest.json'
+        subset.write_text(json.dumps(dict(spec, families=families), indent=2) + '\n')
+        prepare.prepare(subset, Path(out))
 
 
 # --- workspaces and index ------------------------------------------------------------------------------------------
@@ -243,11 +272,19 @@ def schemas(binary, key):
 # --- run ------------------------------------------------------------------------------------------------------------
 
 def places(text, repos, roots):
-    """The `repo/path:line` places an answer names. A path without its repository is given the one repository, among
-    the question's first and then the cohort's, that has the file."""
+    """The `repo/path:line` places an answer names, a tree row's call sites (`at line N (also M)`) in its caller's
+    file. A path without its repository is given the one repository, among the question's first and then the
+    cohort's, that has the file."""
+    named = []
+    for row in text.splitlines():
+        matches = list(PLACE.finditer(row))
+        named += [m.groups() for m in matches]
+        sites = CALL_SITES.search(row)
+        if matches and sites:
+            repo, path = matches[-1].group(1), matches[-1].group(2)
+            named += [(repo, path, line) for line in [sites.group(1), *re.findall(r'\d+', sites.group(2) or '')]]
     out = []
-    for match in PLACE.finditer(text):
-        repo, path, line = match.group(1), match.group(2), match.group(3)
+    for repo, path, line in named:
         first = path.split('/', 1)[0]
         if repo in roots:
             out.append(f'{repo}/{path}:{line}')
@@ -296,10 +333,12 @@ def run(args):
             question = banks[row['study']][0][row['question']]
             try:
                 error, text = server.call(row['tool'], row['args'])
+                refused = error and any(r.search(text) for r in REFUSALS)
+                error = error and not refused
             except TimeoutError:
-                error, text = True, 'timeout'
+                error, refused, text = True, False, 'timeout'
             calls.append(dict(study=row['study'], question=row['question'], stratum=question['stratum'], tool=row['tool'],
-                              args=row['args'], error=error, bytes=len(text.encode()),
+                              args=row['args'], error=error, refused=refused, bytes=len(text.encode()),
                               places=[] if error else places(text, question['repos'], roots)))
     finally:
         server.close()
@@ -334,14 +373,16 @@ def run(args):
         t = tools.setdefault(call['tool'], dict(calls=0, errors=0, bytes=[]))
         t['calls'] += 1
         t['errors'] += call['error']
+        t['refusals'] = t.get('refusals', 0) + call['refused']
         t['bytes'].append(call['bytes'])
-    tools = {k: dict(calls=v['calls'], errors=v['errors'], bytes_total=sum(v['bytes']),
+    tools = {k: dict(calls=v['calls'], errors=v['errors'], refusals=v['refusals'], bytes_total=sum(v['bytes']),
                      bytes_median=statistics.median(v['bytes'])) for k, v in sorted(tools.items())}
     timing['total_s'] = round(time.monotonic() - started, 1)
     summary = dict(format='replay-gate-1', label=args.label, knowcode_version=version,
                    knowcode_sha256=digest(binary.read_bytes()), corpus_rows=len(corpus), calls=len(calls),
                    skipped=skipped, repos=sorted(roots), strata=strata, tools=tools,
                    errors=[dict(question=c['question'], tool=c['tool'], args=c['args']) for c in calls if c['error']],
+                   refusals=[dict(question=c['question'], tool=c['tool'], args=c['args']) for c in calls if c['refused']],
                    schemas=profile_schemas, timing=timing, questions=per_question)
     out = Path(args.out) if args.out else base/'summary.json'
     out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
@@ -363,10 +404,16 @@ def compare(base, cand, tolerances=TOLERANCES):
             out.append(f"{stratum}: recall {b['recall']:.3f} -> {c['recall']:.3f}")
         if b['precision'] is not None and (c['precision'] or 0) < b['precision'] - tolerances['precision']:
             out.append(f"{stratum}: precision {b['precision']:.3f} -> {c['precision']}")
-    failed = {(e['question'], e['tool'], json.dumps(e['args'], sort_keys=True)) for e in base['errors']}
+    key = lambda e: (e['question'], e['tool'], json.dumps(e['args'], sort_keys=True))
+    failed = {key(e) for e in base['errors']}
     for e in cand['errors']:
-        if (e['question'], e['tool'], json.dumps(e['args'], sort_keys=True)) not in failed:
+        if key(e) not in failed:
             out.append(f"new error: {e['tool']} {json.dumps(e['args'], sort_keys=True)} ({e['question']})")
+    # A call the base refused by design may stay refused; one it answered must not become a refusal.
+    refused = {key(e) for e in base.get('refusals', [])} | failed
+    for e in cand.get('refusals', []):
+        if key(e) not in refused:
+            out.append(f"newly refused: {e['tool']} {json.dumps(e['args'], sort_keys=True)} ({e['question']})")
     for tool, b in base['tools'].items():
         c = cand['tools'].get(tool)
         if c and b['bytes_total'] and c['bytes_total'] > b['bytes_total'] * (1 + tolerances['bytes']):
@@ -387,10 +434,10 @@ def table(base, cand):
         fmt = lambda v: '—' if v is None else f'{v:.3f}'
         lines.append(f"| {stratum} | {b['questions']} | {fmt(b['recall'])} → {fmt(c.get('recall'))} | "
                      f"{fmt(b['precision'])} → {fmt(c.get('precision'))} |")
-    lines += ['', '| Tool | Calls | Errors | Answer bytes (total) | Median |', '| --- | ---: | ---: | ---: | ---: |']
+    lines += ['', '| Tool | Calls | Errors | Refusals | Answer bytes (total) | Median |', '| --- | ---: | ---: | ---: | ---: | ---: |']
     for tool, b in base['tools'].items():
         c = cand['tools'].get(tool, {})
-        lines.append(f"| {tool} | {b['calls']} | {b['errors']} → {c.get('errors')} | {b['bytes_total']} → "
+        lines.append(f"| {tool} | {b['calls']} | {b['errors']} → {c.get('errors')} | {b.get('refusals', 0)} → {c.get('refusals', 0)} | {b['bytes_total']} → "
                      f"{c.get('bytes_total')} | {b['bytes_median']} → {c.get('bytes_median')} |")
     lines += ['', '| Profile | Tools listed | Always loaded | Always-loaded bytes | Instructions bytes | Tokens |',
               '| --- | ---: | ---: | ---: | ---: | ---: |']
@@ -408,6 +455,9 @@ def main():
     e.add_argument('--study', required=True, choices=sorted(STUDIES))
     e.add_argument('--transcripts', nargs='+', required=True)
     e.add_argument('--out', required=True)
+    f = sub.add_parser('fetch')
+    f.add_argument('--repos', default=','.join(SUBSET), help='comma-separated public-v2 repositories (default: the fast subset)')
+    f.add_argument('--out', required=True, help='a new or empty directory outside this checkout')
     r = sub.add_parser('run')
     r.add_argument('--knowcode', required=True)
     r.add_argument('--label', required=True)
@@ -427,6 +477,8 @@ def main():
         rows = extract(a.study, a.transcripts)
         Path(a.out).write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
         print(json.dumps(dict(rows=len(rows), calls=sum(r['sessions'] for r in rows))))
+    elif a.command == 'fetch':
+        fetch(a.repos.split(','), a.out)
     elif a.command == 'run':
         summary = run(a)
         print(json.dumps({k: summary[k] for k in ('label', 'knowcode_version', 'calls', 'skipped', 'strata', 'timing')}, indent=1))

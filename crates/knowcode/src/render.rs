@@ -966,6 +966,70 @@ pub fn coupled(repos: &[crate::ops::CoupledRepo], file: &str) {
     }
 }
 
+/// One definition's history per repo: its commits (newest first), first and last change, who wrote its current
+/// lines, and the files changed in the same commits.
+pub fn history(repos: &[crate::history::HistoryRepo], p: &crate::history::HistoryParams) {
+    if repos.is_empty() {
+        println!("no definition {}", p.symbol);
+    }
+    let multi = repos.len() > 1;
+    for r in repos {
+        let root = multi.then_some(r.root.as_path());
+        let s = &r.symbol;
+        let moved = r.head_lines.map(|(a, b)| format!(" (lines {a}-{b} at HEAD)")).unwrap_or_default();
+        println!("{} {}  {}:{}-{}{moved}", s.kind, s.name, loc_file(root, &s.file), s.line, s.end_line);
+        if r.uncommitted {
+            println!("  not committed yet: no history");
+        }
+        let line = |c: &crate::history::Change| format!("{} {} {}  {}", c.sha, c.date, c.author, c.subject);
+        if !r.commits.is_empty() {
+            let more = if r.capped { "+" } else { "" };
+            println!("  {}{more} commits changed it{}:", r.commits.len(), p.since.as_deref().map(|s| format!(" since {s}")).unwrap_or_default());
+            for c in r.commits.iter().take(p.limit) {
+                println!("    {}", line(c));
+            }
+            if r.commits.len() > p.limit {
+                println!("    … {} more (-n)", r.commits.len() - p.limit);
+            }
+            if let Some(first) = r.first() {
+                println!("  first change: {}", line(first));
+            }
+        } else if !r.uncommitted {
+            println!("  no commit changed it{}", p.since.as_deref().map(|s| format!(" since {s}")).unwrap_or_default());
+        }
+        if !r.writers.is_empty() {
+            let w: Vec<String> = r.writers.iter().map(|w| format!("{} {} lines ({:.0}%)", w.author, w.lines, w.share * 100.0)).collect();
+            println!("  current lines by: {}", w.join(", "));
+        }
+        if r.writers_uncommitted > 0 {
+            println!("  uncommitted lines: {}", r.writers_uncommitted);
+        }
+        if !r.changed_with.is_empty() {
+            println!("  changed in the same commits (of at most 50 files):");
+            let shown = crate::history::changed_with_shown(p.limit);
+            for c in r.changed_with.iter().take(shown) {
+                println!("    {:>3}  {}", c.shared, loc_file(root, &c.file));
+            }
+            if r.changed_with_total > shown {
+                println!("    … {} more", r.changed_with_total - shown);
+            }
+        }
+        if r.sweeps > 0 {
+            println!("  {} of its commits changed more than 50 files: left out of what changed with it", r.sweeps);
+        }
+        if !r.commits.is_empty() && !r.changed_with_unread && r.callers_total > 0 {
+            println!("  direct callers changed in its commits: {} of {}", r.callers.len(), r.callers_total);
+            for c in &r.callers {
+                let test = if c.test { "  (test)" } else { "" };
+                println!("    {:>3}  {}  {}:{}  {}{test}", c.shared, c.qualified, loc_file(root, &c.file), c.line, c.commits.join(" "));
+            }
+        }
+        if !r.others.is_empty() {
+            println!("  other definitions: {}", r.others.join(", "));
+        }
+    }
+}
+
 /// The history partners of one repo's answer: co-change evidence only.
 fn coupled_partners(r: &crate::ops::CoupledRepo, root: Option<&Path>) {
     let Some(first) = r.partners.first() else {
@@ -973,7 +1037,7 @@ fn coupled_partners(r: &crate::ops::CoupledRepo, root: Option<&Path>) {
         return;
     };
     println!(
-        "{}: {} commits ({}); changed with it, most first by shared commits weighted by age (half per 90 days):",
+        "{}: {} commits ({}); changed with it, most shared commits first (recency: weighted by age, half per 90 days):",
         loc_file(root, &r.file),
         first.coupled.commits,
         r.history
@@ -994,7 +1058,7 @@ fn coupled_partners(r: &crate::ops::CoupledRepo, root: Option<&Path>) {
         }
         let tags = if tags.is_empty() { String::new() } else { format!("  ({})", tags.join(", ")) };
         println!(
-            "  {:>3} of {:<3} {:>4.0}%  weight {:<5.2} {}{tags}",
+            "  {:>3} of {:<3} {:>4.0}%  recency {:<5.2} {}{tags}",
             p.coupled.support,
             p.coupled.commits,
             p.coupled.confidence * 100.0,

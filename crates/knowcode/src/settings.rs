@@ -47,6 +47,10 @@ fn settings() -> Result<Vec<Setting>> {
             let (value, source) = config::session_hook()?;
             Setting { key: "hooks.session_start".into(), value: json!(value), source: source.describe("", "") }
         },
+        {
+            let (value, source) = config::node_modules()?;
+            Setting { key: "index.node_modules".into(), value: json!(value), source: source.describe("", "") }
+        },
         Setting {
             key: "cache.dir".into(),
             value: json!(cache),
