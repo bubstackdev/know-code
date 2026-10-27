@@ -1029,7 +1029,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Flow { entry, depth, limit, max_repos, edges, children, evidence, cite, repo } => {
             cite.enter();
-            let opts = flow::FlowOptions { depth: depth.clamp(1, 16), max_steps: limit, max_repos, edges: ops::edge_filter(&edges, &evidence)?, children };
+            let opts = flow::FlowOptions { depth: depth.clamp(1, flow::MAX_DEPTH), max_steps: limit, max_repos, edges: ops::edge_filter(&edges, &evidence)?, children };
             let out = flow::flow(&entry, &opts, &repo.scope())?;
             emit(&repo, &out.env, || render::flow(&entry, out.data.as_ref()))
         }
@@ -1576,4 +1576,27 @@ fn purge() -> Result<()> {
     }
     println!("coordination locks and unrelated cache files are retained");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    #[test]
+    fn the_cli_says_the_bounds_the_tools_apply() {
+        let cli = super::Cli::command();
+        for (cmd, arg, r) in [
+            ("trace", "depth", &crate::mcp::TRACE_DEPTH),
+            ("impact", "depth", &crate::mcp::IMPACT_DEPTH),
+            ("flow", "depth", &crate::mcp::FLOW_DEPTH),
+            ("path", "max_hops", &crate::mcp::PATH_HOPS),
+            ("path", "paths", &crate::mcp::PATH_COUNT),
+        ] {
+            let sub = cli.find_subcommand(cmd).unwrap_or_else(|| panic!("no command {cmd}"));
+            let a = sub.get_arguments().find(|a| a.get_id() == arg).unwrap_or_else(|| panic!("{cmd}: no {arg}"));
+            let help = a.get_help().map(|h| h.to_string()).unwrap_or_default();
+            let said = help.split_once(&format!(", {} to {}", r.min, r.max)).is_some_and(|(_, after)| !after.starts_with(|c: char| c.is_ascii_digit()));
+            assert!(said, "{cmd} --{arg}: {help}");
+        }
+    }
 }

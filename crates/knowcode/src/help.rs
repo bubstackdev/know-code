@@ -332,7 +332,7 @@ variable's or output's callers include the calls in other repos setting or readi
     Topic {
         name: "kc_trace",
         summary: "call and relation tree around a symbol",
-        text: r#"Call and relation tree around a symbol, one hop by default (depth up to 3): callers (in), callees (out),
+        text: r#"Call and relation tree around a symbol, one hop by default (depth up to {max:kc_trace.depth}): callers (in), callees (out),
 conformers, protocol implementations (witness), calls through a protocol (via_protocol), and in C#, calls through a
 service the DI container binds to one implementation (via_di, with where it is registered), which out traces follow
 instead of stopping at the interface. Every edge has a confidence and evidence; by default only exact and unique_name
@@ -356,7 +356,7 @@ through hidden kinds).
 
 A call made through an interface member, its base interface's (`Impl : IDerived`, `IDerived : IBase`, the member on
 `IBase`), or the abstract or virtual base-class member an override overrides reaches the implementation (edge
-`via_protocol`). Depth goes up to 3: asked deeper, the answer says it walked 3 (`depth: {asked, walked}`). Nodes the
+`via_protocol`). Depth goes up to {max:kc_trace.depth}: asked deeper, the answer says it walked {max:kc_trace.depth} (`depth: {asked, walked}`). Nodes the
 tree lists without growing that lead further (at the depth, or reached only by an ambiguous edge) are its `frontier`
 ({qualified, file, line, hop, reason, beyond, next}: `next` is the exact kc_trace call going on from it), with an
 `incomplete` entry (reason `depth`, or `policy` for ambiguous edges) saying how to go on."#,
@@ -365,7 +365,7 @@ tree lists without growing that lead further (at the depth, or reached only by a
         name: "kc_path",
         summary: "how one symbol reaches another",
         text: r#"How symbol `from` reaches symbol `to`, possibly across repos (`to_repo`; without it, the repos defining `to`
-when `repo` doesn't, up to 8; more are named in the error, to pick one): the best 1-5 paths (`paths`, default 3), each a
+when `repo` doesn't, up to 8; more are named in the error, to pick one): the best {min:kc_path.paths}-{max:kc_path.paths} paths (`paths`, default {default:kc_path.paths}), each a
 list of steps from `from` to `to` with the edge reaching each step (calls, via_di: a call through a DI-bound service to
 the implementation, dispatch: an interface member to its one implementation, instantiates, uses, reads/writes: Entity
 Framework access to a DbSet, or SQL reading a table, sql: a DbSet to its SQL table or a procedure call to its SQL
@@ -413,7 +413,7 @@ in `through`. Left out and counted in `left_out`: ambiguous edges, test code, an
 Publish call at the site of an http or bus edge).
 
 `steps` are numbered depth first (index, parent, depth), each with repo, symbol, file:line, the edge reaching it, its
-confidence and site; each symbol appears once, unless the depth limit (`depth`, default 10, up to 16) cut it where first
+confidence and site; each symbol appears once, unless the depth limit (`depth`, default {default:kc_flow.depth}, up to {max:kc_flow.depth}) cut it where first
 reached and it is reached again nearer the entry, where it is grown. A step at the depth limit that leads on has `stop`
 ({reason, beyond, next}: `next` the exact kc_flow call going on from it), and the answer an `incomplete` entry (reason
 `depth`). `limit` caps the steps (default 40), `max_repos` the repos opened (default 16); a flow they cut has a
@@ -425,7 +425,7 @@ limits the edge kinds followed (calls, reads, writes, uses, http, bus, sql, ngrx
         name: "kc_impact",
         summary: "what depends on a change, by proximity",
         text: r#"What depends on something you change. Give one of: `symbol`, `file`, or `diff` ("working" for uncommitted
-changes, or a git revision). One hop by default (the direct dependents); pass depth 2-16 for more.
+changes, or a git revision). One hop by default (the direct dependents); pass depth 2-{max:kc_impact.depth} for more.
 
 Each affected symbol is classed by proximity: `direct` (hop 1), `near` (2), `far` (3+), or `test` (test code at any
 hop, which never sets `nearest`). Proximity is graph distance and nothing more: it says how many edges separate a
@@ -452,7 +452,7 @@ way in `ways` ({via, hop, confidence, site, also}; in text, last on its row: `(a
 answer leaves those out first, and says how many. When the walk stops at the limit (`limit`,
 default 30; `truncated`), `counts_cover` is "shown": the counts are of the affected symbols listed, not all.
 
-Where the walk stops: the walk goes up to 16 hops (deeper asked: `depth: {asked, walked}`), its budget the symbol
+Where the walk stops: the walk goes up to {max:kc_impact.depth} hops (deeper asked: `depth: {asked, walked}`), its budget the symbol
 limit. Listed symbols it didn't walk past that have dependents it doesn't list are its `frontier` ({qualified, file,
 line, hop, reason, beyond, next}: `depth` at the depth reached, `ambiguous` reached only by ambiguous edges; `beyond`
 counts the dependents past it, at least; `next` is the exact kc_impact call going on from it), each kind with an `incomplete` entry (reason `depth` or `policy`) naming
@@ -795,7 +795,7 @@ overview, areas, notes, note_add, grep_ast, status). `q` fills the op's main par
 - more: `cursor`; help: `topic` (an op's name is its tool's topic: `impact`, `impact.crossings`)
 - path: `from`; flow: `entry`; symbol_at: `file`; coupled: `file`; ownership: `path`; overview: `focus`; areas: `area`
 - tests: `targets`, reviewers: `files` (`q` as a list of one, or `qs`)
-- unused, hotspots, status: no `q`
+- unused, hotspots, status: no `q` (an empty one is ignored)
 
 Every other parameter of the op's tool is passed by its own name, as that tool's topic lists it (`kc {op: impact,
 q: Orders.Place, depth: 2, repo: shop}`, `kc {op: search, q: "retry", regex: true}`, `kc {op: path, q: A, to: B}`).
@@ -956,11 +956,9 @@ kc_locate, kc_more and kc_help. A cut answer's `hint` names the call that contin
 ];
 
 /// The parameters every tool shares, described once (their schemas carry no description, to keep each tool's
-/// advertised schema short); the server's instructions name `repo`.
-pub const COMMON: &[(&str, &str)] = &[
-    ("repo", "Repo to query: a path, or the name of an indexed repo. Default: the server's repo."),
-    ("max_chars", "Answer size cap in characters (default 8000, max 40000); a list cut to fit says so (`incomplete`, `more`)."),
-];
+/// advertised schema short); the server's instructions name `repo`. `max_chars` is described by its bounds
+/// (`mcp::ANSWER_CHARS`).
+pub const COMMON: &[(&str, &str)] = &[("repo", "Repo to query: a path, or the name of an indexed repo. Default: the server's repo.")];
 
 /// The topic named `name`: as listed, or a tool's without its `kc_` prefix (`context`, `context.http`).
 pub fn topic(name: &str) -> Option<&'static Topic> {
@@ -971,7 +969,7 @@ pub fn topic(name: &str) -> Option<&'static Topic> {
 /// A tool topic's text with its parameters, read from the tool's schema (`schema`: its `inputSchema`), so every
 /// parameter is documented here whatever the text names.
 pub fn render(t: &Topic, schema: Option<&serde_json::Map<String, serde_json::Value>>) -> String {
-    let mut out = format!("{}\n{}\n", t.name, t.text);
+    let mut out = format!("{}\n{}\n", t.name, fill(t.text));
     if let Some(props) = schema.and_then(|s| s.get("properties")).and_then(|p| p.as_object()) {
         let required: Vec<&str> =
             schema.and_then(|s| s.get("required")).and_then(|r| r.as_array()).map(|r| r.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
@@ -983,8 +981,9 @@ pub fn render(t: &Topic, schema: Option<&serde_json::Map<String, serde_json::Val
                 _ => "value".to_string(),
             };
             let req = if required.contains(&name.as_str()) { ", required" } else { "" };
-            let common = COMMON.iter().find(|(n, _)| n == name).map(|(_, d)| *d);
-            let desc = p["description"].as_str().filter(|d| !d.is_empty()).or(common).unwrap_or("");
+            let common = COMMON.iter().find(|(n, _)| n == name).map(|(_, d)| d.to_string());
+            let common = common.or_else(|| crate::mcp::range(t.name, name).map(|r| r.line()));
+            let desc = p["description"].as_str().filter(|d| !d.is_empty()).map(str::to_string).or(common).unwrap_or_default();
             out.push_str(&format!("- `{name}` ({ty}{req}): {desc}\n"));
         }
     }
@@ -995,6 +994,42 @@ pub fn render(t: &Topic, schema: Option<&serde_json::Map<String, serde_json::Val
             out.push_str(&format!("- `{}`: {}\n", s.name, s.summary));
         }
     }
+    out
+}
+
+/// `text` with each bounds placeholder filled from `mcp::RANGES`: `{max:kc_impact.depth}`, and `min`, `default` and
+/// `span` likewise, so the prose says the bounds the answers apply. Any other braces are left as they are.
+pub fn fill(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let filled = tail.find('}').and_then(|end| {
+            let (which, param) = tail[1..end].split_once(':')?;
+            let (tool, name) = param.split_once('.')?;
+            let r = crate::mcp::range(tool, name)?;
+            let v = match which {
+                "min" => r.min.to_string(),
+                "max" => r.max.to_string(),
+                "default" => r.default.to_string(),
+                "span" => r.span(),
+                _ => return None,
+            };
+            Some((v, end + 1))
+        });
+        match filled {
+            Some((v, n)) => {
+                out.push_str(&v);
+                rest = &tail[n..];
+            }
+            None => {
+                out.push('{');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
     out
 }
 

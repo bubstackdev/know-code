@@ -31,7 +31,78 @@ const DEFAULT_CHARS: usize = 8_000;
 
 /// The least a `kc_context` bundle is capped at (its default budget makes 6,000).
 const CONTEXT_CHARS: usize = 6_000;
+const MIN_CHARS: usize = 1_000;
 const MAX_CHARS: usize = 40_000;
+
+/// A numeric parameter's bounds. Its schema line, its help text (see `help::fill`) and the clamp its answers apply
+/// all read them here, so they can't say different things.
+#[derive(Debug)]
+pub struct Range {
+    /// What the number counts, leading its schema line.
+    pub what: &'static str,
+    pub min: usize,
+    pub default: usize,
+    pub max: usize,
+    /// Said after the bounds.
+    pub note: &'static str,
+}
+
+impl Range {
+    /// `v`, or the default, within the bounds.
+    pub fn clamp(&self, v: Option<usize>) -> usize {
+        v.unwrap_or(self.default).clamp(self.min, self.max)
+    }
+
+    /// `1 (default) to 16`, `1 to 16 (default 10)`.
+    pub fn span(&self) -> String {
+        if self.default == self.min {
+            format!("{} (default) to {}", self.min, self.max)
+        } else {
+            format!("{} to {} (default {})", self.min, self.max, self.default)
+        }
+    }
+
+    /// The parameter's line in its tool's schema and help: `Hops, 1 (default) to 16.`
+    pub fn line(&self) -> String {
+        format!("{}, {}{}.", self.what, self.span(), self.note)
+    }
+}
+
+pub const TRACE_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_TRACE_DEPTH as usize, note: "" };
+pub const IMPACT_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_IMPACT_DEPTH as usize, note: "" };
+pub const FLOW_DEPTH: Range = Range { what: "Steps deep", min: 1, default: 10, max: crate::flow::MAX_DEPTH as usize, note: "" };
+pub const PATH_HOPS: Range = Range { what: "Hops a path may have", min: 1, default: 8, max: crate::walk::MAX_PATH_HOPS as usize, note: "" };
+pub const PATH_COUNT: Range = Range { what: "Paths to return", min: 1, default: 3, max: crate::walk::MAX_PATHS, note: "" };
+pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, default: 20, max: 500, note: "" };
+pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "" };
+pub const ANSWER_CHARS: Range = Range {
+    what: "Answer size cap in characters",
+    min: MIN_CHARS,
+    default: DEFAULT_CHARS,
+    max: MAX_CHARS,
+    note: ", the max doubled for several inputs; a list cut to fit says so (`incomplete`, `more`)",
+};
+
+/// Every bounded parameter, by tool (`*`: every tool).
+pub const RANGES: &[(&str, &str, &Range)] = &[
+    ("kc_trace", "depth", &TRACE_DEPTH),
+    ("kc_impact", "depth", &IMPACT_DEPTH),
+    ("kc_flow", "depth", &FLOW_DEPTH),
+    ("kc_path", "max_hops", &PATH_HOPS),
+    ("kc_path", "paths", &PATH_COUNT),
+    ("kc_search", "limit", &SEARCH_LIMIT),
+    ("kc_search", "context", &SEARCH_CONTEXT),
+    ("kc_grep_ast", "limit", &SEARCH_LIMIT),
+    ("*", "max_chars", &ANSWER_CHARS),
+];
+
+/// The bounds of `tool`'s parameter `param`.
+pub fn range(tool: &str, param: &str) -> Option<&'static Range> {
+    RANGES.iter().find(|(t, p, _)| (*t == tool || *t == "*") && *p == param).map(|(_, _, r)| *r)
+}
+
+/// An [`ADVERTISED`] line standing for the parameter's bounds (`1 (default) to 16.`).
+const SPAN: &str = "{span}";
 
 
 
@@ -136,7 +207,7 @@ pub struct TraceParams {
     /// `in`, `out` or `both` (default).
     #[serde(default)]
     pub direction: Option<String>,
-    /// Hops, 1 (default) to 3.
+    /// Hops (bounds in `RANGES`).
     #[serde(default)]
     pub depth: Option<u8>,
     /// Node cap (default 25).
@@ -191,10 +262,10 @@ pub struct PathParams {
     /// The repo `to` is in (default: `repo`, else the repos defining it).
     #[serde(default)]
     pub to_repo: Option<String>,
-    /// Hops a path may have, 1 to 12 (default 8).
+    /// Hops a path may have (bounds in `RANGES`).
     #[serde(default)]
     pub max_hops: Option<u8>,
-    /// Paths to return, 1 to 5 (default 3).
+    /// Paths to return (bounds in `RANGES`).
     #[serde(default)]
     pub paths: Option<usize>,
     /// Follow ambiguous edges too.
@@ -226,7 +297,7 @@ pub struct PathParams {
 pub struct FlowParams {
     /// An Angular route, a component, a controller action, `Type.member` or `file:line`.
     pub entry: String,
-    /// Steps deep, 1 to 16 (default 10).
+    /// Steps deep (bounds in `RANGES`).
     #[serde(default)]
     pub depth: Option<u8>,
     /// Steps to list (default 40).
@@ -265,7 +336,7 @@ pub struct ImpactParams {
     /// A diff instead: `working`, or a git revision.
     #[serde(default)]
     pub diff: Option<String>,
-    /// Hops, 1 (default) to 5.
+    /// Hops (bounds in `RANGES`).
     #[serde(default)]
     pub depth: Option<u8>,
     /// Affected symbols to list (default 30).
@@ -448,7 +519,7 @@ pub struct SearchParams {
     /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`, `**/shop/src/**`), that repo only.
     #[serde(default)]
     pub paths: Vec<String>,
-    /// Lines of context around each hit (max 10).
+    /// Lines of context around each hit (bounds in `RANGES`).
     #[serde(default)]
     pub context: Option<usize>,
     /// Results per page (default 20).
@@ -648,7 +719,9 @@ pub fn one_call(p: OneParams) -> Result<(String, serde_json::Map<String, Value>)
         return Err(format!("no op {op:?}: one of {}", ops.join(", ")));
     };
     let mut args = p.rest;
-    if let Some(q) = p.q {
+    // An op taking no query takes an empty one as none.
+    let q = p.q.filter(|q| !main.is_empty() || !q.trim().is_empty());
+    if let Some(q) = q {
         if main.is_empty() {
             return Err(format!("op {op} takes no `q`; pass its parameters by name (kc {{op: help, q: {op}}})"));
         }
@@ -797,10 +870,10 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_locate", &[("query", ""), ("queries", "")]),
     ("kc_refs", &[("name", ""), ("names", "")]),
     ("kc_context", &[("symbol", ""), ("symbols", "")]),
-    ("kc_trace", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("direction", "`in`, `out` or `both` (default)."), ("depth", "1 (default) to 3.")]),
+    ("kc_trace", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("direction", "`in`, `out` or `both` (default)."), ("depth", SPAN)]),
     ("kc_path", &[("from", ""), ("to", "")]),
     ("kc_flow", &[("entry", "")]),
-    ("kc_impact", &[("symbol", "Name, `Type.member` or file:line."), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
+    ("kc_impact", &[("symbol", "Name, `Type.member` or file:line."), ("diff", "`working` or a git revision."), ("depth", SPAN)]),
     ("kc_unused", &[]),
     ("kc_rename_preview", &[("symbol", ""), ("new_name", "")]),
     ("kc_coupled", &[("file", "")]),
@@ -832,6 +905,10 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
         if let Some(o) = p.as_object_mut() {
             if line.is_empty() {
                 o.remove("description");
+            } else if *line == SPAN
+                && let Some(r) = range(tool, name)
+            {
+                o.insert("description".into(), Value::from(format!("{}.", r.span())));
             } else {
                 o.insert("description".into(), Value::from(*line));
             }
@@ -881,6 +958,20 @@ pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// `schema` with each bounded parameter's line from [`RANGES`].
+fn ranged(tool: &str, mut schema: rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, p) in props.iter_mut() {
+            if let Some(r) = range(tool, name).filter(|_| p.get("description").is_some())
+                && let Some(o) = p.as_object_mut()
+            {
+                o.insert("description".into(), Value::from(r.line()));
+            }
+        }
+    }
+    schema
 }
 
 /// A tool's input schema as advertised: without what tells an agent nothing (`$schema`, `default: null`, integer
@@ -1059,13 +1150,13 @@ tokio::task_local! {
 /// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
 async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
     let env = blocking(false, with_cuts(f)).await?;
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
+    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
 }
 
 /// [`run`] for an operation that runs a child process (a search): in the children's lane.
 async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
     let env = blocking(true, with_cuts(f)).await?;
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
+    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
 }
 
 /// `f`, with the child processes cut while it ran said in its envelope (see [`ops::add_cuts`]). Runs on the blocking
@@ -1125,7 +1216,7 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
         Ok((env, text))
     })
     .await?;
-    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS);
+    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS);
     let body = notes_first(&lean_sites(&mcp_names(&text)));
     // Complete when the envelope says so and the tree says nothing was cut (its cut notes come first).
     let complete = env["complete"].as_bool() != Some(false) && crate::contract::incomplete_of(&env).is_empty() && !body.starts_with('…');
@@ -1332,7 +1423,7 @@ async fn run_batch(
     if inputs.len() > MAX_BATCH {
         return Err(format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len()));
     }
-    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS * 2);
+    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS * 2);
     blocking(false, move || {
         let n = inputs.len();
         let mut results: Vec<String> = Vec::new();
@@ -1953,7 +2044,7 @@ impl KnowcodeServer {
         let mut schemas = std::collections::BTreeMap::new();
         for mut route in Self::tool_router() {
             // The full schema documents every parameter in help; the advertised one only the common ones.
-            let full = slim(&route.attr.input_schema);
+            let full = ranged(&route.attr.name, slim(&route.attr.input_schema));
             route.attr.input_schema = std::sync::Arc::new(advertised(&route.attr.name, &full));
             if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) || route.attr.name == "kc" {
                 let mut meta = rmcp::model::JsonObject::new();
@@ -2071,7 +2162,7 @@ impl KnowcodeServer {
         let filter = p.walk.filter();
         let what = format!("no definition named {}", p.symbol);
         // Asked deeper than a trace goes, the answer says so (`ops::trace`); the notes go by the depth walked.
-        let asked = p.depth.unwrap_or(1).max(1);
+        let asked = p.depth.unwrap_or(TRACE_DEPTH.default as u8).max(1);
         let depth = asked.min(kc_store::trace::MAX_TRACE_DEPTH);
         let limit = p.limit.unwrap_or(25);
         let mode = cite_mode(p.walk.cite.as_deref())?;
@@ -2135,10 +2226,10 @@ impl KnowcodeServer {
         let path = move || {
             cite(mode);
             let opts = crate::walk::PathOptions {
-                max_hops: p.max_hops.unwrap_or(8),
+                max_hops: p.max_hops.unwrap_or(PATH_HOPS.default as u8),
                 max_nodes: p.max_nodes.unwrap_or(2000).max(1),
                 max_repos: p.max_repos.unwrap_or(16).max(1),
-                paths: p.paths.unwrap_or(3),
+                paths: p.paths.unwrap_or(PATH_COUNT.default),
                 one_way: false,
                 allow_ambiguous: p.allow_ambiguous,
                 edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
@@ -2183,7 +2274,7 @@ impl KnowcodeServer {
         let flow = move || {
             cite(mode);
             let opts = crate::flow::FlowOptions {
-                depth: p.depth.unwrap_or(10).clamp(1, 16),
+                depth: FLOW_DEPTH.clamp(p.depth.map(usize::from)) as u8,
                 max_steps: p.limit.unwrap_or(40),
                 max_repos: p.max_repos.unwrap_or(16).max(1),
                 edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
@@ -2232,7 +2323,7 @@ impl KnowcodeServer {
             symbol: p.symbol,
             file: p.file,
             diff: p.diff,
-            depth: p.depth.unwrap_or(1),
+            depth: p.depth.unwrap_or(IMPACT_DEPTH.default as u8),
             limit: p.limit.unwrap_or(30),
             filter: p.walk.filter(),
             order,
@@ -2248,7 +2339,7 @@ impl KnowcodeServer {
                 if out.data.is_empty() {
                     text = format!("{what}\n");
                 } else if params.depth < 2 && out.data.iter().any(|r| !r.impact.affected.is_empty()) {
-                    text.push_str("(one hop: direct dependents only; pass depth 2-16 for more)\n");
+                    text.push_str(&format!("(one hop: direct dependents only; pass depth 2-{} for more)\n", IMPACT_DEPTH.max));
                 }
                 Ok((out.env, text))
             })
@@ -2264,7 +2355,7 @@ impl KnowcodeServer {
                     hints.push(format!("symbol limit {} reached; raise limit, lower depth, or filter with edges/kinds", params.limit));
                 }
                 if params.depth < 2 && out.data.iter().any(|r| !r.impact.affected.is_empty()) {
-                    hints.push("one hop: direct dependents only; pass depth 2-16 for more".to_string());
+                    hints.push(format!("one hop: direct dependents only; pass depth 2-{} for more", IMPACT_DEPTH.max));
                 }
                 if !hints.is_empty() {
                     env["hint"] = Value::from(hints.join("; "));
@@ -2428,12 +2519,12 @@ impl KnowcodeServer {
         for g in p.paths {
             args.extend(["-g".into(), g]);
         }
-        args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
+        args.extend(["-C".into(), SEARCH_CONTEXT.clamp(p.context).to_string()]);
         // A first page at the default limit shows every hit in code when they fit the answer (at most 60 hits).
         if p.limit.is_none() && p.offset.unwrap_or(0) == 0 && !p.files_only {
-            args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS).to_string()]);
+            args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS).to_string()]);
         }
-        args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
+        args.extend(["-n".into(), SEARCH_LIMIT.clamp(p.limit).to_string()]);
         args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
         if let Some(n) = p.max_lines {
             args.extend(["--max-lines".into(), n.max(1).to_string()]);
@@ -2473,7 +2564,7 @@ impl KnowcodeServer {
         for g in p.paths {
             args.extend(["-g".into(), g]);
         }
-        args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
+        args.extend(["-n".into(), SEARCH_LIMIT.clamp(p.limit).to_string()]);
         args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
         if let Some(n) = p.max_matches {
             args.extend(["--max-matches".into(), n.max(1).to_string()]);
@@ -2702,6 +2793,41 @@ mod tests {
     /// What tool discovery costs an agent's context, held to a budget so it can't creep back: the advertised schema
     /// (every tool, as `tools/list` sends it), each description, each parameter's line, and the instructions.
     #[test]
+    fn bounds_are_said_as_answers_apply_them() {
+        let s = server("all");
+        let advertised: std::collections::HashMap<String, rmcp::model::Tool> =
+            s.tool_router.list_all().into_iter().map(|t| (t.name.to_string(), t)).collect();
+        for (tool, param, r) in RANGES.iter().filter(|(t, _, _)| *t != "*") {
+            // The schema's line, the help topic's and the advertised one.
+            let full = &s.schemas[*tool]["properties"][*param];
+            assert_eq!(full["description"].as_str(), Some(r.line().as_str()), "{tool}.{param}");
+            let help = s.help(Some(tool)).unwrap();
+            assert!(help.contains(&format!("`{param}` (integer): {}\n", r.line())), "{tool}.{param}: {help}");
+            if let Some(shown) = advertised[*tool].input_schema["properties"].get(*param).and_then(|p| p["description"].as_str()) {
+                assert_eq!(shown, format!("{}.", r.span()), "{tool}.{param}");
+            }
+            // The clamp.
+            assert_eq!((r.clamp(Some(r.max + 1)), r.clamp(Some(r.min)), r.clamp(None)), (r.max, r.min, r.default), "{tool}.{param}");
+        }
+        assert!(s.help(Some("kc_find")).unwrap().contains(&format!("`max_chars` (integer): {}\n", ANSWER_CHARS.line())));
+        // The ranges are the runtime's.
+        assert_eq!(TRACE_DEPTH.max, kc_store::trace::MAX_TRACE_DEPTH as usize);
+        assert_eq!(IMPACT_DEPTH.max, kc_store::trace::MAX_IMPACT_DEPTH as usize);
+        assert_eq!(FLOW_DEPTH.max, crate::flow::MAX_DEPTH as usize);
+        assert_eq!((PATH_HOPS.max, PATH_COUNT.max), (crate::walk::MAX_PATH_HOPS as usize, crate::walk::MAX_PATHS));
+        // Help prose names bounds by placeholder only: every one fills, and no topic says a stale one.
+        for t in crate::help::TOPICS {
+            let text = crate::help::fill(t.text);
+            for p in ["{min:", "{max:", "{default:", "{span:"] {
+                assert!(!text.contains(p), "{}: unfilled {p}", t.name);
+            }
+        }
+        let impact = s.help(Some("impact")).unwrap();
+        assert!(impact.contains(&format!("up to {} hops", IMPACT_DEPTH.max)) && impact.contains(&format!("pass depth 2-{} for more", IMPACT_DEPTH.max)), "{impact}");
+        assert!(!impact.contains("to 5"), "{impact}");
+    }
+
+    #[test]
     fn invariant_the_advertised_schema_keeps_within_its_budget() {
         let tools = server("all").tool_router.list_all();
         let bytes = serde_json::to_string(&tools).unwrap().len();
@@ -2927,6 +3053,11 @@ mod tests {
                 assert!(parse(&t, Value::Object(args)).unwrap().contains("zq-main"), "{op}: q");
             } else {
                 assert!(kc(json!({ "op": op, "q": "x" })).is_err(), "{op} takes no q");
+                // An empty or absent `q` is none.
+                for args in [json!({ "op": op }), json!({ "op": op, "q": "" }), json!({ "op": op, "q": " " })] {
+                    let (t, args) = kc(args.clone()).unwrap_or_else(|e| panic!("{args}: {e}"));
+                    assert!(parse(&t, Value::Object(args)).is_ok(), "{op}");
+                }
             }
             if !many.is_empty() {
                 assert!(all.contains_key(*many), "{op}: qs fills {many}, which {tool} doesn't take");
@@ -2938,6 +3069,10 @@ mod tests {
                 assert!(parse(&t, Value::Object(args)).unwrap().contains("zq-many"), "{op}: qs");
             }
         }
+        // The `kc` topic names the ops taking no `q`.
+        let no_q: Vec<&str> = ONE_OPS.iter().filter(|(_, main, _)| main.is_empty()).map(|(o, _, _)| *o).collect();
+        let kc_topic = crate::help::topic("kc").unwrap().text;
+        assert!(kc_topic.contains(&format!("- {}: no `q`", no_q.join(", "))), "{no_q:?}");
         // With or without the prefix; an unknown op is refused, naming the ops.
         assert_eq!(kc(json!({ "op": "kc_find", "q": "A" })).unwrap().0, "kc_find");
         assert!(kc(json!({ "op": "nope" })).unwrap_err().contains("impact, find, refs"));
@@ -3473,6 +3608,14 @@ mod tests {
         assert!(!impact.lines().any(|l| l.contains("called by method") && l.contains(" at ")), "{impact}");
         let trace = rt.block_on(s.kc_trace(p(json!({ "symbol": "Audit.Log", "direction": "in" })))).unwrap();
         assert!(trace.contains("truncated at the node limit") && trace.contains("raise limit"), "{trace}");
+        // Asked deeper than they go, they walk as deep as their schema and help say (`RANGES`).
+        for (range, v) in [
+            (&IMPACT_DEPTH, rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log", "depth": 99, "format": "json" }))))),
+            (&TRACE_DEPTH, rt.block_on(s.kc_trace(p(json!({ "symbol": "Audit.Log", "depth": 99, "format": "json" }))))),
+        ] {
+            let v: Value = serde_json::from_str(&v.unwrap()).unwrap();
+            assert_eq!(v["depth"], json!({ "asked": 99, "walked": range.max }), "{v}");
+        }
         assert!(!trace.lines().next().unwrap().ends_with("; complete"), "{trace}");
 
         // kc_context: within its cap; its callers list cut, with the cursor that continues it: more to read, the

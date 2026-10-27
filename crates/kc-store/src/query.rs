@@ -152,6 +152,43 @@ pub fn split_dotted(query: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// How a constructor is written in its file's language. The index stores every constructor as `init`, Swift's word;
+/// Python writes `__init__`, TypeScript and JavaScript `constructor`, and C# the type's own name.
+pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option<&'a str> {
+    match file.rsplit('.').next().unwrap_or("") {
+        "swift" => Some("init"),
+        "py" => Some("__init__"),
+        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
+        "cs" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        _ => None,
+    }
+}
+
+/// The name a definition has in its source: a constructor's (see [`constructor_written`]), or its indexed name.
+pub fn written_name(s: &SymbolRow) -> &str {
+    if s.kind == "init" { constructor_written(&s.file, s.container.as_deref()).unwrap_or(&s.name) } else { &s.name }
+}
+
+/// The constructors in a container named `container` (any, when `None`) whose source writes them `name` (see
+/// [`constructor_written`]): `Factory.__init__`, `Cart.constructor`, C#'s `Cart.Cart`. Empty for any other name.
+fn written_constructors(conn: &Connection, container: Option<&str>, name: &str) -> Result<Vec<SymbolRow>> {
+    let langs = match name {
+        "__init__" => "'python'",
+        "constructor" => "'typescript', 'tsx', 'javascript'",
+        _ if container.is_some_and(|c| c.rsplit('.').next() == Some(name)) => "'csharp'",
+        _ => return Ok(Vec::new()),
+    };
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE s.name = 'init' AND s.kind = 'init' AND f.lang IN ({langs}) ORDER BY f.path, s.start_byte"
+    );
+    let rows = conn.prepare_cached(&sql)?.query_map([], symbol_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|s| written_name(s) == name && container.is_none_or(|c| s.container.as_deref().is_some_and(|sc| names_type(sc, c))))
+        .collect())
+}
+
 /// Whether `qualified` is the type `c` names: `c` itself or ending in `.c`.
 fn names_type(qualified: &str, c: &str) -> bool {
     qualified == c || qualified.strip_suffix(c).is_some_and(|head| head.ends_with('.'))
@@ -289,6 +326,11 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
             hits.entry(row.id).or_insert((3, FindHit { symbol: row, matched: "token" }));
         }
     }
+    for row in written_constructors(conn, container, name)? {
+        if kind_matches(kind, &row.kind) {
+            hits.insert(row.id, (0, FindHit { symbol: row, matched: "exact" }));
+        }
+    }
 
     let mut ranked: Vec<(u8, FindHit)> = hits.into_values().collect();
     ranked.sort_by(|(ta, a), (tb, b)| {
@@ -356,10 +398,13 @@ fn definitions_split(conn: &Connection, _query: &str, (container, name): (Option
             })
             .collect();
     }
+    rows.extend(written_constructors(conn, container, name)?);
     // Code before tests and copies, whatever its kind (a test helper sharing the name of the code it tests never comes
     // first), then by kind; an Ansible role's meta symbol after its main tasks.
     let meta = |s: &SymbolRow| s.kind == "role" && s.tags == "meta";
-    let key = |s: &SymbolRow| (crate::path_rank(&s.file), kind_rank(&s.kind), meta(s), s.file.clone(), s.line);
+    // A constructor the index names `init` comes after a definition its source writes `init` (Python's `__init__` after
+    // a method named `init`).
+    let key = |s: &SymbolRow| (crate::path_rank(&s.file), s.kind == "init" && written_name(s) != name, kind_rank(&s.kind), meta(s), s.file.clone(), s.line);
     rows.sort_by_cached_key(key);
     Ok(rows)
 }
@@ -1984,6 +2029,9 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         .iter()
         .copied()
         .filter(|d| compatible(&hit.kind, &d.kind) && (case_ok || d.kind != "case"))
+        // A call written `init` reaches a constructor only where constructors are written `init`: in Python
+        // `self.init()` is a method named `init`, never `__init__`.
+        .filter(|d| !(hit.name == "init" && d.kind == "init" && matches!(d.lang.as_str(), "python" | "typescript" | "tsx" | "javascript")))
         .filter(|d| !implicit || d.kind == "case" || d.is_static)
         .filter(|d| !key_path || matches!(d.kind.as_str(), "property" | "subscript"))
         // Anything a script defines is visible only inside that script.
