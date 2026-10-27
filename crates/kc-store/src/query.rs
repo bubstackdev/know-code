@@ -5937,6 +5937,13 @@ pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Imp
     implemented_in(conn, conn, sym, parents, HashSet::from([short]), false)
 }
 
+/// Whether a member taking `a` (min_args, max_args) and one taking `b` take the same parameters, as an
+/// implementation and the member it implements or overrides do: as many, whichever have default values (an override
+/// may leave its base's defaults out, `M(x, y = null)` and `override M(x, y)`). Unknown on either side: the same.
+pub fn same_parameters(a: (Option<u32>, Option<u32>), b: (Option<u32>, Option<u32>)) -> bool {
+    a == b || a.0.is_none() || b.0.is_none() || (a.1.is_some() && a.1 == b.1)
+}
+
 /// [`implemented_members`] declared in a dependency `dep` (a package's base class or interface): the supertypes
 /// `sym`'s type names in its own repo (`conn`) that no type there defines, looked up in `dep`, and theirs there,
 /// transitively. Any repo's implementation may run for a call in `dep`, so each is `shared`.
@@ -6124,12 +6131,12 @@ fn implemented_in(
                         && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}")))
                 })
                 .collect();
-            // An implementation takes the arguments the member does (a WCF client's `XAsync()` doesn't implement
+            // An implementation takes the parameters the member does (a WCF client's `XAsync()` doesn't implement
             // the channel's `XAsync(request)`).
             let mut same = Vec::new();
             for m in members {
                 let theirs = arity(types, m.id)?;
-                if theirs == own || theirs.0.is_none() || own.0.is_none() {
+                if same_parameters(theirs, own) {
                     same.push(m);
                 }
             }

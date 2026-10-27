@@ -844,12 +844,14 @@ impl Tracer<'_> {
                      WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind = ?2 AND s.container IN (
                        SELECT CASE WHEN c.container IS NULL THEN c.name ELSE c.container || '.' || c.name END
                        FROM relations r JOIN symbols c ON c.id = r.from_id WHERE r.target_name = ?3 COLLATE BINARY)
-                     AND (?5 = 0 OR (s.min_args IS (SELECT min_args FROM symbols WHERE id = ?4) AND s.max_args IS (SELECT max_args FROM symbols WHERE id = ?4)))
+                     AND (?5 = 0 OR (s.min_args IS (SELECT min_args FROM symbols WHERE id = ?4) AND s.max_args IS (SELECT max_args FROM symbols WHERE id = ?4))
+                          OR s.max_args = (SELECT max_args FROM symbols WHERE id = ?4))
                      ORDER BY f.path, s.start_byte"
                 );
                 let mut stmt = self.conn.prepare_cached(&sql)?;
                 let short = container.rsplit('.').next().unwrap_or(container);
-                // Overloads of the requirement: only the implementations taking the same arguments.
+                // Overloads of the requirement: only the implementations taking the same parameters (see
+                // [`query::same_parameters`]).
                 let overloaded = query::definitions(self.conn, &sym.qualified())?.iter().filter(|d| d.container == sym.container && d.kind == sym.kind).count() > 1;
                 let rows: Vec<SymbolRow> =
                     stmt.query_map(rusqlite::params![sym.name, sym.kind, short, sym.id, overloaded], symbol_row)?.collect::<rusqlite::Result<_>>()?;
@@ -881,7 +883,7 @@ impl Tracer<'_> {
                     for d in query::definitions(self.conn, &format!("{p}.{}", sym.name))? {
                         if d.kind == sym.kind && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}"))) {
                             let theirs = arity(d.id)?;
-                            if theirs == own || theirs.0.is_none() || own.0.is_none() {
+                            if query::same_parameters(theirs, own) {
                                 reqs.push(d);
                             }
                         }

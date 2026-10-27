@@ -2,6 +2,14 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- A C# override or implementation that leaves out its base member's default parameter value
+  (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
+  member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
+  "nothing affected" and called that complete. Members now match by how many parameters they take, whichever have
+  defaults, and then by parameter types as before.
+
 ## 0.5.0 (2026-10-27)
 
 0.5 answers questions about a method's history and walks across library boundaries. `history` reads one definition's git
