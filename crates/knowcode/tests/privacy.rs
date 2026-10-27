@@ -590,6 +590,44 @@ fn invariant_no_mcp_tool_shows_blocked_content() {
         assert_clean(&format!("{tool} {args}"), &text);
         withheld += usize::from(text.contains("withheld"));
         answered += usize::from(r["result"]["isError"] != json!(true));
+        // Every refusal has its code; a privacy refusal and every `withheld` entry carry the same policy.
+        let policy = |p: &Value, what: &str| {
+            assert_eq!(p["file"], json!(".knowcode-privacy.yml"), "{tool} {args} {what}: {r}");
+            assert_eq!(p["block_at"], json!(1), "{tool} {args} {what}: {r}");
+            let whole = p["repo"] == json!("locked-lib");
+            assert!(whole || p["repo"] == json!("app"), "{tool} {args} {what}: {r}");
+            assert_eq!(p["blocks"], json!(if whole { "repo" } else { "paths" }), "{tool} {args} {what}: {r}");
+        };
+        if r["result"]["isError"] == json!(true) {
+            let e = &r["result"]["structuredContent"]["error"];
+            let body = r["result"]["content"][0]["text"].as_str().unwrap_or_default();
+            if body.starts_with("withheld") {
+                assert_eq!(e["code"], json!("withheld"), "{tool} {args}: {r}");
+                policy(&e["privacy"], "refusal");
+            } else {
+                assert!(e["code"].is_string() && e["code"] != json!("internal"), "{tool} {args}: {r}");
+            }
+        } else if let Ok(v) = serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap_or_default()) {
+            fn entries(v: &Value, out: &mut Vec<Value>) {
+                match v {
+                    Value::Object(m) => {
+                        for (k, x) in m {
+                            if k == "incomplete" && let Some(list) = x.as_array() {
+                                out.extend(list.iter().filter(|e| e["reason"] == json!("withheld")).cloned());
+                            }
+                            entries(x, out);
+                        }
+                    }
+                    Value::Array(a) => a.iter().for_each(|x| entries(x, out)),
+                    _ => {}
+                }
+            }
+            let mut found = Vec::new();
+            entries(&v, &mut found);
+            for e in &found {
+                policy(&e["privacy"], "entry");
+            }
+        }
         if *tool == "kc_find" && args["query"] == "shared_helper" && args.get("repo").is_none() {
             assert!(text.contains("src/helpers.py"), "{text}");
         }

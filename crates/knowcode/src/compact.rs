@@ -256,11 +256,16 @@ fn one_stale(list: &mut Vec<Value>, names: &Names) {
             if subjects.is_empty() { what } else { format!("{}: {what}", subjects.join(", ")) }
         })
         .collect();
+    // A repo still being indexed is the code to act on: ask again.
+    let indexing = at.iter().any(|&i| list[i]["code"] == "indexing");
     let mut one = Map::new();
     one.insert("reason".into(), Value::from("stale"));
     one.insert("detail".into(), Value::from(detail.join("; ")));
     if !hints.is_empty() {
         one.insert("hint".into(), Value::from(hints.join("; ")));
+    }
+    if indexing {
+        one.insert("code".into(), Value::from("indexing"));
     }
     list[first] = Value::Object(one);
     for &i in at.iter().skip(1).rev() {

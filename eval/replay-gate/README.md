@@ -42,9 +42,10 @@ fifth, final, rerun) and public-v2 runs (baseline, release candidate). That is 1
 | Recall per question type | drops by more than 0.02 |
 | Precision per question type | drops by more than 0.05 |
 | Errors | errors on a call the base answered |
-| Refusals | refuses a call the base answered (a refusal by design, such as `paths matched 0 files`, is not an error) |
+| Refusals | refuses a call the base answered (a refusal by design, code `no_files` or, from older builds, `paths matched 0 files`, is not an error) |
 | Answer bytes per tool | grow more than 10% |
 | Always-loaded schemas and instructions | grow more than 5% |
+| Codes | refuses a call without a machine code (or with `internal`), or gives an `incomplete` or `more` entry a reason or code outside [the contract](../../docs/answers.md#codes); checked for builds that code their refusals (0.6 on) |
 
 Precision here is over every place the answers name, context and evidence included, so it is low in absolute terms. It
 is for comparing builds, not a claim about answers.

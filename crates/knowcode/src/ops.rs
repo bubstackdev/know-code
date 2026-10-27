@@ -12,7 +12,7 @@ use kc_index::{Head, SyncOptions, SyncReport};
 use kc_index::ownership::{self, Ownership};
 use kc_index::vitals::{self, FileVitals};
 use kc_store::Store;
-use kc_store::answer::{Assumption, Evidence, Incomplete, Mechanism, Provenance, Reason, Verdict};
+use kc_store::answer::{Assumption, Code, Evidence, Incomplete, Mechanism, Provenance, Reason, Refusal, Verdict};
 use kc_store::db::{self, DbModel, SymbolTables};
 use kc_store::locate as query_locate;
 use kc_store::manifests::{self, ManifestHit, RepoEdge};
@@ -52,11 +52,12 @@ fn scope_repos(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         if p.whole() {
             // Opening purges what an index made before the policy holds.
             drop(kc_index::open(r)?); // also replaces an evicted index's cached summary with the blocked marker
-            bail!(
+            let message = format!(
                 "withheld: {}: its {} blocks the whole repo, so KnowCode indexes and answers nothing from it (`knowcode status` shows the policy)",
                 p.detail(&repo_name(r)),
                 kc_index::privacy::file_name()
             );
+            bail!(Refusal::withheld(message, p.policy(&repo_name(r))));
         }
     }
     Ok((roots, workspace))
@@ -140,6 +141,7 @@ pub fn withheld(root: &Path) -> Option<Incomplete> {
     p.blocks_anything().then(|| {
         let what = if p.whole() { "the whole repo" } else { "paths in it" };
         Incomplete::new(Reason::Withheld, p.detail(&repo_name(root)))
+            .with_privacy(p.policy(&repo_name(root)))
             .with_hint(format!("its {} blocks {what}; KnowCode never reads or answers from blocked content", kc_index::privacy::file_name()))
     })
 }
@@ -163,11 +165,12 @@ pub fn guard_inputs(repos: &[PathBuf], inputs: &[String]) -> Result<()> {
         let here = cwd.strip_prefix(&root).ok().map(Path::to_path_buf);
         for s in inputs {
             if names_blocked(&root, here.as_deref(), &p, s) {
-                bail!(
+                let message = format!(
                     "withheld: {}: the path asked about is in an area its {} blocks, so KnowCode answers nothing about it",
                     p.detail(&repo_name(&root)),
                     kc_index::privacy::file_name()
                 );
+                bail!(Refusal::withheld(message, p.policy(&repo_name(&root))));
             }
         }
     }
@@ -209,9 +212,9 @@ fn scope_repos_any(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         let roots = kc_index::indexed_roots()?;
         if roots.is_empty() {
             if kc_index::config::workspace()?.0.is_empty() {
-                bail!("not in a git repo and nothing is indexed; run `knowcode index <repo>` or pass --repo");
+                bail!(Refusal::new(Code::NotIndexed, "not in a git repo and nothing is indexed; run `knowcode index <repo>` or pass --repo"));
             }
-            bail!("not in a git repo and no repo under the workspace roots is indexed; run `knowcode index <repo>` or pass --repo");
+            bail!(Refusal::new(Code::NotIndexed, "not in a git repo and no repo under the workspace roots is indexed; run `knowcode index <repo>` or pass --repo"));
         }
         (roots, true)
     };
@@ -346,7 +349,7 @@ pub fn left_out(roots: &[PathBuf], root: &Path, e: anyhow::Error) -> Result<()> 
 pub fn unreadable(root: &Path, e: &anyhow::Error) -> Incomplete {
     let name = repo_name(root);
     if !root.join(".git").exists() {
-        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display()))
+        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display())).with_code(Code::Gone)
             .with_hint("clone it there again, or `knowcode prune` to forget its index")
     } else {
         Incomplete::new(Reason::Failed, format!("{name}: could not be read at {}; left out of this answer: {e:#}", root.display()))
@@ -419,6 +422,7 @@ impl Consulted {
             .iter()
             .map(|r| {
                 Incomplete::new(Reason::MissingRepo, format!("{}: indexed, but its checkout at {r} is gone; references into it are not resolved", repo_name(Path::new(r))))
+                    .with_code(Code::Gone)
                     .with_hint("clone it there again, or `knowcode purge` and re-index")
             })
             .collect();
@@ -512,7 +516,7 @@ fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
             continue;
         }
         let detail = format!("{}: indexed, but its checkout at {path} is gone; links into it are left out", repo_name(&r));
-        push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_hint("clone it there again, or `knowcode prune` to forget its index"));
+        push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_code(Code::Gone).with_hint("clone it there again, or `knowcode prune` to forget its index"));
     }
 }
 
@@ -546,7 +550,7 @@ pub fn unindexed_note() -> Option<Incomplete> {
     } else {
         format!("the cache is near cache.max_size, so {they} not indexed in the background: raise cache.max_size, or ask about one by name to index it now")
     };
-    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_hint(hint))
+    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_code(Code::NotIndexed).with_hint(hint))
 }
 
 /// Whether `i` is the entry [`unindexed_note`] makes.
@@ -696,7 +700,7 @@ fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> 
             return Ok(s.qualified());
         }
     }
-    bail!("{}", unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}")))
+    bail!(Refusal::new(Code::NotFound, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
 }
 
 /// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos
@@ -1323,10 +1327,13 @@ fn at_file(file: &str, args: &Scope) -> Result<(PathBuf, String)> {
     let one = |found: Vec<(PathBuf, String)>, what: &str| -> Result<(PathBuf, String)> {
         match found.as_slice() {
             [one] => Ok(one.clone()),
-            [] => bail!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"),
+            [] => bail!(Refusal::new(Code::NotFound, format!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"))),
             many => {
                 let names: Vec<String> = many.iter().map(|(r, _)| repo_name(r)).collect();
-                bail!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+                bail!(Refusal::new(
+                    Code::Ambiguous,
+                    format!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+                ))
             }
         }
     };
@@ -3926,6 +3933,7 @@ fn ensure_summaries(o: &Opened, focus: &[PathBuf], full: bool) -> Result<std::sy
     for s in summaries.iter().filter(|s| s.light && !s.blocked.whole && !s.gone && s.root != o.root && (full || !kc_index::light::unchanged(&s.root))) {
         if no_sync {
             o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Stale, format!("{}: only manifests and names were scanned; graph joins are not indexed", repo_name(&s.root)))
+                .with_code(Code::NotIndexed)
                 .with_hint("ask again without --no-sync to index the needed checkout automatically"));
         } else {
             // A checkout that can't be read (gone since the summaries were read, a failing `git`) is left out.
@@ -5439,6 +5447,7 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
                     value["background"] = json!(b);
                 }
                 push_incomplete(&mut value, withheld(root).unwrap_or_else(|| Incomplete::new(Reason::Stale, "index: this checkout has no full index yet; discovery contains only manifests and names")
+                    .with_code(Code::Indexing)
                     .with_hint(hint)));
                 finish(&mut value);
                 out.push(value);
@@ -8001,7 +8010,7 @@ pub fn note_add(symbol: &str, text: &str, tag: Option<&str>, args: &Scope) -> Re
         opened.push(o);
     }
     if found.is_empty() {
-        bail!("no definition named {symbol} in the repos searched");
+        bail!(Refusal::new(Code::NotFound, format!("no definition named {symbol} in the repos searched")));
     }
     Ok(Out { env: notes_env(&opened, &found), data: found })
 }

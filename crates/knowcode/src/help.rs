@@ -788,7 +788,8 @@ one op (`impact` or `kc_impact`); none: every op.
 The document has `capabilities` (its own version, raised when a field changes meaning or goes), `server` (name and
 version), `protocol` (the MCP version the server speaks), `index_schema` (the graph schema it reads), `profile`
 (`one`, or the tools advertised), `common` (the parameters every op takes), `evidence` (the presets, mechanisms and
-assumptions an evidence policy is written with) and `ops`, one entry per op:
+assumptions an evidence policy is written with), `reasons` and `codes` (the closed sets an `incomplete` entry and a
+refused call are coded with; see `contract`), `errors` (where a refused call's code is) and `ops`, one entry per op:
 
 - `op` and `tool` (`impact`, `kc_impact`), `summary`, `description` (the tool's), `help` (its topic's resource), and
   `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`).
@@ -881,6 +882,11 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),
   `moved` (`at` is where it is now, `was` where the index had it), `gone`, or `unchecked`; `drift` says what moved,
   and any drift makes the answer `stale`.
+- Codes: an entry's code is its `reason`, or its `code` where that says more (`indexing`: ask again after it
+  finishes; `not_indexed`, `gone`). A refused call's code is in the tool result's `structuredContent.error.code`
+  (invalid_argument, not_found, ambiguous, no_files, not_indexed, indexing, gone, withheld, stale_cursor,
+  unsupported, collision, cut, cancelled, failed, internal); a rename refused says `codes` beside its `reasons`.
+  Anything `withheld` carries `privacy`: `{repo, file, block_at, blocks}`. Branch on codes, not on the English.
 - An empty answer says what was searched (`note`). Older fields agree with `incomplete`: `truncated`, `total`,
   `capped`, `freshness.failed`, `left_out` and `hint`.
 

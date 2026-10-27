@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use kc_store::answer::Code;
 use serde_json::{Value, json};
 
 use crate::mcp;
@@ -83,6 +84,13 @@ pub fn document(s: &Surface, of: Option<&str>) -> Result<Value, String> {
             "confirmed": name(kc_store::answer::CONFIRMED.iter().map(|m| kc_store::answer::name_of(*m)).collect()),
             "assumptions": name(kc_store::answer::ASSUMPTIONS.iter().map(|a| kc_store::answer::name_of(*a)).collect()),
         },
+        "reasons": kc_store::answer::REASONS.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
+        "codes": kc_store::answer::CODES.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+        "errors": {
+            "at": "structuredContent.error",
+            "keys": ["code", "message"],
+            "privacy": ["repo", "file", "block_at", "blocks"],
+        },
         "ops": ops,
     }))
 }
@@ -104,10 +112,10 @@ fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
     let mut choices = serde_json::Map::new();
     for name in props.keys() {
         if let Some(r) = mcp::range(&tool, name) {
-            ranges.insert(name.clone(), json!({ "min": r.min, "max": r.max, "default": r.default, "beyond": "clamped" }));
+            ranges.insert(name.clone(), json!({ "min": r.min, "max": r.max, "default": r.default, "beyond": "clamped", "wrong_type": Code::InvalidArgument.as_str() }));
         }
         if let Some(c) = mcp::choices(&tool, name) {
-            choices.insert(name.clone(), json!({ "values": c, "default": c[0], "other": "refused" }));
+            choices.insert(name.clone(), json!({ "values": c, "default": c[0], "other": "refused", "code": Code::InvalidArgument.as_str() }));
         }
     }
     let aliases: serde_json::Map<String, Value> =
@@ -132,7 +140,7 @@ fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
         "output": { "format": shape.format, "formats": shape.formats, "keys": shape.keys, "list": shape.list },
     });
     if let Some((_, param)) = BATCH.iter().find(|(t, _)| *t == tool) {
-        e["batch"] = json!({ "param": param, "max": mcp::MAX_BATCH, "keys": ["complete", "results"] });
+        e["batch"] = json!({ "param": param, "max": mcp::MAX_BATCH, "keys": ["complete", "results"], "over": Code::InvalidArgument.as_str() });
     }
     if props.contains_key("evidence") {
         let default = EVIDENCE_DEFAULT.iter().find(|(t, _)| *t == tool).map_or("default", |(_, d)| *d);
