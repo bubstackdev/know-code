@@ -117,6 +117,36 @@ pub fn disambiguate(conn: &Connection, rows: &mut [SymbolRow]) -> Result<()> {
     Ok(())
 }
 
+/// Of `decls`, declarations sharing one qualified name (a module's `Grid` and another's `private struct Grid`), the
+/// ids of those an extension declared in `ext` extends: the one in its own file, else its module's (a module's own
+/// type shadows an imported one), else those of other modules. A `private` or `fileprivate` declaration is seen from
+/// its file only. Files whose module can't be told count as one module. Empty when it sees none of them: it extends
+/// a type the repo doesn't declare.
+pub fn extended_by(conn: &Connection, ext: &SymbolRow, decls: &[SymbolRow]) -> Result<Vec<i64>> {
+    let here = namespace_of(conn, ext)?;
+    let mut ranked = Vec::with_capacity(decls.len());
+    for d in decls {
+        let rank = if d.file == ext.file {
+            0
+        } else if file_private(&d.signature) {
+            continue;
+        } else if namespace_of(conn, d)? == here {
+            1
+        } else {
+            2
+        };
+        ranked.push((rank, d.id));
+    }
+    let best = ranked.iter().map(|r| r.0).min();
+    Ok(ranked.into_iter().filter(|r| Some(r.0) == best).map(|r| r.1).collect())
+}
+
+/// Whether a Swift declaration is seen from its own file only: written `private` or `fileprivate`.
+fn file_private(signature: &str) -> bool {
+    let head = signature.split(['(', '<', ':', '{', '=']).next().unwrap_or("");
+    head.split_whitespace().any(|w| w == "private" || w == "fileprivate")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

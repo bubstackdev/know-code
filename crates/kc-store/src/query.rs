@@ -5671,6 +5671,16 @@ pub fn constructors(conn: &Connection, ty: &SymbolRow, files: &[&str]) -> Result
     Ok(rows.into_iter().filter(|r| files.is_empty() || files.contains(&r.file.as_str())).collect())
 }
 
+/// The types other than `ty` (and its `parts`) declared with its qualified name: another module's type of that name,
+/// a file's `private` one.
+fn same_named_types(conn: &Connection, ty: &SymbolRow, parts: &HashSet<i64>) -> Result<Vec<SymbolRow>> {
+    let qualified = ty.qualified();
+    Ok(definitions_split(conn, &ty.name, (None, &ty.name))?
+        .into_iter()
+        .filter(|d| d.id != ty.id && !parts.contains(&d.id) && TYPE_KINDS.contains(&d.kind.as_str()) && d.qualified() == qualified)
+        .collect())
+}
+
 /// At most this many of a type's conformers are listed in its context.
 pub const CONFORMERS_SHOWN: usize = 50;
 /// At most this many other definitions of a name are listed in a context.
@@ -5768,6 +5778,27 @@ pub fn context_with(
             .into_iter()
             .filter(|e| e.qualified() == qualified)
             .collect();
+        let found = partial_parts(conn, &symbol)?;
+        if found.len() > 1 {
+            parts = found.iter().map(|p| format!("{}:{}", p.file, p.line)).collect();
+            part_ids = found.iter().map(|p| p.id).collect();
+        }
+        // Other types of this qualified name (another module's, a file's `private` one): their members, and the
+        // extensions of theirs, are not this one's.
+        let others = if symbol.kind == "extension" { Vec::new() } else { same_named_types(conn, &symbol, &part_ids)? };
+        let mut not_ours: HashSet<i64> = others.iter().map(|o| o.id).collect();
+        if !others.is_empty() {
+            let decls: Vec<SymbolRow> = std::iter::once(symbol.clone()).chain(others).collect();
+            let mut kept = Vec::with_capacity(extensions.len());
+            for e in extensions {
+                if crate::identity::extended_by(conn, &e, &decls)?.contains(&symbol.id) {
+                    kept.push(e);
+                } else {
+                    not_ours.insert(e.id);
+                }
+            }
+            extensions = kept;
+        }
 
         let from_ids: Vec<i64> = std::iter::once(symbol.id).chain(extensions.iter().map(|e| e.id)).collect();
         let mut stmt = conn.prepare_cached(
@@ -5796,6 +5827,17 @@ pub fn context_with(
         );
         let mut stmt = conn.prepare_cached(&sql)?;
         let mut all: Vec<SymbolRow> = stmt.query_map([&qualified], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+        if !not_ours.is_empty() {
+            let mut parent = conn.prepare_cached("SELECT parent_id FROM symbols WHERE id = ?1")?;
+            let mut kept = Vec::with_capacity(all.len());
+            for m in all {
+                let p: Option<i64> = parent.query_row([m.id], |r| r.get(0)).optional()?.flatten();
+                if p.is_none_or(|p| !not_ours.contains(&p)) {
+                    kept.push(m);
+                }
+            }
+            all = kept;
+        }
         // Constructors first: how the type is made is what a cut list should keep.
         all.sort_by_key(|m| m.kind != "init");
         members_total = all.len();
@@ -5819,11 +5861,6 @@ pub fn context_with(
             let (found, n) = indirect_conformers(conn, &symbol.name, limits.conformers)?;
             conformers_indirect_total = (n > found.len()).then_some(n);
             conformers_indirect = found;
-        }
-        let found = partial_parts(conn, &symbol)?;
-        if found.len() > 1 {
-            parts = found.iter().map(|p| format!("{}:{}", p.file, p.line)).collect();
-            part_ids = found.iter().map(|p| p.id).collect();
         }
     }
 
