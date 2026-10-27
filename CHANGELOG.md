@@ -2,12 +2,20 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.5.0 (2026-10-27)
 
-- A query that joined indexing already under way could answer from the index as it was before a file's latest
-  edit, and call that answer complete: the edit's new symbol was missing with nothing said. When the job it joined
-  finishes and the working tree still differs from the index, the query now waits on a new one, within the same
-  budget, or says the repo is still being indexed.
+0.5 answers questions about a method's history and walks across library boundaries. `history` reads one definition's git
+history over the lines it spans: the commits that changed it, who wrote its current lines, and the files and direct
+callers that changed with it. On history-v1's public questions, labelled from git alone, it answers the 10 method-level
+questions exactly, at least as high in recall and precision as each plain-git approach, and higher in one. On the two
+caller questions it falls short of `git log -S` (1 of 2, against 2 of 2 with one wrong commit): it misses a caller that
+calls through a dependency's interface (Serilog's `ILogger`), which `impact` doesn't reach; fixing that is 0.5.1 work.
+`coupled` lists more of the files that change with a file than git's own log does. `impact` and `trace` walk from a
+library's method on to its callers in the repos using it, where they stopped one hop across. Calls through a declared
+client package link through the package's own code, C# actions serve every route they declare, and recorded `search`
+calls no longer fail. The [release gate](eval/release-gate/0.5.0.md) makes no model calls; it measures what KnowCode
+returns, and makes no claim about how agents use it.
+
 - `impact` and `trace` (callers) walk on across a library boundary: from a method or property, to its calls in the repos
   depending on its repo (resolved into it) and on to their callers there; from an implementation of an interface
   member a dependency declares, to the calls through that member in the dependency and the repos using it. A row
@@ -17,11 +25,35 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   **`cross_repo` changes:** it no longer lists a site the walk lists, so its count drops where the walk reaches
   across. Library crossings are looked up for at most 64 walked symbols an answer (then `incomplete` says how many
   were left). A continue call names a symbol by `file:line` when overloads share its file.
+- `history SYMBOL` (`kc_history`; `kc {op: history, q: …}`): one definition's git history, read over the lines the
+  index says it spans. It lists the commits that changed those lines (`git log -L`, through edits and renames of the
+  file), the newest and, when the whole history was read, the oldest, who last changed its current lines (`git blame
+  -w` over the definition), and the files changed in the same commits (commits of more than 50 files left out). A
+  method's history is its own, not its file's. Uncommitted edits that move it are allowed for. It reads at most 200
+  commits, and the MCP server stops git at the call's time budget, keeping what it read; the answer says when
+  either happened. `history deepen` is unchanged. On the history-v1 development questions (public repositories at
+  full history, labels from git alone), it answers the 10 method-level questions exactly.
 - `history` lists a symbol's direct callers whose files changed in its commits (`callers_changed_with`), each with
   how many of its commits and the newest few, tests marked; `callers_total` counts every direct caller. Callers come
   from `impact`'s first hop in the repo; those in the symbol's own file aren't listed, since each of its commits
   changes that file. On history-v1's two caller questions it names the one production caller of each label that
   `impact` reaches; the other, a call through Serilog's `ILogger` inside Serilog.Extensions.Hosting, isn't reached.
+- `coupled` ranks partners by shared commits, the most recent first among equals, where it ranked them by shared
+  commits weighted by age (half per 90 days). Over a long span the weighting buried the strongest partners: with
+  `--since all`, Autofac's `ResolveOperation.cs` listed one of the ten files sharing the most commits with it in its
+  top ten, and a rule file touched by tooling sweeps first. Now its top ten holds nine of them, and the tenth is next.
+  The age weighting is still in each partner (`weight`, shown as `recency`). A partner that isn't code and shared under
+  a fifth of its own commits with the file (a rule or settings file that sweeps touched) comes after the others.
+  Against history-v1's two file co-change questions (labels from git alone, renames followed), `coupled --since all`
+  lists 51 of 55 and 14 of 14 of the labelled files at the label's size.
+- The default `kc` tool names the history questions: its description lists `history`, and the server's instructions
+  say which op answers a symbol's commits and authors (`history`) and the files changing with a file (`coupled`).
+  Before, agents learned of them only from `help`. To stay within the 1,300-byte budget, the instructions no longer
+  say answers are read from the working tree. The tool and instructions are 1,290 bytes and 501 tokens
+  (count_tokens), from 1,283 and 502.
+- `search` takes a look-ahead at the end of a regex or a look-behind at its start, which agents write to find uses
+  that aren't calls: `\bSetParent\b(?!\()`, `(?<!\.)Save`. The rest of the pattern finds each match and the
+  look-around is checked on its line. Such patterns were refused as invalid; look-around anywhere else still is.
 - A call to an external client the repo declares in a `.d.ts` (`declare module 'jellyfin-apiclient'`) links
   through the client package's own code when it is installed in the repo's `node_modules` at the version the
   lockfile pins: to the action serving the request the package's method makes, assuming `package_code`, with
@@ -81,22 +113,6 @@ reaches further: replaying every call recorded in the published studies, two-hop
 labelled places (recall 0.587 to 0.628) with fewer wrong ones, and no question type got worse. From 0.4 on, releases ship on [checks that make no model calls](eval/release-gate/0.4.0.md); they
 measure what KnowCode returns, and make no claim about how agents use it.
 
-- `coupled` ranks partners by shared commits, the most recent first among equals, where it ranked them by shared
-  commits weighted by age (half per 90 days). Over a long span the weighting buried the strongest partners: with
-  `--since all`, Autofac's `ResolveOperation.cs` listed one of the ten files sharing the most commits with it in its
-  top ten, and a rule file touched by tooling sweeps first. Now its top ten holds nine of them, and the tenth is next.
-  The age weighting is still in each partner (`weight`, shown as `recency`). A partner that isn't code and shared under
-  a fifth of its own commits with the file (a rule or settings file that sweeps touched) comes after the others.
-  Against history-v1's two file co-change questions (labels from git alone, renames followed), `coupled --since all`
-  lists 51 of 55 and 14 of 14 of the labelled files at the label's size.
-- The default `kc` tool names the history questions: its description lists `history`, and the server's instructions
-  say which op answers a symbol's commits and authors (`history`) and the files changing with a file (`coupled`).
-  Before, agents learned of them only from `help`. To stay within the 1,300-byte budget, the instructions no longer
-  say answers are read from the working tree. The tool and instructions are 1,290 bytes and 501 tokens
-  (count_tokens), from 1,283 and 502.
-- `search` takes a look-ahead at the end of a regex or a look-behind at its start, which agents write to find uses
-  that aren't calls: `\bSetParent\b(?!\()`, `(?<!\.)Save`. The rest of the pattern finds each match and the
-  look-around is checked on its line. Such patterns were refused as invalid; look-around anywhere else still is.
 - C#: a value of a type parameter constrained to one type (`where T : BaseItem, new()`) has that type's members:
   `new T().SetParent(…)` is `BaseItem.SetParent`, which `impact` and `trace` now reach, where it was an unresolved
   call. Several type constraints, or one naming another type parameter, leave it unresolved. Calls through an
@@ -105,14 +121,6 @@ measure what KnowCode returns, and make no claim about how agents use it.
   false hop-2 rows). In an extension method an unqualified call is the declaring class's (its overload, or an
   extension called in static form), never the extended type's member; an extension whose `this` parameter starts a
   line is recognised as one.
-- `history SYMBOL` (`kc_history`; `kc {op: history, q: …}`): one definition's git history, read over the lines the
-  index says it spans. It lists the commits that changed those lines (`git log -L`, through edits and renames of the
-  file), the newest and, when the whole history was read, the oldest, who last changed its current lines (`git blame
-  -w` over the definition), and the files changed in the same commits (commits of more than 50 files left out). A
-  method's history is its own, not its file's. Uncommitted edits that move it are allowed for. It reads at most 200
-  commits, and the MCP server stops git at the call's time budget, keeping what it read; the answer says when
-  either happened. `history deepen` is unchanged. On the history-v1 development questions (public repositories at
-  full history, labels from git alone), it answers the 10 method-level questions exactly.
 - A TypeScript or JavaScript request whose URL is a `const` of the function making it links as if the URL were
   written in the call: `const url = apiClient.getUrl('Collections', query)` passed as `$.ajax({ url })`, and
   `const url = 'Videos/' + itemId + '/Subtitles/' + index` passed to `apiClient.getUrl(url)`, which weren't read

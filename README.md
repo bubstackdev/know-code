@@ -120,8 +120,13 @@ lists what it doesn't. The full contract is in [docs/answers.md](docs/answers.md
 
 KnowCode is checked on public repositories, and every result is published with its misses.
 
-- **Cost per turn.** The default `kc` tool and the server's instructions take 502 tokens of every turn's context,
-  where 0.3's eight tools took 1,276 ([0.4 release gate](eval/release-gate/0.4.0.md)).
+- **Cost per turn.** The default `kc` tool and the server's instructions take 501 tokens of every turn's context,
+  where 0.3's eight tools took 1,276 ([0.5 release gate](eval/release-gate/0.5.0.md),
+  [0.4's](eval/release-gate/0.4.0.md)).
+- **History questions.** On [history-v1](eval/history-v1/README.md)'s 10 method-level questions, labelled from git
+  alone, `history` has recall 1.0 at precision 1.0; of the plain-git approaches, `git log -L :name:` has 0.526 at 1.0
+  and `git log --follow` 0.965 at 0.062. On its two caller questions it finds 1 of 2, where `git log -S` finds both
+  ([0.5 release gate](eval/release-gate/0.5.0.md)).
 - **Answers on recorded questions.** The release gate replays the 1,092 KnowCode calls agents made in the public studies
   and scores the answers against the studies' labels, with no model calls. The gate reports recall per question type
   and compares builds; it says nothing about how agents use the answers
