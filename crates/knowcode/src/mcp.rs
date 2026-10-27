@@ -80,7 +80,7 @@ pub const ANSWER_CHARS: Range = Range {
     min: MIN_CHARS,
     default: DEFAULT_CHARS,
     max: MAX_CHARS,
-    note: ", twice that for several inputs (`qs`); a list cut to fit says so (`incomplete`, `more`)",
+    note: ", the max doubled for several inputs; a list cut to fit says so (`incomplete`, `more`)",
 };
 
 /// Every bounded parameter, by tool (`*`: every tool).
