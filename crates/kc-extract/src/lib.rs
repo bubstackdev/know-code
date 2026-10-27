@@ -963,6 +963,52 @@ pub fn decode(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// The first parse errors of `source`, a file of `lang`, at most `limit`, in source order: each one's 1-based line and
+/// column and its first line of text (up to 60 characters), read as extraction reads the file. Empty for a language
+/// without a grammar.
+pub fn parse_error_sites(lang: Lang, source: &str, limit: usize) -> Vec<(u32, u32, String)> {
+    if lang == Lang::Swift {
+        return swift::error_sites(source, limit);
+    }
+    let Some(grammar) = grammar(lang) else { return Vec::new() };
+    let mut parser = tree_sitter::Parser::new();
+    if parser.set_language(&grammar).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source, None) else { return vec![(1, 1, String::new())] };
+    let mut out = Vec::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(n) = stack.pop() {
+        if out.len() == limit {
+            break;
+        }
+        if n.is_error() || n.is_missing() {
+            out.push(error_site(n, source));
+            continue;
+        }
+        let mut cursor = n.walk();
+        let mut kids: Vec<tree_sitter::Node> = n.children(&mut cursor).filter(|c| c.has_error() || c.is_missing()).collect();
+        kids.reverse();
+        stack.extend(kids);
+    }
+    out
+}
+
+/// Where a parse error `node` is, as [`parse_error_sites`] gives it. A missing token says which (``missing `)` ``); an
+/// error starts at its first token that isn't a comment (one around a whole file starts at its header comment).
+pub(crate) fn error_site(node: tree_sitter::Node, source: &str) -> (u32, u32, String) {
+    let at = |n: tree_sitter::Node| (n.start_position().row as u32 + 1, n.start_position().column as u32 + 1);
+    if node.is_missing() {
+        let (line, col) = at(node);
+        return (line, col, format!("missing `{}`", node.kind()));
+    }
+    let mut cursor = node.walk();
+    let first = node.children(&mut cursor).find(|c| !c.kind().contains("comment")).unwrap_or(node);
+    let (line, col) = at(first);
+    let text = source[first.start_byte()..node.end_byte()].lines().next().unwrap_or("").trim();
+    (line, col, text.chars().take(60).collect())
+}
+
 /// The tree-sitter grammar a source language is parsed with, for tools that query syntax trees themselves
 /// (structural search). `None` for manifests and HTML.
 pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
