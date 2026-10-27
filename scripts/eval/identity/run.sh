@@ -20,10 +20,10 @@ CPUS=${CPUS:-4}
 MEMORY=${MEMORY:-12g}
 
 # The toolchain images, by digest; README.md names their versions.
-SWIFT_IMAGE=swift:6.2.1-noble@sha256:PENDING
+SWIFT_IMAGE=swift:6.3-noble@sha256:1038d54c80063f5cdfabc4560990c30af64b5de8ebf28161deb22ca4ad5db866
 # The .NET SDK comes from Ubuntu's archive (dotnet-sdk-10.0), installed while the network is up.
-DOTNET_IMAGE=ubuntu:26.04@sha256:PENDING
-NODE_IMAGE=node:24-bookworm@sha256:PENDING
+DOTNET_IMAGE=ubuntu:26.04@sha256:19fcd1bf268f02b60aca3bd30bd8a6d9a11759a430e32921833e65f16d87348a
+NODE_IMAGE=node:24-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
 
 read -r _ LANGUAGE URL SHA < <(grep -E "^$REPO " "$HERE/repos.txt") || { echo "run.sh: $REPO is not in repos.txt" >&2; exit 2; }
 if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
@@ -32,7 +32,7 @@ if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
 fi
 
 rm -rf "$IO/in" && mkdir -p "$IO/in" "$IO/out"
-(cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --null -cf "$IO/in/src.tar" -T -)
+(cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -cf "$IO/in/src.tar" -T -)
 cp -R "$HERE/$LANGUAGE" "$IO/in/tools"
 find "$IO/in/tools" \( -name bin -o -name obj \) -prune -exec rm -rf {} +
 
@@ -61,9 +61,10 @@ case $LANGUAGE in
     run "command -v python3 >/dev/null || (apt-get update -qq && apt-get install -y -qq python3 >/dev/null) >>$LOG 2>&1
          cd /work/src && swift package resolve >>$LOG 2>&1" ;;
   csharp)
+    PROPS=$(grep -E "^$REPO( |$)" "$HERE/csharp/properties.txt" | cut -s -d' ' -f2- || true)
     run "(apt-get update -qq && apt-get install -y -qq --no-install-recommends dotnet-sdk-10.0 ca-certificates >/dev/null) >>$LOG 2>&1
          cd /work/src && dotnet --info >>$LOG 2>&1
-         dotnet restore \$(ls *.sln *.slnx 2>/dev/null | head -1) >>$LOG 2>&1
+         dotnet restore -p:NuGetAudit=false $(for p in $PROPS; do printf -- "-p:%s " "$p"; done)\$(ls *.sln *.slnx 2>/dev/null | head -1) >>$LOG 2>&1
          dotnet restore /work/tools/Labeller.csproj >>$LOG 2>&1" ;;
   typescript)
     run "cd /work/src && node --version >>$LOG
@@ -83,7 +84,7 @@ case $LANGUAGE in
          python3 /work/tools/label.py --repo $REPO --src /work/src /work/dump.tsv | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
   csharp)
     run "cd /work/tools && dotnet build -c Release --no-restore -o /work/labeller >>$LOG 2>&1
-         cd /work/src && dotnet /work/labeller/Labeller.dll --repo $REPO --src /work/src --solution \$(ls *.sln *.slnx 2>/dev/null | head -1) 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
+         cd /work/src && dotnet /work/labeller/Labeller.dll --repo $REPO --src /work/src --solution \$(ls *.sln *.slnx 2>/dev/null | head -1) $(for p in $PROPS; do printf -- "--property %s " "$p"; done)2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
   typescript)
     CONFIGS=$(grep -E "^$REPO " "$HERE/typescript/configs.txt" | cut -d' ' -f2-)
     run "cd /work/src && node /work/tools/label.cjs --repo $REPO --src /work/src $CONFIGS 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;

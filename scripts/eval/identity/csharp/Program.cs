@@ -1,7 +1,7 @@
 // C# references and declarations as identity-v1 enumerates them (eval/identity-v1/README.md), from Roslyn's semantic
 // model over MSBuildWorkspace. Runs in the labelling container, after `dotnet restore`.
 //
-//     Labeller --repo NAME --src DIR --solution FILE > enumeration-NAME.jsonl
+//     Labeller --repo NAME --src DIR --solution FILE [--property NAME=VALUE ...] > enumeration-NAME.jsonl
 using System.Text;
 using System.Text.Json;
 using Microsoft.Build.Locator;
@@ -13,6 +13,7 @@ using Microsoft.CodeAnalysis.MSBuild;
 static class Labeller
 {
     static string repo = "", src = "";
+    static readonly Dictionary<string, string> properties = new() { ["Configuration"] = "Debug", ["NuGetAudit"] = "false" };
 
     static async Task<int> Main(string[] args)
     {
@@ -24,6 +25,7 @@ static class Labeller
                 case "--repo": repo = args[i + 1]; break;
                 case "--src": src = Path.GetFullPath(args[i + 1]).TrimEnd('/') + "/"; break;
                 case "--solution": solution = Path.GetFullPath(args[i + 1]); break;
+                case "--property": var kv = args[i + 1].Split('=', 2); properties[kv[0]] = kv[1]; break;
             }
         }
         if (repo == "" || src == "/" || solution == null)
@@ -37,7 +39,7 @@ static class Labeller
 
     static async Task<int> Run(string solutionPath)
     {
-        using var workspace = MSBuildWorkspace.Create(new Dictionary<string, string> { ["Configuration"] = "Debug" });
+        using var workspace = MSBuildWorkspace.Create(properties);
         workspace.RegisterWorkspaceFailedHandler(e => Console.Error.WriteLine($"workspace: {e.Diagnostic.Message}"));
         var solution = await workspace.OpenSolutionAsync(solutionPath);
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = false };

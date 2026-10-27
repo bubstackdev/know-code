@@ -55,6 +55,9 @@ Left out:
 - **Operators, keywords and accessors:** `+`, `self`, `this`, `base`, `super`, `get`/`set`, subscripts.
 - **Imports:** `import`, `using`, and TypeScript `import`/`export` lists.
 - **Renamed references:** the token differs from the declaration's own name (an import alias, a type alias's target).
+- **C:** references in the C files of a Swift package, and Swift references to declarations in its C modules.
+- **Synthesised members:** a member the compiler makes for one of the repository's types (an enum's `rawValue`), which
+  has no declaration in source.
 - **Anything the toolchain can't bind:** an error type, or a member of `any`.
 
 ### Kinds
@@ -64,9 +67,12 @@ Each reference has one kind, the first that applies:
 1. `extension`: a member declared in an extension (a Swift extension, a C# extension method). TypeScript has none.
 2. `dispatch`: a member declared by a protocol or an interface, or an abstract member: the call is satisfied through a
    conformance.
-3. `call`: a function or method called.
+3. `call`: a function or method, called or passed.
 4. `member`: a property, field, event or enum case read or written.
 5. `type`: a type named: a class, struct, enum, protocol, interface, type alias or delegate.
+
+`extension` and `dispatch` are kinds of member: a type declared in an extension is a `type`. The Swift index store
+holds no declaration for a standard library or SDK target, so a Swift reference to one is `call`, `member` or `type`.
 
 ### The target
 
@@ -102,8 +108,9 @@ language, weighted toward names declared more than once:
 - **Spread:** at most 3 references per target declaration in a stratum, so a few common names don't fill it.
 - **One row per reference:** a reference sampled into one stratum isn't drawn again.
 
-`labels.jsonl` holds the set; `enumeration-*.jsonl.gz` the full enumeration it was drawn from, so the draw can be
-checked. Each label records its repository, file, line and 1-based UTF-8 byte column, the name, kind, bucket, the
+`labels.jsonl` holds the set and `strata.json`, per stratum, how many references there were and how many were drawn.
+The enumerations it was drawn from (about 10 MB compressed) aren't checked in: run.sh makes them again, and
+`enumerations.sha256` holds the digests of the ones drawn from. Each label records its repository, file, line and 1-based UTF-8 byte column, the name, kind, bucket, the
 target (inside with its locations, or outside with its origin), and the toolchain's own name for the symbol.
 
 ## Scoring

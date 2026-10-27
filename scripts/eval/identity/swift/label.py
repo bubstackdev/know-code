@@ -95,7 +95,7 @@ def enumerate_repo(repo, src, records):
                     d['locs'].add((rel, o['line']))
                 if parents:
                     d['parent'] = parents[0]['kind']
-            elif where == 'inside' and o['roles'] & REFERENCE and not o['roles'] & IMPLICIT:
+            elif where == 'inside' and rel.endswith('.swift') and o['roles'] & REFERENCE and not o['roles'] & IMPLICIT:
                 refs.append((rel, o))
 
     texts = {}
@@ -112,7 +112,7 @@ def enumerate_repo(repo, src, records):
     out = []
     for usr, d in sorted(defs.items()):
         name = base(d['name'])
-        if d['where'] != 'inside' or not name or d['subkind'] != 0:
+        if d['where'] != 'inside' or not name or d['subkind'] != 0 or not all(f.endswith('.swift') for f, _ in d['locs']):
             continue
         group = 'type' if d['kind'] in TYPE else 'callable' if d['kind'] in CALLABLE else \
             'member' if d['kind'] in MEMBER else None
@@ -120,6 +120,12 @@ def enumerate_repo(repo, src, records):
             for f, ln in sorted(d['locs']):
                 out.append(dict(t='decl', repo=repo, name=name, key=usr, file=f, line=ln, decl=group))
                 break
+    # A member the compiler synthesises for one of the repository's types (an enum's `rawValue`, a memberwise
+    # property) has no definition anywhere, but isn't outside: it isn't labelled.
+    own_types = {usr for usr, d in defs.items() if d['where'] == 'inside' and d['kind'] in TYPE}
+
+    def synthesised(usr):
+        return any(usr[:n] in own_types for n in range(3, len(usr)))
     seen = set()
     for rel, o in refs:
         name = base(o['name'])
@@ -129,7 +135,12 @@ def enumerate_repo(repo, src, records):
             continue
         seen.add((rel, o['line'], o['col'], o['usr']))
         d = defs.get(o['usr'])
-        parent = d and d['parent']
+        if not d and synthesised(o['usr']):
+            continue
+        # A declaration in one of the repository's C modules: KnowCode doesn't read C, so it isn't labelled.
+        if d and d['where'] == 'inside' and not all(f.endswith('.swift') for f, _ in d['locs']):
+            continue
+        parent = d and d['parent'] if o['kind'] not in TYPE else None
         if parent == EXTENSION:
             kind = 'extension'
         elif parent == PROTOCOL:
