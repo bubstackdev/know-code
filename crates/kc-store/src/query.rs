@@ -2574,6 +2574,34 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
     })
 }
 
+/// The overloads of one name, for telling which a call the repo couldn't resolve (one through a library's type) may
+/// call: see [`Overloads::may_call`].
+pub struct Overloads<'c> {
+    defs: Vec<Def>,
+    oracle: TypeOracle<'c>,
+}
+
+impl<'c> Overloads<'c> {
+    pub fn named(conn: &'c Connection, name: &str) -> Result<Self> {
+        Ok(Overloads { defs: defs_named(conn, name)?, oracle: TypeOracle::new(conn) })
+    }
+
+    /// Whether `hit` may call `id` among its type's overloads: `id` takes as many arguments as it passes, and the
+    /// argument types the call site gives don't pick another overload over it (see [`narrow_by_argument_types`]).
+    pub fn may_call(&mut self, hit: &RefHit, id: i64) -> Result<bool> {
+        let Some(me) = self.defs.iter().find(|d| d.id == id) else { return Ok(false) };
+        if hit.args.is_some_and(|n| !me.accepts(n)) {
+            return Ok(false);
+        }
+        let fitting: Vec<&Def> =
+            self.defs.iter().filter(|d| d.container == me.container && d.kind == me.kind && hit.args.is_none_or(|n| d.accepts(n))).collect();
+        if fitting.len() < 2 || hit.arg_types.is_none() {
+            return Ok(true);
+        }
+        Ok(narrow_by_argument_types(&mut self.oracle, hit, fitting)?.iter().any(|d| d.id == id))
+    }
+}
+
 fn defs_named(conn: &Connection, name: &str) -> Result<Vec<Def>> {
     let sql = format!(
         "SELECT {DEF_COLS} FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id

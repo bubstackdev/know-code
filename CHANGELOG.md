@@ -29,6 +29,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   from one table, so they can't disagree. `max_chars` now says its maximum doubles for several inputs, as it always has.
 - `kc {op: status, q: ""}` (and `unused`, `hotspots`): an op taking no query takes an empty `q` as none, where it
   was an error. The `kc` topic says which ops take no `q`.
+- `impact`, `trace` (callers) and `history` reach an implementation of a library's interface member from the calls
+  in the repo through that interface (`_cached.ForContext<T>()` on Serilog's `ILogger`, in a class implementing
+  `ILogger`) when no indexed repo defines the interface. Before, such a call resolved to nothing and reached no
+  implementation. It is `ambiguous` (the library's own implementation may run instead), so listed, not walked past;
+  a call of another overload (by argument count and the argument types the call site gives) isn't listed. With the
+  library indexed, the call is listed once, in the walk, not again in `cross_repo`. `history`'s
+  `callers_changed_with` marks such a caller `ambiguous`.
 
 ## 0.5.0 (2026-10-27)
 

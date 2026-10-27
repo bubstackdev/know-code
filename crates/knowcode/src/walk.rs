@@ -135,6 +135,21 @@ impl<'a> Graph<'a> {
         &mut self.crossing
     }
 
+    /// [`HttpCrossing::frontier`] of a walk's stops, with the home repo's edge cache: what the walk resolved is read
+    /// once.
+    pub(crate) fn frontier(
+        &mut self,
+        stops: &[kc_store::trace::Stop],
+        listed: &dyn Fn(Option<&str>, i64) -> bool,
+        budget: usize,
+    ) -> Result<(Vec<kc_store::trace::Frontier>, usize)> {
+        let Graph { crossing, caches, .. } = self;
+        match caches.first_mut() {
+            Some(home) => crossing.frontier(home, stops, listed, budget),
+            None => crossing.frontier(&mut EdgeCache::default(), stops, listed, budget),
+        }
+    }
+
     /// The root of repo `repo`.
     pub fn root(&self, repo: usize) -> &Path {
         &self.roots[repo]

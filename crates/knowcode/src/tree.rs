@@ -134,8 +134,14 @@ fn cross_trace(g: &mut Graph, t: &mut Trace, depth: u8, max: usize, inward: bool
                 repos.insert(l.clone(), there);
             }
             for a in &landing.arrivals {
-                // Code already in the tree (a test calling the action directly, say) isn't listed again.
-                if t.nodes.iter().any(|n| n.id == a.sym().id && n.repo == label) {
+                // Code already in the tree (a test calling the action directly, say) isn't listed again. One the repo's
+                // own walk reached through the library's interface without the library (see trace's `in_edges`) takes
+                // the crossing's library and member.
+                if let Some(n) = t.nodes.iter_mut().find(|n| n.id == a.sym().id && n.repo == label) {
+                    if n.library.is_none() && n.parent == Some(at) && n.edge == landing.via.edge() && landing.via.library().is_some() {
+                        n.library = landing.via.library();
+                        n.evidence.clone_from(&a.evidence);
+                    }
                     continue;
                 }
                 if landing.judge(g.gate(), &root, id, a) == Verdict::Exclude {
@@ -456,6 +462,19 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                         if !row.also.contains(site) {
                             row.also.push(site.clone());
                         }
+                        continue;
+                    }
+                }
+                // The repo's own walk reached it through the library's interface without the library (see trace's
+                // `in_edges`): the crossing says which library and member it goes through.
+                if let Some(&i) = rows.get(&(label.clone(), s.id))
+                    && landing.via.library().is_some()
+                {
+                    let row = &mut impact.affected[i];
+                    if row.library.is_none() && row.hop == hop + 1 && row.edge == landing.via.edge() {
+                        row.library = landing.via.library();
+                        row.evidence = arrival.evidence.clone();
+                        changed = true;
                         continue;
                     }
                 }

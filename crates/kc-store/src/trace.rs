@@ -602,6 +602,16 @@ impl Tracer<'_> {
         Ok(self.refs_by_name[&key].clone())
     }
 
+    /// [`Self::refs_named`]'s references that `keep` keeps, without copying the rest.
+    fn refs_named_where(&mut self, name: &str, kinds: Vec<&'static str>, keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
+        let key = (name.to_string(), kinds.clone());
+        if !self.refs_by_name.contains_key(&key) {
+            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
+            self.refs_by_name.insert(key.clone(), hits);
+        }
+        Ok(self.refs_by_name[&key].iter().filter(|h| keep(h)).cloned().collect())
+    }
+
     /// What `sym` uses: calls and instantiations in its body, the types it conforms to, and for a protocol
     /// requirement, nothing more (its implementations are dependents, listed under `in`).
     fn out_edges(&mut self, sym: &SymbolRow) -> Result<Vec<Edge>> {
@@ -931,6 +941,34 @@ impl Tracer<'_> {
                     let hits = self.refs_named(&req.name, kinds.clone())?;
                     let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
+                }
+                // And calls through a library's interface or base class it implements, one no indexed repo defines
+                // (`ILogger` from a package): the repo has no member to resolve them to, so they stay unresolved. One
+                // on a receiver of that type, passing arguments this member takes, may run it. Another implementation
+                // may run instead, the library's own or another type's, so each is `ambiguous`. With the library
+                // indexed, they resolve into it and `impact` lists them across repos instead.
+                let unresolved: Vec<RefHit> = if matches!(sym.kind.as_str(), "method" | "property") {
+                    self.refs_named_where(&sym.name, kinds.clone(), |h| {
+                        h.confidence == "unresolved" && h.target_ids.is_empty() && h.receiver.is_some() && h.receiver_type.is_some()
+                    })?
+                } else {
+                    Vec::new()
+                };
+                if !unresolved.is_empty() {
+                    let library: HashSet<String> =
+                        query::outside_supertype_names(self.conn, container)?.iter().map(|t| bare_type(t).to_string()).collect();
+                    let mut overloads = query::Overloads::named(self.conn, &sym.name)?;
+                    let mut hits = Vec::new();
+                    for mut h in unresolved {
+                        if !h.receiver_type.as_deref().is_some_and(|r| library.contains(bare_type(r))) || !overloads.may_call(&h, sym.id)? {
+                            continue;
+                        }
+                        h.confidence = "ambiguous";
+                        h.target_ids = vec![sym.id];
+                        h.evidence = Some(Evidence::new(crate::answer::Mechanism::ReceiverType));
+                        hits.push(h);
+                    }
+                    push_callers(self, hits, Some(sym.id), "via_protocol")?;
                 }
             }
         }
@@ -1264,15 +1302,27 @@ pub struct Frontier {
 
 /// Of the symbols `stops` names (of the repo `conn` indexes), those with neighbours one hop past them in the stop's
 /// direction (`in`: dependents, as impact and `trace in` walk; `out`: what it uses) that the edge filter would list and
-/// `listed` says the answer doesn't have. At most `budget` are checked; also returns how many weren't.
+/// `listed` says the answer doesn't have. At most `budget` are checked; also returns how many weren't. `cache` holds the
+/// references the walk resolved already (a stop shares its name with what the walk read, often).
 pub fn frontier(
+    conn: &Connection,
+    cache: &mut EdgeCache,
+    stops: &[Stop],
+    listed: &dyn Fn(i64) -> bool,
+    filter: &EdgeFilter,
+    budget: usize,
+) -> Result<(Vec<Frontier>, usize)> {
+    cache.with(conn, |t| frontier_with(t, conn, stops, listed, filter, budget))
+}
+
+fn frontier_with(
+    t: &mut Tracer,
     conn: &Connection,
     stops: &[Stop],
     listed: &dyn Fn(i64) -> bool,
     filter: &EdgeFilter,
     budget: usize,
 ) -> Result<(Vec<Frontier>, usize)> {
-    let mut t = Tracer { conn, refs_by_name: HashMap::new(), bindings: HashMap::new(), precise: HashSet::new(), evidence: HashMap::new(), also: HashMap::new(), one_of: false };
     let mut out = Vec::new();
     let mut checked = HashSet::new();
     let mut unchecked = 0;

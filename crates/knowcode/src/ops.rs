@@ -3755,7 +3755,7 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
             let listed: HashSet<(Option<String>, i64)> = t.nodes.iter().map(|n| (n.repo.clone(), n.id)).collect();
             let stops = std::mem::take(&mut t.stopped);
             let budget = if t.truncated { 0 } else { FRONTIER_CHECKS };
-            let mut fr = g.crossing().frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            let mut fr = g.frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
             // Each stop's exact call going on from it, the way the walk went.
             let mut go_on = filter.args(&edges);
             go_on.insert("depth".into(), depth.clamp(1, trace::MAX_TRACE_DEPTH).into());
@@ -5159,9 +5159,11 @@ impl<'a> HttpCrossing<'a> {
 
     /// Of the symbols a walk stopped at (`stops`, see [`trace::Stop`]), those with neighbours one hop past them that
     /// `listed` says the answer doesn't have: through references, and for dependents, across HTTP routes, the bus,
-    /// SQL and deploys too. At most `budget` are checked; also returns how many weren't.
+    /// SQL and deploys too. At most `budget` are checked; also returns how many weren't. `home` is the home repo's edge
+    /// cache, the walk's.
     pub(crate) fn frontier(
         &mut self,
+        home: &mut trace::EdgeCache,
         stops: &[trace::Stop],
         listed: &dyn Fn(Option<&str>, i64) -> bool,
         budget: usize,
@@ -5185,7 +5187,9 @@ impl<'a> HttpCrossing<'a> {
             let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
-            let (found, skipped) = trace::frontier(self.store(&root).conn(), &group, &mine, self.gate.filter(), room)?;
+            let mut theirs = trace::EdgeCache::default();
+            let cache = if label.is_none() { &mut *home } else { &mut theirs };
+            let (found, skipped) = trace::frontier(self.store(&root).conn(), cache, &group, &mine, self.gate.filter(), room)?;
             unchecked += skipped;
             out.extend(found);
             // Dependents across a route, the bus, SQL or a deploy, of a stop that has none through references.
@@ -5986,7 +5990,6 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             removed = list;
         }
         crate::tree::cross_impact(&mut g, &mut impact, p.depth, p.limit)?;
-        let crossing = g.crossing();
         // Where the walk stopped short: the symbols it listed without walking past that have dependents it doesn't list.
         let listed: HashSet<(Option<String>, i64)> =
             impact.affected.iter().map(|a| (a.repo.clone(), a.id)).chain(impact.scope.iter().map(|s| (None, s.id))).collect();
@@ -5994,7 +5997,8 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         // what one more hop does).
         let budget = if impact.truncated { 0 } else { FRONTIER_CHECKS };
         let (mut frontier, frontier_unchecked) =
-            crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            g.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+        let crossing = g.crossing();
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
         let (library_checked, library_cut) = (crossing.library_checked, crossing.library_cut);
         // Each stop's exact call going on from it.
@@ -6086,12 +6090,14 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
                 }
             }
         }
-        // A use the walk lists across a library boundary (in `affected`, with its repo) isn't listed again here.
+        // A use the walk lists already isn't listed again here: one across a library boundary (in `affected`, with its
+        // repo), or one in this repo through a library's interface, which the walk reaches when no indexed repo it
+        // consults resolves the call.
         let home = repo_name(&o.root);
         let walked: HashSet<(String, String)> = impact
             .affected
             .iter()
-            .filter(|a| a.library.is_some())
+            .filter(|a| a.library.is_some() || a.repo.is_none())
             .flat_map(|a| {
                 let repo = a.repo.clone().unwrap_or_else(|| home.clone());
                 a.site.iter().chain(&a.also).map(move |s| (repo.clone(), s.clone()))
@@ -9909,6 +9915,47 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         );
         assert!(r.cross_repo.is_empty(), "listed in the walk, not again: {:?}", r.cross_repo);
         let _ = (lib, web);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A call in the repo through a library's interface its type implements is a caller of the implementation, one of
+    /// several: listed once, in the walk, whether the library is indexed (the call resolves into it) or not.
+    #[test]
+    fn impact_lists_a_call_through_a_librarys_interface_in_the_repo_once() {
+        let cache = test_cache();
+        let base = cache.dir("own-dispatch");
+        let host = repo(
+            &base,
+            "notes-host",
+            &[
+                ("src/Notes.Host.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes.Host</PackageId></PropertyGroup>\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Swappable.cs", "using Notes;\nnamespace Notes.Host;\npublic sealed class Swappable : INotes\n{\n    public INotes Tagged<T>() => this;\n    public INotes Tagged(string tag) => this;\n}\n"),
+                ("src/Relay.cs", "using Notes;\nnamespace Notes.Host;\npublic class Relay\n{\n    private readonly INotes _notes;\n    public INotes Forward<T>() => _notes.Tagged<T>();\n}\n"),
+            ],
+        );
+        let rows = |out: &Out<Vec<ImpactRepo>>| -> (Vec<(String, &'static str)>, usize) {
+            let r = &out.data[0];
+            let affected = r.impact.affected.iter().filter(|a| a.file == "src/Relay.cs").map(|a| (a.qualified.clone(), a.confidence)).collect();
+            (affected, r.cross_repo.iter().filter(|h| h.file == "src/Relay.cs").count())
+        };
+        let p = ImpactParams { symbol: Some("src/Swappable.cs:5".into()), depth: 1, limit: 100, ..Default::default() };
+        let alone = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        assert_eq!(rows(&alone), (vec![("Relay.Forward".to_string(), "ambiguous")], 0));
+        // The library indexed beside it.
+        let lib = repo(
+            &base,
+            "notes",
+            &[
+                ("src/Notes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/INotes.cs", "namespace Notes;\npublic interface INotes\n{\n    INotes Tagged<T>();\n    INotes Tagged(string tag);\n}\n"),
+            ],
+        );
+        let both = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        assert_eq!(rows(&both), (vec![("Relay.Forward".to_string(), "ambiguous")], 0), "{}", both.env);
+        // With the library it goes through named.
+        let row = both.data[0].impact.affected.iter().find(|a| a.file == "src/Relay.cs").unwrap();
+        assert_eq!(row.library.as_ref().and_then(|l| l.through.as_deref()), Some("INotes"), "{}", both.env);
+        let _ = lib;
         let _ = std::fs::remove_dir_all(&base);
     }
 
