@@ -67,6 +67,10 @@ protocol FineScalar: GridScalar {}
 func checkFine(_ s: FineScalar) -> Bool {
     s.isFinite
 }
+
+extension String {
+    public var shouted: String { uppercased() }
+}
 ";
 
 /// A reference as the tests compare it: caller, line, confidence, targets and basis.
@@ -97,9 +101,9 @@ fn a_member_added_to_a_library_struct_is_not_another_library_types() {
             ("allFinite".to_string(), 15, "unresolved", vec![], None),
             // `Float` conforms to `GridScalar`, and has `isFinite` of its own, outside the repo.
             ("checkOne".to_string(), 20, "exact", vec!["GridScalar.isFinite".to_string()], Some(query::VIA_PROTOCOL)),
-            // Untyped: the requirement or the addition to `Int32`, never one picked.
-            ("checkPair".to_string(), 24, "ambiguous", both.clone(), None),
-            ("checkPair".to_string(), 24, "ambiguous", both, None),
+            // Untyped: `isFinite` is a common library member, as likely the library's as the repo's.
+            ("checkPair".to_string(), 24, "external_likely", both.clone(), None),
+            ("checkPair".to_string(), 24, "external_likely", both, None),
             // The receiver's type is the extended one.
             ("checkWide".to_string(), 31, "exact", int32, None),
             // A protocol the repo declares calls the requirement itself.
@@ -117,13 +121,14 @@ fn a_dependencys_member_on_a_library_struct_is_not_another_library_types() {
     write(
         &app,
         "Sources/App/Compare.swift",
-        "import Grid\n\nfunc closeEnough(_ a: [Float], _ b: [Float]) -> Bool {\n    for (x, y) in zip(a, b) where !x.isFinite || !y.isFinite {\n        return false\n    }\n    return true\n}\n\nfunc finiteValue(_ v: Float) -> Bool {\n    v.isFinite\n}\n",
+        "import Grid\n\nfunc closeEnough(_ a: [Float], _ b: [Float]) -> Bool {\n    for (x, y) in zip(a, b) where !x.isFinite || !y.isFinite {\n        return false\n    }\n    return true\n}\n\nfunc finiteValue(_ v: Float) -> Bool {\n    v.isFinite\n}\n\nfunc loud(_ a: [String]) {\n    for (n, _) in zip(a, a) {\n        print(n.shouted)\n    }\n}\n",
     );
     let (grid_store, app_store) = (index(&grid), index(&app));
-    // The requirement isn't declared `public`, so only the addition to `Int32` is seen from the app: untyped, any
-    // library type's `isFinite` is as likely.
+    // The requirement isn't declared `public`, so only the addition to `Int32` is seen from the app. It is there to
+    // satisfy the requirement, which `Float` satisfies itself: untyped, any library type's `isFinite` is as likely.
     let dep = query::Dependency { repo: "grid".into(), conn: grid_store.conn(), modules: vec!["Grid".into()], assumptions: Vec::new() };
-    let (hits, _) = query::refs_with(app_store.conn(), "isFinite", &["member"], 50, std::slice::from_ref(&dep)).unwrap();
+    let refs = |name: &str| query::refs_with(app_store.conn(), name, &["member"], 50, std::slice::from_ref(&dep)).unwrap().0;
+    let hits = refs("isFinite");
     let int32 = vec!["Int32.isFinite".to_string()];
     assert_eq!(
         uses(&hits),
@@ -134,6 +139,8 @@ fn a_dependencys_member_on_a_library_struct_is_not_another_library_types() {
             ("finiteValue".to_string(), 11, "unresolved", vec![], None),
         ]
     );
+    // A member the dependency adds to a library struct, with a name of its own, is still its.
+    assert_eq!(uses(&refs("shouted")), [("loud".to_string(), 16, "unique_name", vec!["String.shouted".to_string()], None)]);
     let _ = std::fs::remove_dir_all(&grid);
     let _ = std::fs::remove_dir_all(&app);
 }

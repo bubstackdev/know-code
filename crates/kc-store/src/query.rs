@@ -1947,10 +1947,11 @@ fn bare_name(receiver: &str) -> Option<&str> {
 const STDLIB_MEMBERS: &[&str] = &[
     "append", "allSatisfy", "compactMap", "contains", "count", "decode", "dropFirst", "dropLast", "encode",
     "enumerated", "filter", "first", "firstIndex", "flatMap", "forEach", "formUnion", "index", "insert",
-    "intersection", "isEmpty", "joined", "last", "lastIndex", "lowercased", "map", "mapValues", "max", "merge",
-    "min", "prefix", "reduce", "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences",
-    "reserveCapacity", "reversed", "sort", "sorted", "split", "starts", "subtract", "suffix", "trimmingCharacters",
-    "union", "updateValue", "uppercased", "write", "zip",
+    "intersection", "isEmpty", "isFinite", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
+    "last", "lastIndex", "lowercased", "magnitude", "map", "mapValues", "max", "merge", "min", "prefix", "reduce",
+    "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences", "reserveCapacity",
+    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "starts", "subtract", "suffix",
+    "trimmingCharacters", "ulp", "union", "updateValue", "uppercased", "write", "zip",
 ];
 
 /// .NET collection, string, LINQ and object members, for calls from C#.
@@ -2175,11 +2176,6 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     }
     let instance_receiver = hit.receiver.as_deref().is_some_and(|r| r != "." && !type_like(r));
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
-        return ("external_likely", cands.iter().map(|d| d.id).collect());
-    }
-    // Only members the repo adds to library structs have the name: through an untyped value, the library's own
-    // same-named member on another type is as likely, so the name alone doesn't settle it.
-    if matches!(recv, Receiver::Unknown) && instance_receiver && cands.iter().all(|d| on_stdlib_type(d)) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
     }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -4200,9 +4196,16 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
                     let mut groups: Vec<Option<&str>> = picked.iter().map(|d| d.container.as_deref()).collect();
                     groups.sort();
                     groups.dedup();
-                    // As in the repo itself: members added to library structs, through an untyped value.
+                    // Through an untyped value, as in the repo itself: a common library member's name is the library's.
+                    // So is the name of a member the dependency adds to library structs to satisfy a requirement of
+                    // its own protocol (`extension Int32 { var isFinite … }` for `GridScalar.isFinite`), which the
+                    // library's other types satisfy themselves: its own member on another type is as likely.
                     let instance = receiver.is_some_and(|r| r != "." && !type_like(r));
-                    if instance && !picked.is_empty() && picked.iter().all(|d| on_stdlib_type(d)) {
+                    let library = instance
+                        && !picked.is_empty()
+                        && (stdlib_member(&hit.file, &hit.name)
+                            || picked.iter().all(|d| on_stdlib_type(d)) && requirement_named(dep.conn, &hit.name)?);
+                    if library {
                         ("external_likely", picked)
                     } else {
                         (if groups.len() == 1 { "unique_name" } else { "ambiguous" }, picked)
@@ -4261,6 +4264,16 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
         }
     }
     Ok(())
+}
+
+/// Whether a protocol declares a requirement named `name`.
+fn requirement_named(conn: &Connection, name: &str) -> Result<bool> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM symbols s JOIN symbols p ON p.id = s.parent_id
+             WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND p.kind = 'protocol')",
+        )?
+        .query_row([name], |r| r.get(0))?)
 }
 
 /// Whether a member reference typed by its receiver (`v.isFinite`, `v: Float`) reached only protocol requirements
