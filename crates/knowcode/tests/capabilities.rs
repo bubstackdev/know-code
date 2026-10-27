@@ -282,21 +282,29 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
             assert_eq!(mcp.kc_coded(op, &a).1.as_ref(), batch["over"].as_str().map(String::from).as_ref(), "{op}: more than {} inputs", batch["max"]);
         }
 
-        // Each range: in the schema too; past either end, clamped, not refused.
+        // Each range: in the schema too; each end does what the document says: clamped past max (up to type_max) and
+        // under a min above 0, refused when negative or past type_max.
         for (param, r) in entry["ranges"].as_object().unwrap() {
             let p = &props[param];
             assert_eq!((&p["minimum"], &p["maximum"], &p["default"]), (&r["min"], &r["max"], &r["default"]), "{op}.{param}");
-            assert_eq!(r["beyond"], json!("clamped"));
-            let (min, max) = (r["min"].as_u64().unwrap(), r["max"].as_u64().unwrap());
-            let mut ends = vec![max + 1];
+            let (min, max) = (r["min"].as_i64().unwrap(), r["max"].as_i64().unwrap());
+            let mut ends = vec![(max + 1, &r["above_max"]), (-1, &r["negative"])];
             if min > 0 {
-                ends.push(min - 1);
+                ends.push((min - 1, &r["below_min"]));
             }
-            for v in ends {
+            if let Some(t) = r["type_max"].as_i64() {
+                ends.push((t, &r["above_max"]));
+                ends.push((t + 1, &r["above_type_max"]));
+            }
+            for (v, said) in ends {
                 let mut a = args.clone();
                 a[param] = json!(v);
                 let (text, err) = mcp.kc(op, &a);
-                assert!(!err, "{op} {param}={v} is clamped, not refused: {text}");
+                match said.as_str() {
+                    Some("clamped") => assert!(!err, "{op} {param}={v} is clamped, not refused: {text}"),
+                    Some("invalid_argument") => assert!(err, "{op} {param}={v} is refused: {text}"),
+                    other => panic!("{op}.{param}: {other:?}"),
+                }
             }
             // A walk asked deeper than it goes says what it walked.
             if param == "depth" && entry["choices"].get("format").is_some() {

@@ -117,6 +117,27 @@ fn common() -> Value {
     })
 }
 
+/// What the server does with a number for a bounded parameter: a count past `max` is clamped to it (up to `type_max`,
+/// past which it is refused); one under `min` is clamped up to it, but never a negative number, which the parameter's
+/// unsigned type refuses, as it does a value of another type.
+pub(crate) fn range_json(r: &mcp::Range) -> Value {
+    let refused = Code::InvalidArgument.as_str();
+    let mut v = json!({
+        "min": r.min,
+        "max": r.max,
+        "default": r.default,
+        "above_max": "clamped",
+        "below_min": if r.min > 0 { "clamped" } else { refused },
+        "negative": refused,
+        "wrong_type": refused,
+    });
+    if let Some(t) = r.type_max {
+        v["type_max"] = json!(t);
+        v["above_type_max"] = json!(refused);
+    }
+    v
+}
+
 fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
     let tool = format!("kc_{op}");
     let input = s.schemas.get(&tool).cloned().unwrap_or_default();
@@ -125,7 +146,7 @@ fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
     let mut choices = serde_json::Map::new();
     for name in props.keys() {
         if let Some(r) = mcp::range(&tool, name) {
-            ranges.insert(name.clone(), json!({ "min": r.min, "max": r.max, "default": r.default, "beyond": "clamped", "wrong_type": Code::InvalidArgument.as_str() }));
+            ranges.insert(name.clone(), range_json(r));
         }
         if let Some(c) = mcp::choices(&tool, name) {
             choices.insert(name.clone(), json!({ "values": c, "default": c[0], "other": "refused", "code": Code::InvalidArgument.as_str() }));

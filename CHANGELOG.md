@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `capabilities` says what the server does at each end of a bounded number, where it said every out-of-range value
+  is "clamped": past `max` it is clamped (`above_max`), up to the `type_max` a depth's type holds (255), past which it
+  is refused; under `min` it is clamped up when `min` is above 0 (`below_min`); a negative number is refused
+  (`negative`: `invalid_argument`), as `search` with `context: -1` always was. The server's behaviour is unchanged.
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a

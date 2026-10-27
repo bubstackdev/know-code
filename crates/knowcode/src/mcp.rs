@@ -47,6 +47,9 @@ pub struct Range {
     pub max: usize,
     /// Said after the bounds.
     pub note: &'static str,
+    /// The largest number the parameter's type holds, when it is a small one (255 for a `u8` depth): a value past it
+    /// is refused, where one between `max` and it is clamped. `None`: any count.
+    pub type_max: Option<u64>,
 }
 
 impl Range {
@@ -70,19 +73,20 @@ impl Range {
     }
 }
 
-pub const TRACE_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_TRACE_DEPTH as usize, note: "" };
-pub const IMPACT_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_IMPACT_DEPTH as usize, note: "" };
-pub const FLOW_DEPTH: Range = Range { what: "Steps deep", min: 1, default: 10, max: crate::flow::MAX_DEPTH as usize, note: "" };
-pub const PATH_HOPS: Range = Range { what: "Hops a path may have", min: 1, default: 8, max: crate::walk::MAX_PATH_HOPS as usize, note: "" };
-pub const PATH_COUNT: Range = Range { what: "Paths to return", min: 1, default: 3, max: crate::walk::MAX_PATHS, note: "" };
-pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, default: 20, max: 500, note: "" };
-pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "" };
+pub const TRACE_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_TRACE_DEPTH as usize, note: "", type_max: Some(u8::MAX as u64) };
+pub const IMPACT_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_IMPACT_DEPTH as usize, note: "", type_max: Some(u8::MAX as u64) };
+pub const FLOW_DEPTH: Range = Range { what: "Steps deep", min: 1, default: 10, max: crate::flow::MAX_DEPTH as usize, note: "", type_max: Some(u8::MAX as u64) };
+pub const PATH_HOPS: Range = Range { what: "Hops a path may have", min: 1, default: 8, max: crate::walk::MAX_PATH_HOPS as usize, note: "", type_max: Some(u8::MAX as u64) };
+pub const PATH_COUNT: Range = Range { what: "Paths to return", min: 1, default: 3, max: crate::walk::MAX_PATHS, note: "", type_max: None };
+pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, default: 20, max: 500, note: "", type_max: None };
+pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "", type_max: None };
 pub const ANSWER_CHARS: Range = Range {
     what: "Answer size cap in characters",
     min: MIN_CHARS,
     default: DEFAULT_CHARS,
     max: MAX_CHARS,
     note: ", the max doubled for several inputs; a list cut to fit says so (`incomplete`, `more`)",
+    type_max: None,
 };
 
 /// Every bounded parameter, by tool (`*`: every tool).
@@ -3204,6 +3208,43 @@ mod tests {
 
     /// What tool discovery costs an agent's context, held to a budget so it can't creep back: the advertised schema
     /// (every tool, as `tools/list` sends it), each description, each parameter's line, and the instructions.
+    #[test]
+    fn ranges_say_which_numbers_are_clamped_and_which_refused() {
+        let raw: std::collections::HashMap<String, rmcp::model::JsonObject> =
+            KnowcodeServer::tool_router().list_all().into_iter().map(|t| (t.name.to_string(), (*t.input_schema).clone())).collect();
+        for (tool, param, r) in RANGES {
+            let tool = if *tool == "*" { "kc_find" } else { *tool };
+            let props = raw[tool]["properties"].as_object().unwrap();
+            let p = props.get(*param).unwrap_or_else(|| panic!("{tool}.{param}"));
+            // The type's own limit is what `type_max` says: a u8 holds 255, a usize any count.
+            let small = p.to_string().contains("\"uint8\"");
+            assert_eq!(r.type_max, small.then_some(u8::MAX as u64), "{tool}.{param}: {p}");
+            let mut base = serde_json::Map::new();
+            for req in raw[tool].get("required").and_then(Value::as_array).into_iter().flatten() {
+                let req = req.as_str().unwrap();
+                base.insert(req.into(), sample(&props[req], req));
+            }
+            let takes = |n: i64| {
+                let mut args = base.clone();
+                args.insert(param.to_string(), json!(n));
+                parse(tool, Value::Object(args)).is_ok()
+            };
+            let said = crate::capabilities::range_json(r);
+            // Past max: taken (and clamped by the answer), up to what the type holds.
+            assert!(takes(r.max as i64 + 1) && said["above_max"] == "clamped", "{tool}.{param}");
+            if let Some(t) = r.type_max {
+                assert!(takes(t as i64) && !takes(t as i64 + 1) && said["above_type_max"] == "invalid_argument", "{tool}.{param}");
+            }
+            // Under min: taken and clamped up when min is above 0; a negative number never.
+            if r.min > 0 {
+                assert!(takes(r.min as i64 - 1) && said["below_min"] == "clamped", "{tool}.{param}");
+            } else {
+                assert_eq!(said["below_min"], "invalid_argument", "{tool}.{param}");
+            }
+            assert!(!takes(-1) && said["negative"] == "invalid_argument", "{tool}.{param}");
+        }
+    }
+
     #[test]
     fn bounds_are_said_as_answers_apply_them() {
         let s = server("all");
