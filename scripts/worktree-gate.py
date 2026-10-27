@@ -191,7 +191,7 @@ def per_index(path):
     `stats.bytes_read`: how many files the content index's postings named, which depends on its merge history as in
     any index updated in place; the matches are verified against the files either way)."""
     last = path[-1] if path else ""
-    return (last in ("id", "cursor", "generation") or last.endswith("_cursor") or last.endswith("_ms")
+    return (last in ("id", "cursor", "generation", "ms") or last.endswith("_cursor") or last.endswith("_ms")
             or (len(path) >= 2 and path[-2] == "stats" and last in ("candidates", "bytes_read")))
 
 
@@ -449,7 +449,15 @@ def concurrent(binary, repo, work, k, volatile):
         sep.append((ins, sep_env))
     failures = []
     for r, row, (_, sep_env) in zip(roots, rows, sep):
-        bad = [q for q in repo["queries"] if masked(ask(binary, r, env, q), volatile) != masked(ask(binary, r, sep_env, q), volatile)]
+        bad = []
+        for q in repo["queries"]:
+            a, b = ask(binary, r, env, q), ask(binary, r, sep_env, q)
+            if masked(a, volatile) != masked(b, volatile):
+                bad.append(q)
+                (work / "diffs").mkdir(exist_ok=True)
+                stem = f"{repo['name']}-{r.name}-{re.sub(r'[^A-Za-z0-9]+', '_', q)[:80]}"
+                (work / "diffs" / f"{stem}.shared.json").write_bytes(a)
+                (work / "diffs" / f"{stem}.separate.json").write_bytes(b)
         row["mismatches"] = bad
         failures += [f"at once, {r.name}: `{q}` differs from a separate index" for q in bad]
     # The one that built the base adopted it after: it is the one that parsed files.
