@@ -669,7 +669,8 @@ pub const UNPLACED_MODULE: &str = "tsconfig maps the import to no indexed file";
 /// [`RefHit::basis`]: several dependencies the file imports declare the name, and the import doesn't say which.
 pub const AMBIGUOUS_DEPENDENCY: &str = "several imported dependencies declare it";
 /// [`RefHit::basis`]: the target is a protocol requirement the receiver's type satisfies with a member of its own that
-/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`).
+/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`). The row is `external_likely`, the requirement
+/// listed as its target.
 pub const VIA_PROTOCOL: &str = "via protocol: the receiver's type satisfies this requirement outside the repo";
 
 impl RefHit {
@@ -5085,7 +5086,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
+                // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);
+                confidence = "external_likely";
             } else {
                 // The library type conforms in a module this code neither is in nor imports: the call is the
                 // library type's own member, never the requirement.

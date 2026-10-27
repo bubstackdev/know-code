@@ -102,8 +102,8 @@ fn a_member_added_to_a_library_struct_is_not_another_library_types() {
             ("bench".to_string(), 2, "unresolved", vec![], None),
             // A generic parameter is no `Int32`: what it conforms to isn't read, so nothing is linked.
             ("allFinite".to_string(), 15, "unresolved", vec![], None),
-            // `Float` conforms to `GridScalar`, and has `isFinite` of its own, outside the repo.
-            ("checkOne".to_string(), 20, "exact", vec!["GridScalar.isFinite".to_string()], Some(query::VIA_PROTOCOL)),
+            // `Float` conforms to `GridScalar`, and has `isFinite` of its own, outside the repo: listed, not linked.
+            ("checkOne".to_string(), 20, "external_likely", vec!["GridScalar.isFinite".to_string()], Some(query::VIA_PROTOCOL)),
             // Untyped: `isFinite` is a common library member, as likely the library's as the repo's.
             ("checkPair".to_string(), 24, "external_likely", both.clone(), None),
             ("checkPair".to_string(), 24, "external_likely", both, None),
