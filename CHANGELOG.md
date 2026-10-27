@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# call written on a type reached a same-named extension method of another type: `string.IsNullOrEmpty(s)`
+  resolved to a repo's `IsNullOrEmpty(this Guid? g)`, and `string.Compare(a, b, c)` to repo `Compare` methods, so
+  `impact`, `refs` and `trace` listed those calls as callers. A predefined type keyword (`string`, `int`, …) as
+  receiver is now the type, and a call on a type reaches only that type's members and extensions on it.
 - `impact` listed each dependent once, by its best way, and dropped the others with their lines: a method calling
   the change on one line (hop 1) and, on others, a method that calls it (hop 2) named only the first line. A row now
   keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
