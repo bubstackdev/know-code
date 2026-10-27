@@ -3755,7 +3755,7 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
             let listed: HashSet<(Option<String>, i64)> = t.nodes.iter().map(|n| (n.repo.clone(), n.id)).collect();
             let stops = std::mem::take(&mut t.stopped);
             let budget = if t.truncated { 0 } else { FRONTIER_CHECKS };
-            let mut fr = g.crossing().frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            let mut fr = g.frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
             // Each stop's exact call going on from it, the way the walk went.
             let mut go_on = filter.args(&edges);
             go_on.insert("depth".into(), depth.clamp(1, trace::MAX_TRACE_DEPTH).into());
@@ -5159,9 +5159,11 @@ impl<'a> HttpCrossing<'a> {
 
     /// Of the symbols a walk stopped at (`stops`, see [`trace::Stop`]), those with neighbours one hop past them that
     /// `listed` says the answer doesn't have: through references, and for dependents, across HTTP routes, the bus,
-    /// SQL and deploys too. At most `budget` are checked; also returns how many weren't.
+    /// SQL and deploys too. At most `budget` are checked; also returns how many weren't. `home` is the home repo's edge
+    /// cache, the walk's.
     pub(crate) fn frontier(
         &mut self,
+        home: &mut trace::EdgeCache,
         stops: &[trace::Stop],
         listed: &dyn Fn(Option<&str>, i64) -> bool,
         budget: usize,
@@ -5185,7 +5187,9 @@ impl<'a> HttpCrossing<'a> {
             let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
-            let (found, skipped) = trace::frontier(self.store(&root).conn(), &group, &mine, self.gate.filter(), room)?;
+            let mut theirs = trace::EdgeCache::default();
+            let cache = if label.is_none() { &mut *home } else { &mut theirs };
+            let (found, skipped) = trace::frontier(self.store(&root).conn(), cache, &group, &mine, self.gate.filter(), room)?;
             unchecked += skipped;
             out.extend(found);
             // Dependents across a route, the bus, SQL or a deploy, of a stop that has none through references.
@@ -5986,7 +5990,6 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             removed = list;
         }
         crate::tree::cross_impact(&mut g, &mut impact, p.depth, p.limit)?;
-        let crossing = g.crossing();
         // Where the walk stopped short: the symbols it listed without walking past that have dependents it doesn't list.
         let listed: HashSet<(Option<String>, i64)> =
             impact.affected.iter().map(|a| (a.repo.clone(), a.id)).chain(impact.scope.iter().map(|s| (None, s.id))).collect();
@@ -5994,7 +5997,8 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         // what one more hop does).
         let budget = if impact.truncated { 0 } else { FRONTIER_CHECKS };
         let (mut frontier, frontier_unchecked) =
-            crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            g.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+        let crossing = g.crossing();
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
         let (library_checked, library_cut) = (crossing.library_checked, crossing.library_cut);
         // Each stop's exact call going on from it.

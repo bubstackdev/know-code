@@ -1298,15 +1298,27 @@ pub struct Frontier {
 
 /// Of the symbols `stops` names (of the repo `conn` indexes), those with neighbours one hop past them in the stop's
 /// direction (`in`: dependents, as impact and `trace in` walk; `out`: what it uses) that the edge filter would list and
-/// `listed` says the answer doesn't have. At most `budget` are checked; also returns how many weren't.
+/// `listed` says the answer doesn't have. At most `budget` are checked; also returns how many weren't. `cache` holds the
+/// references the walk resolved already (a stop shares its name with what the walk read, often).
 pub fn frontier(
+    conn: &Connection,
+    cache: &mut EdgeCache,
+    stops: &[Stop],
+    listed: &dyn Fn(i64) -> bool,
+    filter: &EdgeFilter,
+    budget: usize,
+) -> Result<(Vec<Frontier>, usize)> {
+    cache.with(conn, |t| frontier_with(t, conn, stops, listed, filter, budget))
+}
+
+fn frontier_with(
+    t: &mut Tracer,
     conn: &Connection,
     stops: &[Stop],
     listed: &dyn Fn(i64) -> bool,
     filter: &EdgeFilter,
     budget: usize,
 ) -> Result<(Vec<Frontier>, usize)> {
-    let mut t = Tracer { conn, refs_by_name: HashMap::new(), bindings: HashMap::new(), precise: HashSet::new(), evidence: HashMap::new(), also: HashMap::new(), one_of: false };
     let mut out = Vec::new();
     let mut checked = HashSet::new();
     let mut unchecked = 0;
