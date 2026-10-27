@@ -2070,16 +2070,16 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
-/// Whether call `hit` is one no declaration of its name in scope (`named`) can take: each is a function whose
-/// parameters are known, and none takes the call's argument labels (Swift) or as many arguments as it passes (C#).
-/// Such a call is another declaration's, outside the repo (`Equals(a, b)` is `object.Equals`, `xs.Contains(x)`
-/// LINQ's, `xs.append(1)` the library's when the repo declares only `append(optional:)`).
-fn fits_none(hit: &RefHit, named: &[Def]) -> bool {
-    if hit.kind != "call" {
+/// Whether call `hit` is one none of the declarations resolution picked for it (`ids`, of `named`) can take: each is a
+/// function whose parameters are known, and none takes the call's argument labels (Swift) or as many arguments as it
+/// passes (C#). Such a call is another declaration's, outside the repo (`Equals(a, b)` is `object.Equals`,
+/// `xs.Contains(x)` LINQ's, `xs.append(1)` the library's when the repo declares only `append(optional:)`).
+fn takes_none(hit: &RefHit, named: &[Def], ids: &[i64]) -> bool {
+    if hit.kind != "call" || ids.is_empty() {
         return false;
     }
-    let callable: Vec<&Def> = named.iter().filter(|d| compatible(&hit.kind, &d.kind)).collect();
-    if callable.is_empty() {
+    let callable: Vec<&Def> = named.iter().filter(|d| ids.contains(&d.id)).collect();
+    if callable.len() < ids.len() {
         return false;
     }
     if hit.file.ends_with(".swift") {
@@ -2183,8 +2183,8 @@ fn type_like(receiver: &str) -> bool {
 /// types, then its supertypes.
 ///
 /// A call's overloads are first narrowed to those taking its argument labels (Swift) or as many arguments as it passes
-/// (C#); when that leaves nothing to point to, all of them are considered. (A call no declaration of its name can take
-/// at all is settled before: see [`fits_none`].)
+/// (C#); when that leaves nothing to point to, all of them are considered. (A call none of the picked declarations can
+/// take is settled after: see [`takes_none`].)
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
     let all: Vec<&Def> = defs.to_vec();
     // A Swift call's argument labels rule out the overloads it can't call.
@@ -5026,11 +5026,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => usable,
             };
-            if fits_none(hit, named) {
-                ("unresolved", Vec::new())
-            } else {
-                resolve(hit, &recv, &self_chains[&caller], &usable)
-            }
+            let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
+            if takes_none(hit, named, &ids) { ("unresolved", Vec::new()) } else { (confidence, ids) }
         };
         // How an exact answer was reached, recorded where it is decided.
         let mut exact_by = if by_import {
