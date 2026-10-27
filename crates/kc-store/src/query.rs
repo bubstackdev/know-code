@@ -2070,26 +2070,43 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
-/// For a Swift reference made by `from`: `Some(true)` when `from` is an extension (the reference is in its header),
-/// `Some(false)` when `from` is declared in an extension's body (not in a type nested there), `None` otherwise.
-fn swift_extension_scope(conn: &Connection, from: &FromSymbol) -> Result<Option<bool>> {
+/// Where Swift code stands with respect to an extension.
+#[derive(Clone, PartialEq)]
+enum ExtensionScope {
+    /// In the header of an extension of a nested type: the extended type and its conformances, read in the file's
+    /// scope.
+    Header,
+    /// Inside the body of an extension of the nested type named here (qualified), or in a type declared there: the
+    /// extended type and the types nested in it are in scope, the types enclosing it aren't.
+    Body(String),
+    /// Elsewhere.
+    None,
+}
+
+/// Where the Swift symbol `from` stands with respect to an extension (see [`ExtensionScope`]).
+fn swift_extension_scope(conn: &Connection, from: &FromSymbol) -> Result<ExtensionScope> {
+    // Only an extension of a nested type (`extension A.B`) changes what is in scope.
     if from.kind == "extension" {
-        return Ok(Some(true));
+        return Ok(if from.container.is_some() { ExtensionScope::Header } else { ExtensionScope::None });
     }
-    let mut stmt = conn.prepare_cached("SELECT p.id, p.kind FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT p.id, p.kind, CASE WHEN p.container IS NULL THEN p.name ELSE p.container || '.' || p.name END
+         FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1",
+    )?;
     let mut id = from.id;
-    // Members nest shallowly; the bound guards against a malformed parent chain.
+    // Declarations nest shallowly; the bound guards against a malformed parent chain.
     for _ in 0..16 {
-        let Some((parent, kind)) = stmt.query_row([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).optional()? else {
-            return Ok(None);
+        let Some((parent, kind, qualified)) =
+            stmt.query_row([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).optional()?
+        else {
+            return Ok(ExtensionScope::None);
         };
-        match kind.as_str() {
-            "extension" => return Ok(Some(false)),
-            k if TYPE_KINDS.contains(&k) => return Ok(None),
-            _ => id = parent,
+        if kind == "extension" {
+            return Ok(if qualified.contains('.') { ExtensionScope::Body(qualified) } else { ExtensionScope::None });
         }
+        id = parent;
     }
-    Ok(None)
+    Ok(ExtensionScope::None)
 }
 
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
@@ -4812,8 +4829,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     // The caller's type, whether it is a C# extension method's extended type, and whether the code is in a Swift
     // extension's body.
     let mut self_chains: HashMap<(Option<String>, bool, bool), Vec<String>> = HashMap::new();
-    // Swift code in an extension, by the referencing symbol: `Some(true)` in its header, `Some(false)` in its body.
-    let mut in_extension: HashMap<i64, Option<bool>> = HashMap::new();
+    // Swift code in an extension, by the referencing symbol (see [`ExtensionScope`]).
+    let mut in_extension: HashMap<i64, ExtensionScope> = HashMap::new();
     // Per C# method: the static class declaring it, when it is an extension method.
     let mut declaring: HashMap<i64, Option<String>> = HashMap::new();
     // Per service, member, argument count and registration: the implementation's member it is bound to.
@@ -4966,22 +4983,24 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     if let std::collections::hash_map::Entry::Vacant(e) = in_extension.entry(f.id) {
                         e.insert(swift_extension_scope(conn, f)?);
                     }
-                    in_extension[&f.id]
+                    in_extension[&f.id].clone()
                 }
-                _ => None,
+                _ => ExtensionScope::None,
             };
-            let caller = match extension_scope {
-                Some(true) => (None, false, false),
-                Some(false) => (caller.0, caller.1, true),
-                None => (caller.0, caller.1, false),
+            let caller = match &extension_scope {
+                ExtensionScope::Header => (None, false, false),
+                ExtensionScope::Body(_) => (caller.0, caller.1, true),
+                ExtensionScope::None => (caller.0, caller.1, false),
             };
             if !self_chains.contains_key(&caller) {
                 let mut chain = Vec::new();
                 let mut s = caller.0.clone();
                 while let Some(cur) = s {
                     s = cur.rsplit_once('.').map(|(p, _)| p.to_string());
+                    let last = matches!(&extension_scope, ExtensionScope::Body(extended) if *extended == cur);
                     chain.push(cur);
-                    if extension_scope == Some(false) {
+                    // Types enclosing the extended type aren't in scope in its extension.
+                    if last {
                         break;
                     }
                 }

@@ -45,3 +45,24 @@ fn an_extension_of_a_nested_type_sees_the_file_not_the_outer_type() {
     assert!(got.iter().any(|g| g.0 == 12 && g.1 == 24 && g.2 != "exact"), "{got:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// In an extension of a top-level type, and in types declared in an extension, the extended type's members stay in
+/// scope.
+#[test]
+fn types_declared_in_an_extension_see_the_extended_type() {
+    let root = scratch("swift-extension-scope-nested");
+    write(
+        &root,
+        "Sources/Kit/Kit.swift",
+        "enum Kit {\n    protocol Version {}\n}\n\nextension Kit {\n    enum Current: Version {}\n}\n\nextension Kit.Current {\n    struct Inner: Version {}\n}\n",
+    );
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let (hits, _) = query::refs(store.conn(), "Version", &["type_ref"], 50).unwrap();
+    let got: Vec<(u32, &str)> = hits.iter().map(|h| (h.line, h.confidence)).collect();
+    // `extension Kit`'s `Current: Version` is Kit's.
+    assert!(got.contains(&(6, "exact")), "{got:?}");
+    // In `extension Kit.Current`, Kit's members aren't in scope.
+    assert!(got.iter().any(|g| g.0 == 10 && g.1 != "exact"), "{got:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
