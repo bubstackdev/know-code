@@ -64,6 +64,8 @@ SKIPPED = {'kc_more': 'its cursor belongs to the recorded session', 'kc_note_add
 # A place an answer names: `path:line`, optionally `repo:path:line` or `repo/path:line`.
 PLACE = re.compile(r'(?<![\w@./-])(?:([A-Za-z0-9][\w.-]*):)?((?:[\w@.+-]+/)*[\w@+-][\w@.+-]*\.(?:'
                    + recheck.EXTENSIONS + r')):(\d+)(?![\w/])')
+# A tree row's call sites, after its caller's place: `… src/a.cs:37  [ambiguous] direct at line 46 (also 53)`.
+CALL_SITES = re.compile(r'\] \w+ at line (\d+)(?: \(also ([\d, ]+)\))?')
 PROFILES = ('one', 'core', 'all')
 # Refusals by design: the answer says what the call asked for doesn't exist here, rather than failing.
 REFUSALS = (re.compile(r'\bmatched 0 files \('),)
@@ -270,11 +272,19 @@ def schemas(binary, key):
 # --- run ------------------------------------------------------------------------------------------------------------
 
 def places(text, repos, roots):
-    """The `repo/path:line` places an answer names. A path without its repository is given the one repository, among
-    the question's first and then the cohort's, that has the file."""
+    """The `repo/path:line` places an answer names, a tree row's call sites (`at line N (also M)`) in its caller's
+    file. A path without its repository is given the one repository, among the question's first and then the
+    cohort's, that has the file."""
+    named = []
+    for row in text.splitlines():
+        matches = list(PLACE.finditer(row))
+        named += [m.groups() for m in matches]
+        sites = CALL_SITES.search(row)
+        if matches and sites:
+            repo, path = matches[-1].group(1), matches[-1].group(2)
+            named += [(repo, path, line) for line in [sites.group(1), *re.findall(r'\d+', sites.group(2) or '')]]
     out = []
-    for match in PLACE.finditer(text):
-        repo, path, line = match.group(1), match.group(2), match.group(3)
+    for repo, path, line in named:
         first = path.split('/', 1)[0]
         if repo in roots:
             out.append(f'{repo}/{path}:{line}')

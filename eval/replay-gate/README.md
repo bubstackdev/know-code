@@ -26,7 +26,9 @@ fifth, final, rerun) and public-v2 runs (baseline, release candidate). That is 1
 3. **Replay:** each call is sent to `knowcode serve --tools all` over MCP. Recorded `kc_more` calls are skipped,
    because their cursors belong to the recorded session; `kc_note_add` is skipped, because it writes.
 4. **Scoring:** per question, the places (`repo/path:line`) its calls' answers name are scored against the study's
-   published label with [score.py](../../scripts/eval/neutral/score.py).
+   published label with [score.py](../../scripts/eval/neutral/score.py). A tree row's call sites count as places in
+   its caller's file: `RequestLoggingMiddleware.cs:37 [ambiguous] direct at line 46` names lines 37 and 46. Until
+   0.5.0's gate only `path:line` was read, which missed call sites once impact's walk listed them as tree rows.
 5. **Report:** recall and precision per question type, answer bytes and errors per tool, and the tool schemas per
    profile:
    - tools listed and always loaded, and the instructions, in bytes;
