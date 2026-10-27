@@ -1133,6 +1133,24 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
     if whole.len() <= max {
         return Ok(whole);
     }
+    // A row's other ways go first, from the last row up, said by a count when the rest fits; when it doesn't, the
+    // answer is cut as it would be without them.
+    let noted = |text: &str, left: usize| {
+        let note = format!("… {left} more ways to listed symbols left out at max_chars={max}; pass max_chars (up to {MAX_CHARS}) for them\n");
+        Some(format!("{}{note}{text}", header(&env, false))).filter(|w| left > 0 && w.len() <= max)
+    };
+    let (lean, left) = unway_text(&body, whole.len() - max);
+    if let Some(w) = noted(&lean, left) {
+        return Ok(w);
+    }
+    let (body, left) = unway_text(&body, usize::MAX);
+    if let Some(w) = noted(&body, left) {
+        return Ok(w);
+    }
+    let whole = format!("{}{body}", header(&env, complete && left == 0));
+    if whole.len() <= max {
+        return Ok(whole);
+    }
     // Rows before the rest of their sites' statements: those lines go first, from the last row up.
     let body = unstate_text(&body, whole.len() - max);
     let whole = format!("{}{body}", header(&env, complete));
@@ -1140,6 +1158,28 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
         return Ok(whole);
     }
     Ok(cap_text(&format!("{}{body}", header(&env, false)), max))
+}
+
+/// A tree's text less its rows' other ways (`render::WAY`, last on a row), from the last row up, until at least
+/// `excess` bytes and the note saying so are gone; with how many ways it left out. All of them when that isn't enough.
+fn unway_text(text: &str, excess: usize) -> (String, usize) {
+    // The note's bytes, at most.
+    let excess = excess.saturating_add(160);
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let (mut dropped, mut left) = (0, 0);
+    for l in lines.iter_mut().rev() {
+        if dropped >= excess {
+            break;
+        }
+        if let Some(at) = l.find(crate::render::WAY) {
+            left += l[at..].matches(crate::render::WAY).count();
+            dropped += l.len() - at;
+            l.truncate(at);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    (out, left)
 }
 
 /// A tree's text less up to `excess` bytes of the lines quoting the rest of a site's statement (`  41 - text`, and the
@@ -3548,6 +3588,22 @@ mod tests {
             "incomplete": [{ "reason": "capped", "detail": "items: 3 of 9 shown" }] });
         let h = header(&env, false);
         assert!(h.starts_with("repo shop @ 0123456\n") && h.contains("incomplete (capped)"), "{h}");
+    }
+
+    #[test]
+    fn a_capped_tree_leaves_out_its_rows_other_ways_first() {
+        let deep = format!("src/{}/g.cs", "deep/".repeat(40));
+        let rows = format!(
+            "a\n  called by method A.b  src/a.cs:12  [exact] direct (also via C.d at src/a.cs:14) (also via E.f at src/a.cs:20)\n  called by method G.h  {deep}:3  [exact] direct (also via C.d at {deep}:9)\n"
+        );
+        // From the last row up, until enough is gone (room for the note included); each way counted.
+        let (text, left) = unway_text(&rows, 1);
+        assert_eq!(
+            (text, left),
+            (format!("a\n  called by method A.b  src/a.cs:12  [exact] direct (also via C.d at src/a.cs:14) (also via E.f at src/a.cs:20)\n  called by method G.h  {deep}:3  [exact] direct\n"), 1)
+        );
+        let (text, left) = unway_text(&rows, usize::MAX);
+        assert_eq!((text, left), (format!("a\n  called by method A.b  src/a.cs:12  [exact] direct\n  called by method G.h  {deep}:3  [exact] direct\n"), 3));
     }
 
     #[test]

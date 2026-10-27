@@ -1188,6 +1188,10 @@ pub struct Affected {
     /// For a SQL object dumped in several places, the other copies reached (`file:line`), listed once here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub copies: Vec<String>,
+    /// The other ways the walk reached it, each through another symbol than `via` and at sites the row doesn't
+    /// name: a method calling the change at hop 1 and, on other lines, a hop-1 dependent too.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ways: Vec<Way>,
     /// `via` is a definition the change removed (a diff's pre-change side): this symbol still names it, matched by
     /// name, so the change breaks it unless something else of the name now serves.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1364,6 +1368,56 @@ impl Impact {
         }
         self.affected = out;
         self.recount();
+    }
+}
+
+/// Another way an affected symbol was reached (see [`Affected::ways`]): through `via`, at `hop`, at `site` and its
+/// `also` lines.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Way {
+    pub via: String,
+    pub hop: u8,
+    pub site: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
+}
+
+impl Affected {
+    /// Keeps reaching it through `via` at `hop`, at `site` and `also`, as another way: unless that is the row's own
+    /// way, or every site is one the row names already.
+    pub fn add_way(&mut self, via: &str, hop: u8, site: Option<&String>, also: &[String]) {
+        if via == self.via {
+            return;
+        }
+        let named = |x: &String| self.site.as_ref() == Some(x) || self.also.contains(x) || self.ways.iter().any(|w| w.site == *x || w.also.contains(x));
+        let mut sites: Vec<String> = site.into_iter().chain(also).filter(|x| !named(x)).cloned().collect();
+        sites.dedup();
+        if sites.is_empty() {
+            return;
+        }
+        let site = sites.remove(0);
+        match self.ways.iter_mut().find(|w| w.via == via) {
+            Some(w) => {
+                w.hop = w.hop.min(hop);
+                w.also.push(site);
+                w.also.extend(sites);
+            }
+            None => self.ways.push(Way { via: via.to_string(), hop, site, also: sites }),
+        }
+    }
+
+    /// Its row replaced by `better`, a better way to it: that row keeps this one's ways, and this one's own way as
+    /// another.
+    pub fn replaced_by(self, mut better: Affected) -> Affected {
+        let mut ways = self.ways;
+        ways.retain(|w| w.via != better.via);
+        for w in ways {
+            better.add_way(&w.via, w.hop, Some(&w.site), &w.also);
+        }
+        if self.via != better.via {
+            better.add_way(&self.via, self.hop, self.site.as_ref(), &self.also);
+        }
+        better
     }
 }
 

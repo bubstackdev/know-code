@@ -285,10 +285,21 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                 if verdict == Verdict::Exclude {
                     continue;
                 }
-                let Some(grow) = seen.offer_as(dep.id, hop, confidence, verdict == Verdict::Follow) else { continue };
                 // Its other sites reaching `sym`: another reference on the site's own line says nothing new.
                 let mut also: Vec<String> = g.also(repo, dep.id, sym.id).into_iter().filter(|a| Some(a) != site.as_ref()).collect();
                 also.sort_by_key(|a| a.rsplit_once(':').map(|(f, l)| (f.to_string(), l.parse::<u32>().unwrap_or(0))));
+                let Some(grow) = seen.offer_as(dep.id, hop, confidence, verdict == Verdict::Follow) else {
+                    // Listed by a better way: this one is another of its ways.
+                    let listed = match slots.get(&dep.id) {
+                        Some(&Slot::Found(i)) => Some(&mut found[i].0),
+                        Some(&Slot::Listed(i)) => Some(&mut affected[i]),
+                        None => None,
+                    };
+                    if let Some(r) = listed {
+                        r.add_way(&sym.qualified(), hop, site.as_ref(), &also);
+                    }
+                    continue;
+                };
                 let row = Affected {
                     id: dep.id,
                     qualified: dep.qualified(),
@@ -312,6 +323,7 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                     library: None,
                     also,
                     copies: Vec::new(),
+                    ways: Vec::new(),
                     via_removed: false,
                     evidence,
                     cite: None,
@@ -338,11 +350,11 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                 // A better way to a symbol already listed replaces its row.
                 match slots.get(&row.id) {
                     Some(&Slot::Found(i)) => {
-                        found[i].0 = row;
+                        found[i].0 = std::mem::replace(&mut found[i].0, row.clone()).replaced_by(row);
                         found[i].1.extend(onward);
                     }
                     Some(&Slot::Listed(i)) => {
-                        affected[i] = row;
+                        affected[i] = std::mem::replace(&mut affected[i], row.clone()).replaced_by(row);
                         late.extend(onward);
                     }
                     None => {
@@ -404,7 +416,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
     let mut rows: HashMap<(Option<String>, i64), usize> = impact.affected.iter().enumerate().map(|(i, a)| ((a.repo.clone(), a.id), i)).collect();
     let mut changed = false;
     let place = |impact: &mut Impact, rows: &mut HashMap<(Option<String>, i64), usize>, a: Affected| match rows.get(&(a.repo.clone(), a.id)) {
-        Some(&i) => impact.affected[i] = a,
+        Some(&i) => impact.affected[i] = std::mem::replace(&mut impact.affected[i], a.clone()).replaced_by(a),
         None => {
             rows.insert((a.repo.clone(), a.id), impact.affected.len());
             impact.affected.push(a);
@@ -452,7 +464,12 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                     impact.truncated = true;
                     break;
                 }
-                let Some(grow) = seen_there.offer_as(s.id, hop + 1, confidence, verdict == Verdict::Follow) else { continue };
+                let Some(grow) = seen_there.offer_as(s.id, hop + 1, confidence, verdict == Verdict::Follow) else {
+                    if let Some(&i) = rows.get(&(label.clone(), s.id)) {
+                        impact.affected[i].add_way(&qualified, hop + 1, arrival.site().as_ref(), &[]);
+                    }
+                    continue;
+                };
                 let a = Affected {
                     id: s.id,
                     qualified: s.qualified(),
@@ -476,6 +493,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                     library: landing.via.library(),
                     also: Vec::new(),
                     copies: Vec::new(),
+                    ways: Vec::new(),
                     via_removed: false,
                     evidence: arrival.evidence.clone(),
                     cite: None,

@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `impact` listed each dependent once, by its best way, and dropped the others with their lines: a method calling
+  the change on one line (hop 1) and, on others, a method that calls it (hop 2) named only the first line. A row now
+  keeps its other ways in `ways` (`{via, hop, site, also}`), and in text last on its row
+  (`(also via Store.Drop at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
+  and says how many, so no row is cut for them.
 - A C# override or implementation that leaves out its base member's default parameter value
   (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
   member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
