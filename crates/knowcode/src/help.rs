@@ -794,10 +794,12 @@ version), `protocol` (the MCP version the server speaks), `index_schema` (the gr
 (`one`, or the tools advertised), `common` (the parameters every op takes), `evidence` (the presets, mechanisms and
 assumptions an evidence policy is written with), `reasons` and `codes` (the closed sets an `incomplete` entry and a
 refused call are coded with; see `contract`), `partial` (the keys a partial JSON answer adds: `completeness`, `size`),
-`errors` (where a refused call's code is) and `ops`, one entry per op:
+`errors` (where a refused call's code is), `scope` (`restricted`, and for a server started with `serve --restricted`
+its repos, ops and directories) and `ops`, one entry per op:
 
 - `op` and `tool` (`impact`, `kc_impact`), `summary`, `description` (the tool's), `help` (its topic's resource), and
-  `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`).
+  `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`), and `allowed`
+  (false for an op a restricted server refuses).
 - `access`: `read`, or `write` (note_add: notes are the only writes).
 - `q` and `qs`: the parameters they fill as `kc` ops, or null; `takes_query` false for an op taking no `q`.
 - `input`: the full JSON schema of its parameters: `minimum`, `maximum` and `default` for a bounded number,
@@ -897,7 +899,7 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - Codes: an entry's code is its `reason`, or its `code` where that says more (`indexing`: ask again after it
   finishes; `not_indexed`, `gone`). A refused call's code is in the tool result's `structuredContent.error.code`
   (invalid_argument, not_found, ambiguous, no_files, not_indexed, indexing, gone, withheld, stale_cursor,
-  unsupported, collision, cut, cancelled, failed, internal); a rename refused says `codes` beside its `reasons`.
+  unsupported, collision, cut, not_allowed, cancelled, failed, internal); a rename refused says `codes` beside its `reasons`.
   Anything `withheld` carries `privacy`: `{repo, file, block_at, blocks}`. Branch on codes, not on the English.
 - An empty answer says what was searched (`note`). Older fields agree with `incomplete`: `truncated`, `total`,
   `capped`, `freshness.failed`, `left_out` and `hint`.
