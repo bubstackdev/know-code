@@ -27,6 +27,7 @@ mod restricted;
 mod session_hook;
 mod settings;
 mod summary;
+mod task;
 mod setup;
 mod uninstall;
 mod update;
