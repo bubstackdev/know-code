@@ -141,8 +141,19 @@ exact call going on from it. Walk answers are pinned by a snapshot test (`crates
 
 ## The cache lifecycle
 
-- **Seeding.** A new worktree or clone of an indexed repo starts from a copy of that repo's index and extracts only
-  what differs (never when either side's privacy file blocks something).
+- **Shared bases.** Worktrees and clones of one repo share bases: immutable copies of the repo's index at a commit,
+  in `<cache>/bases/`, keyed by the repo's identity (its origin, else its git directory), the commit, the build and
+  the privacy policy. A checkout clean at a commit (no change, no untracked file) publishes one after it is indexed,
+  when the repo has another checkout and no base is within a few files of that commit; it is written by `VACUUM
+  INTO` (no free pages, no WAL) and the checkout's own index becomes a clone of it. A new checkout's index starts as a
+  copy-on-write clone of the nearest base made under its own privacy policy (`clonefile` on APFS, a reflink on btrfs
+  and XFS, a plain copy elsewhere), so the pages it doesn't change stay the base's on disk. Its first sync hashes
+  every file (the clone resets every file's stat), extracts only what differs from the base, and holds what a cold
+  index of its tree holds. A checkout's index never depends on its base after the clone. Bases go first when the
+  cache is over its budget, with their repo's last checkout, and with `purge`. The cache counts a clone's bytes it
+  doesn't share. `cache.shared_bases = false` turns them off. Design: [worktree overlays](design/worktree-overlays.md).
+- **Seeding.** Without a base, a new worktree or clone of an indexed repo starts from a copy of that repo's index and
+  extracts only what differs (never when either side's privacy file blocks something).
 - **Maintenance.** After queries, and periodically while the MCP server runs, deleted checkouts are pruned and idle
   indexes are evicted least recently used above `cache.max_size` (default 2 GiB). Current and in-use indexes stay,
   so the cache may exceed the budget for a while. Eviction keeps the repo's last workspace summary; an answer that

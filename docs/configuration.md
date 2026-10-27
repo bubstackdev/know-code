@@ -26,6 +26,7 @@ layout. `config list` shows every setting as it takes effect and where it came f
 [cache]
 dir = "~/caches/knowcode"        # where the indexes live
 max_size = "2 GiB"              # budget for idle indexes; 0 disables size eviction
+shared_bases = true             # worktrees of a repo start from a shared base (see "The cache lifecycle")
 
 [notes]
 path = "~/notes/knowcode.sqlite" # the notes database
@@ -60,6 +61,7 @@ node_modules = true              # read declared SDK clients' code from node_mod
 | --- | --- | --- |
 | `cache.dir` | the user cache directory | Where indexes live. |
 | `cache.max_size` | `2147483648` (2 GiB) | Idle indexes above this are evicted least recently used. Bytes or a size such as `"4 GiB"`; `0` disables size eviction. |
+| `cache.shared_bases` | `true` | Whether checkouts of a repo with more than one (worktrees, clones) share a base: a checkout clean at a commit publishes one, and a new checkout's index starts as a clone of the nearest (see [architecture](architecture.md#the-cache-lifecycle)). |
 | `notes.path` | `notes.sqlite` in the data directory | The notes database. |
 | `workspace.roots` | none | Directories whose git repos make up the workspace. |
 | `workspace.max_depth` | `4` | How many directories deep under a root a repo may be. |

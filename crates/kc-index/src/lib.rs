@@ -14,6 +14,7 @@
 
 pub mod angular;
 pub mod areas;
+pub mod base;
 pub mod ansible;
 pub mod ci;
 pub mod ci_tools;
@@ -201,6 +202,12 @@ fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Resul
         }
     }
     let mut origin = None;
+    if !db.exists() && !privacy.whole() {
+        // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed.
+        if let Err(e) = base::clone_into(root, &db, &key) {
+            eprintln!("knowcode: {}: not started from a shared base: {e:#}", root.display());
+        }
+    }
     if !db.exists() && !privacy.blocks_anything() {
         // Best effort: without a seed, the first sync indexes from scratch. A repo with anything blocked is never
         // seeded: another checkout's index may hold what this one's policy blocks.
@@ -225,8 +232,9 @@ fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Resul
 
 /// Starts a new checkout's index from a copy of another checkout's of the same repo (same `origin`: a worktree, a
 /// second clone), the most recently indexed. The first sync then re-reads every file but extracts only those whose
-/// content differs, and keeps the content index of the rest. Manifests are extracted again, since path dependencies
-/// resolve against the checkout's location. Candidates come from `checkouts`, or else the workspace summary. Returns
+/// content differs, and keeps the content index of the rest. Every file's stat is reset, so a copied checkout whose
+/// files kept their mtimes (`cp -p`) is still hashed whole. Manifests and Ansible files are extracted again, since
+/// path dependencies resolve against the checkout's location and a repo that is one role is named after it. Candidates come from `checkouts`, or else the workspace summary. Returns
 /// the repo's normalized origin, if it has one.
 fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Result<Option<String>> {
     let out = git::run(root, &["config", "--get", "remote.origin.url"])?;
@@ -263,10 +271,12 @@ fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) ->
     drop(source);
     let copy = open_index(db, true)?;
     copy.set_meta("root", &root.to_string_lossy())?;
-    let manifests: Vec<String> = Lang::ALL.iter().filter(|l| l.is_manifest()).map(|l| format!("'{}'", l.as_str())).collect();
+    let manifests: Vec<String> =
+        Lang::ALL.iter().filter(|l| l.is_manifest() || **l == Lang::Ansible).map(|l| format!("'{}'", l.as_str())).collect();
     copy.conn().execute_batch(&format!(
         "DELETE FROM meta WHERE key LIKE 'head.%' OR key LIKE 'disc.%' OR key = 'last_sync';
          DELETE FROM derived;
+         UPDATE files SET mtime_ns = 0, size = -1;
          UPDATE files SET extractor_version = 0 WHERE lang IN ({});",
         manifests.join(", ")
     ))?;

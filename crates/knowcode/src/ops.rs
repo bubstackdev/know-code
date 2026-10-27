@@ -5182,7 +5182,15 @@ impl<'a> HttpCrossing<'a> {
                     }
                 },
             };
-            let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
+            // In the order of their places, not of their row ids: which stops fit the budget, and the order they are
+            // listed in, never depend on the order files were stored in.
+            let mut group: Vec<(Option<(String, u32, String)>, trace::Stop)> = Vec::new();
+            for s in stops.iter().filter(|s| s.repo == label) {
+                let at = trace::symbol(self.store(&root).conn(), s.id)?.map(|sym| (sym.file.clone(), sym.line, sym.qualified()));
+                group.push((at, s.clone()));
+            }
+            group.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.dir.cmp(y.dir)).then(x.hop.cmp(&y.hop)));
+            let group: Vec<trace::Stop> = group.into_iter().map(|(_, s)| s).collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
             let (found, skipped) = trace::frontier(self.store(&root).conn(), &group, &mine, self.gate.filter(), room)?;

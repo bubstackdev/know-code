@@ -1426,6 +1426,13 @@ fn index(
             eprintln!("knowcode: {}: areas and file ranking not refreshed: {e:#}", repo_name(root));
         }
         drop(store);
+        // A base other checkouts of the repo start from (see `kc_index::base`), when this one is clean at a commit no
+        // base is near. Not fatal: they index from a sibling or cold.
+        let mark = meter::Mark::now();
+        if let Err(e) = kc_index::base::publish(root) {
+            eprintln!("knowcode: {}: no shared base published: {e:#}", repo_name(root));
+        }
+        mark.record("base");
         let costs = meter::take();
         let bytes = kc_index::index_bytes(root)?;
         let privacy = kc_index::privacy::Privacy::load(root);

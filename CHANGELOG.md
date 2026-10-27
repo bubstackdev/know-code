@@ -2,6 +2,18 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
+  at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
+  the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
+  cold index of the same tree: `scripts/worktree-gate.py` checks it on public repos, with the freshness cases (a new
+  untracked file, a same-size edit with its mtime restored) in every worktree. `cache.shared_bases` turns it off.
+- A new checkout seeded from another checkout's index hashes every file, so a copy that kept its files' mtimes no
+  longer keeps another checkout's facts for a file of the same size; a repo that is one Ansible role is named after
+  its own directory, not the other checkout's.
+- `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
+
 ## 0.5.0 (2026-10-27)
 
 0.5 answers questions about a method's history and walks across library boundaries. `history` reads one definition's git

@@ -132,11 +132,51 @@ fn entries() -> Result<Vec<Entry>> {
         let Some((root, schema)) = identity else { continue };
         if !root.is_absolute() || crate::db_path(&root)?.file_name() != db.file_name() { continue; }
         let stamp = access_stamp(&db);
-        let bytes = family(&db).iter().filter_map(|p| fs::symlink_metadata(p).ok()).map(|m| m.len()).sum();
+        let bytes = family(&db).iter().filter_map(|p| Some(own_bytes(p, fs::symlink_metadata(p).ok()?.len()))).sum();
         out.push(Entry { root, db, bytes, used: stamp, newer: schema > kc_store::SCHEMA_VERSION });
     }
     out.sort_by(|a, b| a.used.cmp(&b.used).then_with(|| a.root.cmp(&b.root)));
     Ok(out)
+}
+
+/// The bytes a cache file holds on disk of its own. On APFS, an index cloned from a shared base (see [`crate::base`])
+/// shares the base's blocks until it writes them, and they are counted with the base. Elsewhere, its length.
+pub fn own_bytes(path: &Path, len: u64) -> u64 {
+    #[cfg(target_os = "macos")]
+    if let Some(n) = private_size(path) {
+        return n.min(len);
+    }
+    let _ = path;
+    len
+}
+
+/// The bytes of `path` no other file shares (`ATTR_CMNEXT_PRIVATESIZE`), when the file system says.
+#[cfg(target_os = "macos")]
+fn private_size(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    #[repr(C, packed(4))]
+    struct Out {
+        length: u32,
+        size: libc::off_t,
+    }
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `attrlist` is plain data; zeroed is a valid empty request.
+    let mut list: libc::attrlist = unsafe { std::mem::zeroed() };
+    list.bitmapcount = libc::ATTR_BIT_MAP_COUNT;
+    list.forkattr = libc::ATTR_CMNEXT_PRIVATESIZE;
+    let mut out = Out { length: 0, size: 0 };
+    // SAFETY: `c` is a NUL-terminated path; `list` and `out` outlive the call, and `out`'s size is passed.
+    let r = unsafe {
+        libc::getattrlist(
+            c.as_ptr(),
+            (&raw mut list).cast(),
+            (&raw mut out).cast(),
+            std::mem::size_of::<Out>(),
+            libc::FSOPT_ATTR_CMN_EXTENDED,
+        )
+    };
+    let (length, size) = (out.length, out.size);
+    (r == 0 && length as usize >= std::mem::size_of::<Out>() && size >= 0).then_some(size as u64)
 }
 
 fn global_bytes() -> Result<u64> {
@@ -184,6 +224,10 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
     if !cache.join("repos").is_dir() {
         report.bytes_before = Some(global_bytes()?);
         if mode == Mode::Purge { crate::light::clear()?; } else { crate::light::prune_missing()?; }
+        if mode == Mode::Purge {
+            for (path, _, _) in crate::base::all()? { crate::base::remove(&path)?; }
+            let _ = fs::remove_dir(cache.join(crate::base::DIR));
+        }
         if !is_notes(&cache.join("workspace.json"), &notes_paths()?) {
             if mode == Mode::Purge { crate::workspace::clear_orphan_summary()?; }
             else { crate::workspace::prune_missing_summaries()?; }
@@ -200,9 +244,17 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
     }
     let Some(_metadata) = writer::workspace(false)? else { report.deferred = true; return Ok(report); };
     if mode == Mode::Purge { crate::light::clear()?; } else { crate::light::prune_missing()?; }
+    leftovers(&cache);
     let entries = entries()?;
-    let mut total: u64 = entries.iter().map(|e| e.bytes).sum::<u64>() + global_bytes()?;
+    let bases = bases(mode)?;
+    let mut total: u64 = entries.iter().map(|e| e.bytes).sum::<u64>() + bases.kept + global_bytes()?;
     report.bytes_before = Some(total);
+    // Shared bases go before any index: a checkout's index never needs its base after the clone.
+    for (path, bytes) in bases.idle {
+        if !limit.is_some_and(|n| total > n) { break; }
+        crate::base::remove(&path)?;
+        total = total.saturating_sub(bytes);
+    }
     // An oversized checkout must remain usable: never evict the most recently queried index just to rebuild it
     // on the next call. Active stores and explicitly queried roots are protected independently.
     let newest = entries.last().map(|e| e.root.clone());
@@ -246,8 +298,56 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
         crate::workspace::prune_missing_summaries()?;
     }
     let _ = fs::remove_dir(cache.join("repos")); // only if empty; unknown files and subdirectories stay
-    report.bytes_after = Some(self::entries()?.iter().map(|e| e.bytes).sum::<u64>() + global_bytes()?);
+    let _ = fs::remove_dir(cache.join(crate::base::DIR));
+    report.bytes_after = Some(self::entries()?.iter().map(|e| e.bytes).sum::<u64>() + bases_bytes()? + global_bytes()?);
     Ok(report)
+}
+
+/// The shared bases after [`run`] removed what `mode` removes outright: every base with a purge, else those of
+/// another build and those whose repository has no checkout left. What stays, with its bytes, least recently used first.
+struct Bases { kept: u64, idle: Vec<(PathBuf, u64)> }
+
+fn bases(mode: Mode) -> Result<Bases> {
+    let all = crate::base::all()?;
+    let mut out = Bases { kept: 0, idle: Vec::new() };
+    if all.is_empty() { return Ok(out); }
+    let live: Option<std::collections::HashSet<String>> = if mode == Mode::Purge { None } else {
+        Some(crate::workspace::all_summaries()?.iter().filter(|s| !gone(&s.root)).filter_map(|s| crate::base::identity_hash(s.origin.as_deref(), &s.root)).collect())
+    };
+    for (path, bytes, _) in all {
+        let keep = live.as_ref().is_some_and(|live| crate::base::hash_of(&path).is_some_and(|h| live.contains(h)) && crate::base::current(&path));
+        if !keep {
+            crate::base::remove(&path)?;
+            continue;
+        }
+        let bytes = own_bytes(&path, bytes);
+        out.kept += bytes;
+        out.idle.push((path, bytes));
+    }
+    Ok(out)
+}
+
+/// Removes the temporary files a clone, an adoption or a publication of a base (see [`crate::base`]) left when its
+/// process died: `<index>.clone.<pid>`, `<index>.adopt.<pid>` in `repos/`, `<base>.tmp.<pid>` in `bases/`, an hour
+/// old. Nothing else.
+fn leftovers(cache: &Path) {
+    let old = |p: &Path| fs::symlink_metadata(p).ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs() > 3600);
+    for (dir, kinds) in [("repos", &["clone", "adopt"][..]), (crate::base::DIR, &["tmp"][..])] {
+        let Ok(items) = fs::read_dir(cache.join(dir)) else { continue };
+        for item in items.flatten() {
+            let path = item.path();
+            let name = item.file_name().to_string_lossy().into_owned();
+            let Some((rest, pid)) = name.rsplit_once('.') else { continue };
+            let ours = !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) && kinds.iter().any(|k| rest.ends_with(&format!(".{k}")));
+            if ours && old(&path) {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+fn bases_bytes() -> Result<u64> {
+    Ok(crate::base::all()?.iter().map(|(p, bytes, _)| own_bytes(p, *bytes)).sum())
 }
 
 /// What [`remove_owned_state`] removed and what it retained, with why.
