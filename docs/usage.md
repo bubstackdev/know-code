@@ -167,6 +167,7 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 | Connect Claude Code, Codex or Cursor | `knowcode setup claude\|codex\|cursor` |
 | Remove client registrations and cached indexes | `knowcode uninstall` |
 | Run the MCP server on stdio | `knowcode serve` |
+| Every MCP op as JSON, for a client building its own tool surface | `knowcode capabilities [OP]` |
 | Show or change settings | `knowcode config path\|list\|get\|set\|unset\|migrate` |
 | Manage workspace roots | `knowcode workspace add\|remove\|list` |
 | Clone the git repos this repo depends on, for cross-repo answers | `knowcode fetch-deps --into DIR [--dry-run]` |
@@ -193,7 +194,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 26 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 26 tools (every tool but `kc_capabilities`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
@@ -244,6 +245,22 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_status` | `status` | `kc_status` |
 | `kc_more` | `more` | `kc_more`, `cursors` |
 | `kc_help` | | `kc_help` |
+| `kc_capabilities` | `capabilities` | `kc_capabilities` |
+
+`kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
+and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it.
+
+## Capabilities
+
+A client that builds its own tool surface (an automated pipeline offering an agent a subset of the ops, say) reads
+`kc {op: capabilities}` instead of copying this page. It describes every op as JSON: the full input schema, with the
+bounds of each number (`minimum`, `maximum`, `default`) and the words a closed set takes (`enum`); what `q` and `qs`
+fill and whether the op takes a query at all; whether it reads or writes (`note_add` is the only write); the
+evidence presets it takes; and its answer's format, the keys a JSON answer always has, and the list it is about. A
+number past its range is clamped, and a walk says how deep it went (`depth: {asked, walked}`); a word outside its set
+or a value of the wrong type is refused. The document also names the server's version, the MCP protocol version and
+the index schema. It is read from the same tables as help and the advertised schemas, and a test checks every op's
+entry against the running server. `kc_help kc_capabilities` describes each field.
 
 Every tool takes `repo` and `max_chars`. Shared concepts have their own topics: `contract`, `evidence`, `cursors`,
 `privacy` and `profiles`.

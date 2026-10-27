@@ -779,21 +779,47 @@ privacy file blocks anything or is malformed): the file's state (read, empty, ma
 repos blocked whole. `workspace` for every indexed repo."#,
     },
     Topic {
+        name: "kc_capabilities",
+        summary: "every op as data, for a client building its tool surface",
+        text: r#"Every op as JSON, for a client that builds its own tool surface instead of copying this help: read from the
+same schemas, ranges and tables that help and the advertised schemas are made from, so they can't disagree. `of` names
+one op (`impact` or `kc_impact`); none: every op.
+
+The document has `capabilities` (its own version, raised when a field changes meaning or goes), `server` (name and
+version), `protocol` (the MCP version the server speaks), `index_schema` (the graph schema it reads), `profile`
+(`one`, or the tools advertised), `common` (the parameters every op takes), `evidence` (the presets, mechanisms and
+assumptions an evidence policy is written with) and `ops`, one entry per op:
+
+- `op` and `tool` (`impact`, `kc_impact`), `summary`, `description` (the tool's), `help` (its topic's resource), and
+  `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`).
+- `access`: `read`, or `write` (note_add: notes are the only writes).
+- `q` and `qs`: the parameters they fill as `kc` ops, or null; `takes_query` false for an op taking no `q`.
+- `input`: the full JSON schema of its parameters: `minimum`, `maximum` and `default` for a bounded number,
+  `enum` for a closed set of words (the default first). `ranges` and `choices` say the same per parameter. A number
+  beyond its range is clamped, and the answer says what it walked (`depth: {asked, walked}`); a word outside its set,
+  or a value of the wrong type, is refused. Parameters not in the schema are ignored. `aliases` names parameters that
+  stand for another (refs' `edges` for `kinds`).
+- `batch`: the parameter taking several inputs in one call, and how many at most; the answer is then
+  `{"results": [...]}`.
+- `evidence`: the policy an op taking `evidence` uses by default.
+- `output`: its `format` by default and the `formats` it takes, `keys` an answer in JSON always has, and `list`, the
+  list the answer is about. `tree` is text: a header line (`repo <name> @ <commit>`, then `; complete`, or one line
+  per `incomplete` and `more` entry), then the tree.
+
+Served as the `kc` tool's `capabilities` op, as the resource `knowcode://capabilities`, and by `knowcode
+capabilities`; `KNOWCODE_TOOLS=all,kc_capabilities` advertises it as a tool. It isn't in `all`: a client reads it once,
+not on every turn."#,
+    },
+    Topic {
         name: "kc",
         summary: "the one tool of the default profile: every tool as an `op`",
         text: r#"The default profile (`one`) advertises a single tool, `kc`, so a client carries one schema on every turn.
-`op` names the tool to run, without `kc_`: impact, find, refs, context, search, locate, more and help, and every other
-tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, history,
-overview, areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
+`op` names the tool to run, without `kc_`: {kc_ops}. `q` fills the op's main parameter, `qs` its list of
+several:
 
-- impact, context, trace, rename_preview, history, notes, note_add: `symbol`; context: `symbols` from `qs`
-- find: `query`; locate: `query`, `queries` from `qs`
-- refs: `name`, `names` from `qs`
-- search, grep_ast: `pattern`
-- more: `cursor`; help: `topic` (an op's name is its tool's topic: `impact`, `impact.crossings`)
-- path: `from`; flow: `entry`; symbol_at: `file`; coupled: `file`; ownership: `path`; overview: `focus`; areas: `area`
-- tests: `targets`, reviewers: `files` (`q` as a list of one, or `qs`)
-- unused, hotspots, status: no `q` (an empty one is ignored)
+{kc_q}
+
+An op's name is its tool's help topic (`impact`, `impact.crossings`).
 
 Every other parameter of the op's tool is passed by its own name, as that tool's topic lists it (`kc {op: impact,
 q: Orders.Place, depth: 2, repo: shop}`, `kc {op: search, q: "retry", regex: true}`, `kc {op: path, q: A, to: B}`).
@@ -945,11 +971,11 @@ is named only as blocked. An answer that may have drawn on blocked content is in
 so a client carries one schema and short instructions on every turn, whether or not it defers tools. Answers, the
 instructions and the Claude Code plugin's notes and skills then name calls as ops (`kc {op: refs, q: Save}`).
 `KNOWCODE_TOOLS=core` (or `knowcode serve --tools core`) advertises the separate core tools instead: kc_find,
-kc_locate, kc_context, kc_refs, kc_impact, kc_search, kc_more and kc_help. `all` advertises every tool; a comma list
-adds tools by name (`core,kc_trace,kc_tests`). Under those, tools left out are listed in the help index and can't be
-called until the server is started with them; kc_find, kc_context, kc_refs, kc_impact and kc_search are marked always
-loaded (`anthropic/alwaysLoad`), so Claude Code loads them up front and defers the rest to tool search, among them
-kc_locate, kc_more and kc_help. A cut answer's `hint` names the call that continues it."#,
+kc_locate, kc_context, kc_refs, kc_impact, kc_search, kc_more and kc_help. `all` advertises every tool but
+kc_capabilities (read once: see `kc_capabilities`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under
+those, tools left out are listed in the help index and can't be called until the server is started with them; kc_find,
+kc_context, kc_refs, kc_impact and kc_search are marked always loaded (`anthropic/alwaysLoad`), so Claude Code loads
+them up front and defers the rest to tool search, among them kc_locate, kc_more and kc_help. A cut answer's `hint` names the call that continues it."#,
     },
 ];
 
@@ -998,8 +1024,11 @@ pub fn render(t: &Topic, schema: Option<&serde_json::Map<String, serde_json::Val
 /// `text` with each bounds placeholder filled from `mcp::RANGES`: `{max:kc_impact.depth}`, and `min`, `default` and
 /// `span` likewise, so the prose says the bounds the answers apply. Any other braces are left as they are.
 pub fn fill(text: &str) -> String {
+    // The `kc` topic's ops and what `q` fills, from `mcp::ONE_OPS`.
+    let ops: Vec<&str> = crate::mcp::ONE_OPS.iter().map(|(o, _, _)| *o).collect();
+    let text = text.replace("{kc_ops}", &ops.join(", ")).replace("{kc_q}", &crate::mcp::one_q_lines());
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
+    let mut rest = text.as_str();
     while let Some(at) = rest.find('{') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];

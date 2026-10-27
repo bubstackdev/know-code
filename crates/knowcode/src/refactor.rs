@@ -1082,6 +1082,9 @@ impl Evidence {
 /// references, tests, strings, `nameof`, templates or config name it, or when it is public API of a library.
 pub fn unused(p: &UnusedParams, args: &Scope) -> Result<Out<Vec<UnusedRepo>>> {
     let kinds = kind_filter(&p.kinds)?;
+    if !matches!(p.tier.as_str(), "unused" | "possibly" | "all") {
+        bail!("tier must be unused, possibly or all, not {}", p.tier);
+    }
     let mut opened = Vec::new();
     let mut repos = Vec::new();
     let roots = target_repos(&args.repos)?;
