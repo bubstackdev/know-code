@@ -2,7 +2,7 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.5.1 (2026-10-27)
 
 - The repository moved to [bubstackdev/know-code](https://github.com/bubstackdev/know-code); the binary, crate and
   plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 through 0.5.0 get no update notice,
@@ -34,7 +34,6 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `unused` counted another worktree (or clone) of the same repo as a user of the repo's packages, so its answer
   changed with how many checkouts of the repo were indexed: their public API turned `possibly unused` and
   `published` named the packages. Checkouts of one origin are one repo here too.
-
 - Swift files with constructs tree-sitter-swift doesn't read lose less of their code. When a file has parse errors,
   it is parsed again with them blanked (positions kept), and the tree with less of the file in errors is used: the
   underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`), `@_lifetime(…)`, module
