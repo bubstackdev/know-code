@@ -73,3 +73,20 @@ fn a_name_the_file_neither_declares_nor_imports_is_the_global() {
     assert_eq!(uses(conn, "Shared", &["type_ref"]), [("src/page.ts:1".to_string(), "unique_name", vec!["Shared".to_string()])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A re-export names the module's declaration, and a receiver typed by an imported alias is the alias's type.
+#[test]
+fn a_reexport_and_an_imported_alias_still_name_the_repo() {
+    let root = scratch("ts-visibility-reexport");
+    write(&root, "src/item.ts", "export interface Item {\n  tags: string[]\n}\n");
+    write(&root, "src/index.ts", "export { Item } from './item'\n");
+    write(&root, "src/like.ts", "import type { Item } from './item'\nexport type ItemLike = Item\n");
+    write(&root, "src/use.ts", "import type { ItemLike } from './like'\n\nexport function tags(i: unknown) {\n  return (i as ItemLike).tags\n}\n");
+    let store = index(&root);
+    let conn = store.conn();
+    let items = uses(conn, "Item", &["type_ref"]);
+    assert!(!items.iter().any(|(at, c, _)| at == "src/index.ts:1" && *c == "unresolved"), "{items:?}");
+    let tags = uses(conn, "tags", &["member"]);
+    assert!(!tags.iter().any(|(_, c, _)| *c == "unresolved"), "{tags:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

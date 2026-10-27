@@ -5111,6 +5111,11 @@ fn ts_top_level_compatible(ref_kind: &str, def_kind: &str) -> bool {
 
 /// The TypeScript import rules' answer for `hit`, when they have one: an imported name resolves in its module's file
 /// (or outside the repo, for a package), and a name neither imported nor a member resolves in its own file.
+/// Whether the reference's receiver is typed, as written, by the name `ty` (`res: Response`).
+fn written_as(hit: &RefHit, ty: &str) -> bool {
+    matches!(hit.receiver_type.as_deref().and_then(TypeExpr::decode), Some(TypeExpr::Named(n)) if last_segment(&n) == ty)
+}
+
 /// A JavaScript file, whose imports (CommonJS `require`, globals a bundler provides) the index reads only in part: its
 /// names aren't held to [`crate::ts::Modules::sees`].
 fn is_js(path: &str) -> bool {
@@ -5216,10 +5221,14 @@ fn ts_receiver(
 ) -> Result<Receiver> {
     Ok(match recv {
         Receiver::Known(chain) if modules.imports_external(conn, &hit.file, &chain[0])? => Receiver::Foreign(vec![chain[0].clone()]),
-        // A type the file neither declares nor imports is the platform's (`Response`), whatever the repo's modules
-        // export under that name.
+        // A type written by a name the file neither declares nor imports is the platform's (`Response`), whatever
+        // the repo's modules export under that name. Only the type as written: an alias the file imports may name a
+        // type it doesn't.
         Receiver::Known(chain)
-            if !is_js(&hit.file) && modules.declared(conn, &chain[0])? && !modules.sees(conn, &hit.file, &chain[0])? =>
+            if !is_js(&hit.file)
+                && written_as(hit, &chain[0])
+                && modules.declared(conn, &chain[0])?
+                && !modules.sees(conn, &hit.file, &chain[0])? =>
         {
             Receiver::Foreign(vec![chain[0].clone()])
         }
