@@ -2058,6 +2058,28 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
+/// For a Swift reference made by `from`: `Some(true)` when `from` is an extension (the reference is in its header),
+/// `Some(false)` when `from` is declared in an extension's body (not in a type nested there), `None` otherwise.
+fn swift_extension_scope(conn: &Connection, from: &FromSymbol) -> Result<Option<bool>> {
+    if from.kind == "extension" {
+        return Ok(Some(true));
+    }
+    let mut stmt = conn.prepare_cached("SELECT p.id, p.kind FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
+    let mut id = from.id;
+    // Members nest shallowly; the bound guards against a malformed parent chain.
+    for _ in 0..16 {
+        let Some((parent, kind)) = stmt.query_row([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).optional()? else {
+            return Ok(None);
+        };
+        match kind.as_str() {
+            "extension" => return Ok(Some(false)),
+            k if TYPE_KINDS.contains(&k) => return Ok(None),
+            _ => id = parent,
+        }
+    }
+    Ok(None)
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -4648,7 +4670,11 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     // Kept for the next call; an error leaves `shared` without them, to be read again.
     oracle.vis = std::mem::take(&mut shared.vis);
     // Per caller type, or per C# extension method's declaring class: the types an unqualified name is looked up in.
-    let mut self_chains: HashMap<(Option<String>, bool), Vec<String>> = HashMap::new();
+    // The caller's type, whether it is a C# extension method's extended type, and whether the code is in a Swift
+    // extension's body.
+    let mut self_chains: HashMap<(Option<String>, bool, bool), Vec<String>> = HashMap::new();
+    // Swift code in an extension, by the referencing symbol: `Some(true)` in its header, `Some(false)` in its body.
+    let mut in_extension: HashMap<i64, Option<bool>> = HashMap::new();
     // Per C# method: the static class declaring it, when it is an extension method.
     let mut declaring: HashMap<i64, Option<String>> = HashMap::new();
     // Per service, member, argument count and registration: the implementation's member it is bound to.
@@ -4794,12 +4820,31 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 _ => None,
             };
             let caller = (extended.clone().or_else(|| hit.caller_type()), extended.is_some());
+            // Swift code in `extension A.B` (declared at a file's top) sees B's members, not A's: the extension's scope
+            // is the file. Its header (the extended type, the conformances) is read in the file's scope alone.
+            let extension_scope = match &hit.from {
+                Some(f) if hit.file.ends_with(".swift") => {
+                    if let std::collections::hash_map::Entry::Vacant(e) = in_extension.entry(f.id) {
+                        e.insert(swift_extension_scope(conn, f)?);
+                    }
+                    in_extension[&f.id]
+                }
+                _ => None,
+            };
+            let caller = match extension_scope {
+                Some(true) => (None, false, false),
+                Some(false) => (caller.0, caller.1, true),
+                None => (caller.0, caller.1, false),
+            };
             if !self_chains.contains_key(&caller) {
                 let mut chain = Vec::new();
                 let mut s = caller.0.clone();
                 while let Some(cur) = s {
                     s = cur.rsplit_once('.').map(|(p, _)| p.to_string());
                     chain.push(cur);
+                    if extension_scope == Some(false) {
+                        break;
+                    }
                 }
                 if let Some(c) = caller.0.as_ref().filter(|_| !caller.1) {
                     for sup in oracle.chain(c)?.into_iter().skip(1) {
