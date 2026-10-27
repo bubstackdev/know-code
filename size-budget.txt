@@ -1,0 +1,32 @@
+# Installed (dist profile) binary budget in bytes, checked by scripts/check-size.sh (fails above budget + 1%).
+# Measured on aarch64-apple-darwin with `cargo build --profile dist`. Raise it only in the commit that grows the
+# binary, and say why in the commit message; lower it when the script says the binary has shrunk.
+# Public first-run UX adds bundled client setup, bounded background indexing and light root discovery,
+# coordinated cache eviction, update checks and self-update, and uninstall with client-settings and durable-note
+# preservation (35056608, up 513696 from 34542912).
+# Deploy answers continued by cursor, the compact form's timing rule, and constructs met but not read reported as
+# `unsupported` across the C#, SQL, Ansible, Terraform, GitLab CI and TypeScript extractors (35106208, up 49600).
+# Honest walks: constructor overload resolution, generic-argument, typeof, nameof and constraint type uses, C# global
+# and implicit usings, base-interface and override dispatch, the walk frontier and DI registration rows
+# (35255040, up 148832).
+# HTTP: minimal API routes and route groups, attribute request contracts, method-group references, `unsupported`
+# endpoint registrations, and host evidence from config files (a host config extractor) for linking (35436880, up
+# 181840). The MSTest.Sdk and Aspire.AppHost.Sdk implicit usings (35436896, up 16).
+# Configurable conventions and privacy file: the `[conventions.*]` and privacy-format config, its parsing, checks
+# and `config list` rows, and call-role matching in the C# extractor (35503072, up 66176).
+# Answers agents don't re-check: cited source with its check against the index, trace and impact on the walk graph,
+# and every stop's continuation call (0.2 items 2.1-2.3): 35850208, up 115648 from main before them (35734560) and
+# 347136 from the last budget.
+# The 0.2 fix round: leaner answers, complete answers, HTTP routes and client links, workspace-wide declared
+# statements and checked notes for files read only as text (36213984, up 363776; measured on PR #39's dist build).
+# The re-check fix round: note precision, answer lists cut last with repo-prefixed places, and search hits with their
+# statement and parameters (36296656, up 82672; measured on main 96fac0c's dist build).
+# 0.3 and the 0.4 build so far: background workspace indexing, adaptive throughput and the derived-data builder,
+# phase metering, HTTP linking precision (servers a client calls, conventional and per-app routes, default actions,
+# typed-field receivers, query-appending helpers), MS DI descriptors, statement cites, the session-start hook and the
+# single `kc` tool with its op mapping (36628208, up 331552; measured on main dd3589f's dist build).
+# 0.4.1's fixes and the 0.5 build so far: the freshness re-wait and indexed name lookups, SDK type reading from
+# declared clients' node_modules, symbol history, coupled-file ranking, more route forms, the Codex hook's trust status,
+# and the workspace and replay gates' tool fallback (36975376, up 347168; measured on integration/0.5 d2642c8's dist
+# build).
+36975376

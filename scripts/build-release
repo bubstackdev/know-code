@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Keep builder account and checkout paths out of compiled source-location strings, Rust and C alike.
+set -euo pipefail
+knowcode_build_root=$(cd "$(dirname "$0")/.." && pwd -P)
+cd "$knowcode_build_root"
+knowcode_dist_bin=${1:?usage: build-release DIST [build arguments]}
+shift
+if [[ ! ${CARGO_ENCODED_RUSTFLAGS+x} ]]; then
+    CARGO_ENCODED_RUSTFLAGS=$(python3 -c 'import os; print("\x1f".join(os.environ.get("RUSTFLAGS", "").split()), end="")')
+fi
+# Later mappings win, so the more specific prefixes come last.
+knowcode_cargo_home=${CARGO_HOME:-$HOME/.cargo}
+for knowcode_mapping in \
+    "${HOME:?}=/build-home" \
+    "$knowcode_cargo_home=/cargo" \
+    "$knowcode_build_root=/knowcode"; do
+    CARGO_ENCODED_RUSTFLAGS="${CARGO_ENCODED_RUSTFLAGS:+${CARGO_ENCODED_RUSTFLAGS}$'\x1f'}--remap-path-prefix=$knowcode_mapping"
+done
+export CARGO_ENCODED_RUSTFLAGS
+# C and C++ dependencies (tree-sitter and its grammars, through the cc crate) embed __FILE__ in assertions. cc splits
+# *FLAGS on whitespace unless CC_SHELL_ESCAPED_FLAGS is on; the wrapper turns it on (plain flags parse the same) so a
+# prefix containing spaces can be quoted. A caller who turned it off gets an error for such a prefix instead.
+export CC_SHELL_ESCAPED_FLAGS=${CC_SHELL_ESCAPED_FLAGS-1}
+knowcode_c_maps=$(python3 -c '
+import os, shlex, sys
+shell = os.environ["CC_SHELL_ESCAPED_FLAGS"] not in ("", "0", "false", "no")
+flags = []
+for mapping in sys.argv[1:]:
+    flag = "-ffile-prefix-map=" + mapping
+    if not shell and any(c.isspace() for c in mapping):
+        sys.exit("build-release: cannot pass a path with whitespace in CFLAGS while CC_SHELL_ESCAPED_FLAGS is off: " + mapping)
+    flags.append(shlex.quote(flag) if shell else flag)
+print(" ".join(flags), end="")
+' "$HOME=/build-home" "$knowcode_cargo_home=/cargo" "$knowcode_build_root=/src")
+CFLAGS="${CFLAGS:+$CFLAGS }$knowcode_c_maps"
+CXXFLAGS="${CXXFLAGS:+$CXXFLAGS }$knowcode_c_maps"
+export CFLAGS CXXFLAGS
+exec "$knowcode_dist_bin" build "$@"

@@ -1,0 +1,128 @@
+{
+  "accepted": [
+    {
+      "candidate_id": "0a7b1a12bbcbab65287b404196301a8f1fb6cce30ae49debdd87b824840c8dab",
+      "decision": "accept",
+      "question_id": "public-http-cross-repo-001"
+    },
+    {
+      "candidate_id": "a921438b75f6dfbeb3069a97446850682f792771a6418a1ec506fa346cfc06fc",
+      "decision": "accept",
+      "question_id": "public-http-cross-repo-002"
+    },
+    {
+      "candidate_id": "0211a61cd133f26ebb85127038bf1f35bf66687af0bd39e2a2da75c787478a34",
+      "decision": "accept",
+      "question_id": "public-http-cross-repo-003"
+    },
+    {
+      "candidate_id": "fa21328494e296feaad6cc78523d190fbb4cd03e6255dec17348e35d761fa565",
+      "decision": "accept",
+      "question_id": "public-http-cross-repo-004"
+    },
+    {
+      "candidate_id": "d2f67297d28bda1ec652f90e64ef926e2d716306500bbd8fa0941c6ce1d4535c",
+      "decision": "accept",
+      "question_id": "public-http-cross-repo-005"
+    },
+    {
+      "candidate_id": "bda3b37c7028f0373fc22177837f73a5921f8a5f0294fdf6834fccb2eacd221b",
+      "decision": "accept",
+      "question_id": "public-http-cross-repo-006"
+    },
+    {
+      "candidate_id": "2dcfd9f8a9cff22264d498c9fef4230892a386bda7aa1cffe596bb59fe404c0a",
+      "decision": "accept",
+      "question_id": "public-di-implementations-001"
+    },
+    {
+      "candidate_id": "cbea0924eb9fa29cb53f39ebfb9c5e9cdfa3a05d0be42085c2549861ae767a74",
+      "decision": "accept",
+      "question_id": "public-di-implementations-002"
+    },
+    {
+      "candidate_id": "d11b9336db8bf3355d85fd5d0b45dbfde235567adaa72ab3bb415f83b06bed10",
+      "decision": "accept",
+      "question_id": "public-di-implementations-003"
+    },
+    {
+      "candidate_id": "ea4712d77f24be7f0434104d118e36b278e41faccb14d0ac9e257a321c30730b",
+      "decision": "accept",
+      "question_id": "public-di-implementations-004"
+    },
+    {
+      "candidate_id": "cd0209db4488097849ef39809cd90604f48af0222afdd072e9966c43960049a2",
+      "decision": "accept",
+      "question_id": "public-di-implementations-005"
+    },
+    {
+      "candidate_id": "72023826b7d202f6bf12b7636d1aec7e4b2f2c993f0cc7683fc65af2b64b3ae1",
+      "decision": "accept",
+      "question_id": "public-di-implementations-006"
+    },
+    {
+      "candidate_id": "08e97c1d085fd11b4172f686d76d416485cf93cd8865837592c5653e0f402589",
+      "decision": "accept",
+      "question_id": "public-two-hop-impact-001"
+    },
+    {
+      "candidate_id": "0e4b9ce4bbab5b6d77a2a4eadecabe506b74c7e9a915686e9db46dab313984cb",
+      "decision": "accept",
+      "question_id": "public-two-hop-impact-002"
+    },
+    {
+      "candidate_id": "74211cf620d24f608ab8392e20cc363a5b66e846c1a0f42df1c9e432666871a6",
+      "decision": "accept",
+      "question_id": "public-two-hop-impact-003"
+    },
+    {
+      "candidate_id": "f58e402f1bc1997d9518923ffe8802cc611e59b931262b8dadc918cdb9a3b223",
+      "decision": "accept",
+      "question_id": "public-two-hop-impact-004"
+    },
+    {
+      "candidate_id": "99318f3586fa3dace7b3990e297c8b6defc9d5693883919773c81e3c9774a3ac",
+      "decision": "accept",
+      "question_id": "public-two-hop-impact-005"
+    },
+    {
+      "candidate_id": "bcb7e9769fc2881b0b96ade26c31635955a947070c73b6ff72496566d25e0840",
+      "decision": "accept",
+      "question_id": "public-two-hop-impact-006"
+    },
+    {
+      "candidate_id": "a6d212058619bf2008090b369486312e2af02dd97143dc41d8d7d9ffe6fecd4a",
+      "decision": "accept",
+      "question_id": "public-definition-lookup-001"
+    },
+    {
+      "candidate_id": "1f973f98c553ac76391964730f372ce2e9eccffff7ae06110fa609dc026a0489",
+      "decision": "accept",
+      "question_id": "public-definition-lookup-002"
+    },
+    {
+      "candidate_id": "b3858a6d4e50eb9be6cd327f113973a6f95cd13983d55f02ccb5af2df36b4976",
+      "decision": "accept",
+      "question_id": "public-definition-lookup-003"
+    },
+    {
+      "candidate_id": "a4b39a6fb741c7ba9a05a0d4a3449e966d59a944799474eff9731fbbc997ec8e",
+      "decision": "accept",
+      "question_id": "public-definition-lookup-004"
+    },
+    {
+      "candidate_id": "fe01be91d6a6c5612b52b684d8c11be4e9e67c3d42702448f8d978c52bcc6de7",
+      "decision": "accept",
+      "question_id": "public-definition-lookup-005"
+    },
+    {
+      "candidate_id": "2b9ef40ae0e0b4abedc452ff878c3846319a10c2d53ef0c3b1d6f38e1fa3712f",
+      "decision": "accept",
+      "question_id": "public-definition-lookup-006"
+    }
+  ],
+  "format": 1,
+  "procedure": "Provisional picks reviewed in rank order from pinned source during primary labelling. Every pick was a valid declaration inside the stated population; none was a duplicate or extraction error, so no candidate was rejected and no replacement was drawn.",
+  "rejected": [],
+  "sampling_sha256": "ed1011eb8b368313d82f42df8aa671bbcdf0a3aee9a2c035bd548d41eac0bde4"
+}

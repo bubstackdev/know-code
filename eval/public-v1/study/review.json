@@ -1,0 +1,961 @@
+{
+  "adjudications": [
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 1,
+      "final_label_sha256": "a67a12715dbba6af9262449cd76c07bfdea559cfdfb423376cb1133c333bc93a",
+      "id": "public-definition-lookup-002",
+      "independent_completeness": "exhaustive",
+      "independent_items": 1,
+      "independent_label_sha256": "ef87f6cab575cde55b9ae9619e8c0c77cfe5c0babad03c5e79368d09290ffbcd",
+      "primary_completeness": "exhaustive",
+      "primary_items": 1,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 1,
+      "final_label_sha256": "8b270654f9610008743ddf2d8115da7a1e230589c2deb89033dea9a7a14752be",
+      "id": "public-definition-lookup-003",
+      "independent_completeness": "exhaustive",
+      "independent_items": 1,
+      "independent_label_sha256": "6d6b90b1ad8c6ca895fa01b93defe2be7317e29cdae9284c0e7eac6ec172dd1b",
+      "primary_completeness": "exhaustive",
+      "primary_items": 1,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 5,
+      "final_label_sha256": "f19bca3fd5cea4acbb4d8d916d28693620e103399d02ac529eecad1f0bac3188",
+      "id": "public-di-implementations-001",
+      "independent_completeness": "exhaustive",
+      "independent_items": 5,
+      "independent_label_sha256": "946f1ae1f6eb32d46bdd259f16d7a035c76eb4be395bdabd1bdec360fbfb1755",
+      "primary_completeness": "lower_bound",
+      "primary_items": 2,
+      "required_items_agree": true,
+      "resolution": "Required items agree. The blind label adds three RegisterModule forwarding sites as registrations; adjudicated as optional items, since the question asks for registration sites and these register modules with the builder rather than registering IModule as a service. Completeness raised from lower_bound to exhaustive: both labellers found the same required items and the independent label gives an explicit whole-cohort search argument (coverage_basis). Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 3,
+      "final_label_sha256": "4c9f79689b62d2eb4c771cdfd44e98300c65a7edbb609e11770180f0cd1b61b6",
+      "id": "public-di-implementations-002",
+      "independent_completeness": "exhaustive",
+      "independent_items": 3,
+      "independent_label_sha256": "315bf49648d057532e8c0a3dbf1dd467bddeb87b67254b7fe3799320ffcc81eb",
+      "primary_completeness": "lower_bound",
+      "primary_items": 3,
+      "required_items_agree": true,
+      "resolution": "Completeness raised from lower_bound to exhaustive: both labellers found the same required items and the independent label gives an explicit whole-cohort search argument (coverage_basis). Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": true,
+      "final_completeness": "exhaustive",
+      "final_items": 0,
+      "final_label_sha256": "5e966af40a5df9b6cb5ee967eefe64769cb865b670ac1313dbf47dc51d2209f7",
+      "id": "public-http-cross-repo-001",
+      "independent_completeness": "exhaustive",
+      "independent_items": 0,
+      "independent_label_sha256": "6022415bf6ae9aa4f28d915d83b12ecc1e7da8f9045ddc5ecda87113390ef7be",
+      "primary_completeness": "exhaustive",
+      "primary_items": 0,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives). outside_corpus left unset: the excluded tree was not inspected, so no count is claimed.",
+      "seeded_subset": false
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 0,
+      "final_label_sha256": "abeaac637ef6a62ff19b63d0821c0f5523e7b921062fce0278e55ef7433554dd",
+      "id": "public-http-cross-repo-003",
+      "independent_completeness": "exhaustive",
+      "independent_items": 0,
+      "independent_label_sha256": "ac882da898f0dacc6c852cd02eb963bf8697c816e31dd916b01dcfcfa3d8bfa5",
+      "primary_completeness": "exhaustive",
+      "primary_items": 0,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives). outside_corpus left unset: the excluded tree was not inspected, so no count is claimed.",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": true,
+      "final_completeness": "exhaustive",
+      "final_items": 0,
+      "final_label_sha256": "fda5a63dda48ef76cce5d8aa2f7f1d34176505cd2ee016429fd494ebdce50299",
+      "id": "public-http-cross-repo-004",
+      "independent_completeness": "exhaustive",
+      "independent_items": 0,
+      "independent_label_sha256": "dbe23254b1ae4964e5867cfac716610ce126c82348b1b2f2b8de5e5e4ad594a7",
+      "primary_completeness": "exhaustive",
+      "primary_items": 0,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": false
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 2,
+      "final_label_sha256": "51fa6dcddd8cccff03d634a87df1e89d343b74c34c2728fc65716f1a860e8cbc",
+      "id": "public-http-cross-repo-005",
+      "independent_completeness": "exhaustive",
+      "independent_items": 2,
+      "independent_label_sha256": "26b557923f0948b22a9bc241f33be3e05c0571064e8af925fd9068e04fe94166",
+      "primary_completeness": "lower_bound",
+      "primary_items": 2,
+      "required_items_agree": true,
+      "resolution": "Completeness raised from lower_bound to exhaustive: both labellers found the same required items and the independent label gives an explicit whole-cohort search argument (coverage_basis). Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": true,
+      "final_completeness": "exhaustive",
+      "final_items": 0,
+      "final_label_sha256": "7946d4b0ab28eb9f764e66f287c885496e53e249c243d51b41c0607ef305e1fd",
+      "id": "public-http-cross-repo-006",
+      "independent_completeness": "exhaustive",
+      "independent_items": 0,
+      "independent_label_sha256": "2f6f4d712f1b21c920f76568a9715c12ba37a4158d645f0001d47c0c2430460f",
+      "primary_completeness": "exhaustive",
+      "primary_items": 0,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": false
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 0,
+      "final_label_sha256": "2cedb27524ce67ab9ff3f4d6cab3a146b828a8d6055f8b2b0ae29073d52d1211",
+      "id": "public-two-hop-impact-002",
+      "independent_completeness": "exhaustive",
+      "independent_items": 0,
+      "independent_label_sha256": "59e56293bc12dac0adfc12c81ba1cddbbac9c4edc1af3a428775677bb6201394",
+      "primary_completeness": "exhaustive",
+      "primary_items": 0,
+      "required_items_agree": true,
+      "resolution": "Tests and same-name negatives: union of both labels (items never become negatives).",
+      "seeded_subset": true
+    },
+    {
+      "diagnostic": false,
+      "final_completeness": "exhaustive",
+      "final_items": 16,
+      "final_label_sha256": "9ece76028d871946255e98ad86fe9dd135310a29d61c77ec1654c71701be5ad5",
+      "id": "public-two-hop-impact-005",
+      "independent_completeness": "exhaustive",
+      "independent_items": 16,
+      "independent_label_sha256": "04d60e2221577c8de9c7e33e5d98c5c311be1286f12e08b0ff8a74c2af21cc31",
+      "primary_completeness": "lower_bound",
+      "primary_items": 16,
+      "required_items_agree": true,
+      "resolution": "Completeness raised from lower_bound to exhaustive: both labellers found the same required items and the independent label gives an explicit whole-cohort search argument (coverage_basis). Tests and same-name negatives: union of both labels (items never become negatives). Hop assignment: 16 of 16 items at the same shortest distance in both labels.",
+      "seeded_subset": true
+    }
+  ],
+  "agreement": {
+    "completeness_agree": 4,
+    "diagnostic_questions": 3,
+    "diagnostic_required_items_agree": 3,
+    "required_items_agree": 8,
+    "seeded_questions": 8
+  },
+  "compared_tool_outputs_read": false,
+  "format": 1,
+  "labels": [
+    {
+      "assumptions": "No import sites exist (consumers share the namespace). No partial declarations.",
+      "completeness": "exhaustive",
+      "id": "public-definition-lookup-002",
+      "items": [
+        {
+          "evidence": "autofac-di/src/Autofac.Extensions.DependencyInjection/AutofacChildLifetimeScopeServiceProviderFactory.cs:11 `public class AutofacChildLifetimeScopeServiceProviderFactory : IServiceProviderFactory<AutofacChildLifetimeScopeConfigurationAdapter>`",
+          "item": "autofac-di/src/Autofac.Extensions.DependencyInjection/AutofacChildLifetimeScopeServiceProviderFactory.cs:11",
+          "note": "class definition; not partial, single declaration"
+        }
+      ],
+      "match": "file_line",
+      "minutes": 3,
+      "negatives": [
+        {
+          "evidence": "...Factory.cs:22 `public AutofacChildLifetimeScopeServiceProviderFactory(Func<ILifetimeScope> ...)`",
+          "item": "autofac-di/src/Autofac.Extensions.DependencyInjection/AutofacChildLifetimeScopeServiceProviderFactory.cs:22",
+          "note": "constructor, not class declaration"
+        },
+        {
+          "evidence": "...Factory.cs:38 `public AutofacChildLifetimeScopeServiceProviderFactory(ILifetimeScope ...)`",
+          "item": "autofac-di/src/Autofac.Extensions.DependencyInjection/AutofacChildLifetimeScopeServiceProviderFactory.cs:38",
+          "note": "constructor"
+        },
+        {
+          "evidence": "AutofacChildLifetimeScopeConfigurationAdapter.cs:7 `<see cref=\"AutofacChildLifetimeScopeServiceProviderFactory\" />`",
+          "item": "autofac-di/src/Autofac.Extensions.DependencyInjection/AutofacChildLifetimeScopeConfigurationAdapter.cs:7",
+          "note": "doc-comment use"
+        },
+        {
+          "evidence": "AutofacChildLifetimeScopeServiceProviderFactoryTests.cs:9 `public sealed class AutofacChildLifetimeScopeServiceProviderFactoryTests`",
+          "item": "autofac-di/test/Autofac.Extensions.DependencyInjection.Test/AutofacChildLifetimeScopeServiceProviderFactoryTests.cs:9",
+          "note": "test class with prefix-matching name; different type, test code"
+        }
+      ],
+      "note": "Coverage: grep -rn AutofacChildLifetimeScopeServiceProviderFactory autofac-di (all files; 6 files) and autofac (none); grep -rn 'partial.*AutofacChildLifetimeScope' autofac-di (none).",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "AutofacChildLifetimeScopeServiceProviderFactoryTests.cs:14 and further `new AutofacChildLifetimeScopeServiceProviderFactory(...)` uses; also Specification/ChildScopeFactory*Tests.cs",
+          "item": "autofac-di/test/Autofac.Extensions.DependencyInjection.Test/AutofacChildLifetimeScopeServiceProviderFactoryTests.cs:14",
+          "note": "test uses only"
+        }
+      ]
+    },
+    {
+      "assumptions": "NotificationType.SyncFolderCreate/Update/Delete enum members are different symbols. No test file declares or references the class by name.",
+      "completeness": "exhaustive",
+      "id": "public-definition-lookup-003",
+      "items": [
+        {
+          "evidence": "bitwarden-clients/libs/common/src/models/response/notification.response.ts:102 `export class SyncFolderNotification extends BaseResponse {`",
+          "item": "bitwarden-clients/libs/common/src/models/response/notification.response.ts:102",
+          "note": "class definition; single declaration (TypeScript, no partials)"
+        }
+      ],
+      "match": "file_line",
+      "minutes": 3,
+      "negatives": [
+        {
+          "evidence": "notification.response.ts:36 `this.payload = new SyncFolderNotification(payload);`",
+          "item": "bitwarden-clients/libs/common/src/models/response/notification.response.ts:36",
+          "note": "constructor call / use"
+        },
+        {
+          "evidence": "core-sync.service.ts:19",
+          "item": "bitwarden-clients/libs/common/src/platform/sync/core-sync.service.ts:19",
+          "note": "import"
+        },
+        {
+          "evidence": "default-server-notifications.service.ts:33",
+          "item": "bitwarden-clients/libs/common/src/platform/server-notifications/internal/default-server-notifications.service.ts:33",
+          "note": "import (uses as type cast at :223, :230)"
+        },
+        {
+          "evidence": "sync.service.ts:5",
+          "item": "bitwarden-clients/libs/common/src/platform/sync/sync.service.ts:5",
+          "note": "import (parameter types at :80, :84, :90)"
+        },
+        {
+          "evidence": "bitwarden-server/src/Core/Vault/Models/SyncFolderPushNotification.cs:5 `public class SyncFolderPushNotification`",
+          "item": "bitwarden-server/src/Core/Vault/Models/SyncFolderPushNotification.cs:5",
+          "note": "similar-named server C# class in another repository; not in scope"
+        }
+      ],
+      "note": "Coverage: grep -rn SyncFolderNotification bitwarden-clients (every file, 12 hits: 1 declaration, 1 constructor use, 3 imports, 7 type uses); grep -rn SyncFolder bitwarden-clients for near names; grep -rn 'SyncFolderNotification|class SyncFolder' bitwarden-server --include=*.cs.",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "assumptions": "Production = autofac/src and autofac-di/src (scope.json); codegen, bench and test are evidence only. No interface derives from IModule; no production class derives from Module (inherited implementations exist only in test/bench). autofac-di consumes Autofac as a released package and neither implements nor registers IModule. User modules in consuming applications are outside the corpus. Judgement call: only `.As<IModule>()` is a DI service registration of the interface; IModuleRegistrar.RegisterModule forwarding sites are marked optional plumbing.",
+      "completeness": "exhaustive",
+      "groups": {
+        "implementations": {
+          "derived_interface": [],
+          "direct": [
+            "autofac/src/Autofac/Module.cs:47"
+          ],
+          "inherited": []
+        },
+        "registrations": {
+          "derived_interface": [],
+          "optional_registrar_plumbing": [
+            "autofac/src/Autofac/ModuleRegistrationExtensions.cs:181",
+            "autofac/src/Autofac/ModuleRegistrationExtensions.cs:232",
+            "autofac/src/Autofac/ModuleRegistrationExtensions.cs:260"
+          ],
+          "required": [
+            "autofac/src/Autofac/ModuleRegistrationExtensions.cs:175"
+          ]
+        }
+      },
+      "id": "public-di-implementations-001",
+      "items": [
+        {
+          "evidence": "autofac/src/Autofac/Module.cs:47 `public abstract class Module : IModule`",
+          "item": "autofac/src/Autofac/Module.cs:47",
+          "note": "impl; direct implementation (abstract base class). Only production implementer in autofac/src or autofac-di/src."
+        },
+        {
+          "evidence": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:172-175 `moduleFinder.RegisterAssemblyTypes(assemblies).Where(t => moduleType.IsAssignableFrom(t)).As<IModule>();` in RegisterAssemblyModules(IModuleRegistrar, Type, Assembly[])",
+          "item": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:175",
+          "note": "registration; the only site that registers implementations as the IModule service in a container (scanned assembly types, resolved back at :179 as IEnumerable<IModule>). Runtime implementers depend on caller-supplied assemblies (assumption: none fixed in source)."
+        },
+        {
+          "evidence": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:181 `registrar.RegisterModule(module);`",
+          "item": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:181",
+          "note": "registration (module-registrar plumbing, not a container service registration): resolved IModule instances added to the builder via IModuleRegistrar.RegisterModule",
+          "optional": true
+        },
+        {
+          "evidence": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:232 `return registrar.RegisterModule(new TModule());` (TModule : IModule, new())",
+          "item": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:232",
+          "note": "registration (module-registrar plumbing, generic TModule)",
+          "optional": true
+        },
+        {
+          "evidence": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:260 `return registrar.RegisterModule(module);` in RegisterModule(ContainerBuilder, IModule)",
+          "item": "autofac/src/Autofac/ModuleRegistrationExtensions.cs:260",
+          "note": "registration (module-registrar plumbing, forwards a caller-supplied IModule)",
+          "optional": true
+        }
+      ],
+      "match": "line_within:2",
+      "minutes": 8,
+      "negatives": [
+        {
+          "evidence": "autofac/src/Autofac/Core/Registration/IModuleRegistrar.cs:11 `public interface IModuleRegistrar`",
+          "item": "autofac/src/Autofac/Core/Registration/IModuleRegistrar.cs:11",
+          "note": "similar name; does not derive from IModule"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Core/Registration/ModuleRegistrar.cs:11 `internal class ModuleRegistrar : IModuleRegistrar`",
+          "item": "autofac/src/Autofac/Core/Registration/ModuleRegistrar.cs:11",
+          "note": "implements IModuleRegistrar, not IModule"
+        },
+        {
+          "evidence": "autofac-di/src/Autofac.Extensions.DependencyInjection/KeyedServiceMiddleware.cs:198 `member.Module.Assembly`",
+          "item": "autofac-di/src/Autofac.Extensions.DependencyInjection/KeyedServiceMiddleware.cs:198",
+          "note": "System.Reflection.Module property, unrelated"
+        }
+      ],
+      "note": "Coverage: grep -rnw IModule autofac autofac-di --include=*.cs; grep -rnE '(:|,)\\s*(Autofac\\.)?Module\\b' autofac autofac-di --include=*.cs; grep -rnwE 'Module|IModule' autofac/src autofac-di/src autofac/codegen; grep -rnE 'interface .*:.*IModule'; grep -rnE 'As<\\s*IModule|typeof\\(IModule\\)'; grep -rn 'RegisterModule|RegisterAssemblyModules|As<IModule>' autofac/src autofac-di/src autofac/codegen. Base-list-on-next-line check: grep -rnE '^\\s*:\\s*\\S*Module' (none).",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "autofac/bench/Autofac.Benchmarks/ModuleRegistrationBenchmark.cs:43 `private sealed class NoHookModule : Module`",
+          "item": "autofac/bench/Autofac.Benchmarks/ModuleRegistrationBenchmark.cs:43",
+          "note": "test/bench class NoHookModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/ContainerBuilderTests.cs:179 `private class BuildCallbackModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/ContainerBuilderTests.cs:179",
+          "note": "test/bench class BuildCallbackModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/ContainerBuilderTests.cs:199 `private class NestingModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/ContainerBuilderTests.cs:199",
+          "note": "test/bench class NestingModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Features/DecoratorTests.cs:1657 `private class MyModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Features/DecoratorTests.cs:1657",
+          "note": "test/bench class MyModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:241 `private class Module1 : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:241",
+          "note": "test/bench class Module1; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:249 `private class Module2 : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:249",
+          "note": "test/bench class Module2; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:257 `private class DecoratingModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:257",
+          "note": "test/bench class DecoratingModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:265 `private class CompositingModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:265",
+          "note": "test/bench class CompositingModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:295 `internal class ObjectModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:295",
+          "note": "test/bench class ObjectModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:311 `internal class StringModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/ModuleRegistrationTests.cs:311",
+          "note": "test/bench class StringModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/RegistrationOnlyIfTests.cs:380 `private class MyModule : Module`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/RegistrationOnlyIfTests.cs:380",
+          "note": "test/bench class MyModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test.Aot/SmokeTestModule.cs:9 `internal sealed class SmokeTestModule : Module`",
+          "item": "autofac/test/Autofac.Test.Aot/SmokeTestModule.cs:9",
+          "note": "test/bench class SmokeTestModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test.Scenarios.LoadContext/LifetimeScopeEndingModule.cs:8 `public class LifetimeScopeEndingModule : Module`",
+          "item": "autofac/test/Autofac.Test.Scenarios.LoadContext/LifetimeScopeEndingModule.cs:8",
+          "note": "test/bench class LifetimeScopeEndingModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test.Scenarios.LoadContext/OnActivatedModule.cs:8 `public class OnActivatedModule : Module`",
+          "item": "autofac/test/Autofac.Test.Scenarios.LoadContext/OnActivatedModule.cs:8",
+          "note": "test/bench class OnActivatedModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test.Scenarios.ScannedAssembly/AModule.cs:6 `public class AModule : ModuleBase`",
+          "item": "autofac/test/Autofac.Test.Scenarios.ScannedAssembly/AModule.cs:6",
+          "note": "test/bench class AModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test.Scenarios.ScannedAssembly/BModule.cs:6 `public class BModule : ModuleBase`",
+          "item": "autofac/test/Autofac.Test.Scenarios.ScannedAssembly/BModule.cs:6",
+          "note": "test/bench class BModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test.Scenarios.ScannedAssembly/ModuleBase.cs:6 `public abstract class ModuleBase : Module`",
+          "item": "autofac/test/Autofac.Test.Scenarios.ScannedAssembly/ModuleBase.cs:6",
+          "note": "test/bench class ModuleBase; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/Core/ContainerTests.cs:205 `private class ReplaceInstanceModule : Module`",
+          "item": "autofac/test/Autofac.Test/Core/ContainerTests.cs:205",
+          "note": "test/bench class ReplaceInstanceModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/Core/Registration/ModuleRegistrarTests.cs:35 `private class ModuleA : Module`",
+          "item": "autofac/test/Autofac.Test/Core/Registration/ModuleRegistrarTests.cs:35",
+          "note": "test/bench class ModuleA; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/Core/Registration/ModuleRegistrarTests.cs:43 `private class ModuleB : Module`",
+          "item": "autofac/test/Autofac.Test/Core/Registration/ModuleRegistrarTests.cs:43",
+          "note": "test/bench class ModuleB; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/Features/Collections/CollectionOrderingTests.cs:100 `private class ImplementorModule : Module`",
+          "item": "autofac/test/Autofac.Test/Features/Collections/CollectionOrderingTests.cs:100",
+          "note": "test/bench class ImplementorModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:13 `internal class ObjectModule : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:13",
+          "note": "test/bench class ObjectModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:147 `internal class ModuleExposingThisAssembly : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:147",
+          "note": "test/bench class ModuleExposingThisAssembly; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:176 `internal class PropertySetModule : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:176",
+          "note": "test/bench class PropertySetModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:211 `internal class NoHookModule : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:211",
+          "note": "test/bench class NoHookModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:252 `internal class ComponentRegistrationHookModule : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:252",
+          "note": "test/bench class ComponentRegistrationHookModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:310 `internal class RegistrationSourceHookModule : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:310",
+          "note": "test/bench class RegistrationSourceHookModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:379 `internal abstract class IntermediateModuleBase : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:379",
+          "note": "test/bench class IntermediateModuleBase; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:37 `internal class AttachingModule : Module`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:37",
+          "note": "test/bench class AttachingModule; inherited IModule implementation via Autofac.Module (not production)"
+        },
+        {
+          "evidence": "autofac/test/Autofac.Test/ModuleTests.cs:391 `internal class ConcreteIntermediateModule : IntermediateModuleBase`",
+          "item": "autofac/test/Autofac.Test/ModuleTests.cs:391",
+          "note": "test/bench class ConcreteIntermediateModule; inherited IModule implementation via Autofac.Module (not production)"
+        }
+      ]
+    },
+    {
+      "assumptions": "IConcreteActivatorData is internal activator-data plumbing used as a generic constraint (RegistrationBuilder.CreateRegistration/RegisterSingleComponent, AsSelf/AsImplementedInterfaces); it is never registered as a service in any container, so the registration group is empty (exhaustive). No class in the corpus derives from any of the three implementers (inherited group empty); no interface derives from it. autofac-di does not reference the interface. Test code neither implements nor references it.",
+      "completeness": "exhaustive",
+      "groups": {
+        "implementations": {
+          "derived_interface": [],
+          "direct": [
+            "autofac/src/Autofac/Builder/SimpleActivatorData.cs:11",
+            "autofac/src/Autofac/Builder/ConcreteReflectionActivatorData.cs:13",
+            "autofac/src/Autofac/Features/GeneratedFactories/GeneratedFactoryActivatorData.cs:14"
+          ],
+          "inherited": []
+        },
+        "registrations": {
+          "derived_interface": [],
+          "required": []
+        }
+      },
+      "id": "public-di-implementations-002",
+      "items": [
+        {
+          "evidence": "autofac/src/Autofac/Builder/SimpleActivatorData.cs:11 `public class SimpleActivatorData : IConcreteActivatorData`",
+          "item": "autofac/src/Autofac/Builder/SimpleActivatorData.cs:11",
+          "note": "impl; direct"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Builder/ConcreteReflectionActivatorData.cs:13 `public class ConcreteReflectionActivatorData : ReflectionActivatorData, IConcreteActivatorData`",
+          "item": "autofac/src/Autofac/Builder/ConcreteReflectionActivatorData.cs:13",
+          "note": "impl; direct (also inherits ReflectionActivatorData, which does not implement the interface)"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Features/GeneratedFactories/GeneratedFactoryActivatorData.cs:14 `public class GeneratedFactoryActivatorData : IConcreteActivatorData`",
+          "item": "autofac/src/Autofac/Features/GeneratedFactories/GeneratedFactoryActivatorData.cs:14",
+          "note": "impl; direct (obsolete generated-factory feature)"
+        }
+      ],
+      "match": "line_within:2",
+      "minutes": 6,
+      "negatives": [
+        {
+          "evidence": "autofac/src/Autofac/Builder/ReflectionActivatorData.cs:13 `public class ReflectionActivatorData` (no interface)",
+          "item": "autofac/src/Autofac/Builder/ReflectionActivatorData.cs:13",
+          "note": "base of ConcreteReflectionActivatorData; does not implement IConcreteActivatorData"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Features/Scanning/ScanningActivatorData.cs:11 `: BaseScanningActivatorData<ConcreteReflectionActivatorData, SingleRegistrationStyle>`",
+          "item": "autofac/src/Autofac/Features/Scanning/ScanningActivatorData.cs:11",
+          "note": "ConcreteReflectionActivatorData is a type argument, not a base; BaseScanningActivatorData derives from ReflectionActivatorData"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Features/LightweightAdapters/LightweightAdapterActivatorData.cs:11",
+          "item": "autofac/src/Autofac/Features/LightweightAdapters/LightweightAdapterActivatorData.cs:11",
+          "note": "other activator data; no IConcreteActivatorData"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Features/OpenGenerics/OpenGenericDecoratorActivatorData.cs:14 `: ReflectionActivatorData`",
+          "item": "autofac/src/Autofac/Features/OpenGenerics/OpenGenericDecoratorActivatorData.cs:14",
+          "note": "other activator data; no IConcreteActivatorData"
+        },
+        {
+          "evidence": "autofac/src/Autofac/Builder/RegistrationBuilder.cs:122-125 CreateRegistration `where TActivatorData : IConcreteActivatorData`",
+          "item": "autofac/src/Autofac/Builder/RegistrationBuilder.cs:125",
+          "note": "generic constraint consumer, not an implementation or a DI registration of the interface (same for RegistrationBuilder.cs:268, RegistrationExtensions.AssemblyScanning.cs:156, :218)"
+        }
+      ],
+      "note": "Coverage: grep -rnw IConcreteActivatorData autofac autofac-di (all files); grep -rnE 'class\\s+\\w+[^(]*:\\s*[^<]*\\b(ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData|IConcreteActivatorData)\\b' autofac autofac-di --include=*.cs; grep -rnE '^\\s*:\\s*(ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData)\\b'; grep -rnE 'interface .*:.*IConcreteActivatorData'; grep -rnE 'As<\\s*IConcreteActivatorData|typeof\\(IConcreteActivatorData\\)' (none).",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "completeness": "exhaustive",
+      "id": "public-http-cross-repo-001",
+      "items": [],
+      "match": "file",
+      "minutes": 9,
+      "negatives": [
+        {
+          "evidence": "bitwarden-clients/libs/common/src/vault/tasks/services/default-task.service.ts:104 send(\"GET\", \"/tasks\") and :94 send(\"PATCH\", `/tasks/${taskId}/complete`)",
+          "item": "bitwarden-clients/libs/common/src/vault/tasks/services/default-task.service.ts",
+          "note": "Same controller (SecurityTaskController [Route(\"tasks\")]) but different actions: GET /tasks (GetTasks, line 52) and PATCH /tasks/{taskId}/complete (line 65). Not GET /tasks/{organizationId}/metrics."
+        }
+      ],
+      "note": "Route: GET /tasks/{organizationId:guid}/metrics (bitwarden-server/src/Api/Vault/Controllers/SecurityTaskController.cs:17 [Route(\"tasks\")] + :90 [HttpGet(\"{organizationId:guid}/metrics\")]). Coverage: grep -rIn -E '/tasks|tasks/|\"tasks\"|`tasks' over the whole bitwarden-clients view (all file types) finds URL use only in default-task.service.ts (GET /tasks, PATCH /tasks/{id}/complete) and its spec; grep -rIn -E '/metrics|metrics[`\"/]' and grep -rIniw metrics over *.ts/*.js/*.mjs find no URL/path string; grep for TaskMetrics|taskMetrics|getTaskMetrics finds nothing; grep for security_?task|.tasks()|SecurityTaskApi finds no SDK-routed security-task call in apps/ or libs/. Empty within the exported corpus. Boundaries: bitwarden_license/ was excluded from the exported bitwarden-clients view (source-receipt.json exclude list); I did not and could not inspect it, so any caller there is out of corpus and not counted (outside_corpus left 0 because it is unverified, not because it is known empty). @bitwarden/sdk-internal 0.2.0-main.1126 (package.json:190) is a WASM SDK whose source is not in the cohort; no client code was found invoking a security-task SDK method, so no SDK-mediated caller is asserted.",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "completeness": "exhaustive",
+      "id": "public-http-cross-repo-003",
+      "items": [],
+      "match": "file",
+      "minutes": 7,
+      "negatives": [
+        {
+          "evidence": "bitwarden-clients/libs/common/src/services/api.service.ts:1030 \"/organization/\" + orgId + \"/secrets/\" + id + \"/events\"",
+          "item": "bitwarden-clients/libs/common/src/services/api.service.ts",
+          "note": "Different route (event log for a secret, EventsController), shares the secrets/{id} segment only."
+        },
+        {
+          "evidence": "bitwarden-clients/apps/web/src/app/dirt/event-logs/services/event.service.ts:1530-1533 href \"#/sm/\" + orgId + \"/secrets?search=\"",
+          "item": "bitwarden-clients/apps/web/src/app/dirt/event-logs/services/event.service.ts",
+          "note": "Client-side hash route for an anchor, not an HTTP call."
+        }
+      ],
+      "note": "Route: GET /secrets/{id} (bitwarden-server/src/Api/SecretsManager/Controllers/SecretsController.cs:120 [HttpGet(\"secrets/{id}\")]; controller has no class [Route], only [Authorize(\"secrets\")] at :26). Coverage: grep -rIn -E '[\"`/]secrets(/|\"|`|$|?)' over *.ts/*.js/*.mjs/*.rs in the whole bitwarden-clients view yields only api.service.ts:1030 (different route) and event.service.ts:1533 (UI href); grep of every 'secrets' string literal in apps/ libs/ (excluding secretsManager i18n keys, specs, stories) shows only marketing URLs, feature-flag names and /organizations/{id}/subscribe-secrets-manager, /users/enable-secrets-manager; grep for secrets(|SecretsClient|SecretResponse|secrets_manager finds no SDK-mediated secrets call. apps/ holds only browser, cli, desktop, web; the CLI has no Secrets Manager commands. Empty within the exported corpus. Judgement call: the Secrets Manager web client is, by its absence from apps/web/src/app/secrets-manager (only a landing page), likely under the excluded bitwarden_license/ tree. bitwarden_license/ was excluded from the exported bitwarden-clients view (source-receipt.json exclude list); I did not and could not inspect it, so any caller there is out of corpus and not counted (outside_corpus left 0 because it is unverified, not because it is known empty).",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "completeness": "exhaustive",
+      "id": "public-http-cross-repo-004",
+      "items": [],
+      "match": "file",
+      "minutes": 7,
+      "negatives": [
+        {
+          "evidence": "jellyfin-web/src/apps/dashboard/features/users/api/useChannels.ts:9 getChannelApi(api).getChannels -> GET /Channels (sdk channel-api.js)",
+          "item": "jellyfin-web/src/apps/dashboard/features/users/api/useChannels.ts",
+          "note": "Same SDK ChannelApi, different operation/route."
+        },
+        {
+          "evidence": "jellyfin-web/src/apps/legacy/features/libraries/api/useLatestMedia.ts:14-15 getLibraryApi(api).getLatestMedia -> GET /Items/Latest (sdk generated-client/api/library-api.js:747-755)",
+          "item": "jellyfin-web/src/apps/legacy/features/libraries/api/useLatestMedia.ts",
+          "note": "UserLibraryController GET Items/Latest (UserLibraryController.cs:527), shares the Items/Latest suffix only."
+        },
+        {
+          "evidence": "jellyfin-web/src/hooks/useFetchItems.ts:741 getLibraryApi(api).getLatestMedia -> GET /Items/Latest",
+          "item": "jellyfin-web/src/hooks/useFetchItems.ts",
+          "note": "Different route (UserLibraryController)."
+        },
+        {
+          "evidence": "jellyfin-web/src/components/groupedcards.js:22 getUrl('Users/' + userId + '/Items/Latest')",
+          "item": "jellyfin-web/src/components/groupedcards.js",
+          "note": "Legacy GET /Users/{userId}/Items/Latest (UserLibraryController.cs:619)."
+        },
+        {
+          "evidence": "jellyfin-web/src/apps/legacy/controllers/music/musicrecommended.js:57 getUrl('Users/' + userId + '/Items/Latest')",
+          "item": "jellyfin-web/src/apps/legacy/controllers/music/musicrecommended.js",
+          "note": "Legacy /Users/{userId}/Items/Latest."
+        },
+        {
+          "evidence": "jellyfin-web/src/apps/legacy/controllers/movies/moviesrecommended.js:37 getUrl('Users/' + userId + '/Items/Latest')",
+          "item": "jellyfin-web/src/apps/legacy/controllers/movies/moviesrecommended.js",
+          "note": "Legacy /Users/{userId}/Items/Latest."
+        }
+      ],
+      "note": "Route: GET /Channels/Items/Latest (jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs:13 [Route(\"[controller]\")] -> Channels; ChannelsController.cs:165 [HttpGet(\"Items/Latest\")]). SDK map: @jellyfin/sdk generated-client/api/channel-api.js:210-218 getLatestChannelItems -> GET `/Channels/Items/Latest`. jellyfin-apiclient 1.11.0 dist has no Channels/Items/Latest builder (only LiveTv/Channels/...). Coverage: grep -rIn 'getChannelApi|channel-api|ChannelApi|LatestChannel' src -> only useChannels.ts getChannels; grep 'Channels/Items' and \"['/`]Channels\" string literals in src (non-i18n) -> none; all 'Items/' URL string literals in src listed (14 hits) - none is Channels/Items/Latest. Empty.",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "completeness": "exhaustive",
+      "id": "public-http-cross-repo-005",
+      "items": [
+        {
+          "evidence": "jellyfin-web/src/hooks/useFetchItems.ts:18 import getLiveTvApi; :319-320 case LibraryTab.SeriesTimers: getLiveTvApi(api).getSeriesTimers({sortBy, sortOrder}) ; SDK live-tv-api.js:1333-1341 getSeriesTimers -> method 'GET' `/LiveTv/SeriesTimers`",
+          "item": "jellyfin-web/src/hooks/useFetchItems.ts",
+          "note": "Proved via lock-pinned SDK (external boundary; agents cannot see SDK source). Reached from modern library view (ItemsView.tsx:135, livetv.ts tab 5)."
+        },
+        {
+          "evidence": "jellyfin-web/src/apps/legacy/controllers/livetv/livetvseriestimers.js:46 ApiClient.getLiveTvSeriesTimers(query); jellyfin-apiclient 1.11.0 dist/jellyfin-apiclient.js getLiveTvSeriesTimers: getJSON(getUrl(\"LiveTv/SeriesTimers\", e)) and getJSON uses type:\"GET\"",
+          "item": "jellyfin-web/src/apps/legacy/controllers/livetv/livetvseriestimers.js",
+          "note": "Proved via lock-pinned jellyfin-apiclient (external). Loaded dynamically by livetvsuggested.js:262/266 import(`../livetv/${depends}`) for tab 5."
+        }
+      ],
+      "match": "file",
+      "minutes": 10,
+      "negatives": [
+        {
+          "evidence": "jellyfin-web/src/apiclient.d.ts:163 getLiveTvSeriesTimers(options?: any) declaration",
+          "item": "jellyfin-web/src/apiclient.d.ts",
+          "note": "Type declaration only, no call."
+        },
+        {
+          "evidence": "jellyfin-web/src/hooks/api/liveTvHooks/useGetSeriesTimer.ts:16 getLiveTvApi(api).getSeriesTimer -> GET /LiveTv/SeriesTimers/{timerId}",
+          "item": "jellyfin-web/src/hooks/api/liveTvHooks/useGetSeriesTimer.ts",
+          "note": "Singular GetSeriesTimer, different route."
+        },
+        {
+          "evidence": "jellyfin-web/src/apps/legacy/controllers/itemDetails/index.js:144-145 renderSeriesTimerSchedule -> apiClient.getLiveTvTimers({SeriesTimerId}) -> GET /LiveTv/Timers",
+          "item": "jellyfin-web/src/apps/legacy/controllers/itemDetails/index.js",
+          "note": "Series-timer-named function but calls the Timers endpoint."
+        }
+      ],
+      "note": "Route: GET /LiveTv/SeriesTimers (BaseJellyfinApiController.cs:13 [Route(\"[controller]\")] -> LiveTv; LiveTvController.cs:873 [HttpGet(\"SeriesTimers\")]; POST at :924 is CreateSeriesTimer). Coverage: grep -rIn -F getLiveTvSeriesTimers src -> d.ts + livetvseriestimers.js:46; grep getSeriesTimers|LiveTvApi -> useFetchItems.ts:320 is the only getSeriesTimers (plural) call; grep -F 'LiveTv/SeriesTimers' src -> none (no hand-built URL); all getUrl('LiveTv...') literals listed, none SeriesTimers. Assumptions: global ApiClient / apiClient are jellyfin-apiclient ApiClient instances; SDK Api basePath is the same server; generated-client wiring through getLiveTvApi (utils/api/live-tv-api.js) returns the generated LiveTvApi. No test files reference the endpoint.",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "completeness": "exhaustive",
+      "id": "public-http-cross-repo-006",
+      "items": [],
+      "match": "file",
+      "minutes": 8,
+      "negatives": [
+        {
+          "evidence": "jellyfin-web/src/components/itemContextMenu.js:418,436,485 getLibraryApi(api).getDownloadUrl -> /Items/{itemId}/Download (sdk utils/api/library-api.js getDownloadUrl)",
+          "item": "jellyfin-web/src/components/itemContextMenu.js",
+          "note": "Download, not File."
+        },
+        {
+          "evidence": "jellyfin-web/src/hooks/api/libraryHooks/useGetDownload.ts:17 getLibraryApi(api).getDownload -> GET /Items/{itemId}/Download",
+          "item": "jellyfin-web/src/hooks/api/libraryHooks/useGetDownload.ts",
+          "note": "Download, not File."
+        },
+        {
+          "evidence": "jellyfin-web/src/components/slideshow/slideshow.js:102 getDownloadUrl",
+          "item": "jellyfin-web/src/components/slideshow/slideshow.js",
+          "note": "Download, not File."
+        },
+        {
+          "evidence": "jellyfin-web/src/plugins/pdfPlayer/plugin.js:212 getDownloadUrl",
+          "item": "jellyfin-web/src/plugins/pdfPlayer/plugin.js",
+          "note": "Download, not File."
+        },
+        {
+          "evidence": "jellyfin-web/src/plugins/bookPlayer/plugin.js:338 getDownloadUrl",
+          "item": "jellyfin-web/src/plugins/bookPlayer/plugin.js",
+          "note": "Download, not File."
+        },
+        {
+          "evidence": "jellyfin-web/src/plugins/comicsPlayer/plugin.js:269 getDownloadUrl",
+          "item": "jellyfin-web/src/plugins/comicsPlayer/plugin.js",
+          "note": "Download, not File."
+        }
+      ],
+      "note": "Route: GET /Items/{itemId}/File (LibraryController.cs:47 [Route(\"\")] overrides base; :109 [HttpGet(\"Items/{itemId}/File\")]). SDK map: generated-client/api/library-api.js:161-172 getFile -> GET `/Items/{itemId}/File`; AugmentedLibraryApi (utils/api/library-api.js) only adds getDownloadUrl (/Download). jellyfin-apiclient 1.11.0 dist contains no '/File' URL builder (only FileReader / error strings). Coverage: grep -rIn '.getFile(|getFile:|getFileUrl|/File\\b' src -> no API use; all getLibraryApi( uses in src enumerated (getDownloadUrl, getDownload, getItems, getLatestMedia, getResumeItems, getThemeMedia, playlisteditor) - none getFile; all 'Items/' URL literals in src enumerated - none ends in /File; grep getUri( -> none. Empty.",
+      "outside_corpus": 0,
+      "tests": []
+    },
+    {
+      "assumptions": "Subject is RegistrationExtensions.RegisterDecorator<TService>(ContainerBuilder, Func<IComponentContext, TService, TService>, object fromKey, object? toKey) at :69 (keyed, two-argument delegate). Overload resolution: a two-parameter lambda with a fromKey argument binds only :69; three-parameter lambdas bind :36 (keyed) or :205 (keyless); one-parameter lambdas bind :102; RegisterDecorator<TDecorator,TService>() binds :131; (Type, Type) binds :161. Static extension method: no virtual/interface dispatch. No production code in autofac/src, autofac/codegen or autofac-di/src calls it or references it as a method group, so hop 1 and hop 2 are empty. Callers exist only in test and benchmark code (listed under tests). Consumers of the published library are outside the corpus.",
+      "completeness": "exhaustive",
+      "hops": {
+        "1": [],
+        "2": []
+      },
+      "id": "public-two-hop-impact-002",
+      "items": [],
+      "match": "file_line",
+      "minutes": 10,
+      "negatives": [
+        {
+          "evidence": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:86 `LightweightAdapterRegistrationExtensions.RegisterDecorator<TService>(builder, (c, p, f) => decorator(c, f), fromKey, toKey)`",
+          "item": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:86",
+          "note": "callee inside the subject (different class's RegisterDecorator), not a caller"
+        },
+        {
+          "evidence": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:53",
+          "item": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:53",
+          "note": "inside the :36 overload, calls LightweightAdapterRegistrationExtensions.RegisterDecorator"
+        },
+        {
+          "evidence": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:119",
+          "item": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:119",
+          "note": "inside the :102 overload, calls LightweightAdapterRegistrationExtensions.RegisterDecorator"
+        },
+        {
+          "evidence": "RegistrationOnlyIfTests.cs:277 `(ctx, p, s) => ..., \"from\"`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/RegistrationOnlyIfTests.cs:277",
+          "note": "test; binds the :36 overload (three-parameter delegate), not the subject"
+        },
+        {
+          "evidence": "RegistrationOnlyIfTests.cs:279 `s => ..., \"from\"`",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/RegistrationOnlyIfTests.cs:279",
+          "note": "test; binds the :102 overload (Func<TService,TService>)"
+        },
+        {
+          "evidence": "KeylessSimpleLambdaBenchmark.cs:22 `(c, p, i) => ...` no key",
+          "item": "autofac/bench/Autofac.Benchmarks/Decorators/KeylessSimpleLambdaBenchmark.cs:22",
+          "note": "binds the keyless :205 overload; likewise the other Keyless* benchmarks bind :131 or :205"
+        }
+      ],
+      "note": "Coverage: grep -rlw RegisterDecorator autofac autofac-di (every file, every extension) -> only 2 src files (the declaring file and LightweightAdapterRegistrationExtensions.cs, which declares a different RegisterDecorator at :46) plus test/bench; grep -rnw -A2 RegisterDecorator autofac/test and bench to classify overloads. Empty exhaustive label justified by whole-repo name search: any call or method-group reference must contain the identifier RegisterDecorator.",
+      "outside_corpus": 0,
+      "tests": [
+        {
+          "evidence": "autofac/test/Autofac.Specification.Test/Registration/RegistrationOnlyIfTests.cs:278 `builder.RegisterDecorator<IService>((ctx, s) => new Decorator(s), \"from\")` in OnlyIf_EnabledByStandardRegistrations",
+          "item": "autofac/test/Autofac.Specification.Test/Registration/RegistrationOnlyIfTests.cs:278",
+          "note": "test; hop 1 (two-parameter lambda + fromKey binds the :69 overload)"
+        },
+        {
+          "evidence": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedSimpleBenchmark.cs:22-24 `(c, inner) => ..., fromKey: \"handler\"` in Setup",
+          "item": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedSimpleBenchmark.cs:22",
+          "note": "benchmark (non-production); hop 1. Setup is a [GlobalSetup] framework callback with no explicit source caller"
+        },
+        {
+          "evidence": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedNestedBenchmark.cs:22-25 `(c, inner) => ..., fromKey: \"handler\", toKey: \"decorated\"`",
+          "item": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedNestedBenchmark.cs:22",
+          "note": "benchmark; hop 1"
+        },
+        {
+          "evidence": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedNestedBenchmark.cs:26-28 `(c, inner) => ..., fromKey: \"decorated\"`",
+          "item": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedNestedBenchmark.cs:26",
+          "note": "benchmark; hop 1"
+        },
+        {
+          "evidence": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedAnyKeySimpleBenchmark.cs:23-25 `(c, inner) => ..., fromKey: \"handler\"`",
+          "item": "autofac/bench/Autofac.Benchmarks/Decorators/KeyedAnyKeySimpleBenchmark.cs:23",
+          "note": "benchmark; hop 1"
+        }
+      ]
+    },
+    {
+      "assumptions": "Subject is the single-ItemValueType overload (JellyfinQueryHelperExtensions.cs:106). Hop-1 calls are directly in the body of BaseItemRepository.TranslateQuery(IQueryable<BaseItemEntity>, JellyfinDbContext, InternalItemsQuery) (BaseItemRepository.TranslateQuery.cs:82; no lambda/local function encloses lines 624-681; the only local function, WithPrimaryVersions, starts at :1212). Hop 2 = every call of that method: unqualified calls from other parts of the partial class, and calls through IItemQueryHelpers.TranslateQuery (MediaBrowser.Controller/Persistence/IItemQueryHelpers.cs:23), whose only production implementation is BaseItemRepository (BaseItemRepository.cs:30; registered at Emby.Server.Implementations/ApplicationHost.cs:555); these are flagged via dispatch. Tests only mock IItemQueryHelpers. jellyfin-web (TypeScript) cannot call this C# method; HTTP paths are not source call edges, so it contributes nothing. No recursion.",
+      "completeness": "exhaustive",
+      "hops": {
+        "1": [
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:624",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:655",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:681"
+        ],
+        "2": [
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:93",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:128",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:180",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:237",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:350",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:50",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:76",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:122",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:610",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs:37",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/ItemCountService.cs:51",
+          "jellyfin-server/Jellyfin.Server.Implementations/Item/ItemCountService.cs:63",
+          "jellyfin-server/Emby.Server.Implementations/Library/SimilarItems/MovieSimilarItemsProvider.cs:172"
+        ]
+      },
+      "id": "public-two-hop-impact-005",
+      "items": [
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:624 `baseQuery.WhereReferencedItem(context, ItemValueType.AlbumArtist, filter.AlbumArtistIds)` in BaseItemRepository.TranslateQuery",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:624",
+          "note": "hop 1"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:655 `WhereReferencedItem(context, ItemValueType.Genre, filter.GenreIds)`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:655",
+          "note": "hop 1"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:681 `WhereReferencedItem(context, ItemValueType.Studios, filter.StudioIds)`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:681",
+          "note": "hop 1"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:93 `return TranslateQuery(`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:93",
+          "note": "hop 2 (direct call within partial class BaseItemRepository)"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:128 `baseQuery = TranslateQuery(baseQuery, context, filter);`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:128",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:180 `var innerQueryFilter = TranslateQuery(context.BaseItems...`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:180",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:237 `var masterQuery = TranslateQuery(innerQuery, context, outerQueryFilter);`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:237",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:350 `var scopedItems = TranslateQuery(...)`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.ByName.cs:350",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:50 `dbQuery = TranslateQuery(dbQuery, context, filter);`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:50",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:76",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:76",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:122",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:122",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:610",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.Querying.cs:610",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs:37 `dbQuery = TranslateQuery(dbQuery, context, filter);`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.QueryBuilding.cs:37",
+          "note": "hop 2"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/ItemCountService.cs:51 `_queryHelpers.TranslateQuery(...)` on IItemQueryHelpers; BaseItemRepository.cs:30 implements IItemQueryHelpers; Emby.Server.Implementations/ApplicationHost.cs:555 registers IItemQueryHelpers -> BaseItemRepository",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/ItemCountService.cs:51",
+          "note": "hop 2 via interface dispatch",
+          "via": "dispatch"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/ItemCountService.cs:63 `_queryHelpers.TranslateQuery(...)`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/ItemCountService.cs:63",
+          "note": "hop 2 via interface dispatch",
+          "via": "dispatch"
+        },
+        {
+          "evidence": "jellyfin-server/Emby.Server.Implementations/Library/SimilarItems/MovieSimilarItemsProvider.cs:172 `_queryHelpers.TranslateQuery(baseQuery, context, filter)`",
+          "item": "jellyfin-server/Emby.Server.Implementations/Library/SimilarItems/MovieSimilarItemsProvider.cs:172",
+          "note": "hop 2 via interface dispatch",
+          "via": "dispatch"
+        }
+      ],
+      "match": "file_line",
+      "minutes": 10,
+      "negatives": [
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:619 `WhereReferencedItem(context, [ItemValueType.Artist, ItemValueType.AlbumArtist], filter.ArtistIds)`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:619",
+          "note": "collection-expression argument binds the IReadOnlyList<ItemValueType> overload at JellyfinQueryHelperExtensions.cs:130, not the subject"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:650 `[ItemValueType.Artist, ItemValueType.AlbumArtist], filter.ExcludeArtistIds, true`",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs:650",
+          "note": "binds :130 overload"
+        },
+        {
+          "evidence": "jellyfin-server/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinQueryHelperExtensions.cs:113 `baseQuery.WhereReferencedItem(context, [itemValueType], referenceIds, invert)`",
+          "item": "jellyfin-server/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinQueryHelperExtensions.cs:113",
+          "note": "the subject's own body calling the :130 overload (callee, not a caller; no recursion)"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/PeopleRepository.cs:36 and :93 call PeopleRepository's private TranslateQuery(IQueryable<People>, ...) declared at :400",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/PeopleRepository.cs:36",
+          "note": "same-name different method"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/PeopleRepository.cs:93",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/PeopleRepository.cs:93",
+          "note": "same-name different method (PeopleRepository.TranslateQuery)"
+        },
+        {
+          "evidence": "jellyfin-server/Jellyfin.Server.Implementations/Item/MediaStreamRepository.cs:55 calls private MediaStreamRepository.TranslateQuery declared at :89",
+          "item": "jellyfin-server/Jellyfin.Server.Implementations/Item/MediaStreamRepository.cs:55",
+          "note": "same-name different method"
+        }
+      ],
+      "note": "Coverage: grep -rnw WhereReferencedItem jellyfin-server jellyfin-web (all files; 8 hits classified by overload); grep -rnw TranslateQuery jellyfin-server jellyfin-web (all hits classified: BaseItemRepository partials, IItemQueryHelpers callers, same-name private methods in PeopleRepository/MediaStreamRepository, test comments); grep -rnw IItemQueryHelpers jellyfin-server for implementers/registration.",
+      "outside_corpus": 0,
+      "tests": []
+    }
+  ],
+  "primary_labels_read": false,
+  "question_revision": "2026-10-20, after review and after the pilot: the six DI questions ask for one flat list with a kind per item instead of separate groups (answer format only; subjects, ids and what is asked are unchanged). Labels are unaffected.",
+  "questions_sha256": "1a05b2b3631a7574f5ac5a7bbe13d3aa258ea96b48338ebd7545b620b09bd79e",
+  "reviewed_questions_sha256": "42cef56a0d4b040996b925cd71fa46641d7951a334d1d52657efecd154f79e40",
+  "reviewer": "Independent blind AI labeller sessions (Claude Opus 5.5 in Claude Code, separate sessions with no access to primary labels, evidence reports or tool outputs): A for lookup, DI and impact; B for HTTP. Adjudicated by the study operator session (also an AI agent). No human has reviewed these labels.",
+  "reviewer_sessions": {
+    "blind-a": "independent blind AI labeller session A (model: claude-opus-5-5)",
+    "blind-b": "independent blind AI labeller session B (model: claude-opus-5-5)"
+  },
+  "seed": "knowcode-public-v1-independent-review-2026-10-16",
+  "source_only": true,
+  "status": "complete"
+}

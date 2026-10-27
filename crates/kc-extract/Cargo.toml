@@ -1,0 +1,19 @@
+[package]
+name = "kc-extract"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tree-sitter.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-swift.workspace = true
+tree-sitter-c-sharp.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-cfml.workspace = true
+tree-sitter-hcl.workspace = true
+toml.workspace = true
+yaml-rust2.workspace = true

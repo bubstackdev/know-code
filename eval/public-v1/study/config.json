@@ -1,0 +1,9 @@
+{
+  "client": "claude-code",
+  "client_version": "2.1.304",
+  "effort": "medium",
+  "knowcode_profile": "core",
+  "knowcode_sha256": "1bda7bbe292df1dbbd8d5c6d3170519056935b1f7d9611bd2892a0b2c1192174",
+  "model": "claude-opus-5-5",
+  "research_call_budget": 40
+}

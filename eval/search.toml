@@ -1,0 +1,286 @@
+# Search parity set (M5): every query runs through `knowcode search` and through `git grep` at pinned commits, over
+# the same files, and the (repo, file, line) sets must match exactly. `scripts/search_eval.py` runs it.
+#
+# Fields: id, backs (the eval question in questions.toml it supports, if any), repos (`name` for a public corpus repo
+# from corpus.toml, `repo@sha` for a workspace repo at a pin), pattern, regex (POSIX ERE syntax that both engines read
+# the same way), case (sensitive | insensitive), word, globs (`*.ext` or `dir/`, passed to git grep as pathspecs).
+#
+# The first 20 back the eval questions, using the searches their references were checked with. The rest cover the
+# public corpus: literal, regex, case-insensitive, whole-word, short patterns with no trigram, and multi-repo.
+
+[[query]]
+id = "q-find-01"
+backs = "find-01"
+repos = ["bubs-maps@a462d943bd05"]
+pattern = "(struct|class|enum|actor) BubPlace"
+regex = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-find-02"
+backs = "find-02"
+repos = ["aether-engine@c9eeb4299473"]
+pattern = "(struct|class|enum|actor|protocol|typealias) [A-Za-z_]*Engine([^A-Za-z_]|$)"
+regex = true
+globs = ["Sources/"]
+
+[[query]]
+id = "q-find-03"
+backs = "find-03"
+repos = ["aether-engine@c9eeb4299473", "bubs-mail@5f1fcb2f10aa", "bubs-maps@a462d943bd05", "bubstack@946d2f115b4a", "face-hugger@cac29bac7822", "idk-play@ea256e572f4f", "midi-me@31875748b728", "renaml@261313586bd2", "space-case@1eaedb9b0f04"]
+pattern = "@main"
+globs = ["*.swift"]
+
+[[query]]
+id = "q-context-01"
+backs = "context-01"
+repos = ["face-hugger@cac29bac7822"]
+pattern = "\\.load\\("
+regex = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-context-02"
+backs = "context-02"
+repos = ["renaml@261313586bd2"]
+pattern = "(struct|class|enum|actor) RenameRecipe|extension RenameRecipe"
+regex = true
+
+[[query]]
+id = "q-context-03"
+backs = "context-03"
+repos = ["bubs-mail@5f1fcb2f10aa"]
+pattern = "MailMessage"
+word = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-trace-01"
+backs = "trace-01"
+repos = ["bubstack@946d2f115b4a"]
+pattern = "BubstackCard|BubsCard"
+regex = true
+word = true
+
+[[query]]
+id = "q-trace-02"
+backs = "trace-02"
+repos = ["midi-me@31875748b728"]
+pattern = "MIDIPlaybackController"
+
+[[query]]
+id = "q-trace-03"
+backs = "trace-03"
+repos = ["midi-me@31875748b728"]
+pattern = "loadSoundBank"
+word = true
+
+[[query]]
+id = "q-trace-04"
+backs = "trace-04"
+repos = ["idk-play@ea256e572f4f"]
+pattern = "YouTubeDurationProviding"
+word = true
+
+[[query]]
+id = "q-impact-01"
+backs = "impact-01"
+repos = ["bubs-maps@a462d943bd05"]
+pattern = "retry\\(\\)|\\.retry\\("
+regex = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-impact-02"
+backs = "impact-02"
+repos = ["face-hugger@cac29bac7822"]
+pattern = "QueueArchive|UploadJob\\.self|archive\\.(load|save)"
+regex = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-impact-03"
+backs = "impact-03"
+repos = ["renaml@261313586bd2"]
+pattern = ".remove(id:"
+globs = ["*.swift"]
+
+[[query]]
+id = "q-hotspots-01"
+backs = "hotspots-01"
+repos = ["aether-engine@c9eeb4299473"]
+pattern = "TODO|FIXME"
+regex = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-hotspots-02"
+backs = "hotspots-02"
+repos = ["bubs-maps@a462d943bd05"]
+pattern = "fix"
+case = "insensitive"
+word = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-overview-01"
+backs = "overview-01"
+repos = ["midi-me@31875748b728"]
+pattern = "^import "
+regex = true
+globs = ["*.swift"]
+
+[[query]]
+id = "q-overview-02"
+backs = "overview-02"
+repos = ["space-case@1eaedb9b0f04"]
+pattern = "(class|struct|enum|actor|protocol) (Cell|Tile|Factory)([^A-Za-z0-9_]|$)"
+regex = true
+
+[[query]]
+id = "q-cross-repo-01"
+backs = "cross-repo-01"
+repos = ["aether-engine@c9eeb4299473", "bubs-mail@5f1fcb2f10aa", "bubs-maps@a462d943bd05", "bubstack@946d2f115b4a", "face-hugger@cac29bac7822", "idk-play@ea256e572f4f", "midi-me@31875748b728", "renaml@261313586bd2", "space-case@1eaedb9b0f04"]
+pattern = "bubstack"
+case = "insensitive"
+globs = ["*Package.swift", "*project.yml", "*Cargo.toml"]
+
+[[query]]
+id = "q-cross-repo-02"
+backs = "cross-repo-02"
+repos = ["bubs-mail@5f1fcb2f10aa"]
+pattern = "^import Bubstack"
+regex = true
+
+[[query]]
+id = "q-cross-repo-03"
+backs = "cross-repo-03"
+repos = ["bubstack@946d2f115b4a", "bubs-mail@5f1fcb2f10aa"]
+pattern = "\\.space\\.(cardPadding|sheetPadding|stackGap|margin|marginBottom|rowHorizontal|rowVertical|rowGap|keyGap|keyPadding|keyPaddingCompact|gapTight|gapSmall|gapMedium|fieldInset)([^A-Za-z0-9_]|$)"
+regex = true
+
+[[query]]
+id = "q-literal-swift"
+repos = ["swift-argument-parser"]
+pattern = "ParsableCommand"
+
+[[query]]
+id = "q-literal-punct"
+repos = ["swift-argument-parser"]
+pattern = "@Option("
+
+[[query]]
+id = "q-literal-func"
+repos = ["Alamofire"]
+pattern = "func request("
+
+[[query]]
+id = "q-regex-error-types"
+repos = ["Alamofire"]
+pattern = "(class|struct|enum|actor|protocol) [A-Z][A-Za-z]*Error"
+regex = true
+
+[[query]]
+id = "q-ci-word-todo"
+repos = ["Alamofire"]
+pattern = "todo"
+case = "insensitive"
+word = true
+
+[[query]]
+id = "q-literal-def"
+repos = ["requests"]
+pattern = "def get("
+
+[[query]]
+id = "q-regex-raise"
+repos = ["requests"]
+pattern = "raise [A-Z][A-Za-z]*Error"
+regex = true
+
+[[query]]
+id = "q-ci-common"
+repos = ["requests"]
+pattern = "session"
+case = "insensitive"
+
+[[query]]
+id = "q-short-word"
+repos = ["requests"]
+pattern = "if"
+word = true
+
+[[query]]
+id = "q-literal-decorator"
+repos = ["flask"]
+pattern = "@app.route("
+
+[[query]]
+id = "q-regex-anchored"
+repos = ["flask"]
+pattern = "^class [A-Za-z_]+\\("
+regex = true
+globs = ["*.py"]
+
+[[query]]
+id = "q-word-import"
+repos = ["flask"]
+pattern = "import"
+word = true
+globs = ["*.py"]
+
+[[query]]
+id = "q-literal-generics"
+repos = ["serde"]
+pattern = "impl<'de>"
+
+[[query]]
+id = "q-regex-fn-prefix"
+repos = ["serde"]
+pattern = "fn deserialize_[a-z_]+"
+regex = true
+
+[[query]]
+id = "q-word-unsafe"
+repos = ["serde"]
+pattern = "unsafe"
+word = true
+
+[[query]]
+id = "q-regex-async-fn"
+repos = ["axum"]
+pattern = "async fn [a-z_]+\\("
+regex = true
+
+[[query]]
+id = "q-literal-path"
+repos = ["axum"]
+pattern = "Router::new()"
+
+[[query]]
+id = "q-multi-ci"
+repos = ["swift-argument-parser", "Alamofire", "requests", "flask", "serde", "axum"]
+pattern = "deprecated"
+case = "insensitive"
+
+[[query]]
+id = "q-multi-url"
+repos = ["swift-argument-parser", "Alamofire", "requests", "flask", "serde", "axum"]
+pattern = "http://"
+
+[[query]]
+id = "q-multi-regex-dates"
+repos = ["swift-argument-parser", "Alamofire", "requests", "flask", "serde", "axum"]
+pattern = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
+regex = true
+
+[[query]]
+id = "q-multi-word"
+repos = ["swift-argument-parser", "Alamofire", "requests", "flask", "serde", "axum"]
+pattern = "Copyright"
+word = true
+
+[[query]]
+id = "q-short-punct"
+repos = ["swift-argument-parser"]
+pattern = ";"

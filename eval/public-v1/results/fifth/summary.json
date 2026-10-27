@@ -1,0 +1,4736 @@
+{
+  "arms": {
+    "knowcode": {
+      "budget_overruns": 0,
+      "correct_empty": 5,
+      "correct_empty_n": 5,
+      "cost_usd": 2.4009,
+      "f1_exhaustive_mean": 1.0,
+      "f1_n": 10,
+      "fixed_overhead_median": 3716.5,
+      "hop_agreement_mean": 1.0,
+      "knowcode_answers_rechecked": 31,
+      "knowcode_answers_total": 62,
+      "knowcode_answers_with_claims": 60,
+      "knowcode_calls_mean": 2.5833333333333335,
+      "output_tokens_median": 2667.0,
+      "recall_lower_bound_mean": 1.0,
+      "recall_lower_bound_n": 8,
+      "recall_uncertain_mean": 1.0,
+      "recheck_rate": 0.5166666666666667,
+      "recheck_rate_ci95": [
+        0.3888888888888889,
+        0.6956521739130435
+      ],
+      "research_calls_mean": 4.958333333333333,
+      "sessions": 24,
+      "sessions_with_knowcode_call": 24,
+      "sessions_with_stale_answer": 0,
+      "stale_answers": 0,
+      "status": {
+        "answered": 24
+      },
+      "tokens_median": 33295.0,
+      "tokens_n": 24
+    },
+    "knowcode-unprompted": {
+      "budget_overruns": 0,
+      "correct_empty": 5,
+      "correct_empty_n": 5,
+      "cost_usd": 2.4843,
+      "f1_exhaustive_mean": 1.0,
+      "f1_n": 10,
+      "fixed_overhead_median": 3718.5,
+      "hop_agreement_mean": 1.0,
+      "knowcode_answers_rechecked": 28,
+      "knowcode_answers_total": 72,
+      "knowcode_answers_with_claims": 69,
+      "knowcode_calls_mean": 3.0416666666666665,
+      "output_tokens_median": 2899.5,
+      "recall_lower_bound_mean": 1.0,
+      "recall_lower_bound_n": 8,
+      "recall_uncertain_mean": 1.0,
+      "recheck_rate": 0.4057971014492754,
+      "recheck_rate_ci95": [
+        0.25609756097560976,
+        0.5873015873015873
+      ],
+      "research_calls_mean": 5.208333333333333,
+      "sessions": 24,
+      "sessions_with_knowcode_call": 24,
+      "sessions_with_stale_answer": 0,
+      "stale_answers": 0,
+      "status": {
+        "answered": 24
+      },
+      "tokens_median": 30736.0,
+      "tokens_n": 24
+    },
+    "plain": {
+      "budget_overruns": 0,
+      "correct_empty": 3,
+      "correct_empty_n": 5,
+      "cost_usd": 2.9808,
+      "f1_exhaustive_mean": 1.0,
+      "f1_n": 10,
+      "fixed_overhead_median": 2518.5,
+      "hop_agreement_mean": 1.0,
+      "knowcode_answers_rechecked": 0,
+      "knowcode_answers_total": 0,
+      "knowcode_answers_with_claims": 0,
+      "knowcode_calls_mean": 0.0,
+      "output_tokens_median": 2920.5,
+      "recall_lower_bound_mean": 1.0,
+      "recall_lower_bound_n": 8,
+      "recall_uncertain_mean": 1.0,
+      "recheck_rate": null,
+      "recheck_rate_ci95": null,
+      "research_calls_mean": 5.583333333333333,
+      "sessions": 24,
+      "sessions_with_knowcode_call": 0,
+      "sessions_with_stale_answer": 0,
+      "stale_answers": 0,
+      "status": {
+        "answered": 22,
+        "unsupported": 2
+      },
+      "tokens_median": 33604.5,
+      "tokens_n": 24
+    }
+  },
+  "bootstrap": {
+    "resamples": 10000,
+    "seed": "knowcode-public-v1-bootstrap-2026-10-20",
+    "unit": "question"
+  },
+  "criteria": {
+    "1_recheck_rate_halved": {
+      "answers": 60,
+      "baseline_rate": 0.3333333333333333,
+      "ci95": [
+        0.3888888888888889,
+        0.6956521739130435
+      ],
+      "met": false,
+      "rate": 0.5166666666666667,
+      "rule": "named-arm pooled re-check rate <= 0.5 x the baseline run rate"
+    },
+    "2_f1_at_least_equal": {
+      "f1_ci95": [
+        0.0,
+        0.0
+      ],
+      "f1_difference": 0.0,
+      "f1_n": 10,
+      "met": true,
+      "recall_ci95": [
+        0.0,
+        0.0
+      ],
+      "recall_difference": 0.0,
+      "recall_n": 8,
+      "rule": "mean paired F1 difference (named - plain, non-empty exhaustive labels) >= 0 and mean paired recall difference (lower-bound labels) >= 0"
+    },
+    "3_fewer_research_tokens": {
+      "ci95": [
+        -158.0,
+        10776.0
+      ],
+      "difference": 3747.5,
+      "met": false,
+      "n": 24,
+      "rule": "median paired difference in session tokens (named - plain) < 0"
+    },
+    "4_unprompted_use": {
+      "calls_per_session_mean": 3.0416666666666665,
+      "ci95": [
+        0.862023793448672,
+        0.9999999999999999
+      ],
+      "met": true,
+      "rule": "KnowCode called in >= 20 of 24 unprompted sessions",
+      "sessions": 24,
+      "sessions_with_call": 24
+    }
+  },
+  "format": 1,
+  "freeze_sha256": "cb371bf54fe6e22fa5e10f1a0101a7b13cf9eddf3af8302950bdf88e55e079df",
+  "paired": {
+    "knowcode-minus-plain": {
+      "f1": {
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "difference": 0.0,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "n": 10,
+        "statistic": "mean"
+      },
+      "recall_lower_bound": {
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "difference": 0.0,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "n": 8,
+        "statistic": "mean"
+      },
+      "tokens": {
+        "ci95": [
+          -158.0,
+          10776.0
+        ],
+        "difference": 3747.5,
+        "distribution": [
+          -128464,
+          -113411,
+          -72145,
+          -30185,
+          -26698,
+          -10464,
+          -601,
+          -158,
+          -132,
+          1956,
+          2371,
+          3458,
+          4037,
+          5049,
+          6611,
+          9662,
+          10776,
+          12546,
+          16880,
+          21555,
+          27025,
+          27205,
+          28266,
+          60572
+        ],
+        "n": 24,
+        "statistic": "median"
+      }
+    },
+    "knowcode-unprompted-minus-plain": {
+      "f1": {
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "difference": 0.0,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "n": 10,
+        "statistic": "mean"
+      },
+      "recall_lower_bound": {
+        "ci95": [
+          0.0,
+          0.0
+        ],
+        "difference": 0.0,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "n": 8,
+        "statistic": "mean"
+      },
+      "tokens": {
+        "ci95": [
+          6193.0,
+          13424.0
+        ],
+        "difference": 9146.5,
+        "distribution": [
+          -188564,
+          -91462,
+          -77648,
+          -32743,
+          -4619,
+          2,
+          6167,
+          6193,
+          7507,
+          8397,
+          8564,
+          8613,
+          9680,
+          10651,
+          11805,
+          13034,
+          13424,
+          17107,
+          18009,
+          18035,
+          24435,
+          39836,
+          41538,
+          42906
+        ],
+        "n": 24,
+        "statistic": "median"
+      }
+    }
+  },
+  "sensitivity": {
+    "arms": {
+      "knowcode": {
+        "budget_overruns": 0,
+        "correct_empty": 3,
+        "correct_empty_n": 3,
+        "cost_usd": 2.179,
+        "f1_exhaustive_mean": 1.0,
+        "f1_n": 10,
+        "fixed_overhead_median": 3716.5,
+        "hop_agreement_mean": 1.0,
+        "knowcode_answers_rechecked": 29,
+        "knowcode_answers_total": 60,
+        "knowcode_answers_with_claims": 58,
+        "knowcode_calls_mean": 2.727272727272727,
+        "output_tokens_median": 2636.0,
+        "recall_lower_bound_mean": 1.0,
+        "recall_lower_bound_n": 8,
+        "recall_uncertain_mean": 1.0,
+        "recheck_rate": 0.5,
+        "recheck_rate_ci95": [
+          0.37333333333333335,
+          0.6792452830188679
+        ],
+        "research_calls_mean": 4.818181818181818,
+        "sessions": 22,
+        "sessions_with_knowcode_call": 22,
+        "sessions_with_stale_answer": 0,
+        "stale_answers": 0,
+        "status": {
+          "answered": 22
+        },
+        "tokens_median": 32185.5,
+        "tokens_n": 22
+      },
+      "knowcode-unprompted": {
+        "budget_overruns": 0,
+        "correct_empty": 3,
+        "correct_empty_n": 3,
+        "cost_usd": 2.2193,
+        "f1_exhaustive_mean": 1.0,
+        "f1_n": 10,
+        "fixed_overhead_median": 3718.5,
+        "hop_agreement_mean": 1.0,
+        "knowcode_answers_rechecked": 27,
+        "knowcode_answers_total": 63,
+        "knowcode_answers_with_claims": 60,
+        "knowcode_calls_mean": 2.909090909090909,
+        "output_tokens_median": 2616.5,
+        "recall_lower_bound_mean": 1.0,
+        "recall_lower_bound_n": 8,
+        "recall_uncertain_mean": 1.0,
+        "recheck_rate": 0.45,
+        "recheck_rate_ci95": [
+          0.30158730158730157,
+          0.6129032258064516
+        ],
+        "research_calls_mean": 4.909090909090909,
+        "sessions": 22,
+        "sessions_with_knowcode_call": 22,
+        "sessions_with_stale_answer": 0,
+        "stale_answers": 0,
+        "status": {
+          "answered": 22
+        },
+        "tokens_median": 28773.5,
+        "tokens_n": 22
+      },
+      "plain": {
+        "budget_overruns": 0,
+        "correct_empty": 2,
+        "correct_empty_n": 3,
+        "cost_usd": 2.7314,
+        "f1_exhaustive_mean": 1.0,
+        "f1_n": 10,
+        "fixed_overhead_median": 2518.5,
+        "hop_agreement_mean": 1.0,
+        "knowcode_answers_rechecked": 0,
+        "knowcode_answers_total": 0,
+        "knowcode_answers_with_claims": 0,
+        "knowcode_calls_mean": 0.0,
+        "output_tokens_median": 2853.5,
+        "recall_lower_bound_mean": 1.0,
+        "recall_lower_bound_n": 8,
+        "recall_uncertain_mean": 1.0,
+        "recheck_rate": null,
+        "recheck_rate_ci95": null,
+        "research_calls_mean": 5.5,
+        "sessions": 22,
+        "sessions_with_knowcode_call": 0,
+        "sessions_with_stale_answer": 0,
+        "stale_answers": 0,
+        "status": {
+          "answered": 21,
+          "unsupported": 1
+        },
+        "tokens_median": 27152.0,
+        "tokens_n": 22
+      }
+    },
+    "criteria": {
+      "1_recheck_rate_halved": {
+        "answers": 58,
+        "baseline_rate": 0.45,
+        "ci95": [
+          0.37333333333333335,
+          0.6792452830188679
+        ],
+        "met": false,
+        "rate": 0.5,
+        "rule": "named-arm pooled re-check rate <= 0.5 x the baseline run rate"
+      },
+      "2_f1_at_least_equal": {
+        "f1_ci95": [
+          0.0,
+          0.0
+        ],
+        "f1_difference": 0.0,
+        "f1_n": 10,
+        "met": true,
+        "recall_ci95": [
+          0.0,
+          0.0
+        ],
+        "recall_difference": 0.0,
+        "recall_n": 8,
+        "rule": "mean paired F1 difference (named - plain, non-empty exhaustive labels) >= 0 and mean paired recall difference (lower-bound labels) >= 0"
+      },
+      "3_fewer_research_tokens": {
+        "ci95": [
+          -601.0,
+          10776.0
+        ],
+        "difference": 3747.5,
+        "met": false,
+        "n": 22,
+        "rule": "median paired difference in session tokens (named - plain) < 0"
+      },
+      "4_unprompted_use": {
+        "calls_per_session_mean": 2.909090909090909,
+        "ci95": [
+          0.8513451233948545,
+          1.0
+        ],
+        "met": true,
+        "rule": "KnowCode called in >= 20 of 24 unprompted sessions",
+        "sessions": 22,
+        "sessions_with_call": 22
+      }
+    },
+    "paired": {
+      "knowcode-minus-plain": {
+        "f1": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "difference": 0.0,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n": 10,
+          "statistic": "mean"
+        },
+        "recall_lower_bound": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "difference": 0.0,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n": 8,
+          "statistic": "mean"
+        },
+        "tokens": {
+          "ci95": [
+            -601.0,
+            10776.0
+          ],
+          "difference": 3747.5,
+          "distribution": [
+            -128464,
+            -113411,
+            -72145,
+            -30185,
+            -26698,
+            -10464,
+            -601,
+            -132,
+            1956,
+            2371,
+            3458,
+            4037,
+            5049,
+            6611,
+            9662,
+            10776,
+            12546,
+            16880,
+            21555,
+            27025,
+            28266,
+            60572
+          ],
+          "n": 22,
+          "statistic": "median"
+        }
+      },
+      "knowcode-unprompted-minus-plain": {
+        "f1": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "difference": 0.0,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n": 10,
+          "statistic": "mean"
+        },
+        "recall_lower_bound": {
+          "ci95": [
+            0.0,
+            0.0
+          ],
+          "difference": 0.0,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "n": 8,
+          "statistic": "mean"
+        },
+        "tokens": {
+          "ci95": [
+            6167.0,
+            12614.5
+          ],
+          "difference": 8588.5,
+          "distribution": [
+            -188564,
+            -91462,
+            -77648,
+            -32743,
+            -4619,
+            2,
+            6167,
+            6193,
+            7507,
+            8397,
+            8564,
+            8613,
+            9680,
+            10651,
+            11805,
+            13034,
+            13424,
+            18009,
+            18035,
+            24435,
+            39836,
+            41538
+          ],
+          "n": 22,
+          "statistic": "median"
+        }
+      }
+    },
+    "summary_note": "Bitwarden HTTP questions 001 and 003 excluded (labels depend on the separately licensed tree left out of the export)"
+  },
+  "sessions": [
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 5193,
+      "correct_empty": null,
+      "cost_usd": 0.054536,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3629,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 1,
+      "output_tokens": 1307,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-definition-lookup-006",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 18513,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 28042,
+      "correct_empty": null,
+      "cost_usd": 0.278009,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2528,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 2,
+      "output_tokens": 6067,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-005",
+      "recall": 1.0,
+      "research_calls": 14,
+      "session": "plain-public-di-implementations-005",
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 116072,
+      "tp": 5,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 6441,
+      "correct_empty": null,
+      "cost_usd": 0.0570298,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3725,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 3,
+      "output_tokens": 1737,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 2,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-public-di-implementations-004",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 16338,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 6044,
+      "correct_empty": null,
+      "cost_usd": 0.0577434,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3630,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 4,
+      "output_tokens": 1830,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 2,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-unprompted-public-definition-lookup-005",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 20189,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 5794,
+      "correct_empty": null,
+      "cost_usd": 0.0805912,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2520,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 5,
+      "output_tokens": 2406,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-003",
+      "recall": 1.0,
+      "research_calls": 4,
+      "session": "plain-public-di-implementations-003",
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 25526,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 4909,
+      "correct_empty": null,
+      "cost_usd": 0.0392786,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3642,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 6,
+      "output_tokens": 1233,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 2,
+      "session": "knowcode-public-definition-lookup-002",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 14246,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 6926,
+      "correct_empty": null,
+      "cost_usd": 0.064807,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3720,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 7,
+      "output_tokens": 1919,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 1,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-di-implementations-003",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 25528,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 9758,
+      "correct_empty": false,
+      "cost_usd": 0.128225,
+      "f1": null,
+      "fixed_overhead": 2527,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive-empty",
+      "ordinal": 8,
+      "output_tokens": 3622,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-http-cross-repo-001",
+      "recall": null,
+      "research_calls": 6,
+      "session": "plain-public-http-cross-repo-001",
+      "status": "unsupported",
+      "stratum": "http-cross-repo",
+      "tokens": 48099,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 14067,
+      "correct_empty": null,
+      "cost_usd": 0.1292758,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3726,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 9,
+      "output_tokens": 3258,
+      "overrun": 0,
+      "policy_flags": [
+        "subagent event outside study interface",
+        "unrecognized stream event: tool_progress"
+      ],
+      "precision": null,
+      "question_id": "public-di-implementations-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 3,
+        "rechecked_answers": 2,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 5,
+      "session": "knowcode-public-di-implementations-005",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 43927,
+      "tp": 8,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 10313,
+      "correct_empty": null,
+      "cost_usd": 0.1051772,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3699,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 10,
+      "output_tokens": 2968,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-di-implementations-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 4,
+        "rechecked_answers": 1,
+        "rechecking_calls": 4
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 5,
+      "session": "knowcode-unprompted-public-di-implementations-001",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 42202,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 8322,
+      "correct_empty": true,
+      "cost_usd": 0.1211762,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2515,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 11,
+      "output_tokens": 3933,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-003",
+      "recall": 1.0,
+      "research_calls": 7,
+      "session": "plain-public-http-cross-repo-003",
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 46708,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 17101,
+      "correct_empty": true,
+      "cost_usd": 0.1894224,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3709,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 10,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 12,
+      "output_tokens": 4769,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 9,
+        "knowcode_answers": 10,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 3,
+        "rechecked_answers": 3,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 13,
+      "session": "knowcode-public-http-cross-repo-006",
+      "stale_answers": {
+        "answers": 10,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 122027,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 15919,
+      "correct_empty": null,
+      "cost_usd": 0.146054,
+      "extra": 2,
+      "f1": null,
+      "fixed_overhead": 3714,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 5,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 13,
+      "output_tokens": 3493,
+      "overrun": 0,
+      "policy_flags": [
+        "subagent event outside study interface",
+        "unrecognized stream event: tool_progress"
+      ],
+      "precision": null,
+      "question_id": "public-http-cross-repo-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 5,
+        "knowcode_answers": 5,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 3,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 9,
+      "session": "knowcode-unprompted-public-http-cross-repo-002",
+      "stale_answers": {
+        "answers": 5,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 60029,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 8058,
+      "correct_empty": null,
+      "cost_usd": 0.09628239999999999,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2499,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 14,
+      "output_tokens": 2922,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-di-implementations-001",
+      "recall": 1.0,
+      "research_calls": 4,
+      "session": "plain-public-di-implementations-001",
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 28778,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 4668,
+      "correct_empty": null,
+      "cost_usd": 0.036296,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3628,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 15,
+      "output_tokens": 1148,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        }
+      ],
+      "research_calls": 2,
+      "session": "knowcode-public-definition-lookup-005",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 13532,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 15291,
+      "correct_empty": null,
+      "cost_usd": 0.17975359999999999,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3893,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 16,
+      "output_tokens": 5152,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 4,
+        "rechecked_answers": 2,
+        "rechecking_calls": 4
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_impact"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "read",
+                "read",
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 6,
+      "session": "knowcode-unprompted-public-two-hop-impact-001",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 79320,
+      "tp": 11,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 9690,
+      "correct_empty": null,
+      "cost_usd": 0.12061640000000001,
+      "extra": 1,
+      "f1": null,
+      "fixed_overhead": 2514,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 17,
+      "output_tokens": 3316,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-http-cross-repo-002",
+      "recall": 1.0,
+      "research_calls": 5,
+      "session": "plain-public-http-cross-repo-002",
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 42020,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 11533,
+      "correct_empty": true,
+      "cost_usd": 0.11507040000000002,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3725,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 18,
+      "output_tokens": 2836,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 7,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 8,
+      "session": "knowcode-public-http-cross-repo-001",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 75304,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 8432,
+      "correct_empty": null,
+      "cost_usd": 0.079775,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3714,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 19,
+      "output_tokens": 2291,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-di-implementations-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-di-implementations-002",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 27396,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 5459,
+      "correct_empty": null,
+      "cost_usd": 0.0695702,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2690,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 20,
+      "output_tokens": 2055,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-004",
+      "recall": 1.0,
+      "research_calls": 2,
+      "session": "plain-public-two-hop-impact-004",
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 13286,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 10347,
+      "correct_empty": null,
+      "cost_usd": 0.0937732,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3697,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 21,
+      "output_tokens": 2479,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-di-implementations-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 1,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-public-di-implementations-001",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 32815,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 10068,
+      "correct_empty": null,
+      "cost_usd": 0.0871258,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3890,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 22,
+      "output_tokens": 2226,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-unprompted-public-two-hop-impact-004",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 31321,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 4685,
+      "correct_empty": null,
+      "cost_usd": 0.059955999999999995,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2527,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 23,
+      "output_tokens": 2025,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-004",
+      "recall": 1.0,
+      "research_calls": 3,
+      "session": "plain-public-di-implementations-004",
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 16939,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 8486,
+      "correct_empty": null,
+      "cost_usd": 0.0887028,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3723,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 24,
+      "output_tokens": 2725,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-public-di-implementations-006",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 27773,
+      "tp": 8,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 18485,
+      "correct_empty": null,
+      "cost_usd": 0.1602006,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3901,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 4,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 25,
+      "output_tokens": 3384,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 4,
+        "knowcode_answers": 4,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 2,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_impact"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 6,
+      "session": "knowcode-unprompted-public-two-hop-impact-003",
+      "stale_answers": {
+        "answers": 4,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 79969,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 3928,
+      "correct_empty": null,
+      "cost_usd": 0.044178800000000004,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2429,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 26,
+      "output_tokens": 1472,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-006",
+      "recall": 1.0,
+      "research_calls": 2,
+      "session": "plain-public-definition-lookup-006",
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 11006,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 17024,
+      "correct_empty": null,
+      "cost_usd": 0.1931178,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3903,
+      "fn": 0,
+      "fp": 0,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 27,
+      "output_tokens": 5642,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-two-hop-impact-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 4,
+        "rechecked_answers": 1,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "read",
+                "read",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_impact"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 6,
+      "session": "knowcode-public-two-hop-impact-005",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 56115,
+      "tp": 16,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 7133,
+      "correct_empty": null,
+      "cost_usd": 0.0638958,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3727,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 28,
+      "output_tokens": 1847,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 2,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-di-implementations-004",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 23132,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 12821,
+      "correct_empty": true,
+      "cost_usd": 0.1466242,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2673,
+      "fn": 0,
+      "fp": 0,
+      "hop_agreement": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 29,
+      "output_tokens": 3949,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-two-hop-impact-002",
+      "recall": 1.0,
+      "research_calls": 6,
+      "session": "plain-public-two-hop-impact-002",
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 64426,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 9531,
+      "correct_empty": null,
+      "cost_usd": 0.092001,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3716,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 30,
+      "output_tokens": 2619,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 1,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read",
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-public-http-cross-repo-005",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 29678,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 14955,
+      "correct_empty": true,
+      "cost_usd": 0.14216020000000001,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3873,
+      "fn": 0,
+      "fp": 0,
+      "hop_agreement": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 31,
+      "output_tokens": 3366,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-two-hop-impact-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 2,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_impact"
+        }
+      ],
+      "research_calls": 7,
+      "session": "knowcode-unprompted-public-two-hop-impact-002",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 76231,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 6701,
+      "correct_empty": null,
+      "cost_usd": 0.0805552,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2687,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "uncertain",
+      "negatives_returned": 0,
+      "ordinal": 32,
+      "output_tokens": 2528,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-006",
+      "recall": 1.0,
+      "research_calls": 3,
+      "session": "plain-public-two-hop-impact-006",
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 21754,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 9721,
+      "correct_empty": null,
+      "cost_usd": 0.0875826,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3888,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 33,
+      "output_tokens": 2242,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-public-two-hop-impact-004",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 40311,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 9473,
+      "correct_empty": true,
+      "cost_usd": 0.1021634,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3719,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 34,
+      "output_tokens": 2982,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 4,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 5,
+      "session": "knowcode-unprompted-public-http-cross-repo-004",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 45869,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 7141,
+      "correct_empty": null,
+      "cost_usd": 0.0877102,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2514,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 35,
+      "output_tokens": 2788,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-di-implementations-002",
+      "recall": 1.0,
+      "research_calls": 3,
+      "session": "plain-public-di-implementations-002",
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 21229,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 12918,
+      "correct_empty": null,
+      "cost_usd": 0.1308882,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3899,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 36,
+      "output_tokens": 3455,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 5,
+        "rechecked_answers": 2,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "read"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_impact"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 7,
+      "session": "knowcode-public-two-hop-impact-003",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 59986,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 15582,
+      "correct_empty": true,
+      "cost_usd": 0.1445164,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3727,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 8,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 37,
+      "output_tokens": 3183,
+      "overrun": 0,
+      "policy_flags": [
+        "subagent event outside study interface",
+        "unrecognized stream event: tool_progress"
+      ],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 8,
+        "knowcode_answers": 8,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 10,
+      "session": "knowcode-unprompted-public-http-cross-repo-001",
+      "stale_answers": {
+        "answers": 8,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 91005,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 3812,
+      "correct_empty": null,
+      "cost_usd": 0.0411534,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2433,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 38,
+      "output_tokens": 1348,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-003",
+      "recall": 1.0,
+      "research_calls": 2,
+      "session": "plain-public-definition-lookup-003",
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 10939,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 7453,
+      "correct_empty": null,
+      "cost_usd": 0.08552660000000001,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3712,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 39,
+      "output_tokens": 2754,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-di-implementations-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 3,
+        "rechecked_answers": 1,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-public-di-implementations-002",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 33775,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 5338,
+      "correct_empty": null,
+      "cost_usd": 0.0468812,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3644,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 40,
+      "output_tokens": 1456,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-definition-lookup-002",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 19848,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 11702,
+      "correct_empty": null,
+      "cost_usd": 0.14480300000000002,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2693,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 41,
+      "output_tokens": 4381,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-001",
+      "recall": 1.0,
+      "research_calls": 4,
+      "session": "plain-public-two-hop-impact-001",
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 39484,
+      "tp": 11,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 12988,
+      "correct_empty": true,
+      "cost_usd": 0.1419548,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3717,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 9,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 42,
+      "output_tokens": 3922,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 8,
+        "knowcode_answers": 9,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 3,
+        "rechecked_answers": 2,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 12,
+      "session": "knowcode-public-http-cross-repo-004",
+      "stale_answers": {
+        "answers": 9,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 67368,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 10814,
+      "correct_empty": null,
+      "cost_usd": 0.1020288,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3728,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 43,
+      "output_tokens": 2866,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "read",
+                "search",
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 2,
+      "session": "knowcode-unprompted-public-di-implementations-005",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 24610,
+      "tp": 8,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 11043,
+      "correct_empty": null,
+      "cost_usd": 0.1124816,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2701,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 44,
+      "output_tokens": 2919,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-003",
+      "recall": 1.0,
+      "research_calls": 4,
+      "session": "plain-public-two-hop-impact-003",
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 38431,
+      "tp": 3,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 5102,
+      "correct_empty": null,
+      "cost_usd": 0.0405538,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3631,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 45,
+      "output_tokens": 1251,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 2,
+      "session": "knowcode-public-definition-lookup-001",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 14208,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 14664,
+      "correct_empty": true,
+      "cost_usd": 0.13827119999999998,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3711,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 7,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 46,
+      "output_tokens": 3385,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 4,
+        "knowcode_answers": 7,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 9,
+      "session": "knowcode-unprompted-public-http-cross-repo-006",
+      "stale_answers": {
+        "answers": 7,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 61927,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 3784,
+      "correct_empty": null,
+      "cost_usd": 0.0409766,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2433,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 47,
+      "output_tokens": 1380,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-001",
+      "recall": 1.0,
+      "research_calls": 1,
+      "session": "plain-public-definition-lookup-001",
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 7597,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 6925,
+      "correct_empty": null,
+      "cost_usd": 0.06234,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3718,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 48,
+      "output_tokens": 1796,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 1,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-public-di-implementations-003",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 25394,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 8440,
+      "correct_empty": null,
+      "cost_usd": 0.0913838,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3725,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 49,
+      "output_tokens": 2933,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-unprompted-public-di-implementations-006",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 21728,
+      "tp": 8,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 8648,
+      "correct_empty": true,
+      "cost_usd": 0.1291004,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2519,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 50,
+      "output_tokens": 4216,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-004",
+      "recall": 1.0,
+      "research_calls": 9,
+      "session": "plain-public-http-cross-repo-004",
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 50488,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 19331,
+      "correct_empty": null,
+      "cost_usd": 0.20799299999999998,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3891,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 51,
+      "output_tokens": 5389,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 5,
+        "rechecked_answers": 3,
+        "rechecking_calls": 4
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_impact"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 8,
+      "session": "knowcode-public-two-hop-impact-001",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 100056,
+      "tp": 11,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 11514,
+      "correct_empty": null,
+      "cost_usd": 0.13691740000000002,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3718,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 6,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 52,
+      "output_tokens": 4044,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 5,
+        "knowcode_answers": 5,
+        "knowcode_errors": 1,
+        "plain_calls_after_first_answer": 2,
+        "rechecked_answers": 3,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_find"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 11,
+      "session": "knowcode-unprompted-public-http-cross-repo-005",
+      "stale_answers": {
+        "answers": 5,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 65441,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 28611,
+      "correct_empty": null,
+      "cost_usd": 0.2859094,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2518,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 53,
+      "output_tokens": 6360,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-005",
+      "recall": 1.0,
+      "research_calls": 13,
+      "session": "plain-public-http-cross-repo-005",
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 143089,
+      "tp": 2,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 18285,
+      "correct_empty": true,
+      "cost_usd": 0.17305800000000002,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3871,
+      "fn": 0,
+      "fp": 0,
+      "hop_agreement": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 54,
+      "output_tokens": 4130,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-two-hop-impact-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 3,
+        "rechecked_answers": 2,
+        "rechecking_calls": 3
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_impact"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            },
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 8,
+      "session": "knowcode-public-two-hop-impact-002",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 75202,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 9240,
+      "correct_empty": null,
+      "cost_usd": 0.0857092,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3887,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 4,
+      "label": "uncertain",
+      "negatives_returned": 0,
+      "ordinal": 55,
+      "output_tokens": 2367,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 4,
+        "knowcode_answers": 4,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-unprompted-public-two-hop-impact-006",
+      "stale_answers": {
+        "answers": 4,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 30151,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 4347,
+      "correct_empty": null,
+      "cost_usd": 0.050583,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2438,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 56,
+      "output_tokens": 1686,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-004",
+      "recall": 1.0,
+      "research_calls": 2,
+      "session": "plain-public-definition-lookup-004",
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 11785,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 10649,
+      "correct_empty": null,
+      "cost_usd": 0.1021242,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3885,
+      "fn": 0,
+      "fp": null,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 5,
+      "label": "uncertain",
+      "negatives_returned": 0,
+      "ordinal": 57,
+      "output_tokens": 2653,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-two-hop-impact-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 5,
+        "knowcode_answers": 5,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 2,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Read"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 6,
+      "session": "knowcode-public-two-hop-impact-006",
+      "stale_answers": {
+        "answers": 5,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 50020,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 19893,
+      "correct_empty": null,
+      "cost_usd": 0.21651679999999995,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3905,
+      "fn": 0,
+      "fp": 0,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 5,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 58,
+      "output_tokens": 5575,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-two-hop-impact-005",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 5,
+        "knowcode_answers": 5,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_more"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_context"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 8,
+      "session": "knowcode-unprompted-public-two-hop-impact-005",
+      "stale_answers": {
+        "answers": 5,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 110735,
+      "tp": 16,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 15762,
+      "correct_empty": null,
+      "cost_usd": 0.1910956,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 2525,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 59,
+      "output_tokens": 5583,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-di-implementations-006",
+      "recall": 1.0,
+      "research_calls": 14,
+      "session": "plain-public-di-implementations-006",
+      "status": "answered",
+      "stratum": "di-implementations",
+      "tokens": 54471,
+      "tp": 8,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 4655,
+      "correct_empty": null,
+      "cost_usd": 0.03646,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3627,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 60,
+      "output_tokens": 1161,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-006",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 2,
+      "session": "knowcode-public-definition-lookup-006",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 13377,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 5950,
+      "correct_empty": null,
+      "cost_usd": 0.05464820000000001,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3633,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 61,
+      "output_tokens": 1692,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-001",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 2,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "search",
+                "search",
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-definition-lookup-001",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 20631,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 17098,
+      "correct_empty": null,
+      "cost_usd": 0.21472000000000002,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2705,
+      "fn": 0,
+      "fp": 0,
+      "hop_agreement": 1.0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 62,
+      "output_tokens": 6130,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-two-hop-impact-005",
+      "recall": 1.0,
+      "research_calls": 8,
+      "session": "plain-public-two-hop-impact-005",
+      "status": "answered",
+      "stratum": "two-hop-impact",
+      "tokens": 86300,
+      "tp": 16,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 6371,
+      "correct_empty": null,
+      "cost_usd": 0.052971199999999996,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3636,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 63,
+      "output_tokens": 1497,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 2,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        },
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-public-definition-lookup-004",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 21447,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 5516,
+      "correct_empty": null,
+      "cost_usd": 0.052121600000000004,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3633,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 64,
+      "output_tokens": 1681,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 1,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-definition-lookup-003",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 19503,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 5272,
+      "correct_empty": null,
+      "cost_usd": 0.0504388,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2444,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 65,
+      "output_tokens": 1481,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-002",
+      "recall": 1.0,
+      "research_calls": 1,
+      "session": "plain-public-definition-lookup-002",
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 9197,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 9988,
+      "correct_empty": null,
+      "cost_usd": 0.0957978,
+      "extra": 1,
+      "f1": null,
+      "fixed_overhead": 3712,
+      "fn": 0,
+      "fp": null,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "lower_bound",
+      "negatives_returned": 0,
+      "ordinal": 66,
+      "output_tokens": 2681,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-http-cross-repo-002",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 3,
+        "rechecked_answers": 1,
+        "rechecking_calls": 2
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read",
+                "read",
+                "read"
+              ],
+              "tool": "Bash"
+            },
+            {
+              "reasons": [
+                "search"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 4,
+      "session": "knowcode-public-http-cross-repo-002",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 31556,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 6490,
+      "correct_empty": null,
+      "cost_usd": 0.0514274,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3638,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 3,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 67,
+      "output_tokens": 1390,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-004",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 3,
+        "knowcode_answers": 3,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_search"
+        }
+      ],
+      "research_calls": 3,
+      "session": "knowcode-unprompted-public-definition-lookup-004",
+      "stale_answers": {
+        "answers": 3,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 21465,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 4033,
+      "correct_empty": null,
+      "cost_usd": 0.0540872,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 2430,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 68,
+      "output_tokens": 1636,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-005",
+      "recall": 1.0,
+      "research_calls": 2,
+      "session": "plain-public-definition-lookup-005",
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 11576,
+      "tp": 1,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 9466,
+      "correct_empty": true,
+      "cost_usd": 0.10680020000000001,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3713,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 69,
+      "output_tokens": 3211,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 4,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 5,
+      "session": "knowcode-public-http-cross-repo-003",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 46550,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode-unprompted",
+      "context_at_answer": 10374,
+      "correct_empty": true,
+      "cost_usd": 0.120448,
+      "extra": 0,
+      "f1": null,
+      "fixed_overhead": 3715,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 1,
+      "label": "exhaustive-empty",
+      "negatives_returned": 0,
+      "ordinal": 70,
+      "output_tokens": 3505,
+      "overrun": 0,
+      "policy_flags": [
+        "subagent event outside study interface",
+        "unrecognized stream event: tool_progress"
+      ],
+      "precision": 1.0,
+      "question_id": "public-http-cross-repo-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 1,
+        "knowcode_answers": 1,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 6,
+        "rechecked_answers": 1,
+        "rechecking_calls": 1
+      },
+      "recheck_sequences": [
+        {
+          "by": [
+            {
+              "reasons": [
+                "read"
+              ],
+              "tool": "Bash"
+            }
+          ],
+          "rechecked": true,
+          "tool": "kc_context"
+        }
+      ],
+      "research_calls": 7,
+      "session": "knowcode-unprompted-public-http-cross-repo-003",
+      "stale_answers": {
+        "answers": 1,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "http-cross-repo",
+      "tokens": 63815,
+      "tp": 0,
+      "transport_integrity": true
+    },
+    {
+      "arm": "plain",
+      "context_at_answer": 36440,
+      "correct_empty": false,
+      "cost_usd": 0.35196599999999995,
+      "f1": null,
+      "fixed_overhead": 2511,
+      "integrity_issues": 0,
+      "knowcode_calls": 0,
+      "label": "exhaustive-empty",
+      "ordinal": 71,
+      "output_tokens": 6713,
+      "overrun": 0,
+      "policy_flags": [],
+      "precision": null,
+      "question_id": "public-http-cross-repo-006",
+      "recall": null,
+      "research_calls": 15,
+      "session": "plain-public-http-cross-repo-006",
+      "status": "unsupported",
+      "stratum": "http-cross-repo",
+      "tokens": 250491,
+      "transport_integrity": true
+    },
+    {
+      "arm": "knowcode",
+      "context_at_answer": 5381,
+      "correct_empty": null,
+      "cost_usd": 0.0428812,
+      "extra": 0,
+      "f1": 1.0,
+      "fixed_overhead": 3631,
+      "fn": 0,
+      "fp": 0,
+      "integrity_issues": 0,
+      "knowcode_calls": 2,
+      "label": "exhaustive",
+      "negatives_returned": 0,
+      "ordinal": 72,
+      "output_tokens": 1299,
+      "overrun": 0,
+      "policy_flags": [
+        "subagent event outside study interface",
+        "unrecognized stream event: tool_progress"
+      ],
+      "precision": 1.0,
+      "question_id": "public-definition-lookup-003",
+      "recall": 1.0,
+      "recheck": {
+        "answers_with_claims": 2,
+        "knowcode_answers": 2,
+        "knowcode_errors": 0,
+        "plain_calls_after_first_answer": 0,
+        "rechecked_answers": 0,
+        "rechecking_calls": 0
+      },
+      "recheck_sequences": [
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_find"
+        },
+        {
+          "by": [],
+          "rechecked": false,
+          "tool": "kc_refs"
+        }
+      ],
+      "research_calls": 2,
+      "session": "knowcode-public-definition-lookup-003",
+      "stale_answers": {
+        "answers": 2,
+        "stale": 0
+      },
+      "status": "answered",
+      "stratum": "definition-lookup",
+      "tokens": 14397,
+      "tp": 1,
+      "transport_integrity": true
+    }
+  ],
+  "sessions_scheduled": 72,
+  "sessions_with_result": 72
+}
