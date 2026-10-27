@@ -113,7 +113,7 @@ Add the release's entry to [CHANGELOG.md](../CHANGELOG.md) before tagging.
 
 A release ships on its release gate, measured with no model calls against the
 previous release and published with it under [`eval/release-gate/`](../eval/release-gate)
-([0.5.0](../eval/release-gate/0.5.0.md), [0.4.0](../eval/release-gate/0.4.0.md)): tool cost per turn, the
+([0.5.1](../eval/release-gate/0.5.1.md), [0.5.0](../eval/release-gate/0.5.0.md), [0.4.0](../eval/release-gate/0.4.0.md)): tool cost per turn, the
 [replay gate](../eval/replay-gate/README.md), the workspace gate, clean-machine
 acceptance ([first-run-acceptance.md](first-run-acceptance.md)) and the update
 from the previous release. Public material makes no comparative or performance

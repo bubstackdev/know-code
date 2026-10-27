@@ -2,7 +2,18 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.5.1 (2026-10-27)
+
+0.5.1 meets the two checks 0.5.0 missed, and moves the repository to bubstackdev/know-code. Rows of `impact` and `trace`
+lead with their call site as `file:line`: on the recorded calls of the public studies, two-hop impact recall is 0.833
+read as `file:line` alone, where 0.5.0 had 0.607. `history` reaches a caller that calls through a library's interface,
+and history-v1's caller label now carries the `optional` flag it dropped; KnowCode meets plain git on the caller
+questions either way. `impact` also stops calling some answers complete that weren't (an override leaving out a default
+parameter), and keeps every way a row was reached; constructors are found by the names their source gives them; Swift
+files with constructs the parser misses lose less code, and a Swift member added to a standard-library type no longer
+captures others' uses. Shell installs of 0.3.0 through 0.5.0 must re-run the installer once to update. The [release
+gate](eval/release-gate/0.5.1.md) makes no model calls; `impact` answers grew 10.4% there, past its 10% tolerance, most
+of it one answer that 0.5.0 left wrongly empty.
 
 - A query opening a repo whose AI privacy file had just changed, while another query or a background link step was
   still reading that repo's index, failed with "index is in use: …; close its readers and retry". Removing the index
@@ -17,8 +28,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
   ```
 
-  From then on `self-update` works, accepting installer receipts that name either repository. Homebrew installs are
-  unaffected.
+  From then on `self-update` works, accepting installer receipts that name either repository. The Claude Code plugin
+  stays at 0.5.0 until you run `knowcode setup claude` again. Homebrew installs are unaffected.
 - A member a Swift repo adds to a standard-library struct (`extension Int32 { var isFinite … }`) no longer captures
   uses of the same name on other library types. On a value of another library type (`v: Float`), or of a generic
   parameter, it is never linked: the fallback that links a framework type's member to the repo's extension of a
@@ -38,7 +49,6 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `unused` counted another worktree (or clone) of the same repo as a user of the repo's packages, so its answer
   changed with how many checkouts of the repo were indexed: their public API turned `possibly unused` and
   `published` named the packages. Checkouts of one origin are one repo here too.
-
 - Swift files with constructs tree-sitter-swift doesn't read lose less of their code. When a file has parse errors,
   it is parsed again with them blanked (positions kept), and the tree with less of the file in errors is used: the
   underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`), `@_lifetime(…)`, module
