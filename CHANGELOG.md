@@ -18,6 +18,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   has a method named `init`, `Factory.init` is that method, with the constructor listed after it to pick by place.
   Before, `Factory.__init__` found no definition. A call written `init` (`self.init()`, `this.init()`) now resolves
   to that method alone, no longer to the constructor too.
+- `kc_impact`'s help said its walk goes up to 16 hops while its `depth` parameter said 1 to 5; it walks up to 16.
+  Every bounded parameter (`depth` of impact, trace and flow; path's `max_hops` and `paths`; search's `limit` and
+  `context`; grep_ast's `limit`; `max_chars`) now takes its schema line, its help text and the clamp its answers apply
+  from one table, so they can't disagree. `max_chars` now says its maximum doubles for several inputs, as it always has.
+- `kc {op: status, q: ""}` (and `unused`, `hotspots`): an op taking no query takes an empty `q` as none, where it
+  was an error. The `kc` topic says which ops take no `q`.
 
 ## 0.5.0 (2026-10-27)
 
