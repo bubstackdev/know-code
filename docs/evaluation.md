@@ -131,6 +131,9 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
 - [Identity gate](../eval/identity-v1/README.md): references from pinned public repositories labelled by each
   language's toolchain (the Swift index store, Roslyn, the TypeScript compiler), with KnowCode's reference links scored
   against them: `exact` precision, recall, and links to the workspace where the toolchain resolves outside.
+- [Task answers](../eval/tasks-v1/README.md): tasks from public repositories' fix commits, labelled with the files and
+  tests each commit changed, from git alone, with an op's answers scored by recall within a byte budget against
+  `locate` alone.
 - [Schema cost](../eval/schema-cost.md): what the advertised tools and instructions cost a session per turn.
 
 **Agent studies** compare agents with and without KnowCode on pinned public repositories, pre-registered, with the
