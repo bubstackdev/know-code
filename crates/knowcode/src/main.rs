@@ -24,6 +24,7 @@ mod render;
 mod repo_walks;
 mod session_hook;
 mod settings;
+mod summary;
 mod setup;
 mod uninstall;
 mod update;

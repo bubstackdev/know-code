@@ -21,6 +21,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
   topic's list of what `q` fills is now made from the same table.
 - `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Completeness said apart: a partial JSON answer adds `completeness` (`graph`: the graph it read was whole; `source`:
+  its quoted source is whole, not a skeleton or cut; `lists`: no list cut or continuing) and `size` (`max_chars` asked,
+  `chars` returned, the source mode in effect, and each continuation's cursor, rows left and about how many
+  characters they take), in the room the size cap leaves, never a row's. A whole answer, and every text answer, is as
+  it was.
 - Stable codes: every refused call carries a machine code beside its English, in the tool result's
   `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
   `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
