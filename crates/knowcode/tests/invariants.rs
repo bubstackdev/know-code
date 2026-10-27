@@ -268,7 +268,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
 /// `fetch_deps.rs`), or manage the cache and config. `more` continues another answer's list from its cursor (see the
 /// cursor invariants in `cursor.rs`).
 const NOT_QUESTIONS: &[&str] =
-    &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "fetch-deps", "history"];
+    &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "fetch-deps", "history", "capabilities"];
 
 /// The commands `knowcode --help` lists.
 fn listed_commands() -> BTreeSet<String> {

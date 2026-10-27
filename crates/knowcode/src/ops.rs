@@ -12,7 +12,7 @@ use kc_index::{Head, SyncOptions, SyncReport};
 use kc_index::ownership::{self, Ownership};
 use kc_index::vitals::{self, FileVitals};
 use kc_store::Store;
-use kc_store::answer::{Assumption, Evidence, Incomplete, Mechanism, Provenance, Reason, Verdict};
+use kc_store::answer::{Assumption, Code, Evidence, Incomplete, Mechanism, Provenance, Reason, Refusal, Verdict};
 use kc_store::db::{self, DbModel, SymbolTables};
 use kc_store::locate as query_locate;
 use kc_store::manifests::{self, ManifestHit, RepoEdge};
@@ -52,11 +52,12 @@ fn scope_repos(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         if p.whole() {
             // Opening purges what an index made before the policy holds.
             drop(kc_index::open(r)?); // also replaces an evicted index's cached summary with the blocked marker
-            bail!(
+            let message = format!(
                 "withheld: {}: its {} blocks the whole repo, so KnowCode indexes and answers nothing from it (`knowcode status` shows the policy)",
                 p.detail(&repo_name(r)),
                 kc_index::privacy::file_name()
             );
+            bail!(Refusal::withheld(message, p.policy(&repo_name(r))));
         }
     }
     Ok((roots, workspace))
@@ -140,6 +141,7 @@ pub fn withheld(root: &Path) -> Option<Incomplete> {
     p.blocks_anything().then(|| {
         let what = if p.whole() { "the whole repo" } else { "paths in it" };
         Incomplete::new(Reason::Withheld, p.detail(&repo_name(root)))
+            .with_privacy(p.policy(&repo_name(root)))
             .with_hint(format!("its {} blocks {what}; KnowCode never reads or answers from blocked content", kc_index::privacy::file_name()))
     })
 }
@@ -163,11 +165,12 @@ pub fn guard_inputs(repos: &[PathBuf], inputs: &[String]) -> Result<()> {
         let here = cwd.strip_prefix(&root).ok().map(Path::to_path_buf);
         for s in inputs {
             if names_blocked(&root, here.as_deref(), &p, s) {
-                bail!(
+                let message = format!(
                     "withheld: {}: the path asked about is in an area its {} blocks, so KnowCode answers nothing about it",
                     p.detail(&repo_name(&root)),
                     kc_index::privacy::file_name()
                 );
+                bail!(Refusal::withheld(message, p.policy(&repo_name(&root))));
             }
         }
     }
@@ -209,9 +212,9 @@ fn scope_repos_any(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         let roots = kc_index::indexed_roots()?;
         if roots.is_empty() {
             if kc_index::config::workspace()?.0.is_empty() {
-                bail!("not in a git repo and nothing is indexed; run `knowcode index <repo>` or pass --repo");
+                bail!(Refusal::new(Code::NotIndexed, "not in a git repo and nothing is indexed; run `knowcode index <repo>` or pass --repo"));
             }
-            bail!("not in a git repo and no repo under the workspace roots is indexed; run `knowcode index <repo>` or pass --repo");
+            bail!(Refusal::new(Code::NotIndexed, "not in a git repo and no repo under the workspace roots is indexed; run `knowcode index <repo>` or pass --repo"));
         }
         (roots, true)
     };
@@ -346,7 +349,7 @@ pub fn left_out(roots: &[PathBuf], root: &Path, e: anyhow::Error) -> Result<()> 
 pub fn unreadable(root: &Path, e: &anyhow::Error) -> Incomplete {
     let name = repo_name(root);
     if !root.join(".git").exists() {
-        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display()))
+        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display())).with_code(Code::Gone)
             .with_hint("clone it there again, or `knowcode prune` to forget its index")
     } else {
         Incomplete::new(Reason::Failed, format!("{name}: could not be read at {}; left out of this answer: {e:#}", root.display()))
@@ -419,6 +422,7 @@ impl Consulted {
             .iter()
             .map(|r| {
                 Incomplete::new(Reason::MissingRepo, format!("{}: indexed, but its checkout at {r} is gone; references into it are not resolved", repo_name(Path::new(r))))
+                    .with_code(Code::Gone)
                     .with_hint("clone it there again, or `knowcode purge` and re-index")
             })
             .collect();
@@ -512,7 +516,7 @@ fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
             continue;
         }
         let detail = format!("{}: indexed, but its checkout at {path} is gone; links into it are left out", repo_name(&r));
-        push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_hint("clone it there again, or `knowcode prune` to forget its index"));
+        push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_code(Code::Gone).with_hint("clone it there again, or `knowcode prune` to forget its index"));
     }
 }
 
@@ -546,7 +550,7 @@ pub fn unindexed_note() -> Option<Incomplete> {
     } else {
         format!("the cache is near cache.max_size, so {they} not indexed in the background: raise cache.max_size, or ask about one by name to index it now")
     };
-    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_hint(hint))
+    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_code(Code::NotIndexed).with_hint(hint))
 }
 
 /// Whether `i` is the entry [`unindexed_note`] makes.
@@ -696,7 +700,7 @@ fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> 
             return Ok(s.qualified());
         }
     }
-    bail!("{}", unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}")))
+    bail!(Refusal::new(Code::NotFound, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
 }
 
 /// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos
@@ -1323,10 +1327,13 @@ fn at_file(file: &str, args: &Scope) -> Result<(PathBuf, String)> {
     let one = |found: Vec<(PathBuf, String)>, what: &str| -> Result<(PathBuf, String)> {
         match found.as_slice() {
             [one] => Ok(one.clone()),
-            [] => bail!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"),
+            [] => bail!(Refusal::new(Code::NotFound, format!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"))),
             many => {
                 let names: Vec<String> = many.iter().map(|(r, _)| repo_name(r)).collect();
-                bail!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+                bail!(Refusal::new(
+                    Code::Ambiguous,
+                    format!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+                ))
             }
         }
     };
@@ -3755,7 +3762,7 @@ pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &Wa
             let listed: HashSet<(Option<String>, i64)> = t.nodes.iter().map(|n| (n.repo.clone(), n.id)).collect();
             let stops = std::mem::take(&mut t.stopped);
             let budget = if t.truncated { 0 } else { FRONTIER_CHECKS };
-            let mut fr = g.crossing().frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            let mut fr = g.frontier(&stops, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
             // Each stop's exact call going on from it, the way the walk went.
             let mut go_on = filter.args(&edges);
             go_on.insert("depth".into(), depth.clamp(1, trace::MAX_TRACE_DEPTH).into());
@@ -3926,6 +3933,7 @@ fn ensure_summaries(o: &Opened, focus: &[PathBuf], full: bool) -> Result<std::sy
     for s in summaries.iter().filter(|s| s.light && !s.blocked.whole && !s.gone && s.root != o.root && (full || !kc_index::light::unchanged(&s.root))) {
         if no_sync {
             o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Stale, format!("{}: only manifests and names were scanned; graph joins are not indexed", repo_name(&s.root)))
+                .with_code(Code::NotIndexed)
                 .with_hint("ask again without --no-sync to index the needed checkout automatically"));
         } else {
             // A checkout that can't be read (gone since the summaries were read, a failing `git`) is left out.
@@ -5159,9 +5167,11 @@ impl<'a> HttpCrossing<'a> {
 
     /// Of the symbols a walk stopped at (`stops`, see [`trace::Stop`]), those with neighbours one hop past them that
     /// `listed` says the answer doesn't have: through references, and for dependents, across HTTP routes, the bus,
-    /// SQL and deploys too. At most `budget` are checked; also returns how many weren't.
+    /// SQL and deploys too. At most `budget` are checked; also returns how many weren't. `home` is the home repo's edge
+    /// cache, the walk's.
     pub(crate) fn frontier(
         &mut self,
+        home: &mut trace::EdgeCache,
         stops: &[trace::Stop],
         listed: &dyn Fn(Option<&str>, i64) -> bool,
         budget: usize,
@@ -5185,7 +5195,9 @@ impl<'a> HttpCrossing<'a> {
             let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
-            let (found, skipped) = trace::frontier(self.store(&root).conn(), &group, &mine, self.gate.filter(), room)?;
+            let mut theirs = trace::EdgeCache::default();
+            let cache = if label.is_none() { &mut *home } else { &mut theirs };
+            let (found, skipped) = trace::frontier(self.store(&root).conn(), cache, &group, &mine, self.gate.filter(), room)?;
             unchecked += skipped;
             out.extend(found);
             // Dependents across a route, the bus, SQL or a deploy, of a stop that has none through references.
@@ -5439,6 +5451,7 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
                     value["background"] = json!(b);
                 }
                 push_incomplete(&mut value, withheld(root).unwrap_or_else(|| Incomplete::new(Reason::Stale, "index: this checkout has no full index yet; discovery contains only manifests and names")
+                    .with_code(Code::Indexing)
                     .with_hint(hint)));
                 finish(&mut value);
                 out.push(value);
@@ -5986,7 +5999,6 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             removed = list;
         }
         crate::tree::cross_impact(&mut g, &mut impact, p.depth, p.limit)?;
-        let crossing = g.crossing();
         // Where the walk stopped short: the symbols it listed without walking past that have dependents it doesn't list.
         let listed: HashSet<(Option<String>, i64)> =
             impact.affected.iter().map(|a| (a.repo.clone(), a.id)).chain(impact.scope.iter().map(|s| (None, s.id))).collect();
@@ -5994,7 +6006,8 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         // what one more hop does).
         let budget = if impact.truncated { 0 } else { FRONTIER_CHECKS };
         let (mut frontier, frontier_unchecked) =
-            crossing.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+            g.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+        let crossing = g.crossing();
         let ci_cut = std::mem::take(&mut crossing.ci_cut);
         let (library_checked, library_cut) = (crossing.library_checked, crossing.library_cut);
         // Each stop's exact call going on from it.
@@ -6086,12 +6099,14 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
                 }
             }
         }
-        // A use the walk lists across a library boundary (in `affected`, with its repo) isn't listed again here.
+        // A use the walk lists already isn't listed again here: one across a library boundary (in `affected`, with its
+        // repo), or one in this repo through a library's interface, which the walk reaches when no indexed repo it
+        // consults resolves the call.
         let home = repo_name(&o.root);
         let walked: HashSet<(String, String)> = impact
             .affected
             .iter()
-            .filter(|a| a.library.is_some())
+            .filter(|a| a.library.is_some() || a.repo.is_none())
             .flat_map(|a| {
                 let repo = a.repo.clone().unwrap_or_else(|| home.clone());
                 a.site.iter().chain(&a.also).map(move |s| (repo.clone(), s.clone()))
@@ -8001,7 +8016,7 @@ pub fn note_add(symbol: &str, text: &str, tag: Option<&str>, args: &Scope) -> Re
         opened.push(o);
     }
     if found.is_empty() {
-        bail!("no definition named {symbol} in the repos searched");
+        bail!(Refusal::new(Code::NotFound, format!("no definition named {symbol} in the repos searched")));
     }
     Ok(Out { env: notes_env(&opened, &found), data: found })
 }
@@ -9912,6 +9927,47 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A call in the repo through a library's interface its type implements is a caller of the implementation, one of
+    /// several: listed once, in the walk, whether the library is indexed (the call resolves into it) or not.
+    #[test]
+    fn impact_lists_a_call_through_a_librarys_interface_in_the_repo_once() {
+        let cache = test_cache();
+        let base = cache.dir("own-dispatch");
+        let host = repo(
+            &base,
+            "notes-host",
+            &[
+                ("src/Notes.Host.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes.Host</PackageId></PropertyGroup>\n  <ItemGroup><PackageReference Include=\"Notes\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Swappable.cs", "using Notes;\nnamespace Notes.Host;\npublic sealed class Swappable : INotes\n{\n    public INotes Tagged<T>() => this;\n    public INotes Tagged(string tag) => this;\n}\n"),
+                ("src/Relay.cs", "using Notes;\nnamespace Notes.Host;\npublic class Relay\n{\n    private readonly INotes _notes;\n    public INotes Forward<T>() => _notes.Tagged<T>();\n}\n"),
+            ],
+        );
+        let rows = |out: &Out<Vec<ImpactRepo>>| -> (Vec<(String, &'static str)>, usize) {
+            let r = &out.data[0];
+            let affected = r.impact.affected.iter().filter(|a| a.file == "src/Relay.cs").map(|a| (a.qualified.clone(), a.confidence)).collect();
+            (affected, r.cross_repo.iter().filter(|h| h.file == "src/Relay.cs").count())
+        };
+        let p = ImpactParams { symbol: Some("src/Swappable.cs:5".into()), depth: 1, limit: 100, ..Default::default() };
+        let alone = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        assert_eq!(rows(&alone), (vec![("Relay.Forward".to_string(), "ambiguous")], 0));
+        // The library indexed beside it.
+        let lib = repo(
+            &base,
+            "notes",
+            &[
+                ("src/Notes.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Notes</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/INotes.cs", "namespace Notes;\npublic interface INotes\n{\n    INotes Tagged<T>();\n    INotes Tagged(string tag);\n}\n"),
+            ],
+        );
+        let both = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
+        assert_eq!(rows(&both), (vec![("Relay.Forward".to_string(), "ambiguous")], 0), "{}", both.env);
+        // With the library it goes through named.
+        let row = both.data[0].impact.affected.iter().find(|a| a.file == "src/Relay.cs").unwrap();
+        assert_eq!(row.library.as_ref().and_then(|l| l.through.as_deref()), Some("INotes"), "{}", both.env);
+        let _ = lib;
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn a_walked_row_leads_with_its_call_site_then_its_declaration() {
         let cache = test_cache();
@@ -10041,6 +10097,72 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         assert!(!deep.iter().any(|(q, _)| q == "Desk.One"), "{deep:?}");
         // `Find(q, ids)`, as many arguments of other types: not `Two`.
         assert!(!callers("src/Shelf.cs:6").iter().any(|(q, _)| q == "Desk.Two"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn an_impact_row_keeps_the_other_ways_its_symbol_was_reached() {
+        let cache = test_cache();
+        let base = cache.dir("other-ways");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                ("src/Item.cs", "namespace Shelf;\npublic class Item\n{\n    public void Detach() { }\n}\n"),
+                ("src/Store.cs", "namespace Shelf;\npublic class Store\n{\n    public void Drop(Item item) { item.Detach(); }\n}\n"),
+                // `Sweep` detaches the item itself (hop 1) and drops it through the store (hop 2), on other lines.
+                (
+                    "src/Bin.cs",
+                    "namespace Shelf;\npublic class Bin\n{\n    private readonly Store _store = new Store();\n    public void Sweep(Item item)\n    {\n\
+                     \x20       item.Detach();\n        _store.Drop(item);\n        _store.Drop(item);\n    }\n}\n",
+                ),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("Item.Detach".into()), depth: 2, limit: 50, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![root.clone()], no_sync: false }).unwrap();
+        let sweep = &out.env["items"][0]["affected"].as_array().unwrap().iter().find(|a| a["qualified"] == "Bin.Sweep").cloned().unwrap();
+        assert_eq!((sweep["hop"].clone(), sweep["site"].clone()), (json!(1), json!("src/Bin.cs:7")), "{sweep}");
+        assert_eq!(sweep["ways"], json!([{"via": "Store.Drop", "hop": 2, "confidence": "unique_name", "site": "src/Bin.cs:8", "also": ["src/Bin.cs:9"]}]), "{sweep}");
+        let text = crate::render::impact_text(&out.data, false);
+        assert!(text.contains("method Bin.Sweep  src/Bin.cs:7  [unique_name] direct (declared at line 5) (also via Store.Drop [unique_name] at src/Bin.cs:8, src/Bin.cs:9)"), "{text}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_call_on_a_predefined_type_never_reaches_another_types_extension() {
+        let cache = test_cache();
+        let base = cache.dir("keyword-receiver");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "src/GuidExtensions.cs",
+                    "using System;\nnamespace Shelf;\npublic static class GuidExtensions\n{\n    public static bool IsEmpty(this Guid guid) => guid.Equals(default);\n\
+                     \x20   public static bool IsNullOrEmpty(this Guid? guid) => guid is null || guid.Value.IsEmpty();\n}\n",
+                ),
+                (
+                    "src/StringExtensions.cs",
+                    "namespace Shelf;\npublic static class StringExtensions\n{\n    public static bool IsBlank(this string s) => s.Trim().Length == 0;\n\
+                     \x20   public static int ToInt32(this string s) => int.Parse(s);\n}\n",
+                ),
+                (
+                    "src/Desk.cs",
+                    "using System;\nnamespace Shelf;\npublic class Desk\n{\n    public bool Named(string path) => !string.IsNullOrEmpty(path);\n\
+                     \x20   public bool Owned(Guid? id) => id.IsNullOrEmpty();\n    public bool Static(Guid? id) => GuidExtensions.IsNullOrEmpty(id);\n\
+                     \x20   public bool Blank(string path) => path.IsBlank();\n    public int Parsed(object o) => Convert.ToInt32(o);\n\
+                     \x20   public int Own(string s) => s.ToInt32();\n}\n",
+                ),
+            ],
+        );
+        let callers = |at: &str| -> Vec<String> { impact_of(&root, at).impact.affected.iter().filter(|a| a.hop == 1).map(|a| a.qualified.clone()).collect() };
+        // `string.IsNullOrEmpty` is the framework's, not the `Guid?` extension of the same name.
+        let guid = callers("src/GuidExtensions.cs:6");
+        assert!(guid.contains(&"Desk.Owned".to_string()) && guid.contains(&"Desk.Static".to_string()), "{guid:?}");
+        assert!(!guid.contains(&"Desk.Named".to_string()), "{guid:?}");
+        // An extension on `string` is still reached through a `string` value; `Convert.ToInt32` is the framework's.
+        assert_eq!(callers("src/StringExtensions.cs:4"), ["Desk.Blank".to_string()]);
+        assert_eq!(callers("src/StringExtensions.cs:5"), ["Desk.Own".to_string()]);
         let _ = std::fs::remove_dir_all(&base);
     }
 

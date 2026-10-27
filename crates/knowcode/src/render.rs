@@ -339,6 +339,9 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
         for e in &c.extensions {
             println!("  {}  {}", e.signature, loc(r, &e.file, e.line));
         }
+        for a in &c.extensions_ambiguous {
+            println!("  ambiguous: {a}");
+        }
     }
     if c.members_total > 0 {
         println!("members ({}):", c.members_total);
@@ -741,6 +744,9 @@ fn relation_label(
     }
 }
 
+/// What starts each of an impact row's other ways in text: `(also via X [exact] at a.cs:12, a.cs:30)`.
+pub const WAY: &str = " (also via ";
+
 /// A site's line when the site (`file:line`) is in `file`.
 fn own_line(file: &str, site: &str) -> Option<u32> {
     site.rsplit_once(':').filter(|(f, _)| *f == file).and_then(|(_, l)| l.parse().ok())
@@ -789,6 +795,17 @@ fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
     }
     if let Some(at) = own {
         site.push_str(&declared(a.line, at));
+    }
+    // Its other ways, last on the line: a capped answer leaves them out first (see `mcp::unway_text`).
+    for w in &a.ways {
+        let places: Vec<String> = std::iter::once(&w.site)
+            .chain(&w.also)
+            .map(|s| match s.rsplit_once(':').and_then(|(f, l)| Some((f, l.parse().ok()?))) {
+                Some((f, l)) => loc_in(root, a.repo.as_deref(), f, l),
+                None => in_repo(a.repo.as_deref(), s),
+            })
+            .collect();
+        site.push_str(&format!("{WAY}{} [{}] at {})", w.via, w.confidence, places.join(", ")));
     }
     format!(
         "{} {} {}  {}  [{}] {}{site}",

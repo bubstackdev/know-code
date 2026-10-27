@@ -1,6 +1,7 @@
 //! `knowcode`: index local repos and answer code-graph questions about them.
 
 mod bench;
+mod capabilities;
 mod cite;
 mod contract;
 mod compact;
@@ -644,6 +645,15 @@ enum Cmd {
         #[arg(long)]
         tools: Option<String>,
     },
+    /// Every MCP op as JSON: its parameters with ranges and choices, whether it writes, its answer's shape (what
+    /// `kc {op: capabilities}` answers), for a client building its own tool surface.
+    Capabilities {
+        /// One op to describe (`impact`); default: every op.
+        of: Option<String>,
+        /// The profile whose advertised tools it names, as `serve --tools` takes it.
+        #[arg(long)]
+        tools: Option<String>,
+    },
     /// Packages, targets and dependencies from manifests, and repo-to-repo edges across indexed repos.
     Deps {
         #[command(flatten)]
@@ -847,6 +857,12 @@ fn main() {
     if notify { update::start(); }
     if let Err(e) = guard_privacy().and_then(|_| run(cli)) {
         eprintln!("knowcode: {e:#}");
+        // For the server running this as its child (a search): the refusal's code, on a line of its own.
+        if std::env::var_os(KEEP_RESUME).is_some()
+            && let Some(r) = e.chain().find_map(|c| c.downcast_ref::<kc_store::answer::Refusal>())
+        {
+            eprintln!("{}{}", mcp::REFUSAL_LINE, serde_json::json!({ "code": r.code, "privacy": r.privacy }));
+        }
         std::process::exit(1);
     }
     kc_index::cache::after_command();
@@ -1236,6 +1252,13 @@ fn run(cli: Cli) -> Result<()> {
             let served = mcp::serve(ops::Scope { repos, no_sync: false }, &tools);
             let _ = refresh.join();
             served
+        }
+        Cmd::Capabilities { of, tools } => {
+            let tools = tools.unwrap_or_else(mcp::profile_spec);
+            let server = mcp::KnowcodeServer::new(ops::Scope { repos: Vec::new(), no_sync: true }, &tools).map_err(anyhow::Error::msg)?;
+            let doc = capabilities::document(&server.surface(), of.as_deref()).map_err(anyhow::Error::msg)?;
+            println!("{}", serde_json::to_string_pretty(&doc)?);
+            Ok(())
         }
         Cmd::FetchDeps(options) => fetch::run(options),
         Cmd::History { action: Some(HistoryCmd::Deepen(options)), .. } => history::deepen(options),

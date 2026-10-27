@@ -220,6 +220,7 @@ pub fn dependents(
                 library: None,
                 also: Vec::new(),
                 copies: Vec::new(),
+                ways: Vec::new(),
                 via_removed: true,
                 evidence,
                 cite: None,

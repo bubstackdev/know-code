@@ -357,6 +357,16 @@ impl Privacy {
     pub fn detail(&self, repo: &str) -> String {
         withheld_detail(repo, self.block_at)
     }
+
+    /// The policy as an answer states it (see [`kc_store::answer::PrivacyPolicy`]).
+    pub fn policy(&self, repo: &str) -> kc_store::answer::PrivacyPolicy {
+        kc_store::answer::PrivacyPolicy {
+            repo: repo.to_string(),
+            file: self.file.clone(),
+            block_at: self.block_at,
+            blocks: if self.whole { "repo" } else { "paths" }.to_string(),
+        }
+    }
 }
 
 /// `AI privacy level 1 in <repo>` (`level 2 or lower` when the threshold is 2, and so on).

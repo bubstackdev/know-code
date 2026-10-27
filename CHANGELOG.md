@@ -4,6 +4,38 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
+  describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
+  schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
+  whether an op reads or writes (notes are the only writes), the evidence presets, the answer's format and the keys
+  it always has, and the server, MCP protocol and index schema versions. It is read from the tables help and the
+  advertised schemas come from, and a test checks each op's entry against the running server. It costs nothing up
+  front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
+  topic's list of what `q` fills is now made from the same table.
+- `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Stable codes: every refused call carries a machine code beside its English, in the tool result's
+  `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
+  `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
+  code, with `code` where it says more: `indexing` (ask again after it finishes), `not_indexed`, `gone`. A refused
+  input of a batch, and the batch's entry for it, carry the code too, and a refused rename preview has `codes` beside
+  its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
+  blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
+  replay gate fails a build that codes its refusals if any refusal it replays has none.
+- `context` on a type lists the members and extensions of the declaration it picks, not those of every type with its
+  name. Two Swift modules each declaring `Tile`, or a file's `private struct Tile` beside a module's public one, used
+  to share one member list. An extension goes to the declaration it can see: the one in its file, else its module's,
+  else that of a module its file imports; a `private` or `fileprivate` type is seen from its own file only. An
+  extension nothing narrows to one (its file imports two modules declaring the type) is listed under each, and each
+  context says so (`extensions_ambiguous`).
+- A C# call written on a type reached a same-named extension method of another type: `string.IsNullOrEmpty(s)`
+  resolved to a repo's `IsNullOrEmpty(this Guid? g)`, and `string.Compare(a, b, c)` to repo `Compare` methods, so
+  `impact`, `refs` and `trace` listed those calls as callers. A predefined type keyword (`string`, `int`, …) as
+  receiver is now the type, and a call on a type reaches only that type's members and extensions on it.
+- `impact` listed each dependent once, by its best way, and dropped the others with their lines: a method calling
+  the change on one line (hop 1) and, on others, a method that calls it (hop 2) named only the first line. A row now
+  keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
+  row (`(also via Store.Drop [exact] at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
+  and says how many, so no row is cut for them.
 - An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
   was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
   `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
@@ -32,6 +64,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   from one table, so they can't disagree. `max_chars` now says its maximum doubles for several inputs, as it always has.
 - `kc {op: status, q: ""}` (and `unused`, `hotspots`): an op taking no query takes an empty `q` as none, where it
   was an error. The `kc` topic says which ops take no `q`.
+- `impact`, `trace` (callers) and `history` reach an implementation of a library's interface member from the calls
+  in the repo through that interface (`_cached.ForContext<T>()` on Serilog's `ILogger`, in a class implementing
+  `ILogger`) when no indexed repo defines the interface. Before, such a call resolved to nothing and reached no
+  implementation. It is `ambiguous` (the library's own implementation may run instead), so listed, not walked past;
+  a call of another overload (by argument count and the argument types the call site gives) isn't listed. With the
+  library indexed, the call is listed once, in the walk, not again in `cross_repo`. `history`'s
+  `callers_changed_with` marks such a caller `ambiguous`.
 
 ## 0.5.0 (2026-10-27)
 
