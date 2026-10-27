@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
+  end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
+  can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
+  file. A file the AI privacy file blocks still answers nothing.
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
