@@ -46,15 +46,16 @@ fn a_name_the_file_neither_declares_nor_imports_is_the_global() {
     write(
         &root,
         "src/server.test.ts",
-        "export async function check(res: Response) {\n  const status = res.status\n  return Response.json({ status })\n}\n",
+        "import { app } from './app'\n\nexport async function check(res: Response) {\n  const status = res.status\n  return Response.json({ status, app })\n}\n",
     );
     write(
         &root,
         "src/client/use.ts",
         "import type { Response } from './types'\n\nexport function read(res: Response) {\n  return res.status\n}\n",
     );
+    write(&root, "src/app.ts", "export const app = 1\n");
     write(&root, "src/globals.d.ts", "interface Shared {\n  id: string\n}\n");
-    write(&root, "src/page.ts", "export function show(s: Shared) {\n  return s.id\n}\n");
+    write(&root, "src/page.ts", "import { app } from './app'\n\nexport function show(s: Shared) {\n  return s.id + app\n}\n");
     let store = index(&root);
     let conn = store.conn();
     assert_eq!(
@@ -62,15 +63,15 @@ fn a_name_the_file_neither_declares_nor_imports_is_the_global() {
         [
             ("src/client/use.ts:4".to_string(), "exact", vec!["ClientResponse.status".to_string()]),
             // The platform's `Response`: the test file imports nothing.
-            ("src/server.test.ts:2".to_string(), "unresolved", vec![]),
+            ("src/server.test.ts:4".to_string(), "unresolved", vec![]),
         ]
     );
-    assert_eq!(uses(conn, "json", &["call"]), [("src/server.test.ts:3".to_string(), "unresolved", vec![])]);
+    assert_eq!(uses(conn, "json", &["call"]), [("src/server.test.ts:5".to_string(), "unresolved", vec![])]);
     let types = uses(conn, "Response", &["type_ref"]);
-    assert!(types.contains(&("src/server.test.ts:1".to_string(), "unresolved", vec![])), "{types:?}");
+    assert!(types.contains(&("src/server.test.ts:3".to_string(), "unresolved", vec![])), "{types:?}");
     assert!(types.contains(&("src/client/use.ts:3".to_string(), "exact", vec!["Response".to_string()])), "{types:?}");
     // A script's declarations are global.
-    assert_eq!(uses(conn, "Shared", &["type_ref"]), [("src/page.ts:1".to_string(), "unique_name", vec!["Shared".to_string()])]);
+    assert_eq!(uses(conn, "Shared", &["type_ref"]), [("src/page.ts:3".to_string(), "unique_name", vec!["Shared".to_string()])]);
     let _ = std::fs::remove_dir_all(&root);
 }
 

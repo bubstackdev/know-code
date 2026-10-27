@@ -489,10 +489,17 @@ impl Modules {
     /// Whether code in the TypeScript `file` can name the repo's top-level declaration `name`: the file declares it,
     /// imports or re-exports it, or the repo declares it in a script (a file with no import or export, whose declarations are
     /// global). A name the file neither declares nor imports is otherwise a global of the platform's (`Response`,
-    /// `Event`), even when one of the repo's modules exports a declaration of that name.
+    /// `Event`), even when one of the repo's modules exports a declaration of that name. A file importing nothing is
+    /// read as before: it sees every declaration.
     pub(crate) fn sees(&mut self, conn: &Connection, file: &str, name: &str) -> Result<bool> {
+        let bindings = self.file_bindings(conn, file)?;
+        // A file importing nothing at all: its imports may be ones the index doesn't read (triple-slash references,
+        // a bundler's globals), so any of the repo's declarations may be what it names.
+        if !bindings.iter().any(|b| !b.export) {
+            return Ok(true);
+        }
         // Imported, or re-exported (`export { X } from './x'` names the module's `X`).
-        if self.file_bindings(conn, file)?.iter().any(|b| b.local == name) {
+        if bindings.iter().any(|b| b.local == name) {
             return Ok(true);
         }
         let files: Vec<String> = conn
