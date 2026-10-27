@@ -1667,6 +1667,7 @@ async fn run_batch(
     blocking(false, move || {
         let n = inputs.len();
         let mut results: Vec<String> = Vec::new();
+        let mut shares: Vec<usize> = Vec::new();
         // `{"results":[` and `]}`, and the commas between results.
         let mut used = 14;
         for (k, i) in inputs.iter().enumerate() {
@@ -1679,7 +1680,8 @@ async fn run_batch(
                 Ok(mut env) => {
                     ops::add_cuts(&mut env);
                     env["input"] = Value::from(i.as_str());
-                    cap(env, share)
+                    shares.push(share);
+                    cap_plain(env, share)
                 }
                 Err(e) => {
                     // As a refused call: the English, its code and, for `withheld`, the policy.
@@ -1688,6 +1690,7 @@ async fn run_batch(
                     if let Some(p) = &e.privacy {
                         v["privacy"] = serde_json::json!(p);
                     }
+                    shares.push(0);
                     v.to_string()
                 }
             };
@@ -1698,13 +1701,26 @@ async fn run_batch(
             results.push(text);
         }
         // What is left out, said within the cap too: fewer results until the answer fits.
-        loop {
+        let mut answer = loop {
             let answer = batch_answer(&results, &inputs[results.len()..], max);
             if answer.len() <= max || results.is_empty() {
-                return Ok(answer);
+                break answer;
             }
             results.pop();
+        };
+        // Each result's summary (see `summary`), where the batch still fits with it.
+        let left = &inputs[results.len()..];
+        for k in 0..results.len() {
+            let Some(with) = crate::summary::add(&results[k], shares[k]) else { continue };
+            let plain = std::mem::replace(&mut results[k], with);
+            let trial = batch_answer(&results, left, max);
+            if trial.len() <= max {
+                answer = trial;
+            } else {
+                results[k] = plain;
+            }
         }
+        Ok(answer)
     })
     .await
 }
@@ -1914,6 +1930,14 @@ fn release_memory() {
 
 /// The answer as the server outputs it: [`cap_full`], said in its compact form (see [`crate::compact`]).
 pub(crate) fn cap(env: Value, max: usize) -> String {
+    let names = crate::compact::Names::load();
+    let out = crate::compact::output(&cap_full_named(env, max, &names), &names);
+    // A partial answer says how, and what it cost (see `summary`), in the room the cap left: never in place of a row.
+    crate::summary::add(&out, max).unwrap_or(out)
+}
+
+/// [`cap`] without the summary: a batch's results, which get theirs only in the room the whole batch leaves.
+fn cap_plain(env: Value, max: usize) -> String {
     let names = crate::compact::Names::load();
     crate::compact::output(&cap_full_named(env, max, &names), &names)
 }
@@ -2901,7 +2925,7 @@ impl KnowcodeServer {
             "kc_status" => self.kc_status(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
-        out.map(|o| one_text(&o, false)).map_err(|e| e.reworded(|m| one_text(m, false)))
+        out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
     }
 
     #[tool(description = "Every op as data: its parameters with ranges and choices, whether it writes, its answer's shape.")]

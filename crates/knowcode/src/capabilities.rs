@@ -86,6 +86,11 @@ pub fn document(s: &Surface, of: Option<&str>) -> Result<Value, String> {
         },
         "reasons": kc_store::answer::REASONS.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
         "codes": kc_store::answer::CODES.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+        "partial": {
+            "completeness": ["graph", "source", "lists"],
+            "size": ["max_chars", "chars", "source", "continue"],
+            "continue": ["list", "cursor", "rest", "chars"],
+        },
         "errors": {
             "at": "structuredContent.error",
             "keys": ["code", "message"],

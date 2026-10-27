@@ -793,7 +793,8 @@ The document has `capabilities` (its own version, raised when a field changes me
 version), `protocol` (the MCP version the server speaks), `index_schema` (the graph schema it reads), `profile`
 (`one`, or the tools advertised), `common` (the parameters every op takes), `evidence` (the presets, mechanisms and
 assumptions an evidence policy is written with), `reasons` and `codes` (the closed sets an `incomplete` entry and a
-refused call are coded with; see `contract`), `errors` (where a refused call's code is) and `ops`, one entry per op:
+refused call are coded with; see `contract`), `partial` (the keys a partial JSON answer adds: `completeness`, `size`),
+`errors` (where a refused call's code is) and `ops`, one entry per op:
 
 - `op` and `tool` (`impact`, `kc_impact`), `summary`, `description` (the tool's), `help` (its topic's resource), and
   `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`).
@@ -886,6 +887,13 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),
   `moved` (`at` is where it is now, `was` where the index had it), `gone`, or `unchecked`; `drift` says what moved,
   and any drift makes the answer `stale`.
+- `completeness` and `size` (JSON answers, only when something is partial): `completeness` says apart whether the
+  graph the answer read was whole (`graph`: no `depth`, `policy`, `stale`, `failed`, `missing_repo`, `unsupported`,
+  `withheld` or `deadline` entry), whether the source it quotes is (`source`: no skeleton or cut source), and whether
+  its lists are all there (`lists`: none cut or continuing). `size` gives `max_chars` asked, `chars` returned, the
+  `source` mode in effect, and `continue`: each list that continues, `{list, cursor, rest, chars}`, the rows left and
+  about how many characters they take at the rate of the rows shown, to decide whether the next page is worth it.
+  They take only the room `max_chars` leaves (`continue` goes first, then `size`), never a row's.
 - Codes: an entry's code is its `reason`, or its `code` where that says more (`indexing`: ask again after it
   finishes; `not_indexed`, `gone`). A refused call's code is in the tool result's `structuredContent.error.code`
   (invalid_argument, not_found, ambiguous, no_files, not_indexed, indexing, gone, withheld, stale_cursor,
