@@ -8426,7 +8426,8 @@ pub(crate) mod tests {
         let row = &i.env["items"][0]["affected"][0];
         assert_eq!((row["site"].as_str(), row["also"].clone()), (Some("src/Shop.cs:5"), json!(["src/Shop.cs:7"])), "{}", i.env);
         let text = crate::render::impact_text(&i.data, false);
-        assert!(text.contains("at src/Shop.cs:5 (also 7)"), "{text}");
+        // The row leads with its first site, each other site a place of its own, then the declaration's line.
+        assert!(text.contains("method Shop.Run  src/Shop.cs:5  [unique_name] direct (also src/Shop.cs:7) (declared at line 3)"), "{text}");
     }
 
     #[test]
@@ -9912,6 +9913,45 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn a_walked_row_leads_with_its_call_site_then_its_declaration() {
+        let cache = test_cache();
+        let base = cache.dir("site-first");
+        // A library method, and a repo using it from a constructor whose call is lines below its declaration.
+        let lib = repo(
+            &base,
+            "ledger",
+            &[
+                ("src/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Ledger</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/Entry.cs", "namespace Ledger;\npublic static class Entry\n{\n    public static int Post(int n) => n;\n    public static int Twice(int n)\n    {\n        var a = Post(n);\n        return a + Post(n);\n    }\n}\n"),
+            ],
+        );
+        let app = repo(
+            &base,
+            "ledger-app",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Ledger\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Till.cs", "using Ledger;\nnamespace App;\npublic class Till\n{\n    private readonly int _n;\n    public Till()\n    {\n        _n = Entry.Post(1);\n    }\n}\n"),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("Entry.Post".into()), depth: 1, limit: 50, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let text = crate::render::impact_text(&out.data, false);
+        // In the repo and across the library boundary alike: the call's line, each other call's, then where the
+        // caller is declared.
+        assert!(text.contains("method Entry.Twice  src/Entry.cs:7  [exact] direct (also src/Entry.cs:8) (declared at line 5)"), "{text}");
+        assert!(text.contains("constructor Till.init  ledger-app/src/Till.cs:8  [exact] direct (declared at line 6)"), "{text}");
+        // `trace in` names callers the same way; `trace out` names a callee at its declaration, the call after it.
+        let t = trace("Entry.Post", "in", 1, 50, &WalkFilter::default(), &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let text = crate::render::trace_text(&lib, &t.data.found[0].1, false);
+        assert!(text.contains("called by method Entry.Twice  src/Entry.cs:7  [exact] (declared at line 5)"), "{text}");
+        let t = trace("Entry.Twice", "out", 1, 50, &WalkFilter::default(), &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let text = crate::render::trace_text(&lib, &t.data.found[0].1, false);
+        assert!(text.contains("calls method Entry.Post  src/Entry.cs:4  [exact] at src/Entry.cs:7"), "{text}");
+        let _ = app;
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn calls_through_an_interface_reach_the_overload_taking_their_arguments() {
         let cache = test_cache();
         let base = cache.dir("iface-arity");
@@ -9943,6 +9983,45 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         assert!(!deep.iter().any(|(q, _)| q == "Desk.One"), "{deep:?}");
         // `Find(q, ids)`, as many arguments of other types: not `Two`.
         assert!(!callers("src/Shelf.cs:6").iter().any(|(q, _)| q == "Desk.Two"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn an_override_dropping_a_default_parameter_is_reached_through_its_base_member() {
+        let cache = test_cache();
+        let base = cache.dir("override-default");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "src/Bin.cs",
+                    "namespace Shelf;\npublic class Bin\n{\n    public virtual int Count(string owner, bool deep, string filter = null) => 0;\n\
+                     \x20   public virtual int Count(string owner) => 0;\n}\n",
+                ),
+                ("src/IBin.cs", "namespace Shelf;\npublic interface IBin\n{\n    int Peek(string owner, string filter = null);\n}\n"),
+                // C# lets an override or an implementation leave the default value out: it takes the same parameters.
+                (
+                    "src/Crate.cs",
+                    "namespace Shelf;\npublic class Crate : Bin, IBin\n{\n    public override int Count(string owner, bool deep, string filter) => 1;\n\
+                     \x20   public int Peek(string owner, string filter) => 2;\n}\n",
+                ),
+                (
+                    "src/Desk.cs",
+                    "namespace Shelf;\npublic class Desk\n{\n    public int Tally(Bin bin) => bin.Count(\"a\", true);\n    public int Total(Bin bin) => bin.Count(\"a\");\n\
+                     \x20   public int Look(IBin bin) => bin.Peek(\"a\");\n}\n",
+                ),
+            ],
+        );
+        let r = impact_of(&root, "src/Crate.cs:4");
+        let callers: Vec<(String, &str)> = r.impact.affected.iter().filter(|a| a.hop == 1).map(|a| (a.qualified.clone(), a.edge)).collect();
+        // The call taking the default reaches the override, through the base member; the call of the other
+        // overload doesn't.
+        assert!(callers.iter().any(|(q, e)| q == "Desk.Tally" && *e == "via_protocol"), "{callers:?}");
+        assert!(!callers.iter().any(|(q, _)| q == "Desk.Total"), "{callers:?}");
+        // The same through an interface member.
+        let r = impact_of(&root, "src/Crate.cs:5");
+        assert!(r.impact.affected.iter().any(|a| a.qualified == "Desk.Look" && a.edge == "via_protocol"), "{:?}", r.impact.affected);
         let _ = std::fs::remove_dir_all(&base);
     }
 

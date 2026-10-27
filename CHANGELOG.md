@@ -2,6 +2,18 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- A C# override or implementation that leaves out its base member's default parameter value
+  (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
+  member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
+  "nothing affected" and called that complete. Members now match by how many parameters they take, whichever have
+  defaults, and then by parameter types as before.
+- In `impact` and `trace` (callers) text, a row now leads with its use site, the line to open (`Till.cs:8`), then
+  its other sites as `file:line` and the line its symbol is declared at (`(declared at line 6)`). Before, a row led
+  with the declaration and gave the site as `at line 8`, which an agent or a script reading `file:line` places
+  missed: since rows across a library boundary joined the walk, their call sites too. The JSON is unchanged.
+
 ## 0.5.0 (2026-10-27)
 
 0.5 answers questions about a method's history and walks across library boundaries. `history` reads one definition's git
