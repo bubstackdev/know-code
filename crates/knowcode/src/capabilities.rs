@@ -109,6 +109,11 @@ fn common() -> Value {
     json!({
         "repo": { "type": "string", "description": crate::help::COMMON.iter().find(|(n, _)| *n == "repo").map(|(_, d)| *d).unwrap_or_default() },
         "max_chars": { "type": "integer", "minimum": r.min, "maximum": r.max, "default": r.default, "description": r.line() },
+        "provenance": {
+            "type": "boolean",
+            "default": false,
+            "description": "true: the answer is unchanged, and a second content block holds {\"record\": …}, the provenance record for durable records (kc_help contract). Taken by every call; in no tool's schema, so it costs nothing up front.",
+        },
     })
 }
 

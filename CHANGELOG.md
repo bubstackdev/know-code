@@ -11,6 +11,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
   commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
   `cache.shared_bases` turns it off.
+- **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
+  for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
+  hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
+  commit, a digest of its uncommitted content, index generation, the base it was cloned from and its privacy policy's
+  digests. Compact answers are unchanged.
 - `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
 - An answer naming a file the extractor couldn't read whole says so: `coverage` lists each such file with its count of
   parse errors, the first error's line and column, and the answer's own symbol when the error lies in its span, with an
