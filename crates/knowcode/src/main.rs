@@ -27,6 +27,7 @@ mod restricted;
 mod session_hook;
 mod settings;
 mod summary;
+mod task;
 mod setup;
 mod uninstall;
 mod update;
@@ -206,6 +207,22 @@ enum Cmd {
         query: String,
         #[arg(long, short = 'n', default_value_t = 20)]
         limit: usize,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
+    /// One bounded answer for a goal in words: the files involved, what depends on them, the tests to run, and what
+    /// the index can't settle.
+    Task {
+        goal: String,
+        /// Files to list.
+        #[arg(long, default_value_t = mcp::TASK_FILES.default)]
+        files: usize,
+        /// Dependents to list.
+        #[arg(long, default_value_t = mcp::TASK_DEPENDENTS.default)]
+        dependents: usize,
+        /// Tests to list.
+        #[arg(long, default_value_t = mcp::TASK_TESTS.default)]
+        tests: usize,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -985,6 +1002,16 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Locate { query, limit, repo } => {
             let out = ops::locate(&query, limit, &repo.scope())?;
             emit(&repo, &out.env, || render::locate(&out.data))
+        }
+        Cmd::Task { goal, files, dependents, tests, repo } => {
+            let p = task::TaskParams {
+                goal,
+                files: mcp::TASK_FILES.clamp(Some(files)),
+                dependents: mcp::TASK_DEPENDENTS.clamp(Some(dependents)),
+                tests: mcp::TASK_TESTS.clamp(Some(tests)),
+            };
+            let out = task::task(&p, &repo.scope())?;
+            emit(&repo, &out.env, || task::render(&out.env))
         }
         Cmd::Refs { name, kind, limit, cite, repo } => {
             cite.enter();
