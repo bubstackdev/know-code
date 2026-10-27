@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 22;
+pub const VERSION: u32 = 23;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -384,9 +384,11 @@ impl<'a> Cx<'a> {
                     self.add(name.to_string(), None, None, RefKind::TypeRef, node);
                 }
             }
+            // `ns.Type`, `globalThis.Event`: the name is looked up in its qualifier, never in the scope around it.
             "nested_type_identifier" => {
-                if let Some(n) = node.child_by_field_name("name") {
-                    self.visit(n);
+                if let (Some(n), Some(q)) = (node.child_by_field_name("name"), node.child_by_field_name("module")) {
+                    let qualifier = self.text(q).to_string();
+                    self.add(self.text(n).to_string(), Some(qualifier), None, RefKind::TypeRef, n);
                 }
             }
             // A callback (`(control: AbstractControl) => …`): its parameters are locals of the enclosing function.
@@ -2373,6 +2375,14 @@ export const toLines = (cart: Cart): CartLine[] => cart.items.map((i) => i.line)
 
 export abstract class BaseComponent {}
 "#;
+
+    #[test]
+    fn a_qualified_type_keeps_its_qualifier() {
+        let f = extract("export type FocusEvent = globalThis.FocusEvent\nlet a: ns.Inner.Leaf\nlet b: Plain\n", false);
+        let types: Vec<(&str, Option<&str>)> =
+            f.refs.iter().filter(|r| r.kind == RefKind::TypeRef).map(|r| (r.name.as_str(), r.receiver.as_deref())).collect();
+        assert_eq!(types, [("FocusEvent", Some("globalThis")), ("Leaf", Some("ns.Inner")), ("Plain", None)]);
+    }
 
     #[test]
     fn extracts_typescript_classes_members_and_refs() {

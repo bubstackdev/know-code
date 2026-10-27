@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 17;
+pub const VERSION: u32 = 18;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -513,10 +513,12 @@ impl<'a> Cx<'a> {
                 }
             }
             "user_type" => {
-                let name = type_name(self.src, node);
-                let name = last_component(&name);
-                if !COMMON_TYPES.contains(&name) {
-                    self.add_ref(name.to_string(), None, RefKind::TypeRef, node);
+                let full = type_name(self.src, node);
+                let (qualifier, name) = split_qualified(&full);
+                // A qualified name (`Array<T>.Index`, `Module.Type`) keeps its qualifier: the name is looked up there,
+                // never in the scope around it.
+                if qualifier.is_some() || !COMMON_TYPES.contains(&name) {
+                    self.add_ref(name.to_string(), qualifier.map(str::to_string), RefKind::TypeRef, node);
                 }
                 for child in children(node) {
                     if child.kind() == "type_arguments" {
@@ -616,9 +618,9 @@ impl<'a> Cx<'a> {
         let sym = self.push_symbol(node, name, kind, container);
         if kind == SymbolKind::Extension {
             // Extending a type uses it; across repos this is often the only trace of the dependency.
-            let extended = last_component(&qualified).to_string();
+            let (qualifier, extended) = split_qualified(&qualified);
             self.scopes.push(Scope { sym, type_name: None, callable: false, locals: HashMap::new(), bound: HashSet::new() });
-            self.add_ref(extended, None, RefKind::TypeRef, name_node);
+            self.add_ref(extended.to_string(), qualifier.map(str::to_string), RefKind::TypeRef, name_node);
             self.scopes.pop();
         }
 
@@ -636,7 +638,8 @@ impl<'a> Cx<'a> {
                     kind: RelationKind::Inherits,
                     line: line(target),
                 });
-                self.add_ref(last_component(&target_name).to_string(), None, RefKind::TypeRef, target);
+                let (qualifier, name) = split_qualified(&target_name);
+                self.add_ref(name.to_string(), qualifier.map(str::to_string), RefKind::TypeRef, target);
                 targets.push(target_name);
             }
         }
@@ -1279,6 +1282,15 @@ fn is_subscript(call: Node) -> bool {
         .is_some_and(|open| open.kind() == "[")
 }
 
+/// A dotted type name's qualifier and last name: `Array.Index` gives `(Some("Array"), "Index")`, `Index` gives
+/// `(None, "Index")`.
+fn split_qualified(name: &str) -> (Option<&str>, &str) {
+    match name.rsplit_once('.') {
+        Some((q, n)) if !q.is_empty() => (Some(q), n),
+        _ => (None, name),
+    }
+}
+
 pub(crate) fn last_component(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
@@ -1378,6 +1390,24 @@ pub(crate) fn collapse(s: &str, cap: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_qualified_type_keeps_its_qualifier() {
+        let f = extract(
+            "struct Ring {\n    func copy() -> UnsafeMutableBufferPointer<Int>.Index { 0 }\n    var s: String.UnicodeScalarView\n    var i: Index\n}\nextension Rings.Ring: Swift.Sendable {}\n",
+        );
+        let types: Vec<(&str, Option<&str>)> =
+            f.refs.iter().filter(|r| r.kind == RefKind::TypeRef).map(|r| (r.name.as_str(), r.receiver.as_deref())).collect();
+        for want in [
+            ("Index", Some("UnsafeMutableBufferPointer")),
+            ("UnicodeScalarView", Some("String")),
+            ("Index", None),
+            ("Ring", Some("Rings")),
+            ("Sendable", Some("Swift")),
+        ] {
+            assert!(types.contains(&want), "{want:?} in {types:?}");
+        }
+    }
 
     #[test]
     fn a_calls_argument_labels_are_recorded() {
