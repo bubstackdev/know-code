@@ -69,8 +69,11 @@ func checkFine(_ s: FineScalar) -> Bool {
 }
 ";
 
-/// `(caller, line, confidence, targets, basis)` for each reference to `name` in `conn`.
-fn uses(hits: &[query::RefHit]) -> Vec<(String, u32, &'static str, Vec<String>, Option<&'static str>)> {
+/// A reference as the tests compare it: caller, line, confidence, targets and basis.
+type Use = (String, u32, &'static str, Vec<String>, Option<&'static str>);
+
+/// Each of `hits` as a [`Use`].
+fn uses(hits: &[query::RefHit]) -> Vec<Use> {
     hits.iter()
         .map(|h| {
             let from = h.from.as_ref().map(|f| f.name.clone()).unwrap_or_default();
