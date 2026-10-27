@@ -543,6 +543,9 @@ pub fn status(v: &serde_json::Value) {
     if let Some(worst) = v.pointer("/coverage/worst_parse_errors").and_then(|w| w.as_array()) {
         for w in worst {
             println!("           {} ({} errors)", w["file"].as_str().unwrap_or(""), w["errors"]);
+            for f in w["first"].as_array().map(Vec::as_slice).unwrap_or_default() {
+                println!("             at {}: {}", f["at"].as_str().unwrap_or(""), f["text"].as_str().unwrap_or(""));
+            }
         }
     }
     for f in v.pointer("/coverage/skipped_large").and_then(|w| w.as_array()).map(Vec::as_slice).unwrap_or_default() {

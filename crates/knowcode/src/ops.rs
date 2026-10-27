@@ -321,6 +321,22 @@ pub fn open_fresh(root: &Path, no_sync: bool) -> Result<Opened> {
 /// [`open_fresh`] for `root`, one of the `roots` a query fans out over: when there are several, a repo that can't be
 /// read is left out and named in the answer (see [`left_out`]) instead of failing it. A query for one repo fails with
 /// its error, as does a cancelled query.
+/// A file with parse errors as `status` lists it: its path, how many errors, and where the first ones are
+/// (`first`: `line:col` and the text there), read from the file as it is now. A file the privacy file blocks, or
+/// that can't be read, gives no places.
+fn worst_parse_errors(root: &Path, privacy: &kc_index::privacy::Privacy, path: &str, errors: u32) -> Value {
+    let mut v = json!({ "file": path, "errors": errors });
+    if privacy.blocks(path) {
+        return v;
+    }
+    let (Some(lang), Ok(bytes)) = (kc_extract::Lang::from_path(path), std::fs::read(root.join(path))) else { return v };
+    let sites = kc_extract::parse_error_sites(lang, &kc_extract::decode(&bytes), 3);
+    if !sites.is_empty() {
+        v["first"] = sites.into_iter().map(|(line, col, text)| json!({ "at": format!("{line}:{col}"), "text": text })).collect();
+    }
+    v
+}
+
 pub fn open_member(roots: &[PathBuf], root: &Path, no_sync: bool) -> Result<Option<Opened>> {
     match open_fresh(root, no_sync) {
         Ok(o) => Ok(Some(o)),
@@ -5489,7 +5505,7 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
                 "skipped_large": large_files(&kc_index::skipped_large(&store)?),
                 "skipped_symlinks": kc_index::skipped_symlinks(&store)?,
                 "with_parse_errors": stats.files_with_parse_errors,
-                "worst_parse_errors": errors.iter().map(|(p, n)| json!({ "file": p, "errors": n })).collect::<Vec<_>>(),
+                "worst_parse_errors": errors.iter().map(|(p, n)| worst_parse_errors(root, &privacy, p, *n)).collect::<Vec<_>>(),
             },
             "symbols": stats.symbols_by_kind,
             "refs": stats.refs_by_kind,
