@@ -206,7 +206,9 @@ pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Bas
 fn checkout_reset(renamed: bool) -> String {
     let mut sql = format!(
         "DELETE FROM meta WHERE {CHECKOUT_META} OR key IN ('{META_COMMIT}', '{META_BUILD}', '{META_DIRNAME}');
-         UPDATE files SET mtime_ns = 0, size = -1;"
+         UPDATE files SET mtime_ns = 0, size = -1;
+         INSERT OR REPLACE INTO meta(key, value) VALUES ('{}', '1');",
+        crate::content::CARRY
     );
     if renamed {
         sql.push_str(&format!("UPDATE files SET extractor_version = 0 WHERE lang = '{}';", Lang::Ansible.as_str()));

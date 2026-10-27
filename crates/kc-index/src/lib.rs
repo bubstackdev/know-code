@@ -143,27 +143,27 @@ pub(crate) fn open_index(db: &Path, create: bool) -> Result<Store> {
 
 /// Checkouts a new index can be seeded from (see [`open`]): origin, root and when each was indexed.
 ///
-/// [`open`] reads them from the workspace summary, which it refreshes, each time it creates an index. Indexing many
+/// [`open`] reads them from the workspace summary, which it refreshes, each time it seeds an index. Indexing many
 /// repos in one run loads them once and adds each repo as it is indexed instead: refreshing the summary for every
 /// new repo rewrote it whole each time, which took most of the run's time and memory over a few hundred repos.
 #[derive(Default)]
 pub struct Seeds {
-    /// Loaded when the first new index is created.
+    /// Loaded when the first new index is seeded: one cloned from a shared base (see [`base`]) needs none.
     checkouts: Option<Vec<(String, PathBuf, i64)>>,
 }
 
+/// Where [`open_with`] finds the checkouts to seed from, loading them on first need.
+type Checkouts<'a> = Option<&'a mut Option<Vec<(String, PathBuf, i64)>>>;
+
 impl Seeds {
-    fn load() -> Result<Vec<(String, PathBuf, i64)>> {
-        Ok(workspace::all_summaries()?.iter().filter_map(|s| Some((s.origin.clone()?, s.root.clone(), s.indexed_at))).collect())
+    fn load() -> Vec<(String, PathBuf, i64)> {
+        workspace::all_summaries().map(|all| all.iter().filter_map(|s| Some((s.origin.clone()?, s.root.clone(), s.indexed_at))).collect()).unwrap_or_default()
     }
 
     /// [`open`], seeding a new index from these checkouts. A new index's repo becomes a candidate for the repos opened
     /// after it.
     pub fn open(&mut self, root: &Path) -> Result<Store> {
-        if self.checkouts.is_none() && !db_path(root)?.exists() {
-            self.checkouts = Some(Seeds::load().unwrap_or_default());
-        }
-        let (store, origin) = open_with(root, self.checkouts.as_deref())?;
+        let (store, origin) = open_with(root, Some(&mut self.checkouts))?;
         if let (Some(origin), Some(checkouts)) = (origin, self.checkouts.as_mut()) {
             checkouts.retain(|(_, r, _)| r != root);
             checkouts.push((origin, root.to_path_buf(), now_nanos() as i64));
@@ -172,9 +172,9 @@ impl Seeds {
     }
 }
 
-/// [`open`], seeding from `checkouts` (or the workspace summary). Returns the repo's normalized origin when it was
-/// looked up, which is only for a new index.
-fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Result<(Store, Option<String>)> {
+/// [`open`], seeding from `checkouts` (loaded from the workspace summary when first needed). Returns the repo's normalized
+/// origin when it was looked up, which is only for a new seeded index.
+fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>)> {
     // A cancelled operation (see `kc_store::limits`) opens no further repo: a workspace query stops here.
     kc_store::limits::check()?;
     let db = db_path(root)?;
@@ -236,17 +236,12 @@ fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Resul
 /// files kept their mtimes (`cp -p`) is still hashed whole. Manifests and Ansible files are extracted again, since
 /// path dependencies resolve against the checkout's location and a repo that is one role is named after it. Candidates come from `checkouts`, or else the workspace summary. Returns
 /// the repo's normalized origin, if it has one.
-fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Result<Option<String>> {
+fn seed(root: &Path, db: &Path, checkouts: Checkouts) -> Result<Option<String>> {
     let out = git::run(root, &["config", "--get", "remote.origin.url"])?;
     let Some(origin) = workspace::normalize_remote(String::from_utf8_lossy(&out).trim()) else { return Ok(None) };
-    let loaded;
-    let checkouts = match checkouts {
-        Some(c) => c,
-        None => {
-            loaded = Seeds::load()?;
-            &loaded
-        }
-    };
+    let mut local = None;
+    let cell = checkouts.unwrap_or(&mut local);
+    let checkouts: &[(String, PathBuf, i64)] = cell.get_or_insert_with(Seeds::load);
     // The checkout a worktree was made from shares its git directory and usually its files: the best seed. Otherwise
     // the most recently indexed checkout of the repo.
     let common = |dir: &Path| git::run(dir, &["rev-parse", "--git-common-dir"]).ok().map(|o| dir.join(String::from_utf8_lossy(&o).trim())).and_then(|p| std::fs::canonicalize(p).ok());
@@ -277,8 +272,10 @@ fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) ->
         "DELETE FROM meta WHERE key LIKE 'head.%' OR key LIKE 'disc.%' OR key = 'last_sync';
          DELETE FROM derived;
          UPDATE files SET mtime_ns = 0, size = -1;
+         INSERT OR REPLACE INTO meta(key, value) VALUES ('{carry}', '1');
          UPDATE files SET extractor_version = 0 WHERE lang IN ({});",
-        manifests.join(", ")
+        manifests.join(", "),
+        carry = content::CARRY
     ))?;
     Ok(Some(origin))
 }
