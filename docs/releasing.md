@@ -116,7 +116,20 @@ previous release and published with it under [`eval/release-gate/`](../eval/rele
 ([0.5.0](../eval/release-gate/0.5.0.md), [0.4.0](../eval/release-gate/0.4.0.md)): tool cost per turn, the
 [replay gate](../eval/replay-gate/README.md), the workspace gate, clean-machine
 acceptance ([first-run-acceptance.md](first-run-acceptance.md)) and the update
-from the previous release. Public material makes no comparative or performance
+from the previous release. From 0.6, it also includes the [identity gate](../eval/identity-v1/README.md):
+compiler-labelled references, with `exact` precision of at least 0.99 in each language and no
+outside label linked. Run it on the previous release and the candidate, publish both summaries'
+figures and the `compare` table, and tag only when `check` passes on the candidate:
+
+```sh
+python3 scripts/eval/identity_gate.py fetch --work WORK
+python3 scripts/eval/identity_gate.py run --knowcode PREVIOUS_BIN --work WORK --out previous.json
+python3 scripts/eval/identity_gate.py run --knowcode CANDIDATE_BIN --work WORK --out candidate.json
+python3 scripts/eval/identity_gate.py compare previous.json candidate.json
+python3 scripts/eval/identity_gate.py check candidate.json
+```
+
+Public material makes no comparative or performance
 claim beyond what a published evaluation shows.
 
 Then check all local gates ([evaluation.md](evaluation.md#gates-per-change)), the
