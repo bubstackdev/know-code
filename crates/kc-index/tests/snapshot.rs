@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use kc_index::{SyncOptions, sync};
 use kc_store::{Store, query};
@@ -73,26 +73,32 @@ fn invariant_a_query_reads_one_generation_while_another_connection_reindexes() {
     let opts = SyncOptions { threads: 1, ..Default::default() };
     sync(&root, &mut Store::open(&db).unwrap(), &opts).unwrap();
 
+    // The reader reads until the writer has reindexed `SYNCS` times since its first read, it has made `READS` queries
+    // and seen more than one state, however slowly either runs: counted, not timed (an unloaded run of the timed test
+    // made about this many of each). The deadline only stops a hang.
+    const SYNCS: usize = 12;
+    const READS: usize = 2000;
     let stop = AtomicBool::new(false);
+    let syncs = AtomicUsize::new(0);
     let (reads, seen, problems) = std::thread::scope(|scope| {
         let writer = scope.spawn(|| {
             let mut store = Store::open(&db).unwrap();
-            let mut syncs = 0;
             let mut k = 1;
             while !stop.load(Ordering::Relaxed) {
                 k = k % 6 + 1;
                 write(&root, k);
                 // A new size each time, so the stat alone says the file changed.
                 sync(&root, &mut store, &opts).unwrap();
-                syncs += 1;
+                syncs.fetch_add(1, Ordering::Relaxed);
             }
-            syncs
         });
         let reader = scope.spawn(|| {
             let store = Store::open(&db).unwrap();
             let (mut reads, mut seen, mut problems) = (0, std::collections::BTreeSet::new(), Vec::new());
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
-            while std::time::Instant::now() < until {
+            let start = syncs.load(Ordering::Relaxed);
+            let hang = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            while syncs.load(Ordering::Relaxed) < start + SYNCS || reads < READS || seen.len() < 2 {
+                assert!(std::time::Instant::now() < hang, "no progress: {} reindexes and {seen:?} over {reads} queries", syncs.load(Ordering::Relaxed) - start);
                 store.begin_snapshot().unwrap();
                 match read_once(&store) {
                     Ok(k) => {
@@ -105,15 +111,14 @@ fn invariant_a_query_reads_one_generation_while_another_connection_reindexes() {
             }
             (reads, seen, problems)
         });
-        let out = reader.join().unwrap();
+        let out = reader.join();
         stop.store(true, Ordering::Relaxed);
-        let syncs = writer.join().unwrap();
-        assert!(syncs > 5, "the writer reindexed only {syncs} times");
-        out
+        writer.join().unwrap();
+        out.unwrap()
     });
     assert!(problems.is_empty(), "{} of {reads} queries saw a mixed state, first: {:?}", problems.len(), &problems[..problems.len().min(5)]);
-    // The reader saw the writer's changes, not just one state.
-    assert!(seen.len() > 1, "only saw {seen:?} over {reads} queries");
+    // Every query ran while the writer reindexed, and the reader saw its changes, not just one state.
+    assert!(seen.len() > 1 && reads >= READS, "only saw {seen:?} over {reads} queries");
     let _ = std::fs::remove_dir_all(&root);
 }
 
