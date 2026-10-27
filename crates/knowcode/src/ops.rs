@@ -9948,6 +9948,9 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         );
         let both = impact(&p, &Scope { repos: vec![host.clone()], no_sync: false }).unwrap();
         assert_eq!(rows(&both), (vec![("Relay.Forward".to_string(), "ambiguous")], 0), "{}", both.env);
+        // With the library it goes through named.
+        let row = both.data[0].impact.affected.iter().find(|a| a.file == "src/Relay.cs").unwrap();
+        assert_eq!(row.library.as_ref().and_then(|l| l.through.as_deref()), Some("INotes"), "{}", both.env);
         let _ = lib;
         let _ = std::fs::remove_dir_all(&base);
     }
