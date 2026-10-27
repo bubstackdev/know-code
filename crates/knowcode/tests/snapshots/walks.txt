@@ -423,7 +423,7 @@ method OrderPage.submit  src/order.page.ts:4
 method OrderService.place  src/order.service.ts:3
      3 | place(): void {
 reached by (in):
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact]
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrderService.place []
@@ -653,7 +653,7 @@ reaches (out):
   instantiates class ApiPlaceOrder  src/contracts.ts:1  [unique_name] at src/order.service.ts:5
        5 | this.http.send(new ApiPlaceOrder());
 reached by (in):
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact]
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrderService.place []
@@ -807,11 +807,11 @@ reached by (in):
 by proximity: direct 1, near 1, far 1; low-confidence 1
 method OrderService.place  src/order.service.ts:3
      3 | place(): void {
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-    dispatches method OrderPage.check  src/order.page.ts:7  [unique_name] near at src/order.page.ts:8
+    dispatches method OrderPage.check  src/order.page.ts:8  [unique_name] near (declared at line 7)
          8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-      called by method OrderPage.submit  src/order.page.ts:4  [exact] far at src/order.page.ts:5
+      called by method OrderPage.submit  src/order.page.ts:5  [exact] far (declared at line 4)
            5 | this.check();
 
 === trace in CheckoutService.Place []
@@ -967,11 +967,11 @@ method OrderService.place  src/order.service.ts:3
 method CheckoutService.Place  src/CheckoutService.cs:7
      7 | public void Place()
 reached by (in):
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out CheckoutService.Place []
@@ -1331,11 +1331,11 @@ reaches (out):
       11 | _bus.Publish(new OrderPlaced());
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact CheckoutService.Place []
@@ -1585,17 +1585,17 @@ reached by (in):
 by proximity: direct 2, near 1, far 3; low-confidence 3
 method CheckoutService.Place  src/CheckoutService.cs:7
      7 | public void Place()
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] direct at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] direct (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] near at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] near (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-        dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+        dispatches method OrderPage.check  web/src/order.page.ts:8  [unique_name] far (declared at line 7)
              8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-          called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+          called by method OrderPage.submit  web/src/order.page.ts:5  [exact] far (declared at line 4)
                5 | this.check();
-  consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct at src/OrderPlacedConsumer.cs:4
+  consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct
        4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   registered CheckoutService as IOrderService (scoped)  src/Startup.cs:5  [type on the path at hop 0]
 
@@ -1711,9 +1711,9 @@ method CheckoutService.Place  src/CheckoutService.cs:7
 method OrdersController.Orders  src/OrdersController.cs:4
      5 | public void Orders() => _svc.Place();
 reached by (in):
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrdersController.Orders []
@@ -2078,9 +2078,9 @@ reaches (out):
         11 | _bus.Publish(new OrderPlaced());
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrdersController.Orders []
@@ -2271,13 +2271,13 @@ reached by (in):
 by proximity: direct 1, near 1, far 2; low-confidence 2
 method OrdersController.Orders  src/OrdersController.cs:4
      5 | public void Orders() => _svc.Place();
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] direct at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] direct (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-      dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+      dispatches method OrderPage.check  web/src/order.page.ts:8  [unique_name] far (declared at line 7)
            8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-        called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+        called by method OrderPage.submit  web/src/order.page.ts:5  [exact] far (declared at line 4)
              5 | this.check();
 
 === trace in Order []
@@ -2495,17 +2495,17 @@ method OrdersController.Orders  src/OrdersController.cs:4
 class Order  src/Shop.cs:2
      3 | public class Order { }
 reached by (in):
-  instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+  instantiated by method CheckoutService.Place  src/CheckoutService.cs:9  [unique_name] (declared at line 7)
        9 | _db.Orders.Add(new Order());
-    called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+    called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
          5 | public void Orders() => _svc.Place();
-  used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+  used by class ShopContext  src/Shop.cs:6  [unique_name] (declared at line 4)
        6 | public DbSet<Order> Orders { get; set; }
-    used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+    used by class CheckoutService  src/CheckoutService.cs:5  [unique_name] (declared at line 3)
          5 | private readonly ShopContext _db;
-      used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+      used by method Startup.ConfigureServices  src/Startup.cs:5  [unique_name] (declared at line 3)
            5 | services.AddScoped<IOrderService, CheckoutService>();
-      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
            5 | this.http.send(new ApiPlaceOrder());
 
 === trace out Order []
@@ -2780,17 +2780,17 @@ nothing reaches it or is reached from it within the depth, direction and filters
 class Order  src/Shop.cs:2
      3 | public class Order { }
 reached by (in):
-  instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+  instantiated by method CheckoutService.Place  src/CheckoutService.cs:9  [unique_name] (declared at line 7)
        9 | _db.Orders.Add(new Order());
-    called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+    called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
          5 | public void Orders() => _svc.Place();
-  used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+  used by class ShopContext  src/Shop.cs:6  [unique_name] (declared at line 4)
        6 | public DbSet<Order> Orders { get; set; }
-    used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+    used by class CheckoutService  src/CheckoutService.cs:5  [unique_name] (declared at line 3)
          5 | private readonly ShopContext _db;
-      used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+      used by method Startup.ConfigureServices  src/Startup.cs:5  [unique_name] (declared at line 3)
            5 | services.AddScoped<IOrderService, CheckoutService>();
-      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
            5 | this.http.send(new ApiPlaceOrder());
 
 === impact Order []
@@ -3119,19 +3119,19 @@ reached by (in):
 by proximity: direct 2, near 2, far 3; low-confidence 5
 class Order  src/Shop.cs:2
      3 | public class Order { }
-  instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] direct at src/CheckoutService.cs:9
+  instantiated by method CheckoutService.Place  src/CheckoutService.cs:9  [unique_name] direct (declared at line 7)
        9 | _db.Orders.Add(new Order());
-    called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] near at src/OrdersController.cs:5
+    called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] near (declared at line 4)
          5 | public void Orders() => _svc.Place();
-      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] far at web/src/order.service.ts:5
+      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] far (declared at line 3)
            5 | this.http.send(new ApiPlaceOrder());
-        called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+        called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far
              3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-          dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+          dispatches method OrderPage.check  web/src/order.page.ts:8  [unique_name] far (declared at line 7)
                8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-    consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] near at src/OrderPlacedConsumer.cs:4
+    consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] near
          4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
-  used by class ShopContext  src/Shop.cs:4  [unique_name] direct at src/Shop.cs:6
+  used by class ShopContext  src/Shop.cs:6  [unique_name] direct (declared at line 4)
        6 | public DbSet<Order> Orders { get; set; }
 table orders_snap (Order) is read and written by:
   write  CheckoutService.Place  src/CheckoutService.cs:9  [unique_name]
@@ -5273,7 +5273,7 @@ method OrderPage.submit  src/order.page.ts:4
 method OrderService.place  src/order.service.ts:3
      3 | place(): void {
 reached by (in):
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact]
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrderService.place [confirmed]
@@ -5487,7 +5487,7 @@ reaches (out):
   calls method LoggerService.info  src/logger.service.ts:2  [exact] at src/order.service.ts:4
        4 | this.log.info('placing');
 reached by (in):
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact]
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrderService.place [confirmed]
@@ -5612,7 +5612,7 @@ reached by (in):
 by proximity: direct 1; low-confidence 0
 method OrderService.place  src/order.service.ts:3
      3 | place(): void {
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace in CheckoutService.Place [confirmed]
@@ -5753,11 +5753,11 @@ method OrderService.place  src/order.service.ts:3
 method CheckoutService.Place  src/CheckoutService.cs:7
      7 | public void Place()
 reached by (in):
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out CheckoutService.Place [confirmed]
@@ -6037,11 +6037,11 @@ reaches (out):
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
       11 | _bus.Publish(new OrderPlaced());
 reached by (in):
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact CheckoutService.Place [confirmed]
@@ -6262,13 +6262,13 @@ reached by (in):
 by proximity: direct 2, near 1, far 1; low-confidence 2
 method CheckoutService.Place  src/CheckoutService.cs:7
      7 | public void Place()
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] direct at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] direct (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] near at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] near (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-  consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct at src/OrderPlacedConsumer.cs:4
+  consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct
        4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   registered CheckoutService as IOrderService (scoped)  src/Startup.cs:5  [type on the path at hop 0]
 
@@ -6389,9 +6389,9 @@ method CheckoutService.Place  src/CheckoutService.cs:7
 method OrdersController.Orders  src/OrdersController.cs:4
      5 | public void Orders() => _svc.Place();
 reached by (in):
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrdersController.Orders [confirmed]
@@ -6696,9 +6696,9 @@ reaches (out):
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
         11 | _bus.Publish(new OrderPlaced());
 reached by (in):
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrdersController.Orders [confirmed]
@@ -6859,9 +6859,9 @@ reached by (in):
 by proximity: direct 1, near 1; low-confidence 1
 method OrdersController.Orders  src/OrdersController.cs:4
      5 | public void Orders() => _svc.Place();
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] direct at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] direct (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace in Order [confirmed]
@@ -8246,7 +8246,7 @@ method OrderPage.submit  src/order.page.ts:4
 method OrderService.place  src/order.service.ts:3
      3 | place(): void {
 reached by (in):
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact]
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrderService.place [all]
@@ -8486,7 +8486,7 @@ reaches (out):
   instantiates class ApiPlaceOrder  src/contracts.ts:1  [unique_name] at src/order.service.ts:5
        5 | this.http.send(new ApiPlaceOrder());
 reached by (in):
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact]
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrderService.place [all]
@@ -8645,11 +8645,11 @@ reached by (in):
 by proximity: direct 1, near 1, far 1; low-confidence 1
 method OrderService.place  src/order.service.ts:3
      3 | place(): void {
-  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct at src/order.effects.ts:3
+  called by property OrderEffects.place$  src/order.effects.ts:3  [exact] direct
        3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-    dispatches method OrderPage.check  src/order.page.ts:7  [unique_name] near at src/order.page.ts:8
+    dispatches method OrderPage.check  src/order.page.ts:8  [unique_name] near (declared at line 7)
          8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-      called by method OrderPage.submit  src/order.page.ts:4  [exact] far at src/order.page.ts:5
+      called by method OrderPage.submit  src/order.page.ts:5  [exact] far (declared at line 4)
            5 | this.check();
 
 === trace in CheckoutService.Place [all]
@@ -8810,11 +8810,11 @@ method OrderService.place  src/order.service.ts:3
 method CheckoutService.Place  src/CheckoutService.cs:7
      7 | public void Place()
 reached by (in):
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out CheckoutService.Place [all]
@@ -9184,11 +9184,11 @@ reaches (out):
       11 | _bus.Publish(new OrderPlaced());
   publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact CheckoutService.Place [all]
@@ -9443,17 +9443,17 @@ reached by (in):
 by proximity: direct 2, near 1, far 3; low-confidence 3
 method CheckoutService.Place  src/CheckoutService.cs:7
      7 | public void Place()
-  called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] direct at src/OrdersController.cs:5
+  called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] direct (declared at line 4)
        5 | public void Orders() => _svc.Place();
-    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] near at web/src/order.service.ts:5
+    requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] near (declared at line 3)
          5 | this.http.send(new ApiPlaceOrder());
-      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+      called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far
            3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-        dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+        dispatches method OrderPage.check  web/src/order.page.ts:8  [unique_name] far (declared at line 7)
              8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-          called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+          called by method OrderPage.submit  web/src/order.page.ts:5  [exact] far (declared at line 4)
                5 | this.check();
-  consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct at src/OrderPlacedConsumer.cs:4
+  consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] direct
        4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
   registered CheckoutService as IOrderService (scoped)  src/Startup.cs:5  [type on the path at hop 0]
 
@@ -9574,9 +9574,9 @@ method CheckoutService.Place  src/CheckoutService.cs:7
 method OrdersController.Orders  src/OrdersController.cs:4
      5 | public void Orders() => _svc.Place();
 reached by (in):
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === trace out OrdersController.Orders [all]
@@ -9951,9 +9951,9 @@ reaches (out):
         11 | _bus.Publish(new OrderPlaced());
     publishes to (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] at src/CheckoutService.cs:11
 reached by (in):
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact]
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
 
 === impact OrdersController.Orders [all]
@@ -10149,13 +10149,13 @@ reached by (in):
 by proximity: direct 1, near 1, far 2; low-confidence 2
 method OrdersController.Orders  src/OrdersController.cs:4
      5 | public void Orders() => _svc.Place();
-  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] direct at web/src/order.service.ts:5
+  requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] direct (declared at line 3)
        5 | this.http.send(new ApiPlaceOrder());
-    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near at web/src/order.effects.ts:3
+    called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] near
          3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-      dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+      dispatches method OrderPage.check  web/src/order.page.ts:8  [unique_name] far (declared at line 7)
            8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-        called by method OrderPage.submit  web/src/order.page.ts:4  [exact] far at web/src/order.page.ts:5
+        called by method OrderPage.submit  web/src/order.page.ts:5  [exact] far (declared at line 4)
              5 | this.check();
 
 === trace in Order [all]
@@ -10378,17 +10378,17 @@ method OrdersController.Orders  src/OrdersController.cs:4
 class Order  src/Shop.cs:2
      3 | public class Order { }
 reached by (in):
-  instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+  instantiated by method CheckoutService.Place  src/CheckoutService.cs:9  [unique_name] (declared at line 7)
        9 | _db.Orders.Add(new Order());
-    called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+    called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
          5 | public void Orders() => _svc.Place();
-  used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+  used by class ShopContext  src/Shop.cs:6  [unique_name] (declared at line 4)
        6 | public DbSet<Order> Orders { get; set; }
-    used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+    used by class CheckoutService  src/CheckoutService.cs:5  [unique_name] (declared at line 3)
          5 | private readonly ShopContext _db;
-      used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+      used by method Startup.ConfigureServices  src/Startup.cs:5  [unique_name] (declared at line 3)
            5 | services.AddScoped<IOrderService, CheckoutService>();
-      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
            5 | this.http.send(new ApiPlaceOrder());
 
 === trace out Order [all]
@@ -10673,17 +10673,17 @@ nothing reaches it or is reached from it within the depth, direction and filters
 class Order  src/Shop.cs:2
      3 | public class Order { }
 reached by (in):
-  instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] at src/CheckoutService.cs:9
+  instantiated by method CheckoutService.Place  src/CheckoutService.cs:9  [unique_name] (declared at line 7)
        9 | _db.Orders.Add(new Order());
-    called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] at src/OrdersController.cs:5
+    called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] (declared at line 4)
          5 | public void Orders() => _svc.Place();
-  used by class ShopContext  src/Shop.cs:4  [unique_name] at src/Shop.cs:6
+  used by class ShopContext  src/Shop.cs:6  [unique_name] (declared at line 4)
        6 | public DbSet<Order> Orders { get; set; }
-    used by class CheckoutService  src/CheckoutService.cs:3  [unique_name] at src/CheckoutService.cs:5
+    used by class CheckoutService  src/CheckoutService.cs:5  [unique_name] (declared at line 3)
          5 | private readonly ShopContext _db;
-      used by method Startup.ConfigureServices  src/Startup.cs:3  [unique_name] at src/Startup.cs:5
+      used by method Startup.ConfigureServices  src/Startup.cs:5  [unique_name] (declared at line 3)
            5 | services.AddScoped<IOrderService, CheckoutService>();
-      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] at web/src/order.service.ts:5
+      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] (declared at line 3)
            5 | this.http.send(new ApiPlaceOrder());
 
 === impact Order [all]
@@ -11017,19 +11017,19 @@ reached by (in):
 by proximity: direct 2, near 2, far 3; low-confidence 5
 class Order  src/Shop.cs:2
      3 | public class Order { }
-  instantiated by method CheckoutService.Place  src/CheckoutService.cs:7  [unique_name] direct at src/CheckoutService.cs:9
+  instantiated by method CheckoutService.Place  src/CheckoutService.cs:9  [unique_name] direct (declared at line 7)
        9 | _db.Orders.Add(new Order());
-    called through DI by method OrdersController.Orders  src/OrdersController.cs:4  [unique_name] near at src/OrdersController.cs:5
+    called through DI by method OrdersController.Orders  src/OrdersController.cs:5  [unique_name] near (declared at line 4)
          5 | public void Orders() => _svc.Place();
-      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:3  [unique_name] far at web/src/order.service.ts:5
+      requested by (http POST /Orderssnap exact: new ApiPlaceOrder) method OrderService.place  web/src/order.service.ts:5  [unique_name] far (declared at line 3)
            5 | this.http.send(new ApiPlaceOrder());
-        called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far at web/src/order.effects.ts:3
+        called by property OrderEffects.place$  web/src/order.effects.ts:3  [exact] far
              3 | place$ = createEffect(() => this.actions$.pipe(ofType(PlaceOrder), mergeMap(() => this.orders.place())));
-          dispatches method OrderPage.check  web/src/order.page.ts:7  [unique_name] far at web/src/order.page.ts:8
+          dispatches method OrderPage.check  web/src/order.page.ts:8  [unique_name] far (declared at line 7)
                8 | this.store.dispatch(PlaceOrder({ id: 1 }));
-    consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] near at src/OrderPlacedConsumer.cs:4
+    consumed by (bus exact: Shop.Apisnap.OrderPlaced (Orders)) method OrderPlacedConsumer.Consume  src/OrderPlacedConsumer.cs:4  [exact] near
          4 | public override Task Consume(OrderPlaced message, ConsumeContext<OrderPlaced> context) => null;
-  used by class ShopContext  src/Shop.cs:4  [unique_name] direct at src/Shop.cs:6
+  used by class ShopContext  src/Shop.cs:6  [unique_name] direct (declared at line 4)
        6 | public DbSet<Order> Orders { get; set; }
 table orders_snap (Order) is read and written by:
   write  CheckoutService.Place  src/CheckoutService.cs:9  [unique_name]
@@ -12864,7 +12864,7 @@ explored 23 nodes (16 forward, 7 backward), 3 repos open
 method DomController.Orders  src/DomController.cs:3
      4 | public void Orders() { }
 reached by (in):
-  requested by (http POST /snapdom dominant: new ApiSnapDom) method DomService.place  dom-web/src/dom.service.ts:4  [unique_name] at dom-web/src/dom.service.ts:5
+  requested by (http POST /snapdom dominant: new ApiSnapDom) method DomService.place  dom-web/src/dom.service.ts:5  [unique_name] (declared at line 4)
        5 | this.http.send(new ApiSnapDom());
 
 === impact DomController.Orders (dominant route) []
@@ -12987,7 +12987,7 @@ reached by (in):
 by proximity: direct 1; low-confidence 1
 method DomController.Orders  src/DomController.cs:3
      4 | public void Orders() { }
-  requested by (http POST /snapdom dominant: new ApiSnapDom) method DomService.place  dom-web/src/dom.service.ts:4  [unique_name] direct at dom-web/src/dom.service.ts:5
+  requested by (http POST /snapdom dominant: new ApiSnapDom) method DomService.place  dom-web/src/dom.service.ts:5  [unique_name] direct (declared at line 4)
        5 | this.http.send(new ApiSnapDom());
 
 === path DomService.place -> DomController.Orders (dominant route) []

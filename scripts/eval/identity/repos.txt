@@ -1,0 +1,10 @@
+# The identity gate's public repositories (eval/identity-v1): name, language, URL and the commit labelled. The pins are
+# the ones the replay gate (public-v2's manifest) and the workspace gate (scripts/workspace-gate/repos.txt) already use.
+swift-argument-parser swift https://github.com/apple/swift-argument-parser efd239f0055b3d6b6cc122a786c46a0ea8d0235b
+swift-collections swift https://github.com/apple/swift-collections a8a70a34951b0c674b2be3affa033f001229d548
+swift-nio swift https://github.com/apple/swift-nio 108daca35da6a1b4ed8da29c1dfbd19668b9b8fc
+serilog csharp https://github.com/serilog/serilog 81af75f3a5e28ec9f5be18ef74357a9914a51745
+autofac csharp https://github.com/autofac/Autofac ae9e1e1129b9c22e7ab111381308dcb02f80a8d2
+jellyfin-server csharp https://github.com/jellyfin/jellyfin aec42b345e1a7da25ee5492183f12209338df688
+jellyfin-web typescript https://github.com/jellyfin/jellyfin-web f21682ad693f87f513f578e2b3da6cc96271e76c
+hono typescript https://github.com/honojs/hono 5ca49b0720755c585c9a9835f0a479ceea36fb52

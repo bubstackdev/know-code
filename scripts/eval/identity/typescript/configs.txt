@@ -1,0 +1,3 @@
+# The tsconfig files whose programs identity-v1 labels, per TypeScript repository (eval/identity-v1/README.md).
+jellyfin-web tsconfig.json
+hono tsconfig.spec.json

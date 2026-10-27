@@ -15,7 +15,7 @@ Families (see eval/history-v1/README.md):
 - symbol-blame: the member's current lines by author, `git blame -w -L START,END`, most first.
 - symbol-cochange: the files changed in those commits (commits of at most MAX_FILES files), by shared commits.
 - callers-history: of the files holding a direct caller (hop 1 of a published public-v1/v2 label), those changed in
-  one of those commits.
+  one of those commits; a file whose callers the published label all marks optional is `optional` here too.
 - file-cochange: the files changed in the same non-merge commits as a file (commits of at most MAX_FILES files), by
   shared commits; `tests` keeps test files only.
 
@@ -207,15 +207,19 @@ def label(q: dict, repos: Path) -> dict:
         out.update(commits=len(commits), commits_counted=used, items=[r for r in ranked if r['shared'] >= p.get('min_shared', 2)])
     elif q['family'] == 'callers-history':
         callers = published_callers(q['callers'], q['repo'])
-        caller_files = sorted({c['item'].split('/', 1)[1].rsplit(':', 1)[0] for c in callers})
+        file_of = lambda c: c['item'].split('/', 1)[1].rsplit(':', 1)[0]
+        caller_files = sorted({file_of(c) for c in callers})
         touched: dict[str, list[str]] = {}
         for c in commits:
             files = files_of(repo, c['sha'])
             for f in caller_files:
                 if files is not None and f in files:
                     touched.setdefault(f, []).append(c['sha'][:12])
+        # A file whose every caller the published label marks optional (one it accepts listed or not) is optional too.
+        optional = {f for f in caller_files if all(c.get('optional') for c in callers if file_of(c) == f)}
         out.update(callers=len(callers), caller_files=caller_files, commits=len(commits),
-                   items=[{'file': f, 'commits': touched[f]} for f in caller_files if f in touched])
+                   items=[{'file': f, 'commits': touched[f], **({'optional': True} if f in optional else {})}
+                          for f in caller_files if f in touched])
     else:
         raise SystemExit(f"{q['id']}: unknown family {q['family']}")
     return out

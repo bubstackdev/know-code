@@ -1,0 +1,463 @@
+#!/usr/bin/env python3
+"""Identity gate: KnowCode's reference links against identity-v1's compiler labels, with no model calls.
+
+    identity_gate.py fetch --work WORK [--repos a,b]
+    identity_gate.py run --knowcode BIN --work WORK [--labels FILE] [--repos a,b] [--out SUMMARY] [--jobs N]
+    identity_gate.py report SUMMARY [--wrong N]
+    identity_gate.py check SUMMARY
+    identity_gate.py compare BASE_SUMMARY CANDIDATE_SUMMARY
+
+`fetch` clones each repository of scripts/eval/identity/repos.txt at its pin into WORK/clones (a shallow fetch of the
+pinned commit). Nothing is built and no repository code runs: labelling happens in a container
+(scripts/eval/identity/run.sh), scoring only reads the clones and asks KnowCode.
+
+`run` indexes each clone alone, with the build's own cache, config and data under WORK/kc/<binary hash>/<repo>, never
+in a clone. Then, per repository and name in the labels, one `refs NAME --json --cite none` answer, and each label is
+judged by the rule in eval/identity-v1/README.md:
+
+- its targets: the row's `targets`, or the entries of the answer's numbered `overloads` its `overload` names;
+- its row: the row of the same file, line and name at the label's column; failing that, the only row of that name on
+  the line, when the name appears once on the line;
+- a target matches when it is in a file of the label's and its name line (the first of the target's line and the next
+  NAME_WINDOW lines with the name as a word outside comments and attributes) is one of the label's lines.
+
+The summary has, per language, repository and stratum: precision per confidence tag, the ambiguous rows' hit rate
+and size, recall (linked, and among candidates), outside labels linked to an indexed declaration, and every wrong
+`exact` row, each with its cause (CAUSES), written one file per cause beside the summary (SUMMARY.causes/). `compare`
+shows how a candidate moves the figures and each cause from a base, and the labels it fixed and broke. `check` exits 1
+unless, in every language, `exact` precision is at least EXACT_PRECISION and no outside
+label is linked.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+REPOS = HERE/'identity/repos.txt'
+LABELS = ROOT/'eval/identity-v1/labels.jsonl'
+EXACT_PRECISION = 0.99
+NAME_WINDOW = 10
+LINKS = ('exact', 'unique_name')
+# What went wrong in a wrong `exact` row, so a fix can show which it moves (cause()).
+CAUSES = {
+    'several_with_label': 'several declarations, the label among them',
+    'several_without_label': 'several declarations, the label not among them',
+    'linked_outside': 'linked inside where the toolchain resolves outside',
+    'one_wrong': 'one declaration, the wrong one',
+}
+GIT_ENV = {'PATH': '/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1',
+           'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
+
+
+def repos():
+    out = {}
+    for line in REPOS.read_text().splitlines():
+        if line.strip() and not line.startswith('#'):
+            name, lang, url, sha = line.split()
+            out[name] = dict(lang=lang, url=url, sha=sha)
+    return out
+
+
+def jsonl(path):
+    return [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+
+
+def selected(names):
+    known = repos()
+    if not names:
+        return known
+    want = names.split(',')
+    unknown = sorted(set(want) - set(known))
+    if unknown:
+        raise SystemExit('not in repos.txt: ' + ', '.join(unknown))
+    return {n: known[n] for n in want}
+
+
+def fetch(work, names=None):
+    clones = Path(work)/'clones'
+    clones.mkdir(parents=True, exist_ok=True)
+    for name, r in selected(names).items():
+        target = clones/name
+        git = lambda *a: subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', *a], cwd=target, env=GIT_ENV,
+                                        check=True, capture_output=True, text=True).stdout.strip()
+        if not (target/'.git').is_dir():
+            target.mkdir()
+            git('init', '--quiet')
+        if subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=target, env=GIT_ENV, capture_output=True,
+                          text=True).stdout.strip() != r['sha']:
+            git('fetch', '--quiet', '--depth', '1', r['url'], r['sha'])
+            git('-c', 'advice.detachedHead=false', 'checkout', '--quiet', 'FETCH_HEAD')
+        print(f"{name} {git('rev-parse', 'HEAD')}")
+
+
+# --- judging --------------------------------------------------------------------------------------------------------
+
+def word(name):
+    return re.compile(r'(?<![\w$])' + re.escape(name) + r'(?![\w$])')
+
+
+def name_line(lines, line, name):
+    """The line of a declaration's name: the first of `line` and the next NAME_WINDOW lines that has the name as a
+    word outside comments, attributes and decorators (a declaration that starts at one); `line` when none does."""
+    pattern = word(name)
+    for n in range(line, min(line + NAME_WINDOW, len(lines)) + 1):
+        if n < 1 or COMMENT.match(lines[n - 1]):
+            continue
+        if pattern.search(ATTRIBUTES.sub('', lines[n - 1], count=1)):
+            return n
+    return line
+
+
+def find_row(rows, label, line_text):
+    """The KnowCode row for a label: same file, line and name at its column, else the only such row on the line when
+    the name appears once on it; None when KnowCode has no reference there."""
+    here = [r for r in rows if r.get('file') == label['file'] and r.get('line') == label['line']
+            and r.get('name') == label['name']]
+    for r in here:
+        if r.get('col') == label['col']:
+            return r
+    if len(here) == 1 and len(word(label['name']).findall(line_text or '')) == 1:
+        return here[0]
+    return None
+
+
+def target_matches(target, label, lines_of):
+    if target.get('file') not in {f for f, _ in label['locs']}:
+        return False
+    lines = lines_of(target['file'])
+    at = name_line(lines, int(target.get('line') or 0), label['name'])
+    return [target['file'], at] in [list(l) for l in label['locs']]
+
+
+def judge(label, row, lines_of):
+    """One label's outcome: KnowCode's confidence and targets at that reference, and whether they are right."""
+    out = dict(id=label['id'], lang=label['lang'], repo=label['repo'], kind=label['kind'], where=label['where'],
+               bucket=label['bucket'])
+    if row is None:
+        return dict(out, confidence='none', targets=0, right=label['where'] == 'outside', among=False)
+    confidence = row.get('confidence') or 'none'
+    targets = [t for t in row.get('targets') or [] if t.get('file')]
+    hits = [target_matches(t, label, lines_of) for t in targets] if label['where'] == 'inside' else [False] * len(targets)
+    if targets:
+        right = all(hits)
+    else:
+        right = label['where'] == 'outside'
+    out.update(confidence=confidence, targets=len(targets), right=right, among=any(hits),
+               got=[f"{t['file']}:{t.get('line')}" for t in targets[:5]])
+    return out
+
+
+# --- summary --------------------------------------------------------------------------------------------------------
+
+def ratio(a, b):
+    return round(a / b, 4) if b else None
+
+
+def metrics(judged):
+    """Precision per confidence tag, ambiguous rows, recall, and outside labels linked, over some judged labels."""
+    by_tag = defaultdict(list)
+    for j in judged:
+        by_tag[j['confidence']].append(j)
+    tags = {}
+    for tag, rows in sorted(by_tag.items()):
+        right = sum(j['right'] for j in rows)
+        tags[tag] = dict(rows=len(rows), right=right, precision=ratio(right, len(rows)))
+        if tag in LINKS:
+            # Wrong rows naming several declarations, the label among them (a call's overloads, say).
+            tags[tag]['several_with_label'] = sum(1 for j in rows if not j['right'] and j['targets'] > 1 and j['among'])
+        if tag not in LINKS and any(j['targets'] for j in rows):
+            with_targets = [j for j in rows if j['targets']]
+            tags[tag].update(contains=ratio(sum(j['among'] for j in with_targets), len(with_targets)),
+                             mean_candidates=round(sum(j['targets'] for j in with_targets) / len(with_targets), 2))
+    inside = [j for j in judged if j['where'] == 'inside']
+    outside = [j for j in judged if j['where'] == 'outside']
+    linked = sum(1 for j in inside if j['confidence'] in LINKS and j['right'])
+    among = sum(1 for j in inside if j['among'])
+    return dict(
+        labels=len(judged), inside=len(inside), outside=len(outside), tags=tags,
+        exact_precision=tags.get('exact', {}).get('precision'),
+        recall_linked=ratio(linked, len(inside)), recall_among=ratio(among, len(inside)),
+        outside_linked=sum(1 for j in outside if j['confidence'] in LINKS and j['targets']),
+        outside_candidates=sum(1 for j in outside if j['confidence'] not in LINKS and j['targets']))
+
+
+def cause(j):
+    """Why a wrong `exact` (or `unique_name`) row is wrong: one of CAUSES."""
+    if j['where'] == 'outside':
+        return 'linked_outside'
+    if j['targets'] > 1:
+        return 'several_with_label' if j['among'] else 'several_without_label'
+    return 'one_wrong'
+
+
+def summarize(judged, labels):
+    by_id = {l['id']: l for l in labels}
+    groups = defaultdict(list)
+    for j in judged:
+        groups[('lang', j['lang'])].append(j)
+        groups[('repo', j['repo'])].append(j)
+        groups[('stratum', f"{j['lang']}/{j['kind']}/{j['where']}/{j['bucket']}")].append(j)
+    out = dict(overall=metrics(judged), lang={}, repo={}, stratum={})
+    for (level, key), rows in sorted(groups.items()):
+        out[level][key] = metrics(rows)
+
+    def listing(j):
+        l = by_id[j['id']]
+        want = 'outside (' + str(l['origin']) + ')' if l['where'] == 'outside' else \
+            ', '.join(f'{f}:{n}' for f, n in l['locs'])
+        return dict(id=j['id'], lang=j['lang'], at=f"{l['repo']}/{l['file']}:{l['line']}:{l['col']}", name=l['name'],
+                    kind=l['kind'], bucket=l['bucket'], confidence=j['confidence'], knowcode=j.get('got', []),
+                    toolchain=want, symbol=l['symbol'], cause=cause(j) if j['targets'] else 'none_named')
+    wrong = [j for j in judged if j['confidence'] == 'exact' and not j['right']]
+    out['wrong_exact'] = [listing(j) for j in wrong]
+    out['causes'] = {lang: {c: 0 for c in CAUSES} for lang in sorted({j['lang'] for j in judged})}
+    for w in out['wrong_exact']:
+        bucket = out['causes'][w['lang']]
+        bucket[w['cause']] = bucket.get(w['cause'], 0) + 1
+    out['outside_linked'] = [listing(j) for j in judged
+                             if j['where'] == 'outside' and j['confidence'] in LINKS and j['targets']]
+    out['outside_candidates'] = [listing(j) for j in judged
+                                 if j['where'] == 'outside' and j['confidence'] not in LINKS and j['targets']]
+    return out
+
+
+def verdict(summary):
+    failures = []
+    for lang, m in sorted(summary['lang'].items()):
+        if m['exact_precision'] is not None and m['exact_precision'] < EXACT_PRECISION:
+            failures.append(f"{lang}: exact precision {m['exact_precision']} < {EXACT_PRECISION}")
+        if m['outside_linked']:
+            failures.append(f"{lang}: {m['outside_linked']} outside labels linked to an indexed declaration")
+    return failures
+
+
+# --- run ------------------------------------------------------------------------------------------------------------
+
+def binary_hash(binary):
+    return hashlib.sha256(Path(binary).read_bytes()).hexdigest()[:16]
+
+
+def kc_env(base):
+    for d in ('home', 'cache', 'config', 'data'):
+        (base/d).mkdir(parents=True, exist_ok=True)
+    return dict(GIT_ENV, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'),
+                KNOWCODE_CONFIG_DIR=str(base/'config'), KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
+
+
+OVERLOAD = re.compile(r'^(\d+): .* at (.+?):(\d+)(?: \([^)]*\))*$')
+# What a declaration's first lines can hold before its name: comments, and attributes or decorators.
+COMMENT = re.compile(r'^\s*(//|/\*|\*|#)')
+ATTRIBUTES = re.compile(r'^\s*(?:\[[^\]]*\]\s*|@\w+(?:\.\w+)*(?:\([^)]*\))?\s*)+')
+
+
+def with_overloads(rows, overloads):
+    """Rows whose `overload` names entries of the answer's numbered `overloads` list (`3: Sink(…) at FILE:LINE`), given
+    those entries as their `targets`: the answer lists a call's overloads once instead of in each row."""
+    numbered = {}
+    for entry in overloads or []:
+        m = OVERLOAD.match(entry)
+        if m:
+            numbered[int(m.group(1))] = dict(file=m.group(2), line=int(m.group(3)))
+    out = []
+    for r in rows:
+        if 'overload' in r:
+            ns = r['overload'] if isinstance(r['overload'], list) else [r['overload']]
+            r = dict(r, targets=[numbered[n] for n in ns if n in numbered])
+        out.append(r)
+    return out
+
+
+def refs(binary, clone, env, name):
+    """Every row of `refs NAME` in the clone's repository, following a cut answer's cursor."""
+    args = [str(binary), 'refs', name, '--json', '--cite', 'none', '--limit', '1000000', '--no-sync']
+    rows, overloads = [], None
+    while True:
+        p = subprocess.run(args, cwd=clone, env=env, capture_output=True, text=True)
+        if p.returncode != 0:
+            return with_overloads(rows, overloads), (p.stderr.strip() or p.stdout.strip())[:300]
+        answer = json.loads(p.stdout)
+        rows += answer.get('items') or []
+        overloads = overloads or answer.get('overloads')
+        cursor = answer.get('cursor')
+        if not cursor or answer.get('complete', True):
+            return with_overloads(rows, overloads), None
+        args = [str(binary), 'more', cursor, '--json']
+
+
+def run(args):
+    labels = jsonl(args.labels)
+    chosen = selected(args.repos)
+    labels = [l for l in labels if l['repo'] in chosen]
+    binary = Path(args.knowcode).resolve()
+    work = Path(args.work).resolve()
+    base = work/'kc'/binary_hash(binary)
+    version = subprocess.run([str(binary), '--version'], capture_output=True, text=True).stdout.strip()
+    judged, errors, timing = [], {}, {}
+    for repo in chosen:
+        mine = [l for l in labels if l['repo'] == repo]
+        if not mine:
+            continue
+        clone = work/'clones'/repo
+        if not (clone/'.git').is_dir():
+            raise SystemExit(f'{clone}: missing; run `identity_gate.py fetch` first')
+        env = kc_env(base/repo)
+        started = time.monotonic()
+        subprocess.run([str(binary), 'index', str(clone)], env=env, cwd=clone, check=True, capture_output=True)
+        indexed = time.monotonic()
+        names = sorted({l['name'] for l in mine})
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            answers = dict(zip(names, pool.map(lambda n: refs(binary, clone, env, n), names)))
+        texts = {}
+
+        def lines_of(rel):
+            if rel not in texts:
+                try:
+                    texts[rel] = (clone/rel).read_text(encoding='utf-8', errors='replace').split('\n')
+                except OSError:
+                    texts[rel] = []
+            return texts[rel]
+        for l in mine:
+            rows, error = answers[l['name']]
+            if error:
+                errors[f"{repo}:{l['name']}"] = error
+            lines = lines_of(l['file'])
+            line_text = lines[l['line'] - 1] if 0 < l['line'] <= len(lines) else ''
+            judged.append(judge(l, find_row(rows, l, line_text), lines_of))
+        timing[repo] = dict(index_s=round(indexed - started, 1), refs_s=round(time.monotonic() - indexed, 1),
+                            names=len(names))
+        print(f'{repo}: {len(mine)} labels, {len(names)} names', file=sys.stderr)
+    summary = dict(knowcode=version, binary=binary_hash(binary), labels=str(args.labels), timing=timing,
+                   errors=errors, **summarize(judged, labels))
+    summary['verdict'] = verdict(summary) or 'pass'
+    text = json.dumps(summary, indent=1, sort_keys=True) + '\n'
+    if args.out:
+        Path(args.out).write_text(text)
+        (Path(args.out).with_suffix('.judged.jsonl')).write_text(''.join(json.dumps(j, sort_keys=True) + '\n' for j in judged))
+        write_causes(summary, Path(args.out).with_suffix('.causes'))
+    print(report(summary, args.wrong))
+
+
+def write_causes(summary, directory):
+    """One file per cause in DIRECTORY: its wrong `exact` rows, each with KnowCode's targets and the label's."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    for c in list(CAUSES) + ['none_named']:
+        rows = [w for w in summary['wrong_exact'] if w['cause'] == c]
+        lines = [f"# {c}: {CAUSES.get(c, 'exact with no declaration named')} ({len(rows)})", '']
+        lines += [f"- `{w['at']}` {w['name']} ({w['kind']}, {w['bucket']}): KnowCode {', '.join(w['knowcode']) or 'none'}; "
+                  f"toolchain {w['toolchain']}" for w in rows]
+        (directory/f'{c}.md').write_text('\n'.join(lines) + '\n')
+
+
+def compare(base, cand):
+    """How a candidate's summary moves from a base's: the gate's figures and the causes per language, and the labels
+    each fixed and broke (a label is fixed when the base's row was wrong `exact` and the candidate's isn't)."""
+    out = ['| Language | Figure | Base | Candidate |', '| --- | --- | ---: | ---: |']
+    for lang in sorted(set(base['lang']) | set(cand['lang'])):
+        b, c = base['lang'].get(lang, {}), cand['lang'].get(lang, {})
+        for key, label in (('exact_precision', '`exact` precision'), ('recall_linked', 'recall, linked'),
+                           ('recall_among', 'recall, among candidates'), ('outside_linked', 'outside linked')):
+            out.append(f"| {lang} | {label} | {fmt(b.get(key))} | {fmt(c.get(key))} |")
+        bc, cc = base.get('causes', {}).get(lang, {}), cand.get('causes', {}).get(lang, {})
+        for key in sorted(set(bc) | set(cc), key=lambda k: list(CAUSES).index(k) if k in CAUSES else len(CAUSES)):
+            out.append(f"| {lang} | wrong `exact`: {key} | {bc.get(key, 0)} | {cc.get(key, 0)} |")
+    was = {w['id'] for w in base['wrong_exact']}
+    now = {w['id'] for w in cand['wrong_exact']}
+    out += ['', f'Wrong `exact` labels fixed: {len(was - now)}; newly wrong: {len(now - was)}.']
+    for w in cand['wrong_exact']:
+        if w['id'] not in was:
+            out.append(f"- newly wrong `{w['at']}` {w['name']} ({w['cause']}): KnowCode {', '.join(w['knowcode']) or 'none'}")
+    return '\n'.join(out)
+
+
+def fmt(x):
+    return '–' if x is None else f'{x:.3f}' if isinstance(x, float) else str(x)
+
+
+def report(summary, wrong=50):
+    out = [f"KnowCode {summary['knowcode']} ({summary['binary']}): verdict {summary['verdict']}", '',
+           '| Language | Labels | Inside | `exact` rows | `exact` precision | `unique_name` precision | Recall, linked | '
+           'Recall, among candidates | Outside linked | Outside as candidates |',
+           '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    for lang, m in sorted(summary['lang'].items()):
+        t = m['tags']
+        out.append(f"| {lang} | {m['labels']} | {m['inside']} | {t.get('exact', {}).get('rows', 0)} | "
+                   f"{fmt(m['exact_precision'])} | {fmt(t.get('unique_name', {}).get('precision'))} | "
+                   f"{fmt(m['recall_linked'])} | {fmt(m['recall_among'])} | {m['outside_linked']} | "
+                   f"{m['outside_candidates']} |")
+    out += ['', '| Stratum | Labels | Tags (rows, precision) | Recall, linked | Outside linked |', '| --- | ---: | --- | ---: | ---: |']
+    for key, m in sorted(summary['stratum'].items()):
+        tags = ', '.join(f"{t} {v['rows']} ({fmt(v['precision'])})" for t, v in sorted(m['tags'].items()))
+        out.append(f"| {key} | {m['labels']} | {tags} | {fmt(m['recall_linked'])} | {m['outside_linked']} |")
+    if summary.get('causes'):
+        out += ['', '| Language | ' + ' | '.join(CAUSES) + ' |', '| --- |' + ' ---: |' * len(CAUSES)]
+        for lang, counts in sorted(summary['causes'].items()):
+            out.append(f'| {lang} | ' + ' | '.join(str(counts.get(c, 0)) for c in CAUSES) + ' |')
+    if summary['wrong_exact']:
+        out += ['', f"Wrong `exact` links ({len(summary['wrong_exact'])}):", '']
+        for w in summary['wrong_exact'][:wrong]:
+            out.append(f"- `{w['at']}` {w['name']} ({w['kind']}, {w['bucket']}): KnowCode {', '.join(w['knowcode'])}; "
+                       f"toolchain {w['toolchain']}")
+        if len(summary['wrong_exact']) > wrong:
+            out.append(f"- … {len(summary['wrong_exact']) - wrong} more in the summary")
+    linked = [w for w in summary['outside_linked'] if w['confidence'] != 'exact']
+    if linked:
+        out += ['', f"Outside labels linked `unique_name` ({len(linked)}; the `exact` ones are above):", '']
+        for w in linked[:wrong]:
+            out.append(f"- `{w['at']}` {w['name']} ({w['kind']}, {w['bucket']}): KnowCode {', '.join(w['knowcode'])}; "
+                       f"toolchain {w['toolchain']}")
+        if len(linked) > wrong:
+            out.append(f"- … {len(linked) - wrong} more in the summary")
+    return '\n'.join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    f = sub.add_parser('fetch')
+    f.add_argument('--work', required=True)
+    f.add_argument('--repos')
+    r = sub.add_parser('run')
+    r.add_argument('--knowcode', required=True)
+    r.add_argument('--work', required=True)
+    r.add_argument('--labels', default=str(LABELS))
+    r.add_argument('--repos')
+    r.add_argument('--out')
+    r.add_argument('--jobs', type=int, default=4)
+    r.add_argument('--wrong', type=int, default=50)
+    p = sub.add_parser('report')
+    p.add_argument('summary')
+    p.add_argument('--wrong', type=int, default=50)
+    c = sub.add_parser('check')
+    c.add_argument('summary')
+    m = sub.add_parser('compare')
+    m.add_argument('base')
+    m.add_argument('candidate')
+    args = ap.parse_args()
+    if args.cmd == 'fetch':
+        fetch(args.work, args.repos)
+    elif args.cmd == 'run':
+        run(args)
+    elif args.cmd == 'report':
+        print(report(json.loads(Path(args.summary).read_text()), args.wrong))
+    elif args.cmd == 'compare':
+        print(compare(json.loads(Path(args.base).read_text()), json.loads(Path(args.candidate).read_text())))
+    else:
+        failures = verdict(json.loads(Path(args.summary).read_text()))
+        print('\n'.join(failures) or 'pass')
+        sys.exit(1 if failures else 0)
+
+
+if __name__ == '__main__':
+    main()

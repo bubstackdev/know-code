@@ -97,6 +97,27 @@ class FamiliesTest(unittest.TestCase):
         got = history_labels.label(q, self.repos)
         self.assertEqual(got['items'], [{'file': 'src/Price.cs', 'shared': 3}, {'file': 'src/Tax.cs', 'shared': 1}])
 
+    def callers(self, items):
+        """The callers-history label against a published label of `items` (in a made-up study)."""
+        study = Path(self.tmp.name) / 'eval'
+        (study / 'made-up' / 'study').mkdir(parents=True, exist_ok=True)
+        (study / 'made-up' / 'study' / 'labels.jsonl').write_text(json.dumps({'id': 'made-up-1', 'items': items}) + '\n')
+        old, history_labels.STUDIES = history_labels.STUDIES, study
+        try:
+            return self.label('callers-history', callers='made-up#made-up-1')['items']
+        finally:
+            history_labels.STUDIES = old
+
+    def test_callers_history_carries_the_published_labels_optional(self):
+        # A file with a required caller is required, even beside an optional one; Tax never changed with Total.
+        got = self.callers([{'item': 'shop/src/Price.cs:1', 'hop': 1, 'optional': True}, {'item': 'shop/src/Price.cs:2', 'hop': 1},
+                            {'item': 'shop/src/Tax.cs:1', 'hop': 1}])
+        self.assertEqual([(i['file'], i.get('optional', False)) for i in got], [('src/Price.cs', False)])
+        self.assertNotIn('optional', got[0])
+        # A file whose every caller is optional is optional.
+        got = self.callers([{'item': 'shop/src/Price.cs:1', 'hop': 1, 'optional': True}])
+        self.assertEqual([(i['file'], i.get('optional', False)) for i in got], [('src/Price.cs', True)])
+
     def test_a_clone_off_its_pin_is_refused(self):
         q = {'id': 'q', 'family': 'symbol-last', 'repo': 'shop', 'pin': '0' * 40, 'subject': {'file': 'src/Cart.cs', 'line': 6, 'name': 'Total'}}
         with self.assertRaises(SystemExit):

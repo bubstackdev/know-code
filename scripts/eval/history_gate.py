@@ -21,8 +21,9 @@ each against the label:
 | callers-history | `impact FILE:LINE` hop 1, in `history`'s commits | `git grep -lw NAME` files, in each approach's commits |
 | file-cochange | `coupled FILE --since all` | `log --no-merges -- FILE` and `log --follow --no-merges -- FILE`, counted |
 
-A set is scored by recall and precision; a ranked list (co-change) at the label's size; the last change by whether
-the newest commit named is the label's; blame by the lines attributed to the right authors.
+A set is scored by recall and precision, an item the label marks optional counting as neither a hit nor a miss; a
+ranked list (co-change) at the label's size; the last change by whether the newest commit named is the label's; blame
+by the lines attributed to the right authors.
 
 The verdict (exit 1 when it fails): over the method-level and caller questions, KnowCode must beat each plain approach:
 recall and precision at least equal, one of them higher (a whole file's log has full recall and is beaten on precision).
@@ -88,8 +89,10 @@ def fetch(work, only):
 
 # --- scoring ----------------------------------------------------------------------------------------------------------
 
-def score_set(got, truth):
-    got, truth = list(dict.fromkeys(got)), set(truth)
+def score_set(got, truth, optional=()):
+    """Recall and precision counts. An optional item (one the label accepts listed or not) is neither a hit nor a
+    miss: it counts in neither `truth` nor `listed`."""
+    got, truth = [g for g in dict.fromkeys(got) if g not in set(optional)], set(truth)
     hit = len(set(got) & truth)
     return {'hits': hit, 'truth': len(truth), 'listed': len(got)}
 
@@ -213,7 +216,8 @@ def answers(q, lab, repo, binary, env):
         for name, shas in plain.items():
             out[name] = score_set(ranked(files_in(repo, shas, s['file'], now), minimum), truth)
     elif fam == 'callers-history':
-        truth = [i['file'] for i in lab['items']]
+        truth = [i['file'] for i in lab['items'] if not i.get('optional')]
+        optional = [i['file'] for i in lab['items'] if i.get('optional')]
         # The label's callers are production code (public-v2's), as the question says: tests are left out on each side.
         if 'callers_changed_with' in item:
             # One call: `history` lists the direct callers changed in the symbol's commits.
@@ -225,12 +229,12 @@ def answers(q, lab, repo, binary, env):
                        if a.get('hop') == 1 and a.get('class') != 'test'}
             changed = files_in(repo, full, s['file'], now)
             found = {f for f in callers if f in changed}
-        out['knowcode'] = score_set(sorted(found), truth)
+        out['knowcode'] = score_set(sorted(found), truth, optional)
         grep, _ = git(repo, 'grep', '-lw', s['name'])
         candidates = {f for f in grep.splitlines() if f != s['file'] and not history_labels.TEST_PATH.search(f)}
         for name, shas in plain.items():
             changed = files_in(repo, shas, s['file'], now)
-            out[name] = score_set(sorted(f for f in candidates if f in changed), truth)
+            out[name] = score_set(sorted(f for f in candidates if f in changed), truth, optional)
     return out
 
 
