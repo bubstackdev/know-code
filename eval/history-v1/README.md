@@ -30,6 +30,11 @@ comments. Each label records the span's first and last lines and the file's sha2
 by git's own diff, so a different git version can move a label; the gate recomputes every label and stops when one
 differs from labels.jsonl.
 
+A caller file whose callers the published label all marks `optional` (a call it accepts listed or not, such as one
+through an interface whose runtime receiver is never M's type) is `optional` here too, and the gate scores it as
+neither a hit nor a miss: it counts in neither the label's size nor what an answer listed. history-callers-002's one
+file is such a file, so that question has no required item.
+
 ## How plain tools answer
 
 An agent with grep, find, read and git would reach for these:
