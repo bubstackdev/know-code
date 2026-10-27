@@ -110,3 +110,67 @@ fn constructors_are_found_by_the_name_their_source_writes() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Two modules each declaring a type of one name: a context lists the members and extensions of the declaration it
+/// picks, never the other's, whether that one is another module's or a file's `private` type.
+#[test]
+fn a_types_members_are_its_declarations_not_a_same_named_ones() {
+    let root = scratch("same-names-members");
+    write(
+        &root,
+        "Sources/Grid/Tile.swift",
+        "public struct Tile<Scalar> {\n    public var cells: [Scalar]\n    public init(cells: [Scalar]) { self.cells = cells }\n}\n",
+    );
+    write(&root, "Sources/Grid/TileOps.swift", "extension Tile {\n    public var count: Int { cells.count }\n}\n");
+    write(
+        &root,
+        "Sources/Probe/Reader.swift",
+        "private struct Tile {\n    var name: String\n    func file(base: String) -> String { base + name }\n}\n\nextension Tile {\n    var label: String { name }\n}\n",
+    );
+    write(&root, "Sources/Probe/Other.swift", "import Grid\n\nextension Tile {\n    var total: Int { 0 }\n}\n");
+    let store = index(&root);
+    let conn = store.conn();
+    let limits = query::ContextLimits::from_budget(2000);
+    let names = |c: &query::Context| -> (Vec<String>, Vec<String>) {
+        (c.members.iter().map(|m| m.name.clone()).collect(), c.extensions.iter().map(|e| format!("{}:{}", e.file, e.line)).collect())
+    };
+
+    let grid = query::context(conn, &root, "Sources/Grid/Tile.swift:1", &limits).unwrap().unwrap();
+    assert_eq!(grid.symbol.file, "Sources/Grid/Tile.swift");
+    // The private type is seen from its own file only: the extension in Probe's other file extends Grid's.
+    assert_eq!(
+        names(&grid),
+        (
+            vec!["init".into(), "cells".into(), "count".into(), "total".into()],
+            vec!["Sources/Grid/TileOps.swift:1".into(), "Sources/Probe/Other.swift:3".into()]
+        )
+    );
+
+    let probe = query::context(conn, &root, "Sources/Probe/Reader.swift:1", &limits).unwrap().unwrap();
+    assert_eq!(names(&probe), (vec!["name".into(), "file".into(), "label".into()], vec!["Sources/Probe/Reader.swift:6".into()]));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An extension in a third module goes to the type of the module its file imports; when the file imports both
+/// modules declaring the name, nothing tells which it extends, and each context says the extension is ambiguous.
+#[test]
+fn an_extension_seeing_two_imported_types_of_its_name_is_ambiguous() {
+    let root = scratch("same-names-imports");
+    write(&root, "Sources/Grid/Tile.swift", "public struct Tile {\n    public var cells: Int\n}\n");
+    write(&root, "Sources/Board/Tile.swift", "public struct Tile {\n    public var squares: Int\n}\n");
+    write(&root, "Sources/Game/Both.swift", "import Grid\nimport Board\n\nextension Tile {\n    var either: Int { 0 }\n}\n");
+    write(&root, "Sources/Game/OnlyGrid.swift", "import Grid\n\nextension Tile {\n    var gridOnly: Int { 0 }\n}\n");
+    let store = index(&root);
+    let conn = store.conn();
+    let limits = query::ContextLimits::from_budget(2000);
+    let context = |at: &str| query::context(conn, &root, at, &limits).unwrap().unwrap();
+    let members = |c: &query::Context| -> Vec<String> { c.members.iter().map(|m| m.name.clone()).collect() };
+
+    let board = context("Sources/Board/Tile.swift:1");
+    assert_eq!(members(&board), ["squares", "either"]);
+    assert_eq!(board.extensions_ambiguous, ["1 extension may extend this or Sources/Grid/Tile.swift:1 (Grid): Sources/Game/Both.swift:4"]);
+    let grid = context("Sources/Grid/Tile.swift:1");
+    assert_eq!(members(&grid), ["either", "gridOnly", "cells"]);
+    assert_eq!(grid.extensions_ambiguous, ["1 extension may extend this or Sources/Board/Tile.swift:1 (Board): Sources/Game/Both.swift:4"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
