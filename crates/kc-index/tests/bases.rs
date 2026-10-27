@@ -189,6 +189,9 @@ fn a_clean_worktree_at_the_base_commit_extracts_nothing() {
     assert_eq!(resolved, wt.to_string_lossy());
     assert_eq!(store.generation().unwrap(), generation);
     assert_eq!(facts(&store), facts(&cold(&wt, "crates-wt1")));
+    // The content index takes the stats the sync just took for the files it hashed: none is read again.
+    let content = kc_index::content::sync_content(&wt, &mut store, 1).unwrap();
+    assert_eq!((content.reread, content.rebuilt), (0, false), "{content:?}");
 }
 
 #[test]
