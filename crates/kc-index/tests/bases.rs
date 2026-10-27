@@ -284,3 +284,26 @@ fn checkouts_started_together_wait_for_one_to_build_the_base() {
     assert_eq!(from.as_deref(), published.file_name().and_then(|n| n.to_str()));
     assert_eq!(parsed, 0);
 }
+
+#[test]
+fn a_base_a_worktree_uses_is_never_evicted_and_one_none_uses_is() {
+    let _turn = turn();
+    let main = repo("pantry", 6);
+    drop(indexed(&main));
+    let published = kc_index::base::publish(&main).unwrap().expect("published");
+    let wt = worktree(&main, "wt1");
+    drop(indexed(&wt));
+    assert!(kc_index::base::in_use(&published));
+    // A budget every index and base is over: the checkouts asked about stay, and so does the base they use.
+    std::fs::create_dir_all(base().join("config")).unwrap();
+    std::fs::write(base().join("config/config.toml"), "[cache]\nmax_size = 1\n").unwrap();
+    kc_index::cache::maintain(&[main.clone(), wt.clone()]).unwrap();
+    assert!(published.exists(), "a base its worktrees use stays");
+    // Their indexes gone, nothing uses it: evicted like any idle index.
+    kc_index::forget(&main).unwrap();
+    kc_index::forget(&wt).unwrap();
+    assert!(!kc_index::base::in_use(&published));
+    let report = kc_index::cache::maintain(&[]).unwrap();
+    std::fs::remove_file(base().join("config/config.toml")).unwrap();
+    assert!(!published.exists(), "{report:?}");
+}

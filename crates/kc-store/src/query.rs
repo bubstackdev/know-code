@@ -5426,6 +5426,21 @@ fn ts_top_level_compatible(ref_kind: &str, def_kind: &str) -> bool {
 
 /// The TypeScript import rules' answer for `hit`, when they have one: an imported name resolves in its module's file
 /// (or outside the repo, for a package), and a name neither imported nor a member resolves in its own file.
+/// Whether the reference's receiver is typed, as written, by a name other than `ty` that the file sees: an alias that
+/// leads to `ty` (`(i as ItemLike).tags`, `type ItemLike = Item`).
+fn seen_alias(conn: &Connection, hit: &RefHit, ty: &str, modules: &mut crate::ts::Modules) -> Result<bool> {
+    match hit.receiver_type.as_deref().and_then(TypeExpr::decode) {
+        Some(TypeExpr::Named(n)) if last_segment(&n) != ty => modules.sees(conn, &hit.file, last_segment(&n)),
+        _ => Ok(false),
+    }
+}
+
+/// A JavaScript file, whose imports (CommonJS `require`, globals a bundler provides) the index reads only in part: its
+/// names aren't held to [`crate::ts::Modules::sees`].
+fn is_js(path: &str) -> bool {
+    matches!(path.rsplit_once('.').map(|(_, e)| e), Some("js" | "jsx" | "mjs" | "cjs"))
+}
+
 fn ts_scoped(
     conn: &Connection,
     hit: &mut RefHit,
@@ -5469,7 +5484,14 @@ fn ts_scoped(
         }
         None if hit.receiver.is_none() && hit.kind != "member" => {
             let own: Vec<i64> = defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).map(|d| d.id).collect();
-            Ok((!own.is_empty()).then_some(("exact", own)))
+            if !own.is_empty() {
+                return Ok(Some(("exact", own)));
+            }
+            // Neither declared here nor imported: a global, the repo's only when a script of its declares it.
+            if !is_js(&hit.file) && !modules.sees(conn, &hit.file, &hit.name)? {
+                return Ok(Some(("unresolved", Vec::new())));
+            }
+            Ok(None)
         }
         None => Ok(None),
     }
@@ -5518,6 +5540,17 @@ fn ts_receiver(
 ) -> Result<Receiver> {
     Ok(match recv {
         Receiver::Known(chain) if modules.imports_external(conn, &hit.file, &chain[0])? => Receiver::Foreign(vec![chain[0].clone()]),
+        // A type the file neither declares nor imports is the platform's (`Response`), whatever the repo's modules
+        // export under that name; unless the receiver's type is written by another name the file does see, an
+        // alias of it (`ItemLike = Item`).
+        Receiver::Known(chain)
+            if !is_js(&hit.file)
+                && modules.declared(conn, &chain[0])?
+                && !modules.sees(conn, &hit.file, &chain[0])?
+                && !seen_alias(conn, hit, &chain[0], modules)? =>
+        {
+            Receiver::Foreign(vec![chain[0].clone()])
+        }
         Receiver::Unknown => match hit.receiver_type.as_deref() {
             Some(enc) => match oracle.foreign_prefix(enc, hit.caller_type().as_deref())? {
                 Some(t) => Receiver::Foreign(vec![t]),

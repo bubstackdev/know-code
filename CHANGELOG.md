@@ -4,6 +4,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
+  end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
+  can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
+  file. A file the AI privacy file blocks still answers nothing.
+- Task context: `kc {op: task, q: "refunds fail for partial captures"}` (and `knowcode task`) answers a goal in words in
+  one bounded answer, where a client joined `locate`, `context`, `impact` and `tests` itself: the files most likely
+  involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
+  changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
+  index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does.
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
@@ -11,6 +21,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
   commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
   `cache.shared_bases` turns it off.
+- A shared base a worktree still uses is never evicted; bases nothing uses are evicted with the other idle indexes,
+  least recently used first. A removed worktree's index goes at the next query, `status` or `prune`.
 - **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
   for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
   hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
