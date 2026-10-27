@@ -14,6 +14,7 @@
 
 pub mod angular;
 pub mod areas;
+pub mod base;
 pub mod ansible;
 pub mod ci;
 pub mod ci_tools;
@@ -142,27 +143,27 @@ pub(crate) fn open_index(db: &Path, create: bool) -> Result<Store> {
 
 /// Checkouts a new index can be seeded from (see [`open`]): origin, root and when each was indexed.
 ///
-/// [`open`] reads them from the workspace summary, which it refreshes, each time it creates an index. Indexing many
+/// [`open`] reads them from the workspace summary, which it refreshes, each time it seeds an index. Indexing many
 /// repos in one run loads them once and adds each repo as it is indexed instead: refreshing the summary for every
 /// new repo rewrote it whole each time, which took most of the run's time and memory over a few hundred repos.
 #[derive(Default)]
 pub struct Seeds {
-    /// Loaded when the first new index is created.
+    /// Loaded when the first new index is seeded: one cloned from a shared base (see [`base`]) needs none.
     checkouts: Option<Vec<(String, PathBuf, i64)>>,
 }
 
+/// Where [`open_with`] finds the checkouts to seed from, loading them on first need.
+type Checkouts<'a> = Option<&'a mut Option<Vec<(String, PathBuf, i64)>>>;
+
 impl Seeds {
-    fn load() -> Result<Vec<(String, PathBuf, i64)>> {
-        Ok(workspace::all_summaries()?.iter().filter_map(|s| Some((s.origin.clone()?, s.root.clone(), s.indexed_at))).collect())
+    fn load() -> Vec<(String, PathBuf, i64)> {
+        workspace::all_summaries().map(|all| all.iter().filter_map(|s| Some((s.origin.clone()?, s.root.clone(), s.indexed_at))).collect()).unwrap_or_default()
     }
 
     /// [`open`], seeding a new index from these checkouts. A new index's repo becomes a candidate for the repos opened
     /// after it.
     pub fn open(&mut self, root: &Path) -> Result<Store> {
-        if self.checkouts.is_none() && !db_path(root)?.exists() {
-            self.checkouts = Some(Seeds::load().unwrap_or_default());
-        }
-        let (store, origin) = open_with(root, self.checkouts.as_deref())?;
+        let (store, origin) = open_with(root, Some(&mut self.checkouts))?;
         if let (Some(origin), Some(checkouts)) = (origin, self.checkouts.as_mut()) {
             checkouts.retain(|(_, r, _)| r != root);
             checkouts.push((origin, root.to_path_buf(), now_nanos() as i64));
@@ -171,9 +172,9 @@ impl Seeds {
     }
 }
 
-/// [`open`], seeding from `checkouts` (or the workspace summary). Returns the repo's normalized origin when it was
-/// looked up, which is only for a new index.
-fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Result<(Store, Option<String>)> {
+/// [`open`], seeding from `checkouts` (loaded from the workspace summary when first needed). Returns the repo's normalized
+/// origin when it was looked up, which is only for a new seeded index.
+fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>)> {
     // A cancelled operation (see `kc_store::limits`) opens no further repo: a workspace query stops here.
     kc_store::limits::check()?;
     let db = db_path(root)?;
@@ -201,6 +202,18 @@ fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Resul
         }
     }
     let mut origin = None;
+    if !db.exists() && !privacy.whole() {
+        // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed. Without
+        // one, a checkout of a commit another process is building a base for waits for it.
+        let cloned = base::clone_into(root, &db, &key).and_then(|b| match b {
+            Some(b) => Ok(Some(b)),
+            None if base::wait_or_claim(root)? == base::Turn::Waited => base::clone_into(root, &db, &key),
+            None => Ok(None),
+        });
+        if let Err(e) = cloned {
+            eprintln!("knowcode: {}: not started from a shared base: {e:#}", root.display());
+        }
+    }
     if !db.exists() && !privacy.blocks_anything() {
         // Best effort: without a seed, the first sync indexes from scratch. A repo with anything blocked is never
         // seeded: another checkout's index may hold what this one's policy blocks.
@@ -229,17 +242,12 @@ fn open_with(root: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Resul
 /// files kept their mtimes (`cp -p`) is still hashed whole. Manifests and Ansible files are extracted again, since
 /// path dependencies resolve against the checkout's location and a repo that is one role is named after it. Candidates come from `checkouts`, or else the workspace summary. Returns
 /// the repo's normalized origin, if it has one.
-fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) -> Result<Option<String>> {
+fn seed(root: &Path, db: &Path, checkouts: Checkouts) -> Result<Option<String>> {
     let out = git::run(root, &["config", "--get", "remote.origin.url"])?;
     let Some(origin) = workspace::normalize_remote(String::from_utf8_lossy(&out).trim()) else { return Ok(None) };
-    let loaded;
-    let checkouts = match checkouts {
-        Some(c) => c,
-        None => {
-            loaded = Seeds::load()?;
-            &loaded
-        }
-    };
+    let mut local = None;
+    let cell = checkouts.unwrap_or(&mut local);
+    let checkouts: &[(String, PathBuf, i64)] = cell.get_or_insert_with(Seeds::load);
     // The checkout a worktree was made from shares its git directory and usually its files: the best seed. Otherwise
     // the most recently indexed checkout of the repo.
     let common = |dir: &Path| git::run(dir, &["rev-parse", "--git-common-dir"]).ok().map(|o| dir.join(String::from_utf8_lossy(&o).trim())).and_then(|p| std::fs::canonicalize(p).ok());
@@ -270,8 +278,10 @@ fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) ->
         "DELETE FROM meta WHERE key LIKE 'head.%' OR key LIKE 'disc.%' OR key = 'last_sync';
          DELETE FROM derived;
          UPDATE files SET mtime_ns = 0, size = -1;
+         INSERT OR REPLACE INTO meta(key, value) VALUES ('{carry}', '1');
          UPDATE files SET extractor_version = 0 WHERE lang IN ({});",
-        manifests.join(", ")
+        manifests.join(", "),
+        carry = content::CARRY
     ))?;
     Ok(Some(origin))
 }
@@ -947,6 +957,28 @@ pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
     let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
     let generation = store.generation()?;
     Ok(areas::needs_refresh(root, store)? || store.derived_gen(&rank_key)?.is_some_and(|g| g != generation))
+}
+
+/// The state of one kind of derived data, for `status`: computed for the index as it is (`current`), carried from the
+/// shared base the index was cloned from while no file differs from it (`from_base`, the same as computing it now),
+/// computed at an earlier generation (`stale`: an answer drawing on it says so), or never computed (`missing`: the
+/// first answer needing it computes it).
+pub fn derived_state(root: &Path, store: &Store) -> Result<(&'static str, &'static str)> {
+    let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
+    let generation = store.generation()?;
+    let from_base = base::cloned(store)?.is_some_and(|c| c.unchanged);
+    let current = if from_base { "from_base" } else { "current" };
+    let rank = match store.derived_gen(&rank_key)? {
+        None => "missing",
+        Some(g) if g == generation => current,
+        Some(_) => "stale",
+    };
+    let areas = match store.derived_gen("areas")? {
+        None => "missing",
+        Some(_) if areas::needs_refresh(root, store)? => "stale",
+        Some(_) => current,
+    };
+    Ok((rank, areas))
 }
 
 /// Whether the file ranking (the reference graph) was never computed for `store`'s index.

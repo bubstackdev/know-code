@@ -61,6 +61,7 @@ const MAX_DEPTH_LIMIT: i64 = 32;
 pub const KEYS: &[&str] = &[
     "cache.dir",
     "cache.max_size",
+    "cache.shared_bases",
     "notes.path",
     "workspace.roots",
     "workspace.max_depth",
@@ -90,7 +91,7 @@ pub const KEYS: &[&str] = &[
     "conventions.ansible.name_prefixes",
 ];
 /// The `[conventions.*]` keys among [`KEYS`]: each a list (`scope_lifetimes` a table) replacing its default.
-pub const CONVENTION_KEYS: &[&str] = KEYS.split_at(15).1;
+pub const CONVENTION_KEYS: &[&str] = KEYS.split_at(16).1;
 /// The notes database's file name, in the data directory by default.
 pub const NOTES_FILE: &str = "notes.sqlite";
 
@@ -108,6 +109,9 @@ pub struct Config {
     pub cache_dir: Option<PathBuf>,
     /// `[cache] max_size`, in bytes; zero disables size eviction.
     pub max_cache_size: Option<u64>,
+    /// `[cache] shared_bases`: whether checkouts of one repo start from a shared base (see [`crate::base`]); on by
+    /// default.
+    pub shared_bases: Option<bool>,
     /// `[notes] path`.
     pub notes_path: Option<PathBuf>,
     /// `[workspace] roots`.
@@ -173,6 +177,7 @@ impl Config {
                         match k.as_str() {
                             "dir" => c.cache_dir = Some(path_value(&v).map_err(|w| bad("cache.dir", w))?),
                             "max_size" => c.max_cache_size = Some(size_value(&v).ok_or_else(|| bad("cache.max_size", "must be nonnegative bytes or a size such as \"2 GiB\" (0 disables size eviction)"))?),
+                            "shared_bases" => c.shared_bases = Some(v.as_bool().ok_or_else(|| bad("cache.shared_bases", "must be true or false"))?),
                             _ => c.unknown.push(format!("cache.{k}")),
                         }
                     }
@@ -416,6 +421,15 @@ pub fn session_hook() -> Result<(bool, Source)> {
 /// on by default; see [`crate::sdk`]).
 pub fn node_modules() -> Result<(bool, Source)> {
     Ok(match load()?.config.node_modules {
+        Some(value) => (value, Source::Config),
+        None => (true, Source::Default),
+    })
+}
+
+/// Whether checkouts of one repo start from a shared base, and checkouts clean at a commit publish one
+/// (`cache.shared_bases`, on by default; see [`crate::base`]).
+pub fn shared_bases() -> Result<(bool, Source)> {
+    Ok(match load()?.config.shared_bases {
         Some(value) => (value, Source::Config),
         None => (true, Source::Default),
     })
@@ -987,6 +1001,8 @@ mod tests {
         assert_eq!(parse("[hooks]\nsession_start = false\n").unwrap().session_hook, Some(false));
         assert!(parse("[hooks]\nsession_start = 0\n").unwrap_err().to_string().contains("hooks.session_start"));
         assert_eq!(parse("[index]\nnode_modules = false\n").unwrap().node_modules, Some(false));
+        assert_eq!(parse("[cache]\nshared_bases = false\n").unwrap().shared_bases, Some(false));
+        assert!(parse("[cache]\nshared_bases = 1\n").unwrap_err().to_string().contains("cache.shared_bases"));
         assert!(parse("[index]\nnode_modules = \"no\"\n").unwrap_err().to_string().contains("index.node_modules"));
     }
 

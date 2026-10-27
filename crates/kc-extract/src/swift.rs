@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 17;
+pub const VERSION: u32 = 18;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -998,7 +998,8 @@ impl<'a> Cx<'a> {
             "simple_identifier" => {
                 let name = self.text(callee).to_string();
                 let kind = if starts_upper(&name) { RefKind::Instantiate } else { RefKind::Call };
-                self.add_ref(name, None, kind, callee);
+                let at = self.add_typed_ref(name, None, None, kind, callee);
+                self.label_call(at, kind, node);
             }
             "navigation_expression" => {
                 let Some(suffix) = callee
@@ -1031,7 +1032,8 @@ impl<'a> Cx<'a> {
                     }
                 } else {
                     let kind = if starts_upper(&name) { RefKind::Instantiate } else { RefKind::Call };
-                    self.add_typed_ref(name, receiver, receiver_type, kind, suffix);
+                    let at = self.add_typed_ref(name, receiver, receiver_type, kind, suffix);
+                    self.label_call(at, kind, node);
                 }
             }
             "prefix_expression" => {
@@ -1041,7 +1043,8 @@ impl<'a> Cx<'a> {
                 {
                     let name = self.text(target).to_string();
                     if name != "init" {
-                        self.add_ref(name, Some(".".into()), RefKind::Call, target);
+                        let at = self.add_typed_ref(name, Some(".".into()), None, RefKind::Call, target);
+                        self.label_call(at, RefKind::Call, node);
                     }
                 }
             }
@@ -1126,11 +1129,23 @@ impl<'a> Cx<'a> {
         self.add_typed_ref(name, receiver, None, kind, at);
     }
 
-    fn add_typed_ref(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) {
+    /// The reference's index in `refs`, when it is a new one.
+    fn add_typed_ref(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) -> Option<usize> {
         let from = self.current_sym();
         let (l, col) = (line(at), name_col(self.src, at, &name));
         if self.seen_refs.insert((from, name.clone(), kind, l, col)) {
             self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: l, col, args: None });
+            return Some(self.facts.refs.len() - 1);
+        }
+        None
+    }
+
+    /// A call's argument labels, which tell Swift overloads apart (see [`call_labels`]), recorded for call `at`.
+    fn label_call(&mut self, at: Option<usize>, kind: RefKind, call: Node) {
+        if let Some(i) = at.filter(|_| kind == RefKind::Call)
+            && let Some(labels) = call_labels(self.src, call)
+        {
+            self.facts.arg_types.insert(i, labels);
         }
     }
 }
@@ -1324,6 +1339,34 @@ fn doc_comment(src: &str, node: Node) -> Option<String> {
     (!cleaned.is_empty()).then(|| collapse(cleaned, DOC_CAP))
 }
 
+/// A call's argument labels as JSON: `{"l": [...], "t": [...]}`, the labels of the arguments in parentheses and of the
+/// trailing closures, `null` for one without (`f(1, from: x) { }` is `{"l": [null, "from"], "t": [null]}`). `None`
+/// for a call without a suffix (a function reference) or with an argument tree-sitter couldn't read.
+fn call_labels(src: &str, call: Node) -> Option<String> {
+    let suffix = children(call).find(|c| c.kind() == "call_suffix")?;
+    let label = |n: Node| collapse(&src[n.byte_range()], 80);
+    let mut args = Vec::new();
+    if let Some(list) = children(suffix).find(|c| c.kind() == "value_arguments") {
+        for arg in children(list) {
+            match arg.kind() {
+                "value_argument" => args.push(arg.child_by_field_name("name").map(label)),
+                "(" | ")" | "," | "comment" | "multiline_comment" => {}
+                _ => return None,
+            }
+        }
+    }
+    let mut trailing = Vec::new();
+    let mut pending = None;
+    for c in children(suffix) {
+        match c.kind() {
+            "lambda_literal" => trailing.push(pending.take()),
+            "simple_identifier" => pending = Some(label(c)),
+            _ => {}
+        }
+    }
+    Some(serde_json::json!({ "l": args, "t": trailing }).to_string())
+}
+
 pub(crate) fn collapse(s: &str, cap: usize) -> String {
     let mut out = String::with_capacity(s.len().min(cap + 4));
     for word in s.split_whitespace() {
@@ -1364,6 +1407,18 @@ mod tests {
         ] {
             assert!(types.contains(&want), "{want:?} in {types:?}");
         }
+    }
+
+    #[test]
+    fn a_calls_argument_labels_are_recorded() {
+        let f = extract("func g() {\n    f(1, from: x) { }\n    s.put(into: 3)\n    run { } done: { }\n    let h = f\n}\n");
+        let labels = |name: &str| -> Option<&str> {
+            let i = f.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call)?;
+            f.arg_types.get(&i).map(String::as_str)
+        };
+        assert_eq!(labels("f"), Some(r#"{"l":[null,"from"],"t":[null]}"#));
+        assert_eq!(labels("put"), Some(r#"{"l":["into"],"t":[]}"#));
+        assert_eq!(labels("run"), Some(r#"{"l":[],"t":[null,"done"]}"#));
     }
 
     /// `(kind, qualified name)` of each symbol of `f`.

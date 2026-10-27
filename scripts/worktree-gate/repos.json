@@ -1,0 +1,89 @@
+{
+  "_comment": "Public repos for scripts/worktree-gate.py, at pinned commits. `edit` is a tracked source file the gate edits in place, `rename` a name declared in it (its first occurrence in the file) and a same-length replacement, `delete` a tracked file one worktree removes, `probe_dir` where untracked files go. `queries` are knowcode subcommands (shell words), run with --json from each worktree.",
+  "repos": [
+    {
+      "name": "swift-argument-parser",
+      "url": "https://github.com/apple/swift-argument-parser.git",
+      "commit": "38ca4eceb349155836701b88da3e0986eb9d1e1c",
+      "ext": "swift",
+      "edit": "Sources/ArgumentParser/Parsable Types/CommandConfiguration.swift",
+      "rename": ["CommandConfiguration", "CommandConfigurXtion"],
+      "delete": "Sources/ArgumentParser/Completions/FishCompletionsGenerator.swift",
+      "probe_dir": "Sources/ArgumentParser",
+      "queries": [
+        "find ParsableCommand",
+        "find main",
+        "refs ParsableArguments",
+        "context CommandConfiguration",
+        "context ParsableCommand.main",
+        "trace ParsableCommand.main",
+        "impact CommandConfiguration",
+        "locate 'generate shell completions'",
+        "search 'func validate'",
+        "at 'Sources/ArgumentParser/Parsable Types/ParsableCommand.swift:150'",
+        "tests 'Sources/ArgumentParser/Parsable Types/CommandConfiguration.swift'",
+        "unused",
+        "overview",
+        "areas",
+        "hotspots",
+        "deps"
+      ]
+    },
+    {
+      "name": "axum",
+      "url": "https://github.com/tokio-rs/axum.git",
+      "commit": "bf3684991a586fe19a093f493dc07f5d4546ea57",
+      "ext": "rs",
+      "edit": "axum/src/routing/mod.rs",
+      "rename": ["take_route_or_internal_error", "take_route_or_internal_errox"],
+      "delete": "axum-extra/src/json_lines.rs",
+      "probe_dir": "axum/src",
+      "queries": [
+        "find Router",
+        "find route",
+        "refs IntoResponse",
+        "context Router",
+        "context Router.route",
+        "trace Router.route",
+        "impact MethodRouter",
+        "locate 'extract json body'",
+        "search 'fn into_response'",
+        "at 'axum/src/routing/mod.rs:190'",
+        "tests axum/src/routing/mod.rs",
+        "unused",
+        "overview",
+        "areas",
+        "hotspots",
+        "deps"
+      ]
+    }
+    ,{
+      "name": "tokio",
+      "url": "https://github.com/tokio-rs/tokio.git",
+      "commit": "0d38f8349f4d0af50a30d046630c08dd513ebaa7",
+      "ext": "rs",
+      "edit": "tokio/src/sync/mutex.rs",
+      "rename": ["TryLockError", "TryLockErrox"],
+      "delete": "tokio/src/sync/barrier.rs",
+      "probe_dir": "tokio/src",
+      "queries": [
+        "find Mutex",
+        "find spawn",
+        "refs JoinHandle",
+        "context Mutex",
+        "context Mutex.lock",
+        "trace Mutex.lock",
+        "impact Semaphore",
+        "locate 'read lines from a tcp stream'",
+        "search 'fn poll_read'",
+        "at 'tokio/src/sync/mutex.rs:400'",
+        "tests tokio/src/sync/mutex.rs",
+        "unused",
+        "overview",
+        "areas",
+        "hotspots",
+        "deps"
+      ]
+    }
+  ]
+}

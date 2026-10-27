@@ -168,7 +168,7 @@ Every reference, trace or impact row, and path or flow step carries a `confidenc
 
 | confidence | meaning |
 | --- | --- |
-| `exact` | resolved through scope, type, an import or a compiler index |
+| `exact` | resolved through scope, type, an import or a compiler index, to one declaration (or the parts of one: TypeScript's merged declarations, a C# `partial` member) |
 | `unique_name` | the one definition of the name in scope; a heuristic preference among several HTTP handlers or SQL schemas is also labelled `unique_name`, with evidence `name_dominant` |
 | `ambiguous` | several candidates, all listed, none picked |
 | `external_likely` | probably outside the indexed code (a standard-library member, an unindexed module) |
@@ -213,7 +213,8 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 | `revision_unverified` | the dependency's checkout is the revision asked for (a Terraform `?ref=`, a CI include `ref:`, a registry version) |
 
 `exact` is a statement about how a name was resolved, not a measured probability. A syntactic `exact` still rests on
-the assumptions listed beside it.
+the assumptions listed beside it. Its precision against the language toolchains is measured by the
+[identity gate](../eval/identity-v1/README.md).
 
 ## Cited source
 

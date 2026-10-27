@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
+  at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
+  the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
+  cold index of the same tree: `scripts/worktree-gate.py` checks it on public repos, with the freshness cases (a new
+  untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
+  commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
+  `cache.shared_bases` turns it off.
+- `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
 - Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
   describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
   schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
@@ -53,6 +61,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
   row (`(also via Store.Drop [exact] at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
   and says how many, so no row is cut for them.
+- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
+  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
+  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
+  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
+  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
+  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
+  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
+  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
 - A C# override or implementation that leaves out its base member's default parameter value
   (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
   member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
