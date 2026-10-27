@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use kc_extract::{FileFacts, Lang};
@@ -276,11 +276,21 @@ fn seed(root: &Path, db: &Path, checkouts: Option<&[(String, PathBuf, i64)]>) ->
     Ok(Some(origin))
 }
 
-/// Removes the index of the checkout at `root`. Returns whether there was one.
+/// Removes the index of the checkout at `root`. Returns whether there was one. Refused while anything reads it.
 pub fn forget(root: &Path) -> Result<bool> {
+    forget_within(root, Duration::ZERO)
+}
+
+/// How long removing an index under a new AI privacy policy waits for its readers to close it. Readers are queries
+/// and cross-repo link steps, open for moments; the remover holds the writer lease, so no new sync starts meanwhile.
+const PURGE_READERS_WAIT: Duration = Duration::from_secs(30);
+
+/// [`forget`], waiting up to `wait` for the index's readers to close it.
+fn forget_within(root: &Path, wait: Duration) -> Result<bool> {
     let _writer = writer::WriterLock::acquire(root)?;
     let db = db_path(root)?;
-    let _idle = writer::idle(&db)?.ok_or_else(|| anyhow::anyhow!("index is in use: {}; close its readers and retry", root.display()))?;
+    let _idle = writer::idle_within(&db, wait)?
+        .ok_or_else(|| anyhow::anyhow!("index is in use: {}; close its readers and retry", root.display()))?;
     let existed = db.exists();
     cache::remove_files(&db)?;
     drop(_idle); // never wait for the summary lock while holding an exclusive lifetime lease
@@ -294,7 +304,9 @@ pub fn forget(root: &Path) -> Result<bool> {
 /// snapshot and status cache, its entry in the workspace summary file, and the notes on symbols in blocked files
 /// (every note, for a repo blocked whole).
 pub fn purge_blocked(root: &Path, privacy: &privacy::Privacy) -> Result<()> {
-    forget(root)?;
+    // Opening the index under the new policy does this, and another query may be reading it still: wait for it, as
+    // the index can't be answered from until it is rebuilt without what is blocked.
+    forget_within(root, PURGE_READERS_WAIT)?;
     workspace::forget_summary(&db_path(root)?)?;
     notes::purge(root, |file| privacy.blocks(file))?;
     Ok(())
