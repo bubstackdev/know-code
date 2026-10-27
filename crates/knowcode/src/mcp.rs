@@ -1068,6 +1068,8 @@ pub struct KnowcodeServer {
     hidden: std::sync::Arc<Vec<String>>,
     /// The `one` profile: every tool is reached through `kc`, and answers name calls as its ops.
     one: bool,
+    /// Restricted mode's scope (see [`crate::restricted`]).
+    restriction: Option<std::sync::Arc<crate::restricted::Restriction>>,
 }
 
 /// The tools of the `core` profile, the default: the ones that answer the first questions about code (where X is
@@ -1274,7 +1276,13 @@ impl KnowcodeServer {
 
     /// What this server offers, for its capabilities.
     pub fn surface(&self) -> crate::capabilities::Surface<'_> {
-        crate::capabilities::Surface { schemas: &self.schemas, descriptions: &self.descriptions, hidden: &self.hidden, one: self.one }
+        crate::capabilities::Surface {
+            schemas: &self.schemas,
+            descriptions: &self.descriptions,
+            hidden: &self.hidden,
+            one: self.one,
+            restriction: self.restriction.as_deref(),
+        }
     }
 
     /// A help topic as text (with a tool's parameters from its schema), or the index without one.
@@ -2365,6 +2373,7 @@ impl KnowcodeServer {
             descriptions: std::sync::Arc::new(descriptions),
             hidden: std::sync::Arc::new(hidden),
             one,
+            restriction: None,
         })
     }
 
@@ -2972,6 +2981,11 @@ impl ServerHandler for KnowcodeServer {
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        if let Some(r) = &self.restriction
+            && let Err(e) = r.check(&request.name, request.arguments.as_ref())
+        {
+            return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(anyhow::Error::new(e)));
+        }
         if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
             return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(e));
         }
@@ -2999,7 +3013,14 @@ impl ServerHandler for KnowcodeServer {
     }
 
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
+        let mut capabilities = ServerCapabilities::builder().enable_tools().enable_resources().build();
+        // A restricted server states its scope in its first reply.
+        if let Some(r) = &self.restriction
+            && let Value::Object(scope) = r.scope()
+        {
+            capabilities.experimental = Some([("knowcode/scope".to_string(), scope)].into_iter().collect());
+        }
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("knowcode", concat!(env!("CARGO_PKG_VERSION"), "+", env!("KNOWCODE_BUILD"))))
             .with_instructions(if self.one { ONE_INSTRUCTIONS } else { INSTRUCTIONS })
     }
@@ -3068,6 +3089,26 @@ has a confidence; an incomplete answer says why. `withheld`: a privacy file bloc
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
     let server = KnowcodeServer::new(default, tools).map_err(anyhow::Error::msg)?;
+    run_server(server)
+}
+
+/// [`serve`] in restricted mode: about its bound repos only, its allowed ops only (see [`crate::restricted`]).
+pub fn serve_restricted(r: crate::restricted::Restriction, tools: &str) -> anyhow::Result<()> {
+    let default = Scope { repos: r.repos.clone(), no_sync: false };
+    let mut server = KnowcodeServer::new(default, tools).map_err(anyhow::Error::msg)?;
+    // Under a profile of separate tools, the tools it may not run aren't listed either.
+    let refused: Vec<String> = server.schemas.keys().filter(|t| *t != "kc" && !r.allows(t) && !server.hidden.contains(t)).cloned().collect();
+    for t in &refused {
+        server.tool_router.disable_route(t.clone());
+    }
+    let mut hidden = (*server.hidden).clone();
+    hidden.extend(refused);
+    server.hidden = std::sync::Arc::new(hidden);
+    server.restriction = Some(std::sync::Arc::new(r));
+    run_server(server)
+}
+
+fn run_server(server: KnowcodeServer) -> anyhow::Result<()> {
     kc_index::light::discover_roots()?;
     crate::refresh::start();
     // No process-wide SQLite memory limit: SQLite is built without the counting it needs (see .cargo/config.toml).

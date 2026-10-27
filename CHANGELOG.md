@@ -13,6 +13,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
   topic's list of what `q` fills is now made from the same table.
 - `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Restricted mode: `knowcode serve --restricted --repo DIR --ops find,refs,… --cache-dir DIR --config-dir DIR`, for an
+  automated pipeline. The server is bound to the repos given: nothing else is discovered or indexed, and another repo,
+  or a path outside them, is refused with the new code `not_allowed`, as is any op not in the allowlist. It needs
+  explicit cache and config directories and writes nothing outside the cache. It runs no update check or plugin
+  refresh, and keeps git off the network. It states its scope in the `initialize` reply
+  (`capabilities.experimental["knowcode/scope"]`), on stderr and in the capabilities. docs/usage.md has a headless
+  recipe, with the real git for macOS's `/usr/bin/git` shim. An acceptance test runs it under a macOS sandbox
+  profile that kills it on any write outside the cache or any network connection.
 - Completeness said apart: a partial JSON answer adds `completeness` (`graph`: the graph it read was whole; `source`:
   its quoted source is whole, not a skeleton or cut; `lists`: no list cut or continuing) and `size` (`max_chars` asked,
   `chars` returned, the source mode in effect, and each continuation's cursor, rows left and about how many

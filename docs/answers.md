@@ -103,6 +103,7 @@ The English stays, for people.
 | `unsupported` | a construct or language the analysis doesn't model (a rename of a member the index can't see too) |
 | `collision` | a rename's new name is taken where the symbol is in scope |
 | `cut` | a rename preview cut to fit `max_chars`, which can't be applied as it is |
+| `not_allowed` | a restricted server (`serve --restricted`) isn't allowed to answer it: an op outside its allowlist, or a repo or path outside the repos it is bound to |
 | `cancelled` | the client cancelled the call |
 | `failed` | files, the index or git could not be read |
 | `internal` | anything else: a fault in KnowCode, worth reporting |
