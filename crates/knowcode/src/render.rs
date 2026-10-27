@@ -684,9 +684,14 @@ pub fn trace_text(root: &Path, t: &kc_store::trace::Trace, multi: bool) -> Strin
             };
             let conf = if n.confidence.is_empty() { String::new() } else { format!("  [{}]", n.confidence) };
             let site_repo = n.site_repo.as_deref().or(n.repo.as_deref());
-            let site = n.site.as_deref().map(|s| format!(" at {}", in_repo(site_repo, s))).unwrap_or_default();
+            // A caller's site is in its own code: the row leads with it.
+            let own = n.site.as_deref().filter(|_| n.direction == "in" && site_repo == n.repo.as_deref()).and_then(|s| own_line(&n.file, s));
+            let (line, site) = match own {
+                Some(at) => (at, declared(n.line, at)),
+                None => (n.line, n.site.as_deref().map(|s| format!(" at {}", in_repo(site_repo, s))).unwrap_or_default()),
+            };
             let binding = n.binding.as_deref().map(|b| format!(" (bound at {b})")).unwrap_or_default();
-            w!(out, "{indent}{tag}{} {}  {}{conf}{site}{binding}", kw(&n.kind, &n.file), n.qualified, loc_in(r, n.repo.as_deref(), &n.file, n.line));
+            w!(out, "{indent}{tag}{} {}  {}{conf}{site}{binding}", kw(&n.kind, &n.file), n.qualified, loc_in(r, n.repo.as_deref(), &n.file, line));
             cite_text(&mut out, &indent, n.cite.as_ref(), &mut seen);
         }
     }
@@ -736,10 +741,36 @@ fn relation_label(
     }
 }
 
-/// One affected symbol's line in the impact tree.
+/// A site's line when the site (`file:line`) is in `file`.
+fn own_line(file: &str, site: &str) -> Option<u32> {
+    site.rsplit_once(':').filter(|(f, _)| *f == file).and_then(|(_, l)| l.parse().ok())
+}
+
+/// After a row leading with its site, the line its symbol is declared at, when that's another.
+fn declared(line: u32, at: u32) -> String {
+    if line == at { String::new() } else { format!(" (declared at line {line})") }
+}
+
+/// One affected symbol's line in the impact tree. A dependent's site is in its own code (a call, a use): the row
+/// leads with it, and with each of its other sites in the file as a place of its own, then says the line its symbol
+/// is declared at.
 fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
-    let mut site = a.site.as_deref().map(|s| format!(" at {}", in_repo(a.repo.as_deref(), s))).unwrap_or_default();
-    if let Some(first) = a.site.as_deref()
+    let own = a.site.as_deref().and_then(|s| own_line(&a.file, s));
+    let mut site = match own {
+        Some(_) => String::new(),
+        None => a.site.as_deref().map(|s| format!(" at {}", in_repo(a.repo.as_deref(), s))).unwrap_or_default(),
+    };
+    if own.is_some() && !a.also.is_empty() {
+        let places: Vec<String> = a
+            .also
+            .iter()
+            .map(|s| match own_line(&a.file, s) {
+                Some(l) => loc_in(root, a.repo.as_deref(), &a.file, l),
+                None => in_repo(a.repo.as_deref(), s),
+            })
+            .collect();
+        site.push_str(&format!(" (also {})", places.join(", ")));
+    } else if let Some(first) = a.site.as_deref()
         && !a.also.is_empty()
     {
         // Its other sites: lines of the same file by number, any other file in full.
@@ -756,6 +787,9 @@ fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
     if a.via_removed {
         site.push_str(&format!(" (names {}, which the change removes)", a.via));
     }
+    if let Some(at) = own {
+        site.push_str(&declared(a.line, at));
+    }
     format!(
         "{} {} {}  {}  [{}] {}{site}",
         module_label(a.edge, "in", a.module.as_ref()).unwrap_or_else(|| relation_label(
@@ -769,7 +803,7 @@ fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
         )),
         kw(&a.kind, &a.file),
         a.qualified,
-        loc_in(root, a.repo.as_deref(), &a.file, a.line),
+        loc_in(root, a.repo.as_deref(), &a.file, own.unwrap_or(a.line)),
         a.confidence,
         a.class,
     )

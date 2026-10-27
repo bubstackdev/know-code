@@ -8426,7 +8426,8 @@ pub(crate) mod tests {
         let row = &i.env["items"][0]["affected"][0];
         assert_eq!((row["site"].as_str(), row["also"].clone()), (Some("src/Shop.cs:5"), json!(["src/Shop.cs:7"])), "{}", i.env);
         let text = crate::render::impact_text(&i.data, false);
-        assert!(text.contains("at src/Shop.cs:5 (also 7)"), "{text}");
+        // The row leads with its first site, each other site a place of its own, then the declaration's line.
+        assert!(text.contains("method Shop.Run  src/Shop.cs:5  [unique_name] direct (also src/Shop.cs:7) (declared at line 3)"), "{text}");
     }
 
     #[test]
@@ -9908,6 +9909,45 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         );
         assert!(r.cross_repo.is_empty(), "listed in the walk, not again: {:?}", r.cross_repo);
         let _ = (lib, web);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_walked_row_leads_with_its_call_site_then_its_declaration() {
+        let cache = test_cache();
+        let base = cache.dir("site-first");
+        // A library method, and a repo using it from a constructor whose call is lines below its declaration.
+        let lib = repo(
+            &base,
+            "ledger",
+            &[
+                ("src/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Ledger</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/Entry.cs", "namespace Ledger;\npublic static class Entry\n{\n    public static int Post(int n) => n;\n    public static int Twice(int n)\n    {\n        var a = Post(n);\n        return a + Post(n);\n    }\n}\n"),
+            ],
+        );
+        let app = repo(
+            &base,
+            "ledger-app",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Ledger\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Till.cs", "using Ledger;\nnamespace App;\npublic class Till\n{\n    private readonly int _n;\n    public Till()\n    {\n        _n = Entry.Post(1);\n    }\n}\n"),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("Entry.Post".into()), depth: 1, limit: 50, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let text = crate::render::impact_text(&out.data, false);
+        // In the repo and across the library boundary alike: the call's line, each other call's, then where the
+        // caller is declared.
+        assert!(text.contains("method Entry.Twice  src/Entry.cs:7  [exact] direct (also src/Entry.cs:8) (declared at line 5)"), "{text}");
+        assert!(text.contains("constructor Till.init  ledger-app/src/Till.cs:8  [exact] direct (declared at line 6)"), "{text}");
+        // `trace in` names callers the same way; `trace out` names a callee at its declaration, the call after it.
+        let t = trace("Entry.Post", "in", 1, 50, &WalkFilter::default(), &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let text = crate::render::trace_text(&lib, &t.data.found[0].1, false);
+        assert!(text.contains("called by method Entry.Twice  src/Entry.cs:7  [exact] (declared at line 5)"), "{text}");
+        let t = trace("Entry.Twice", "out", 1, 50, &WalkFilter::default(), &Scope { repos: vec![lib.clone()], no_sync: false }).unwrap();
+        let text = crate::render::trace_text(&lib, &t.data.found[0].1, false);
+        assert!(text.contains("calls method Entry.Post  src/Entry.cs:4  [exact] at src/Entry.cs:7"), "{text}");
+        let _ = app;
         let _ = std::fs::remove_dir_all(&base);
     }
 
