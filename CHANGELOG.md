@@ -4,6 +4,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A member a Swift repo adds to a standard-library struct (`extension Int32 { var isFinite … }`) no longer captures
+  uses of the same name on other library types. On a value of another library type (`v: Float`), or of a generic
+  parameter, it is never linked: the fallback that links a framework type's member to the repo's extension of a
+  framework protocol skips library structs, which nothing conforms to. On an untyped value (`for (x, y) in zip(a, b)`,
+  `x.isFinite`), a use reached in a dependency is `external_likely`, not `unique_name`, when the name is a common
+  library member's or the member is there to satisfy one of the dependency's protocol requirements, as it is within a
+  repo. `isFinite`, `isNaN`, `magnitude`, `rounded` and other number members join the common library members, and
+  more sized number types count as standard-library types (`Int8` to `UInt64`, `Float16` to `Float80`, `Decimal`).
+- A member reached on a library type through a protocol it conforms to (`v.isFinite`, `v: Float`, resolving to
+  `GridScalar.isFinite`) says so: the reference's `basis` is `via protocol`, since the member that runs is the
+  type's own, outside the repo. When the conformance (`extension Float: GridScalar {}`) is in a SwiftPM target the
+  code neither is in nor imports, the use is the library member's alone and stays unresolved.
 - A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
   mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
   sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the
