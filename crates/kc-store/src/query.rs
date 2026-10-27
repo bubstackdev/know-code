@@ -2016,10 +2016,10 @@ fn settle(hit: &RefHit, ids: Vec<i64>, named: &[Def]) -> (&'static str, Vec<i64>
         let receiver = hit.receiver.as_deref().unwrap_or("");
         let through_type = receiver.starts_with(char::is_uppercase) && receiver.chars().all(|c| c.is_alphanumeric() || c == '_');
         let through_value = receiver.starts_with(|c: char| c.is_lowercase()) && receiver.chars().all(|c| c.is_alphanumeric() || c == '_');
-        if through_type || through_value {
-            if let Some(r) = one(cands.iter().copied().filter(|d| d.is_static == through_type).collect()) {
-                return r;
-            }
+        if (through_type || through_value)
+            && let Some(r) = one(cands.iter().copied().filter(|d| d.is_static == through_type).collect())
+        {
+            return r;
         }
     }
     // A Swift module's own declaration shadows one of the same name it imports.
