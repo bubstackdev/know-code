@@ -783,6 +783,25 @@ privacy file blocks anything or is malformed): the file's state (read, empty, ma
 repos blocked whole. `workspace` for every indexed repo."#,
     },
     Topic {
+        name: "kc_task",
+        summary: "one bounded answer for a goal in words",
+        text: r#"One bounded answer for a goal in words (a bug report, a ticket title, what a change should do), where
+otherwise kc_locate, kc_context, kc_impact and kc_tests are joined by hand. Four sections:
+
+- `items`: the files most likely involved, kc_locate's ranking, each `path | symbols matching the goal (kind :line)`;
+  the first two also quote the line declaring their best symbol (`| 42: public void Refund(…)`).
+- `dependents`: what depends on the first three files, one hop (`path:line Caller → Callee [confidence]`, confident
+  edges first), and the files that usually change with them (`path (changes with …: n of m commits)`).
+- `tests`: the tests to run for those files, each with its likelihood (0-1). Advisory: the most likely tests, not all;
+  a test not listed may still fail, and is never said to be safe to skip.
+- `unsettled`: what the index can't settle: goal words no listed file matches, edges left as ambiguous (a call that
+  may reach several implementations), constructs not read, content withheld, repos not read.
+
+`sections` says for each list whether it is whole (`complete`) and the call that continues it (`next`); a cut list is a
+`capped` entry of `incomplete` too. Rows are short text, so the answer costs about what kc_locate's does alone. Bounds:
+`files`, `dependents` and `tests`."#,
+    },
+    Topic {
         name: "kc_capabilities",
         summary: "every op as data, for a client building its tool surface",
         text: r#"Every op as JSON, for a client that builds its own tool surface instead of copying this help: read from the

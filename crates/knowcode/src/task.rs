@@ -232,3 +232,63 @@ fn quote(root: &Path, file: &str, line: u32) -> Option<String> {
     let l = text.lines().nth(line.checked_sub(1)? as usize)?.trim();
     Some(l.chars().take(QUOTE_CHARS).collect())
 }
+
+/// The answer as text: each section under its heading, then what isn't whole.
+pub fn render(env: &Value) {
+    let rows = |key: &str| env[key].as_array().cloned().unwrap_or_default();
+    for (title, key) in [("files", "items"), ("dependents", "dependents"), ("tests (advisory)", "tests"), ("unsettled", "unsettled")] {
+        let list = rows(key);
+        if list.is_empty() {
+            continue;
+        }
+        println!("{title}:");
+        for r in list {
+            println!("  {}", r.as_str().unwrap_or_default());
+        }
+    }
+    for i in incomplete_of(env) {
+        println!("{}", i.line());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::tests::{repo, test_cache};
+
+    /// A goal in words gets the files that match it, what depends on them, the tests reaching them and the words
+    /// nothing matched, each section saying whether it is whole and how to go on; tests are advice, never the only
+    /// ones to run.
+    #[test]
+    fn a_goal_gets_its_files_dependents_tests_and_what_is_unsettled() {
+        let cache = test_cache();
+        let base = cache.dir("task");
+        let root = repo(
+            &base,
+            "shop",
+            &[
+                ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/Refunds.cs", "namespace Shop;\npublic class Refunds\n{\n    public void RefundPartialCapture() { Ledger.Post(); }\n}\n"),
+                ("src/Ledger.cs", "namespace Shop;\npublic static class Ledger\n{\n    public static void Post() { }\n}\n"),
+                ("src/Checkout.cs", "namespace Shop;\npublic class Checkout\n{\n    public void Run() { new Refunds().RefundPartialCapture(); }\n}\n"),
+                ("tests/RefundsTests.cs", "namespace Shop.Tests;\npublic class RefundsTests\n{\n    public void Refunds() { new Shop.Refunds().RefundPartialCapture(); }\n}\n"),
+            ],
+        );
+        let s = Scope { repos: vec![root], no_sync: false };
+        let p = TaskParams { goal: "refund partial capture zebra".into(), files: 1, dependents: 6, tests: 4 };
+        let env = task(&p, &s).unwrap().env;
+        let items: Vec<&str> = env["items"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(items[0].starts_with("src/Refunds.cs | Refunds.RefundPartialCapture (method :4)") && items[0].contains(" | 4: public void RefundPartialCapture()"), "{env}");
+        // Past the files listed, the rest is a call away.
+        assert_eq!(env["sections"]["items"]["complete"], false, "{env}");
+        let deps: Vec<&str> = env["dependents"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(deps.iter().any(|d| d.starts_with("src/Checkout.cs:4 Checkout.Run → Refunds.RefundPartialCapture")), "{env}");
+        assert!(env["tests"].as_array().unwrap().iter().any(|t| t.as_str().is_some_and(|t| t.starts_with("tests/RefundsTests.cs ("))), "{env}");
+        assert_eq!(env["sections"]["tests"]["advisory"], ADVISORY);
+        assert!(env["unsettled"].as_array().unwrap().iter().any(|u| u.as_str().is_some_and(|u| u.contains("zebra"))), "{env}");
+        // Each section says whether it is whole and how to continue.
+        for key in ["items", "dependents", "tests"] {
+            assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["next"].is_string(), "{key}: {env}");
+        }
+    }
+}

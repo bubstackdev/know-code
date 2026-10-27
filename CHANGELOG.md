@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Task context: `kc {op: task, q: "refunds fail for partial captures"}` (and `knowcode task`) answers a goal in words in
+  one bounded answer, where a client joined `locate`, `context`, `impact` and `tests` itself: the files most likely
+  involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
+  changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
+  index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does.
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a

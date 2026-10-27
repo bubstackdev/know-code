@@ -158,6 +158,7 @@ const QUESTIONS: &[&[&str]] = &[
     &["find", "shared_helper"],
     &["find", "Cipher"],
     &["locate", "secret store vault cipher seal"],
+    &["task", "secret store vault cipher seal"],
     &["refs", "shared_helper"],
     &["context", "shared_helper"],
     &["context", "run_app"],
