@@ -1848,6 +1848,11 @@ fn cs_receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<(Receiver, Optio
         };
         return Ok((Receiver::Known(supers), None));
     }
+    // A predefined type (`string.IsNullOrEmpty(s)`): the type itself, so only its own members and extensions declared
+    // on it, never a same-named member of another type.
+    if let Some(k) = r.filter(|r| CS_PREDEFINED_TYPES.contains(r)) {
+        return Ok((Receiver::Foreign(vec![k.to_string()]), None));
+    }
     oracle.origin = Origin::Here;
     let mut ty = None;
     if let Some(r) = r
@@ -1911,6 +1916,10 @@ fn cs_receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<(Receiver, Optio
         Seen::Library => (Receiver::Foreign(vec![last_segment(&written).to_string()]), Some(Vec::new())),
     })
 }
+
+/// C#'s predefined type keywords: as a receiver, a type, never a variable.
+const CS_PREDEFINED_TYPES: &[&str] =
+    &["string", "object", "bool", "char", "sbyte", "byte", "short", "ushort", "int", "uint", "long", "ulong", "nint", "nuint", "float", "double", "decimal"];
 
 /// `Name` for a receiver written `Name` or `Name<T, …>` with `Name` capitalised: a property or a type.
 fn bare_name(receiver: &str) -> Option<&str> {
@@ -2088,7 +2097,11 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             found.retain(|d| d.kind != "method");
         }
         if found.is_empty() {
-            if matches!(recv, Receiver::Foreign(_)) {
+            // A C# call on a type written as its receiver (`string.IsNullOrEmpty(s)`, `Convert.ToInt32(x)`) reaches
+            // that type's static members, none of which the repo declares: never another type's extension method.
+            let on_type = hit.file.ends_with(".cs")
+                && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
+            if matches!(recv, Receiver::Foreign(_)) && !on_type {
                 // A framework type may conform to a framework protocol the repo extends.
                 let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container).collect();
                 return group_confidence(&ext);
