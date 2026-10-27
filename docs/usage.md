@@ -197,7 +197,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 26 tools (every tool but `kc_capabilities` and `kc_test_targets`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 27 tools (every tool but `kc_capabilities` and `kc_test_targets`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
