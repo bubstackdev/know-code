@@ -339,6 +339,9 @@ pub fn context(root: &Path, c: &Context, multi: bool) {
         for e in &c.extensions {
             println!("  {}  {}", e.signature, loc(r, &e.file, e.line));
         }
+        for a in &c.extensions_ambiguous {
+            println!("  ambiguous: {a}");
+        }
     }
     if c.members_total > 0 {
         println!("members ({}):", c.members_total);

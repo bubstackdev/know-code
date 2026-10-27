@@ -5507,6 +5507,11 @@ pub struct Context {
     pub relations: Vec<RelationHit>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<SymbolRow>,
+    /// Extensions listed that may extend another type of this name instead (each imported module declaring one, say),
+    /// one line per set of other types: `2 extensions may extend this or file:line (Module): file:line, file:line`.
+    /// Their members are listed as this type's too.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions_ambiguous: Vec<String>,
     /// For a C# `partial` type declared in several parts: every part, `file:line`, this one among them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<String>,
@@ -5756,6 +5761,7 @@ pub fn context_with(
     let is_type = TYPE_KINDS.contains(&symbol.kind.as_str()) || symbol.kind == "extension";
 
     let mut extensions = Vec::new();
+    let mut extensions_ambiguous = Vec::new();
     let mut relations = Vec::new();
     let mut members = Vec::new();
     let mut members_total = 0;
@@ -5790,14 +5796,36 @@ pub fn context_with(
         if !others.is_empty() {
             let decls: Vec<SymbolRow> = std::iter::once(symbol.clone()).chain(others).collect();
             let mut kept = Vec::with_capacity(extensions.len());
+            let mut ambiguous: Vec<(Vec<String>, Vec<String>)> = Vec::new();
             for e in extensions {
-                if crate::identity::extended_by(conn, &e, &decls)?.contains(&symbol.id) {
-                    kept.push(e);
-                } else {
+                let targets = crate::identity::extended_by(conn, &e, &decls)?;
+                if !targets.contains(&symbol.id) {
                     not_ours.insert(e.id);
+                    continue;
                 }
+                if targets.len() > 1 {
+                    let mut also: Vec<String> = Vec::new();
+                    for d in decls.iter().filter(|d| d.id != symbol.id && targets.contains(&d.id)) {
+                        let ns = crate::identity::namespace_of(conn, d)?.map(|n| format!(" ({n})")).unwrap_or_default();
+                        also.push(format!("{}:{}{ns}", d.file, d.line));
+                    }
+                    let at = format!("{}:{}", e.file, e.line);
+                    match ambiguous.iter_mut().find(|(a, _)| *a == also) {
+                        Some((_, exts)) => exts.push(at),
+                        None => ambiguous.push((also, vec![at])),
+                    }
+                }
+                kept.push(e);
             }
             extensions = kept;
+            // One line per set of other types: a type declared twice under `#if` has every extension in both.
+            for (also, exts) in ambiguous {
+                let n = exts.len();
+                let shown: Vec<&str> = exts.iter().take(3).map(String::as_str).collect();
+                let more = if n > 3 { ", …" } else { "" };
+                let word = if n == 1 { "extension" } else { "extensions" };
+                extensions_ambiguous.push(format!("{n} {word} may extend this or {}: {}{more}", also.join(", "), shown.join(", ")));
+            }
         }
 
         let from_ids: Vec<i64> = std::iter::once(symbol.id).chain(extensions.iter().map(|e| e.id)).collect();
@@ -5971,6 +5999,7 @@ pub fn context_with(
         source_changed,
         relations,
         extensions,
+        extensions_ambiguous,
         parts,
         members,
         members_total,

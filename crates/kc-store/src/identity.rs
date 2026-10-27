@@ -119,26 +119,39 @@ pub fn disambiguate(conn: &Connection, rows: &mut [SymbolRow]) -> Result<()> {
 
 /// Of `decls`, declarations sharing one qualified name (a module's `Grid` and another's `private struct Grid`), the
 /// ids of those an extension declared in `ext` extends: the one in its own file, else its module's (a module's own
-/// type shadows an imported one), else those of other modules. A `private` or `fileprivate` declaration is seen from
-/// its file only. Files whose module can't be told count as one module. Empty when it sees none of them: it extends
-/// a type the repo doesn't declare.
+/// type shadows an imported one), else those of other modules, narrowed to the modules its file imports when it
+/// imports any of them. A `private` or `fileprivate` declaration is seen from its file only. Files whose module can't
+/// be told count as one module. Several when nothing tells them apart (two imported modules each declaring it): the
+/// extension is ambiguous between them. Empty when it sees none of them: it extends a type the repo doesn't declare.
 pub fn extended_by(conn: &Connection, ext: &SymbolRow, decls: &[SymbolRow]) -> Result<Vec<i64>> {
     let here = namespace_of(conn, ext)?;
     let mut ranked = Vec::with_capacity(decls.len());
     for d in decls {
+        let ns = namespace_of(conn, d)?;
         let rank = if d.file == ext.file {
             0
         } else if file_private(&d.signature) {
             continue;
-        } else if namespace_of(conn, d)? == here {
+        } else if ns == here {
             1
         } else {
             2
         };
-        ranked.push((rank, d.id));
+        ranked.push((rank, d.id, ns));
     }
-    let best = ranked.iter().map(|r| r.0).min();
-    Ok(ranked.into_iter().filter(|r| Some(r.0) == best).map(|r| r.1).collect())
+    let Some(best) = ranked.iter().map(|r| r.0).min() else { return Ok(Vec::new()) };
+    ranked.retain(|r| r.0 == best);
+    if best == 2 {
+        let imports: Vec<String> = conn
+            .prepare_cached("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?
+            .query_map([&ext.file], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let imported = |ns: &Option<String>| ns.as_deref().is_some_and(|n| imports.iter().any(|i| crate::query::imports_module(i, n)));
+        if ranked.iter().any(|r| imported(&r.2)) {
+            ranked.retain(|r| imported(&r.2));
+        }
+    }
+    Ok(ranked.into_iter().map(|r| r.1).collect())
 }
 
 /// Whether a Swift declaration is seen from its own file only: written `private` or `fileprivate`.

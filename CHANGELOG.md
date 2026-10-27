@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `context` on a type lists the members and extensions of the declaration it picks, not those of every type with its
+  name. Two Swift modules each declaring `Tile`, or a file's `private struct Tile` beside a module's public one, used
+  to share one member list. An extension goes to the declaration it can see: the one in its file, else its module's,
+  else that of a module its file imports; a `private` or `fileprivate` type is seen from its own file only. An
+  extension nothing narrows to one (its file imports two modules declaring the type) is listed under each, and each
+  context says so (`extensions_ambiguous`).
 - `impact` listed each dependent once, by its best way, and dropped the others with their lines: a method calling
   the change on one line (hop 1) and, on others, a method that calls it (hop 2) named only the first line. A row now
   keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
