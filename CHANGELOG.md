@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
+  mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
+  sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the
+  other checkout's directory; its Ansible files are extracted again.
+- `unused` counted another worktree (or clone) of the same repo as a user of the repo's packages, so its answer
+  changed with how many checkouts of the repo were indexed: their public API turned `possibly unused` and
+  `published` named the packages. Checkouts of one origin are one repo here too.
+
 - A C# call written on a type reached a same-named extension method of another type: `string.IsNullOrEmpty(s)`
   resolved to a repo's `IsNullOrEmpty(this Guid? g)`, and `string.Compare(a, b, c)` to repo `Compare` methods, so
   `impact`, `refs` and `trace` listed those calls as callers. A predefined type keyword (`string`, `int`, …) as
