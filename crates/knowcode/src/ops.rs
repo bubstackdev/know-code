@@ -9987,6 +9987,45 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn an_override_dropping_a_default_parameter_is_reached_through_its_base_member() {
+        let cache = test_cache();
+        let base = cache.dir("override-default");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "src/Bin.cs",
+                    "namespace Shelf;\npublic class Bin\n{\n    public virtual int Count(string owner, bool deep, string filter = null) => 0;\n\
+                     \x20   public virtual int Count(string owner) => 0;\n}\n",
+                ),
+                ("src/IBin.cs", "namespace Shelf;\npublic interface IBin\n{\n    int Peek(string owner, string filter = null);\n}\n"),
+                // C# lets an override or an implementation leave the default value out: it takes the same parameters.
+                (
+                    "src/Crate.cs",
+                    "namespace Shelf;\npublic class Crate : Bin, IBin\n{\n    public override int Count(string owner, bool deep, string filter) => 1;\n\
+                     \x20   public int Peek(string owner, string filter) => 2;\n}\n",
+                ),
+                (
+                    "src/Desk.cs",
+                    "namespace Shelf;\npublic class Desk\n{\n    public int Tally(Bin bin) => bin.Count(\"a\", true);\n    public int Total(Bin bin) => bin.Count(\"a\");\n\
+                     \x20   public int Look(IBin bin) => bin.Peek(\"a\");\n}\n",
+                ),
+            ],
+        );
+        let r = impact_of(&root, "src/Crate.cs:4");
+        let callers: Vec<(String, &str)> = r.impact.affected.iter().filter(|a| a.hop == 1).map(|a| (a.qualified.clone(), a.edge)).collect();
+        // The call taking the default reaches the override, through the base member; the call of the other
+        // overload doesn't.
+        assert!(callers.iter().any(|(q, e)| q == "Desk.Tally" && *e == "via_protocol"), "{callers:?}");
+        assert!(!callers.iter().any(|(q, _)| q == "Desk.Total"), "{callers:?}");
+        // The same through an interface member.
+        let r = impact_of(&root, "src/Crate.cs:5");
+        assert!(r.impact.affected.iter().any(|a| a.qualified == "Desk.Look" && a.edge == "via_protocol"), "{:?}", r.impact.affected);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn impact_reaches_calls_on_a_constrained_type_parameter() {
         let cache = test_cache();
         let base = cache.dir("constrained");
