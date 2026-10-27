@@ -108,3 +108,22 @@ fn a_swift_qualifier_is_read_in_scope_and_in_the_modules_the_file_sees() {
     assert_eq!(uses(conn, "Handle"), [("Sources/Hash/Hash.swift:4".to_string(), "unresolved", vec![])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A qualifier naming a repo type in scope whose nested name the source doesn't declare (a macro generates it) is
+/// nowhere in the repo, not another type's same-named member; of copies of one declaration, the file's own is meant.
+#[test]
+fn a_qualifier_in_scope_without_the_name_leaves_it_unresolved() {
+    let root = scratch("qualified-generated");
+    write(&root, "Sources/App/Feature.swift", "struct Feature {\n    enum Destination {}\n    var d: Destination.State?\n}\n");
+    write(&root, "Sources/App/Other.swift", "struct Other {\n    enum Destination { struct State {} }\n}\n");
+    write(&root, "Sources/App/Step1.swift", "struct Card { enum Action { enum Alert {} } }\nlet a: Card.Action.Alert? = nil\n");
+    write(&root, "Sources/App/Step2.swift", "struct Card { enum Action { enum Alert {} } }\nlet b: Card.Action.Alert? = nil\n");
+    let store = index(&root);
+    let conn = store.conn();
+    let states = uses(conn, "State");
+    assert_eq!(states, [("Sources/App/Feature.swift:3".to_string(), "unresolved", vec![])]);
+    let alerts: Vec<(String, &str, usize)> =
+        query::refs(conn, "Alert", &["type_ref"], 50).unwrap().0.iter().map(|h| (format!("{}:{}", h.file, h.line), h.confidence, h.target_ids.len())).collect();
+    assert_eq!(alerts, [("Sources/App/Step1.swift:2".to_string(), "exact", 1), ("Sources/App/Step2.swift:2".to_string(), "exact", 1)]);
+    let _ = std::fs::remove_dir_all(&root);
+}

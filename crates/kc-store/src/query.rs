@@ -1969,6 +1969,20 @@ fn stdlib_member(file: &str, name: &str) -> bool {
     }
 }
 
+/// The type the qualifier `q` of a type reference names, read as code inside the types of `chain` (innermost first)
+/// reads it: the qualified name of a type the repo declares as `<scope>.q` for a scope in the chain, else as `q`.
+/// `None` when the repo declares no such type.
+fn qualifier_in_scope(conn: &Connection, q: &str, chain: &[String]) -> Result<Option<String>> {
+    let name = q.rsplit('.').next().unwrap_or(q);
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT CASE WHEN container IS NULL THEN name ELSE container || '.' || name END FROM symbols
+         WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ({}, 'typealias')",
+        TYPE_KINDS.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ")
+    ))?;
+    let declared: HashSet<String> = stmt.query_map([name], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(chain.iter().map(|scope| format!("{scope}.{q}")).chain(std::iter::once(q.to_string())).find(|c| declared.contains(c)))
+}
+
 /// Of `defs`, those code in the Swift file `file` can name: declared in its own SwiftPM target or one it imports, or
 /// where the target can't be told (outside a `Sources/<Target>/` layout, as is `file`'s own).
 fn swift_seen<'a>(conn: &Connection, file: &str, defs: Vec<&'a Def>) -> Result<Vec<&'a Def>> {
@@ -1992,10 +2006,14 @@ fn swift_seen<'a>(conn: &Connection, file: &str, defs: Vec<&'a Def>) -> Result<V
 /// any type whose name ends with it; else those declared at the top of a module named `q` (`Rings.Ring`). A leading
 /// module qualifies the rest (`Rings.Ring.Index`). With none, the qualifier is a type or module the repo doesn't
 /// declare (`Array<T>.Index`, `String.UnicodeScalarView`, `globalThis.Event`, a generic parameter's `Base.Element`, a C
-/// module's type), and so is the name: `unresolved`, never the repo's same-named type.
-fn qualified_type(q: &str, self_chain: &[String], cands: &[&Def]) -> (&'static str, Vec<i64>) {
+/// module's type), and so is the name: `unresolved`, never the repo's same-named type. Of several declarations of the
+/// one name, one in `file` is the one meant.
+fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let module = |d: &Def| crate::identity::module_of(&d.file, &d.lang);
     let one = |found: Vec<&Def>| {
+        // Of several declarations of one name, the one in the referencing file is the one it means.
+        let here: Vec<&Def> = found.iter().copied().filter(|d| d.file == file).collect();
+        let found = if here.is_empty() { found } else { here };
         let mut owners: Vec<(Option<&str>, Option<String>)> = found.iter().map(|d| (d.container.as_deref(), module(d))).collect();
         owners.sort();
         owners.dedup();
@@ -2181,7 +2199,7 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             Some("super") if crate::ts::is_ts_path(&hit.file) => first_in(self_chain.get(1..).unwrap_or_default(), false),
             // A type written through a qualifier (`Outer.Inner`, `Module.Type`, `Array<T>.Index`) is looked up there.
             Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
-                return qualified_type(r, self_chain, &cands);
+                return qualified_type(r, &hit.file, self_chain, &cands);
             }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
@@ -4615,6 +4633,17 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 swift_seen(conn, &hit.file, usable)?
             } else {
                 usable
+            };
+            // A qualifier naming a type the repo declares in scope: the name is nested there or nowhere in the repo
+            // (a member a macro generates, `@Reducer enum Destination`'s `State`), never a same-named type elsewhere.
+            let usable = match hit.receiver.as_deref() {
+                Some(q) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || ts) => {
+                    match qualifier_in_scope(conn, q, &self_chains[&caller])? {
+                        Some(owner) => usable.into_iter().filter(|d| d.container.as_deref() == Some(owner.as_str())).collect(),
+                        None => usable,
+                    }
+                }
+                _ => usable,
             };
             resolve(hit, &recv, &self_chains[&caller], &usable)
         };
