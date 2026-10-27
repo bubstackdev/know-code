@@ -54,15 +54,19 @@ fn types_declared_in_an_extension_see_the_extended_type() {
     write(
         &root,
         "Sources/Kit/Kit.swift",
-        "enum Kit {\n    protocol Version {}\n}\n\nextension Kit {\n    enum Current: Version {}\n}\n\nextension Kit.Current {\n    struct Inner: Version {}\n}\n",
+        "enum Kit {\n    protocol Version {}\n    struct Case { init(n: Int) {} }\n}\n\nextension Kit {\n    enum Current: Version {}\n}\n\nextension Kit.Current {\n    struct Inner: Version {}\n    static let all = [1].map(Kit.Case.init(n:))\n}\n",
     );
     let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
     sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
     let (hits, _) = query::refs(store.conn(), "Version", &["type_ref"], 50).unwrap();
     let got: Vec<(u32, &str)> = hits.iter().map(|h| (h.line, h.confidence)).collect();
     // `extension Kit`'s `Current: Version` is Kit's.
-    assert!(got.contains(&(6, "exact")), "{got:?}");
+    assert!(got.contains(&(7, "exact")), "{got:?}");
     // In `extension Kit.Current`, Kit's members aren't in scope.
-    assert!(got.iter().any(|g| g.0 == 10 && g.1 != "exact"), "{got:?}");
+    assert!(got.iter().any(|g| g.0 == 11 && g.1 != "exact"), "{got:?}");
+    // Written qualified, they are: `Kit.Case.init(n:)`.
+    let (made, _) = query::refs(store.conn(), "Case", &["instantiate"], 50).unwrap();
+    let made: Vec<(u32, &str)> = made.iter().map(|h| (h.line, h.confidence)).collect();
+    assert!(made.contains(&(12, "exact")), "{made:?}");
     let _ = std::fs::remove_dir_all(&root);
 }

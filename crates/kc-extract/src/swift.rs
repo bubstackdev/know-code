@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 20;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -1025,8 +1025,9 @@ impl<'a> Cx<'a> {
                 if name == "init" {
                     // `Foo.init(...)` instantiates Foo; `self.init` and `super.init` delegate.
                     if let Some(r) = receiver.as_deref().filter(|r| starts_upper(r)) {
-                        let ty = last_component(r).to_string();
-                        self.add_ref(ty, None, RefKind::Instantiate, suffix);
+                        // `ABI.EncodedTestCase.init(…)` keeps its qualifier, as `ABI.EncodedTestCase(…)` does.
+                        let (qualifier, ty) = split_qualified(r);
+                        self.add_ref(ty.to_string(), qualifier.map(str::to_string), RefKind::Instantiate, suffix);
                     } else {
                         self.add_ref(name, receiver, RefKind::Call, suffix);
                     }
