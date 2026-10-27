@@ -447,7 +447,9 @@ ambiguous link counts as low-confidence and, under the default evidence policy, 
 walks past it, marked ambiguous). A dependent reaching what it was reached from on several lines gives the first as
 its `site` and the rest in `also`. In text a dependent leads with its site, the line to open, then its other sites
 and the line it is declared at (`a.cs:12  [exact] direct (also a.cs:30) (declared at line 9)`); `trace` names callers
-the same way. When the walk stops at the limit (`limit`,
+the same way. A dependent the walk reaches again through another symbol, at lines its row doesn't name, keeps that
+way in `ways` ({via, hop, confidence, site, also}; in text, last on its row: `(also via Store.Drop [exact] at a.cs:40)`); a capped text
+answer leaves those out first, and says how many. When the walk stops at the limit (`limit`,
 default 30; `truncated`), `counts_cover` is "shown": the counts are of the affected symbols listed, not all.
 
 Where the walk stops: the walk goes up to {max:kc_impact.depth} hops (deeper asked: `depth: {asked, walked}`), its budget the symbol
@@ -633,9 +635,10 @@ newest; `first`, the oldest, given only when the whole history was read; `commit
 its current lines (git blame of the working tree, whitespace ignored; `writers_uncommitted` and `writers_automated`
 counted apart). `changed_with`: the files changed in those commits, by shared commits (`changed_with_total`; commits of
 more than 50 files left out and counted in `sweeps`). `callers_changed_with`: its direct callers (kc_impact's hop 1,
-in this repo) whose files changed in those commits, each with how many (`shared`), the newest few and `test` for test
-code; `callers_total` counts every direct caller, those in its own file included (they aren't listed: each of its
-commits changes that file). `since` keeps commits since a date (`2025-01-01`, `90 days ago`).
+in this repo, calls through an interface it implements included) whose files changed in those commits, each with how
+many (`shared`), the newest few, `test` for test code and `ambiguous` when the call may run another implementation;
+`callers_total` counts every direct caller, those in its own file included (they aren't listed: each of its commits
+changes that file). `since` keeps commits since a date (`2025-01-01`, `90 days ago`).
 
 Give the symbol as a name, `Type.member` or file:line; when several definitions match (overloads), the first is read
 and `others` lists the rest: ask with file:line for another. Uncommitted edits that move the lines are allowed for
