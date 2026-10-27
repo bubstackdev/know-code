@@ -207,9 +207,21 @@ fn a_restricted_server_stays_in_its_repos_ops_and_cache() {
     let tools = s.call("tools/list", json!({}));
     assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 1, "{tools}");
 
-    // The ops allowed answer about the bound repo.
-    let (text, code) = s.kc("find", json!({ "q": "Orders" }));
-    assert!(code.is_none() && text.contains("src/Orders.cs"), "{text}");
+    // The ops allowed answer about the bound repo. The server indexes it in the background on first use: until that
+    // finishes, an answer comes from the committed snapshot and says so (never `complete`); then it finds the file.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let (text, code) = s.kc("find", json!({ "q": "Orders" }));
+        assert!(code.is_none(), "{text}");
+        if text.contains("src/Orders.cs") {
+            break;
+        }
+        let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| panic!("{text}"));
+        let indexing = v["incomplete"].as_array().is_some_and(|i| i.iter().any(|x| x["code"] == "indexing"));
+        assert!(v["complete"] == json!(false) && indexing, "an answer before the repo is indexed must say so: {text}");
+        assert!(std::time::Instant::now() < until, "the bound repo was never indexed: {text}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     let (text, code) = s.kc("symbol_at", json!({ "q": shop.join("src/Audit.cs").to_str().unwrap(), "line": 4 }));
     assert!(code.is_none() && text.contains("Audit.Log"), "{text}");
     // The workspace is the bound repo: the other repo's names aren't found.
