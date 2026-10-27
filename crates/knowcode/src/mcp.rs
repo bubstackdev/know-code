@@ -3562,6 +3562,9 @@ mod tests {
         // A prefix of another file's name isn't the same file.
         let prefix = "  used by method A.b  src/a.cs:10  [exact] direct at a.cs:12";
         assert_eq!(lean_site(prefix), prefix);
+        // A row leading with its own site already says each place once.
+        let led = "  called by method A.b  src/a.cs:12  [exact] direct (also src/a.cs:14) (declared at line 10)";
+        assert_eq!(lean_site(led), led);
     }
 
     /// Every tool listing locations quotes the lines under them (`cite`), unless the call says `cite: none`; the mode
