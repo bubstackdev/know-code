@@ -61,6 +61,12 @@ func checkPair(_ a: [Float], _ b: [Float]) -> Bool {
 func checkWide(_ n: Int32) -> Bool {
     n.isFinite
 }
+
+protocol FineScalar: GridScalar {}
+
+func checkFine(_ s: FineScalar) -> Bool {
+    s.isFinite
+}
 ";
 
 /// `(caller, line, confidence, targets, basis)` for each reference to `name` in `conn`.
@@ -93,6 +99,8 @@ fn a_member_added_to_a_library_struct_is_not_another_library_types() {
             ("checkPair".to_string(), 24, "ambiguous", both, None),
             // The receiver's type is the extended one.
             ("checkWide".to_string(), 31, "exact", int32, None),
+            // A protocol the repo declares calls the requirement itself.
+            ("checkFine".to_string(), 37, "exact", vec!["GridScalar.isFinite".to_string()], None),
         ]
     );
     let _ = std::fs::remove_dir_all(&root);

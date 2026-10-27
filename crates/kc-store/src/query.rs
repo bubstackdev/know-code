@@ -4264,11 +4264,21 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
 }
 
 /// Whether a member reference typed by its receiver (`v.isFinite`, `v: Float`) reached only protocol requirements
-/// (members declared in a protocol's body) of a protocol other than the receiver's type: the type conforms, and the
-/// member it has is its own, outside the repo, not the requirement's declaration.
+/// (members declared in a protocol's body) of a protocol other than the receiver's type, which the repo doesn't
+/// declare: the library type conforms, and the member it has is its own, outside the repo, not the requirement's
+/// declaration. A receiver of a type the repo declares (an interface deriving from another) calls the requirement.
 fn through_requirement(conn: &Connection, hit: &RefHit, ids: &[i64]) -> Result<bool> {
     let Some(ty) = hit.receiver_type.as_deref() else { return Ok(false) };
     if ids.is_empty() || !matches!(hit.kind.as_str(), "member" | "call") {
+        return Ok(false);
+    }
+    let declared: bool = conn
+        .prepare_cached(&format!(
+            "SELECT EXISTS(SELECT 1 FROM symbols WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ({}))",
+            TYPE_KINDS.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ")
+        ))?
+        .query_row([last_segment(ty)], |r| r.get(0))?;
+    if declared {
         return Ok(false);
     }
     let mut stmt = conn.prepare_cached("SELECT p.kind, p.name FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
