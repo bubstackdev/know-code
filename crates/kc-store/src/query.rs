@@ -2574,6 +2574,23 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
     })
 }
 
+/// Whether a call `hit` the repo couldn't resolve (one through a library's type) may call `id` among its type's
+/// overloads of the name: `id` takes as many arguments as it passes, and the argument types the call site gives don't
+/// pick another overload over it (see [`narrow_by_argument_types`]).
+pub fn may_call_overload(conn: &Connection, hit: &RefHit, id: i64) -> Result<bool> {
+    let defs = defs_named(conn, &hit.name)?;
+    let Some(me) = defs.iter().find(|d| d.id == id) else { return Ok(false) };
+    if hit.args.is_some_and(|n| !me.accepts(n)) {
+        return Ok(false);
+    }
+    let fitting: Vec<&Def> =
+        defs.iter().filter(|d| d.container == me.container && d.kind == me.kind && hit.args.is_none_or(|n| d.accepts(n))).collect();
+    if fitting.len() < 2 || hit.arg_types.is_none() {
+        return Ok(true);
+    }
+    Ok(narrow_by_argument_types(&mut TypeOracle::new(conn), hit, fitting)?.iter().any(|d| d.id == id))
+}
+
 fn defs_named(conn: &Connection, name: &str) -> Result<Vec<Def>> {
     let sql = format!(
         "SELECT {DEF_COLS} FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id

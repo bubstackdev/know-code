@@ -932,6 +932,33 @@ impl Tracer<'_> {
                     let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
+                // And calls through a library's interface or base class it implements, one no indexed repo defines
+                // (`ILogger` from a package): the repo has no member to resolve them to, so they stay unresolved. One
+                // on a receiver of that type, passing arguments this member takes, may run it. Another implementation
+                // may run instead, the library's own or another type's, so each is `ambiguous`. With the library
+                // indexed, they resolve into it and `impact` lists them across repos instead.
+                if matches!(sym.kind.as_str(), "method" | "property") {
+                    let library: HashSet<String> =
+                        query::outside_supertype_names(self.conn, container)?.iter().map(|t| bare_type(t).to_string()).collect();
+                    if !library.is_empty() {
+                        let mut hits = Vec::new();
+                        for mut h in self.refs_named(&sym.name, kinds.clone())? {
+                            if h.confidence != "unresolved"
+                                || !h.target_ids.is_empty()
+                                || h.receiver.is_none()
+                                || !h.receiver_type.as_deref().is_some_and(|r| library.contains(bare_type(r)))
+                                || !query::may_call_overload(self.conn, &h, sym.id)?
+                            {
+                                continue;
+                            }
+                            h.confidence = "ambiguous";
+                            h.target_ids = vec![sym.id];
+                            h.evidence = Some(Evidence::new(crate::answer::Mechanism::ReceiverType));
+                            hits.push(h);
+                        }
+                        push_callers(self, hits, Some(sym.id), "via_protocol")?;
+                    }
+                }
             }
         }
         Ok(out)
