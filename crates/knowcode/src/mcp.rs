@@ -104,6 +104,47 @@ pub fn range(tool: &str, param: &str) -> Option<&'static Range> {
 /// An [`ADVERTISED`] line standing for the parameter's bounds (`1 (default) to 16.`).
 const SPAN: &str = "{span}";
 
+/// The string parameters taking one of a closed set of words, by tool (`*`: every tool taking it), the default first.
+/// The full schema lists them (`enum`), and so do the capabilities; each op refuses any other word.
+pub const CHOICES: &[(&str, &str, &[&str])] = &[
+    ("kc_trace", "direction", &["both", "in", "out"]),
+    ("kc_context", "source", &["auto", "full", "skeleton", "none"]),
+    ("kc_impact", "order", &["rank", "hop"]),
+    ("kc_unused", "tier", &["all", "unused", "possibly"]),
+    ("kc_search", "case", &["sensitive", "insensitive", "smart"]),
+    ("kc_grep_ast", "lang", &["csharp", "typescript", "javascript", "python", "rust", "swift"]),
+    ("kc_note_add", "tag", &["decision", "gotcha", "todo"]),
+    ("*", "format", &["tree", "json"]),
+    ("*", "cite", &["brief", "lines", "check", "none"]),
+];
+
+/// The words `tool`'s parameter `param` takes, the default first.
+pub fn choices(tool: &str, param: &str) -> Option<&'static [&'static str]> {
+    CHOICES.iter().find(|(t, p, _)| (*t == tool || *t == "*") && *p == param).map(|(_, _, c)| *c)
+}
+
+/// `schema` with each bounded parameter's `minimum`, `maximum` and `default` from [`RANGES`], and each closed set's
+/// `enum` from [`CHOICES`]: the full schema, which help and the capabilities read. The advertised one leaves them out.
+fn bounded(tool: &str, mut schema: rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, p) in props.iter_mut() {
+            let Some(o) = p.as_object_mut() else { continue };
+            if let Some(r) = range(tool, name) {
+                o.insert("minimum".into(), Value::from(r.min));
+                o.insert("maximum".into(), Value::from(r.max));
+                o.insert("default".into(), Value::from(r.default));
+            }
+            if let Some(c) = choices(tool, name) {
+                o.insert("enum".into(), Value::from(c.to_vec()));
+            }
+        }
+    }
+    schema
+}
+
+/// What [`bounded`] added, taken out of an advertised parameter.
+const BOUNDS: &[&str] = &["minimum", "maximum", "default", "enum"];
+
 
 
 // Parameter docs are the schema's descriptions, advertised with every tool: one short line each. The details are in
@@ -639,6 +680,13 @@ pub struct MoreParams {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CapabilitiesParams {
+    /// One op (`impact`) or tool (`kc_impact`) to describe; none: every op.
+    #[serde(default)]
+    pub of: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
     /// A tool (`kc_context`), a section (`kc_context.http`) or a concept (`contract`); none: the index.
     #[serde(default)]
@@ -706,7 +754,39 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("note_add", "symbol", ""),
     ("grep_ast", "pattern", ""),
     ("status", "", ""),
+    ("capabilities", "of", ""),
 ];
+
+/// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
+/// `kc` help topic's list.
+pub fn one_q_lines() -> String {
+    let mut groups: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
+    for (op, main, many) in ONE_OPS {
+        match groups.iter_mut().find(|(m, _)| m == main) {
+            Some((_, ops)) => ops.push((op, many)),
+            None => groups.push((main, vec![(op, many)])),
+        }
+    }
+    groups.sort_by_key(|(main, _)| main.is_empty());
+    let mut lines = Vec::new();
+    for (main, ops) in groups {
+        let names: Vec<&str> = ops.iter().map(|(o, _)| *o).collect();
+        if main.is_empty() {
+            lines.push(format!("- {}: no `q` (an empty one is ignored)", names.join(", ")));
+            continue;
+        }
+        let mut line = format!("- {}: `{main}`", names.join(", "));
+        for (op, many) in ops.iter().filter(|(_, m)| !m.is_empty()) {
+            if many == &main {
+                line.push_str(&format!(" ({op}: `q` as a list of one, or `qs`)"));
+            } else {
+                line.push_str(&format!("; {op}: `{many}` from `qs`"));
+            }
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
 
 /// The parameters that take a list, among those `q` fills.
 const ONE_LISTS: &[&str] = &["targets", "files"];
@@ -837,6 +917,8 @@ pub struct KnowcodeServer {
     tool_router: ToolRouter<Self>,
     /// Every tool's input schema as advertised, advertised or not (for `kc_help`).
     schemas: std::sync::Arc<std::collections::BTreeMap<String, rmcp::model::JsonObject>>,
+    /// Every tool's description, advertised or not (for the capabilities).
+    descriptions: std::sync::Arc<std::collections::BTreeMap<String, String>>,
     /// Tools the profile leaves out (see [`profile`]).
     hidden: std::sync::Arc<Vec<String>>,
     /// The `one` profile: every tool is reached through `kc`, and answers name calls as its ops.
@@ -890,6 +972,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_grep_ast", &[("pattern", ""), ("lang", "csharp, typescript, javascript, python, rust or swift.")]),
     ("kc_more", &[("cursor", "")]),
     ("kc_status", &[]),
+    ("kc_capabilities", &[("of", "")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -903,6 +986,9 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
     for (name, line) in keep.iter() {
         let Some(mut p) = full.get(*name).cloned() else { continue };
         if let Some(o) = p.as_object_mut() {
+            if range(tool, name).is_some() || choices(tool, name).is_some() {
+                BOUNDS.iter().for_each(|k| drop(o.remove(*k)));
+            }
             if line.is_empty() {
                 o.remove("description");
             } else if *line == SPAN
@@ -918,6 +1004,10 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
     out.insert("properties".into(), Value::Object(props));
     out
 }
+
+/// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
+/// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
+pub const ON_REQUEST: &[&str] = &["kc_capabilities"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -940,7 +1030,7 @@ pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = if one { Vec::new() } else { vec!["kc_help".into()] };
     for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         let names: Vec<String> = match part {
-            "all" => all.to_vec(),
+            "all" => all.iter().filter(|t| !ON_REQUEST.contains(&t.as_str())).cloned().collect(),
             "core" => CORE.iter().map(|s| s.to_string()).collect(),
             "one" => vec!["kc".into()],
             name => {
@@ -1035,6 +1125,11 @@ impl KnowcodeServer {
             None => self.default.repos.clone(),
         };
         ops::guard_inputs(&repos, &inputs)
+    }
+
+    /// What this server offers, for its capabilities.
+    pub fn surface(&self) -> crate::capabilities::Surface<'_> {
+        crate::capabilities::Surface { schemas: &self.schemas, descriptions: &self.descriptions, hidden: &self.hidden, one: self.one }
     }
 
     /// A help topic as text (with a tool's parameters from its schema), or the index without one.
@@ -1366,7 +1461,7 @@ fn cap_text(text: &str, max: usize) -> String {
 }
 
 /// Inputs one batch call takes at most.
-const MAX_BATCH: usize = 20;
+pub const MAX_BATCH: usize = 20;
 
 /// The least room an input's result is given: below it, an answer is too cut to use.
 const MIN_SHARE: usize = 1_000;
@@ -2002,9 +2097,10 @@ impl KnowcodeServer {
     pub fn new(default: Scope, tools: &str) -> Result<Self, String> {
         let mut router = ToolRouter::new();
         let mut schemas = std::collections::BTreeMap::new();
+        let mut descriptions = std::collections::BTreeMap::new();
         for mut route in Self::tool_router() {
             // The full schema documents every parameter in help; the advertised one only the common ones.
-            let full = ranged(&route.attr.name, slim(&route.attr.input_schema));
+            let full = bounded(&route.attr.name, ranged(&route.attr.name, slim(&route.attr.input_schema)));
             route.attr.input_schema = std::sync::Arc::new(advertised(&route.attr.name, &full));
             if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) || route.attr.name == "kc" {
                 let mut meta = rmcp::model::JsonObject::new();
@@ -2012,6 +2108,7 @@ impl KnowcodeServer {
                 route.attr.meta = Some(rmcp::model::MetaObject(meta));
             }
             schemas.insert(route.attr.name.to_string(), full);
+            descriptions.insert(route.attr.name.to_string(), route.attr.description.as_deref().unwrap_or_default().to_string());
             router.add_route(route);
         }
         // `kc` is the `one` profile's alone: `all` is every other tool.
@@ -2022,7 +2119,14 @@ impl KnowcodeServer {
             router.disable_route(t.clone());
         }
         let one = on.iter().any(|t| t == "kc");
-        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden), one })
+        Ok(Self {
+            default,
+            tool_router: router,
+            schemas: std::sync::Arc::new(schemas),
+            descriptions: std::sync::Arc::new(descriptions),
+            hidden: std::sync::Arc::new(hidden),
+            one,
+        })
     }
 
     #[tool(description = "Docs on any tool, parameter or concept; no topic: the index.")]
@@ -2559,6 +2663,8 @@ impl KnowcodeServer {
             "kc_search" => self.kc_search(a(t, args)?).await,
             "kc_locate" => self.kc_locate(a(t, args)?).await,
             "kc_more" => self.kc_more(a(t, args)?).await,
+            // Data, as it is: its names are the tools' own.
+            "kc_capabilities" => return self.kc_capabilities(a(t, args)?).await,
             "kc_help" => return self.kc_help(a(t, args)?).await.map(|h| one_text(&h, true)).map_err(|e| one_text(&e, true)),
             "kc_trace" => self.kc_trace(a(t, args)?).await,
             "kc_path" => self.kc_path(a(t, args)?).await,
@@ -2581,6 +2687,12 @@ impl KnowcodeServer {
             other => Err(format!("no op {other}")),
         };
         out.map(|o| one_text(&o, false)).map_err(|e| one_text(&e, false))
+    }
+
+    #[tool(description = "Every op as data: its parameters with ranges and choices, whether it writes, its answer's shape.")]
+    async fn kc_capabilities(&self, Parameters(p): Parameters<CapabilitiesParams>) -> Result<String, String> {
+        let doc = crate::capabilities::document(&self.surface(), p.of.as_deref())?;
+        Ok(serde_json::to_string(&doc).unwrap_or_default())
     }
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
@@ -2651,12 +2763,17 @@ impl ServerHandler for KnowcodeServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
-        let resources = crate::help::TOPICS
+        let mut resources: Vec<rmcp::model::Resource> = crate::help::TOPICS
             .iter()
             .map(|t| {
                 rmcp::model::Resource::new(format!("{HELP_URI}{}", t.name), t.name).with_description(t.summary).with_mime_type("text/markdown")
             })
             .collect();
+        resources.push(
+            rmcp::model::Resource::new(CAPABILITIES_URI, "capabilities")
+                .with_description("every op as data (kc_help capabilities)")
+                .with_mime_type("application/json"),
+        );
         Ok(rmcp::model::ListResourcesResult::with_all_items(resources))
     }
 
@@ -2665,6 +2782,11 @@ impl ServerHandler for KnowcodeServer {
         request: rmcp::model::ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        if request.uri == CAPABILITIES_URI {
+            let doc = crate::capabilities::document(&self.surface(), None).map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
+            let text = serde_json::to_string(&doc).unwrap_or_default();
+            return Ok(rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(text, request.uri)]).into());
+        }
         let topic = request.uri.strip_prefix(HELP_URI).ok_or_else(|| rmcp::ErrorData::resource_not_found(format!("no resource {}", request.uri), None))?;
         let text = self.help(Some(topic)).map_err(|e| rmcp::ErrorData::resource_not_found(e, None))?;
         Ok(rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(text, request.uri)]).into())
@@ -2673,6 +2795,9 @@ impl ServerHandler for KnowcodeServer {
 
 /// Where the help topics are served as resources.
 const HELP_URI: &str = "knowcode://help/";
+
+/// Where the capabilities are served as a resource.
+const CAPABILITIES_URI: &str = "knowcode://capabilities";
 
 /// The server's instructions: what KnowCode is for and which core tool answers which question (a short map; each
 /// tool's description says more), callers and HTTP endpoints first, the questions agents most often took to grep; the
@@ -2849,7 +2974,7 @@ mod tests {
     /// tool is described in its schema or in that topic; every topic a description or topic points to exists.
     #[test]
     fn invariant_every_parameter_is_documented_where_an_agent_can_reach_it() {
-        let s = server("all");
+        let s = server("all,kc_capabilities");
         let one = server("one");
         let mut tools = s.tool_router.list_all();
         tools.extend(one.tool_router.list_all());
@@ -2921,6 +3046,7 @@ mod tests {
             "kc_grep_ast" => as_::<GrepAstParams>(args),
             "kc_more" => as_::<MoreParams>(args),
             "kc_status" => as_::<RepoOnlyParams>(args),
+            "kc_capabilities" => as_::<CapabilitiesParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -2932,7 +3058,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all");
+        let s = server("all,kc_capabilities");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -2975,7 +3101,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all");
+        let s = server("all,kc_capabilities");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
@@ -3031,7 +3157,7 @@ mod tests {
         }
         // The `kc` topic names the ops taking no `q`.
         let no_q: Vec<&str> = ONE_OPS.iter().filter(|(_, main, _)| main.is_empty()).map(|(o, _, _)| *o).collect();
-        let kc_topic = crate::help::topic("kc").unwrap().text;
+        let kc_topic = crate::help::fill(crate::help::topic("kc").unwrap().text);
         assert!(kc_topic.contains(&format!("- {}: no `q`", no_q.join(", "))), "{no_q:?}");
         // With or without the prefix; an unknown op is refused, naming the ops.
         assert_eq!(kc(json!({ "op": "kc_find", "q": "A" })).unwrap().0, "kc_find");

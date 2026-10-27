@@ -4,6 +4,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
+  describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
+  schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
+  whether an op reads or writes (notes are the only writes), the evidence presets, the answer's format and the keys
+  it always has, and the server, MCP protocol and index schema versions. It is read from the tables help and the
+  advertised schemas come from, and a test checks each op's entry against the running server. It costs nothing up
+  front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
+  topic's list of what `q` fills is now made from the same table.
+- `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
 - `kc_impact`'s help said its walk goes up to 16 hops while its `depth` parameter said 1 to 5; it walks up to 16.
   Every bounded parameter (`depth` of impact, trace and flow; path's `max_hops` and `paths`; search's `limit` and
   `context`; grep_ast's `limit`; `max_chars`) now takes its schema line, its help text and the clamp its answers apply
