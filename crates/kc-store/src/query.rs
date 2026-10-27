@@ -1969,6 +1969,40 @@ fn stdlib_member(file: &str, name: &str) -> bool {
     }
 }
 
+/// The types named `…` through the qualifier `q`, among `cands`: those nested in a type named `q` (`Ring.Index` in
+/// `struct Ring { struct Index }`), else those declared at the top of a module named `q` (`Rings.Ring`). A leading
+/// module qualifies the rest (`Rings.Ring.Index`). With neither, the qualifier is a type or module the repo doesn't
+/// declare (`Array<T>.Index`, `String.UnicodeScalarView`, `globalThis.Event`, a C module's type), and so is the name:
+/// `unresolved`, never the repo's same-named type.
+fn qualified_type(q: &str, cands: &[&Def]) -> (&'static str, Vec<i64>) {
+    let module = |d: &Def| crate::identity::module_of(&d.file, &d.lang);
+    let one = |found: Vec<&Def>| {
+        let mut owners: Vec<(Option<&str>, Option<String>)> = found.iter().map(|d| (d.container.as_deref(), module(d))).collect();
+        owners.sort();
+        owners.dedup();
+        (if owners.len() == 1 { "exact" } else { "ambiguous" }, found.iter().map(|d| d.id).collect())
+    };
+    let mut q = q;
+    loop {
+        let nested: Vec<&Def> = cands
+            .iter()
+            .copied()
+            .filter(|d| d.container.as_deref().is_some_and(|c| c == q || c.ends_with(&format!(".{q}"))))
+            .collect();
+        if !nested.is_empty() {
+            return one(nested);
+        }
+        let top: Vec<&Def> = cands.iter().copied().filter(|d| d.container.is_none() && module(d).as_deref() == Some(q)).collect();
+        if !top.is_empty() {
+            return one(top);
+        }
+        match q.split_once('.') {
+            Some((head, rest)) if cands.iter().any(|d| module(d).as_deref() == Some(head)) => q = rest,
+            _ => return ("unresolved", Vec::new()),
+        }
+    }
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -2116,6 +2150,10 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             Some("self") | Some("Self") => first_in(self_chain, false),
             // TypeScript's `super.m()`: the nearest supertype defining it, never the caller's own override.
             Some("super") if crate::ts::is_ts_path(&hit.file) => first_in(self_chain.get(1..).unwrap_or_default(), false),
+            // A type written through a qualifier (`Outer.Inner`, `Module.Type`, `Array<T>.Index`) is looked up there.
+            Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
+                return qualified_type(r, &cands);
+            }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
                 let mut found = in_container(r);
