@@ -21,10 +21,24 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
   blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
   replay gate fails a build that codes its refusals if any refusal it replays has none.
+- A C# override or implementation that leaves out its base member's default parameter value
+  (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
+  member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
+  "nothing affected" and called that complete. Members now match by how many parameters they take, whichever have
+  defaults, and then by parameter types as before.
+- In `impact` and `trace` (callers) text, a row now leads with its use site, the line to open (`Till.cs:8`), then
+  its other sites as `file:line` and the line its symbol is declared at (`(declared at line 6)`). Before, a row led
+  with the declaration and gave the site as `at line 8`, which an agent or a script reading `file:line` places
+  missed: since rows across a library boundary joined the walk, their call sites too. The JSON is unchanged.
+- A constructor is found by the name its source gives it: `Factory.__init__` (Python), `Cart.constructor`
+  (TypeScript, JavaScript) and `Ledger.Ledger` (C#), as well as by `init`, the name the index stores. Where a class also
+  has a method named `init`, `Factory.init` is that method, with the constructor listed after it to pick by place.
+  Before, `Factory.__init__` found no definition. A call written `init` (`self.init()`, `this.init()`) now resolves
+  to that method alone, no longer to the constructor too.
 - `kc_impact`'s help said its walk goes up to 16 hops while its `depth` parameter said 1 to 5; it walks up to 16.
   Every bounded parameter (`depth` of impact, trace and flow; path's `max_hops` and `paths`; search's `limit` and
   `context`; grep_ast's `limit`; `max_chars`) now takes its schema line, its help text and the clamp its answers apply
-  from one table, so they can't disagree. `max_chars` says it goes to twice its maximum for several inputs, as it did.
+  from one table, so they can't disagree. `max_chars` now says its maximum doubles for several inputs, as it always has.
 - `kc {op: status, q: ""}` (and `unused`, `hotspots`): an op taking no query takes an empty `q` as none, where it
   was an error. The `kc` topic says which ops take no `q`.
 
