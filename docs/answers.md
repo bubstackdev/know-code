@@ -51,6 +51,30 @@ an assembly scan exposing only other services.
 The text rendering ends with one line per entry, for example
 `incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}`.
 
+### Completeness and size
+
+`complete` says whether the answer is partial for what was asked. A JSON answer that is partial in any way also says
+how, in three parts that call for different things, and what it cost:
+
+```json
+"completeness": {"graph": true, "source": false, "lists": false},
+"size": {"max_chars": 8000, "chars": 7914, "source": "skeleton",
+         "continue": [{"list": "items[0].callers", "cursor": "kc~3", "rest": 37, "chars": 6290}]}
+```
+
+- `graph`: the graph the answer read was whole: no `incomplete` entry saying a walk stopped at its depth, the
+  evidence policy left edges out, or data was stale, unreadable, missing, unmodelled, withheld or out of time. When
+  it is false, a cursor won't help: ask deeper, with another policy, or later.
+- `source`: the source it quotes is whole, not a skeleton or cut short. Ask for `source: full` or a larger budget.
+- `lists`: every list is all there. When it is false, `size.continue` names each list that continues, with its
+  cursor, the rows left (`rest`) and about how many characters they would take (`chars`, at the rate of the rows
+  shown), so a client can tell whether the next page is worth its cost.
+- `size` gives `max_chars` as asked, `chars` returned (the summary included), and the `source` mode in effect.
+
+They take only the room `max_chars` leaves, never a row's: when they don't fit, `continue` is left out first, then
+`size`. A whole answer has neither, and is as it was. A text answer (a tree) says the same in its header lines: one per
+`incomplete` and `more` entry, with the call that continues it.
+
 ### Codes
 
 Every refusal and every partial answer carries a machine code, so a client never reads the English to tell them apart.
@@ -79,6 +103,7 @@ The English stays, for people.
 | `unsupported` | a construct or language the analysis doesn't model (a rename of a member the index can't see too) |
 | `collision` | a rename's new name is taken where the symbol is in scope |
 | `cut` | a rename preview cut to fit `max_chars`, which can't be applied as it is |
+| `not_allowed` | a restricted server (`serve --restricted`) isn't allowed to answer it: an op outside its allowlist, or a repo or path outside the repos it is bound to |
 | `cancelled` | the client cancelled the call |
 | `failed` | files, the index or git could not be read |
 | `internal` | anything else: a fault in KnowCode, worth reporting |
@@ -191,7 +216,7 @@ Every reference, trace or impact row, and path or flow step carries a `confidenc
 
 | confidence | meaning |
 | --- | --- |
-| `exact` | resolved through scope, type, an import or a compiler index |
+| `exact` | resolved through scope, type, an import or a compiler index, to one declaration (or the parts of one: TypeScript's merged declarations, a C# `partial` member) |
 | `unique_name` | the one definition of the name in scope; a heuristic preference among several HTTP handlers or SQL schemas is also labelled `unique_name`, with evidence `name_dominant` |
 | `ambiguous` | several candidates, all listed, none picked |
 | `external_likely` | probably outside the indexed code (a standard-library member, an unindexed module) |
@@ -236,7 +261,8 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 | `revision_unverified` | the dependency's checkout is the revision asked for (a Terraform `?ref=`, a CI include `ref:`, a registry version) |
 
 `exact` is a statement about how a name was resolved, not a measured probability. A syntactic `exact` still rests on
-the assumptions listed beside it.
+the assumptions listed beside it. Its precision against the language toolchains is measured by the
+[identity gate](../eval/identity-v1/README.md).
 
 ## Cited source
 

@@ -167,6 +167,7 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 | Connect Claude Code, Codex or Cursor | `knowcode setup claude\|codex\|cursor` |
 | Remove client registrations and cached indexes | `knowcode uninstall` |
 | Run the MCP server on stdio | `knowcode serve` |
+| Run it for a pipeline: bound repos, an op allowlist, its own cache | `knowcode serve --restricted --repo DIR --ops LIST --cache-dir DIR --config-dir DIR` |
 | Every MCP op as JSON, for a client building its own tool surface | `knowcode capabilities [OP]` |
 | Show or change settings | `knowcode config path\|list\|get\|set\|unset\|migrate` |
 | Manage workspace roots | `knowcode workspace add\|remove\|list` |
@@ -262,6 +263,48 @@ or a value of the wrong type is refused. The document also names the server's ve
 the index schema. It is read from the same tables as help and the advertised schemas, and a test checks every op's
 entry against the running server. `kc_help kc_capabilities` describes each field.
 
+## Restricted mode
+
+An automated pipeline that gives an agent KnowCode, rather than a person's session, can start the server bound to
+what the job needs:
+
+```sh
+knowcode serve --restricted --repo /work/job-17/shop --ops find,refs,context,impact,more \
+  --cache-dir /work/kc-cache --config-dir /work/kc-config
+```
+
+- **Bound repos.** It answers about the `--repo`s only (each a repo's root; repeat the flag for more). The workspace
+  is those repos: nothing else is discovered or indexed, a workspace-wide call covers them alone, and a call naming
+  another repo, or an absolute path outside them, is refused with code `not_allowed`.
+- **An op allowlist.** `--ops` lists the ops it runs. Any other is refused with `not_allowed`, and under a profile
+  of separate tools (`--tools all`) isn't listed. `capabilities` is
+  always allowed. List `more` too if answers should continue, and `note_add` only if the job may write notes.
+- **Explicit directories.** `--cache-dir` and `--config-dir` (or `KNOWCODE_CACHE_DIR` and `KNOWCODE_CONFIG_DIR`) are
+  required, so nothing of the user's is read or written. Notes go to `--data-dir`, by default `data` in the cache.
+  The server writes nothing outside the cache (and data) directory.
+- **Nothing else.** No update checks, no Claude Code plugin refresh, and git kept off the network: a partial clone's
+  missing objects aren't fetched (`GIT_NO_LAZY_FETCH`), and only local git protocols are allowed. The MCP server never
+  clones or fetches in any mode.
+- **Its scope, said.** The `initialize` reply carries it under `capabilities.experimental["knowcode/scope"]`: the
+  repos, ops and directories, and `discovery`, `update_checks`, `plugin_refresh` and `git_network`, all false. The
+  same is the first line on stderr and the capabilities' `scope`, beside each op's `allowed`.
+
+A headless run, for example in a sandbox that allows writes to the cache only:
+
+- Start it from a clean environment: `env -i HOME=… PATH=… TMPDIR=<cache>/tmp knowcode serve --restricted …`, with
+  `TMPDIR` inside the cache.
+- On macOS, put the real git first on `PATH`, not `/usr/bin/git`. That is a shim that runs `xcrun`, which may need to
+  write its own cache files outside yours. The real one is in the directory above `git --exec-path`'s parent, `bin`
+  (`/Library/Developer/CommandLineTools/usr/bin` with the Command Line Tools).
+- Index the repos once before the jobs (`knowcode index DIR` with the same `KNOWCODE_CACHE_DIR` and
+  `KNOWCODE_CONFIG_DIR`). The server also indexes a bound repo itself on its first question.
+
+The acceptance check (`crates/knowcode/tests/restricted.rs`) starts it this way on macOS under a sandbox profile
+that kills the server on any write outside its cache and on any network connection. It then checks that the server
+says its scope, answers the ops allowed about its repo, refuses other ops, repos and paths with `not_allowed`, and is
+still running at the end. Elsewhere it runs the same calls without the sandbox, and compares the files outside the
+cache before and after.
+
 Every tool takes `repo` and `max_chars`. Shared concepts have their own topics: `contract`, `evidence`, `cursors`,
 `privacy` and `profiles`.
 
@@ -311,7 +354,8 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `note export`, `note import` | `--repo` |
 | `more` | |
 | `status` | `--verify` |
-| `serve` | `--tools` |
+| `serve` | `--tools`; restricted mode: `--restricted`, `--ops`, `--cache-dir`, `--config-dir`, `--data-dir` |
+| `capabilities` | `--tools` |
 | `setup` | `--client-dir`, `--print`, `--replace` |
 | `uninstall` | `--delete-config`, `--delete-notes` |
 | `self-update` | `--check` |

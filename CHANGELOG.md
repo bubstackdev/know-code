@@ -26,6 +26,19 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
   topic's list of what `q` fills is now made from the same table.
 - `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Restricted mode: `knowcode serve --restricted --repo DIR --ops find,refs,… --cache-dir DIR --config-dir DIR`, for an
+  automated pipeline. The server is bound to the repos given: nothing else is discovered or indexed, and another repo,
+  or a path outside them, is refused with the new code `not_allowed`, as is any op not in the allowlist. It needs
+  explicit cache and config directories and writes nothing outside the cache. It runs no update check or plugin
+  refresh, and keeps git off the network. It states its scope in the `initialize` reply
+  (`capabilities.experimental["knowcode/scope"]`), on stderr and in the capabilities. docs/usage.md has a headless
+  recipe, with the real git for macOS's `/usr/bin/git` shim. An acceptance test runs it under a macOS sandbox
+  profile that kills it on any write outside the cache or any network connection.
+- Completeness said apart: a partial JSON answer adds `completeness` (`graph`: the graph it read was whole; `source`:
+  its quoted source is whole, not a skeleton or cut; `lists`: no list cut or continuing) and `size` (`max_chars` asked,
+  `chars` returned, the source mode in effect, and each continuation's cursor, rows left and about how many
+  characters they take), in the room the size cap leaves, never a row's. A whole answer, and every text answer, is as
+  it was.
 - Stable codes: every refused call carries a machine code beside its English, in the tool result's
   `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
   `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
@@ -66,6 +79,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
   row (`(also via Store.Drop [exact] at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
   and says how many, so no row is cut for them.
+- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
+  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
+  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
+  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
+  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
+  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
+  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
+  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
 - A C# override or implementation that leaves out its base member's default parameter value
   (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
   member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered

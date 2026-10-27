@@ -679,8 +679,35 @@ pub fn privacy_format() -> crate::privacy::Format {
     load().map(|l| l.config.privacy_format()).unwrap_or_default()
 }
 
+/// The repos a restricted server is bound to (see [`bind`]).
+static BOUND: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+
+/// Carries [`bind`]'s repos to the processes a bound one starts (a search runs in a child), as a path list.
+pub const BOUND_VAR: &str = "KNOWCODE_BOUND_REPOS";
+
+/// Binds this process, and the processes it starts, to `repos` (canonical paths), for a restricted server: the
+/// workspace is these repos and nothing else, whatever the config's roots say, so nothing more is discovered or
+/// indexed. Once, while the process has one thread, before anything reads the workspace.
+pub fn bind(repos: Vec<PathBuf>) {
+    if let Ok(list) = std::env::join_paths(&repos) {
+        // SAFETY: called while the process has one thread (see above).
+        unsafe { std::env::set_var(BOUND_VAR, list) };
+    }
+    let _ = BOUND.set(repos);
+}
+
+/// The repos this process is bound to, when it is (see [`bind`]): set here, or by the process that started it.
+pub fn bound() -> Option<&'static [PathBuf]> {
+    let repos = BOUND.get_or_init(|| std::env::var_os(BOUND_VAR).map(|v| std::env::split_paths(&v).collect()).unwrap_or_default());
+    (!repos.is_empty()).then_some(repos.as_slice())
+}
+
 /// The configured workspace roots (`~` expanded, as written otherwise) and how deep under them repos are looked for.
+/// For a bound process, its repos, each a root of depth 0.
 pub fn workspace() -> Result<(Vec<PathBuf>, usize)> {
+    if let Some(repos) = bound() {
+        return Ok((repos.to_vec(), 0));
+    }
     let loaded = load()?;
     Ok((loaded.config.roots.clone(), loaded.config.max_depth.unwrap_or(DEFAULT_MAX_DEPTH)))
 }

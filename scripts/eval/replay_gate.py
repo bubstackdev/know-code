@@ -74,7 +74,7 @@ REFUSAL_CODES = {'no_files'}
 # The reasons an `incomplete` or `more` entry may give, and the codes it or a refused call may carry (docs/answers.md).
 REASONS = {'capped', 'budget', 'deadline', 'stale', 'failed', 'missing_repo', 'unsupported', 'policy', 'withheld', 'depth'}
 CODES = {'invalid_argument', 'not_found', 'ambiguous', 'no_files', 'not_indexed', 'indexing', 'gone', 'withheld',
-         'stale_cursor', 'unsupported', 'collision', 'cut', 'cancelled', 'failed', 'internal'}
+         'stale_cursor', 'unsupported', 'collision', 'cut', 'not_allowed', 'cancelled', 'failed', 'internal'}
 TREE_ENTRY = re.compile(r'^(?:incomplete|more) \((\w+)\)', re.M)
 GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}

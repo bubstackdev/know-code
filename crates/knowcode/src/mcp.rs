@@ -1068,6 +1068,8 @@ pub struct KnowcodeServer {
     hidden: std::sync::Arc<Vec<String>>,
     /// The `one` profile: every tool is reached through `kc`, and answers name calls as its ops.
     one: bool,
+    /// Restricted mode's scope (see [`crate::restricted`]).
+    restriction: Option<std::sync::Arc<crate::restricted::Restriction>>,
 }
 
 /// The tools of the `core` profile, the default: the ones that answer the first questions about code (where X is
@@ -1274,7 +1276,13 @@ impl KnowcodeServer {
 
     /// What this server offers, for its capabilities.
     pub fn surface(&self) -> crate::capabilities::Surface<'_> {
-        crate::capabilities::Surface { schemas: &self.schemas, descriptions: &self.descriptions, hidden: &self.hidden, one: self.one }
+        crate::capabilities::Surface {
+            schemas: &self.schemas,
+            descriptions: &self.descriptions,
+            hidden: &self.hidden,
+            one: self.one,
+            restriction: self.restriction.as_deref(),
+        }
     }
 
     /// A help topic as text (with a tool's parameters from its schema), or the index without one.
@@ -1688,6 +1696,7 @@ async fn run_batch(
     blocking(false, move || {
         let n = inputs.len();
         let mut results: Vec<String> = Vec::new();
+        let mut shares: Vec<usize> = Vec::new();
         // `{"results":[` and `]}`, and the commas between results.
         let mut used = 14;
         for (k, i) in inputs.iter().enumerate() {
@@ -1701,7 +1710,8 @@ async fn run_batch(
                     ops::add_cuts(&mut env);
                     env["input"] = Value::from(i.as_str());
                     note(&recording, &env);
-                    cap(env, share)
+                    shares.push(share);
+                    cap_plain(env, share)
                 }
                 Err(e) => {
                     // As a refused call: the English, its code and, for `withheld`, the policy.
@@ -1710,6 +1720,7 @@ async fn run_batch(
                     if let Some(p) = &e.privacy {
                         v["privacy"] = serde_json::json!(p);
                     }
+                    shares.push(0);
                     v.to_string()
                 }
             };
@@ -1720,13 +1731,26 @@ async fn run_batch(
             results.push(text);
         }
         // What is left out, said within the cap too: fewer results until the answer fits.
-        loop {
+        let mut answer = loop {
             let answer = batch_answer(&results, &inputs[results.len()..], max);
             if answer.len() <= max || results.is_empty() {
-                return Ok(answer);
+                break answer;
             }
             results.pop();
+        };
+        // Each result's summary (see `summary`), where the batch still fits with it.
+        let left = &inputs[results.len()..];
+        for k in 0..results.len() {
+            let Some(with) = crate::summary::add(&results[k], shares[k]) else { continue };
+            let plain = std::mem::replace(&mut results[k], with);
+            let trial = batch_answer(&results, left, max);
+            if trial.len() <= max {
+                answer = trial;
+            } else {
+                results[k] = plain;
+            }
         }
+        Ok(answer)
     })
     .await
 }
@@ -1936,6 +1960,14 @@ fn release_memory() {
 
 /// The answer as the server outputs it: [`cap_full`], said in its compact form (see [`crate::compact`]).
 pub(crate) fn cap(env: Value, max: usize) -> String {
+    let names = crate::compact::Names::load();
+    let out = crate::compact::output(&cap_full_named(env, max, &names), &names);
+    // A partial answer says how, and what it cost (see `summary`), in the room the cap left: never in place of a row.
+    crate::summary::add(&out, max).unwrap_or(out)
+}
+
+/// [`cap`] without the summary: a batch's results, which get theirs only in the room the whole batch leaves.
+fn cap_plain(env: Value, max: usize) -> String {
     let names = crate::compact::Names::load();
     crate::compact::output(&cap_full_named(env, max, &names), &names)
 }
@@ -2363,6 +2395,7 @@ impl KnowcodeServer {
             descriptions: std::sync::Arc::new(descriptions),
             hidden: std::sync::Arc::new(hidden),
             one,
+            restriction: None,
         })
     }
 
@@ -2923,7 +2956,7 @@ impl KnowcodeServer {
             "kc_status" => self.kc_status(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
-        out.map(|o| one_text(&o, false)).map_err(|e| e.reworded(|m| one_text(m, false)))
+        out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
     }
 
     #[tool(description = "Every op as data: its parameters with ranges and choices, whether it writes, its answer's shape.")]
@@ -2970,6 +3003,11 @@ impl ServerHandler for KnowcodeServer {
         mut request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        if let Some(r) = &self.restriction
+            && let Err(e) = r.check(&request.name, request.arguments.as_ref())
+        {
+            return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(anyhow::Error::new(e)));
+        }
         if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
             return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(e));
         }
@@ -3014,7 +3052,14 @@ impl ServerHandler for KnowcodeServer {
     }
 
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().build())
+        let mut capabilities = ServerCapabilities::builder().enable_tools().enable_resources().build();
+        // A restricted server states its scope in its first reply.
+        if let Some(r) = &self.restriction
+            && let Value::Object(scope) = r.scope()
+        {
+            capabilities.experimental = Some([("knowcode/scope".to_string(), scope)].into_iter().collect());
+        }
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("knowcode", concat!(env!("CARGO_PKG_VERSION"), "+", env!("KNOWCODE_BUILD"))))
             .with_instructions(if self.one { ONE_INSTRUCTIONS } else { INSTRUCTIONS })
     }
@@ -3083,6 +3128,26 @@ has a confidence; an incomplete answer says why. `withheld`: a privacy file bloc
 /// Serves MCP over stdin/stdout until the client disconnects.
 pub fn serve(default: Scope, tools: &str) -> anyhow::Result<()> {
     let server = KnowcodeServer::new(default, tools).map_err(anyhow::Error::msg)?;
+    run_server(server)
+}
+
+/// [`serve`] in restricted mode: about its bound repos only, its allowed ops only (see [`crate::restricted`]).
+pub fn serve_restricted(r: crate::restricted::Restriction, tools: &str) -> anyhow::Result<()> {
+    let default = Scope { repos: r.repos.clone(), no_sync: false };
+    let mut server = KnowcodeServer::new(default, tools).map_err(anyhow::Error::msg)?;
+    // Under a profile of separate tools, the tools it may not run aren't listed either.
+    let refused: Vec<String> = server.schemas.keys().filter(|t| *t != "kc" && !r.allows(t) && !server.hidden.contains(t)).cloned().collect();
+    for t in &refused {
+        server.tool_router.disable_route(t.clone());
+    }
+    let mut hidden = (*server.hidden).clone();
+    hidden.extend(refused);
+    server.hidden = std::sync::Arc::new(hidden);
+    server.restriction = Some(std::sync::Arc::new(r));
+    run_server(server)
+}
+
+fn run_server(server: KnowcodeServer) -> anyhow::Result<()> {
     kc_index::light::discover_roots()?;
     crate::refresh::start();
     // No process-wide SQLite memory limit: SQLite is built without the counting it needs (see .cargo/config.toml).

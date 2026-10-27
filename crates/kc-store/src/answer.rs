@@ -96,6 +96,9 @@ pub enum Code {
     Collision,
     /// The answer would be cut where a part of it is useless: a rename preview cut to fit `max_chars`.
     Cut,
+    /// A restricted server isn't allowed to answer it: an op outside its allowlist, or a repo or path outside the
+    /// repos it is bound to.
+    NotAllowed,
     /// The client cancelled the call.
     Cancelled,
     /// Files, the index or git could not be read.
@@ -118,6 +121,7 @@ pub const CODES: &[Code] = &[
     Code::Unsupported,
     Code::Collision,
     Code::Cut,
+    Code::NotAllowed,
     Code::Cancelled,
     Code::Failed,
     Code::Internal,
@@ -138,6 +142,7 @@ impl Code {
             Code::Unsupported => "unsupported",
             Code::Collision => "collision",
             Code::Cut => "cut",
+            Code::NotAllowed => "not_allowed",
             Code::Cancelled => "cancelled",
             Code::Failed => "failed",
             Code::Internal => "internal",

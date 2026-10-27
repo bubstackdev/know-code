@@ -10042,6 +10042,64 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// An `exact` reference names one declaration: of several, the one its argument labels, its receiver or its module
+    /// decides; otherwise it is `ambiguous`, every candidate listed.
+    #[test]
+    fn an_exact_reference_names_one_declaration() {
+        let cache = test_cache();
+        let base = cache.dir("one-exact");
+        let shelf = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "Sources/Shelf/Shelf.swift",
+                    "struct Shelf {\n    func put(_ item: Int) {}\n    func put(_ item: Int, at slot: Int = 0, then done: () -> Void) {}\n\
+                     \x20   func put(into bin: Int) {}\n    static func make() -> Shelf { Shelf() }\n    func make() {}\n\
+                     \x20   func fill(_ n: Int) {}\n    func fill(_ s: String) {}\n}\n",
+                ),
+                (
+                    "Sources/Shelf/Use.swift",
+                    "func use(shelf: Shelf) {\n    shelf.put(1)\n    shelf.put(1, at: 2) { }\n    shelf.put(into: 3)\n\
+                     \x20   _ = Shelf.make()\n    shelf.make()\n    shelf.fill(1)\n}\n",
+                ),
+            ],
+        );
+        let at = |root: &Path, name: &str, file: &str, line: u32| -> (&'static str, Vec<u32>) {
+            let r = refs(name, &[], 100, &Scope { repos: vec![root.to_path_buf()], no_sync: false }).unwrap();
+            let (_, h) = r.data.items.iter().find(|(_, h)| h.file == file && h.line == line).unwrap_or_else(|| panic!("{name} at {file}:{line}"));
+            (h.confidence, h.targets.iter().map(|t| t.line).collect())
+        };
+        let use_swift = "Sources/Shelf/Use.swift";
+        // Argument labels: `put(_:)`, `put(_:at:then:)` with its trailing closure, `put(into:)`.
+        assert_eq!(at(&shelf, "put", use_swift, 2), ("exact", vec![2]));
+        assert_eq!(at(&shelf, "put", use_swift, 3), ("exact", vec![3]));
+        assert_eq!(at(&shelf, "put", use_swift, 4), ("exact", vec![4]));
+        // A type reaches the static member, a value the instance one.
+        assert_eq!(at(&shelf, "make", use_swift, 5), ("exact", vec![5]));
+        assert_eq!(at(&shelf, "make", use_swift, 6), ("exact", vec![6]));
+        // The labels and the receiver can't tell `fill(Int)` from `fill(String)`: both, never `exact`.
+        assert_eq!(at(&shelf, "fill", use_swift, 7), ("ambiguous", vec![7, 8]));
+
+        let web = repo(
+            &base,
+            "web",
+            &[
+                ("src/kind.ts", "export const Kind = { A: 'a' } as const;\nexport type Kind = typeof Kind[keyof typeof Kind];\n"),
+                (
+                    "src/kind.test.ts",
+                    "import { Kind } from './kind';\ndescribe('k', () => {\n  it('a', () => {\n    type Expected = string;\n    const x: Expected = Kind.A;\n  });\n\
+                     \x20 it('b', () => {\n    type Expected = number;\n    const y: Expected = 1;\n  });\n});\n",
+                ),
+            ],
+        );
+        // One module's `const` and `type` of one name are one declaration; same-named types local to two callbacks
+        // aren't.
+        assert_eq!(at(&web, "Kind", "src/kind.test.ts", 5), ("exact", vec![1, 2]));
+        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 5).0, "ambiguous");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn calls_through_an_interface_reach_the_overload_taking_their_arguments() {
         let cache = test_cache();
