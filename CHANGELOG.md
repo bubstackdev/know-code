@@ -4,6 +4,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.5.0 (2026-10-27)
 
+0.5 answers questions about a method's history and walks across library boundaries. `history` reads one definition's
+git history over the lines it spans: the commits that changed it, who wrote its current lines, and the files and direct
+callers that changed with it. On history-v1's public questions, labelled from git alone, it answers the 10
+method-level questions exactly and one of the two caller questions, and `coupled` lists more of the files that change
+with a file than git's own log does. `impact` and `trace` walk from a library's method on to its callers in the repos
+using it, where they stopped one hop across. Calls through a declared client package link through the package's own
+code, C# actions serve every route they declare, and recorded `search` calls no longer fail. The
+[release gate](eval/release-gate/0.5.0.md) makes no model calls; it measures what KnowCode returns, and makes no claim
+about how agents use it.
+
 - `impact` and `trace` (callers) walk on across a library boundary: from a method or property, to its calls in the repos
   depending on its repo (resolved into it) and on to their callers there; from an implementation of an interface
   member a dependency declares, to the calls through that member in the dependency and the repos using it. A row
