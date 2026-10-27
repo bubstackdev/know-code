@@ -523,6 +523,24 @@ pub fn status(v: &serde_json::Value) {
         s("/index/path").as_str().unwrap_or(""),
         s("/index/bytes").as_f64().unwrap_or(0.0) / 1e6
     );
+    if let Some(commit) = s("/base/commit").as_str() {
+        println!(
+            "base     cloned from base {commit}{}",
+            if s("/base/unchanged").as_bool() == Some(true) { "; no file differs from it" } else { "" }
+        );
+    }
+    if v.pointer("/index/counted").and_then(|c| c.as_str()) == Some("length") && v.get("base").is_some() {
+        println!("         the cache counts this index's whole length: this file system can't tell what it shares with the base");
+    }
+    if let Some(d) = v.get("derived") {
+        let say = |k: &str| match d[k].as_str().unwrap_or("") {
+            "from_base" => "carried from the base (no file differs)",
+            "current" => "computed for this index",
+            "stale" => "computed at an earlier generation; answers using it say so",
+            _ => "not computed yet; the first answer needing it computes it",
+        };
+        println!("derived  ranking {}; areas {}", say("ranking"), say("areas"));
+    }
     println!(
         "fresh    {} stale, {} removed (checked in {} ms{})",
         s("/freshness/stale_files"),

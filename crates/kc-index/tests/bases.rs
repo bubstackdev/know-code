@@ -192,6 +192,12 @@ fn a_clean_worktree_at_the_base_commit_extracts_nothing() {
     // The content index takes the stats the sync just took for the files it hashed: none is read again.
     let content = kc_index::content::sync_content(&wt, &mut store, 1).unwrap();
     assert_eq!((content.reread, content.rebuilt), (0, false), "{content:?}");
+    // Status says where the index came from, and that nothing differs from it until a file does.
+    let cloned = kc_index::base::cloned(&store).unwrap().expect("cloned");
+    assert_eq!((cloned.commit.len(), cloned.unchanged), (40, true), "{cloned:?}");
+    write(&wt, "core/src/lib.rs", "pub fn run() {}\npub fn stop() {}\n");
+    sync(&wt, &mut store, &opts()).unwrap();
+    assert!(!kc_index::base::cloned(&store).unwrap().unwrap().unchanged);
 }
 
 #[test]

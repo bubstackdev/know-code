@@ -5510,6 +5510,16 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
         if let Some(scip) = scip_status(&store)? {
             value["scip"] = scip;
         }
+        // A checkout started from a shared base: which, and what the cache counts of it (see `kc_index::base`).
+        let db = kc_index::db_path(root)?;
+        let len = std::fs::metadata(&db).map_or(0, |m| m.len());
+        value["index"]["own_bytes"] = json!(kc_index::cache::own_bytes(&db, len));
+        value["index"]["counted"] = json!(if kc_index::cache::counts_shared_apart(&db) { "own_bytes" } else { "length" });
+        if let Some(c) = kc_index::base::cloned(&store)? {
+            value["base"] = json!(c);
+        }
+        let (ranking, areas) = kc_index::derived_state(root, &store)?;
+        value["derived"] = json!({ "ranking": ranking, "areas": areas });
         // Opened by a query whose budget ran out before its first sync finished.
         if let Some(b) = background(root) {
             value["background"] = json!(b);

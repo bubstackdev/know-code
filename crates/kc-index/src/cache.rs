@@ -150,6 +150,17 @@ pub fn own_bytes(path: &Path, len: u64) -> u64 {
     len
 }
 
+/// Whether [`own_bytes`] counts what a file shares with a base apart (APFS), or its whole length (elsewhere).
+pub fn counts_shared_apart(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    return private_size(path).is_some();
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// The bytes of `path` no other file shares (`ATTR_CMNEXT_PRIVATESIZE`), when the file system says.
 #[cfg(target_os = "macos")]
 fn private_size(path: &Path) -> Option<u64> {

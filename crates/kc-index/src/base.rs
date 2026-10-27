@@ -40,6 +40,9 @@ const META_BUILD: &str = "base.build";
 const META_DIRNAME: &str = "base.dirname";
 /// In a checkout's index: the base it was cloned from (`<file name>`), for provenance.
 pub const META_FROM: &str = "base.from";
+/// In a checkout's index: the index generation (`tree_gen`) it was cloned at. While its generation is still that one,
+/// no file differs from the base and the derived data the base carried is the checkout's own.
+const META_GEN: &str = "base.generation";
 
 /// What a checkout's state at its last sync leaves in its index and a base must not carry: the checkout's root, its
 /// discovery and `git status` caches, failed reads, when its `node_modules` was last read, and the SCIP file it was
@@ -190,6 +193,7 @@ pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Bas
         conn.execute_batch(&checkout_reset(dirname != base.dirname))?;
         relocate_path_deps(&conn, root)?;
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)", [META_FROM, base.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_str()])?;
+        conn.execute(&format!("INSERT OR REPLACE INTO meta(key, value) SELECT '{META_GEN}', value FROM meta WHERE key = 'tree_gen'"), [])?;
         Ok(())
     })();
     if let Err(e) = reset.and_then(|()| Ok(fs::rename(&tmp, db)?)) {
@@ -309,6 +313,7 @@ fn adopt(db: &Path, base: &Path) -> Result<bool> {
             put.execute([k, v])?;
         }
         put.execute([META_FROM, base.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_str()])?;
+        conn.execute(&format!("INSERT OR REPLACE INTO meta(key, value) SELECT '{META_GEN}', value FROM meta WHERE key = 'tree_gen'"), [])?;
         drop(put);
         conn.close().map_err(|(_, e)| e)?;
         fs::rename(&tmp, db)?;
@@ -368,7 +373,7 @@ fn publish_from(root: &Path, source: &kc_store::Store, commit: &str, key: &str) 
         source.conn().execute("VACUUM INTO ?1", [tmp.to_string_lossy()])?;
         let conn = Connection::open(&tmp)?;
         let dirname = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        conn.execute_batch(&format!("PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; DELETE FROM meta WHERE {CHECKOUT_META} OR key = '{META_FROM}';"))?;
+        conn.execute_batch(&format!("PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; DELETE FROM meta WHERE {CHECKOUT_META} OR key IN ('{META_FROM}', '{META_GEN}');"))?;
         let mut put = conn.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)")?;
         for (k, v) in [(META_COMMIT, commit), (META_BUILD, crate::fresh::build().as_str()), (META_DIRNAME, dirname.as_str())] {
             put.execute([k, v])?;
@@ -507,6 +512,24 @@ fn retire(id: &Identity, keep: &Path) -> Result<()> {
         remove(&b.path)?;
     }
     Ok(())
+}
+
+/// Where a checkout's index came from and whether it still holds only the base's facts, for `status`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Cloned {
+    /// The base's file name and commit.
+    pub base: String,
+    pub commit: String,
+    /// No file has differed from the base since the clone: the derived data it carried is this checkout's own.
+    pub unchanged: bool,
+}
+
+/// [`Cloned`] for `store`, the index of a checkout cloned from a base; `None` for one that wasn't.
+pub fn cloned(store: &kc_store::Store) -> Result<Option<Cloned>> {
+    let Some(base) = store.meta(META_FROM)? else { return Ok(None) };
+    let commit = Path::new(&base).file_stem().and_then(|s| s.to_str()).and_then(|s| s.rsplit_once('-')).map(|(_, c)| c.to_string()).unwrap_or_default();
+    let unchanged = store.meta(META_GEN)?.is_some_and(|g| store.meta("tree_gen").ok().flatten().as_deref() == Some(g.as_str()));
+    Ok(Some(Cloned { base, commit, unchanged }))
 }
 
 /// The identity hash of a checkout from its workspace summary: of its origin, else of its git common directory.

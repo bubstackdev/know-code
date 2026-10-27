@@ -959,6 +959,28 @@ pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
     Ok(areas::needs_refresh(root, store)? || store.derived_gen(&rank_key)?.is_some_and(|g| g != generation))
 }
 
+/// The state of one kind of derived data, for `status`: computed for the index as it is (`current`), carried from the
+/// shared base the index was cloned from while no file differs from it (`from_base`, the same as computing it now),
+/// computed at an earlier generation (`stale`: an answer drawing on it says so), or never computed (`missing`: the
+/// first answer needing it computes it).
+pub fn derived_state(root: &Path, store: &Store) -> Result<(&'static str, &'static str)> {
+    let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
+    let generation = store.generation()?;
+    let from_base = base::cloned(store)?.is_some_and(|c| c.unchanged);
+    let current = if from_base { "from_base" } else { "current" };
+    let rank = match store.derived_gen(&rank_key)? {
+        None => "missing",
+        Some(g) if g == generation => current,
+        Some(_) => "stale",
+    };
+    let areas = match store.derived_gen("areas")? {
+        None => "missing",
+        Some(_) if areas::needs_refresh(root, store)? => "stale",
+        Some(_) => current,
+    };
+    Ok((rank, areas))
+}
+
 /// Whether the file ranking (the reference graph) was never computed for `store`'s index.
 pub fn derived_missing(store: &Store) -> Result<bool> {
     Ok(store.derived_gen(&format!("rank_graph:{}", kc_store::rank::RANK_VERSION))?.is_none())
