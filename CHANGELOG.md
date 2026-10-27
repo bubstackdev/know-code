@@ -31,7 +31,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
   changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
   index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
-  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does.
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does. Its
+  keys are written in reading order (files, tests, dependents, what is unsettled, then what the answer says about
+  itself), not by name, so the tests come within the first part a client reads.
 - `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
   tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
   (`dotnet test`) and `package.json` test scripts (run with the package manager
