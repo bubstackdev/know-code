@@ -257,3 +257,24 @@ fn purging_the_cache_removes_the_bases_and_pruning_those_no_checkout_uses() {
     kc_index::cache::purge().unwrap();
     assert!(!published.exists());
 }
+
+#[test]
+fn checkouts_started_together_wait_for_one_to_build_the_base() {
+    let _turn = turn();
+    let main = repo("till", 10);
+    let (a, b) = (worktree(&main, "a"), worktree(&main, "b"));
+    // `a` is clean and first: it claims the commit's base.
+    assert_eq!(kc_index::base::wait_or_claim(&a).unwrap(), kc_index::base::Turn::Building);
+    let waiter = std::thread::spawn(move || {
+        let mut store = kc_index::open(&b).unwrap();
+        let from = store.meta(kc_index::base::META_FROM).unwrap();
+        (from, sync(&b, &mut store, &opts()).unwrap().parsed)
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!waiter.is_finished(), "`b` waits for the base `a` builds");
+    drop(indexed(&a));
+    let published = kc_index::base::publish(&a).unwrap().expect("published");
+    let (from, parsed) = waiter.join().unwrap();
+    assert_eq!(from.as_deref(), published.file_name().and_then(|n| n.to_str()));
+    assert_eq!(parsed, 0);
+}

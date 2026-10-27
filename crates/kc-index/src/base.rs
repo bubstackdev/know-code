@@ -244,6 +244,13 @@ static LOOKED: Mutex<Option<HashSet<(PathBuf, String, String)>>> = Mutex::new(No
 /// build and policy is within a few files of its commit.
 /// Best effort, after the checkout's derived data is built so the base carries it. Returns the base's path.
 pub fn publish(root: &Path) -> Result<Option<PathBuf>> {
+    let published = publish_claimed(root);
+    // Published or not, the processes waiting for it go on: to clone it, or to index on their own.
+    release(root);
+    published
+}
+
+fn publish_claimed(root: &Path) -> Result<Option<PathBuf>> {
     if !crate::config::shared_bases()?.0 {
         return Ok(None);
     }
@@ -389,6 +396,84 @@ fn shared(root: &Path, id: &Identity) -> Result<bool> {
         return Ok(true);
     }
     Ok(workspace::all_summaries()?.iter().any(|s| s.root != root && identity_hash(s.origin.as_deref(), &s.root).as_deref() == Some(id.hash.as_str())))
+}
+
+/// What [`wait_or_claim`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    /// Nothing to wait for or build: bases are off, the repo has no other checkout, or no commit.
+    None,
+    /// This process builds the commit's base: the checkout is clean, and no other process was building it.
+    Building,
+    /// Another process was building a base for the commit; it has published it, given up or run out of time.
+    Waited,
+}
+
+/// How long a new checkout waits for another process to publish the base of its commit before indexing cold: about
+/// what indexing the checkout cold takes, by its size (its git index holds about 100 bytes a tracked file; a cold
+/// index with its derived data takes up to about 50 ms a file on a loaded machine), within a minute and 15 minutes.
+fn wait_for(root: &Path) -> std::time::Duration {
+    let files = crate::git_index_bytes(root) / 100;
+    std::time::Duration::from_millis(files.saturating_mul(50).clamp(60_000, 900_000))
+}
+
+/// The claims this process holds on bases it is building (see [`wait_or_claim`]), by checkout: released by [`publish`],
+/// whatever it decides, and with the process.
+static BUILDING: Mutex<Vec<(PathBuf, fs::File)>> = Mutex::new(Vec::new());
+
+/// For a checkout whose index starts with no base to clone (see [`clone_into`]): N jobs that start at once on a commit
+/// should index it once, not N times. A clean checkout of the commit claims its base (a lock per repository and
+/// commit) and builds it: its index, published when it is synced and its derived data built. A checkout of a commit
+/// whose base another process has claimed waits for that process to let go (at most [`wait_for`]), then the caller tries
+/// the clone again; a clean one that still finds no base claims it in turn.
+pub fn wait_or_claim(root: &Path) -> Result<Turn> {
+    if !crate::config::shared_bases()?.0 {
+        return Ok(Turn::None);
+    }
+    let (Some(id), Some(commit)) = (Identity::of(root), crate::head_commit(root)) else { return Ok(Turn::None) };
+    if !shared(root, &id)? {
+        return Ok(Turn::None);
+    }
+    if BUILDING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(r, _)| r == root) {
+        return Ok(Turn::Building);
+    }
+    let locks = crate::cache_dir()?.join("locks");
+    fs::create_dir_all(&locks)?;
+    // Named like a repository's lock (`<name>-<12 hex digits>.lock`), so uninstall recognises it.
+    let lock = writer::lock_file(&locks.join(format!("build{}-{}.lock", &commit[..commit.len().min(12)], id.hash)))?;
+    let clean = git::run(root, &["status", "--porcelain=v1", "--untracked-files=normal", "-z"]).is_ok_and(|s| s.is_empty());
+    let claim = |lock: fs::File| -> Turn {
+        if clean {
+            BUILDING.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), lock));
+            Turn::Building
+        } else {
+            Turn::None
+        }
+    };
+    match lock.try_lock() {
+        Ok(()) => return Ok(claim(lock)),
+        Err(TryLockError::WouldBlock) => {}
+        Err(TryLockError::Error(e)) => return Err(e.into()),
+    }
+    let deadline = std::time::Instant::now() + wait_for(root);
+    loop {
+        kc_store::limits::check()?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        match lock.try_lock() {
+            Ok(()) => {
+                drop(lock);
+                return Ok(Turn::Waited);
+            }
+            Err(TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {}
+            Err(TryLockError::WouldBlock) => return Ok(Turn::Waited),
+            Err(TryLockError::Error(e)) => return Err(e.into()),
+        }
+    }
+}
+
+/// Lets go of this process's claim on the base of `root`'s commit, if it holds one.
+fn release(root: &Path) {
+    BUILDING.lock().unwrap_or_else(|e| e.into_inner()).retain(|(r, _)| r != root);
 }
 
 /// When a base was last cloned or published.

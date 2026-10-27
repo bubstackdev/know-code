@@ -18,7 +18,10 @@ For each repo in --list (default scripts/worktree-gate/repos.json: public repos 
    with the modification time restored, of a tracked file and of the untracked one. The first is asked without
    `KNOWCODE_VERIFY` (both caches must answer alike) and with `KNOWCODE_VERIFY=1` (the edit must show); the second
    without it, before and after a `context` call (whose source read checks the file's hash; the edit must show after).
-6. Reports instructions retired by the `index` commands (macOS `/usr/bin/time -l`) and the disk each cache holds:
+6. Then N clean worktrees of the pinned commit (--at-once, 4 by default) are indexed at the same moment in a cache with
+   no base: one must build the base while the others wait for it and clone it, and their answers must match separate
+   indexes'.
+7. Reports instructions retired by the `index` commands (macOS `/usr/bin/time -l`) and the disk each cache holds:
    the bytes no other file shares (APFS `ATTR_CMNEXT_PRIVATESIZE`), with shared blocks counted once, under the base.
 
 Prints a Markdown report; --json writes the details. Exit status 1 when a check fails. Instruction counts hold on a
@@ -117,12 +120,20 @@ def index(binary, root, env):
     """`knowcode index --phases ROOT`: instructions retired by the process, by the phases a query needs before it can
     answer (everything but `derived.*`), and by the derived data (the file ranking and the areas, which `index`
     computes ahead and a query otherwise computes when it first needs them); and its JSON row."""
+    return index_finish(root, index_start(binary, root, env))
+
+
+def index_start(binary, root, env):
     timed = ["/usr/bin/time", "-l"] if sys.platform == "darwin" else []
-    p = subprocess.run([*timed, str(binary), "index", "--phases", "--json", str(root)], env=env, capture_output=True, text=True)
+    return subprocess.Popen([*timed, str(binary), "index", "--phases", "--json", str(root)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def index_finish(root, p):
+    out, err = p.communicate()
     if p.returncode != 0:
-        raise SystemExit(f"index {root} failed: {p.stderr[-2000:]}")
-    m = INSTRUCTIONS.search(p.stderr)
-    row = json.loads(p.stdout)["repos"][0]
+        raise SystemExit(f"index {root} failed: {err[-2000:]}")
+    m = INSTRUCTIONS.search(err)
+    row = json.loads(out)["repos"][0]
     phases = row.get("phases", [])
     derived = sum(ph["instructions"] for ph in phases if ph["name"].startswith("derived."))
     answerable = sum(ph["instructions"] for ph in phases if not ph["name"].startswith("derived."))
@@ -315,7 +326,7 @@ def freshness(binary, repo, wt, envs):
 # --- the gate -------------------------------------------------------------------------------------------------------
 
 
-def gate_repo(binary, repo, work, n):
+def gate_repo(binary, repo, work, n, at_once):
     src = work / "src" / repo["name"]
     print(f"## {repo['name']} at {repo['commit'][:12]}: {clone(repo, src)}", file=sys.stderr)
     wts = make_worktrees(repo, src, work / "wt" / repo["name"], n)
@@ -398,7 +409,54 @@ def gate_repo(binary, repo, work, n):
 
     result["instructions"] = totals
     result["disk_end"] = disk_both(caches, shared_cache, wts)
+    if at_once:
+        result["at_once"] = concurrent(binary, repo, work, at_once, volatile)
+        result["failures"] += result["at_once"]["failures"]
     return result
+
+
+def concurrent(binary, repo, work, k, volatile):
+    """k clean worktrees of the pinned commit, indexed at once in one cache that has no base yet: one claims the base
+    and builds it, the others wait for it and clone it. Against k separate indexes, and their answers compared."""
+    src = work / "src" / repo["name"]
+    wt_dir = work / "wt" / f"{repo['name']}-at-once"
+    for line in git(src, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree ") and Path(line[9:]).resolve().is_relative_to(wt_dir.resolve()):
+            git(src, "worktree", "remove", "--force", line[9:], check=False)
+    git(src, "worktree", "prune")
+    if wt_dir.exists():
+        shutil.rmtree(wt_dir)
+    wt_dir.mkdir(parents=True)
+    roots = []
+    for i in range(k):
+        path = wt_dir / f"job{i}"
+        git(src, "worktree", "add", "-q", "--detach", str(path), repo["commit"])
+        roots.append(path)
+    caches = work / "caches" / repo["name"]
+    cache = caches / "at-once"
+    env = env_for(work, cache, shared=True)
+    procs = [index_start(binary, r, env) for r in roots]
+    rows = []
+    for r, p in zip(roots, procs):
+        ins, row = index_finish(r, p)
+        rows.append({"worktree": r.name, "instructions": ins, "parsed": row["report"]["parsed"], "base": cloned_from(cache, r)})
+    sep = []
+    for r in roots:
+        sep_env = env_for(work, caches / f"at-once-separate-{r.name}", shared=False)
+        ins, row = index(binary, r, sep_env)
+        sep.append((ins, sep_env))
+    failures = []
+    for r, row, (_, sep_env) in zip(roots, rows, sep):
+        bad = [q for q in repo["queries"] if masked(ask(binary, r, env, q), volatile) != masked(ask(binary, r, sep_env, q), volatile)]
+        row["mismatches"] = bad
+        failures += [f"at once, {r.name}: `{q}` differs from a separate index" for q in bad]
+    # The one that built the base adopted it after: it is the one that parsed files.
+    built = [row for row in rows if row["parsed"] > 0]
+    if len(built) != 1:
+        failures.append(f"at once: {len(built)} of {k} worktrees indexed cold, where one should build the base")
+    total = lambda xs: {key: sum((x[key] or 0) for x in xs) for key in ("process", "answerable", "derived")}
+    return {"k": k, "rows": rows, "shared": total([row["instructions"] for row in rows]), "separate": total([ins for ins, _ in sep]),
+            "failures": failures}
 
 
 def disk_both(caches, shared_cache, wts):
@@ -442,6 +500,16 @@ def report(results, n):
                 f"- Failures: {len(r['failures'])}", ""]
         out += [f"  - {f}" for f in r["failures"]]
         out.append("")
+        if "at_once" in r:
+            a = r["at_once"]
+            out += [f"### {a['k']} clean worktrees of the commit indexed at once, no base yet", "",
+                    "| worktree | parsed | started from | instructions (process) | mismatches |", "| --- | --- | --- | --- | --- |"]
+            for row in a["rows"]:
+                base = "built and published it" if row["parsed"] else (row["base"] or "-").rsplit("-", 1)[-1].replace(".sqlite", "")[:12]
+                out.append(f"| {row['worktree']} | {row['parsed']} | {base} | {m(row['instructions']['process'] or 0)} | {len(row['mismatches'])} |")
+            out += ["", f"- Instructions retired, whole processes: at once on one cache {m(a['shared']['process'])}, {a['k']} separate indexes "
+                    f"{m(a['separate']['process'])} ({ratio(a['shared']['process'], a['separate']['process'])}); answerable {m(a['shared']['answerable'])} "
+                    f"against {m(a['separate']['answerable'])}, derived {m(a['shared']['derived'])} against {m(a['separate']['derived'])}.", ""]
     return "\n".join(out)
 
 
@@ -452,6 +520,7 @@ def main():
     ap.add_argument("--work", type=Path, required=True, help="scratch directory: clones, worktrees, caches")
     ap.add_argument("-n", type=int, default=5, help=f"worktrees per repo (at most {MAX_N})")
     ap.add_argument("--repo", action="append", help="only these repos (by name)")
+    ap.add_argument("--at-once", type=int, default=4, help="clean worktrees of the commit indexed at once in a cache with no base (0: none)")
     ap.add_argument("--json", type=Path)
     args = ap.parse_args()
     if not 2 <= args.n <= MAX_N:
@@ -461,7 +530,7 @@ def main():
     repos = json.loads(args.list.read_text())["repos"]
     if args.repo:
         repos = [r for r in repos if r["name"] in args.repo]
-    results = [gate_repo(args.bin.resolve(), r, work, args.n) for r in repos]
+    results = [gate_repo(args.bin.resolve(), r, work, args.n, args.at_once) for r in repos]
     print(report(results, args.n))
     if args.json:
         args.json.write_text(json.dumps(results, indent=2, default=str))

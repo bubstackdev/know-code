@@ -203,8 +203,14 @@ fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>
     }
     let mut origin = None;
     if !db.exists() && !privacy.whole() {
-        // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed.
-        if let Err(e) = base::clone_into(root, &db, &key) {
+        // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed. Without
+        // one, a checkout of a commit another process is building a base for waits for it.
+        let cloned = base::clone_into(root, &db, &key).and_then(|b| match b {
+            Some(b) => Ok(Some(b)),
+            None if base::wait_or_claim(root)? == base::Turn::Waited => base::clone_into(root, &db, &key),
+            None => Ok(None),
+        });
+        if let Err(e) = cloned {
             eprintln!("knowcode: {}: not started from a shared base: {e:#}", root.display());
         }
     }
