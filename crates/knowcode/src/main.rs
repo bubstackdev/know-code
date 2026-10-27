@@ -857,6 +857,12 @@ fn main() {
     if notify { update::start(); }
     if let Err(e) = guard_privacy().and_then(|_| run(cli)) {
         eprintln!("knowcode: {e:#}");
+        // For the server running this as its child (a search): the refusal's code, on a line of its own.
+        if std::env::var_os(KEEP_RESUME).is_some()
+            && let Some(r) = e.chain().find_map(|c| c.downcast_ref::<kc_store::answer::Refusal>())
+        {
+            eprintln!("{}{}", mcp::REFUSAL_LINE, serde_json::json!({ "code": r.code, "privacy": r.privacy }));
+        }
         std::process::exit(1);
     }
     kc_index::cache::after_command();

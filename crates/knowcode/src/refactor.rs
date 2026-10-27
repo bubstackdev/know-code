@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use kc_store::answer::Code;
 use kc_store::query::{self, RefHit};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -1660,6 +1661,8 @@ pub struct RenamePreview {
     /// True when the preview refuses: an ambiguous site, a collision, or a member the index can't see.
     pub refused: bool,
     pub reasons: Vec<String>,
+    /// Each reason's code: `ambiguous`, `collision`, `unsupported` (a member the index can't see).
+    pub codes: Vec<Code>,
 }
 
 pub struct RenameParams {
@@ -1716,6 +1719,7 @@ pub fn rename(p: &RenameParams, args: &Scope) -> Result<Out<RenamePreview>> {
         ("mentions", json!(preview.mentions)),
         ("refused", json!(preview.refused)),
         ("reasons", json!(preview.reasons)),
+        ("codes", json!(preview.codes)),
     ] {
         env[k] = v;
     }
@@ -1903,6 +1907,7 @@ fn rename_in(o: &Opened, m: &Model, files: &[String], s: &Sym, new: &str, allow_
     let mut sites: Vec<Site> = Vec::new();
     let mut mentions: Vec<Site> = Vec::new();
     let mut reasons: Vec<String> = Vec::new();
+    let mut codes: Vec<Code> = Vec::new();
     let mut seen: HashSet<(usize, u32, u32)> = HashSet::new();
     let site = |fi: usize, occ: &Occ, kind: &'static str, confidence: &'static str, note: Option<String>, sites: &mut Vec<Site>| {
         sites.push(Site {
@@ -1956,10 +1961,12 @@ fn rename_in(o: &Opened, m: &Model, files: &[String], s: &Sym, new: &str, allow_
         let sig = format!(" {}", s.signature);
         if sig.contains(" override ") && !group.iter().any(|g| g.id != s.id && !format!(" {}", g.signature).contains(" override ")) {
             reasons.push(format!("{} overrides a member of {}, declared outside the index", s.qualified(), ext.join(", ")));
+            codes.push(Code::Unsupported);
         } else if s.declared_public()
             && let Some(i) = ext.iter().find(|b| s.typescript() || is_interface_name(b))
         {
             reasons.push(format!("{} may implement a member of {i}, declared outside the index", s.qualified()));
+            codes.push(Code::Unsupported);
         }
     }
 
@@ -2273,9 +2280,11 @@ fn rename_in(o: &Opened, m: &Model, files: &[String], s: &Sym, new: &str, allow_
     let uncertain = sites.iter().chain(&cross_repo).filter(|x| x.confidence != "exact" && x.confidence != "unique_name").count();
     if uncertain > 0 {
         reasons.push(format!("{uncertain} ambiguous site(s)"));
+        codes.push(Code::Ambiguous);
     }
     if !collisions.is_empty() {
         reasons.push(format!("{} collision(s) with `{new}`", collisions.len()));
+        codes.push(Code::Collision);
     }
     Ok(RenamePreview {
         symbol: s.qualified(),
@@ -2290,6 +2299,7 @@ fn rename_in(o: &Opened, m: &Model, files: &[String], s: &Sym, new: &str, allow_
         mentions,
         refused: !reasons.is_empty() && !allow_ambiguous,
         reasons,
+        codes,
     })
 }
 

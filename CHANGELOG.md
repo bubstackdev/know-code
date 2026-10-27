@@ -13,6 +13,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
   topic's list of what `q` fills is now made from the same table.
 - `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Stable codes: every refused call carries a machine code beside its English, in the tool result's
+  `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
+  `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
+  code, with `code` where it says more: `indexing` (ask again after it finishes), `not_indexed`, `gone`. A refused
+  input of a batch, and the batch's entry for it, carry the code too, and a refused rename preview has `codes` beside
+  its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
+  blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
+  replay gate fails a build that codes its refusals if any refusal it replays has none.
 - `kc_impact`'s help said its walk goes up to 16 hops while its `depth` parameter said 1 to 5; it walks up to 16.
   Every bounded parameter (`depth` of impact, trace and flow; path's `max_hops` and `paths`; search's `limit` and
   `context`; grep_ast's `limit`; `max_chars`) now takes its schema line, its help text and the clamp its answers apply

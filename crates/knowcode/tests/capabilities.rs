@@ -114,18 +114,29 @@ impl Mcp {
         }
     }
 
-    /// A tool call's text, and whether it was an error.
-    fn tool(&mut self, name: &str, args: Value) -> (String, bool) {
+    /// A tool call's text, and its error's code when it was refused (every refusal has one).
+    fn coded(&mut self, name: &str, args: Value) -> (String, Option<String>) {
         let r = self.call("tools/call", json!({ "name": name, "arguments": args }));
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{name} {args}: {r}")).to_string();
-        (text, r["result"]["isError"] == json!(true))
+        if r["result"]["isError"] != json!(true) {
+            return (text, None);
+        }
+        let error = &r["result"]["structuredContent"]["error"];
+        assert_eq!(error["message"].as_str(), Some(text.as_str()), "{name} {args}: the English is the text: {r}");
+        let code = error["code"].as_str().unwrap_or_else(|| panic!("{name} {args}: refused with no code: {r}")).to_string();
+        (text, Some(code))
     }
 
     /// `kc {op, …args}`.
     fn kc(&mut self, op: &str, args: &Value) -> (String, bool) {
+        let (text, code) = self.kc_coded(op, args);
+        (text, code.is_some())
+    }
+
+    fn kc_coded(&mut self, op: &str, args: &Value) -> (String, Option<String>) {
         let mut a = args.as_object().cloned().unwrap_or_default();
         a.insert("op".into(), Value::from(op));
-        self.tool("kc", Value::Object(a))
+        self.coded("kc", Value::Object(a))
     }
 
     fn tool_names(&mut self) -> Vec<String> {
@@ -233,7 +244,7 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
         }
         assert_eq!(entry["takes_query"], json!(entry["q"].is_string()), "{op}");
         if entry["q"].is_null() {
-            assert!(mcp.kc(op, &json!({ "q": "x" })).1, "{op} takes no q");
+            assert_eq!(mcp.kc_coded(op, &json!({ "q": "x" })).1.as_deref(), Some("invalid_argument"), "{op} takes no q");
         }
         for (alias, of) in entry["aliases"].as_object().unwrap() {
             assert!(props.contains_key(alias) && props.contains_key(of.as_str().unwrap()), "{op}: alias {alias}");
@@ -268,7 +279,7 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
             let mut a = args.clone();
             a.as_object_mut().unwrap().remove("q");
             a["qs"] = Value::from(over);
-            assert!(mcp.kc(op, &a).1, "{op}: more than {} inputs are refused", batch["max"]);
+            assert_eq!(mcp.kc_coded(op, &a).1.as_ref(), batch["over"].as_str().map(String::from).as_ref(), "{op}: more than {} inputs", batch["max"]);
         }
 
         // Each range: in the schema too; past either end, clamped, not refused.
@@ -300,7 +311,7 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
             // A number of the wrong type is refused.
             let mut a = args.clone();
             a[param] = json!("deep");
-            assert!(mcp.kc(op, &a).1, "{op} {param}: a word for a number is refused");
+            assert_eq!(mcp.kc_coded(op, &a).1.as_ref(), r["wrong_type"].as_str().map(String::from).as_ref(), "{op} {param}: a word for a number");
         }
 
         // Each closed set: in the schema too; every word accepted, any other refused.
@@ -319,8 +330,8 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
             }
             let mut a = args.clone();
             a[param] = json!("sideways");
-            let (text, err) = mcp.kc(op, &a);
-            assert!(err, "{op} {param}=sideways is refused: {text}");
+            let (text, code) = mcp.kc_coded(op, &a);
+            assert_eq!(code.as_ref(), c["code"].as_str().map(String::from).as_ref(), "{op} {param}=sideways is refused: {text}");
             assert!(text.contains("sideways"), "{op}: the refusal names the word: {text}");
         }
     }
@@ -335,8 +346,36 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
         assert_eq!(v["ops"].as_array().unwrap().len(), 1);
         assert_eq!(v["ops"][0], ops.iter().find(|o| o["op"] == "impact").unwrap().clone());
     }
-    let (text, err) = mcp.kc("capabilities", &json!({ "q": "nope" }));
-    assert!(err && text.contains("impact, find"), "{text}");
+    let (text, code) = mcp.kc_coded("capabilities", &json!({ "q": "nope" }));
+    assert!(code.as_deref() == Some("invalid_argument") && text.contains("impact, find"), "{text}");
+    for c in ["invalid_argument", "not_found", "withheld", "indexing", "internal"] {
+        assert!(doc["codes"].as_array().unwrap().contains(&json!(c)), "{c}");
+    }
+
+    // Each refusal family, with its code, through `kc` and through the tool itself.
+    for (op, args, code) in [
+        ("nope", json!({}), "invalid_argument"),
+        ("find", json!({}), "invalid_argument"),
+        ("context", json!({ "q": "src/Nowhere.cs:3" }), "not_found"),
+        ("path", json!({ "q": "Checkout.Run", "to": "NoSuchThing" }), "not_found"),
+        ("search", json!({ "q": "Log", "paths": ["nowhere/**"] }), "no_files"),
+        ("find", json!({ "q": "Orders", "repo": "no-such-repo" }), "not_indexed"),
+        ("more", json!({ "q": "kc~ffff" }), "stale_cursor"),
+        ("more", json!({ "q": "not-a-cursor" }), "invalid_argument"),
+        ("grep_ast", json!({ "q": "class {", "lang": "csharp" }), "invalid_argument"),
+        ("search", json!({ "q": "(", "regex": true }), "invalid_argument"),
+        ("impact", json!({ "q": "Audit.Log", "evidence": "sometimes" }), "invalid_argument"),
+        ("help", json!({ "q": "no-such-topic" }), "invalid_argument"),
+    ] {
+        let (text, got) = mcp.kc_coded(op, &args);
+        assert_eq!(got.as_deref(), Some(code), "{op} {args}: {text}");
+    }
+    // A rename refused says why in codes beside its reasons.
+    let (text, _) = mcp.kc_coded("rename_preview", &json!({ "q": "Checkout.Run", "new_name": "_orders" }));
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["refused"], json!(true), "{text}");
+    assert_eq!(v["codes"].as_array().unwrap().len(), v["reasons"].as_array().unwrap().len(), "{text}");
+    assert!(v["codes"].as_array().unwrap().contains(&json!("collision")), "{text}");
     drop(mcp);
 
     // Under another profile: the same ops, each `advertised` as tools/list says; the tool itself only when named.

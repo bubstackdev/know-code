@@ -181,6 +181,27 @@ class ReplayGateTests(unittest.TestCase):
         refusing['errors'] = []
         self.assertEqual(replay_gate.compare(base, refusing), ["newly refused: kc_find {\"query\": \"Y\"} (q3)"])
 
+    def test_a_build_that_codes_its_refusals_codes_every_one_and_every_entry(self):
+        call = lambda **kw: dict(dict(question='q1', tool='kc_search', args={'pattern': 'a'}, error=False, refused=False,
+                                      code=None, entries=[]), **kw)
+        # Entries read from JSON (nested lists too) and from a tree's header lines.
+        self.assertEqual(replay_gate.entry_codes(json.dumps({'incomplete': [{'reason': 'stale', 'code': 'indexing'}],
+                                                             'items': [{'more': [{'reason': 'capped'}]}]})),
+                         ['capped', 'indexing'])
+        self.assertEqual(replay_gate.entry_codes('repo shop @ 1a2b\nincomplete (depth): shop: …\nmore (capped): x\n'),
+                         ['capped', 'depth'])
+        calls = [call(), call(refused=True, code='no_files'), call(error=True, code='not_found'),
+                 call(tool='kc_find', error=True, code=None), call(tool='kc_refs', error=True, code='internal'),
+                 call(tool='kc_context', entries=['capped', 'mystery'])]
+        why = [(u['tool'], u['why']) for u in replay_gate.uncoded(calls)]
+        self.assertEqual(why, [('kc_find', ['refused with code None']), ('kc_refs', ['refused with code internal']),
+                               ('kc_context', ['mystery'])])
+        base = dict(strata={}, errors=[], tools={}, schemas={})
+        older = dict(base, coded=False, uncoded=replay_gate.uncoded(calls))
+        self.assertEqual(replay_gate.compare(base, older), [])
+        coded = dict(base, coded=True, uncoded=replay_gate.uncoded(calls))
+        self.assertEqual(len(replay_gate.compare(base, coded)), 3)
+
 
     def test_fetch_exports_only_the_named_repositories_with_their_pins_and_exclusions(self):
         seen = {}

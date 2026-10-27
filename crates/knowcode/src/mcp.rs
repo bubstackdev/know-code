@@ -24,6 +24,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use kc_store::answer::{Code, Refusal};
+
 use crate::ops::{self, Scope};
 
 /// Responses longer than this many characters lose list items until they fit (about 4 characters per token).
@@ -146,6 +148,149 @@ fn bounded(tool: &str, mut schema: rmcp::model::JsonObject) -> rmcp::model::Json
 const BOUNDS: &[&str] = &["minimum", "maximum", "default", "enum"];
 
 
+
+/// A refused call as a client gets it: the English in the tool result's text, as it always was, and the machine code
+/// in its `structuredContent` (`{"error": {"code", "message", "privacy"}}`, `privacy` for `withheld`), so a client
+/// never reads the English to tell refusals apart. A [`Refusal`] raised where the call is refused keeps its code;
+/// any other error is coded by what it says ([`code_of`]), and one nothing codes is `internal`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolError {
+    pub code: Code,
+    pub message: String,
+    pub privacy: Option<kc_store::answer::PrivacyPolicy>,
+}
+
+impl ToolError {
+    pub fn new(code: Code, message: impl Into<String>) -> Self {
+        ToolError { code, message: message.into(), privacy: None }
+    }
+
+    /// The same refusal said in other words (`kc`'s op names).
+    fn reworded(self, f: impl FnOnce(&str) -> String) -> Self {
+        ToolError { message: f(&self.message), ..self }
+    }
+
+    /// `{"code", "message", "privacy"}`.
+    pub fn json(&self) -> Value {
+        let mut v = serde_json::json!({ "code": self.code, "message": self.message });
+        if let Some(p) = &self.privacy {
+            v["privacy"] = serde_json::json!(p);
+        }
+        v
+    }
+}
+
+impl From<String> for ToolError {
+    fn from(message: String) -> Self {
+        ToolError::new(code_of(&message), message)
+    }
+}
+
+impl From<anyhow::Error> for ToolError {
+    fn from(e: anyhow::Error) -> Self {
+        let message = format!("{e:#}");
+        match e.chain().find_map(|c| c.downcast_ref::<Refusal>()) {
+            Some(r) => ToolError { code: r.code, message, privacy: r.privacy.clone() },
+            None if kc_store::limits::current().is_cancelled() => ToolError::new(Code::Cancelled, message),
+            None => ToolError::from(message),
+        }
+    }
+}
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::ops::Deref for ToolError {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.message
+    }
+}
+
+impl PartialEq<&str> for ToolError {
+    fn eq(&self, other: &&str) -> bool {
+        self.message == *other
+    }
+}
+
+impl rmcp::handler::server::tool::IntoCallToolResult for ToolError {
+    fn into_call_tool_result(self) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        Ok(coded(rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(self.message.clone())]), &self).into())
+    }
+}
+
+/// `result` with `e`'s code in its `structuredContent`.
+fn coded(mut result: rmcp::model::CallToolResult, e: &ToolError) -> rmcp::model::CallToolResult {
+    result.structured_content = Some(serde_json::json!({ "error": e.json() }));
+    result
+}
+
+/// The code of an error raised without one, by what it says: the argument checks of each op, the messages of the
+/// libraries parsing a call's arguments (serde), and the errors of reading files, the index and git. Every family an
+/// op raises is here or raised as a [`Refusal`]; the tests call each op into each and check its code.
+pub fn code_of(message: &str) -> Code {
+    let m = message;
+    let has = |words: &[&str]| words.iter().any(|w| m.contains(w));
+    if m.starts_with("withheld:") {
+        Code::Withheld
+    } else if has(&["stale cursor", "is no longer held by this server"]) {
+        Code::StaleCursor
+    } else if has(&["paths matched 0 files"]) {
+        Code::NoFiles
+    } else if has(&[
+        "failed to deserialize",
+        "invalid type:",
+        "missing field",
+        "invalid value:",
+        "unknown variant",
+        " must be ",
+        "is not a cursor",
+        "no op ",
+        "takes no `q`",
+        "takes one `q`",
+        "per call; split them",
+        "is not a valid identifier",
+        "is an assumption: write",
+        "a preset can't be taken away",
+        "unknown evidence",
+        "unknown edge kind",
+        "unknown symbol kind",
+        "unknown kind `",
+        "unknown tag ",
+        "edges for references are",
+        "doesn't parse as",
+        "invalid regex",
+        "invalid pattern",
+        "invalid text regex",
+        "empty pattern",
+        "structural search covers",
+        "takes a date git understands",
+        "a note needs some text",
+        "no help topic",
+        "not a path search's cursor",
+        "are the same symbol",
+    ]) || m.starts_with("give ")
+    {
+        Code::InvalidArgument
+    } else if has(&["names several definitions", "definitions; pass", "beyond the repo limit", "rename previews one repo at a time"])
+        || (m.contains(" is in ") && m.contains(" repos ("))
+    {
+        Code::Ambiguous
+    } else if has(&["no repo at ", "nothing is indexed", "is indexed; run", "not inside a git repo", "no indexed repo named", "no repo to query"]) {
+        Code::NotIndexed
+    } else if has(&["no definition", "no symbol ", "no indexed repo defines", "no commit ", "not a git revision", "shares no history", "no such file"]) {
+        Code::NotFound
+    } else if has(&["cancelled"]) {
+        Code::Cancelled
+    } else if has(&["failed in ", "opening ", "reading ", "could not read", "is in use", "can't open", "no longer exists", "changed while it was being opened"]) {
+        Code::Failed
+    } else {
+        Code::Internal
+    }
+}
 
 // Parameter docs are the schema's descriptions, advertised with every tool: one short line each. The details are in
 // each tool's help topic (`help.rs`), which lists these too.
@@ -1243,13 +1388,13 @@ tokio::task_local! {
 }
 
 /// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
-async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
+async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
     let env = blocking(false, with_cuts(f)).await?;
     Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
 }
 
 /// [`run`] for an operation that runs a child process (a search): in the children's lane.
-async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
+async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
     let env = blocking(true, with_cuts(f)).await?;
     Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
 }
@@ -1267,7 +1412,7 @@ fn with_cuts(f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> impl
 /// Runs a blocking operation in a lane (see [`WORK`]) as the call's operation: a client's cancellation stops its
 /// child processes and the work at its next check. The lane is held until the work ends, even when the call's
 /// future is dropped first, so a cancelled call never lets more work run than the lanes allow.
-async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
+async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ToolError> {
     let lane = lane(child).await?;
     let call = OPERATION.try_with(|o| o.clone()).unwrap_or_else(|_| kc_store::limits::Operation::new());
     // Dropping the awaiting future (the client went away) cancels the work too.
@@ -1281,10 +1426,10 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
         f()
     })
     .await
-    .map_err(|e| e.to_string());
+    .map_err(|e| ToolError::new(Code::Internal, e.to_string()));
     cancel_on_drop.0 = None;
     release_memory();
-    result?.map_err(|e| format!("{e:#}"))
+    result?.map_err(ToolError::from)
 }
 
 /// Cancels an operation when dropped.
@@ -1300,7 +1445,7 @@ impl Drop for CancelOnDrop {
 
 /// Runs a traversal and answers as text: a header naming the repo and commit, then the tree, cut at the size cap
 /// on a line boundary with a hint saying how much was cut.
-async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(Value, String)> + Send + 'static) -> Result<String, String> {
+async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(Value, String)> + Send + 'static) -> Result<String, ToolError> {
     let (env, text) = blocking(false, move || {
         let (mut env, text) = f()?;
         ops::add_cuts(&mut env);
@@ -1474,9 +1619,9 @@ async fn run_batch(
     max_chars: Option<usize>,
     inputs: Vec<String>,
     f: impl Fn(&str) -> anyhow::Result<Value> + Send + 'static,
-) -> Result<String, String> {
+) -> Result<String, ToolError> {
     if inputs.len() > MAX_BATCH {
-        return Err(format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len()));
+        return Err(ToolError::new(Code::InvalidArgument, format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len())));
     }
     let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS * 2);
     blocking(false, move || {
@@ -1496,7 +1641,15 @@ async fn run_batch(
                     env["input"] = Value::from(i.as_str());
                     cap(env, share)
                 }
-                Err(e) => serde_json::json!({ "input": i, "error": format!("{e:#}") }).to_string(),
+                Err(e) => {
+                    // As a refused call: the English, its code and, for `withheld`, the policy.
+                    let e = ToolError::from(e);
+                    let mut v = serde_json::json!({ "input": i, "error": e.message, "code": e.code });
+                    if let Some(p) = &e.privacy {
+                        v["privacy"] = serde_json::json!(p);
+                    }
+                    v.to_string()
+                }
             };
             if text.len() > room {
                 break;
@@ -1526,10 +1679,15 @@ fn batch_answer(results: &[String], left: &[String], max: usize) -> String {
     for (k, r) in results.iter().enumerate() {
         let v: Value = serde_json::from_str(r).unwrap_or(Value::Null);
         if v["complete"].as_bool() == Some(false) || v.get("error").is_some() {
-            let reason = crate::contract::incomplete_of(&v).first().map_or(kc_store::answer::Reason::Failed, |i| i.reason);
+            // Its first entry's reason and code, and its policy where it is `withheld`; a refused input's code.
+            let first = crate::contract::incomplete_of(&v).into_iter().next();
+            let reason = first.as_ref().map_or(kc_store::answer::Reason::Failed, |i| i.reason);
             let input = v["input"].as_str().unwrap_or("");
             let what = if v.get("error").is_some() { "failed" } else { "incomplete: see its `incomplete`" };
-            incomplete.push(kc_store::answer::Incomplete::new(reason, format!("results[{k}] ({input}): {what}")));
+            let mut entry = kc_store::answer::Incomplete::new(reason, format!("results[{k}] ({input}): {what}"));
+            entry.code = first.as_ref().and_then(|i| i.code).or_else(|| serde_json::from_value(v["code"].clone()).ok());
+            entry.privacy = first.and_then(|i| i.privacy).or_else(|| serde_json::from_value(v["privacy"].clone()).ok());
+            incomplete.push(entry);
         }
     }
     if !left.is_empty() {
@@ -1631,7 +1789,7 @@ fn placed(symbol: Option<&str>, empty: bool, scope: &Scope) -> anyhow::Result<()
         && let Some(s) = symbol
         && let Some(why) = ops::unresolved_place(s, scope)?
     {
-        anyhow::bail!(why);
+        anyhow::bail!(Refusal::new(Code::NotFound, why));
     }
     Ok(())
 }
@@ -1653,6 +1811,9 @@ fn repo_label(path: &str) -> String {
 ///
 /// The child has the search deadline (see [`kc_store::limits`]) and is killed when the call is cancelled. Killed at
 /// its deadline, it answers no items, `complete: false` and an `incomplete` entry with reason `deadline`.
+/// Starts the line a child (see [`search_in_child`]) gives its refusal's code on, after its message.
+pub const REFUSAL_LINE: &str = "knowcode-refusal: ";
+
 fn search_in_child(args: &[String]) -> anyhow::Result<Value> {
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
@@ -1670,8 +1831,19 @@ fn search_in_child(args: &[String]) -> anyhow::Result<Value> {
         },
     };
     if !out.status.success() {
-        let msg = String::from_utf8_lossy(&out.stderr);
-        anyhow::bail!("{}", msg.trim().trim_start_matches("knowcode: "));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let (msg, coded) = match stderr.trim_end().rsplit_once('\n') {
+            Some((msg, last)) if last.starts_with(REFUSAL_LINE) => (msg, serde_json::from_str::<Value>(&last[REFUSAL_LINE.len()..]).ok()),
+            _ => (stderr.as_ref(), None),
+        };
+        let msg = msg.trim().trim_start_matches("knowcode: ").to_string();
+        if let Some(c) = coded
+            && let Ok(code) = serde_json::from_value::<Code>(c["code"].clone())
+        {
+            let privacy = serde_json::from_value(c["privacy"].clone()).ok();
+            anyhow::bail!(Refusal { code, message: msg, privacy });
+        }
+        anyhow::bail!("{msg}");
     }
     Ok(serde_json::from_slice(&out.stdout)?)
 }
@@ -1792,6 +1964,9 @@ fn refuse_partial_rename(env: &mut Value, path: &str) {
         && !reasons.iter().any(|r| r == why)
     {
         reasons.push(Value::from(why));
+        if let Some(codes) = env["codes"].as_array_mut() {
+            codes.push(Value::from(Code::Cut.as_str()));
+        }
     }
 }
 
@@ -2130,12 +2305,12 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Docs on any tool, parameter or concept; no topic: the index.")]
-    async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, String> {
-        self.help(p.topic.as_deref())
+    async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, ToolError> {
+        self.help(p.topic.as_deref()).map_err(|e| ToolError::new(Code::InvalidArgument, e))
     }
 
     #[tool(description = "The symbols enclosing a file:line, innermost first: a stack frame's code.")]
-    async fn kc_symbol_at(&self, Parameters(p): Parameters<SymbolAtParams>) -> Result<String, String> {
+    async fn kc_symbol_at(&self, Parameters(p): Parameters<SymbolAtParams>) -> Result<String, ToolError> {
         let scope = if Path::new(&p.file).is_absolute() && p.common.repo.is_none() {
             Scope { repos: Vec::new(), ..self.default.clone() }
         } else {
@@ -2149,7 +2324,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Where a name is defined (name, prefix or `Type.member`): file:line and signature.")]
-    async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, String> {
+    async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let env = ops::find(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
@@ -2160,7 +2335,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Files for a concept, bug report or ticket, ranked. First, when you don't know the names.")]
-    async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, String> {
+    async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, p.workspace)?;
         let limit = p.limit.unwrap_or(10);
         let locate = move |q: &str| -> anyhow::Result<Value> {
@@ -2174,7 +2349,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Every reference to a name, resolved, across repos. What calls X, by hop or across HTTP: kc_impact on X's file:line.")]
-    async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
+    async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
         let kinds = ref_kinds(&p.kinds, &p.edges)?;
@@ -2191,7 +2366,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "One symbol: source, members, callers, callees and cross-repo links (HTTP, DI, bus, SQL). A repo's name: how it deploys.")]
-    async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, String> {
+    async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let source: kc_store::skeleton::SourceMode = p.source.as_deref().unwrap_or("auto").parse().map_err(|e| format!("{e:#}"))?;
         let symbols = inputs(p.symbol, p.symbols, "symbol or symbols")?;
@@ -2219,7 +2394,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Call tree of a symbol: callers (`in`), callees (`out`) or both, across DI, HTTP, bus and SQL.")]
-    async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, String> {
+    async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let dir = p.direction.clone().unwrap_or_else(|| "both".into());
         let tree = p.walk.tree()?;
@@ -2279,7 +2454,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "How symbol `from` reaches symbol `to`, across repos: the best paths, step by step.")]
-    async fn kc_path(&self, Parameters(p): Parameters<PathParams>) -> Result<String, String> {
+    async fn kc_path(&self, Parameters(p): Parameters<PathParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let to_repo = match &p.to_repo {
             Some(r) => self.scope(&Common { repo: Some(r.clone()), max_chars: None }, false)?.repos.into_iter().next(),
@@ -2330,7 +2505,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "What runs end to end from an entry point (route, component, action, method), step by step across repos.")]
-    async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, String> {
+    async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
         let entry = p.entry.clone();
@@ -2372,7 +2547,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Who calls a method or an HTTP endpoint, from any repo, by hop (`depth` 2: callers' callers): what breaks if it changes. Bus and SQL too.")]
-    async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, String> {
+    async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let tree = p.walk.tree()?;
         let order: ops::ImpactOrder = p.order.as_deref().unwrap_or("rank").parse().map_err(|e| format!("{e:#}"))?;
@@ -2431,7 +2606,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Dead-code candidates: symbols nothing reaches, with reasons.")]
-    async fn kc_unused(&self, Parameters(p): Parameters<UnusedParams>) -> Result<String, String> {
+    async fn kc_unused(&self, Parameters(p): Parameters<UnusedParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let params = crate::refactor::UnusedParams {
@@ -2445,7 +2620,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Every site renaming a C# or TypeScript symbol would edit, and collisions. Edits nothing.")]
-    async fn kc_rename_preview(&self, Parameters(p): Parameters<RenamePreviewParams>) -> Result<String, String> {
+    async fn kc_rename_preview(&self, Parameters(p): Parameters<RenamePreviewParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let params = crate::refactor::RenameParams { symbol: p.symbol, new_name: p.new_name, allow_ambiguous: p.allow_ambiguous };
@@ -2455,7 +2630,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Files that change in the same commits as a file (git history).")]
-    async fn kc_coupled(&self, Parameters(p): Parameters<CoupledParams>) -> Result<String, String> {
+    async fn kc_coupled(&self, Parameters(p): Parameters<CoupledParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no co-change partner of {} in the last 365 days of history", p.file);
@@ -2466,7 +2641,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Tests to run for changed files, symbols or a diff, ranked: a likely sample.")]
-    async fn kc_tests(&self, Parameters(p): Parameters<TestsParams>) -> Result<String, String> {
+    async fn kc_tests(&self, Parameters(p): Parameters<TestsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no test reaches, is named for, or changes with {}", p.diff.as_deref().map_or_else(|| p.targets.join(", "), |d| format!("diff {d}")));
@@ -2477,7 +2652,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Files that keep hurting: churn, fixes, complexity and coupling.")]
-    async fn kc_hotspots(&self, Parameters(p): Parameters<HotspotsParams>) -> Result<String, String> {
+    async fn kc_hotspots(&self, Parameters(p): Parameters<HotspotsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, p.workspace)?;
         run(p.common.max_chars, move || {
             let what = match &p.path {
@@ -2490,7 +2665,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Who wrote a file, directory or repo (git history): top authors, truck factor.")]
-    async fn kc_ownership(&self, Parameters(p): Parameters<OwnershipParams>) -> Result<String, String> {
+    async fn kc_ownership(&self, Parameters(p): Parameters<OwnershipParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no file in history under {}", p.path.as_deref().unwrap_or("the repo"));
@@ -2501,7 +2676,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "A symbol's git history: commits that changed it, first and last, who wrote it, files changed with it.")]
-    async fn kc_history(&self, Parameters(p): Parameters<HistoryParams>) -> Result<String, String> {
+    async fn kc_history(&self, Parameters(p): Parameters<HistoryParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no definition {}", p.symbol);
@@ -2512,7 +2687,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Who could review a change (files or a diff), by recent lines written.")]
-    async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, String> {
+    async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!(
@@ -2526,7 +2701,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "What a repo is: languages, dependencies, entry points, key types and a map.")]
-    async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, String> {
+    async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, p.workspace)?;
         let budget = p.map_budget.unwrap_or(400);
         let max = p.common.max_chars.or(Some((budget * 4 + 4_000).max(DEFAULT_CHARS)));
@@ -2543,25 +2718,25 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "A repo's functional areas: files clustered by references, co-change and directory.")]
-    async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, String> {
+    async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await
     }
 
     #[tool(description = "Notes on symbols, each current, stale or orphaned.")]
-    async fn kc_notes(&self, Parameters(p): Parameters<NotesParams>) -> Result<String, String> {
+    async fn kc_notes(&self, Parameters(p): Parameters<NotesParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::note_list(p.symbol.as_deref(), &scope)?.env)).await
     }
 
     #[tool(description = "WRITES LOCAL STATE: adds a note to a symbol, kept in KnowCode's data directory, never the repo.")]
-    async fn kc_note_add(&self, Parameters(p): Parameters<NoteAddParams>) -> Result<String, String> {
+    async fn kc_note_add(&self, Parameters(p): Parameters<NoteAddParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::note_add(&p.symbol, &p.text, p.tag.as_deref(), &scope)?.env)).await
     }
 
     #[tool(description = "Ranked grep over every file, definitions first: for strings and keys that aren't symbol names.")]
-    async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, String> {
+    async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, ToolError> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let workspace = p.workspace && p.repos.is_empty();
         let mut args: Vec<String> = vec!["search".into(), "--json".into()];
@@ -2569,7 +2744,7 @@ impl KnowcodeServer {
             None | Some("sensitive") => {}
             Some("insensitive") => args.push("-i".into()),
             Some("smart") => args.push("-S".into()),
-            Some(other) => return Err(format!("case must be sensitive, insensitive or smart, not {other}")),
+            Some(other) => return Err(ToolError::new(Code::InvalidArgument, format!("case must be sensitive, insensitive or smart, not {other}"))),
         }
         for (on, flag) in [(p.regex, "-e"), (p.word, "-w"), (p.files_only, "--files")] {
             if on {
@@ -2601,7 +2776,7 @@ impl KnowcodeServer {
         run_child(p.common.max_chars, move || {
             let env = noted(workspace, search_in_child(&args)?);
             if let Some(why) = searched_nothing(&env, filtered) {
-                anyhow::bail!(why);
+                anyhow::bail!(Refusal::new(Code::NoFiles, why));
             }
             Ok(explain(env, &what, "limit (or offset=next_offset)"))
         })
@@ -2609,7 +2784,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Structural search: an ast-grep pattern (`$X`, `$$$`) over one language. kc_help kc_grep_ast.")]
-    async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, String> {
+    async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, ToolError> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let workspace = p.workspace && p.repos.is_empty();
         let mut args: Vec<String> = vec!["grep-ast".into(), "--json".into(), "-l".into(), p.lang];
@@ -2642,14 +2817,14 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "The next page of a cut list.")]
-    async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, String> {
+    async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, ToolError> {
         // In a child, as a search: a page can be a search's. A handle (see `compact`) stands for the full cursor.
         let args: Vec<String> = vec!["more".into(), "--json".into(), crate::compact::resolve(&p.cursor)?];
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 
     #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, history, more, help.")]
-    async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, String> {
+    async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, ToolError> {
         let (tool, args) = one_call(p)?;
         fn a<T: serde::de::DeserializeOwned>(tool: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
             serde_json::from_value(Value::Object(args)).map(Parameters).map_err(|e| format!("op {}: {e}", &tool[3..]))
@@ -2665,7 +2840,7 @@ impl KnowcodeServer {
             "kc_more" => self.kc_more(a(t, args)?).await,
             // Data, as it is: its names are the tools' own.
             "kc_capabilities" => return self.kc_capabilities(a(t, args)?).await,
-            "kc_help" => return self.kc_help(a(t, args)?).await.map(|h| one_text(&h, true)).map_err(|e| one_text(&e, true)),
+            "kc_help" => return self.kc_help(a(t, args)?).await.map(|h| one_text(&h, true)).map_err(|e| e.reworded(|m| one_text(m, true))),
             "kc_trace" => self.kc_trace(a(t, args)?).await,
             "kc_path" => self.kc_path(a(t, args)?).await,
             "kc_flow" => self.kc_flow(a(t, args)?).await,
@@ -2684,19 +2859,19 @@ impl KnowcodeServer {
             "kc_note_add" => self.kc_note_add(a(t, args)?).await,
             "kc_grep_ast" => self.kc_grep_ast(a(t, args)?).await,
             "kc_status" => self.kc_status(a(t, args)?).await,
-            other => Err(format!("no op {other}")),
+            other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
-        out.map(|o| one_text(&o, false)).map_err(|e| one_text(&e, false))
+        out.map(|o| one_text(&o, false)).map_err(|e| e.reworded(|m| one_text(m, false)))
     }
 
     #[tool(description = "Every op as data: its parameters with ranges and choices, whether it writes, its answer's shape.")]
-    async fn kc_capabilities(&self, Parameters(p): Parameters<CapabilitiesParams>) -> Result<String, String> {
+    async fn kc_capabilities(&self, Parameters(p): Parameters<CapabilitiesParams>) -> Result<String, ToolError> {
         let doc = crate::capabilities::document(&self.surface(), p.of.as_deref())?;
         Ok(serde_json::to_string(&doc).unwrap_or_default())
     }
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
-    async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, String> {
+    async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, ToolError> {
         // Every repo of the workspace, those not indexed yet included.
         let scope = if p.workspace {
             Scope { repos: kc_index::indexed_roots().map_err(|e| format!("{e:#}"))?, no_sync: false }
@@ -2734,20 +2909,28 @@ impl ServerHandler for KnowcodeServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
-            return Ok(rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!("{e:#}"))]).into());
+            return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(e));
         }
         let ct = context.ct.clone();
         let op = kc_store::limits::Operation::new();
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let call = OPERATION.scope(op.clone(), self.tool_router.call(tcc));
         tokio::pin!(call);
-        tokio::select! {
+        let r = tokio::select! {
             r = &mut call => r,
             _ = ct.cancelled() => {
                 op.cancel();
                 // The work stops soon after; its answer (an error) goes nowhere the client waits for.
                 call.await
             }
+        };
+        // An error raised before the tool ran (its arguments didn't fit its parameters) is coded by what it says.
+        match r {
+            Ok(rmcp::model::CallToolResponse::Complete(result)) if result.is_error == Some(true) && result.structured_content.is_none() => {
+                let text: String = result.content.iter().filter_map(|c| c.as_text().map(|t| t.text.clone())).collect();
+                Ok(coded(result, &ToolError::from(text)).into())
+            }
+            r => r,
         }
     }
 
@@ -2910,6 +3093,41 @@ mod tests {
         let impact = s.help(Some("impact")).unwrap();
         assert!(impact.contains(&format!("up to {} hops", IMPACT_DEPTH.max)) && impact.contains(&format!("pass depth 2-{} for more", IMPACT_DEPTH.max)), "{impact}");
         assert!(!impact.contains("to 5"), "{impact}");
+    }
+
+    /// A refusal raised with its code keeps it, through `anyhow` and its context; one raised as English is coded by
+    /// what it says, each family the ops raise; and a refused call carries its code beside the English.
+    #[test]
+    fn every_refusal_is_coded() {
+        let policy = kc_store::answer::PrivacyPolicy { repo: "app".into(), file: ".knowcode-privacy.yml".into(), block_at: 1, blocks: "paths".into() };
+        let e = anyhow::Error::new(Refusal::withheld("withheld: AI privacy level 1 in app", policy.clone())).context("asking");
+        let t = ToolError::from(e);
+        assert_eq!((t.code, t.privacy.as_ref()), (Code::Withheld, Some(&policy)));
+        assert_eq!(t.json()["privacy"]["blocks"], "paths");
+        for (message, code) in [
+            ("failed to deserialize parameters: invalid type: string \"x\", expected u8", Code::InvalidArgument),
+            ("op trace: missing field `symbol`", Code::InvalidArgument),
+            ("direction must be in, out or both, not sideways", Code::InvalidArgument),
+            ("no op \"nope\": one of impact, find", Code::InvalidArgument),
+            ("give a symbol or symbols", Code::InvalidArgument),
+            ("21 inputs: at most 20 per call; split them across calls", Code::InvalidArgument),
+            ("unknown evidence \"sometimes\": a preset (default, confirmed, all)", Code::InvalidArgument),
+            ("pattern `class {` doesn't parse as csharp: …", Code::InvalidArgument),
+            ("cursor kc~ff is no longer held by this server (it keeps the last 4096, until it restarts)", Code::StaleCursor),
+            ("stale cursor: the list changed since this cursor was made", Code::StaleCursor),
+            ("paths matched 0 files (nowhere/**): in shop; nothing was searched", Code::NoFiles),
+            ("no repo at nowhere and no indexed repo named nowhere", Code::NotIndexed),
+            ("no definition named Nope in shop", Code::NotFound),
+            ("Save names 3 definitions; pass Type.member or file:line:", Code::Ambiguous),
+            ("git log failed in /x: fatal", Code::Failed),
+            ("something nobody expected", Code::Internal),
+        ] {
+            assert_eq!(code_of(message), code, "{message}");
+        }
+        let r = rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::new(Code::NotFound, "no definition named X"));
+        let Ok(rmcp::model::CallToolResponse::Complete(r)) = r else { panic!("{r:?}") };
+        assert_eq!(r.is_error, Some(true));
+        assert_eq!(r.structured_content, Some(json!({ "error": { "code": "not_found", "message": "no definition named X" } })));
     }
 
     #[test]
@@ -3306,7 +3524,7 @@ mod tests {
         assert!(!v["items"].as_array().unwrap().is_empty());
     }
 
-    fn batch(max: usize, n: usize) -> Result<String, String> {
+    fn batch(max: usize, n: usize) -> Result<String, ToolError> {
         let inputs: Vec<String> = (0..n).map(|i| format!("name{i}")).collect();
         let answer = |i: &str| -> anyhow::Result<Value> {
             let items: Vec<Value> = (0..40).map(|k| json!({ "file": format!("src/{i}/F{k}.cs"), "line": k })).collect();
@@ -3579,7 +3797,7 @@ mod tests {
             Parameters(serde_json::from_value(v).unwrap())
         }
         let rt = runtime();
-        let mut answers: Vec<(&str, Result<String, String>)> = rt.block_on(async {
+        let mut answers: Vec<(&str, Result<String, ToolError>)> = rt.block_on(async {
             vec![
                 ("kc_symbol_at", s.kc_symbol_at(p(json!({ "file": "src/Orders.cs", "line": 4 }))).await),
                 ("kc_find", s.kc_find(p(json!({ "query": "Orders" }))).await),
