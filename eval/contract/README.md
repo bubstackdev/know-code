@@ -15,8 +15,9 @@ all,kc_capabilities`, then `--tools one`) over a fixture repository with two aut
   advertised schema is kept shorter); each parameter the entry lists is taken: a value of its type isn't refused for
   it.
 - **An answer:** a call with sample arguments answers, and a JSON answer has the keys `output.keys` promises.
-- **Ranges and choices:** a value past a range is clamped or refused as `beyond` says; a value of the wrong type is
-  refused with `wrong_type`'s code; a word outside a closed choice is refused with its `code`.
+- **Ranges and choices:** past a range's maximum, under its minimum, negative, and past its type's maximum, a value
+  is clamped or refused as `above_max`, `below_min`, `negative` and `above_type_max` say (an older build's `beyond`);
+  a value of the wrong type is refused with `wrong_type`'s code; a word outside a closed choice is refused with its `code`.
 - **The single tool:** `kc {op, q}`, and `kc {op, qs}` where the op takes several, reach the op.
 - **Writes:** the read ops leave the notes as they were; `note_add`, the one write, changes them.
 - **Codes:** every refusal carries a code from `codes`, at `errors.at`, with `errors.keys`.

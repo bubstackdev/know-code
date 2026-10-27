@@ -40,6 +40,15 @@ class WatchTest(unittest.TestCase):
             self.assertEqual(contract_gate.changed(before, contract_gate.digest_tree(root, skip=[root/'cache'])), ['a.txt', 'b.txt'])
 
 
+class RangeTest(unittest.TestCase):
+    def test_each_end_and_what_is_said_of_it(self):
+        r = dict(min=1, max=16, above_max='clamped', below_min='clamped', negative='invalid_argument', type_max=255,
+                 above_type_max='invalid_argument')
+        self.assertEqual(contract_gate.range_ends(r), [(17, 'clamped'), (-1, 'invalid_argument'), (0, 'clamped'),
+                                                       (255, 'clamped'), (256, 'invalid_argument')])
+        self.assertEqual(contract_gate.range_ends(dict(min=0, max=10, beyond='clamped')), [(11, 'clamped'), (-1, 'clamped')])
+
+
 class CodesTest(unittest.TestCase):
     def call(self, args, error=False, code=None, entries=()):
         return dict(question='q1', tool='kc_refs', args=args, error=error, code=code, entries=list(entries))

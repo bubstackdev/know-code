@@ -14,8 +14,9 @@ means.
 - each parameter the advertised tool lists (`tools/list`) is in it, of the same type, choices and bounds, and each
   parameter it lists is taken: a value of its type isn't refused for it;
 - a call with sample arguments answers, and a JSON answer has the keys `output.keys` promises;
-- each range: a value past it is clamped or refused as `ranges.*.beyond` says, a value of the wrong type is refused
-  with `ranges.*.wrong_type`'s code; each closed choice: a word outside it is refused with its `code`;
+- each range: past its maximum, under its minimum, negative and past its type's maximum, a value is clamped or
+  refused as `above_max`, `below_min`, `negative` and `above_type_max` say (an older build's `beyond`), and a value
+  of the wrong type is refused with `wrong_type`'s code; each closed choice: a word outside it is refused with its `code`;
 - through the single `kc` tool, `{op, q}` (and `{op, qs}`) reaches the op;
 - read ops leave the notes as they were, and `note_add` (the one write) changes them;
 - every refusal carries a code from `codes`, at `errors.at` with `errors.keys`.
@@ -147,6 +148,24 @@ def changed(before, after):
 
 # --- capabilities ---------------------------------------------------------------------------------------------------
 
+def range_ends(r):
+    """(value, what the capabilities say happens to it) at each end of a range: `clamped`, or the refusal's code. Read
+    from `above_max`, `below_min`, `negative`, `type_max` and `above_type_max`, or from an older build's `beyond`."""
+    lo, hi = r.get('min'), r.get('max')
+    if 'beyond' in r:
+        refused = 'invalid_argument' if r['beyond'] == 'refused' else r['beyond']
+        return [(v, refused) for v in (hi + 1 if hi is not None else None, lo - 1 if lo is not None else None) if v is not None]
+    ends = []
+    if hi is not None:
+        ends.append((hi + 1, r.get('above_max')))
+    ends.append((-1, r.get('negative')))
+    if lo is not None and lo > 0:
+        ends.append((lo - 1, r.get('below_min')))
+    if r.get('type_max') is not None:
+        ends += [(r['type_max'], r.get('above_max')), (r['type_max'] + 1, r.get('above_type_max'))]
+    return ends
+
+
 def check_capabilities(binary, work):
     work = Path(work).resolve()
     root = repo(work/'fixture'/'store', FIXTURE)
@@ -233,14 +252,12 @@ def check_capabilities(binary, work):
                 if code == 'invalid_argument' and name in text:
                     failures.append(f'{op}.{name}={json.dumps(value)}: refused: {text[:120]}')
             for name, r in entry['ranges'].items():
-                for value, side in ((r.get('max'), 1), (r.get('min'), -1)):
-                    if value is None:
-                        continue
-                    error, text, code = call(op, {**args, name: value + side})
-                    if r.get('beyond') == 'clamped' and error:
-                        failures.append(f'{op}.{name}={value + side}: refused ({code}) where capabilities say clamped')
-                    if r.get('beyond') == 'refused' and code != 'invalid_argument':
-                        failures.append(f'{op}.{name}={value + side}: {"answered" if not error else code} where capabilities say refused')
+                for value, said in range_ends(r):
+                    error, text, code = call(op, {**args, name: value})
+                    if said == 'clamped' and error:
+                        failures.append(f'{op}.{name}={value}: refused ({code}) where capabilities say clamped')
+                    if said not in (None, 'clamped') and code != said:
+                        failures.append(f'{op}.{name}={value}: {"answered" if not error else code} where capabilities say {said}')
                 error, text, code = call(op, {**args, name: 'many'})
                 if code != r.get('wrong_type'):
                     failures.append(f'{op}.{name}="many": {code or "answered"}, capabilities say {r.get("wrong_type")}')
