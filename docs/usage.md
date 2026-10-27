@@ -258,7 +258,8 @@ it, and `kc_search` and `kc_grep_ast` run in a child process of their own. Cance
 
 ## Command flags
 
-Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not repeated below.
+Every query command takes `-r/--repo`, `--no-sync`, `--json` and `--provenance` (the JSON envelope with a provenance
+record, for durable records; see [answers](answers.md#the-provenance-record)); they are not repeated below.
 
 | Command | Flags |
 | --- | --- |

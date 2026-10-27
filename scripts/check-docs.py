@@ -29,7 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = {"kc_store", "kc_index", "kc_extract"}
-COMMON_FLAGS = {"--repo", "--no-sync", "--json", "--help", "--version"}
+COMMON_FLAGS = {"--repo", "--no-sync", "--json", "--provenance", "--help", "--version"}
 # Variables that are not user settings: build stamps, test hooks and internal handshakes.
 INTERNAL_ENV = {"KNOWCODE_BUILD", "KNOWCODE_KEEP_RESUME", "KNOWCODE_INSERT_REVERSED"}
 INTERNAL_ENV_PREFIXES = ("KNOWCODE_TEST_",)
