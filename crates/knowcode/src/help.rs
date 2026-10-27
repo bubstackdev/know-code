@@ -875,6 +875,10 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - `provenance`: the repos the answer consulted besides its own (dependencies and dependents opened, repos crossed over
   HTTP, the bus, SQL or Terraform, repos whose workspace summary an item came from), each `{repo, commit, generation,
   dirty, fresh}`; `fresh` says the index was checked against the working tree for this answer and matched it.
+- `provenance: true` on any call adds a second content block, `{"record": …}`, for durable records: the build and
+  extractor versions, the call's hash, the answer's hash and its `evidence` hash (the same for the same answer from any
+  index), and per repo read its worktree, full commit, uncommitted content's digest, generation, base and privacy
+  policy's digests.
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
 - `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
