@@ -204,3 +204,26 @@ fn invariant_another_processes_live_reader_survives_purge() {
     assert_eq!(cache::purge().unwrap().removed[0].root, root);
     assert!(!kc_index::db_path(&root).unwrap().exists());
 }
+
+#[test]
+fn invariant_a_new_policy_waits_for_a_reader_instead_of_refusing() {
+    let f = Fixture::new();
+    let root = f.repo("app");
+    // A query still reading the index (a cross-repo link step) when a privacy file arrives and another query opens it.
+    let reader = kc_index::open(&root).unwrap();
+    fs::write(root.join(".knowcode-privacy.yml"), "level: 1\n").unwrap();
+    let opener = {
+        let root = root.clone();
+        std::thread::spawn(move || kc_index::open(&root).map(|store| store.meta("root").unwrap()))
+    };
+    // The opener takes the writer lease only to remove the index made under the old policy; the reader closes after
+    // that, so the removal always meets it.
+    let until = Instant::now() + Duration::from_secs(20);
+    while kc_index::writer::WriterLock::try_acquire(&root).unwrap().is_some() {
+        assert!(Instant::now() < until && !opener.is_finished(), "the opener never reached the removal");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    drop(reader);
+    assert_eq!(opener.join().unwrap().unwrap().as_deref(), Some(root.to_str().unwrap()));
+    assert!(workspace::all_summaries().unwrap().iter().find(|s| s.root == root).unwrap().blocked.whole);
+}

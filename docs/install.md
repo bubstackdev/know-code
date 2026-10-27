@@ -9,7 +9,7 @@ KnowCode runs on macOS (Apple silicon) and Linux (x86_64 or arm64). It needs `gi
 `claude` CLI for Claude Code, or Codex or Cursor. Windows is not supported yet.
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
 ```
 
 The shell installer puts `knowcode` in `~/.local/bin` and adds that directory to your shell's `PATH` if it isn't
@@ -18,6 +18,11 @@ there; open a new terminal afterwards. Or with Homebrew:
 ```sh
 brew install bubstackdev/tap/knowcode
 ```
+
+**Installed 0.3.0 to 0.5.0 with the shell installer?** The repository moved from `bubstackdev/knowcode` to
+`bubstackdev/know-code` after 0.5.0, and those versions accept releases only under the old name: they show no update
+notice, and `self-update` fails ("installer URL is outside the expected KnowCode release"). Re-run the installer
+above once; from then on `self-update` works. Homebrew installs are unaffected.
 
 From source, with a Rust toolchain: `cargo build --release --locked`, then put `target/release/knowcode` on your
 `PATH`.

@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Report it privately through GitHub: on [bubstackdev/knowcode](https://github.com/bubstackdev/knowcode), open the
+Report it privately through GitHub: on [bubstackdev/know-code](https://github.com/bubstackdev/know-code), open the
 **Security** tab and choose **Report a vulnerability**. Please don't open a public issue for it.
 
 Say what is affected, how to reproduce it, and which version (`knowcode --version`).

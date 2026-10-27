@@ -42,6 +42,33 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
   blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
   replay gate fails a build that codes its refusals if any refusal it replays has none.
+- A query opening a repo whose AI privacy file had just changed, while another query or a background link step was
+  still reading that repo's index, failed with "index is in use: …; close its readers and retry". Removing the index
+  made under the old policy now waits up to 30 seconds for those readers to finish. `knowcode forget` still refuses
+  at once while the index is in use.
+- The repository moved to [bubstackdev/know-code](https://github.com/bubstackdev/know-code); the binary, crate and
+  plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 through 0.5.0 get no update notice,
+  and their `self-update` fails** ("installer URL is outside the expected KnowCode release"): they accept releases
+  only under the old name. Re-run the installer once:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
+  ```
+
+  From then on `self-update` works, accepting installer receipts that name either repository. Homebrew installs are
+  unaffected.
+- A member a Swift repo adds to a standard-library struct (`extension Int32 { var isFinite … }`) no longer captures
+  uses of the same name on other library types. On a value of another library type (`v: Float`), or of a generic
+  parameter, it is never linked: the fallback that links a framework type's member to the repo's extension of a
+  framework protocol skips library structs, which nothing conforms to. On an untyped value (`for (x, y) in zip(a, b)`,
+  `x.isFinite`), a use reached in a dependency is `external_likely`, not `unique_name`, when the name is a common
+  library member's or the member is there to satisfy one of the dependency's protocol requirements, as it is within a
+  repo. `isFinite`, `isNaN`, `magnitude`, `rounded` and other number members join the common library members, and
+  more sized number types count as standard-library types (`Int8` to `UInt64`, `Float16` to `Float80`, `Decimal`).
+- A member reached on a library type through a protocol it conforms to (`v.isFinite`, `v: Float`, resolving to
+  `GridScalar.isFinite`) says so: the reference's `basis` is `via protocol`, since the member that runs is the
+  type's own, outside the repo. When the conformance (`extension Float: GridScalar {}`) is in a SwiftPM target the
+  code neither is in nor imports, the use is the library member's alone and stays unresolved.
 - A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
   mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
   sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the

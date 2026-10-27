@@ -82,7 +82,7 @@ A release publishes the formula `knowcode.rb` to the public tap repository
 - The repository secret `HOMEBREW_TAP_TOKEN` holds a fine-grained personal access token with resource owner
   `bubstackdev`, repository access to `bubstackdev/homebrew-tap` only, and the repository permission
   **Contents: Read and write** (Metadata read-only follows automatically); nothing else. Store it with
-  `gh secret set HOMEBREW_TAP_TOKEN -R bubstackdev/knowcode`, which prompts for the value.
+  `gh secret set HOMEBREW_TAP_TOKEN -R bubstackdev/know-code`, which prompts for the value.
 - The token has an expiry (90 days). Renew it before it lapses: create a new token with the same settings, set the
   secret again, and revoke the old token.
 
@@ -95,7 +95,7 @@ the workflow.
 ## Installation
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
 brew install bubstackdev/tap/knowcode
 ```
 

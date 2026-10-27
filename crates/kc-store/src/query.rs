@@ -666,6 +666,9 @@ pub const GUESSED_MODULE: &str = "module placed by file name: no tsconfig paths 
 pub const UNPLACED_MODULE: &str = "tsconfig maps the import to no indexed file";
 /// [`RefHit::basis`]: several dependencies the file imports declare the name, and the import doesn't say which.
 pub const AMBIGUOUS_DEPENDENCY: &str = "several imported dependencies declare it";
+/// [`RefHit::basis`]: the target is a protocol requirement the receiver's type satisfies with a member of its own that
+/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`).
+pub const VIA_PROTOCOL: &str = "via protocol: the receiver's type satisfies this requirement outside the repo";
 
 impl RefHit {
     /// Whether the reference can point at symbol `id`, directly or as the implementation the container binds.
@@ -749,9 +752,17 @@ const GENERIC_PROJECTIONS: &[&str] =
 
 /// Standard-library types whose members are never defined in the repo (unless it extends them, which lookup finds).
 const STDLIB_TYPES: &[&str] = &[
-    "Array", "Bool", "CGFloat", "Character", "Data", "Date", "Dictionary", "Double", "Float", "Int", "Int64", "Set",
-    "String", "Substring", "UInt", "URL", "UUID",
+    "Array", "Bool", "CGFloat", "Character", "Data", "Date", "Decimal", "Dictionary", "Double", "Float", "Float16",
+    "Float32", "Float64", "Float80", "Int", "Int8", "Int16", "Int32", "Int64", "Set", "String", "Substring", "UInt",
+    "UInt8", "UInt16", "UInt32", "UInt64", "URL", "UUID",
 ];
+
+/// Whether `d` is a member the repo adds to a standard-library type (`extension Int32 { var isFinite … }`). These are
+/// concrete types: no other type conforms to one, so its members are never another type's, and the library declares
+/// same-named members on its other types (`Float.isFinite`).
+fn on_stdlib_type(d: &Def) -> bool {
+    d.external_container && d.container.as_deref().is_some_and(|c| STDLIB_TYPES.contains(&last_segment(c)))
+}
 
 /// .NET collection types a sequence (`TypeExpr::Array`) may be, for extension methods declared on them.
 const DOTNET_SEQUENCES: &[&str] = &[
@@ -1944,10 +1955,11 @@ fn bare_name(receiver: &str) -> Option<&str> {
 const STDLIB_MEMBERS: &[&str] = &[
     "append", "allSatisfy", "compactMap", "contains", "count", "decode", "dropFirst", "dropLast", "encode",
     "enumerated", "filter", "first", "firstIndex", "flatMap", "forEach", "formUnion", "index", "insert",
-    "intersection", "isEmpty", "joined", "last", "lastIndex", "lowercased", "map", "mapValues", "max", "merge",
-    "min", "prefix", "reduce", "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences",
-    "reserveCapacity", "reversed", "sort", "sorted", "split", "starts", "subtract", "suffix", "trimmingCharacters",
-    "union", "updateValue", "uppercased", "write", "zip",
+    "intersection", "isEmpty", "isFinite", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
+    "last", "lastIndex", "lowercased", "magnitude", "map", "mapValues", "max", "merge", "min", "prefix", "reduce",
+    "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences", "reserveCapacity",
+    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "starts", "subtract", "suffix",
+    "trimmingCharacters", "ulp", "union", "updateValue", "uppercased", "write", "zip",
 ];
 
 /// .NET collection, string, LINQ and object members, for calls from C#.
@@ -2174,8 +2186,8 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             let on_type = hit.file.ends_with(".cs")
                 && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
             if matches!(recv, Receiver::Foreign(_)) && !on_type {
-                // A framework type may conform to a framework protocol the repo extends.
-                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container).collect();
+                // A framework type may conform to a framework protocol the repo extends, never be a library struct.
+                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
                 return group_confidence(&ext);
             }
             // The receiver's type is known and nothing on it or its supertypes has this name: the member lives
@@ -4353,8 +4365,8 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
                     }
                     if found.is_empty() {
                         // A framework type (`NavigationStack`) may conform to a framework protocol the dependency
-                        // extends (`extension View`).
-                        let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container).collect();
+                        // extends (`extension View`), never be a library struct (`extension Int32`).
+                        let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
                         let (conf, _) = group_confidence(&ext);
                         (conf, ext)
                     } else {
@@ -4399,7 +4411,20 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
                     let mut groups: Vec<Option<&str>> = picked.iter().map(|d| d.container.as_deref()).collect();
                     groups.sort();
                     groups.dedup();
-                    (if groups.len() == 1 { "unique_name" } else { "ambiguous" }, picked)
+                    // Through an untyped value, as in the repo itself: a common library member's name is the library's.
+                    // So is the name of a member the dependency adds to library structs to satisfy a requirement of
+                    // its own protocol (`extension Int32 { var isFinite … }` for `GridScalar.isFinite`), which the
+                    // library's other types satisfy themselves: its own member on another type is as likely.
+                    let instance = receiver.is_some_and(|r| r != "." && !type_like(r));
+                    let library = instance
+                        && !picked.is_empty()
+                        && (stdlib_member(&hit.file, &hit.name)
+                            || picked.iter().all(|d| on_stdlib_type(d)) && requirement_named(dep.conn, &hit.name)?);
+                    if library {
+                        ("external_likely", picked)
+                    } else {
+                        (if groups.len() == 1 { "unique_name" } else { "ambiguous" }, picked)
+                    }
                 }
             };
             // Overloads: those taking as many arguments as the call passes, when any does.
@@ -4454,6 +4479,120 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
         }
     }
     Ok(())
+}
+
+/// For a reference through a library type's conformance to the protocols declaring the requirements `ids` (see
+/// [`through_requirement`]): whether the code sees a conformance of its receiver's type to one of them, or to a
+/// protocol refining one, declared in a module the referencing file is in or imports. A file or conformance whose
+/// module can't be told counts as seeing it.
+fn conformance_seen(conn: &Connection, hit: &RefHit, ids: &[i64]) -> Result<bool> {
+    let mut protocols: Vec<String> = Vec::new();
+    let mut parent = conn.prepare_cached("SELECT p.name FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
+    for &id in ids {
+        if let Some(p) = parent.query_row([id], |r| r.get::<_, String>(0)).optional()? {
+            protocols.push(p);
+        }
+    }
+    let Some(ty) = hit.receiver_type.as_deref().map(last_segment) else { return Ok(true) };
+    let Some(here) = swiftpm_target(&hit.file) else { return Ok(true) };
+    let imports: Vec<String> = conn
+        .prepare_cached("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?
+        .query_map([&hit.file], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT f.path, r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id JOIN files f ON f.id = s.file_id
+         WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY",
+    )?;
+    let sites: Vec<(String, String)> = stmt.query_map([ty], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut any = false;
+    for (file, target) in sites {
+        if !protocols.iter().any(|p| *p == last_segment(&target)) && !refines(conn, last_segment(&target), &protocols)? {
+            continue;
+        }
+        any = true;
+        match swiftpm_target(&file) {
+            None => return Ok(true),
+            Some(m) if m == here || imports.iter().any(|i| imports_module(i, m)) => return Ok(true),
+            Some(_) => {}
+        }
+    }
+    Ok(!any)
+}
+
+/// Whether protocol `name` refines (directly or through others) one of `protocols`, by the base lists the repo declares.
+fn refines(conn: &Connection, name: &str, protocols: &[String]) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id
+         WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind = 'protocol'",
+    )?;
+    let mut seen: HashSet<String> = HashSet::from([name.to_string()]);
+    let mut frontier = vec![name.to_string()];
+    // Refinement chains are short; the bound guards against a misread cycle.
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for n in &frontier {
+            for t in stmt.query_map([n], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()? {
+                let t = last_segment(&t).to_string();
+                if protocols.contains(&t) {
+                    return Ok(true);
+                }
+                if seen.insert(t.clone()) {
+                    next.push(t);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    Ok(false)
+}
+
+/// The SwiftPM target a file is in: `<Name>` of `Sources/<Name>/…` or `Tests/<Name>/…`; `None` outside those layouts.
+fn swiftpm_target(path: &str) -> Option<&str> {
+    ["Sources/", "Tests/"].iter().find_map(|root| {
+        let rest = &path[path.find(root)? + root.len()..];
+        rest.split_once('/').map(|(target, _)| target)
+    })
+}
+
+/// Whether a protocol declares a requirement named `name`.
+fn requirement_named(conn: &Connection, name: &str) -> Result<bool> {
+    Ok(conn
+        .prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM symbols s JOIN symbols p ON p.id = s.parent_id
+             WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND p.kind = 'protocol')",
+        )?
+        .query_row([name], |r| r.get(0))?)
+}
+
+/// Whether a member reference typed by its receiver (`v.isFinite`, `v: Float`) reached only protocol requirements
+/// (members declared in a protocol's body) of a protocol other than the receiver's type, which the repo doesn't
+/// declare: the library type conforms, and the member it has is its own, outside the repo, not the requirement's
+/// declaration. A receiver of a type the repo declares (an interface deriving from another) calls the requirement.
+fn through_requirement(conn: &Connection, hit: &RefHit, ids: &[i64]) -> Result<bool> {
+    let Some(ty) = hit.receiver_type.as_deref() else { return Ok(false) };
+    if ids.is_empty() || !matches!(hit.kind.as_str(), "member" | "call") {
+        return Ok(false);
+    }
+    let declared: bool = conn
+        .prepare_cached(&format!(
+            "SELECT EXISTS(SELECT 1 FROM symbols WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ({}))",
+            TYPE_KINDS.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ")
+        ))?
+        .query_row([last_segment(ty)], |r| r.get(0))?;
+    if declared {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare_cached("SELECT p.kind, p.name FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
+    for &id in ids {
+        let parent: Option<(String, String)> = stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        if !parent.is_some_and(|(kind, name)| kind == "protocol" && name != last_segment(ty)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Definitions visible from other modules: declared `public` or `open`, or members of a `public extension`. In
@@ -4834,6 +4973,16 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     }
                     (confidence, ids) = ("unresolved", Vec::new());
                 }
+            }
+        }
+        if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
+            if conformance_seen(conn, hit, &ids)? {
+                hit.basis = Some(VIA_PROTOCOL);
+            } else {
+                // The library type conforms in a module this code neither is in nor imports: the call is the
+                // library type's own member, never the requirement.
+                (confidence, ids) = ("unresolved", Vec::new());
+                evidence = None;
             }
         }
         hit.confidence = confidence;
