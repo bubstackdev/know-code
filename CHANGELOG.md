@@ -2,7 +2,7 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.5.0 (2026-10-27)
 
 - A query that joined indexing already under way could answer from the index as it was before a file's latest
   edit, and call that answer complete: the edit's new symbol was missing with nothing said. When the job it joined
