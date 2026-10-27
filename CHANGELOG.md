@@ -2,18 +2,7 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## 0.5.1 (2026-10-27)
-
-0.5.1 meets the two checks 0.5.0 missed, and moves the repository to bubstackdev/know-code. Rows of `impact` and `trace`
-lead with their call site as `file:line`: on the recorded calls of the public studies, two-hop impact recall is 0.833
-read as `file:line` alone, where 0.5.0 had 0.607. `history` reaches a caller that calls through a library's interface,
-and history-v1's caller label now carries the `optional` flag it dropped; KnowCode meets plain git on the caller
-questions either way. `impact` also stops calling some answers complete that weren't (an override leaving out a default
-parameter), and keeps every way a row was reached; constructors are found by the names their source gives them; Swift
-files with constructs the parser misses lose less code, and a Swift member added to a standard-library type no longer
-captures others' uses. Shell installs of 0.3.0 through 0.5.0 must re-run the installer once to update. The [release
-gate](eval/release-gate/0.5.1.md) makes no model calls; `impact` answers grew 10.4% there, past its 10% tolerance, most
-of it one answer that 0.5.0 left wrongly empty.
+## Unreleased
 
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
@@ -62,6 +51,28 @@ of it one answer that 0.5.0 left wrongly empty.
   its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
   blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
   replay gate fails a build that codes its refusals if any refusal it replays has none.
+- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
+  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
+  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
+  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
+  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
+  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
+  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
+  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
+
+## 0.5.1 (2026-10-27)
+
+0.5.1 meets the two checks 0.5.0 missed, and moves the repository to bubstackdev/know-code. Rows of `impact` and `trace`
+lead with their call site as `file:line`: on the recorded calls of the public studies, two-hop impact recall is 0.833
+read as `file:line` alone, where 0.5.0 had 0.607. `history` reaches a caller that calls through a library's interface,
+and history-v1's caller label now carries the `optional` flag it dropped; KnowCode meets plain git on the caller
+questions either way. `impact` also stops calling some answers complete that weren't (an override leaving out a default
+parameter), and keeps every way a row was reached; constructors are found by the names their source gives them; Swift
+files with constructs the parser misses lose less code, and a Swift member added to a standard-library type no longer
+captures others' uses. Shell installs of 0.3.0 through 0.5.0 must re-run the installer once to update. The [release
+gate](eval/release-gate/0.5.1.md) makes no model calls; `impact` answers grew 10.4% there, past its 10% tolerance, most
+of it one answer that 0.5.0 left wrongly empty.
+
 - A query opening a repo whose AI privacy file had just changed, while another query or a background link step was
   still reading that repo's index, failed with "index is in use: …; close its readers and retry". Removing the index
   made under the old policy now waits up to 30 seconds for those readers to finish. `knowcode forget` still refuses
@@ -120,14 +131,6 @@ of it one answer that 0.5.0 left wrongly empty.
   keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
   row (`(also via Store.Drop [exact] at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
   and says how many, so no row is cut for them.
-- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
-  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
-  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
-  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
-  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
-  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
-  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
-  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
 - A C# override or implementation that leaves out its base member's default parameter value
   (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
   member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
