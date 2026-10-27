@@ -19,6 +19,11 @@ there; open a new terminal afterwards. Or with Homebrew:
 brew install bubstackdev/tap/knowcode
 ```
 
+**Installed 0.3.0 to 0.5.0 with the shell installer?** The repository moved from `bubstackdev/knowcode` to
+`bubstackdev/know-code` after 0.5.0, and those versions accept releases only under the old name: they show no update
+notice, and `self-update` fails ("installer URL is outside the expected KnowCode release"). Re-run the installer
+above once; from then on `self-update` works. Homebrew installs are unaffected.
+
 From source, with a Rust toolchain: `cargo build --release --locked`, then put `target/release/knowcode` on your
 `PATH`.
 
@@ -63,10 +68,6 @@ it leaves an empty entry in its place so that Codex still trusts them.
 
 `self-update` updates a shell-installer installation. For a Homebrew installation it refuses and names
 `brew upgrade bubstackdev/tap/knowcode`, which updates it instead.
-
-The repository moved from `bubstackdev/knowcode` to `bubstackdev/know-code` after 0.5.0. A shell installation of
-0.3.0 to 0.5.0 can't update itself across the move: its update check and `self-update` say "installer URL is outside
-the expected KnowCode release". Re-run the installer once; from then on `self-update` works.
 
 Updating keeps the Claude Code plugin in step with the binary. After `self-update` installs a release, and whenever
 `serve` starts and finds that the plugin bundle setup wrote is older than the binary, KnowCode rewrites the bundle

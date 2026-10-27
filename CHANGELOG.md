@@ -5,11 +5,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 ## Unreleased
 
 - The repository moved to [bubstackdev/know-code](https://github.com/bubstackdev/know-code); the binary, crate and
-  plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 to 0.5.0 can't update themselves
-  across the move:** their update check and `self-update` accept release URLs only under the old name, and say
-  "installer URL is outside the expected KnowCode release". Re-run the installer once (the old one-liner URL
-  redirects); after that `self-update` works as before, accepting installer receipts that name either repository.
-  Homebrew installs are unaffected.
+  plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 through 0.5.0 get no update notice,
+  and their `self-update` fails** ("installer URL is outside the expected KnowCode release"): they accept releases
+  only under the old name. Re-run the installer once:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
+  ```
+
+  From then on `self-update` works, accepting installer receipts that name either repository. Homebrew installs are
+  unaffected.
 - A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
   mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
   sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the
