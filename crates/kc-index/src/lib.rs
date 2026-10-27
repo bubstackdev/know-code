@@ -44,6 +44,7 @@ pub mod sdk;
 pub mod search;
 pub mod sql;
 pub mod test_select;
+pub mod test_targets;
 pub mod textdocs;
 pub mod structural;
 pub mod terraform;

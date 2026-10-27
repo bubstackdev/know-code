@@ -80,6 +80,7 @@ listed symbols with `--kinds` and walk through the rest.
 | --- | --- | --- |
 | What depends on a symbol, a file or a diff, by proximity: `direct` (hop 1), `near` (2), `far` (3+), `test`; plus files history couples to it | `knowcode impact [SYMBOL] \| --file F \| --diff working` | `kc_impact` (topics `kc_impact.crossings`, `kc_impact.history`) |
 | The tests to run, ranked, with reasons and a confidence | `knowcode tests FILE... \| --diff REV` | `kc_tests` |
+| Declared test targets (SwiftPM, .NET test projects, `package.json` test scripts): their tests and how to run them, not ranked | `knowcode test-targets [NAME]` | `kc_test_targets` (the `kc` op `test_targets`) |
 | Files that usually change in the same commits | `knowcode coupled FILE` | `kc_coupled` |
 | Who could review a change | `knowcode reviewers FILE... \| --diff REV` | `kc_reviewers` |
 | Dead-code candidates, `unused` or `possibly unused` with reasons (C#, TypeScript) | `knowcode unused` | `kc_unused` |
@@ -195,7 +196,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 26 tools (every tool but `kc_capabilities`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 26 tools (every tool but `kc_capabilities` and `kc_test_targets`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
@@ -247,9 +248,11 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_more` | `more` | `kc_more`, `cursors` |
 | `kc_help` | | `kc_help` |
 | `kc_capabilities` | `capabilities` | `kc_capabilities` |
+| `kc_test_targets` | `test-targets` | `kc_test_targets` |
 
 `kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
-and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it.
+and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it. Nor is `kc_test_targets`, read by an
+automated client once per task: it is the `kc` op `test_targets`, and `--tools all,kc_test_targets` advertises it.
 
 ## Capabilities
 

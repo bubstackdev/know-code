@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
+  tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
+  (`dotnet test`) and `package.json` test scripts (run with the package manager
+  the lockfile names, with the package's test files). Declared, never ranked: `tests` still ranks what a change
+  needs. Served on request, so it costs nothing up front.
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a

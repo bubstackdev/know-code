@@ -410,6 +410,15 @@ enum Cmd {
         #[command(flatten)]
         repo: RepoArgs,
     },
+    /// Declared test targets: SwiftPM test targets, .NET test projects and package.json test scripts, each with its
+    /// tests and the command to run it (and each test). Declared, not ranked: `tests` ranks what a change needs
+    #[command(name = "test-targets")]
+    TestTargets {
+        /// Only the targets of this name.
+        name: Option<String>,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
     /// Files that historically change in the same commits as a file (git history, the last 365 days), with how often:
     /// support (shared commits) and confidence (the share of the file's commits). Source files and the templates,
     /// stylesheets and scripts beside them; renames followed; automated commits left out.
@@ -1094,6 +1103,10 @@ fn run(cli: Cli) -> Result<()> {
                 std::process::exit(2);
             }
             Ok(())
+        }
+        Cmd::TestTargets { name, repo } => {
+            let out = ops::test_targets(name.as_deref(), &repo.scope())?;
+            emit(&repo, &out.env, || render::test_targets(&out.data))
         }
         Cmd::Coupled { file, limit, as_of, since, repo } => {
             let out = ops::coupled(&file, limit, &kc_index::vitals::Span { as_of, since }, &repo.scope())?;
