@@ -90,6 +90,8 @@ fn uses(hits: &[query::RefHit]) -> Vec<Use> {
 fn a_member_added_to_a_library_struct_is_not_another_library_types() {
     let root = scratch("stdlib-members");
     write(&root, "Sources/Grid/FloatGrid.swift", GRID);
+    // A module that doesn't import Grid never sees `Float: GridScalar`.
+    write(&root, "Sources/Bench/Run.swift", "func bench(_ v: Float) -> Bool {\n    v.isFinite\n}\n");
     let store = index(&root);
     let (hits, _) = query::refs(store.conn(), "isFinite", &["member"], 50).unwrap();
     let int32 = vec!["Int32.isFinite".to_string()];
@@ -97,6 +99,7 @@ fn a_member_added_to_a_library_struct_is_not_another_library_types() {
     assert_eq!(
         uses(&hits),
         [
+            ("bench".to_string(), 2, "unresolved", vec![], None),
             // A generic parameter is no `Int32`: what it conforms to isn't read, so nothing is linked.
             ("allFinite".to_string(), 15, "unresolved", vec![], None),
             // `Float` conforms to `GridScalar`, and has `isFinite` of its own, outside the repo.

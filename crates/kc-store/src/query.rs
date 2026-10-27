@@ -4266,6 +4266,82 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
     Ok(())
 }
 
+/// For a reference through a library type's conformance to the protocols declaring the requirements `ids` (see
+/// [`through_requirement`]): whether the code sees a conformance of its receiver's type to one of them, or to a
+/// protocol refining one, declared in a module the referencing file is in or imports. A file or conformance whose
+/// module can't be told counts as seeing it.
+fn conformance_seen(conn: &Connection, hit: &RefHit, ids: &[i64]) -> Result<bool> {
+    let mut protocols: Vec<String> = Vec::new();
+    let mut parent = conn.prepare_cached("SELECT p.name FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
+    for &id in ids {
+        if let Some(p) = parent.query_row([id], |r| r.get::<_, String>(0)).optional()? {
+            protocols.push(p);
+        }
+    }
+    let Some(ty) = hit.receiver_type.as_deref().map(last_segment) else { return Ok(true) };
+    let Some(here) = swiftpm_target(&hit.file) else { return Ok(true) };
+    let imports: Vec<String> = conn
+        .prepare_cached("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?
+        .query_map([&hit.file], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT f.path, r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id JOIN files f ON f.id = s.file_id
+         WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY",
+    )?;
+    let sites: Vec<(String, String)> = stmt.query_map([ty], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut any = false;
+    for (file, target) in sites {
+        if !protocols.iter().any(|p| *p == last_segment(&target)) && !refines(conn, last_segment(&target), &protocols)? {
+            continue;
+        }
+        any = true;
+        match swiftpm_target(&file) {
+            None => return Ok(true),
+            Some(m) if m == here || imports.iter().any(|i| imports_module(i, m)) => return Ok(true),
+            Some(_) => {}
+        }
+    }
+    Ok(!any)
+}
+
+/// Whether protocol `name` refines (directly or through others) one of `protocols`, by the base lists the repo declares.
+fn refines(conn: &Connection, name: &str, protocols: &[String]) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id
+         WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind = 'protocol'",
+    )?;
+    let mut seen: HashSet<String> = HashSet::from([name.to_string()]);
+    let mut frontier = vec![name.to_string()];
+    // Refinement chains are short; the bound guards against a misread cycle.
+    for _ in 0..8 {
+        let mut next = Vec::new();
+        for n in &frontier {
+            for t in stmt.query_map([n], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()? {
+                let t = last_segment(&t).to_string();
+                if protocols.contains(&t) {
+                    return Ok(true);
+                }
+                if seen.insert(t.clone()) {
+                    next.push(t);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    Ok(false)
+}
+
+/// The SwiftPM target a file is in: `<Name>` of `Sources/<Name>/…` or `Tests/<Name>/…`; `None` outside those layouts.
+fn swiftpm_target(path: &str) -> Option<&str> {
+    ["Sources/", "Tests/"].iter().find_map(|root| {
+        let rest = &path[path.find(root)? + root.len()..];
+        rest.split_once('/').map(|(target, _)| target)
+    })
+}
+
 /// Whether a protocol declares a requirement named `name`.
 fn requirement_named(conn: &Connection, name: &str) -> Result<bool> {
     Ok(conn
@@ -4682,7 +4758,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             }
         }
         if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
-            hit.basis = Some(VIA_PROTOCOL);
+            if conformance_seen(conn, hit, &ids)? {
+                hit.basis = Some(VIA_PROTOCOL);
+            } else {
+                // The library type conforms in a module this code neither is in nor imports: the call is the
+                // library type's own member, never the requirement.
+                (confidence, ids) = ("unresolved", Vec::new());
+                evidence = None;
+            }
         }
         hit.confidence = confidence;
         hit.evidence = if matches!(confidence, "unresolved" | "external_likely") { None } else { evidence };
