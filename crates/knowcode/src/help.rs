@@ -136,7 +136,9 @@ When several definitions share the name (copies, template variants), the live on
 its namespace or module (`B.Worker.Run`). A place may be written after its repo's name (`shop/src/a.cs:12`), here and
 in kc_impact, kc_trace and kc_refs (which answers for the definition there); one naming no definition is refused, saying
 what didn't resolve (no such file, or the definitions nearest the line). A stored procedure or table defined in another
-indexed repo (a schema repo) is found there.
+indexed repo (a schema repo) is found there. A file path gives the file's top-level declarations in line order
+(`declarations`: kind, name, line, end_line, and `members` for a type), at most 40 (the rest by cursor), with its area and
+the notes on its symbols: pick one by name or `file:line` for its bundle, rather than reading the file.
 
 `source` is `auto` by default: a long symbol comes as a skeleton (signatures, types and doc comments with bodies elided
 as `{ … }`, plus the lines making its calls into the indexed code and its return/throw lines; `source_lines` lists the
