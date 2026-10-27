@@ -1,0 +1,717 @@
+{"args": {"limit": 30, "query": "OperationDiagnosticTracerBase", "repo": "autofac"}, "question": "public-definition-lookup-001", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "OperationDiagnosticTracerBase", "repo": "autofac"}, "question": "public-definition-lookup-001", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "OperationDiagnosticTracerBase"}, "question": "public-definition-lookup-001", "sessions": 6, "study": "public-v1", "tool": "kc_find"}
+{"args": {"name": "OperationDiagnosticTracerBase"}, "question": "public-definition-lookup-001", "sessions": 3, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"paths": ["autofac/**"], "pattern": "OperationDiagnosticTracerBase"}, "question": "public-definition-lookup-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class OperationDiagnosticTracerBase", "repo": "autofac"}, "question": "public-definition-lookup-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class OperationDiagnosticTracerBase"}, "question": "public-definition-lookup-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 30, "query": "AutofacChildLifetimeScopeServiceProviderFactory", "repo": "autofac-di"}, "question": "public-definition-lookup-002", "sessions": 2, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "AutofacChildLifetimeScopeServiceProviderFactory"}, "question": "public-definition-lookup-002", "sessions": 5, "study": "public-v1", "tool": "kc_find"}
+{"args": {"limit": 50, "pattern": "AutofacChildLifetimeScopeServiceProviderFactory\\b", "regex": true, "repo": "autofac-di"}, "question": "public-definition-lookup-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**"], "pattern": "AutofacChildLifetimeScopeServiceProviderFactory"}, "question": "public-definition-lookup-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class AutofacChildLifetimeScopeServiceProviderFactory", "repo": "autofac-di"}, "question": "public-definition-lookup-002", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class AutofacChildLifetimeScopeServiceProviderFactory"}, "question": "public-definition-lookup-002", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "query": "SyncFolderNotification", "repo": "bitwarden-clients"}, "question": "public-definition-lookup-003", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "SyncFolderNotification", "repo": "bitwarden-clients"}, "question": "public-definition-lookup-003", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "SyncFolderNotification"}, "question": "public-definition-lookup-003", "sessions": 6, "study": "public-v1", "tool": "kc_find"}
+{"args": {"name": "SyncFolderNotification"}, "question": "public-definition-lookup-003", "sessions": 3, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 50, "pattern": "SyncFolderNotification", "repo": "bitwarden-clients"}, "question": "public-definition-lookup-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "SyncFolderNotification"}, "question": "public-definition-lookup-003", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "SyncFolderNotification", "repo": "bitwarden-clients", "word": true}, "question": "public-definition-lookup-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "SyncFolderNotification"}, "question": "public-definition-lookup-003", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class SyncFolderNotification"}, "question": "public-definition-lookup-003", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "query": "OrganizationUserIdIsInvalid", "repo": "bitwarden-server"}, "question": "public-definition-lookup-004", "sessions": 2, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "OrganizationUserIdIsInvalid"}, "question": "public-definition-lookup-004", "sessions": 5, "study": "public-v1", "tool": "kc_find"}
+{"args": {"name": "OrganizationUserIdIsInvalid"}, "question": "public-definition-lookup-004", "sessions": 4, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 100, "pattern": "OrganizationUserIdIsInvalid", "repo": "bitwarden-server"}, "question": "public-definition-lookup-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "OrganizationUserIdIsInvalid"}, "question": "public-definition-lookup-004", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "record OrganizationUserIdIsInvalid"}, "question": "public-definition-lookup-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "record\\s+OrganizationUserIdIsInvalid\\b", "regex": true, "repo": "bitwarden-server"}, "question": "public-definition-lookup-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 30, "query": "NextUpQuery", "repo": "jellyfin-server"}, "question": "public-definition-lookup-005", "sessions": 2, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "NextUpQuery"}, "question": "public-definition-lookup-005", "sessions": 6, "study": "public-v1", "tool": "kc_find"}
+{"args": {"name": "NextUpQuery", "repo": "jellyfin-server"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "NextUpQuery"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 40, "pattern": "NextUpQuery", "repo": "jellyfin-server", "word": true}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**"], "pattern": "NextUpQuery"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(class|record|struct)\\s+NextUpQuery\\b", "regex": true, "repo": "jellyfin-server"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(class|record|struct)\\s+NextUpQuery\\b|NextUpQuery\\(", "regex": true}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "NextUpQuery(", "repo": "jellyfin-server"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class NextUpQuery"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class\\s+NextUpQuery\\b", "regex": true, "repo": "jellyfin-server"}, "question": "public-definition-lookup-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "query": "isValidDuration", "repo": "jellyfin-web"}, "question": "public-definition-lookup-006", "sessions": 2, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "isValidDuration"}, "question": "public-definition-lookup-006", "sessions": 6, "study": "public-v1", "tool": "kc_find"}
+{"args": {"limit": 100, "pattern": "isValidDuration", "repo": "jellyfin-web"}, "question": "public-definition-lookup-006", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "isValidDuration"}, "question": "public-definition-lookup-006", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "isValidDuration"}, "question": "public-definition-lookup-006", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"symbol": "Autofac.Core.IModule"}, "question": "public-di-implementations-001", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "IModule"}, "question": "public-di-implementations-001", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "autofac/src/Autofac/Core/IModule.cs:12"}, "question": "public-di-implementations-001", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"cursor": "kc~1"}, "question": "public-di-implementations-001", "sessions": 2, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~2"}, "question": "public-di-implementations-001", "sessions": 3, "study": "public-v1", "tool": "kc_more"}
+{"args": {"limit": 60, "name": "IModule", "repo": "autofac"}, "question": "public-di-implementations-001", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 60, "name": "IModule", "repo": "autofac-di"}, "question": "public-di-implementations-001", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "Autofac.Module"}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"lang": ["csharp"], "pattern": "(interface \\w+[^\\n]*:[^\\n]*\\bIModule\\b)|^\\s*[:,]\\s*(Autofac\\.)?(Core\\.)?I?Module\\b", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.cs", "!**/test/**", "!**/Test*/**"], "pattern": "IModule\\b", "regex": true}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.cs"], "pattern": ":\\s*(Autofac\\.)?Module\\b", "regex": true}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac-di/**"], "pattern": "Module"}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**", "!src/Autofac/**"], "pattern": "(RegisterModule|RegisterAssemblyModules|\\bModule\\b)", "regex": true}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {}, "question": "public-di-implementations-001", "sessions": 1, "study": "public-v1", "tool": "kc_status"}
+{"args": {"symbol": "IConcreteActivatorData"}, "question": "public-di-implementations-002", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "autofac/src/Autofac/Builder/IConcreteActivatorData.cs:11"}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"lang": "csharp", "pattern": "kind:base_list", "repos": ["autofac", "autofac-di"], "text": "ConcreteActivatorData|ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData"}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_grep_ast"}
+{"args": {"map_budget": 0, "repo": "autofac-di"}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_overview"}
+{"args": {"limit": 50, "name": "IConcreteActivatorData", "repo": "autofac"}, "question": "public-di-implementations-002", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "IConcreteActivatorData"}, "question": "public-di-implementations-002", "sessions": 3, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"context": 1, "pattern": "ActivatorData", "repo": "autofac-di"}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "pattern": "ActivatorData", "repo": "autofac-di"}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "pattern": ":\\s*(ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData)\\b", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "pattern": "IConcreteActivatorData", "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "pattern": "class \\w+.*ActivatorData|^\\s*:\\s*\\w*ActivatorData", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "IConcreteActivatorData", "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac-di/**"], "pattern": "ActivatorData"}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(Register|As|AddSingleton|AddScoped|AddTransient)\\w*<\\s*(IConcreteActivatorData|ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData)\\b|typeof\\((IConcreteActivatorData|ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData)\\)", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": ":\\s*(ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData)\\b", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": ":\\s*(ConcreteReflectionActivatorData|SimpleActivatorData|GeneratedFactoryActivatorData|IConcreteActivatorData)\\b", "regex": true}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "Register\\w*<\\s*I?ConcreteActivatorData|IConcreteActivatorData>|typeof\\(IConcreteActivatorData\\)", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "interface\\s+I\\w+\\s*:[^{]*IConcreteActivatorData", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-di-implementations-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"symbol": "IResolvePipeline"}, "question": "public-di-implementations-003", "sessions": 3, "study": "public-v1", "tool": "kc_context"}
+{"args": {"limit": 60, "name": "IResolvePipeline", "repo": "autofac"}, "question": "public-di-implementations-003", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "IResolvePipeline"}, "question": "public-di-implementations-003", "sessions": 3, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"pattern": "IResolvePipeline\\b", "regex": true}, "question": "public-di-implementations-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"name": "ICustomerUpdatedHandler"}, "question": "public-di-implementations-004", "sessions": 4, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"paths": ["!**/IStripeWebhookHandler.cs"], "pattern": "IStripeWebhookHandler"}, "question": "public-di-implementations-004", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!src/Billing/Services/IStripeWebhookHandler.cs"], "pattern": "CustomerUpdatedHandler\\b|IStripeWebhookHandler\\b", "regex": true, "repo": "bitwarden-server"}, "question": "public-di-implementations-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-server/src/**"], "pattern": "IStripeWebhookHandler"}, "question": "public-di-implementations-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(:\\s*CustomerUpdatedHandler\\b|<IStripeWebhookHandler|IStripeWebhookHandler>)", "regex": true, "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": ":\\s*CustomerUpdatedHandler\\b|<CustomerUpdatedHandler>|IStripeWebhookHandler>|typeof\\(CustomerUpdatedHandler", "regex": true}, "question": "public-di-implementations-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "CustomerUpdatedHandler"}, "question": "public-di-implementations-004", "sessions": 4, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "ICustomerUpdatedHandler", "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-004", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "ICustomerUpdatedHandler"}, "question": "public-di-implementations-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"symbol": "IPushRegistrationService"}, "question": "public-di-implementations-005", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Core/Platform/PushRegistration/IPushRegistrationService.cs:8"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"cursor": "kc~1"}, "question": "public-di-implementations-005", "sessions": 2, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~4"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~5"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"name": "IPushRegistrationService"}, "question": "public-di-implementations-005", "sessions": 3, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"names": ["AddNoopServices", "AddPushRegistration"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"names": ["AddPushRegistration", "AddNoopServices"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"context": 3, "pattern": "AddNoopServices\\(", "repo": "bitwarden-server"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "limit": 40, "paths": ["!**/test/**", "!**/*.Test/**", "!**/*Tests*"], "pattern": "AddNoopServices|class BaseIdentityClientService|PushRegistrationService", "regex": true, "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 20, "offset": 23, "paths": ["!test/**"], "pattern": "IPushRegistrationService", "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "IPushRegistrationService", "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-005", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**"], "pattern": "IPushRegistrationService"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "PushRegistrationService"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(: |, )(I?PushRegistrationService|NoopPushRegistrationService|RelayPushRegistrationService|NotificationHubPushRegistrationService)\\b", "regex": true}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(:|,)\\s*(Noop|Relay|NotificationHub)PushRegistrationService\\b|PushRegistrationService>\\(|PushRegistrationService\\)", "regex": true}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": ":\\s*(NoopPushRegistrationService|NotificationHubPushRegistrationService|RelayPushRegistrationService)\\b|AddPushRegistration\\(", "regex": true, "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": ":\\s*(\\w+\\s*,\\s*)*(NoopPushRegistrationService|NotificationHubPushRegistrationService|RelayPushRegistrationService)\\b", "regex": true, "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "AddNoopServices", "repo": "bitwarden-server"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "AddPushRegistration\\(", "regex": true}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "AddSingleton<IPushRegistrationService|AddPushRegistration\\(|AddNoopServices\\(", "regex": true, "repos": ["bitwarden-server"]}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "IPushRegistrationService"}, "question": "public-di-implementations-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"budget": 4000, "repo": "jellyfin-server", "source": "none", "symbols": ["Video", "Audio", "LiveTvChannel", "Movie", "Episode", "MusicVideo", "Trailer", "AudioBook"]}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"repo": "jellyfin-server", "source": "full", "symbol": "IHasMediaSources"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "IHasMediaSources"}, "question": "public-di-implementations-006", "sessions": 6, "study": "public-v1", "tool": "kc_context"}
+{"args": {"lang": "csharp", "limit": 60, "pattern": "kind:base_list~\\b(Video|Audio|LiveTvChannel)\\b", "repo": "jellyfin-server"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_grep_ast"}
+{"args": {"lang": "csharp", "max_chars": 4000, "pattern": "kind:class_declaration~(?s)^[^{]*:\\s*(Movie|Episode|Trailer|MusicVideo|AudioBook|Audio\\.Audio|Video|Audio)\\b", "repo": "jellyfin-server"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_grep_ast"}
+{"args": {"cursor": "kc~3"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"names": ["Video", "Audio", "LiveTvChannel", "Movie", "Episode", "AudioBook", "MusicVideo", "Trailer"]}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"lang": ["csharp"], "limit": 60, "pattern": "(:|^)\\s*(\\w+\\.)*(Video|Audio|Movie|Episode|MusicVideo|Trailer|AudioBook|LiveTvChannel)\\s*(,|\\{|$)", "regex": true, "repo": "jellyfin-server"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "IHasMediaSources", "repos": ["jellyfin-server", "jellyfin-web"], "word": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "IHasMediaSources", "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "class \\w+(<[^>]*>)?\\s*:\\s*(\\w+\\.)*(Video|Audio|LiveTvChannel|Movie|Episode|MusicVideo|Trailer|AudioBook|Photo|Book)\\b", "regex": true, "repo": "jellyfin-server"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/*.cs"], "pattern": "IHasMediaSources"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.cs"], "pattern": "(Add(Singleton|Scoped|Transient)|TryAdd\\w*|Register\\w*)\\b.*\\b(IHasMediaSources|Video|Audio|LiveTvChannel|Movie|Episode|MusicVideo|Trailer|AudioBook)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.cs"], "pattern": "IHasMediaSources"}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.cs"], "pattern": "^\\s*(public |internal |sealed |abstract |partial )*class \\w+(<[^>]*>)?\\s*:\\s*[\\w.]*(Video|Audio|LiveTvChannel|Movie|Episode|AudioBook|MusicVideo|Trailer)\\b|^\\s*:\\s*[\\w.]*(Video|Audio|LiveTvChannel|Movie|Episode|AudioBook|MusicVideo|Trailer)\\s*(,|$)", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.cs"], "pattern": "^\\s*(public|internal|sealed|abstract|partial|\\s)*class\\s+\\w+[^\\n]*:\\s*(Video|Audio(\\.Audio)?|LiveTvChannel|Movie|Episode|MusicVideo|Trailer|AudioBook)\\b|^\\s*:\\s*(Video|Audio(\\.Audio)?|LiveTvChannel|Movie|Episode|MusicVideo|Trailer|AudioBook)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs"], "pattern": "^\\s*:\\s*(Video|Audio(\\.Audio)?|Movie|Episode|Trailer|MusicVideo|AudioBook|LiveTvChannel)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(Add(Singleton|Scoped|Transient)|TryAdd\\w*|RegisterType|Register)\\s*<\\s*(IHasMediaSources|Video|Audio|LiveTvChannel|Movie|Episode|AudioBook|MusicVideo|Trailer)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(Add(Singleton|Scoped|Transient)|TryAdd\\w*|Register\\w*)\\s*(<|\\(\\s*typeof\\()\\s*(\\w+\\.)*(IHasMediaSources|Video|Audio|LiveTvChannel|Movie|Episode|MusicVideo|Trailer|AudioBook)\\b", "regex": true, "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(Add|TryAdd)(Singleton|Scoped|Transient)<\\s*(IHasMediaSources|Video|Audio|LiveTvChannel|Movie|Episode|Trailer|MusicVideo|AudioBook)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "IHasMediaSources"}, "question": "public-di-implementations-006", "sessions": 5, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "^\\s*:?\\s*(public|internal)?.*\\b(class|record)\\b.*:\\s*(Video|Audio(\\.Audio)?|Movie|Episode|Trailer|MusicVideo|AudioBook|LiveTvChannel)\\s*(,|$|\\{)", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "^\\s*:\\s*(Video|Audio|Audio\\.Audio|Movie|Episode|Trailer|MusicVideo|AudioBook|LiveTvChannel)\\b|class \\w+\\s*:\\s*(\\w+\\.)+(Video|Audio|Movie|Episode|LiveTvChannel)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class \\w+ : (Video|Audio|Movie|Episode|Trailer|MusicVideo|AudioBook|LiveTvChannel)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class \\w+\\s*:\\s*(Audio|Video|Movie|Episode|Trailer|MusicVideo|AudioBook|LiveTvChannel|Book)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class \\w+\\s*:\\s*(Video|Audio|LiveTvChannel|Movie|Episode|AudioBook|MusicVideo|Trailer)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class \\w+\\s*:\\s*(Video|Audio|Movie|Episode|MusicVideo|Trailer|AudioBook|LiveTvChannel)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class \\w+\\s*:\\s*(Video|Audio|Movie|Episode|Trailer|MusicVideo|AudioBook|LiveTvChannel)\\b", "regex": true}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "interface \\w+.*:.*IHasMediaSources", "regex": true, "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-di-implementations-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"symbol": "SecurityTaskController.GetTaskMetricsForOrganization"}, "question": "public-http-cross-repo-001", "sessions": 3, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Api/Vault/Controllers/SecurityTaskController.cs:91"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"queries": ["admin security task service create tasks organization", "security task metrics organization completed total tasks"]}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_locate"}
+{"args": {"query": "admin security task service organization tasks metrics api"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_locate"}
+{"args": {"cursor": "kc~2"}, "question": "public-http-cross-repo-001", "sessions": 2, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~3"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~4"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~5"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"name": "SecurityTaskController.GetTaskMetricsForOrganization"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"case": "insensitive", "context": 2, "pattern": "\\.tasks\\(\\)|task_metrics|taskMetrics|completedTasks|totalTasks", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"case": "insensitive", "files_only": true, "limit": 40, "paths": ["bitwarden_license/**/*.ts", "!**/*.spec.ts"], "pattern": "task", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"case": "insensitive", "limit": 40, "paths": ["!**/*.json"], "pattern": "metrics", "repo": "bitwarden-clients", "word": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"case": "insensitive", "limit": 40, "pattern": "TaskMetrics", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 2, "limit": 40, "paths": ["**/*api*.ts", "!**/*.spec.ts"], "pattern": "tasks", "regex": false, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 2, "paths": ["!**/*.spec.ts"], "pattern": "[\"'`]/?tasks", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 3, "pattern": "/tasks/.*metrics|metrics.*tasks|/metrics", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 3, "pattern": "`/tasks", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 4, "pattern": "\"/tasks", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "limit": 5, "paths": ["bitwarden_license/**"], "pattern": ".", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "limit": 50, "paths": ["!**/*.spec.ts", "!**/*.json"], "pattern": "metrics", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "limit": 60, "paths": ["!**/*.spec.ts"], "pattern": "SecurityTask|bulk-create|getTasksForOrganization|security_tasks|securityTasks\\(\\)", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 10, "pattern": "(sdk|client)\\S*\\.(tasks|security_tasks|securityTasks)\\b", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 40, "paths": ["!**/*.spec.ts", "!**/*.json", "!**/*.md"], "pattern": "tasks/", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 5, "paths": ["tsconfig*.json", "package.json", "angular.json"], "pattern": "bitwarden_license", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts", "**/*.js", "**/*.tsx", "**/*.rs"], "pattern": "bulk-create|tasks/organization|TaskMetrics|taskMetrics|SecurityTaskMetrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts"], "pattern": "/metrics"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts"], "pattern": "metrics"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["apps/**", "libs/**", "!**/*.spec.ts", "!**/*.json", "!**/*.html", "!**/*.md"], "pattern": "(^|[^o])metrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "!**/*.spec.ts"], "pattern": "metrics"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "/metrics"}, "question": "public-http-cross-repo-001", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "/tasks"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "AdminTaskService|DefaultAdminTaskApiService", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "TaskMetrics"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"/tasks"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\\.tasks\\(\\)|SecurityTask.*Api|security-task", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "`/tasks"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "bulk-create"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "bulk-create|tasks/organization|getTaskMetrics|SecurityTaskMetrics|completedTasks", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "bulk-create|tasks/organization|getTaskMetrics|task_metrics|tasksMetrics|TasksMetrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "metrics`"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "tasks/.*metrics|/metrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "tasks/\\$\\{|\"tasks|'tasks|`tasks|/metrics|TaskMetrics|taskMetrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "tasks/\\$\\{|metrics`|metrics\"|metrics'", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**/*.ts", "!**/*.spec.ts"], "pattern": "\"tasks\""}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**/*.ts", "!**/*.spec.ts"], "pattern": "\\.tasks\\(\\)|security_tasks|securityTasks", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**/*.ts", "bitwarden-clients/**/*.html"], "pattern": "assignSecurityTasksToMembers"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**/*.ts", "bitwarden-clients/**/*.rs", "!**/*.spec.ts"], "pattern": "[\"'`/]tasks[/?\"'`]", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**/package.json"], "pattern": "@bitwarden/sdk-internal"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/bitwarden_license/**", "bitwarden-clients/apps/web/**", "!**/*.spec.ts"], "pattern": "SecurityTask"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/bitwarden_license/**"], "pattern": "import"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/bitwarden_license/**/*.ts", "bitwarden-clients/libs/**/*.ts", "!**/*.spec.ts", "!libs/common/src/vault/tasks/**"], "pattern": "SecurityTask"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden_license/**"], "pattern": "apiService.send("}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden_license/**"], "pattern": "tasks"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden_license/**/*.ts"], "pattern": "tasks"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["libs/**", "apps/**"], "pattern": "\\b[Mm]etrics\\b", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["libs/**/*.ts", "apps/**/*.ts", "!**/*.spec.ts"], "pattern": "[Mm]etrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["libs/**/*.ts", "apps/**/*.ts", "apps/**/*.html", "libs/**/*.html"], "pattern": "\\b[Mm]etrics\\b", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "/metrics"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "SecurityTaskType"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "TaskMetrics|taskMetrics|getTaskMetrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "[\"'`]/tasks", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\.tasks\\(\\)|getTaskMetrics|get_task_metrics|security_task", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\.tasks\\(\\)|security_tasks|SecurityTasksClient|tasks_client", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "bulk-create|\"/tasks\"|completedTasks|totalTasks", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "metrics[\"'`]", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "tasks/\\$\\{|\"tasks/|'/tasks|tasks/organization|\"/tasks/", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "tasks/metrics", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "tasks/|\"tasks\"|'tasks'|metrics`|/metrics|TaskMetrics", "regex": true}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {}, "question": "public-http-cross-repo-001", "sessions": 1, "study": "public-v1", "tool": "kc_status"}
+{"args": {"budget": 1500, "repo": "bitwarden-server", "symbol": "ProvidersController.Get"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "ProvidersController.Get"}, "question": "public-http-cross-repo-002", "sessions": 3, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Api/AdminConsole/Controllers/ProvidersController.cs:44"}, "question": "public-http-cross-repo-002", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"cursor": "kc~1"}, "question": "public-http-cross-repo-002", "sessions": 4, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~2"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"limit": 40, "name": "getProvider", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 50, "name": "ProviderApiService.getProvider", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "ProviderApiService.getProvider"}, "question": "public-http-cross-repo-002", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "getProvider"}, "question": "public-http-cross-repo-002", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"context": 3, "pattern": "provide: ProviderApiServiceAbstraction", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 40, "paths": ["!**/*.spec.ts"], "pattern": "\\.getProvider\\(", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 40, "pattern": "providers/\\$\\{|\"providers/\"|'providers/'|'/providers/'", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "[\"'`]/providers/[\"'`$]", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "\\.getProvider\\(", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "getProvider\\b", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "getProvider\\b(?!s|Org|Add|Client|Sub|Inv|User)", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts", "**/*.js", "**/*.rs"], "pattern": "[\"'`]providers/|[\"'`]/providers[\"'`]|/providers/\\$\\{", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts"], "pattern": "/providers/"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts"], "pattern": "\\.getProvider\\(", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["apps/web/src/app/billing/organizations/organization-plans.component.ts", "apps/web/src/app/core/core.module.ts", "libs/angular/src/services/jslib-services.module.ts"], "pattern": "ProviderApiServiceAbstraction|providerApiService\\b.*inject|private providerApiService", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["apps/web/src/app/billing/organizations/organization-plans.component.ts"], "pattern": "providerApiService"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["apps/web/src/app/billing/organizations/organization-plans.component.ts"], "pattern": "providerApiService|ProviderApiService", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "!**/*.spec.ts"], "pattern": "[\"'`]/?providers/", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "!**/*.spec.ts"], "pattern": "\\.getProvider\\(", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "!**/*.spec.ts"], "pattern": "providers/[\"'`]|providers/\\$\\{[^}]*\\}[`\"']", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "[\"']/providers/[\"']\\s*\\+\\s*\\w+\\s*,|`/providers/\\$\\{[^}]+\\}`", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "[\"']/providers/[\"']\\s*\\+|`/providers/\\$\\{", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"/providers/\" +"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"/providers/\" \\+ \\w+,|`/providers/\\$\\{[^}]+\\}`", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"/providers/\\\" \\+|`/providers/\\$\\{[^}]+\\}`|\"/providers/\" \\+ [a-zA-Z.]+(,|\\))", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\\.getProvider\\(", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\\.providers\\(\\)|providers_api|ProvidersApi", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "getProvider\\b", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "getProvider\\b(?!s|U|O|C|A|I|K|B|R|P|E|T|_)", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "providers/\\$\\{", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/apps/web/src/app/billing/organizations/organization-plans.component.ts", "bitwarden-clients/apps/web/src/app/core/core.module.ts", "bitwarden-clients/libs/angular/src/services/jslib-services.module.ts"], "pattern": "providerApiService|ProviderApiServiceAbstraction", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["libs/common/src/services/api.service.ts"], "pattern": "apiUrl \\+ path|getApiUrl\\(\\)", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "[\"'`]/providers/", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\.getProvider\\(", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\.providers\\(\\)|provider_get|getProviderById", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\bgetProvider\\b", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "implements ProviderApiServiceAbstraction|provide: ProviderApiServiceAbstraction", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "provide: ProviderApiServiceAbstraction"}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "providers/\\$\\{|[\"']providers/[\"']|[\"']/providers[\"']", "regex": true}, "question": "public-http-cross-repo-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"area": "bitwarden_license"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_areas"}
+{"args": {"budget": 1200, "repo": "bitwarden-server", "source": "none", "symbol": "SecretsController.GetAsync"}, "question": "public-http-cross-repo-003", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"repo": "bitwarden-server", "source": "none", "symbol": "SecretsController.GetAsync"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "SecretsController.GetAsync"}, "question": "public-http-cross-repo-003", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Api/SecretsManager/Controllers/SecretsController.cs:121"}, "question": "public-http-cross-repo-003", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"query": "SecretService"}, "question": "public-http-cross-repo-003", "sessions": 3, "study": "public-v1", "tool": "kc_find"}
+{"args": {"query": "secrets manager secret service get secret by id api request"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_locate"}
+{"args": {"query": "secrets manager secret service get secret by id api", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_locate"}
+{"args": {"query": "secrets manager secret service get secret by id"}, "question": "public-http-cross-repo-003", "sessions": 2, "study": "public-v1", "tool": "kc_locate"}
+{"args": {"cursor": "kc~1"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~2"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"name": "SecretsController.GetAsync"}, "question": "public-http-cross-repo-003", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"case": "insensitive", "files_only": true, "limit": 30, "paths": ["bitwarden_license/**"], "pattern": "secret", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 3, "limit": 40, "pattern": "[\"'`]/secrets/", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 4, "limit": 40, "pattern": "secrets/[\"'`]\\s*\\+|/secrets/\\$\\{|\"/secrets\"|'/secrets'", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "limit": 40, "pattern": "secrets()|SecretResponse|secretsManager|sm/secrets", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "paths": ["bitwarden_license/**"], "pattern": "\"/secrets", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"lang": ["typescript", "rust"], "limit": 20, "pattern": "\"secrets\"", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"lang": ["typescript"], "limit": 50, "pattern": "secrets/", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"lang": ["typescript"], "limit": 60, "pattern": "/secrets\\b", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 10, "pattern": "bitwarden_license/bit-web/src/app/secrets-manager", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 20, "pattern": "\"secrets/\" +", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 20, "pattern": "\\.secrets\\(\\)|SecretsClient|secrets_manager|SecretIdentifier", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "pattern": "[\"'`]/secrets/", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "paths": ["!**/locales/**"], "pattern": "secrets/[\"'`$]|\"secrets\"|secrets/\\$\\{", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "secrets/[\"'`$]|\"secrets\"|secrets/\\$\\{", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/locales/**", "!**/_locales/**"], "pattern": "\\.secrets\\(\\)|secrets_manager|SecretsClient|secretsManager\\(\\)", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/locales/**"], "pattern": "\\.secrets\\(\\)|SecretsClient|SecretGetRequest|sdk-secrets|@bitwarden/sdk-napi", "regex": true, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts", "**/*.js", "**/*.rs", "!**/*.spec.ts"], "pattern": "[\"'`]/?secrets", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts", "**/*.js", "**/*.rs"], "pattern": "secrets/\\$\\{|\"/secrets/\" \\+ |'/secrets/' \\+ ", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/*.ts"], "pattern": "(sdk|Sdk|client)\\S*\\.secrets?\\b|SecretsManagerClient|secrets_client", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["apps/**", "libs/**", "bitwarden_license/**", "!**/locales/**", "!**/_locales/**"], "pattern": "[\"'`/]secrets[\"'`/]", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["apps/**", "libs/**", "bitwarden_license/**"], "pattern": "[\"'`/]secrets[\"'`/]", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "!**/*.spec.ts", "!**/locales/**"], "pattern": "/secrets\\b", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "[\"'`]/secrets/", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"/secrets/\" +"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"/secrets/\""}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\"secrets/\""}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "\\.secrets\\(\\)|SecretsClient|secret_manager|SecretIdentifier", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "secrets/\\s*[\"'`]?\\s*\\+|`/secrets/\\$|\"/secrets\"", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/bitwarden_license/**"], "pattern": "secrets"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden_license/**", "apps/**", "libs/**"], "pattern": "\"/secrets/\" + |secrets/\" + |`/secrets/|\"secrets/\" + ", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden_license/**"], "pattern": "secrets"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["package.json", "**/package.json"], "pattern": "sdk-internal|@bitwarden/sdk", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "[\"'`]/?secrets/[\"'`$]", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\"/secrets/\""}, "question": "public-http-cross-repo-003", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\"/secrets\""}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\"secrets/\""}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\.secrets\\(\\)|SecretsClient|secrets_manager|SecretResponse\\b", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "apiService.send(\"GET\", \"/secrets"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class SecretService", "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "secrets/\" +|secrets/\\$\\{|\"secrets/\"|'secrets/'", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "secrets/\\S*\\$\\{|\"secrets/|'secrets/|/secrets/\" \\+|\"/secrets/\" \\+", "regex": true}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"max_chars": 3000, "repo": "bitwarden-clients"}, "question": "public-http-cross-repo-003", "sessions": 1, "study": "public-v1", "tool": "kc_status"}
+{"args": {"symbol": "ChannelsController.GetLatestChannelItems"}, "question": "public-http-cross-repo-004", "sessions": 4, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/ChannelsController.cs:166"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"evidence": "all", "repo": "jellyfin-server", "symbol": "ChannelsController.GetLatestChannelItems"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"repo": "jellyfin-server", "symbol": "ChannelsController.GetLatestChannelItems"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"cursor": "kc~3"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"case": "insensitive", "context": 2, "pattern": "Channels/Items/Latest|getLatestChannelItems|LatestChannel", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 1, "paths": ["!src/strings/**"], "pattern": "Channels/", "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 1, "paths": ["!src/strings/**"], "pattern": "getUrl\\(\\s*['\"`]Channels|getChannelsApi|ChannelsApi|getLatestChannel|channelsApi", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 2, "paths": ["!src/strings/**"], "pattern": "fetchChannels|SupportsLatestItems|supportsLatestItems|ChannelIds|channelIds", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 2, "paths": ["Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "Route\\(|class BaseJellyfinApiController", "regex": true, "repo": "jellyfin-server"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 2, "pattern": "Items/Latest|getChannelsApi|'Channels|\"Channels|`Channels", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 3, "pattern": "getChannelApi|\\.getLatestChannelItems|getLatestChannelItems\\(", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 40, "paths": ["!src/strings/**"], "pattern": "['\"`/]Items/Latest|Latest['\"`]", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["**/BaseJellyfinApiController.cs"], "pattern": "Route("}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/**"], "pattern": "Route(\"[controller]\")"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs", "Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "Route"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "Route("}, "question": "public-http-cross-repo-004", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**", "!**/node_modules/**"], "pattern": "(?i)latestchannel|channels/items|Channels/Latest|channels-api", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**", "!jellyfin-web/src/strings/**"], "pattern": "(?i)latest.?channel|channel.?latest|SupportsLatest", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "(?i)channels/items/latest|getLatestChannelItems|ChannelsApi|Channels/Items", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "(?i)getUrl\\(['\"`]Channels|['\"`]Channels/|getChannelsApi|channels-api|LatestChannel|latestchannel", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "Channels/Items|getChannelsApi|ChannelsApi|LatestChannel", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "Channels/|channelsApi|channels-api|getChannels\\(", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "Items/Latest"}, "question": "public-http-cross-repo-004", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "LatestChannelItems|latestChannelItems|supportsLatestItems|SupportsLatestItems", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getChannelApi"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getChannelApi|getUrl\\(['\"`]Channels|['\"`]Channels/|Latest['\"`]", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getChannelsApi|ChannelsApi|LatestChannel|'Channels'", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getLatestChannelItems"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getLatestChannelItems|Channels/Items/Latest|ChannelsApi|getChannelsApi", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/package.json"], "pattern": "\"@jellyfin/sdk\"|\"jellyfin-apiclient\"", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "(?i)channel.*latest|latest.*channel", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "Channels"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "Latest['\"`]|/Latest|Latest\\?", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**/*channel*", "jellyfin-web/src/**/channels/**"], "pattern": "(?i)latest|channel", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/apiclient.d.ts"], "pattern": "Channel"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["package.json"], "pattern": "jellyfin-apiclient|@jellyfin/sdk\"", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**"], "pattern": "(?i)['\"`/]Channels\\b|getChannels|channels-api|Items/Latest", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**"], "pattern": "['\"`/]Channels\\b", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**/*.js", "src/**/*.ts", "src/**/*.tsx", "src/**/*.jsx"], "pattern": "(?i)(getUrl|ajax|fetch)\\(\\s*['\"`]Channels|['\"`]Channels/|getChannelsApi|ChannelsApi|getLatestChannel", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**/*.js", "src/**/*.ts", "src/**/*.tsx", "src/**/*.jsx"], "pattern": "(?i)latest['\"`]|/Latest|getLatest\\w*\\(", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**/*.js", "src/**/*.ts", "src/**/*.tsx", "src/**/*.jsx"], "pattern": "Channels/|ChannelIds|channelIds", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**/*.js", "src/**/*.ts", "src/**/*.tsx", "src/**/*.jsx"], "pattern": "getUrl\\(\\s*['\"`]/?Channels|getChannels\\(|getChannel\\(|Latest['\"`]", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/apiclient.d.ts"], "pattern": "(?i)channel", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(?i)latestchannel|channels/items|channels-api|ChannelsApi", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "Channels/Items/Latest"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "Items/Latest"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "[aA]piClient\\.get\\w*Channel\\w*\\(", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class ChannelsController"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getChannelApi"}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLatestChannelItems"}, "question": "public-http-cross-repo-004", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLatestChannelItems|Channels/Items/Latest|ChannelsApi|getChannelsApi", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLatestChannelItems|Channels/Items/Latest|getChannelsApi", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLatestChannel|LatestChannel|ChannelsApi|channelsApi", "regex": true}, "question": "public-http-cross-repo-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"symbol": "LiveTvController.GetSeriesTimers"}, "question": "public-http-cross-repo-005", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"query": "BaseJellyfinApiController"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"cursor": "kc~1"}, "question": "public-http-cross-repo-005", "sessions": 2, "study": "public-v1", "tool": "kc_more"}
+{"args": {"case": "insensitive", "pattern": "getSeriesTimers|LiveTv/SeriesTimers|getLiveTvSeriesTimers", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 5, "paths": ["src/apiclient.d.ts"], "pattern": "declare", "repo": "jellyfin-web"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "pattern": "SeriesTimers", "repo": "jellyfin-web"}, "question": "public-http-cross-repo-005", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["Jellyfin.Api/Controllers/LiveTvController.cs", "Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "\\[Route\\(|class LiveTvController", "regex": true, "repo": "jellyfin-server"}, "question": "public-http-cross-repo-005", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "Route("}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "\\[Route\\(|class BaseJellyfinApiController", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/Controllers/LiveTvController.cs", "jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "Route("}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/Controllers/LiveTvController.cs"], "pattern": "[Route(\"LiveTv\")]"}, "question": "public-http-cross-repo-005", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "(?i)(getSeriesTimers|getLiveTvSeriesTimers|LiveTv/SeriesTimers)", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "SeriesTimers"}, "question": "public-http-cross-repo-005", "sessions": 4, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getLiveTvApi|'SeriesTimers'|\"SeriesTimers\"", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getLiveTvSeriesTimers|getSeriesTimers\\(|LiveTv/SeriesTimers|seriestimers|tv/series_?timers", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/node_modules/**"], "pattern": "getSeriesTimers"}, "question": "public-http-cross-repo-005", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/package.json"], "pattern": "\"(jellyfin-apiclient|@jellyfin/sdk)\"", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "livetvseriestimers"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/hooks/useFetchItems.ts", "jellyfin-web/src/apps/legacy/controllers/livetv/livetvseriestimers.js", "jellyfin-web/package.json"], "pattern": "(getLiveTvApi|jellyfin-apiclient|from '@jellyfin/sdk)", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/hooks/useFetchItems.ts"], "pattern": "getLiveTvApi|^import", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(?i)livetv/seriestimers|['\"]SeriesTimers['\"]", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "LiveTv/SeriesTimers"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "SeriesTimers"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "class BaseJellyfinApiController"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLiveTvSeriesTimers|LiveTv/SeriesTimers", "regex": true, "workspace": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLiveTvSeriesTimers|LiveTv/SeriesTimers", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLiveTvSeriesTimers|getSeriesTimers\\(|LiveTv/SeriesTimers", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLiveTvSeriesTimers|getSeriesTimers|LiveTv/SeriesTimers", "regex": true}, "question": "public-http-cross-repo-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"budget": 1500, "repo": "jellyfin-server", "source": "none", "symbol": "LibraryController.GetFile"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "LibraryController.GetFile"}, "question": "public-http-cross-repo-006", "sessions": 4, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/LibraryController.cs:114"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"query": "LibraryController.GetDownload"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/LibraryController.cs:114"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"cursor": "kc~1"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~5"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"name": "getDownloadUrl"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"case": "insensitive", "pattern": "/file['\"`?]|getFile|getItemFile", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 3, "pattern": "getItemDownloadUrl|getLibraryApi\\([^)]*\\)\\.getFile|\\.getFile\\(|Items/.*File", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 6, "pattern": "/Download\")]", "repo": "jellyfin-server"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 40, "pattern": "Items/['\"`+$\\{].*(File|Download)|['\"`]File['\"`]\\)|/File`|getDownloadApi|getLibraryApi", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 40, "pattern": "['\"`]/File['\"`?]|/File\\?|'File'|getFile\\b|getItemDownloadUrl|/Download", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/**"], "pattern": "Items/{itemId}/Download"}, "question": "public-http-cross-repo-006", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**", "!**/node_modules/**"], "pattern": "/File[`'\"?/]", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**", "jellyfin-server/Jellyfin.Api/Controllers/LibraryController.cs"], "pattern": "Items/{itemId}/"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "(?i)items/[^\\n]{0,40}/file\\b", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "/File['\"`?]", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "Items/\\$\\{[^}]*\\}/File|/File\\b|\\+ '/File|getFile\\(", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "['\"`/]File['\"`?]|\\.getFile\\(|getLibraryApi\\(.*\\)\\.getFile", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "\\+ ?['\"`]/File|/File\\?|getUrl\\([^)]*File", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "\\.getFile\\(", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getFile"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getFile\\b|getDownloadUrl|getLibraryApi", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getFile|getItemDownloadUrl|getDownloadUrl", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/package.json"], "pattern": "@jellyfin/sdk"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/package.json"], "pattern": "\"@jellyfin/sdk\""}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/package.json"], "pattern": "\"@jellyfin/sdk\"|jellyfin-apiclient", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "'File'|\"File\"|\\+ *'/File|getFile", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "/File"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "getItemDownloadUrl|getItemFileUrl|getFileUrl", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/apps/modern/features/details/components/buttons/DownloadButton.tsx"], "pattern": "getLibraryApi|Download"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/hooks/**"], "pattern": "getLibraryApi\\(|libraryApi|LibraryApi", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**"], "pattern": "(?i)['\"`]/?file['\"`]|(?i)/file\\b", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "(?i)getfileurl|\\{itemId\\}/File|library-api\\.(js|ts)", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "/File"}, "question": "public-http-cross-repo-006", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "/File\\b", "regex": true, "repo": "jellyfin-web"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "Items/.*File|File\\?|\\+ ?'/File|\\}/File", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "Items/{itemId}/Download|Items/{itemId}/File", "repo": "jellyfin-server"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "['\"`/]File['\"`]", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "\\bgetFile\\b|\\bGetFile\\b", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getFile"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getItemDownloadUrl|Items/\\$\\{[^}]+\\}/File|'/File'|libraryApi\\.getFile", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getItemFile|getFile\\(", "regex": true}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getLibraryApi"}, "question": "public-http-cross-repo-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"query": "SingleInstance"}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_find"}
+{"args": {"depth": 2, "symbol": "autofac/src/Autofac/Builder/RegistrationBuilder{TLimit,TActivatorData,TRegistrationStyle}.cs:127"}, "question": "public-two-hop-impact-001", "sessions": 3, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"limit": 60, "names": ["ContainerBuilder.RegisterInstance", "IRegistrationBuilder.SingleInstance", "RegistrationBuilder.SingleInstance"], "repo": "autofac"}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "RegistrationBuilder.SingleInstance"}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "SingleInstance"}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 100, "paths": ["!**/test/**", "!**/tests/**", "!**/bench/**"], "pattern": "SingleInstance\\b", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 100, "paths": ["!**/test/**", "!**/tests/**", "!**/bench/**"], "pattern": "\\.(RegisterInstance|Populate)\\(|\\bPopulate\\(|RegisterInstance\\(", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "paths": ["!**/test/**", "!**/tests/**", "!**/bench/**"], "pattern": "RegisterInstance\\(|RegisterInstance<|ConfigureLifecycle\\(|Populate\\(|: IRegistrationBuilder<|, IRegistrationBuilder<", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "paths": ["!**/test/**", "!**/tests/**", "!**/bench/**"], "pattern": "SingleInstance\\(", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**", "!**/bench/**"], "pattern": ": IRegistrationBuilder<|RegisterInstance<|_buildCallbacks =", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**", "!**/tests/**", "!**/bench/**"], "pattern": "\\.SingleInstance\\b(?!\\()", "regex": true, "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac/src/**", "autofac-di/src/**"], "pattern": "RegisterInstance"}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac/src/**", "autofac-di/src/**"], "pattern": "RegisterInstance\\(|Populate\\(|ConfigureLifecycle\\(|: IRegistrationBuilder<|, IRegistrationBuilder<", "regex": true}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac/src/**", "autofac-di/src/**"], "pattern": "SingleInstance("}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"file": "autofac/src/Autofac/Builder/RegistrationBuilder{TLimit,TActivatorData,TRegistrationStyle}.cs", "line": 127}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"depth": 2, "direction": "in", "limit": 200, "repo": "autofac", "symbol": "RegistrationBuilder.SingleInstance"}, "question": "public-two-hop-impact-001", "sessions": 1, "study": "public-v1", "tool": "kc_trace"}
+{"args": {"depth": 2, "symbol": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs:69"}, "question": "public-two-hop-impact-002", "sessions": 2, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"cursor": "kc~1"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"limit": 100, "name": "RegisterDecorator", "repo": "autofac"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "RegistrationExtensions.RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"names": ["KeyedNestedBenchmark.Setup", "KeyedSimpleBenchmark.Setup", "KeyedAnyKeySimpleBenchmark.Setup"]}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"names": ["KeyedSimpleBenchmark.Setup", "KeyedNestedBenchmark.Setup", "KeyedAnyKeySimpleBenchmark.Setup"]}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"context": 1, "pattern": "KeyedSimpleBenchmark|KeyedNestedBenchmark|KeyedAnyKeySimpleBenchmark|\\bSetup\\(\\)", "regex": true, "repo": "autofac"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"context": 3, "paths": ["bench/**"], "pattern": "RegisterDecorator<ICommandHandler>\\(", "regex": true, "repo": "autofac"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"files_only": true, "limit": 100, "pattern": "RegisterDecorator", "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 100, "paths": ["!**/test/**", "!**/*Test*/**", "!**/bench/**"], "pattern": "RegisterDecorator", "repos": ["autofac", "autofac-di"]}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**", "!**/*Test*/**", "!**/bench/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**", "!**/*Test*/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**", "!**/tests/**", "!**/*Test*/**", "!**/bench/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!autofac/test/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!src/**", "!test/**", "!**/test/**", "!**/tests/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac-di/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["autofac/src/**", "autofac-di/src/**", "!**/test/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**"], "pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "RegisterDecorator"}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"file": "autofac/src/Autofac/RegistrationExtensions.Decorators.cs", "line": 69}, "question": "public-two-hop-impact-002", "sessions": 1, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"symbol": "bitwarden-server/src/Core/Billing/Premium/Commands/UpdatePremiumStorageCommand.cs:273"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_context"}
+{"args": {"depth": 2, "symbol": "bitwarden-server/src/Core/Billing/Premium/Commands/UpdatePremiumStorageCommand.cs:273"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"symbol": "bitwarden-server/src/Core/Billing/Premium/Commands/UpdatePremiumStorageCommand.cs:46"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"limit": 50, "names": ["IUpdatePremiumStorageCommand.Run", "UpdatePremiumStorageCommand.Run", "IUpdatePremiumStorageCommand"], "repo": "bitwarden-server"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "IUpdatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"names": ["IUpdatePremiumStorageCommand.Run", "UpdatePremiumStorageCommand.Run", "IUpdatePremiumStorageCommand"]}, "question": "public-two-hop-impact-003", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 50, "paths": ["!test/**", "!**/*.spec.ts"], "pattern": "(?i)premiumstoragecommand", "regex": true, "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**"], "pattern": "UpdatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!test/**", "!**/test/**"], "pattern": "IUpdatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-server/**"], "pattern": "UpdatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-server/src/**"], "pattern": "updatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-server/src/**"], "pattern": "updatePremiumStorageCommand.Run"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**", "!src/Core/Billing/Premium/Commands/UpdatePremiumStorageCommand.cs"], "pattern": "UpdatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**", "!test/**"], "pattern": "UpdatePremiumStorageCommand"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**", "bitwarden-clients/**", "!test/**"], "pattern": "(?i)updatePremiumStorageCommand\\s*\\.\\s*Run|IUpdatePremiumStorageCommand", "regex": true}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["src/**"], "pattern": "updatePremiumStorageCommand.Run"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "BuildPhaseItemsWithStorage", "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "BuildPhaseItemsWithStorage"}, "question": "public-two-hop-impact-003", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"depth": 2, "direction": "in", "symbol": "UpdatePremiumStorageCommand.BuildPhaseItemsWithStorage"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_trace"}
+{"args": {"depth": 2, "direction": "in", "symbol": "bitwarden-server/src/Core/Billing/Premium/Commands/UpdatePremiumStorageCommand.cs:273"}, "question": "public-two-hop-impact-003", "sessions": 1, "study": "public-v1", "tool": "kc_trace"}
+{"args": {"symbol": "bitwarden-server/src/Core/Models/Business/SubscriptionCreateOptions.cs:87"}, "question": "public-two-hop-impact-004", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"name": "OrganizationSubscriptionOptionsBase"}, "question": "public-two-hop-impact-004", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"context": 2, "pattern": "AddPremiumAccessAddon", "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-two-hop-impact-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "AddPremiumAccessAddon"}, "question": "public-two-hop-impact-004", "sessions": 4, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "OrganizationSubscriptionOptionsBase"}, "question": "public-two-hop-impact-004", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "OrganizationSubscriptionOptionsBase("}, "question": "public-two-hop-impact-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "OrganizationSubscriptionOptionsBase\\b", "regex": true, "repos": ["bitwarden-server", "bitwarden-clients"]}, "question": "public-two-hop-impact-004", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"depth": 2, "direction": "in", "symbol": "AddPremiumAccessAddon"}, "question": "public-two-hop-impact-004", "sessions": 1, "study": "public-v1", "tool": "kc_trace"}
+{"args": {"symbol": "BaseItemRepository.TranslateQuery"}, "question": "public-two-hop-impact-005", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"depth": 2, "symbol": "jellyfin-server/src/Jellyfin.Database/Jellyfin.Database.Implementations/JellyfinQueryHelperExtensions.cs:106"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"cursor": "kc~1"}, "question": "public-two-hop-impact-005", "sessions": 5, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~2"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"name": "BaseItemRepository.TranslateQuery"}, "question": "public-two-hop-impact-005", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "TranslateQuery"}, "question": "public-two-hop-impact-005", "sessions": 2, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 60, "pattern": "TranslateQuery\\b", "regex": true, "repo": "jellyfin-server"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!**/tests/**"], "pattern": "IItemQueryHelpers"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!tests/**"], "pattern": "IItemQueryHelpers", "repo": "jellyfin-server"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!tests/**"], "pattern": "IItemQueryHelpers\\b", "regex": true, "repo": "jellyfin-server"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["!tests/**"], "pattern": "IItemQueryHelpers|\\.TranslateQuery\\b|TranslateQuery\\)", "regex": true}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["Jellyfin.Server.Implementations/**", "src/**", "MediaBrowser*/**", "Emby*/**", "Jellyfin.Api/**"], "pattern": "TranslateQuery\\b", "regex": true}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**", "!**/tests/**"], "pattern": "IItemQueryHelpers"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**", "!**/tests/**"], "pattern": "TranslateQuery\\b", "regex": true}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**"], "pattern": "TranslateQuery"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs", "!**/tests/**"], "pattern": "IItemQueryHelpers"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs", "!**/tests/**"], "pattern": "TranslateQuery"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs", "!**/tests/**"], "pattern": "TranslateQuery("}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs"], "pattern": "TranslateQuery\\b[^(]|\\.TranslateQuery\\(|IItemQueryHelpers", "regex": true}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "IItemQueryHelpers"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "TranslateQuery"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "TranslateQuery[^(]", "regex": true}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "TranslateQuery\\b", "regex": true, "repo": "jellyfin-server"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "WhereReferencedItem", "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "WhereReferencedItem"}, "question": "public-two-hop-impact-005", "sessions": 3, "study": "public-v1", "tool": "kc_search"}
+{"args": {"file": "Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs", "line": 655, "repo": "jellyfin-server"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"file": "Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs", "line": 681, "repo": "jellyfin-server"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"file": "Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs", "line": 681}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"file": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs", "line": 624}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"file": "jellyfin-server/Jellyfin.Server.Implementations/Item/BaseItemRepository.TranslateQuery.cs", "line": 655}, "question": "public-two-hop-impact-005", "sessions": 2, "study": "public-v1", "tool": "kc_symbol_at"}
+{"args": {"depth": 2, "direction": "in", "repo": "jellyfin-server", "symbol": "JellyfinQueryHelperExtensions.WhereReferencedItem"}, "question": "public-two-hop-impact-005", "sessions": 1, "study": "public-v1", "tool": "kc_trace"}
+{"args": {"symbol": "PluginsController.UpdatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 3, "study": "public-v1", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/MediaBrowser.Common/Plugins/BasePluginOfT.cs:163"}, "question": "public-two-hop-impact-006", "sessions": 2, "study": "public-v1", "tool": "kc_context"}
+{"args": {"depth": 2, "symbol": "jellyfin-server/MediaBrowser.Common/Plugins/BasePluginOfT.cs:163"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_impact"}
+{"args": {"cursor": "kc~1"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"cursor": "kc~2"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_more"}
+{"args": {"name": "BasePlugin.UpdateConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "PluginsController.UpdatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"name": "UpdatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"names": ["UpdatePluginConfiguration", "updatePluginConfiguration"]}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_refs"}
+{"args": {"limit": 100, "pattern": "UpdateConfiguration", "repos": ["jellyfin-server", "jellyfin-web"], "word": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 30, "pattern": "updatePluginConfiguration|/Configuration['\"`]", "regex": true, "repo": "jellyfin-web"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 50, "pattern": "UpdatePluginConfiguration", "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "UpdateConfiguration", "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"limit": 60, "pattern": "updatePluginConfiguration|UpdatePluginConfiguration", "regex": true, "repos": ["jellyfin-server", "jellyfin-web"]}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**", "jellyfin-web/**"], "pattern": "UpdateConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**", "jellyfin-web/**"], "pattern": "override\\s+void\\s+UpdateConfiguration|\\.UpdateConfiguration\\b|UpdatePluginConfiguration", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs"], "pattern": "UpdateConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-server/**/*.cs"], "pattern": "UpdateConfiguration\\b", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "PluginConfiguration("}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "Plugins/[^\"'`]*Configuration|updatePluginConfiguration\\(|getPluginsApi", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "updatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "updatePluginConfiguration|UpdateConfiguration", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**", "jellyfin-server/**/*.cs"], "pattern": "PluginConfiguration("}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "Plugins/.*Configuration", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "updatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "Plugins/.*Configuration|Plugins', .*Configuration", "regex": true, "repo": "jellyfin-web"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "UpdateConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "UpdateConfiguration("}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "UpdatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "getPluginsApi|/Configuration['\"`]", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "updatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 2, "study": "public-v1", "tool": "kc_search"}
+{"args": {"pattern": "updatePluginConfiguration|Plugins/.*Configuration|updatePluginConfiguration\\b", "regex": true}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_search"}
+{"args": {"direction": "in", "repo": "jellyfin-server", "symbol": "PluginsController.UpdatePluginConfiguration"}, "question": "public-two-hop-impact-006", "sessions": 1, "study": "public-v1", "tool": "kc_trace"}
+{"args": {"query": "IResolveMiddleware"}, "question": "public2-definition-lookup-001", "sessions": 8, "study": "public-v2", "tool": "kc_find"}
+{"args": {"query": "AutofacServiceProvider"}, "question": "public2-definition-lookup-002", "sessions": 6, "study": "public-v2", "tool": "kc_find"}
+{"args": {"pattern": "class AutofacServiceProvider\\b", "regex": true}, "question": "public2-definition-lookup-002", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"query": "scrapeIframeAllowAttributes"}, "question": "public2-definition-lookup-003", "sessions": 8, "study": "public-v2", "tool": "kc_find"}
+{"args": {"name": "scrapeIframeAllowAttributes"}, "question": "public2-definition-lookup-003", "sessions": 6, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["bitwarden-clients/**"], "pattern": "scrapeIframeAllowAttributes"}, "question": "public2-definition-lookup-003", "sessions": 2, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "scrapeIframeAllowAttributes"}, "question": "public2-definition-lookup-003", "sessions": 4, "study": "public-v2", "tool": "kc_search"}
+{"args": {"query": "SingleRequestBuilder"}, "question": "public2-definition-lookup-004", "sessions": 8, "study": "public-v2", "tool": "kc_find"}
+{"args": {"name": "SingleRequestBuilder"}, "question": "public2-definition-lookup-004", "sessions": 3, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"pattern": "class SingleRequestBuilder"}, "question": "public2-definition-lookup-004", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"query": "ProviderAddProviderTypeBillingPhone"}, "question": "public2-definition-lookup-005", "sessions": 7, "study": "public-v2", "tool": "kc_find"}
+{"args": {"query": "SearchQuery"}, "question": "public2-definition-lookup-006", "sessions": 8, "study": "public-v2", "tool": "kc_find"}
+{"args": {"name": "SearchQuery"}, "question": "public2-definition-lookup-006", "sessions": 2, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["**/*.cs"], "pattern": "class SearchQuery\\b", "regex": true}, "question": "public2-definition-lookup-006", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "class SearchQuery\\b", "regex": true}, "question": "public2-definition-lookup-006", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"query": "close"}, "question": "public2-definition-lookup-007", "sessions": 6, "study": "public-v2", "tool": "kc_find"}
+{"args": {"query": "ILoggerSettings"}, "question": "public2-definition-lookup-008", "sessions": 8, "study": "public-v2", "tool": "kc_find"}
+{"args": {"query": "RequestLoggingMiddleware"}, "question": "public2-definition-lookup-009", "sessions": 7, "study": "public-v2", "tool": "kc_find"}
+{"args": {"query": "IReloadableLogger"}, "question": "public2-definition-lookup-010", "sessions": 4, "study": "public-v2", "tool": "kc_find"}
+{"args": {"symbol": "ISourceRegistrar"}, "question": "public2-di-implementations-001", "sessions": 7, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "ISourceRegistrar"}, "question": "public2-di-implementations-001", "sessions": 2, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["!**/test/**"], "pattern": "ISourceRegistrar"}, "question": "public2-di-implementations-001", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "ISourceRegistrar"}, "question": "public2-di-implementations-001", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "IComponentRegistration"}, "question": "public2-di-implementations-002", "sessions": 4, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "autofac/src/Autofac/Core/IComponentRegistration.cs:12"}, "question": "public2-di-implementations-002", "sessions": 4, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "IOrganizationService"}, "question": "public2-di-implementations-003", "sessions": 5, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Core/AdminConsole/Services/IOrganizationService.cs:13"}, "question": "public2-di-implementations-003", "sessions": 3, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "IHasPaymentMethodQuery"}, "question": "public2-di-implementations-004", "sessions": 3, "study": "public-v2", "tool": "kc_context"}
+{"args": {"cursor": "kc~1"}, "question": "public2-di-implementations-004", "sessions": 3, "study": "public-v2", "tool": "kc_more"}
+{"args": {"name": "IHasPaymentMethodQuery"}, "question": "public2-di-implementations-004", "sessions": 4, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["!**/test/**"], "pattern": "HasPaymentMethodQuery"}, "question": "public2-di-implementations-004", "sessions": 2, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "IAdminRecoverAccountCommand"}, "question": "public2-di-implementations-005", "sessions": 5, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "AdminRecoverAccountCommand"}, "question": "public2-di-implementations-005", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"name": "IAdminRecoverAccountCommand"}, "question": "public2-di-implementations-005", "sessions": 3, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["!**/test/**"], "pattern": "AdminRecoverAccountCommand"}, "question": "public2-di-implementations-005", "sessions": 3, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "INetworkManager"}, "question": "public2-di-implementations-006", "sessions": 7, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "INetworkManager"}, "question": "public2-di-implementations-006", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"symbol": "IDtoService"}, "question": "public2-di-implementations-007", "sessions": 6, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "IDtoService"}, "question": "public2-di-implementations-007", "sessions": 2, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"symbol": "IReloadableLogger"}, "question": "public2-di-implementations-008", "sessions": 7, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "IReloadableLogger"}, "question": "public2-di-implementations-008", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["!**/test/**", "!**/Tests/**"], "pattern": "ReloadableLogger"}, "question": "public2-di-implementations-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**"], "pattern": "ReloadableLogger"}, "question": "public2-di-implementations-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "ILogEventSink"}, "question": "public2-di-implementations-009", "sessions": 4, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "serilog/src/Serilog/Core/ILogEventSink.cs:21"}, "question": "public2-di-implementations-009", "sessions": 3, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "ILogEventSink"}, "question": "public2-di-implementations-009", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"symbol": "ILoggingFailureListener"}, "question": "public2-di-implementations-010", "sessions": 4, "study": "public-v2", "tool": "kc_context"}
+{"args": {"name": "ILoggingFailureListener"}, "question": "public2-di-implementations-010", "sessions": 4, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"symbol": "bitwarden-server/src/Admin/Billing/Controllers/OrganizationPlanMigrationCohortsController.cs:45"}, "question": "public2-http-cross-repo-001", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Admin/Billing/Controllers/OrganizationPlanMigrationCohortsController.cs:45"}, "question": "public2-http-cross-repo-001", "sessions": 3, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"pattern": "migration-cohorts"}, "question": "public2-http-cross-repo-001", "sessions": 2, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "OrganizationAuthRequestsController.UpdateAuthRequest"}, "question": "public2-http-cross-repo-002", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Api/AdminConsole/Controllers/OrganizationAuthRequestsController.cs:47"}, "question": "public2-http-cross-repo-002", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "OrganizationAuthRequestsController.UpdateAuthRequest"}, "question": "public2-http-cross-repo-002", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "bitwarden-server/src/Api/AdminConsole/Controllers/OrganizationAuthRequestsController.cs:47"}, "question": "public2-http-cross-repo-002", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"paths": ["bitwarden-clients/**", "bitwarden-directory-connector/**", "!**/*.spec.ts"], "pattern": "auth-requests"}, "question": "public2-http-cross-repo-002", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "SecretsTrashController.ListByOrganizationAsync"}, "question": "public2-http-cross-repo-003", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Api/SecretsManager/Controllers/SecretsTrashController.cs:42"}, "question": "public2-http-cross-repo-003", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "bitwarden-server/src/Api/SecretsManager/Controllers/SecretsTrashController.cs:42"}, "question": "public2-http-cross-repo-003", "sessions": 4, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"paths": ["bitwarden-clients/**", "bitwarden-directory-connector/**", "!**/*.spec.ts"], "pattern": "/trash"}, "question": "public2-http-cross-repo-003", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "bitwarden-directory-connector/**", "!**/node_modules/**"], "pattern": "/trash"}, "question": "public2-http-cross-repo-003", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**", "bitwarden-directory-connector/**"], "pattern": "/trash"}, "question": "public2-http-cross-repo-003", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["bitwarden-clients/**/secrets*/**", "bitwarden-directory-connector/**"], "pattern": "trash"}, "question": "public2-http-cross-repo-003", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "bitwarden-server/src/Api/Controllers/DevicesController.cs:221"}, "question": "public2-http-cross-repo-004", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "OrganizationUsersKeysController.GetPendingV2UpgradesAsync"}, "question": "public2-http-cross-repo-005", "sessions": 2, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "OrganizationUsersKeysController.GetPendingV2UpgradesAsync"}, "question": "public2-http-cross-repo-005", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "bitwarden-server/src/Api/KeyManagement/Controllers/OrganizationUsersKeysController.cs:64"}, "question": "public2-http-cross-repo-005", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "MusicGenresController.GetMusicGenres"}, "question": "public2-http-cross-repo-006", "sessions": 2, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/MusicGenresController.cs:77"}, "question": "public2-http-cross-repo-006", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/MusicGenresController.cs:77"}, "question": "public2-http-cross-repo-006", "sessions": 4, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "QuickConnectController.GetQuickConnectEnabled"}, "question": "public2-http-cross-repo-007", "sessions": 2, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "QuickConnectController.GetQuickConnectEnabled"}, "question": "public2-http-cross-repo-007", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/QuickConnectController.cs:43"}, "question": "public2-http-cross-repo-007", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"paths": ["jellyfin-server/Jellyfin.Api/BaseJellyfinApiController.cs"], "pattern": "Route("}, "question": "public2-http-cross-repo-007", "sessions": 2, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "QuickConnect/Enabled|getQuickConnectEnabled|quickConnectEnabled|isQuickConnectEnabled", "regex": true}, "question": "public2-http-cross-repo-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**", "!**/*.test.*"], "pattern": "QuickConnect"}, "question": "public2-http-cross-repo-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "QuickConnect/|useQuickConnectEnabled", "regex": true}, "question": "public2-http-cross-repo-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "getQuickConnect\\(|useQuickConnectEnabled|'Enabled'", "regex": true}, "question": "public2-http-cross-repo-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "QuickConnect/Enabled|getQuickConnectEnabled|isQuickConnectEnabled", "regex": true}, "question": "public2-http-cross-repo-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/CollectionController.cs:51"}, "question": "public2-http-cross-repo-008", "sessions": 3, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/CollectionController.cs:51"}, "question": "public2-http-cross-repo-008", "sessions": 3, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"paths": ["jellyfin-web/**", "!**/node_modules/**"], "pattern": "Collections['\"?`]|getCollectionApi|createCollection\\(", "regex": true}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "['\"`/]Collections['\"`?]", "regex": true}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "createCollection"}, "question": "public2-http-cross-repo-008", "sessions": 2, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getCollectionApi"}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "getCollectionApi|CollectionApi|createCollection\\(", "regex": true}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**/*.js", "jellyfin-web/src/**/*.ts", "jellyfin-web/src/**/*.tsx", "jellyfin-web/src/**/*.jsx"], "pattern": "([\"`/])Collections([\"`?]|\\$)", "regex": true}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**/*.js", "jellyfin-web/src/**/*.ts", "jellyfin-web/src/**/*.tsx", "jellyfin-web/src/**/*.jsx"], "pattern": "Collections"}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**/*.js", "jellyfin-web/src/**/*.ts", "jellyfin-web/src/**/*.tsx"], "pattern": "'Collections'"}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**/*.ts", "jellyfin-web/src/**/*.js", "jellyfin-web/src/**/*.tsx", "jellyfin-web/src/**/*.jsx"], "pattern": "Collections"}, "question": "public2-http-cross-repo-008", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/SubtitleController.cs:101"}, "question": "public2-http-cross-repo-009", "sessions": 2, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/SubtitleController.cs:101"}, "question": "public2-http-cross-repo-009", "sessions": 3, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"paths": ["jellyfin-web/**"], "pattern": "deleteSubtitle|DeleteSubtitle|deleteItemSubtitle", "regex": true}, "question": "public2-http-cross-repo-009", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "Subtitles/"}, "question": "public2-http-cross-repo-009", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "getSubtitleApi|SubtitleApi", "regex": true}, "question": "public2-http-cross-repo-009", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "VideosController.DeleteAlternateSources"}, "question": "public2-http-cross-repo-010", "sessions": 2, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "VideosController.DeleteAlternateSources"}, "question": "public2-http-cross-repo-010", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/VideosController.cs:143"}, "question": "public2-http-cross-repo-010", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "autofac/src/Autofac/Core/Activators/Reflection/ReflectionActivator.cs:219"}, "question": "public2-two-hop-impact-001", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"depth": 2, "symbol": "autofac/src/Autofac/Core/Activators/Reflection/ReflectionActivator.cs:219"}, "question": "public2-two-hop-impact-001", "sessions": 4, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"paths": ["!**/test/**"], "pattern": "ActivateInstance"}, "question": "public2-two-hop-impact-001", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**"], "pattern": "ConfigurePipeline("}, "question": "public2-two-hop-impact-001", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["autofac/**", "autofac-di/**"], "pattern": "ActivateInstance"}, "question": "public2-two-hop-impact-001", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["autofac/**", "autofac-di/**"], "pattern": "ConfigurePipeline("}, "question": "public2-two-hop-impact-001", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"depth": 2, "symbol": "autofac/src/Autofac/Features/Scanning/TypeExtensions.cs:76"}, "question": "public2-two-hop-impact-002", "sessions": 3, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"name": "FilterAndRegisterConcreteTypes"}, "question": "public2-two-hop-impact-002", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"names": ["FilterAndRegisterConcreteTypes", "SingleComponentRegistration"]}, "question": "public2-two-hop-impact-002", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"pattern": "FilterAndRegisterConcreteTypes"}, "question": "public2-two-hop-impact-002", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "SingleComponentRegistration"}, "question": "public2-two-hop-impact-002", "sessions": 2, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "bitwarden-server/src/Core/Dirt/Services/Implementations/RabbitMqService.cs:237"}, "question": "public2-two-hop-impact-003", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"depth": 2, "symbol": "bitwarden-server/src/Core/Dirt/Services/Implementations/RabbitMqService.cs:237"}, "question": "public2-two-hop-impact-003", "sessions": 6, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"names": ["DeclareDeadLetterQueueAsync", "TryDeclareAndBindDeadLetterQueueAsync"]}, "question": "public2-two-hop-impact-003", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"depth": 2, "symbol": "bitwarden-server/src/EventsProcessor/AzureQueueHostedService.cs:117"}, "question": "public2-two-hop-impact-004", "sessions": 3, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"name": "ProcessQueueMessageAsync"}, "question": "public2-two-hop-impact-004", "sessions": 2, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"names": ["ProcessQueueMessageAsync", "AzureQueueHostedService.ExecuteAsync"]}, "question": "public2-two-hop-impact-004", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["src/EventsProcessor/**"], "pattern": "ExecuteAsync("}, "question": "public2-two-hop-impact-004", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "ProcessQueueMessage"}, "question": "public2-two-hop-impact-004", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"depth": 2, "symbol": "bitwarden-server/src/Infrastructure.Dapper/Repositories/DeviceRepository.cs:121"}, "question": "public2-two-hop-impact-005", "sessions": 6, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"cursor": "kc~1"}, "question": "public2-two-hop-impact-005", "sessions": 2, "study": "public-v2", "tool": "kc_more"}
+{"args": {"name": "UpdateByIdentifierAndUserIdAsync"}, "question": "public2-two-hop-impact-005", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"name": "UpdateLastActivityByIdentifierAndUserIdAsync"}, "question": "public2-two-hop-impact-005", "sessions": 2, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["!**/test/**"], "pattern": "UpdateByIdentifierAndUserIdAsync"}, "question": "public2-two-hop-impact-005", "sessions": 4, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**"], "pattern": "UpdateLastActivityByIdentifierAndUserIdAsync"}, "question": "public2-two-hop-impact-005", "sessions": 4, "study": "public-v2", "tool": "kc_search"}
+{"args": {"paths": ["!**/test/**"], "pattern": "UpdateLastActivityByIdentifierAndUserIdAsync|UpdateByIdentifierAndUserIdAsync", "regex": true}, "question": "public2-two-hop-impact-005", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "YearsController.GetYears"}, "question": "public2-two-hop-impact-006", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/MediaBrowser.Controller/Entities/TV/Series.cs:224"}, "question": "public2-two-hop-impact-006", "sessions": 4, "study": "public-v2", "tool": "kc_context"}
+{"args": {"depth": 2, "symbol": "jellyfin-server/MediaBrowser.Controller/Entities/Folder.cs:1530"}, "question": "public2-two-hop-impact-006", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"depth": 2, "symbol": "jellyfin-server/MediaBrowser.Controller/Entities/TV/Series.cs:224"}, "question": "public2-two-hop-impact-006", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/YearsController.cs:122"}, "question": "public2-two-hop-impact-006", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"symbol": "jellyfin-server/Jellyfin.Api/Controllers/YearsController.cs:74"}, "question": "public2-two-hop-impact-006", "sessions": 1, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"cursor": "kc~1"}, "question": "public2-two-hop-impact-006", "sessions": 4, "study": "public-v2", "tool": "kc_more"}
+{"args": {"name": "GetChildren"}, "question": "public2-two-hop-impact-006", "sessions": 4, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"names": ["ItemsController.GetItems", "YearsController.GetYears"]}, "question": "public2-two-hop-impact-006", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"paths": ["jellyfin-web/src/**"], "pattern": "getYears"}, "question": "public2-two-hop-impact-006", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"symbol": "jellyfin-server/MediaBrowser.Controller/Entities/BaseItem.cs:1597"}, "question": "public2-two-hop-impact-007", "sessions": 3, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbol": "jellyfin-server/MediaBrowser.Providers/Plugins/Tmdb/TV/TmdbMissingEpisodeProvider.cs:168"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbols": ["LibraryManager.DeleteItem", "ResolverHelper.SetInitialItemValues", "Folder.AddChild", "Folder.ValidateChildrenInternal2", "ProviderManager.GetRemoteSearchResults", "TmdbMissingEpisodeProvider.FetchAsync"]}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbols": ["jellyfin-server/Emby.Server.Implementations/Library/LibraryManager.cs:596", "jellyfin-server/Emby.Server.Implementations/Library/ResolverHelper.cs:25", "jellyfin-server/Emby.Server.Implementations/Library/ResolverHelper.cs:62", "jellyfin-server/MediaBrowser.Controller/Entities/Folder.cs:232", "jellyfin-server/MediaBrowser.Controller/Entities/Folder.cs:532", "jellyfin-server/MediaBrowser.Providers/Plugins/Tmdb/TV/TmdbMissingEpisodeProvider.cs:168", "jellyfin-server/MediaBrowser.Providers/Manager/ProviderManager.cs:933"]}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"symbols": ["jellyfin-server/Emby.Server.Implementations/Library/LibraryManager.cs:596", "jellyfin-server/Emby.Server.Implementations/Library/ResolverHelper.cs:33", "jellyfin-server/Emby.Server.Implementations/Library/ResolverHelper.cs:73", "jellyfin-server/MediaBrowser.Controller/Entities/Folder.cs:232", "jellyfin-server/MediaBrowser.Controller/Entities/Folder.cs:526", "jellyfin-server/MediaBrowser.Providers/Manager/ProviderManager.cs:949", "jellyfin-server/MediaBrowser.Providers/Plugins/Tmdb/TV/TmdbMissingEpisodeProvider.cs:168"]}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_context"}
+{"args": {"query": "Folder.ValidateChildrenInternal2"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_find"}
+{"args": {"depth": 2, "symbol": "jellyfin-server/MediaBrowser.Controller/Entities/BaseItem.cs:1597"}, "question": "public2-two-hop-impact-007", "sessions": 4, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"cursor": "kc~2"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_more"}
+{"args": {"cursor": "kc~6"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_more"}
+{"args": {"cursor": "kc~8"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_more"}
+{"args": {"cursor": "kc~c"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_more"}
+{"args": {"cursor": "kc~e"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_more"}
+{"args": {"paths": ["jellyfin-server/**", "jellyfin-web/**"], "pattern": "SetParent"}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "SetParent("}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"pattern": "\\bSetParent\\b(?!\\()", "regex": true}, "question": "public2-two-hop-impact-007", "sessions": 1, "study": "public-v2", "tool": "kc_search"}
+{"args": {"depth": 2, "symbol": "serilog/src/Serilog/Rendering/MessageTemplateRenderer.cs:92"}, "question": "public2-two-hop-impact-008", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"names": ["RenderPropertyToken", "MessageTemplateRenderer.RenderValue"]}, "question": "public2-two-hop-impact-008", "sessions": 1, "study": "public-v2", "tool": "kc_refs"}
+{"args": {"depth": 2, "symbol": "serilog-extensions-hosting/src/Serilog.Extensions.Hosting/Extensions/Hosting/ReloadableLogger.cs:137"}, "question": "public2-two-hop-impact-009", "sessions": 2, "study": "public-v2", "tool": "kc_impact"}
+{"args": {"depth": 2, "symbol": "serilog/src/Serilog/Log.cs:561"}, "question": "public2-two-hop-impact-010", "sessions": 5, "study": "public-v2", "tool": "kc_impact"}

@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+version = "0.5.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bubstackdev/knowcode"
+homepage = "https://github.com/bubstackdev/knowcode"
+
+[workspace.dependencies]
+kc-extract = { path = "crates/kc-extract" }
+kc-store = { path = "crates/kc-store" }
+kc-index = { path = "crates/kc-index" }
+anyhow = "1.0.104"
+ast-grep-core = "0.50.0"
+blake3 = "1.8.7"
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "6.0.0"
+libc = "0.2.190"
+memchr = "2.8.3"
+regex = "1.13.1"
+regex-syntax = "0.8.11"
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "transport-io", "macros"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+schemars = "1.2.2"
+semver = "1.0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.7"
+toml_edit = "0.25.17"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "io-std", "time"] }
+tree-sitter = "0.27.1"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-swift = "0.7.4"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-cfml = "0.26.43"
+tree-sitter-hcl = "1.1.0"
+yaml-rust2 = "0.13.0"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# What gets installed and measured against size-budget.txt: fat LTO with one codegen unit is 2 MB smaller than
+# release at the same speed (measured during development), but rebuilds take about four times as long, so day-to-day
+# release builds and benchmarks stay on thin LTO.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

@@ -1,0 +1,368 @@
+{
+  "sampling_sha256": "d420782fd14c0238b90604f355a7660be8a2825d6409a60eebf250c5ffc76ee5",
+  "reviewed_in_rank_order": true,
+  "rejected": [],
+  "accepted": [
+    {
+      "candidate_id": "1f1e1d49a7049c42158e29ece897108b62ff4d6cbc8b066f1bbb03df27839a14",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/AdminConsole/Controllers/OrganizationUsersController.cs",
+      "line": 214,
+      "key": "GET OrganizationUsersController.GetMiniDetails"
+    },
+    {
+      "candidate_id": "bc740bd277ce6dac8550e80617432f8cfb584bc2eba2d4e890f80d07c447e736",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Admin/Controllers/ToolsController.cs",
+      "line": 194,
+      "key": "POST ToolsController.PromoteAdmin"
+    },
+    {
+      "candidate_id": "f76bc860aa1d1eabeed2a460747e26a9194df0bf252771b7b753e46ac3b20520",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/AdminConsole/Controllers/OrganizationDomainController.cs",
+      "line": 163,
+      "key": "POST OrganizationDomainController.GetVerifiedOrgDomainSsoDetailsAsync"
+    },
+    {
+      "candidate_id": "e976d78736d4b8ae9b6b9639b8873663f10b8145185621b5674ea43a456b268d",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/Billing/Controllers/VNext/AccountBillingVNextController.cs",
+      "line": 83,
+      "key": "GET AccountBillingVNextController.GetPaymentMethodAsync"
+    },
+    {
+      "candidate_id": "bd710541b0a4418499bf6df1f19ba8ac05a37929ad597537d4b21cfb0a6ff2cf",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/Vault/Controllers/FoldersController.cs",
+      "line": 127,
+      "key": "DELETE FoldersController.DeleteAll"
+    },
+    {
+      "candidate_id": "18c226421399c2725e442ca877c611a77035a45b630388fe3577249193b9b358",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "bitwarden-server",
+      "file": "src/Api/AdminConsole/Public/Controllers/GroupsController.cs",
+      "line": 78,
+      "key": "GET GroupsController.GetMemberIds"
+    },
+    {
+      "candidate_id": "9029f98908eef327045d2a9d29319664ac8ded19f3f5cd41682c0a56925f70f4",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/UserController.cs",
+      "line": 506,
+      "key": "POST UserController.UpdateUserConfigurationLegacy"
+    },
+    {
+      "candidate_id": "55d8be817ee12052f2614117ff8d244761eb4d5cf7679f506715afed90860c56",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/SystemController.cs",
+      "line": 71,
+      "key": "GET SystemController.GetSystemInfo"
+    },
+    {
+      "candidate_id": "f7537a135d44737bc23098d7e294b160ae50cd85ad13c8eefffc5502ba51f21b",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/TvShowsController.cs",
+      "line": 335,
+      "key": "GET TvShowsController.GetSeasons"
+    },
+    {
+      "candidate_id": "e3ed1f73ca3ae012760be0e905601d6d9b31909e83530b319e315149af27e65f",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/ApiKeyController.cs",
+      "line": 73,
+      "key": "DELETE ApiKeyController.RevokeKey"
+    },
+    {
+      "candidate_id": "dfa504bdd14307779393b5c5f66f780e77c73789575ce4262ef30224108b8ea9",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/SessionController.cs",
+      "line": 412,
+      "key": "POST SessionController.ReportViewing"
+    },
+    {
+      "candidate_id": "50ce17bf61ba28c41c78ed053d1ce7a8c87087404267a5df77a4ed77b4459b84",
+      "decision": "accept",
+      "task": "http-cross-repo",
+      "repo": "jellyfin-server",
+      "file": "Jellyfin.Api/Controllers/PluginsController.cs",
+      "line": 140,
+      "key": "DELETE PluginsController.UninstallPlugin"
+    },
+    {
+      "candidate_id": "7fc505c649919f21ff4c91b234cdf85b48706f27532c12101c9fff9b1a0434d9",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "autofac",
+      "file": "src/Autofac/Core/Resolving/Pipeline/IResolvePipelineBuilder.cs",
+      "line": 9,
+      "key": "IResolvePipelineBuilder"
+    },
+    {
+      "candidate_id": "f3e204a1e4e18e0e719119c06e4905d392088373e922b5053b84f3fc1f81b5f2",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "autofac",
+      "file": "src/Autofac/Core/Activators/IPropertySelector.cs",
+      "line": 11,
+      "key": "IPropertySelector"
+    },
+    {
+      "candidate_id": "58bab8df0ea73955d66f3715c6d2311a357ada42f299259db2bdf7501e9d8fb4",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Platform/Mail/Delivery/IMailDeliveryService.cs",
+      "line": 5,
+      "key": "IMailDeliveryService"
+    },
+    {
+      "candidate_id": "b5c82d6da03162966dc66f691bada13f76780582e89df3ac9cebf700f5a7787a",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "bitwarden-server",
+      "file": "src/Core/AdminConsole/OrganizationFeatures/InviteLinks/Interfaces/IUpdateOrganizationInviteLinkCommand.cs",
+      "line": 6,
+      "key": "IUpdateOrganizationInviteLinkCommand"
+    },
+    {
+      "candidate_id": "fdb63f0035b04602d4cefd56c5563392868e01b12e39bda053983332eeb5ce04",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Controller/Persistence/IMediaStreamRepository.cs",
+      "line": 15,
+      "key": "IMediaStreamRepository"
+    },
+    {
+      "candidate_id": "fa6abfac2ba02f23bd82c719518e26963d9720d1f24cb451f0b5bd6bc6b6f527",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Controller/Net/IAuthorizationContext.cs",
+      "line": 9,
+      "key": "IAuthorizationContext"
+    },
+    {
+      "candidate_id": "03c3e50ec26f1b89992746c47f4303e7d4bc9ceb46ed0be642645a46fc94ae0a",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "serilog",
+      "file": "src/Serilog/Core/IMessageTemplateParser.cs",
+      "line": 17,
+      "key": "IMessageTemplateParser"
+    },
+    {
+      "candidate_id": "735eaf5f24546c4531a2266f445582af82f8eea77cfafccde265ff00a554faef",
+      "decision": "accept",
+      "task": "di-implementations",
+      "repo": "serilog",
+      "file": "src/Serilog/Core/ILogEventEnricher.cs",
+      "line": 20,
+      "key": "ILogEventEnricher"
+    },
+    {
+      "candidate_id": "bd698c917a32b99666b38976095c411564f3ec16088b4509d17a652021476dfc",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "autofac",
+      "file": "src/Autofac/Diagnostics/DefaultDiagnosticTracer.cs",
+      "line": 169,
+      "key": "OnRequestSuccess"
+    },
+    {
+      "candidate_id": "cb65a62c8029f2b9243ce3b030fa7f63f19a62f76bdd88507e3a661aabcc4400",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "autofac",
+      "file": "src/Autofac/Util/InternalTypeExtensions.cs",
+      "line": 34,
+      "key": "IsOpenGeneric"
+    },
+    {
+      "candidate_id": "2f91416f1bef48cdd476e314793c23e3f7d289794aa2aaeb31a2e4475f72904d",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "autofac",
+      "file": "src/Autofac/ContainerBuilder.cs",
+      "line": 222,
+      "key": "Build"
+    },
+    {
+      "candidate_id": "a96e661f8bde44ee37f18b1db9e5ed7fe11ce9194a5796733371643864f71d9a",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Auth/Identity/RoleStore.cs",
+      "line": 13,
+      "key": "CreateAsync"
+    },
+    {
+      "candidate_id": "59cede94b7768fe8c7af290589b780c429c09a3b3d6cf8ebdc3c19212f649a03",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Libraries/Invoicing/InvoicePreviews/InvoicePreviewBuilder.cs",
+      "line": 13,
+      "key": "Build"
+    },
+    {
+      "candidate_id": "4d40ef15f17f9acfff5e46b50045407598c508ed69bf5fb051331debab72001a",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Core/AdminConsole/OrganizationFeatures/Groups/UpdateGroupCommand.cs",
+      "line": 68,
+      "key": "SaveGroupWithCollectionsAsync"
+    },
+    {
+      "candidate_id": "f5c300adbd4377e27405d74d5e2a49ac122e7d2c9160e05e3a4de9a133429811",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "bitwarden-server",
+      "file": "src/Core/Services/Implementations/UserService.cs",
+      "line": 382,
+      "key": "InitiateEmailChangeAsync"
+    },
+    {
+      "candidate_id": "27013e042a5f38793e19f94f22af0bcf947d427ad7b6db680fd316a387fc0ca9",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Controller/MediaEncoding/EncodingHelper.cs",
+      "line": 8051,
+      "key": "ShouldEncodeSubtitle"
+    },
+    {
+      "candidate_id": "f85f30a37ce95833b057d1ea48f703f77e4882d89a9e90950e48e79808a193b8",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.MediaEncoding/Encoder/MediaEncoder.cs",
+      "line": 834,
+      "key": "ExtractVideoImagesOnIntervalAccelerated"
+    },
+    {
+      "candidate_id": "49e221182b8872ee45a58184481a50a3f485577abc21520d8d21182d8a568e55",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.Providers/MediaInfo/AudioFileProber.cs",
+      "line": 576,
+      "key": "AddExternalLyrics"
+    },
+    {
+      "candidate_id": "6e75ee200fdc7c47ddc4858fdd4867af67d0ef25e0c3eab5c1bf1ded35fe605c",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "jellyfin-server",
+      "file": "Emby.Server.Implementations/SystemManager.cs",
+      "line": 112,
+      "key": "GetPublicSystemInfo"
+    },
+    {
+      "candidate_id": "ff9f16d375bb18eb3c09201da9341080588b1d5bb0e799544e9c096332cad0b5",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "serilog",
+      "file": "src/Serilog/Events/ScalarValue.cs",
+      "line": 99,
+      "key": "Render"
+    },
+    {
+      "candidate_id": "8176f92d164f2aa78b6685f854dc4c6d9d78a6a5d1da3f3d4c3407cde152e93a",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "serilog",
+      "file": "src/Serilog/Configuration/LoggerSettingsConfiguration.cs",
+      "line": 51,
+      "key": "KeyValuePairs"
+    },
+    {
+      "candidate_id": "432b7eee6452fea66392c992a43401dc8c9eb18f727c05a5117222c638822ec5",
+      "decision": "accept",
+      "task": "two-hop-impact",
+      "repo": "serilog",
+      "file": "src/Serilog/Core/Pipeline/SilentLogger.cs",
+      "line": 275,
+      "key": "Fatal"
+    },
+    {
+      "candidate_id": "e8cf74b4bf7600a7ee984f535c732ac4a6e27f516f847d6f9951d05d93f9a856",
+      "decision": "accept",
+      "task": "definition-lookup",
+      "repo": "autofac",
+      "file": "src/Autofac/Core/Resolving/Pipeline/ResolvePipelineBuilder.cs",
+      "line": 31,
+      "key": "ResolvePipelineBuilder"
+    },
+    {
+      "candidate_id": "3c7f68e5ee48378610e65296bbf7e7f2758b6ea0eebad39321a5a04d2e41a54e",
+      "decision": "accept",
+      "task": "definition-lookup",
+      "repo": "bitwarden-server",
+      "file": "src/Infrastructure.EntityFramework/KeyManagement/Repositories/OrganizationUserKeyRepository.cs",
+      "line": 11,
+      "key": "OrganizationUserKeyRepository"
+    },
+    {
+      "candidate_id": "63a2fd61e74a223c3075395f06916946941b5b894c68090626c9d2a9ebfdf1d8",
+      "decision": "accept",
+      "task": "definition-lookup",
+      "repo": "bitwarden-clients",
+      "file": "apps/web/src/app/billing/individual/premium-checkout/premium-checkout-success.component.ts",
+      "line": 28,
+      "key": "PremiumCheckoutSuccessComponent"
+    },
+    {
+      "candidate_id": "9b305363732e9fd33a5393a1bd858b91aa070bf7157374f750560b85caa4782f",
+      "decision": "accept",
+      "task": "definition-lookup",
+      "repo": "jellyfin-server",
+      "file": "MediaBrowser.XbmcMetadata/Configuration/NfoConfigurationExtension.cs",
+      "line": 8,
+      "key": "NfoConfigurationExtension"
+    },
+    {
+      "candidate_id": "51772b98e292a30b62bca58f7b5981c1294b138343c60c16f3850ae526d809c6",
+      "decision": "accept",
+      "task": "definition-lookup",
+      "repo": "jellyfin-web",
+      "file": "src/components/subtitleuploader/subtitleuploader.js",
+      "line": 180,
+      "key": "show"
+    },
+    {
+      "candidate_id": "d148dea70cb89a93970666419154afb8539978800c6078e866860ca56aab12b3",
+      "decision": "accept",
+      "task": "definition-lookup",
+      "repo": "serilog",
+      "file": "src/Serilog/Core/Filters/DelegateFilter.cs",
+      "line": 17,
+      "key": "DelegateFilter"
+    }
+  ],
+  "note": "Every provisional pick was reviewed against pinned source and accepted; no candidate was rejected and no replacement was drawn."
+}

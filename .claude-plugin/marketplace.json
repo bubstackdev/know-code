@@ -1,0 +1,13 @@
+{
+  "name": "knowcode",
+  "description": "KnowCode's local code-context plugin for coding agents.",
+  "owner": { "name": "KnowCode contributors" },
+  "plugins": [
+    {
+      "name": "knowcode",
+      "source": "./integrations/claude-code",
+      "description": "Local code context and cross-repository tracing with explicit evidence and completeness.",
+      "version": "0.5.0"
+    }
+  ]
+}

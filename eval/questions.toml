@@ -1,0 +1,187 @@
+# Agent-efficiency eval: question set (DRAFT, M0).
+#
+# Status: 20 questions with hand-checked references in eval/references.md; approved by owner 2026-10-12.
+# Every reference was verified with git grep / git show at the pinned commit. See docs/evaluation.md.
+#
+# Fields: id, category (find | context | trace | impact | hotspots | overview | cross-repo), repo (or "workspace"),
+# prompt, grading (set | rubric | exact), pinned_commit (the repo HEAD the reference is checked at), reference.
+
+[[question]]
+id = "find-01"
+category = "find"
+repo = "bubs-maps"
+prompt = "Where is the type that models a saved place defined, and what are its stored properties? Give file:line for each."
+grading = "set"
+pinned_commit = "a462d943bd05"
+reference = "eval/references.md#find-01"
+
+[[question]]
+id = "find-02"
+category = "find"
+repo = "aether-engine"
+prompt = "List every type (class, struct, enum, actor, protocol) under Sources/ whose name ends in \"Engine\", with file:line."
+grading = "set"
+pinned_commit = "c9eeb4299473"
+reference = "eval/references.md#find-02"
+
+[[question]]
+id = "find-03"
+category = "find"
+repo = "workspace"
+prompt = "Which SwiftUI `App` types are marked `@main` across the workspace? Give repo and file:line."
+grading = "set"
+pinned_commit = "per-repo HEADs listed in the reference"
+reference = "eval/references.md#find-03"
+
+[[question]]
+id = "context-01"
+category = "context"
+repo = "face-hugger"
+prompt = "What does PairingArchive do? Show its definition, its methods, and every call site of its load() method."
+grading = "set"
+pinned_commit = "cac29bac7822"
+reference = "eval/references.md#context-01"
+
+[[question]]
+id = "context-02"
+category = "context"
+repo = "renaml"
+prompt = "Summarize RenameRecipe: its stored properties, initializer, conformances and extensions, and the main functions in Sources/ that produce or consume it."
+grading = "rubric"
+pinned_commit = "261313586bd2"
+reference = "eval/references.md#context-02"
+
+[[question]]
+id = "context-03"
+category = "context"
+repo = "bubs-mail"
+prompt = "Where is MailMessage defined, what module and conformances does it have, is it extended anywhere, and which SwiftUI views take one?"
+grading = "rubric"
+pinned_commit = "5f1fcb2f10aa"
+reference = "eval/references.md#context-03"
+
+[[question]]
+id = "trace-01"
+category = "trace"
+repo = "bubstack"
+prompt = "Which symbols create a BubstackCard, directly or through the BubsCard typealias, and what reaches them within three hops?"
+grading = "set"
+pinned_commit = "946d2f115b4a"
+reference = "eval/references.md#trace-01"
+
+[[question]]
+id = "trace-02"
+category = "trace"
+repo = "midi-me"
+prompt = "Starting from MIDIPlaybackController.play(), list the in-repo methods it calls, two levels deep. Ignore AVFoundation and MediaPlayer calls."
+grading = "set"
+pinned_commit = "31875748b728"
+reference = "eval/references.md#trace-02"
+
+[[question]]
+id = "trace-03"
+category = "trace"
+repo = "midi-me"
+prompt = "Who calls MIDIPlaybackController.loadSoundBank(url:), directly or within three hops? Only app code counts; standalone test harnesses are listed separately."
+grading = "set"
+pinned_commit = "31875748b728"
+reference = "eval/references.md#trace-03"
+
+[[question]]
+id = "trace-04"
+category = "trace"
+repo = "idk-play"
+prompt = "Which types conform to YouTubeDurationProviding, and where is the protocol used and called?"
+grading = "set"
+pinned_commit = "ea256e572f4f"
+reference = "eval/references.md#trace-04"
+
+[[question]]
+id = "impact-01"
+category = "impact"
+repo = "bubs-maps"
+prompt = "If `BubRouteModel.retry()` (app/Bub/Route/BubRouteModel.swift:304) gains a required parameter, which call sites stop compiling (Critical) and which functions reach them one hop further (High)?"
+grading = "set"
+pinned_commit = "a462d943bd05"
+reference = "eval/references.md#impact-01"
+
+[[question]]
+id = "impact-02"
+category = "impact"
+repo = "face-hugger"
+prompt = "`QueueArchive` saves `[UploadJob]` as JSON in queue.json. If that on-disk format changes, which types define it, and which code and tests read or write it?"
+grading = "set"
+pinned_commit = "cac29bac7822"
+reference = "eval/references.md#impact-02"
+
+[[question]]
+id = "impact-03"
+category = "impact"
+repo = "renaml"
+prompt = "With `eval/patches/impact-03.diff` applied, which changes `RecipeLibrary.remove(id:)` into `remove(ids: Set<UUID>)`, which symbols are affected within 2 hops?"
+grading = "set"
+pinned_commit = "261313586bd2"
+reference = "eval/references.md#impact-03"
+
+[[question]]
+id = "hotspots-01"
+category = "hotspots"
+repo = "aether-engine"
+prompt = "Which five hand-written Swift files (excluding `records/` and `*/Generated/`) had the most lines changed in the 90 days up to the pin commit, ranked?"
+grading = "rubric"
+pinned_commit = "c9eeb4299473"
+reference = "eval/references.md#hotspots-01"
+
+[[question]]
+id = "hotspots-02"
+category = "hotspots"
+repo = "bubs-maps"
+prompt = "Among Swift files touched by at least 5 commits in the year up to the pin, which have the highest share of commits whose subject matches `\\b(bug|revert|hotfix)\\b`?"
+grading = "exact"
+pinned_commit = "a462d943bd05"
+reference = "eval/references.md#hotspots-02"
+
+[[question]]
+id = "overview-01"
+category = "overview"
+repo = "midi-me"
+prompt = "Orient me in midi-me: list its build targets and entry points, and name the main model and view types and the file where playback lives."
+grading = "rubric"
+pinned_commit = "31875748b728"
+reference = "eval/references.md#overview-01"
+
+[[question]]
+id = "overview-02"
+category = "overview"
+repo = "space-case"
+prompt = "In space-case's FactoryCore, where are Cell, Tile and Factory defined, and how do they relate?"
+grading = "rubric"
+pinned_commit = "1eaedb9b0f04"
+reference = "eval/references.md#overview-02"
+
+[[question]]
+id = "cross-repo-01"
+category = "cross-repo"
+repo = "workspace"
+prompt = "Which repos depend on the bubstack package, through which manifest, and which products do they use?"
+grading = "set"
+pinned_commit = "per-repo HEADs listed in the reference"
+reference = "eval/references.md#cross-repo-01"
+
+[[question]]
+id = "cross-repo-02"
+category = "cross-repo"
+repo = "workspace"
+prompt = "Which bubs-mail files import Bubstack modules, and which BubstackKit symbols does each use?"
+grading = "set"
+pinned_commit = "bubs-mail 5f1fcb2f10aa, bubstack 946d2f115b4a"
+reference = "eval/references.md#cross-repo-02"
+
+[[question]]
+id = "cross-repo-03"
+category = "cross-repo"
+repo = "workspace"
+prompt = "If the spacing tokens on `BubstackTheme.Spacing` (`theme.space.*`) are renamed, which files in which repos break?"
+grading = "set"
+pinned_commit = "per-repo HEADs listed in the reference"
+reference = "eval/references.md#cross-repo-03"

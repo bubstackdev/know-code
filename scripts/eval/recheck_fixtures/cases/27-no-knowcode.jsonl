@@ -1,0 +1,8 @@
+{"type": "system", "subtype": "init", "session_id": "s", "permissionMode": "dontAsk"}
+{"type": "assistant", "session_id": "s", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "grep -rn 'AutofacServiceProvider' /study/source/autofac-di/src"}}], "usage": {"input_tokens": 10, "output_tokens": 5}}}
+{"type": "user", "session_id": "s", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": ""}]}]}}
+{"type": "assistant", "session_id": "s", "message": {"id": "m2", "content": [{"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/study/source/autofac-di/src/Autofac.Extensions.DependencyInjection/AutofacServiceProvider.cs", "offset": 1, "limit": 80}}], "usage": {"input_tokens": 10, "output_tokens": 5}}}
+{"type": "user", "session_id": "s", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": [{"type": "text", "text": "     1\t// file contents elided\n"}]}]}}
+{"type": "assistant", "session_id": "s", "message": {"id": "m3", "content": [{"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "find /study/source/autofac-di -name '*Factory*.cs'"}}], "usage": {"input_tokens": 10, "output_tokens": 5}}}
+{"type": "user", "session_id": "s", "message": {"content": [{"type": "tool_result", "tool_use_id": "t3", "content": [{"type": "text", "text": ""}]}]}}
+{"type": "result", "subtype": "success", "is_error": false, "session_id": "s", "result": "{\"status\": \"answered\", \"items\": [], \"notes\": \"\"}"}

@@ -1,0 +1,603 @@
+{
+  "arms": {
+    "knowcode": {
+      "budget_overruns": 0,
+      "correct_empty": 5,
+      "correct_empty_n": 5,
+      "cost_usd": 4.0829,
+      "f1_exhaustive_mean": 1.0,
+      "f1_n": 10,
+      "fixed_overhead_median": 6546.5,
+      "hop_agreement_mean": 1.0,
+      "knowcode_answers_rechecked": 33,
+      "knowcode_answers_with_claims": 123,
+      "knowcode_calls_mean": 5.458333333333333,
+      "output_tokens_median": 3585.5,
+      "recall_lower_bound_mean": 1.0,
+      "recall_lower_bound_n": 8,
+      "recall_uncertain_mean": 1.0,
+      "recheck_rate": 0.2682926829268293,
+      "recheck_rate_ci95": [
+        0.16447368421052633,
+        0.422680412371134
+      ],
+      "research_calls_mean": 7.958333333333333,
+      "sessions": 24,
+      "sessions_with_knowcode_call": 24,
+      "status": {
+        "answered": 24
+      },
+      "tokens_median": 72384.5,
+      "tokens_n": 24
+    },
+    "knowcode-unprompted": {
+      "budget_overruns": 0,
+      "correct_empty": 5,
+      "correct_empty_n": 5,
+      "cost_usd": 3.4331,
+      "f1_exhaustive_mean": 1.0,
+      "f1_n": 10,
+      "fixed_overhead_median": 6548.5,
+      "hop_agreement_mean": 1.0,
+      "knowcode_answers_rechecked": 30,
+      "knowcode_answers_with_claims": 107,
+      "knowcode_calls_mean": 4.625,
+      "output_tokens_median": 2869.0,
+      "recall_lower_bound_mean": 1.0,
+      "recall_lower_bound_n": 8,
+      "recall_uncertain_mean": 1.0,
+      "recheck_rate": 0.2803738317757009,
+      "recheck_rate_ci95": [
+        0.17293233082706766,
+        0.43010752688172044
+      ],
+      "research_calls_mean": 7.25,
+      "sessions": 24,
+      "sessions_with_knowcode_call": 24,
+      "status": {
+        "answered": 24
+      },
+      "tokens_median": 67040.0,
+      "tokens_n": 24
+    },
+    "plain": {
+      "budget_overruns": 0,
+      "correct_empty": 4,
+      "correct_empty_n": 5,
+      "cost_usd": 3.2106,
+      "f1_exhaustive_mean": 0.9800000000000001,
+      "f1_n": 10,
+      "fixed_overhead_median": 2518.5,
+      "hop_agreement_mean": 1.0,
+      "knowcode_answers_rechecked": 0,
+      "knowcode_answers_with_claims": 0,
+      "knowcode_calls_mean": 0.0,
+      "output_tokens_median": 3173.0,
+      "recall_lower_bound_mean": 0.875,
+      "recall_lower_bound_n": 8,
+      "recall_uncertain_mean": 1.0,
+      "recheck_rate": null,
+      "recheck_rate_ci95": null,
+      "research_calls_mean": 6.666666666666667,
+      "sessions": 24,
+      "sessions_with_knowcode_call": 0,
+      "status": {
+        "answered": 22,
+        "error": 1,
+        "unsupported": 1
+      },
+      "tokens_median": 39524.5,
+      "tokens_n": 24
+    }
+  },
+  "bootstrap": {
+    "resamples": 10000,
+    "seed": "knowcode-public-v1-bootstrap-2026-10-20",
+    "unit": "question"
+  },
+  "criteria": {
+    "1_recheck_rate_halved": {
+      "answers": 123,
+      "baseline_rate": 0.3333333333333333,
+      "ci95": [
+        0.16447368421052633,
+        0.422680412371134
+      ],
+      "met": false,
+      "rate": 0.2682926829268293,
+      "rule": "named-arm pooled re-check rate <= 0.5 x the baseline run rate"
+    },
+    "2_f1_at_least_equal": {
+      "f1_ci95": [
+        0.0,
+        0.06666666666666665
+      ],
+      "f1_difference": 0.019999999999999997,
+      "f1_n": 10,
+      "met": true,
+      "recall_ci95": [
+        0.0,
+        0.4
+      ],
+      "recall_difference": 0.125,
+      "recall_n": 8,
+      "rule": "mean paired F1 difference (named - plain, non-empty exhaustive labels) >= 0 and mean paired recall difference (lower-bound labels) >= 0"
+    },
+    "3_fewer_research_tokens": {
+      "ci95": [
+        19158.0,
+        81698.0
+      ],
+      "difference": 28368.5,
+      "met": false,
+      "n": 24,
+      "rule": "median paired difference in session tokens (named - plain) < 0"
+    },
+    "4_unprompted_use": {
+      "calls_per_session_mean": 4.625,
+      "ci95": [
+        0.862023793448672,
+        0.9999999999999999
+      ],
+      "met": true,
+      "rule": "KnowCode called in >= 20 of 24 unprompted sessions",
+      "sessions": 24,
+      "sessions_with_call": 24
+    }
+  },
+  "format": 1,
+  "freeze_sha256": "0141cee5f36c77155be29fbea246e731029d337a7812e223a4f02376667e94e8",
+  "paired": {
+    "knowcode-minus-plain": {
+      "f1": {
+        "ci95": [
+          0.0,
+          0.06666666666666665
+        ],
+        "difference": 0.019999999999999997,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19999999999999996
+        ],
+        "n": 10,
+        "statistic": "mean"
+      },
+      "recall_lower_bound": {
+        "ci95": [
+          0.0,
+          0.4
+        ],
+        "difference": 0.125,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "n": 8,
+        "statistic": "mean"
+      },
+      "tokens": {
+        "ci95": [
+          19158.0,
+          81698.0
+        ],
+        "difference": 28368.5,
+        "distribution": [
+          -21750,
+          -16084,
+          6493,
+          11545,
+          15625,
+          15644,
+          15744,
+          19158,
+          22829,
+          23046,
+          24677,
+          26197,
+          30540,
+          64000,
+          66959,
+          67519,
+          81698,
+          83780,
+          92655,
+          99160,
+          101085,
+          105558,
+          187461,
+          396529
+        ],
+        "n": 24,
+        "statistic": "median"
+      }
+    },
+    "knowcode-unprompted-minus-plain": {
+      "f1": {
+        "ci95": [
+          0.0,
+          0.06666666666666665
+        ],
+        "difference": 0.019999999999999997,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.19999999999999996
+        ],
+        "n": 10,
+        "statistic": "mean"
+      },
+      "recall_lower_bound": {
+        "ci95": [
+          0.0,
+          0.4
+        ],
+        "difference": 0.125,
+        "distribution": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "n": 8,
+        "statistic": "mean"
+      },
+      "tokens": {
+        "ci95": [
+          23567.0,
+          38885.0
+        ],
+        "difference": 31423.5,
+        "distribution": [
+          -17222,
+          -6491,
+          1130,
+          12592,
+          15762,
+          20758,
+          22851,
+          23567,
+          26509,
+          29283,
+          29451,
+          30340,
+          32507,
+          33846,
+          34446,
+          37389,
+          38885,
+          42572,
+          49869,
+          53452,
+          80526,
+          110541,
+          111372,
+          301848
+        ],
+        "n": 24,
+        "statistic": "median"
+      }
+    }
+  },
+  "sensitivity": {
+    "arms": {
+      "knowcode": {
+        "budget_overruns": 0,
+        "correct_empty": 3,
+        "correct_empty_n": 3,
+        "cost_usd": 3.4369,
+        "f1_exhaustive_mean": 1.0,
+        "f1_n": 10,
+        "fixed_overhead_median": 6546.5,
+        "hop_agreement_mean": 1.0,
+        "knowcode_answers_rechecked": 33,
+        "knowcode_answers_with_claims": 94,
+        "knowcode_calls_mean": 4.545454545454546,
+        "output_tokens_median": 3220.0,
+        "recall_lower_bound_mean": 1.0,
+        "recall_lower_bound_n": 8,
+        "recall_uncertain_mean": 1.0,
+        "recheck_rate": 0.35106382978723405,
+        "recheck_rate_ci95": [
+          0.24107142857142858,
+          0.5074626865671642
+        ],
+        "research_calls_mean": 7.0,
+        "sessions": 22,
+        "sessions_with_knowcode_call": 22,
+        "status": {
+          "answered": 22
+        },
+        "tokens_median": 50807.0,
+        "tokens_n": 22
+      },
+      "knowcode-unprompted": {
+        "budget_overruns": 0,
+        "correct_empty": 3,
+        "correct_empty_n": 3,
+        "cost_usd": 2.8726,
+        "f1_exhaustive_mean": 1.0,
+        "f1_n": 10,
+        "fixed_overhead_median": 6548.5,
+        "hop_agreement_mean": 1.0,
+        "knowcode_answers_rechecked": 27,
+        "knowcode_answers_with_claims": 79,
+        "knowcode_calls_mean": 3.6818181818181817,
+        "output_tokens_median": 2808.5,
+        "recall_lower_bound_mean": 1.0,
+        "recall_lower_bound_n": 8,
+        "recall_uncertain_mean": 1.0,
+        "recheck_rate": 0.34177215189873417,
+        "recheck_rate_ci95": [
+          0.2079207920792079,
+          0.5061728395061729
+        ],
+        "research_calls_mean": 6.2272727272727275,
+        "sessions": 22,
+        "sessions_with_knowcode_call": 22,
+        "status": {
+          "answered": 22
+        },
+        "tokens_median": 58764.0,
+        "tokens_n": 22
+      },
+      "plain": {
+        "budget_overruns": 0,
+        "correct_empty": 3,
+        "correct_empty_n": 3,
+        "cost_usd": 2.7541,
+        "f1_exhaustive_mean": 0.9800000000000001,
+        "f1_n": 10,
+        "fixed_overhead_median": 2518.5,
+        "hop_agreement_mean": 1.0,
+        "knowcode_answers_rechecked": 0,
+        "knowcode_answers_with_claims": 0,
+        "knowcode_calls_mean": 0.0,
+        "output_tokens_median": 3148.5,
+        "recall_lower_bound_mean": 0.875,
+        "recall_lower_bound_n": 8,
+        "recall_uncertain_mean": 1.0,
+        "recheck_rate": null,
+        "recheck_rate_ci95": null,
+        "research_calls_mean": 6.318181818181818,
+        "sessions": 22,
+        "sessions_with_knowcode_call": 0,
+        "status": {
+          "answered": 21,
+          "error": 1
+        },
+        "tokens_median": 32584.0,
+        "tokens_n": 22
+      }
+    },
+    "criteria": {
+      "1_recheck_rate_halved": {
+        "answers": 94,
+        "baseline_rate": 0.45,
+        "ci95": [
+          0.24107142857142858,
+          0.5074626865671642
+        ],
+        "met": false,
+        "rate": 0.35106382978723405,
+        "rule": "named-arm pooled re-check rate <= 0.5 x the baseline run rate"
+      },
+      "2_f1_at_least_equal": {
+        "f1_ci95": [
+          0.0,
+          0.06666666666666665
+        ],
+        "f1_difference": 0.019999999999999997,
+        "f1_n": 10,
+        "met": true,
+        "recall_ci95": [
+          0.0,
+          0.4
+        ],
+        "recall_difference": 0.125,
+        "recall_n": 8,
+        "rule": "mean paired F1 difference (named - plain, non-empty exhaustive labels) >= 0 and mean paired recall difference (lower-bound labels) >= 0"
+      },
+      "3_fewer_research_tokens": {
+        "ci95": [
+          17451.0,
+          67519.0
+        ],
+        "difference": 25437.0,
+        "met": false,
+        "n": 22,
+        "rule": "median paired difference in session tokens (named - plain) < 0"
+      },
+      "4_unprompted_use": {
+        "calls_per_session_mean": 3.6818181818181817,
+        "ci95": [
+          0.8513451233948545,
+          1.0
+        ],
+        "met": true,
+        "rule": "KnowCode called in >= 20 of 24 unprompted sessions",
+        "sessions": 22,
+        "sessions_with_call": 22
+      }
+    },
+    "paired": {
+      "knowcode-minus-plain": {
+        "f1": {
+          "ci95": [
+            0.0,
+            0.06666666666666665
+          ],
+          "difference": 0.019999999999999997,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.19999999999999996
+          ],
+          "n": 10,
+          "statistic": "mean"
+        },
+        "recall_lower_bound": {
+          "ci95": [
+            0.0,
+            0.4
+          ],
+          "difference": 0.125,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "n": 8,
+          "statistic": "mean"
+        },
+        "tokens": {
+          "ci95": [
+            17451.0,
+            67519.0
+          ],
+          "difference": 25437.0,
+          "distribution": [
+            -21750,
+            -16084,
+            6493,
+            11545,
+            15625,
+            15644,
+            15744,
+            19158,
+            22829,
+            23046,
+            24677,
+            26197,
+            30540,
+            64000,
+            66959,
+            67519,
+            81698,
+            83780,
+            92655,
+            101085,
+            105558,
+            187461
+          ],
+          "n": 22,
+          "statistic": "median"
+        }
+      },
+      "knowcode-unprompted-minus-plain": {
+        "f1": {
+          "ci95": [
+            0.0,
+            0.06666666666666665
+          ],
+          "difference": 0.019999999999999997,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.19999999999999996
+          ],
+          "n": 10,
+          "statistic": "mean"
+        },
+        "recall_lower_bound": {
+          "ci95": [
+            0.0,
+            0.4
+          ],
+          "difference": 0.125,
+          "distribution": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "n": 8,
+          "statistic": "mean"
+        },
+        "tokens": {
+          "ci95": [
+            23209.0,
+            36665.5
+          ],
+          "difference": 29895.5,
+          "distribution": [
+            -17222,
+            -6491,
+            1130,
+            12592,
+            15762,
+            20758,
+            22851,
+            23567,
+            26509,
+            29283,
+            29451,
+            30340,
+            32507,
+            33846,
+            34446,
+            37389,
+            38885,
+            42572,
+            49869,
+            53452,
+            80526,
+            111372
+          ],
+          "n": 22,
+          "statistic": "median"
+        }
+      }
+    },
+    "summary_note": "Bitwarden HTTP questions 001 and 003 excluded (labels depend on the separately licensed tree left out of the export)"
+  },
+  "sessions_scheduled": 72,
+  "sessions_with_result": 72
+}

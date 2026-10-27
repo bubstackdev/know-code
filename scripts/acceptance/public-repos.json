@@ -1,0 +1,41 @@
+{
+  "eshop": {
+    "url": "https://github.com/dotnet/eShop.git",
+    "commit": "913acea66708a59595351174cee9b29f37179d29",
+    "question": "What does CatalogApi.GetItemById do, and which other project calls its HTTP endpoint?",
+    "symbol": "CatalogApi.GetItemById",
+    "file": "src/Catalog.API/Apis/CatalogApi.cs",
+    "definition_line": 217,
+    "declaration_start_line": 216,
+    "source_contains": ["id <= 0", "SingleOrDefaultAsync", "TypedResults.NotFound", "TypedResults.Ok(item)"],
+    "cross_project_file": "src/WebAppComponents/Services/CatalogService.cs",
+    "cross_project_symbol": "GetCatalogItem",
+    "cross_project_line": 14,
+    "allowed_incomplete": []
+  },
+  "eshop-controllers": {
+    "url": "https://github.com/dotnet-architecture/eShopOnContainers.git",
+    "branch": "dev",
+    "commit": "b6965936842cab32553543c1abe8a68714956f44",
+    "question": "How does WebhooksController.ListByUser select subscriptions, and which other project calls this HTTP endpoint?",
+    "symbol": "WebhooksController.ListByUser",
+    "file": "src/Services/Webhooks/Webhooks.API/Controllers/WebhooksController.cs",
+    "definition_line": 21,
+    "declaration_start_line": 18,
+    "source_contains": ["GetUserIdentity()", "s.UserId == userId", "return Ok(data)"],
+    "cross_project_file": "src/Web/WebhookClient/Services/WebhooksClient.cs",
+    "cross_project_symbol": "LoadWebhooks",
+    "cross_project_line": 16,
+    "allowed_incomplete": []
+  },
+  "mitt": {
+    "url": "https://github.com/developit/mitt.git",
+    "commit": "6b41670516ed8e8b738612f60491995470aa63b3",
+    "question": "Where is mitt defined, and how does it initialize its event-handler map?",
+    "symbol": "mitt",
+    "file": "src/index.ts",
+    "definition_line": 46,
+    "source_contains": ["all = all || new Map()"],
+    "allowed_incomplete": []
+  }
+}

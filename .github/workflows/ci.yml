@@ -1,0 +1,214 @@
+# The merge gates from docs/evaluation.md "Gates per change": tests (the invariant suite as a step of its own), clippy with no
+# warnings, the eval harness's own tests, docs naming only files that exist, the dist binary against
+# size-budget.txt (measured on aarch64-apple-darwin, so that job runs on macOS), and the release replay gate's fast subset
+# against the latest release.
+# Actions are GitHub-owned and pinned to commit SHAs, as the repository's Actions policy requires.
+name: ci
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only: no job here publishes. The release workflow grants write access only to the job creating a release.
+permissions:
+  contents: read
+
+# A new push to a pull request or a branch cancels that ref's older run: the newest run tests everything before it,
+# so a failure still shows, and merges in quick succession don't queue for runners. A release tag's run is never
+# cancelled.
+concurrency:
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  KNOWCODE_UPDATE_CHECK: "0"
+
+jobs:
+  release-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install the pinned release generator
+        run: bash scripts/install-dist.sh
+      - name: Verify compiled source-path privacy
+        run: python3 -B scripts/test_dist_build.py
+      - name: Verify release workflow and publishing gate
+        run: python3 scripts/generate-release.py --check
+      - name: Plan all release targets without publishing
+        run: dist plan --output-format=json --no-local-paths
+
+  # Release runs only (the release workflow calls this one on a tag push): the Homebrew tap must be public and the
+  # tap token able to push to it, before anything is published. Pull requests and pushes to main skip this job and
+  # need no secret.
+  homebrew-tap:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The Homebrew tap is public and HOMEBREW_TAP_TOKEN can push to it
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. A maintainer creates it as docs/releasing.md describes."
+            exit 1
+          fi
+          if ! repo=$(gh api repos/bubstackdev/homebrew-tap); then
+            echo "::error::HOMEBREW_TAP_TOKEN can't read bubstackdev/homebrew-tap (expired, or not scoped to it)."
+            exit 1
+          fi
+          if [ "$(jq -r '.private' <<<"$repo")" != "false" ]; then
+            echo "::error::bubstackdev/homebrew-tap is private; Homebrew users couldn't tap it."
+            exit 1
+          fi
+          if [ "$(jq -r '.permissions.push' <<<"$repo")" != "true" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN can't push to bubstackdev/homebrew-tap (needs Contents: read and write)."
+            exit 1
+          fi
+          echo "bubstackdev/homebrew-tap is public and the tap token can push to it."
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: test-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: test-${{ runner.os }}-
+      # Tests commit to throwaway repos. A global identity, not GIT_AUTHOR_* variables, so a test's own
+      # `-c user.name=…` still wins (an author named like a bot is left out of history answers).
+      - run: git config --global user.name "Test Author" && git config --global user.email test@example.test
+      # The invariant suite (every test named `invariant_…`, see docs/evaluation.md) first, so a broken invariant is
+      # reported as one; the full run below includes them again.
+      - name: invariants
+        run: cargo test --workspace --locked -- invariant
+      - run: cargo test --workspace --locked
+      - name: docs match the binary's commands, flags, config keys and MCP tools
+        run: python3 scripts/check-docs.py target/debug/knowcode
+      - name: cold MCP first run and background indexing
+        run: python3 scripts/check-first-run.py target/debug/knowcode
+      - name: registered roots and lazy cross-repo first run
+        run: python3 scripts/check-workspace-first-run.py target/debug/knowcode
+      - name: isolated update checks and self-update rollback
+        run: python3 scripts/check-updates.py target/debug/knowcode
+      - name: native macOS evaluation isolation boundary
+        if: runner.os == 'macOS'
+        env:
+          KNOWCODE_TEST_MACOS_SANDBOX: "1"
+        run: python3 -B -m unittest discover -s scripts/eval -p 'test_public_sandbox.py'
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        if: matrix.os == 'ubuntu-24.04'
+
+  harness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s scripts/eval -p 'test_*.py'
+      - run: python -m unittest discover -s scripts/eval/neutral -p 'test_*.py'
+      - run: python -m unittest discover -s scripts/acceptance -p 'test_*.py'
+      - run: bash -n scripts/acceptance/clean-machine.sh
+      # The runner image ships shellcheck.
+      - run: shellcheck scripts/acceptance/clean-machine.sh
+
+  # README.md and docs/ naming a crate or script file that no longer exists.
+  doc-paths:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python scripts/check-doc-paths.py
+
+  size:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: dist-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: dist-${{ runner.os }}-
+      - run: scripts/check-size.sh
+      - name: Install the pinned release generator
+        run: bash scripts/install-dist.sh
+      - name: Package the native macOS binary and installer preview
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: bash scripts/package-native.sh
+      - name: Test the isolated shell installer and installed MCP binary
+        run: python3 scripts/check-installer.py target/distrib
+
+  # The release replay gate on its fast subset (eval/replay-gate/README.md): the recorded KnowCode calls on five small
+  # public repositories, replayed against the latest release and against this change's build, with no model calls. It
+  # fails on a regression beyond the gate's tolerances, and the comparison goes in the job summary. Linux only, so it
+  # never waits for a macOS runner.
+  replay:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      SUBSET: autofac,autofac-di,serilog,serilog-aspnetcore,serilog-extensions-hosting
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: replay-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: replay-${{ runner.os }}-
+      - name: build this change
+        run: cargo build --locked -p knowcode
+      - name: the latest release, checked against its published checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'knowcode-x86_64-unknown-linux-gnu.tar.gz*'
+          sha256sum -c knowcode-x86_64-unknown-linux-gnu.tar.gz.sha256
+          tar xzf knowcode-x86_64-unknown-linux-gnu.tar.gz
+      # The pinned public source of the subset: a shallow fetch of each pinned commit, exported as for the published
+      # studies. Cached by the manifest that pins them; the replay works on its own copies and never writes into it.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/replay-source
+          # This workflow names the subset (a cache key can't hold its commas); the manifest pins it.
+          key: replay-source-${{ hashFiles('eval/public-v2/manifest.json', 'scripts/prepare-public-eval.py', '.github/workflows/ci.yml') }}
+      - name: fetch the pinned public source
+        run: |
+          if [ ! -f "$RUNNER_TEMP/replay-source/source-receipt.json" ]; then
+            python scripts/eval/replay_gate.py fetch --repos "$SUBSET" --out "$RUNNER_TEMP/replay-source"
+          fi
+      - name: replay the release and this change, and compare
+        run: |
+          src="$RUNNER_TEMP/replay-source" work="$RUNNER_TEMP/replay-work"
+          python scripts/eval/replay_gate.py run --knowcode "$RUNNER_TEMP/knowcode-x86_64-unknown-linux-gnu/knowcode" \
+            --label release --source "$src" --work "$work" --repos "$SUBSET" --out "$RUNNER_TEMP/release.json"
+          python scripts/eval/replay_gate.py run --knowcode target/debug/knowcode \
+            --label change --source "$src" --work "$work" --repos "$SUBSET" --out "$RUNNER_TEMP/change.json"
+          status=0
+          python scripts/eval/replay_gate.py compare "$RUNNER_TEMP/release.json" "$RUNNER_TEMP/change.json" \
+            --out "$RUNNER_TEMP/replay.md" || status=$?
+          { echo "## Release replay gate (fast subset)"; echo; cat "$RUNNER_TEMP/replay.md"; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status

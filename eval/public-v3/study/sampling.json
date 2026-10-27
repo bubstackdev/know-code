@@ -1,0 +1,32 @@
+{
+  "format": 1,
+  "stage": "source candidates ranked; provisional picks unreviewed; no questions or labels frozen; no scored runs",
+  "seed": "knowcode-public-v3-source-2026-10-26",
+  "plan_sha256": "473a668d929ff3b96f0e0542f4650f2246f4afbfc74aeb16d2338ff1b5fab7e0",
+  "excluded_candidates": 1388,
+  "scope_sha256": "c4d1bd3ce55b8ae3502c4350f8fd6bed148e3f7e3893585f8c00d58db2a405a2",
+  "candidates_sha256": "8f4af4089a290c9b3cf555854d4ece4d990caa480dbb31f3ea38fe40b69ea403",
+  "provisional_sha256": "01076c4fbecc1f5f9f4fb0f5dc3eb86a79e46daa58604321a16ef80bc62317a3",
+  "tool_sha256": "1f9738f9494f9400967b0f7187dac5500320928570f15a897ae597479b38ae1d",
+  "neutral_sampler_sha256": "56eadd97c3c3bb1d702cb2bc9d5524896c982115ed85b4711f75852a83a08e73",
+  "producer_hashes": {
+    "scripts/sample-public-eval.py": "1f9738f9494f9400967b0f7187dac5500320928570f15a897ae597479b38ae1d",
+    "scripts/scope-public-eval.py": "3de4f12bf9ea393e80578ae6341b2dfbb55a45ea8e0e9504180ae3eccf24300a",
+    "scripts/census-public-eval.py": "86a9b3842170ee2e346cd44ab3bdc9a9707fd445110d7624854b36d365839f3f",
+    "scripts/eval/neutral/sample.py": "56eadd97c3c3bb1d702cb2bc9d5524896c982115ed85b4711f75852a83a08e73",
+    "scripts/eval/neutral/schema.py": "2e5666a13fb313efc451455fed85e4604e525dad76ccebf7be9f16c35de49d8d",
+    "scripts/eval/common.py": "c37b1e84ccda67327c39b569498d0a30310c2bfa89903820d59666e0bdd31b56"
+  },
+  "python_version": "3.12.15 (main, Sep 30 2026, 22:04:19) [Clang 21.0.0 (clang-2100.3.34.2)]",
+  "candidates": 24856,
+  "population_by_task": {
+    "definition-lookup": 11268,
+    "di-implementations": 806,
+    "http-cross-repo": 1071,
+    "two-hop-impact": 11711
+  },
+  "provisional_subjects": 40,
+  "shortfall": 0,
+  "review_required": "Review in rank order from pinned source; record all rejections and duplicate-file skips. Empty answers and unsupported patterns are not exclusion reasons.",
+  "extraction_limits": "Regex declaration seeds, not semantic resolution; comments, strings, attributes, overloads and unusual syntax require source review. No reference search or tool output influences ranking."
+}

@@ -1,0 +1,21 @@
+--- a/Sources/RenaMLCore/RecipeLibrary.swift
++++ b/Sources/RenaMLCore/RecipeLibrary.swift
+@@ -58,13 +58,14 @@
+         }
+     }
+ 
+-    public func remove(id: UUID) throws {
++    /// Removes several saved recipes in one write. Throws, changing nothing, if any of them no longer exists.
++    public func remove(ids: Set<UUID>) throws {
+         try Self.mutationLock.withLock {
+             var values = try load()
+-            guard let index = values.firstIndex(where: { $0.id == id }) else {
+-                throw RenameError.message("That saved recipe no longer exists.")
++            guard ids.isSubset(of: Set(values.map(\.id))) else {
++                throw RenameError.message("A saved recipe you chose no longer exists.")
+             }
+-            values.remove(at: index)
++            values.removeAll { ids.contains($0.id) }
+             try write(values)
+         }
+     }
