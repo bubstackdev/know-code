@@ -2070,6 +2070,30 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
+/// Whether call `hit` is one no declaration of its name in scope (`named`) can take: each is a function whose
+/// parameters are known, and none takes the call's argument labels (Swift) or as many arguments as it passes (C#).
+/// Such a call is another declaration's, outside the repo (`Equals(a, b)` is `object.Equals`, `xs.Contains(x)`
+/// LINQ's, `xs.append(1)` the library's when the repo declares only `append(optional:)`).
+fn fits_none(hit: &RefHit, named: &[Def]) -> bool {
+    if hit.kind != "call" {
+        return false;
+    }
+    let callable: Vec<&Def> = named.iter().filter(|d| compatible(&hit.kind, &d.kind)).collect();
+    if callable.is_empty() {
+        return false;
+    }
+    if hit.file.ends_with(".swift") {
+        let Some(call) = SwiftCall::decode(hit.arg_types.as_deref()) else { return false };
+        return callable.iter().all(|d| d.swift_params.as_ref().is_some_and(|p| !call.fits(p)));
+    }
+    if hit.file.ends_with(".cs")
+        && let Some(n) = hit.args
+    {
+        return callable.iter().all(|d| d.min_args.is_some() && !d.accepts(n));
+    }
+    false
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -2159,7 +2183,8 @@ fn type_like(receiver: &str) -> bool {
 /// types, then its supertypes.
 ///
 /// A call's overloads are first narrowed to those taking its argument labels (Swift) or as many arguments as it passes
-/// (C#); when none of them can take it, the call is `unresolved`: it calls a declaration outside the repo.
+/// (C#); when that leaves nothing to point to, all of them are considered. (A call no declaration of its name can take
+/// at all is settled before: see [`fits_none`].)
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
     let all: Vec<&Def> = defs.to_vec();
     // A Swift call's argument labels rule out the overloads it can't call.
@@ -2168,10 +2193,6 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
         && let Some(call) = SwiftCall::decode(hit.arg_types.as_deref())
     {
         let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.swift_params.as_ref().is_none_or(|p| call.fits(p))).collect();
-        if fitting.is_empty() && !all.is_empty() {
-            // No declaration the repo has takes these labels: the call is another's (the library's), not any of them.
-            return ("unresolved", Vec::new());
-        }
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
@@ -2183,11 +2204,6 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
         && let Some(n) = hit.args
     {
         let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
-        if fitting.is_empty() && !all.is_empty() {
-            // No declaration the repo has takes this many arguments: the call is another's (`Equals(a, b)` is
-            // `object.Equals`, `xs.Contains(x)` LINQ's), not any of them.
-            return ("unresolved", Vec::new());
-        }
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
@@ -2838,6 +2854,8 @@ fn swift_params(signature: &str) -> Option<Vec<SwiftParam>> {
     }
     split_top(list, ',')
         .into_iter()
+        // A trailing comma (`in context: _Context,`) leaves no parameter after it.
+        .filter(|param| !param.trim().is_empty())
         .map(|param| {
             let parts = split_top(param, ':');
             let head = parts.first()?.split_whitespace().filter(|w| !w.starts_with('@')).collect::<Vec<_>>();
@@ -5008,7 +5026,11 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => usable,
             };
-            resolve(hit, &recv, &self_chains[&caller], &usable)
+            if fits_none(hit, named) {
+                ("unresolved", Vec::new())
+            } else {
+                resolve(hit, &recv, &self_chains[&caller], &usable)
+            }
         };
         // How an exact answer was reached, recorded where it is decided.
         let mut exact_by = if by_import {

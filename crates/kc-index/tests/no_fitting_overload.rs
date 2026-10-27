@@ -57,3 +57,27 @@ fn a_call_no_overload_can_take_is_outside_the_repo() {
     assert!(appends.contains(&("Sources/Pages/Pages.swift:8".to_string(), "unresolved", 0)), "{appends:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A call one declaration takes stays linked: a parameter list ending in a comma, and C# overloads of which the one
+/// taking the call's argument count is there.
+#[test]
+fn a_call_some_overload_takes_stays_linked() {
+    let root = scratch("some-fitting-overload");
+    write(
+        &root,
+        "Sources/Run/Runner.swift",
+        "struct Runner {\n    private static func step(\n        _ x: Int,\n        in y: Int,\n    ) {}\n    static func go() {\n        step(1, in: 2)\n    }\n}\n",
+    );
+    write(
+        &root,
+        "src/Check.cs",
+        "namespace Shop;\npublic class Request {}\npublic class Rule {}\npublic interface IChecker\n{\n    bool Check(Request r);\n    bool Check(Request r, Rule rule);\n}\npublic class Gate\n{\n    private readonly IChecker _checker;\n    public Gate(IChecker c) { _checker = c; }\n    public bool Pass(Request r, Rule rule) => _checker.Check(\n        r,\n        rule);\n}\n",
+    );
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let steps = calls(&store, "step");
+    assert!(steps.iter().any(|(at, c, n)| at == "Sources/Run/Runner.swift:7" && *c != "unresolved" && *n == 1), "{steps:?}");
+    let checks = calls(&store, "Check");
+    assert!(checks.iter().any(|(at, c, _)| at == "src/Check.cs:13" && *c != "unresolved"), "{checks:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
