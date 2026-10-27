@@ -2077,8 +2077,8 @@ fn type_like(receiver: &str) -> bool {
 /// `recv_chain` is the receiver's type followed by its supertypes; `self_chain` is the caller's type, its enclosing
 /// types, then its supertypes.
 ///
-/// A call's overloads are first narrowed to those taking as many arguments as it passes; when that leaves nothing to
-/// point to, all of them are considered.
+/// A call's overloads are first narrowed to those taking its argument labels (Swift) or as many arguments as it passes
+/// (C#); when none of them can take it, the call is `unresolved`: it calls a declaration outside the repo.
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
     let all: Vec<&Def> = defs.to_vec();
     // A Swift call's argument labels rule out the overloads it can't call.
@@ -2087,6 +2087,10 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
         && let Some(call) = SwiftCall::decode(hit.arg_types.as_deref())
     {
         let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.swift_params.as_ref().is_none_or(|p| call.fits(p))).collect();
+        if fitting.is_empty() && !all.is_empty() {
+            // No declaration the repo has takes these labels: the call is another's (the library's), not any of them.
+            return ("unresolved", Vec::new());
+        }
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
@@ -2098,6 +2102,11 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
         && let Some(n) = hit.args
     {
         let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
+        if fitting.is_empty() && !all.is_empty() {
+            // No declaration the repo has takes this many arguments: the call is another's (`Equals(a, b)` is
+            // `object.Equals`, `xs.Contains(x)` LINQ's), not any of them.
+            return ("unresolved", Vec::new());
+        }
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
