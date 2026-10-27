@@ -51,7 +51,7 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
   `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
   module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
-  gate's compiler labels, `exact` precision rises from 0.674 to 0.923 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
+  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
   (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
 - A C# override or implementation that leaves out its base member's default parameter value
   (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
