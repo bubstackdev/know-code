@@ -865,7 +865,9 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   links and named where it would have joined one, or where the answer spans it), `unsupported` (a
   construct the analysis doesn't model, where known to be present: also one an extractor recognises but doesn't read,
   named with file:line, such as a DI assembly scan, SQL naming its table at run time, a publish of a message of unknown
-  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read),
+  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read; and
+  a file the answer names with parse errors, listed in `coverage` with its first error and the answer's symbol holding
+  it, `inside`),
   `policy` (the evidence policy left edges out; see
   `evidence`), `withheld` (an AI privacy file blocks content; see `privacy`), `depth` (a walk stopped at its depth,
   asked or the deepest it goes, where symbols lead further: its `frontier` names them).
@@ -875,6 +877,10 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - `provenance`: the repos the answer consulted besides its own (dependencies and dependents opened, repos crossed over
   HTTP, the bus, SQL or Terraform, repos whose workspace summary an item came from), each `{repo, commit, generation,
   dirty, fresh}`; `fresh` says the index was checked against the working tree for this answer and matched it.
+- `provenance: true` on any call adds a second content block, `{"record": …}`, for durable records: the build and
+  extractor versions, the call's hash, the answer's hash and its `evidence` hash (the same for the same answer from any
+  index), and per repo read its worktree, full commit, uncommitted content's digest, generation, base and privacy
+  policy's digests.
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
 - `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
