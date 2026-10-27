@@ -530,6 +530,14 @@ struct Def {
     params: Option<String>,
     /// The defining file's language (`files.lang`).
     lang: String,
+    /// The line the declaration starts on.
+    line: u32,
+    /// Declared `partial` (C#): one declaration with its other parts.
+    partial: bool,
+    /// A Swift function's parameters, read from its signature; `None` elsewhere, or when the signature was cut.
+    swift_params: Option<Vec<SwiftParam>>,
+    /// Declared `export` (TypeScript): at a module's top level.
+    exported: bool,
 }
 
 impl Def {
@@ -1982,6 +1990,57 @@ fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     }
 }
 
+/// An `exact` answer names one declaration. Of several (overloads, same-named members of one type, same-named types
+/// in two modules), the one the evidence decides: parts of one declaration stay together (TypeScript's merged
+/// declarations, a Python redefinition, a C# `partial` member); in Swift and TypeScript, a static or an instance member as the
+/// receiver is a type's bare name or a value; in Swift, of one name declared in several modules, the caller's own
+/// module's. Otherwise the answer is `ambiguous`, with every candidate listed. C# overloads aren't picked by arity
+/// here: a `params` method called in its normal form, or a generic one, takes as many arguments as another overload;
+/// the argument types decide them before resolution (`narrow_by_argument_types`).
+fn settle(hit: &RefHit, ids: Vec<i64>, named: &[Def]) -> (&'static str, Vec<i64>) {
+    let cands: Vec<&Def> = ids.iter().filter_map(|id| named.iter().find(|d| d.id == *id)).collect();
+    if cands.len() < ids.len() {
+        return ("ambiguous", ids);
+    }
+    let first = cands[0];
+    let same_name = cands.iter().all(|d| d.container == first.container && d.kind == first.kind);
+    let one_file = cands.iter().all(|d| d.container == first.container && d.file == first.file);
+    // TypeScript merges same-named declarations of one scope (overload signatures, a `const` and a `type`): a class's
+    // members, or a module's exports. Same-named declarations local to different functions are different ones.
+    let merged = one_file
+        && matches!(first.lang.as_str(), "typescript" | "tsx" | "javascript")
+        && (first.container.is_some() || cands.iter().all(|d| d.exported));
+    let one_declaration = cands.iter().all(|d| d.file == first.file && d.line == first.line)
+        || merged
+        || one_file && first.lang == "python"
+        || one_file && same_name && cands.iter().all(|d| d.partial);
+    if one_declaration {
+        return ("exact", ids);
+    }
+    let one = |picked: Vec<&Def>| (picked.len() == 1).then(|| ("exact", vec![picked[0].id]));
+    let swift = hit.file.ends_with(".swift");
+    if swift || crate::ts::is_ts_path(&hit.file) {
+        // `Type.member` reaches a static member, `value.member` an instance one. A dotted receiver (`Type.shared`)
+        // may be either.
+        let receiver = hit.receiver.as_deref().unwrap_or("");
+        let through_type = receiver.starts_with(char::is_uppercase) && receiver.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let through_value = receiver.starts_with(|c: char| c.is_lowercase()) && receiver.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if (through_type || through_value)
+            && let Some(r) = one(cands.iter().copied().filter(|d| d.is_static == through_type).collect())
+        {
+            return r;
+        }
+    }
+    // A Swift module's own declaration shadows one of the same name it imports.
+    if swift && same_name {
+        let module = module_of(&hit.file);
+        if let Some(r) = one(cands.iter().copied().filter(|d| module_of(&d.file) == module).collect()) {
+            return r;
+        }
+    }
+    ("ambiguous", ids)
+}
+
 /// The module a file most likely belongs to: `Sources/<Name>` or `Tests/<Name>` for SwiftPM layouts, else its
 /// directory.
 fn module_of(path: &str) -> &str {
@@ -2010,6 +2069,19 @@ fn type_like(receiver: &str) -> bool {
 /// point to, all of them are considered.
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
     let all: Vec<&Def> = defs.to_vec();
+    // A Swift call's argument labels rule out the overloads it can't call.
+    if hit.kind == "call"
+        && hit.file.ends_with(".swift")
+        && let Some(call) = SwiftCall::decode(hit.arg_types.as_deref())
+    {
+        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.swift_params.as_ref().is_none_or(|p| call.fits(p))).collect();
+        if fitting.len() < all.len() {
+            let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
+            if !ids.is_empty() {
+                return (confidence, ids);
+            }
+        }
+    }
     if hit.kind == "call"
         && let Some(n) = hit.args
     {
@@ -2565,7 +2637,8 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
      CASE WHEN f.lang = 'csharp' THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
-       CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang";
+       CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
+     s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %'";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2584,7 +2657,149 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         ns: r.get::<_, Option<String>>(11)?.filter(|n| !n.is_empty()),
         params: r.get(12)?,
         lang: r.get(13)?,
+        line: r.get(14)?,
+        partial: r.get(15)?,
+        swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
+        exported: r.get(17)?,
     })
+}
+
+/// A Swift function's parameter, as its signature declares it: what a call has to write for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwiftParam {
+    /// The argument label; `None` for `_`.
+    label: Option<String>,
+    /// Has a default value: a call may leave it out.
+    default: bool,
+    /// `T...`: takes the unlabeled arguments that follow its own.
+    variadic: bool,
+    /// A function type: a trailing closure can pass it.
+    closure: bool,
+}
+
+/// `s` split at `sep` where no bracket, angle bracket or string is open.
+fn split_top(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0i32, false, 0);
+    let mut prev = ' ';
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' | '<' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth -= 1,
+            // `->` isn't a closing angle bracket.
+            '>' if !quoted && prev != '-' => depth -= 1,
+            c if c == sep && depth == 0 && !quoted => {
+                out.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+        prev = c;
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// A Swift function's parameters from its signature (`func parse(_ s: String, from base: Int = 10)`); `None` when the
+/// signature has no complete parameter list (cut at its cap).
+fn swift_params(signature: &str) -> Option<Vec<SwiftParam>> {
+    let after = &signature[signature.find("func ")? + 5..];
+    // The parameter list opens at the first parenthesis outside the generic parameters.
+    let mut depth = 0i32;
+    let open = after.char_indices().find_map(|(i, c)| {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            '(' if depth == 0 => return Some(i),
+            _ => {}
+        }
+        None
+    })?;
+    let list = &after[open + 1..];
+    let mut depth = 1i32;
+    let close = list.char_indices().find_map(|(i, c)| {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(i)
+    })?;
+    let list = list[..close].trim();
+    if list.is_empty() {
+        return Some(Vec::new());
+    }
+    split_top(list, ',')
+        .into_iter()
+        .map(|param| {
+            let parts = split_top(param, ':');
+            let head = parts.first()?.split_whitespace().filter(|w| !w.starts_with('@')).collect::<Vec<_>>();
+            let rest = parts[1..].join(":");
+            let (ty, default) = match split_top(&rest, '=').as_slice() {
+                [ty] => (ty.trim().to_string(), false),
+                [ty, ..] => (ty.trim().to_string(), true),
+                [] => return None,
+            };
+            let label = head.first().filter(|w| **w != "_").map(|w| w.to_string());
+            Some(SwiftParam { label, default, variadic: ty.ends_with("..."), closure: ty.contains("->") })
+        })
+        .collect()
+}
+
+/// A Swift call's argument labels (see `kc_extract`'s `call_labels`): in parentheses, then the trailing closures'.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+struct SwiftCall {
+    l: Vec<Option<String>>,
+    t: Vec<Option<String>>,
+}
+
+impl SwiftCall {
+    fn decode(json: Option<&str>) -> Option<SwiftCall> {
+        serde_json::from_str(json?).ok()
+    }
+
+    /// Whether a call writing these labels can call a function with `params`: each argument takes the next
+    /// parameter with its label, past parameters with defaults; a variadic one takes the unlabeled arguments after
+    /// it; a trailing closure takes the next parameter it can pass; the parameters left over all have defaults.
+    fn fits(&self, params: &[SwiftParam]) -> bool {
+        let mut i = 0;
+        let mut k = 0;
+        while k < self.l.len() {
+            let Some(p) = params.get(i) else { return false };
+            if p.label == self.l[k] {
+                i += 1;
+                k += 1;
+                if p.variadic {
+                    while k < self.l.len() && self.l[k].is_none() {
+                        k += 1;
+                    }
+                }
+            } else if p.default || p.variadic {
+                i += 1;
+            } else {
+                return false;
+            }
+        }
+        for label in &self.t {
+            loop {
+                let Some(p) = params.get(i) else { return false };
+                i += 1;
+                let takes = match label {
+                    Some(l) => p.label.as_deref() == Some(l.as_str()),
+                    // A closure parameter, or one whose type isn't written as a function (a type alias).
+                    None => p.closure || !(p.default || p.variadic),
+                };
+                if takes {
+                    break;
+                }
+                if !(p.default || p.variadic) {
+                    return false;
+                }
+            }
+        }
+        params[i.min(params.len())..].iter().all(|p| p.default || p.variadic)
+    }
 }
 
 /// The overloads of one name, for telling which a call the repo couldn't resolve (one through a library's type) may
@@ -4580,6 +4795,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             if owners.len() > 1 {
                 confidence = "ambiguous";
             }
+        }
+        if confidence == "exact" && ids.len() > 1 {
+            (confidence, ids) = settle(hit, ids, &defs[&hit.name]);
         }
         let mut evidence = Evidence::by_confidence(confidence, exact_by);
         if hit.basis == Some(GUESSED_MODULE) {
@@ -6628,6 +6846,35 @@ mod tests {
         assert_eq!(lines(&["Lib"]), [("a.cs".to_string(), 1), ("b.cs".to_string(), 1), ("c.cs".to_string(), 3)]);
         assert_eq!(lines(&["System", "Library"]), [("a.cs".to_string(), 2), ("c.cs".to_string(), 4)]);
         assert!(lines(&["Other"]).is_empty());
+    }
+
+    #[test]
+    fn swift_parameters_and_argument_labels() {
+        let p = |label: Option<&str>, default: bool, variadic: bool, closure: bool| SwiftParam {
+            label: label.map(str::to_string),
+            default,
+            variadic,
+            closure,
+        };
+        assert_eq!(
+            swift_params("@discardableResult public func put<T: Box<Int>>(_ item: T, at slot: [Int] = [], ids: Int..., then done: @escaping (Int) -> Void) throws -> Int"),
+            Some(vec![p(None, false, false, false), p(Some("at"), true, false, false), p(Some("ids"), false, true, false), p(Some("then"), false, false, true)])
+        );
+        assert_eq!(swift_params("func run()"), Some(vec![]));
+        // Cut at the signature's cap: unknown.
+        assert_eq!(swift_params("func run(_ a: Int, b: Str…"), None);
+        let call = |l: &[Option<&str>], t: &[Option<&str>]| SwiftCall {
+            l: l.iter().map(|x| x.map(str::to_string)).collect(),
+            t: t.iter().map(|x| x.map(str::to_string)).collect(),
+        };
+        let put = swift_params("func put(_ item: Int, at slot: Int = 0, ids: Int..., then done: () -> Void)").unwrap();
+        assert!(call(&[None], &[None]).fits(&put));
+        assert!(call(&[None, Some("at"), Some("ids"), None, None], &[None]).fits(&put));
+        assert!(call(&[None, Some("ids")], &[Some("then")]).fits(&put));
+        // A required parameter left out, a label it doesn't have, or one argument too many.
+        assert!(!call(&[None], &[]).fits(&put));
+        assert!(!call(&[Some("item")], &[None]).fits(&put));
+        assert!(!call(&[None, None], &[None]).fits(&put));
     }
 
     #[test]
