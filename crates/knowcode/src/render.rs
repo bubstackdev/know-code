@@ -1430,11 +1430,25 @@ pub fn areas(repos: &[crate::ops::AreasRepo], picked: Option<&str>, env: &serde_
                 let deps: Vec<String> = area.depends_on.iter().map(|d| format!("#{} {} ({} file edges)", d.area, d.name, d.file_edges)).collect();
                 println!("  depends on: {}", deps.join(", "));
             }
+            if let Some((modules, outside)) = r.declared.by_area.get(&area.id).filter(|_| !r.declared.modules.is_empty()) {
+                let listed: Vec<String> = modules.iter().map(|m| format!("{} ({})", m.name, m.files)).collect();
+                let outside = if *outside > 0 { format!(", {outside} files in no module") } else { String::new() };
+                let spans = if modules.len() > 1 { "spans modules: " } else { "module: " };
+                println!("  {spans}{}{outside}", listed.join(", "));
+            }
             if picked.is_some() {
                 println!("  files:");
                 for f in &area.files {
                     println!("    {f}");
                 }
+            }
+        }
+        if picked.is_none() && !r.declared.modules.is_empty() {
+            println!("declared modules ({}):", r.declared.modules.len());
+            for m in &r.declared.modules {
+                let areas: Vec<String> = m.areas.iter().map(|id| format!("#{id}")).collect();
+                let dir = if m.dir.is_empty() { "(repo root)" } else { &m.dir };
+                println!("  {} {}  {dir}, {} files, areas {}", m.kind, m.name, m.files, if areas.is_empty() { "none".to_string() } else { areas.join(", ") });
             }
         }
         if picked.is_none() && !a.ungrouped.is_empty() {

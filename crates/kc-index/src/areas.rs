@@ -166,6 +166,115 @@ impl Areas {
     }
 }
 
+/// A module the repo's manifests declare: a SwiftPM target (`Sources/<name>`, `Tests/<name>` or `Plugins/<name>` beside
+/// its `Package.swift`), a .NET project, an npm package (a workspace's member, or the repo's own), a Cargo crate. It
+/// holds the files under `dir` that no deeper declared module holds.
+#[derive(Debug, Clone, Serialize)]
+pub struct Module {
+    pub name: String,
+    /// The SwiftPM target kind (`target`, `testTarget`, …) or the manifest kind (`csproj`, `npm`, `cargo`).
+    pub kind: String,
+    pub manifest: String,
+    /// `""` for the repo root.
+    pub dir: String,
+    /// Clustered and ungrouped files it holds.
+    pub files: usize,
+    /// The areas holding them, most files first.
+    pub areas: Vec<u32>,
+}
+
+/// One area's files by declared module, most first.
+#[derive(Debug, Clone, Serialize)]
+pub struct AreaModule {
+    pub name: String,
+    pub files: usize,
+}
+
+/// The inferred areas over the declared modules: both views, each answering its own question (what the build says
+/// belongs together, what references and co-change say).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Declared {
+    pub modules: Vec<Module>,
+    /// Per area id: its files by module, and how many are in no module.
+    pub by_area: BTreeMap<u32, (Vec<AreaModule>, usize)>,
+}
+
+impl Declared {
+    /// Whether the area's files are in more than one declared module.
+    pub fn spans(&self, area: u32) -> bool {
+        self.by_area.get(&area).is_some_and(|(m, _)| m.len() > 1)
+    }
+}
+
+/// The modules the repo's manifests declare (see [`Module`]), over the files `areas` clustered or left ungrouped.
+pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
+    let files: Vec<&str> = areas.areas.iter().flat_map(|a| a.files.iter()).chain(&areas.ungrouped).map(String::as_str).collect();
+    let under = |dir: &str, f: &str| dir.is_empty() || f.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'));
+    let mut modules: Vec<Module> = Vec::new();
+    for p in kc_store::manifests::packages(store.conn())? {
+        let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
+        let join = |parts: &[&str]| parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("/");
+        let mut add = |name: &str, kind: &str, dir: String| {
+            if !modules.iter().any(|m| m.dir == dir) && files.iter().any(|f| under(&dir, f)) {
+                modules.push(Module { name: name.to_string(), kind: kind.to_string(), manifest: p.file.clone(), dir, files: 0, areas: Vec::new() });
+            }
+        };
+        match p.kind.as_str() {
+            "swiftpm" => {
+                for t in &p.targets {
+                    let sub = match t.kind.as_str() {
+                        "target" | "executableTarget" | "macro" => "Sources",
+                        "testTarget" => "Tests",
+                        "plugin" => "Plugins",
+                        _ => continue,
+                    };
+                    add(&t.name, &t.kind, join(&[base, sub, &t.name]));
+                }
+            }
+            "csproj" | "npm" | "cargo" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
+            _ => {}
+        }
+    }
+    // Each file in its innermost module.
+    let mut order: Vec<usize> = (0..modules.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(modules[i].dir.len()));
+    let dirs: Vec<String> = modules.iter().map(|m| m.dir.clone()).collect();
+    let module_of = |f: &str| order.iter().copied().find(|&i| under(&dirs[i], f));
+    let mut out = Declared::default();
+    let mut per_module: Vec<BTreeMap<u32, usize>> = vec![BTreeMap::new(); modules.len()];
+    for f in &areas.ungrouped {
+        if let Some(i) = module_of(f) {
+            modules[i].files += 1;
+        }
+    }
+    for a in &areas.areas {
+        let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut outside = 0;
+        for f in &a.files {
+            match module_of(f) {
+                Some(i) => *counts.entry(i).or_default() += 1,
+                None => outside += 1,
+            }
+        }
+        let mut listed: Vec<(usize, usize)> = counts.into_iter().collect();
+        listed.sort_by_key(|&(i, n)| (std::cmp::Reverse(n), i));
+        for &(i, n) in &listed {
+            modules[i].files += n;
+            per_module[i].insert(a.id, n);
+        }
+        let named = listed.into_iter().map(|(i, n)| AreaModule { name: modules[i].name.clone(), files: n }).collect();
+        out.by_area.insert(a.id, (named, outside));
+    }
+    for (m, held) in modules.iter_mut().zip(per_module) {
+        let mut ids: Vec<(u32, usize)> = held.into_iter().collect();
+        ids.sort_by_key(|&(id, n)| (std::cmp::Reverse(n), id));
+        m.areas = ids.into_iter().map(|(id, _)| id).collect();
+    }
+    modules.sort_by(|a, b| a.dir.cmp(&b.dir));
+    out.modules = modules;
+    Ok(out)
+}
+
 /// The repo's areas, cached per index generation and HEAD. Computes the reference graph and walks the history when
 /// they aren't cached (as `overview` and `hotspots` do).
 pub fn areas(root: &Path, store: &Store) -> Result<Areas> {
