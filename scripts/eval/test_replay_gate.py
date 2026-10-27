@@ -93,6 +93,34 @@ class ReplayGateTests(unittest.TestCase):
             self.assertEqual(replay_gate.places(text, ['app', 'web'], roots),
                              ['app/src/api.cs:3', 'web/src/client.ts:7', 'app/src/api.cs:4', 'src/nowhere.cs:1'])
 
+    def test_places_read_a_tree_rows_call_sites_in_its_callers_file(self):
+        # The row shapes of public2-two-hop-impact-009's answer: a walked row across a library boundary, one with two
+        # call sites, and a cross-repo row of the older form.
+        with tempfile.TemporaryDirectory() as temp:
+            roots = {r: Path(temp)/r for r in ('serilog', 'serilog-aspnetcore', 'serilog-extensions-hosting')}
+            for root in roots.values():
+                root.mkdir()
+            (roots['serilog-extensions-hosting']/'src').mkdir()
+            (roots['serilog-extensions-hosting']/'src/CachingReloadableLogger.cs').write_text('x')
+            text = '\n'.join([
+                '  called through the interface by constructor RequestLoggingMiddleware.init  '
+                'serilog-aspnetcore/src/Serilog.AspNetCore/AspNetCore/RequestLoggingMiddleware.cs:37  [ambiguous] direct at line 46',
+                '      46 | _logger = options.Logger?.ForContext<RequestLoggingMiddleware>();',
+                '  called through the interface by method CachingReloadableLogger.ForContext  '
+                'src/CachingReloadableLogger.cs:144  [ambiguous] direct at line 147 (also 153)',
+                '  direct   cross-repo serilog/src/Serilog/Log.cs:112:59  call Logger.ForContext  in Log.ForContext  '
+                'through ILogger  [ambiguous → ILogger.ForContext (src/Serilog/ILogger.cs:105)]',
+                '  stopped at method serilog: Log.ForContext  src/Serilog/Log.cs:112  [reached only by ambiguous edges]'])
+            self.assertEqual(replay_gate.places(text, ['serilog-extensions-hosting'], roots), [
+                'serilog-aspnetcore/src/Serilog.AspNetCore/AspNetCore/RequestLoggingMiddleware.cs:37',
+                'serilog-aspnetcore/src/Serilog.AspNetCore/AspNetCore/RequestLoggingMiddleware.cs:46',
+                'serilog-extensions-hosting/src/CachingReloadableLogger.cs:144',
+                'serilog-extensions-hosting/src/CachingReloadableLogger.cs:147',
+                'serilog-extensions-hosting/src/CachingReloadableLogger.cs:153',
+                'serilog/src/Serilog/Log.cs:112',
+                'src/Serilog/ILogger.cs:105',
+                'src/Serilog/Log.cs:112'])
+
     def test_a_replay_against_a_build_scores_places_counts_errors_and_reads_schemas(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
