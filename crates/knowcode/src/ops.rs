@@ -10034,6 +10034,34 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn an_impact_row_keeps_the_other_ways_its_symbol_was_reached() {
+        let cache = test_cache();
+        let base = cache.dir("other-ways");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                ("src/Item.cs", "namespace Shelf;\npublic class Item\n{\n    public void Detach() { }\n}\n"),
+                ("src/Store.cs", "namespace Shelf;\npublic class Store\n{\n    public void Drop(Item item) { item.Detach(); }\n}\n"),
+                // `Sweep` detaches the item itself (hop 1) and drops it through the store (hop 2), on other lines.
+                (
+                    "src/Bin.cs",
+                    "namespace Shelf;\npublic class Bin\n{\n    private readonly Store _store = new Store();\n    public void Sweep(Item item)\n    {\n\
+                     \x20       item.Detach();\n        _store.Drop(item);\n        _store.Drop(item);\n    }\n}\n",
+                ),
+            ],
+        );
+        let p = ImpactParams { symbol: Some("Item.Detach".into()), depth: 2, limit: 50, ..Default::default() };
+        let out = impact(&p, &Scope { repos: vec![root.clone()], no_sync: false }).unwrap();
+        let sweep = &out.env["items"][0]["affected"].as_array().unwrap().iter().find(|a| a["qualified"] == "Bin.Sweep").cloned().unwrap();
+        assert_eq!((sweep["hop"].clone(), sweep["site"].clone()), (json!(1), json!("src/Bin.cs:7")), "{sweep}");
+        assert_eq!(sweep["ways"], json!([{"via": "Store.Drop", "hop": 2, "confidence": "unique_name", "site": "src/Bin.cs:8", "also": ["src/Bin.cs:9"]}]), "{sweep}");
+        let text = crate::render::impact_text(&out.data, false);
+        assert!(text.contains("method Bin.Sweep  src/Bin.cs:7  [unique_name] direct (declared at line 5) (also via Store.Drop [unique_name] at src/Bin.cs:8, src/Bin.cs:9)"), "{text}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn an_override_dropping_a_default_parameter_is_reached_through_its_base_member() {
         let cache = test_cache();
         let base = cache.dir("override-default");
