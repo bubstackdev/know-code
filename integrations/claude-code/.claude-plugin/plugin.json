@@ -1,9 +1,0 @@
-{
-  "name": "knowcode",
-  "version": "0.5.0",
-  "description": "Local code context, cross-repository tracing, and explicit evidence and completeness for coding agents.",
-  "author": { "name": "KnowCode contributors" },
-  "homepage": "https://github.com/bubstackdev/knowcode",
-  "repository": "https://github.com/bubstackdev/knowcode",
-  "license": "MIT OR Apache-2.0"
-}
