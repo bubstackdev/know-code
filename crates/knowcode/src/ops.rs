@@ -5208,7 +5208,16 @@ impl<'a> HttpCrossing<'a> {
                     }
                 },
             };
-            let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
+            // In the order of their places, not of their row ids: which stops fit the budget, and the order they are
+            // listed in, never depend on the order files were stored in.
+            type Placed = (Option<(String, u32, String)>, trace::Stop);
+            let mut group: Vec<Placed> = Vec::new();
+            for s in stops.iter().filter(|s| s.repo == label) {
+                let at = trace::symbol(self.store(&root).conn(), s.id)?.map(|sym| (sym.file.clone(), sym.line, sym.qualified()));
+                group.push((at, s.clone()));
+            }
+            group.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.dir.cmp(y.dir)).then(x.hop.cmp(&y.hop)));
+            let group: Vec<trace::Stop> = group.into_iter().map(|(_, s)| s).collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
             let mut theirs = trace::EdgeCache::default();
@@ -5530,6 +5539,16 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
         if let Some(scip) = scip_status(&store)? {
             value["scip"] = scip;
         }
+        // A checkout started from a shared base: which, and what the cache counts of it (see `kc_index::base`).
+        let db = kc_index::db_path(root)?;
+        let len = std::fs::metadata(&db).map_or(0, |m| m.len());
+        value["index"]["own_bytes"] = json!(kc_index::cache::own_bytes(&db, len));
+        value["index"]["counted"] = json!(if kc_index::cache::counts_shared_apart(&db) { "own_bytes" } else { "length" });
+        if let Some(c) = kc_index::base::cloned(&store)? {
+            value["base"] = json!(c);
+        }
+        let (ranking, areas) = kc_index::derived_state(root, &store)?;
+        value["derived"] = json!({ "ranking": ranking, "areas": areas });
         // Opened by a query whose budget ran out before its first sync finished.
         if let Some(b) = background(root) {
             value["background"] = json!(b);

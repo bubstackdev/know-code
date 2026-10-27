@@ -58,6 +58,10 @@ fn settings() -> Result<Vec<Setting>> {
         },
         Setting { key: "cache.max_size".into(), value: json!(config::max_cache_size()?.0), source: set_or_default(c.max_cache_size.is_some()).describe("", "") },
         {
+            let (value, source) = config::shared_bases()?;
+            Setting { key: "cache.shared_bases".into(), value: json!(value), source: source.describe("", "") }
+        },
+        {
             let (notes, source) = config::notes_path()?;
             Setting { key: "notes.path".into(), value: json!(notes), source: source.describe("KNOWCODE_DATA_DIR", "") }
         },

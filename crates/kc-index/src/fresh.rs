@@ -38,7 +38,7 @@ struct Snapshot {
     files: Vec<(String, i64, i64)>,
 }
 
-fn build() -> String {
+pub(crate) fn build() -> String {
     let _ = crate::config::load(); // the configured conventions are part of the extractor versions
 
     let versions: Vec<String> = Lang::ALL.iter().map(|l| format!("{}{}", l.as_str(), l.extractor_version())).collect();

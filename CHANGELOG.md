@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
+  at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
+  the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
+  cold index of the same tree: `scripts/worktree-gate.py` checks it on public repos, with the freshness cases (a new
+  untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
+  commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
+  `cache.shared_bases` turns it off.
+- `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
 - Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
   describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
   schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
