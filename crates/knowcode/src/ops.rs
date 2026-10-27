@@ -10062,6 +10062,44 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
     }
 
     #[test]
+    fn a_call_on_a_predefined_type_never_reaches_another_types_extension() {
+        let cache = test_cache();
+        let base = cache.dir("keyword-receiver");
+        let root = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "src/GuidExtensions.cs",
+                    "using System;\nnamespace Shelf;\npublic static class GuidExtensions\n{\n    public static bool IsEmpty(this Guid guid) => guid.Equals(default);\n\
+                     \x20   public static bool IsNullOrEmpty(this Guid? guid) => guid is null || guid.Value.IsEmpty();\n}\n",
+                ),
+                (
+                    "src/StringExtensions.cs",
+                    "namespace Shelf;\npublic static class StringExtensions\n{\n    public static bool IsBlank(this string s) => s.Trim().Length == 0;\n\
+                     \x20   public static int ToInt32(this string s) => int.Parse(s);\n}\n",
+                ),
+                (
+                    "src/Desk.cs",
+                    "using System;\nnamespace Shelf;\npublic class Desk\n{\n    public bool Named(string path) => !string.IsNullOrEmpty(path);\n\
+                     \x20   public bool Owned(Guid? id) => id.IsNullOrEmpty();\n    public bool Static(Guid? id) => GuidExtensions.IsNullOrEmpty(id);\n\
+                     \x20   public bool Blank(string path) => path.IsBlank();\n    public int Parsed(object o) => Convert.ToInt32(o);\n\
+                     \x20   public int Own(string s) => s.ToInt32();\n}\n",
+                ),
+            ],
+        );
+        let callers = |at: &str| -> Vec<String> { impact_of(&root, at).impact.affected.iter().filter(|a| a.hop == 1).map(|a| a.qualified.clone()).collect() };
+        // `string.IsNullOrEmpty` is the framework's, not the `Guid?` extension of the same name.
+        let guid = callers("src/GuidExtensions.cs:6");
+        assert!(guid.contains(&"Desk.Owned".to_string()) && guid.contains(&"Desk.Static".to_string()), "{guid:?}");
+        assert!(!guid.contains(&"Desk.Named".to_string()), "{guid:?}");
+        // An extension on `string` is still reached through a `string` value; `Convert.ToInt32` is the framework's.
+        assert_eq!(callers("src/StringExtensions.cs:4"), ["Desk.Blank".to_string()]);
+        assert_eq!(callers("src/StringExtensions.cs:5"), ["Desk.Own".to_string()]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn an_override_dropping_a_default_parameter_is_reached_through_its_base_member() {
         let cache = test_cache();
         let base = cache.dir("override-default");
