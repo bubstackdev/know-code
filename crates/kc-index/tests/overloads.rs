@@ -153,9 +153,9 @@ fn overloads_by_argument_count_and_lambdas_by_delegate() {
     // An extension method's receiver isn't an argument.
     let ext = &refs_from(conn, "Touch", "call", "Ext")[0];
     assert_eq!((ext.confidence, lines(ext)), ("exact", vec![28]));
-    // No overload takes three arguments: as before, every one is a candidate.
+    // No overload takes three arguments: the call is another declaration's, outside the repo, not any of these.
     let wrong = &refs_from(conn, "Upsert", "call", "Wrong")[0];
-    assert_eq!(lines(wrong), vec![6, 7]);
+    assert_eq!((wrong.confidence, lines(wrong)), ("unresolved", vec![]));
     assert!(wrong.via_di.is_none());
 
     // `o` is an `Order` because `FindWhere` takes an `Expression<Func<Order, bool>>`; the second parameter of the
