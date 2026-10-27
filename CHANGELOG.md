@@ -4,6 +4,17 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.5.1 (2026-10-27)
 
+0.5.1 meets the two checks 0.5.0 missed, and moves the repository to bubstackdev/know-code. Rows of `impact` and `trace`
+lead with their call site as `file:line`: on the recorded calls of the public studies, two-hop impact recall is 0.833
+read as `file:line` alone, where 0.5.0 had 0.607. `history` reaches a caller that calls through a library's interface,
+and history-v1's caller label now carries the `optional` flag it dropped; KnowCode meets plain git on the caller
+questions either way. `impact` also stops calling some answers complete that weren't (an override leaving out a default
+parameter), and keeps every way a row was reached; constructors are found by the names their source gives them; Swift
+files with constructs the parser misses lose less code, and a Swift member added to a standard-library type no longer
+captures others' uses. Shell installs of 0.3.0 through 0.5.0 must re-run the installer once to update. The [release
+gate](eval/release-gate/0.5.1.md) makes no model calls; `impact` answers grew 10.4% there, past its 10% tolerance, most
+of it one answer that 0.5.0 left wrongly empty.
+
 - A query opening a repo whose AI privacy file had just changed, while another query or a background link step was
   still reading that repo's index, failed with "index is in use: …; close its readers and retry". Removing the index
   made under the old policy now waits up to 30 seconds for those readers to finish. `knowcode forget` still refuses
