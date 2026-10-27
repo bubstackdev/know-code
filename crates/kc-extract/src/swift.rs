@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 19;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -1357,7 +1357,14 @@ fn call_labels(src: &str, call: Node) -> Option<String> {
     }
     let mut trailing = Vec::new();
     let mut pending = None;
-    for c in children(suffix) {
+    // `try f(x) { … }` reads as a call of `try f(x)` with the closure: the closure is `f`'s.
+    let outer = call
+        .parent()
+        .filter(|p| matches!(p.kind(), "try_expression" | "await_expression"))
+        .and_then(|p| p.parent().filter(|g| g.kind() == "call_expression" && g.named_child(0) == Some(p)))
+        .and_then(|g| children(g).find(|c| c.kind() == "call_suffix"))
+        .filter(|s| !children(*s).any(|c| c.kind() == "value_arguments"));
+    for c in children(suffix).chain(outer.into_iter().flat_map(children)) {
         match c.kind() {
             "lambda_literal" => trailing.push(pending.take()),
             "simple_identifier" => pending = Some(label(c)),
@@ -1419,6 +1426,14 @@ mod tests {
         assert_eq!(labels("f"), Some(r#"{"l":[null,"from"],"t":[null]}"#));
         assert_eq!(labels("put"), Some(r#"{"l":["into"],"t":[]}"#));
         assert_eq!(labels("run"), Some(r#"{"l":[],"t":[null,"done"]}"#));
+        // `try`/`await` before a call with a trailing closure: the grammar hangs the closure on `try f(…)`.
+        let g = extract("func g() async throws {\n    let h = try make(at: 1) { x in x }\n    let k = await load(from: y) { }\n}\n");
+        let labels = |name: &str| -> Option<&str> {
+            let i = g.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call)?;
+            g.arg_types.get(&i).map(String::as_str)
+        };
+        assert_eq!(labels("make"), Some(r#"{"l":["at"],"t":[null]}"#));
+        assert_eq!(labels("load"), Some(r#"{"l":["from"],"t":[null]}"#));
     }
 
     /// `(kind, qualified name)` of each symbol of `f`.
