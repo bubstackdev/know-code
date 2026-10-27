@@ -448,7 +448,7 @@ walks past it, marked ambiguous). A dependent reaching what it was reached from 
 its `site` and the rest in `also`. In text a dependent leads with its site, the line to open, then its other sites
 and the line it is declared at (`a.cs:12  [exact] direct (also a.cs:30) (declared at line 9)`); `trace` names callers
 the same way. A dependent the walk reaches again through another symbol, at lines its row doesn't name, keeps that
-way in `ways` ({via, hop, site, also}; in text, last on its row: `(also via Store.Drop at a.cs:40)`); a capped text
+way in `ways` ({via, hop, confidence, site, also}; in text, last on its row: `(also via Store.Drop [exact] at a.cs:40)`); a capped text
 answer leaves those out first, and says how many. When the walk stops at the limit (`limit`,
 default 30; `truncated`), `counts_cover` is "shown": the counts are of the affected symbols listed, not all.
 

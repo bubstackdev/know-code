@@ -741,7 +741,7 @@ fn relation_label(
     }
 }
 
-/// What starts each of an impact row's other ways in text: `(also via X at a.cs:12, a.cs:30)`.
+/// What starts each of an impact row's other ways in text: `(also via X [exact] at a.cs:12, a.cs:30)`.
 pub const WAY: &str = " (also via ";
 
 /// A site's line when the site (`file:line`) is in `file`.
@@ -802,7 +802,7 @@ fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
                 None => in_repo(a.repo.as_deref(), s),
             })
             .collect();
-        site.push_str(&format!("{WAY}{} at {})", w.via, places.join(", ")));
+        site.push_str(&format!("{WAY}{} [{}] at {})", w.via, w.confidence, places.join(", ")));
     }
     format!(
         "{} {} {}  {}  [{}] {}{site}",

@@ -10008,9 +10008,9 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let out = impact(&p, &Scope { repos: vec![root.clone()], no_sync: false }).unwrap();
         let sweep = &out.env["items"][0]["affected"].as_array().unwrap().iter().find(|a| a["qualified"] == "Bin.Sweep").cloned().unwrap();
         assert_eq!((sweep["hop"].clone(), sweep["site"].clone()), (json!(1), json!("src/Bin.cs:7")), "{sweep}");
-        assert_eq!(sweep["ways"], json!([{"via": "Store.Drop", "hop": 2, "site": "src/Bin.cs:8", "also": ["src/Bin.cs:9"]}]), "{sweep}");
+        assert_eq!(sweep["ways"], json!([{"via": "Store.Drop", "hop": 2, "confidence": "unique_name", "site": "src/Bin.cs:8", "also": ["src/Bin.cs:9"]}]), "{sweep}");
         let text = crate::render::impact_text(&out.data, false);
-        assert!(text.contains("method Bin.Sweep  src/Bin.cs:7  [unique_name] direct (declared at line 5) (also via Store.Drop at src/Bin.cs:8, src/Bin.cs:9)"), "{text}");
+        assert!(text.contains("method Bin.Sweep  src/Bin.cs:7  [unique_name] direct (declared at line 5) (also via Store.Drop [unique_name] at src/Bin.cs:8, src/Bin.cs:9)"), "{text}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

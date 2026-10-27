@@ -296,7 +296,7 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
                         None => None,
                     };
                     if let Some(r) = listed {
-                        r.add_way(&sym.qualified(), hop, site.as_ref(), &also);
+                        r.add_way(&sym.qualified(), hop, confidence, site.as_ref(), &also);
                     }
                     continue;
                 };
@@ -466,7 +466,7 @@ pub fn cross_impact(g: &mut Graph, impact: &mut Impact, depth: u8, max: usize) -
                 }
                 let Some(grow) = seen_there.offer_as(s.id, hop + 1, confidence, verdict == Verdict::Follow) else {
                     if let Some(&i) = rows.get(&(label.clone(), s.id)) {
-                        impact.affected[i].add_way(&qualified, hop + 1, arrival.site().as_ref(), &[]);
+                        impact.affected[i].add_way(&qualified, hop + 1, confidence, arrival.site().as_ref(), &[]);
                     }
                     continue;
                 };

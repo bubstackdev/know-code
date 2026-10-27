@@ -1371,12 +1371,13 @@ impl Impact {
     }
 }
 
-/// Another way an affected symbol was reached (see [`Affected::ways`]): through `via`, at `hop`, at `site` and its
-/// `also` lines.
+/// Another way an affected symbol was reached (see [`Affected::ways`]): through `via`, at `hop`, by an edge of
+/// `confidence` (the weakest, for several), at `site` and its `also` lines.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct Way {
     pub via: String,
     pub hop: u8,
+    pub confidence: &'static str,
     pub site: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<String>,
@@ -1385,7 +1386,7 @@ pub struct Way {
 impl Affected {
     /// Keeps reaching it through `via` at `hop`, at `site` and `also`, as another way: unless that is the row's own
     /// way, or every site is one the row names already.
-    pub fn add_way(&mut self, via: &str, hop: u8, site: Option<&String>, also: &[String]) {
+    pub fn add_way(&mut self, via: &str, hop: u8, confidence: &'static str, site: Option<&String>, also: &[String]) {
         if via == self.via {
             return;
         }
@@ -1399,10 +1400,13 @@ impl Affected {
         match self.ways.iter_mut().find(|w| w.via == via) {
             Some(w) => {
                 w.hop = w.hop.min(hop);
+                if strength(confidence) < strength(w.confidence) {
+                    w.confidence = confidence;
+                }
                 w.also.push(site);
                 w.also.extend(sites);
             }
-            None => self.ways.push(Way { via: via.to_string(), hop, site, also: sites }),
+            None => self.ways.push(Way { via: via.to_string(), hop, confidence, site, also: sites }),
         }
     }
 
@@ -1412,10 +1416,10 @@ impl Affected {
         let mut ways = self.ways;
         ways.retain(|w| w.via != better.via);
         for w in ways {
-            better.add_way(&w.via, w.hop, Some(&w.site), &w.also);
+            better.add_way(&w.via, w.hop, w.confidence, Some(&w.site), &w.also);
         }
         if self.via != better.via {
-            better.add_way(&self.via, self.hop, self.site.as_ref(), &self.also);
+            better.add_way(&self.via, self.hop, self.confidence, self.site.as_ref(), &self.also);
         }
         better
     }
