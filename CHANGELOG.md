@@ -21,6 +21,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
   blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
   replay gate fails a build that codes its refusals if any refusal it replays has none.
+- A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
+  mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
+  sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the
+  other checkout's directory; its Ansible files are extracted again.
+- `unused` counted another worktree (or clone) of the same repo as a user of the repo's packages, so its answer
+  changed with how many checkouts of the repo were indexed: their public API turned `possibly unused` and
+  `published` named the packages. Checkouts of one origin are one repo here too.
+
 - Swift files with constructs tree-sitter-swift doesn't read lose less of their code. When a file has parse errors,
   it is parsed again with them blanked (positions kept), and the tree with less of the file in errors is used: the
   underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`), `@_lifetime(…)`, module
