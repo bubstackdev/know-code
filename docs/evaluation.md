@@ -126,6 +126,9 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
   a build and scored against the studies' labels.
 - [History gate](../eval/history-v1/README.md): history questions on full clones, labelled from git alone, with
   KnowCode scored against the plain-git approaches.
+- [Identity gate](../eval/identity-v1/README.md): references from pinned public repositories labelled by each
+  language's toolchain (the Swift index store, Roslyn, the TypeScript compiler), with KnowCode's reference links scored
+  against them: `exact` precision, recall, and links to the workspace where the toolchain resolves outside.
 - [Schema cost](../eval/schema-cost.md): what the advertised tools and instructions cost a session per turn.
 
 **Agent studies** compare agents with and without KnowCode on pinned public repositories, pre-registered, with the

@@ -16,6 +16,14 @@ class ScoringTest(unittest.TestCase):
         self.assertEqual(history_gate.score_ranked(['x', 'a', 'b', 'c'], ['a', 'b', 'c']), dict(hits=2, truth=3, listed=3))
         self.assertEqual(history_gate.score_lines({'ann': 5, 'bob': 3}, {'ann': 4, 'cy': 2}), dict(hits=4, truth=6, listed=8))
 
+    def test_an_optional_item_is_neither_a_hit_nor_a_miss(self):
+        # Listed or not, an optional item counts in neither truth nor what was listed.
+        self.assertEqual(history_gate.score_set(['a', 'o'], ['a'], ['o']), dict(hits=1, truth=1, listed=1))
+        self.assertEqual(history_gate.score_set(['a'], ['a'], ['o']), dict(hits=1, truth=1, listed=1))
+        # A question whose every item is optional: nothing to find, and listing it is not wrong.
+        self.assertEqual(history_gate.score_set(['o'], [], ['o']), dict(hits=0, truth=0, listed=0))
+        self.assertEqual(history_gate.score_set([], [], ['o']), dict(hits=0, truth=0, listed=0))
+
 
 class VerdictTest(unittest.TestCase):
     def test_knowcode_must_beat_each_plain_approach(self):

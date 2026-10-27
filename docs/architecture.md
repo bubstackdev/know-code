@@ -149,9 +149,15 @@ exact call going on from it. Walk answers are pinned by a snapshot test (`crates
   copy-on-write clone of the nearest base made under its own privacy policy (`clonefile` on APFS, a reflink on btrfs
   and XFS, a plain copy elsewhere), so the pages it doesn't change stay the base's on disk. Its first sync hashes
   every file (the clone resets every file's stat), extracts only what differs from the base, and holds what a cold
-  index of its tree holds. A checkout's index never depends on its base after the clone. Bases go first when the
+  index of its tree holds. A checkout's index never depends on its base after the clone. Jobs that start at once on a
+  commit with no base index it once: the first clean checkout claims the commit's base (a lock per repo and commit)
+  and builds it, and the others wait for it to be published, at most about what a cold index of the checkout takes
+  (by its size, between a minute and 15 minutes), then clone it or index on their own. Bases go first when the
   cache is over its budget, with their repo's last checkout, and with `purge`. The cache counts a clone's bytes it
-  doesn't share. `cache.shared_bases = false` turns them off. Design: [worktree overlays](design/worktree-overlays.md).
+  doesn't share where the file system says (APFS), else its whole length (`status`: `index.counted`). `status` says
+  `cloned from base <commit>`, and for the file ranking and the areas whether they are carried from the base (while
+  no file differs from it, the same as computing them), computed for this index, stale (an answer drawing on them
+  says so) or not computed yet. `cache.shared_bases = false` turns them off. Design: [worktree overlays](design/worktree-overlays.md).
 - **Seeding.** Without a base, a new worktree or clone of an indexed repo starts from a copy of that repo's index and
   extracts only what differs (never when either side's privacy file blocks something).
 - **Maintenance.** After queries, and periodically while the MCP server runs, deleted checkouts are pruned and idle

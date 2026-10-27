@@ -60,8 +60,9 @@ pub struct Repo {
     pub commit: Option<String>,
     /// `None` for a repo its privacy policy blocks whole.
     pub uncommitted: Option<Uncommitted>,
-    /// The shared base the checkout's index was cloned from (see [`base`]), by file name.
-    pub base: Option<String>,
+    /// The shared base the checkout's index was cloned from (see [`base`]): its file name, its commit, and whether any
+    /// file differs from it yet.
+    pub base: Option<base::Cloned>,
     pub privacy: Policy,
 }
 

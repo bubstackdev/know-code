@@ -24,6 +24,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+use kc_store::answer::{Code, Refusal};
+
 use crate::ops::{self, Scope};
 
 /// Responses longer than this many characters lose list items until they fit (about 4 characters per token).
@@ -31,9 +33,264 @@ const DEFAULT_CHARS: usize = 8_000;
 
 /// The least a `kc_context` bundle is capped at (its default budget makes 6,000).
 const CONTEXT_CHARS: usize = 6_000;
+const MIN_CHARS: usize = 1_000;
 const MAX_CHARS: usize = 40_000;
 
+/// A numeric parameter's bounds. Its schema line, its help text (see `help::fill`) and the clamp its answers apply
+/// all read them here, so they can't say different things.
+#[derive(Debug)]
+pub struct Range {
+    /// What the number counts, leading its schema line.
+    pub what: &'static str,
+    pub min: usize,
+    pub default: usize,
+    pub max: usize,
+    /// Said after the bounds.
+    pub note: &'static str,
+}
 
+impl Range {
+    /// `v`, or the default, within the bounds.
+    pub fn clamp(&self, v: Option<usize>) -> usize {
+        v.unwrap_or(self.default).clamp(self.min, self.max)
+    }
+
+    /// `1 (default) to 16`, `1 to 16 (default 10)`.
+    pub fn span(&self) -> String {
+        if self.default == self.min {
+            format!("{} (default) to {}", self.min, self.max)
+        } else {
+            format!("{} to {} (default {})", self.min, self.max, self.default)
+        }
+    }
+
+    /// The parameter's line in its tool's schema and help: `Hops, 1 (default) to 16.`
+    pub fn line(&self) -> String {
+        format!("{}, {}{}.", self.what, self.span(), self.note)
+    }
+}
+
+pub const TRACE_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_TRACE_DEPTH as usize, note: "" };
+pub const IMPACT_DEPTH: Range = Range { what: "Hops", min: 1, default: 1, max: kc_store::trace::MAX_IMPACT_DEPTH as usize, note: "" };
+pub const FLOW_DEPTH: Range = Range { what: "Steps deep", min: 1, default: 10, max: crate::flow::MAX_DEPTH as usize, note: "" };
+pub const PATH_HOPS: Range = Range { what: "Hops a path may have", min: 1, default: 8, max: crate::walk::MAX_PATH_HOPS as usize, note: "" };
+pub const PATH_COUNT: Range = Range { what: "Paths to return", min: 1, default: 3, max: crate::walk::MAX_PATHS, note: "" };
+pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, default: 20, max: 500, note: "" };
+pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "" };
+pub const ANSWER_CHARS: Range = Range {
+    what: "Answer size cap in characters",
+    min: MIN_CHARS,
+    default: DEFAULT_CHARS,
+    max: MAX_CHARS,
+    note: ", the max doubled for several inputs; a list cut to fit says so (`incomplete`, `more`)",
+};
+
+/// Every bounded parameter, by tool (`*`: every tool).
+pub const RANGES: &[(&str, &str, &Range)] = &[
+    ("kc_trace", "depth", &TRACE_DEPTH),
+    ("kc_impact", "depth", &IMPACT_DEPTH),
+    ("kc_flow", "depth", &FLOW_DEPTH),
+    ("kc_path", "max_hops", &PATH_HOPS),
+    ("kc_path", "paths", &PATH_COUNT),
+    ("kc_search", "limit", &SEARCH_LIMIT),
+    ("kc_search", "context", &SEARCH_CONTEXT),
+    ("kc_grep_ast", "limit", &SEARCH_LIMIT),
+    ("*", "max_chars", &ANSWER_CHARS),
+];
+
+/// The bounds of `tool`'s parameter `param`.
+pub fn range(tool: &str, param: &str) -> Option<&'static Range> {
+    RANGES.iter().find(|(t, p, _)| (*t == tool || *t == "*") && *p == param).map(|(_, _, r)| *r)
+}
+
+/// An [`ADVERTISED`] line standing for the parameter's bounds (`1 (default) to 16.`).
+const SPAN: &str = "{span}";
+
+/// The string parameters taking one of a closed set of words, by tool (`*`: every tool taking it), the default first.
+/// The full schema lists them (`enum`), and so do the capabilities; each op refuses any other word.
+pub const CHOICES: &[(&str, &str, &[&str])] = &[
+    ("kc_trace", "direction", &["both", "in", "out"]),
+    ("kc_context", "source", &["auto", "full", "skeleton", "none"]),
+    ("kc_impact", "order", &["rank", "hop"]),
+    ("kc_unused", "tier", &["all", "unused", "possibly"]),
+    ("kc_search", "case", &["sensitive", "insensitive", "smart"]),
+    ("kc_grep_ast", "lang", &["csharp", "typescript", "javascript", "python", "rust", "swift"]),
+    ("kc_note_add", "tag", &["decision", "gotcha", "todo"]),
+    ("*", "format", &["tree", "json"]),
+    ("*", "cite", &["brief", "lines", "check", "none"]),
+];
+
+/// The words `tool`'s parameter `param` takes, the default first.
+pub fn choices(tool: &str, param: &str) -> Option<&'static [&'static str]> {
+    CHOICES.iter().find(|(t, p, _)| (*t == tool || *t == "*") && *p == param).map(|(_, _, c)| *c)
+}
+
+/// `schema` with each bounded parameter's `minimum`, `maximum` and `default` from [`RANGES`], and each closed set's
+/// `enum` from [`CHOICES`]: the full schema, which help and the capabilities read. The advertised one leaves them out.
+fn bounded(tool: &str, mut schema: rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, p) in props.iter_mut() {
+            let Some(o) = p.as_object_mut() else { continue };
+            if let Some(r) = range(tool, name) {
+                o.insert("minimum".into(), Value::from(r.min));
+                o.insert("maximum".into(), Value::from(r.max));
+                o.insert("default".into(), Value::from(r.default));
+            }
+            if let Some(c) = choices(tool, name) {
+                o.insert("enum".into(), Value::from(c.to_vec()));
+            }
+        }
+    }
+    schema
+}
+
+/// What [`bounded`] added, taken out of an advertised parameter.
+const BOUNDS: &[&str] = &["minimum", "maximum", "default", "enum"];
+
+
+
+/// A refused call as a client gets it: the English in the tool result's text, as it always was, and the machine code
+/// in its `structuredContent` (`{"error": {"code", "message", "privacy"}}`, `privacy` for `withheld`), so a client
+/// never reads the English to tell refusals apart. A [`Refusal`] raised where the call is refused keeps its code;
+/// any other error is coded by what it says ([`code_of`]), and one nothing codes is `internal`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolError {
+    pub code: Code,
+    pub message: String,
+    pub privacy: Option<kc_store::answer::PrivacyPolicy>,
+}
+
+impl ToolError {
+    pub fn new(code: Code, message: impl Into<String>) -> Self {
+        ToolError { code, message: message.into(), privacy: None }
+    }
+
+    /// The same refusal said in other words (`kc`'s op names).
+    fn reworded(self, f: impl FnOnce(&str) -> String) -> Self {
+        ToolError { message: f(&self.message), ..self }
+    }
+
+    /// `{"code", "message", "privacy"}`.
+    pub fn json(&self) -> Value {
+        let mut v = serde_json::json!({ "code": self.code, "message": self.message });
+        if let Some(p) = &self.privacy {
+            v["privacy"] = serde_json::json!(p);
+        }
+        v
+    }
+}
+
+impl From<String> for ToolError {
+    fn from(message: String) -> Self {
+        ToolError::new(code_of(&message), message)
+    }
+}
+
+impl From<anyhow::Error> for ToolError {
+    fn from(e: anyhow::Error) -> Self {
+        let message = format!("{e:#}");
+        match e.chain().find_map(|c| c.downcast_ref::<Refusal>()) {
+            Some(r) => ToolError { code: r.code, message, privacy: r.privacy.clone() },
+            None if kc_store::limits::current().is_cancelled() => ToolError::new(Code::Cancelled, message),
+            None => ToolError::from(message),
+        }
+    }
+}
+
+impl std::fmt::Display for ToolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::ops::Deref for ToolError {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.message
+    }
+}
+
+impl PartialEq<&str> for ToolError {
+    fn eq(&self, other: &&str) -> bool {
+        self.message == *other
+    }
+}
+
+impl rmcp::handler::server::tool::IntoCallToolResult for ToolError {
+    fn into_call_tool_result(self) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        Ok(coded(rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(self.message.clone())]), &self).into())
+    }
+}
+
+/// `result` with `e`'s code in its `structuredContent`.
+fn coded(mut result: rmcp::model::CallToolResult, e: &ToolError) -> rmcp::model::CallToolResult {
+    result.structured_content = Some(serde_json::json!({ "error": e.json() }));
+    result
+}
+
+/// The code of an error raised without one, by what it says: the argument checks of each op, the messages of the
+/// libraries parsing a call's arguments (serde), and the errors of reading files, the index and git. Every family an
+/// op raises is here or raised as a [`Refusal`]; the tests call each op into each and check its code.
+pub fn code_of(message: &str) -> Code {
+    let m = message;
+    let has = |words: &[&str]| words.iter().any(|w| m.contains(w));
+    if m.starts_with("withheld:") {
+        Code::Withheld
+    } else if has(&["stale cursor", "is no longer held by this server"]) {
+        Code::StaleCursor
+    } else if has(&["paths matched 0 files"]) {
+        Code::NoFiles
+    } else if has(&[
+        "failed to deserialize",
+        "invalid type:",
+        "missing field",
+        "invalid value:",
+        "unknown variant",
+        " must be ",
+        "is not a cursor",
+        "no op ",
+        "takes no `q`",
+        "takes one `q`",
+        "per call; split them",
+        "is not a valid identifier",
+        "is an assumption: write",
+        "a preset can't be taken away",
+        "unknown evidence",
+        "unknown edge kind",
+        "unknown symbol kind",
+        "unknown kind `",
+        "unknown tag ",
+        "edges for references are",
+        "doesn't parse as",
+        "invalid regex",
+        "invalid pattern",
+        "invalid text regex",
+        "empty pattern",
+        "structural search covers",
+        "takes a date git understands",
+        "a note needs some text",
+        "no help topic",
+        "not a path search's cursor",
+        "are the same symbol",
+    ]) || m.starts_with("give ")
+    {
+        Code::InvalidArgument
+    } else if has(&["names several definitions", "definitions; pass", "beyond the repo limit", "rename previews one repo at a time"])
+        || (m.contains(" is in ") && m.contains(" repos ("))
+    {
+        Code::Ambiguous
+    } else if has(&["no repo at ", "nothing is indexed", "is indexed; run", "not inside a git repo", "no indexed repo named", "no repo to query"]) {
+        Code::NotIndexed
+    } else if has(&["no definition", "no symbol ", "no indexed repo defines", "no commit ", "not a git revision", "shares no history", "no such file"]) {
+        Code::NotFound
+    } else if has(&["cancelled"]) {
+        Code::Cancelled
+    } else if has(&["failed in ", "opening ", "reading ", "could not read", "is in use", "can't open", "no longer exists", "changed while it was being opened"]) {
+        Code::Failed
+    } else {
+        Code::Internal
+    }
+}
 
 // Parameter docs are the schema's descriptions, advertised with every tool: one short line each. The details are in
 // each tool's help topic (`help.rs`), which lists these too.
@@ -136,7 +393,7 @@ pub struct TraceParams {
     /// `in`, `out` or `both` (default).
     #[serde(default)]
     pub direction: Option<String>,
-    /// Hops, 1 (default) to 3.
+    /// Hops (bounds in `RANGES`).
     #[serde(default)]
     pub depth: Option<u8>,
     /// Node cap (default 25).
@@ -191,10 +448,10 @@ pub struct PathParams {
     /// The repo `to` is in (default: `repo`, else the repos defining it).
     #[serde(default)]
     pub to_repo: Option<String>,
-    /// Hops a path may have, 1 to 12 (default 8).
+    /// Hops a path may have (bounds in `RANGES`).
     #[serde(default)]
     pub max_hops: Option<u8>,
-    /// Paths to return, 1 to 5 (default 3).
+    /// Paths to return (bounds in `RANGES`).
     #[serde(default)]
     pub paths: Option<usize>,
     /// Follow ambiguous edges too.
@@ -226,7 +483,7 @@ pub struct PathParams {
 pub struct FlowParams {
     /// An Angular route, a component, a controller action, `Type.member` or `file:line`.
     pub entry: String,
-    /// Steps deep, 1 to 16 (default 10).
+    /// Steps deep (bounds in `RANGES`).
     #[serde(default)]
     pub depth: Option<u8>,
     /// Steps to list (default 40).
@@ -265,7 +522,7 @@ pub struct ImpactParams {
     /// A diff instead: `working`, or a git revision.
     #[serde(default)]
     pub diff: Option<String>,
-    /// Hops, 1 (default) to 5.
+    /// Hops (bounds in `RANGES`).
     #[serde(default)]
     pub depth: Option<u8>,
     /// Affected symbols to list (default 30).
@@ -448,7 +705,7 @@ pub struct SearchParams {
     /// Path globs; a leading `!` excludes; after a repo's name (`shop/src/**`, `**/shop/src/**`), that repo only.
     #[serde(default)]
     pub paths: Vec<String>,
-    /// Lines of context around each hit (max 10).
+    /// Lines of context around each hit (bounds in `RANGES`).
     #[serde(default)]
     pub context: Option<usize>,
     /// Results per page (default 20).
@@ -568,6 +825,13 @@ pub struct MoreParams {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct CapabilitiesParams {
+    /// One op (`impact`) or tool (`kc_impact`) to describe; none: every op.
+    #[serde(default)]
+    pub of: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct HelpParams {
     /// A tool (`kc_context`), a section (`kc_context.http`) or a concept (`contract`); none: the index.
     #[serde(default)]
@@ -635,7 +899,39 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("note_add", "symbol", ""),
     ("grep_ast", "pattern", ""),
     ("status", "", ""),
+    ("capabilities", "of", ""),
 ];
+
+/// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
+/// `kc` help topic's list.
+pub fn one_q_lines() -> String {
+    let mut groups: Vec<(&str, Vec<(&str, &str)>)> = Vec::new();
+    for (op, main, many) in ONE_OPS {
+        match groups.iter_mut().find(|(m, _)| m == main) {
+            Some((_, ops)) => ops.push((op, many)),
+            None => groups.push((main, vec![(op, many)])),
+        }
+    }
+    groups.sort_by_key(|(main, _)| main.is_empty());
+    let mut lines = Vec::new();
+    for (main, ops) in groups {
+        let names: Vec<&str> = ops.iter().map(|(o, _)| *o).collect();
+        if main.is_empty() {
+            lines.push(format!("- {}: no `q` (an empty one is ignored)", names.join(", ")));
+            continue;
+        }
+        let mut line = format!("- {}: `{main}`", names.join(", "));
+        for (op, many) in ops.iter().filter(|(_, m)| !m.is_empty()) {
+            if many == &main {
+                line.push_str(&format!(" ({op}: `q` as a list of one, or `qs`)"));
+            } else {
+                line.push_str(&format!("; {op}: `{many}` from `qs`"));
+            }
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
 
 /// The parameters that take a list, among those `q` fills.
 const ONE_LISTS: &[&str] = &["targets", "files"];
@@ -648,7 +944,9 @@ pub fn one_call(p: OneParams) -> Result<(String, serde_json::Map<String, Value>)
         return Err(format!("no op {op:?}: one of {}", ops.join(", ")));
     };
     let mut args = p.rest;
-    if let Some(q) = p.q {
+    // An op taking no query takes an empty one as none.
+    let q = p.q.filter(|q| !main.is_empty() || !q.trim().is_empty());
+    if let Some(q) = q {
         if main.is_empty() {
             return Err(format!("op {op} takes no `q`; pass its parameters by name (kc {{op: help, q: {op}}})"));
         }
@@ -764,6 +1062,8 @@ pub struct KnowcodeServer {
     tool_router: ToolRouter<Self>,
     /// Every tool's input schema as advertised, advertised or not (for `kc_help`).
     schemas: std::sync::Arc<std::collections::BTreeMap<String, rmcp::model::JsonObject>>,
+    /// Every tool's description, advertised or not (for the capabilities).
+    descriptions: std::sync::Arc<std::collections::BTreeMap<String, String>>,
     /// Tools the profile leaves out (see [`profile`]).
     hidden: std::sync::Arc<Vec<String>>,
     /// The `one` profile: every tool is reached through `kc`, and answers name calls as its ops.
@@ -797,10 +1097,10 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_locate", &[("query", ""), ("queries", "")]),
     ("kc_refs", &[("name", ""), ("names", "")]),
     ("kc_context", &[("symbol", ""), ("symbols", "")]),
-    ("kc_trace", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("direction", "`in`, `out` or `both` (default)."), ("depth", "1 (default) to 3.")]),
+    ("kc_trace", &[("symbol", "A name, `Type.member` or [repo/]file:line."),("direction", "`in`, `out` or `both` (default)."), ("depth", SPAN)]),
     ("kc_path", &[("from", ""), ("to", "")]),
     ("kc_flow", &[("entry", "")]),
-    ("kc_impact", &[("symbol", "Name, `Type.member` or file:line."), ("diff", "`working` or a git revision."), ("depth", "1 (default) to 16.")]),
+    ("kc_impact", &[("symbol", "Name, `Type.member` or file:line."), ("diff", "`working` or a git revision."), ("depth", SPAN)]),
     ("kc_unused", &[]),
     ("kc_rename_preview", &[("symbol", ""), ("new_name", "")]),
     ("kc_coupled", &[("file", "")]),
@@ -817,6 +1117,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_grep_ast", &[("pattern", ""), ("lang", "csharp, typescript, javascript, python, rust or swift.")]),
     ("kc_more", &[("cursor", "")]),
     ("kc_status", &[]),
+    ("kc_capabilities", &[("of", "")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -830,8 +1131,15 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
     for (name, line) in keep.iter() {
         let Some(mut p) = full.get(*name).cloned() else { continue };
         if let Some(o) = p.as_object_mut() {
+            if range(tool, name).is_some() || choices(tool, name).is_some() {
+                BOUNDS.iter().for_each(|k| drop(o.remove(*k)));
+            }
             if line.is_empty() {
                 o.remove("description");
+            } else if *line == SPAN
+                && let Some(r) = range(tool, name)
+            {
+                o.insert("description".into(), Value::from(format!("{}.", r.span())));
             } else {
                 o.insert("description".into(), Value::from(*line));
             }
@@ -841,6 +1149,10 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
     out.insert("properties".into(), Value::Object(props));
     out
 }
+
+/// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
+/// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
+pub const ON_REQUEST: &[&str] = &["kc_capabilities"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -863,7 +1175,7 @@ pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = if one { Vec::new() } else { vec!["kc_help".into()] };
     for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         let names: Vec<String> = match part {
-            "all" => all.to_vec(),
+            "all" => all.iter().filter(|t| !ON_REQUEST.contains(&t.as_str())).cloned().collect(),
             "core" => CORE.iter().map(|s| s.to_string()).collect(),
             "one" => vec!["kc".into()],
             name => {
@@ -881,6 +1193,20 @@ pub fn profile(spec: &str, all: &[String]) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// `schema` with each bounded parameter's line from [`RANGES`].
+fn ranged(tool: &str, mut schema: rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+        for (name, p) in props.iter_mut() {
+            if let Some(r) = range(tool, name).filter(|_| p.get("description").is_some())
+                && let Some(o) = p.as_object_mut()
+            {
+                o.insert("description".into(), Value::from(r.line()));
+            }
+        }
+    }
+    schema
 }
 
 /// A tool's input schema as advertised: without what tells an agent nothing (`$schema`, `default: null`, integer
@@ -944,6 +1270,11 @@ impl KnowcodeServer {
             None => self.default.repos.clone(),
         };
         ops::guard_inputs(&repos, &inputs)
+    }
+
+    /// What this server offers, for its capabilities.
+    pub fn surface(&self) -> crate::capabilities::Surface<'_> {
+        crate::capabilities::Surface { schemas: &self.schemas, descriptions: &self.descriptions, hidden: &self.hidden, one: self.one }
     }
 
     /// A help topic as text (with a tool's parameters from its schema), or the index without one.
@@ -1074,17 +1405,17 @@ fn note(recording: &Recording, env: &Value) {
 }
 
 /// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
-async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
+async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
     let env = blocking(false, with_cuts(f)).await?;
     note(&recording(), &env);
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
+    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
 }
 
 /// [`run`] for an operation that runs a child process (a search): in the children's lane.
-async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
+async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
     let env = blocking(true, with_cuts(f)).await?;
     note(&recording(), &env);
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
+    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
 }
 
 /// `f`, with the child processes cut while it ran said in its envelope (see [`ops::add_cuts`]). Runs on the blocking
@@ -1100,7 +1431,7 @@ fn with_cuts(f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> impl
 /// Runs a blocking operation in a lane (see [`WORK`]) as the call's operation: a client's cancellation stops its
 /// child processes and the work at its next check. The lane is held until the work ends, even when the call's
 /// future is dropped first, so a cancelled call never lets more work run than the lanes allow.
-async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
+async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ToolError> {
     let lane = lane(child).await?;
     let call = OPERATION.try_with(|o| o.clone()).unwrap_or_else(|_| kc_store::limits::Operation::new());
     // Dropping the awaiting future (the client went away) cancels the work too.
@@ -1114,10 +1445,10 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
         f()
     })
     .await
-    .map_err(|e| e.to_string());
+    .map_err(|e| ToolError::new(Code::Internal, e.to_string()));
     cancel_on_drop.0 = None;
     release_memory();
-    result?.map_err(|e| format!("{e:#}"))
+    result?.map_err(ToolError::from)
 }
 
 /// Cancels an operation when dropped.
@@ -1133,7 +1464,7 @@ impl Drop for CancelOnDrop {
 
 /// Runs a traversal and answers as text: a header naming the repo and commit, then the tree, cut at the size cap
 /// on a line boundary with a hint saying how much was cut.
-async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(Value, String)> + Send + 'static) -> Result<String, String> {
+async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(Value, String)> + Send + 'static) -> Result<String, ToolError> {
     let (env, text) = blocking(false, move || {
         let (mut env, text) = f()?;
         ops::add_cuts(&mut env);
@@ -1145,11 +1476,29 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
     })
     .await?;
     note(&recording(), &env);
-    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS);
+    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS);
     let body = notes_first(&lean_sites(&mcp_names(&text)));
     // Complete when the envelope says so and the tree says nothing was cut (its cut notes come first).
     let complete = env["complete"].as_bool() != Some(false) && crate::contract::incomplete_of(&env).is_empty() && !body.starts_with('…');
     let whole = format!("{}{body}", header(&env, complete));
+    if whole.len() <= max {
+        return Ok(whole);
+    }
+    // A row's other ways go first, from the last row up, said by a count when the rest fits; when it doesn't, the
+    // answer is cut as it would be without them.
+    let noted = |text: &str, left: usize| {
+        let note = format!("… {left} more ways to listed symbols left out at max_chars={max}; pass max_chars (up to {MAX_CHARS}) for them\n");
+        Some(format!("{}{note}{text}", header(&env, false))).filter(|w| left > 0 && w.len() <= max)
+    };
+    let (lean, left) = unway_text(&body, whole.len() - max);
+    if let Some(w) = noted(&lean, left) {
+        return Ok(w);
+    }
+    let (body, left) = unway_text(&body, usize::MAX);
+    if let Some(w) = noted(&body, left) {
+        return Ok(w);
+    }
+    let whole = format!("{}{body}", header(&env, complete && left == 0));
     if whole.len() <= max {
         return Ok(whole);
     }
@@ -1160,6 +1509,28 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
         return Ok(whole);
     }
     Ok(cap_text(&format!("{}{body}", header(&env, false)), max))
+}
+
+/// A tree's text less its rows' other ways (`render::WAY`, last on a row), from the last row up, until at least
+/// `excess` bytes and the note saying so are gone; with how many ways it left out. All of them when that isn't enough.
+fn unway_text(text: &str, excess: usize) -> (String, usize) {
+    // The note's bytes, at most.
+    let excess = excess.saturating_add(160);
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let (mut dropped, mut left) = (0, 0);
+    for l in lines.iter_mut().rev() {
+        if dropped >= excess {
+            break;
+        }
+        if let Some(at) = l.find(crate::render::WAY) {
+            left += l[at..].matches(crate::render::WAY).count();
+            dropped += l.len() - at;
+            l.truncate(at);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    (out, left)
 }
 
 /// A tree's text less up to `excess` bytes of the lines quoting the rest of a site's statement (`  41 - text`, and the
@@ -1295,7 +1666,7 @@ fn cap_text(text: &str, max: usize) -> String {
 }
 
 /// Inputs one batch call takes at most.
-const MAX_BATCH: usize = 20;
+pub const MAX_BATCH: usize = 20;
 
 /// The least room an input's result is given: below it, an answer is too cut to use.
 const MIN_SHARE: usize = 1_000;
@@ -1308,11 +1679,11 @@ async fn run_batch(
     max_chars: Option<usize>,
     inputs: Vec<String>,
     f: impl Fn(&str) -> anyhow::Result<Value> + Send + 'static,
-) -> Result<String, String> {
+) -> Result<String, ToolError> {
     if inputs.len() > MAX_BATCH {
-        return Err(format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len()));
+        return Err(ToolError::new(Code::InvalidArgument, format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len())));
     }
-    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS * 2);
+    let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS * 2);
     let recording = recording();
     blocking(false, move || {
         let n = inputs.len();
@@ -1332,7 +1703,15 @@ async fn run_batch(
                     note(&recording, &env);
                     cap(env, share)
                 }
-                Err(e) => serde_json::json!({ "input": i, "error": format!("{e:#}") }).to_string(),
+                Err(e) => {
+                    // As a refused call: the English, its code and, for `withheld`, the policy.
+                    let e = ToolError::from(e);
+                    let mut v = serde_json::json!({ "input": i, "error": e.message, "code": e.code });
+                    if let Some(p) = &e.privacy {
+                        v["privacy"] = serde_json::json!(p);
+                    }
+                    v.to_string()
+                }
             };
             if text.len() > room {
                 break;
@@ -1362,10 +1741,15 @@ fn batch_answer(results: &[String], left: &[String], max: usize) -> String {
     for (k, r) in results.iter().enumerate() {
         let v: Value = serde_json::from_str(r).unwrap_or(Value::Null);
         if v["complete"].as_bool() == Some(false) || v.get("error").is_some() {
-            let reason = crate::contract::incomplete_of(&v).first().map_or(kc_store::answer::Reason::Failed, |i| i.reason);
+            // Its first entry's reason and code, and its policy where it is `withheld`; a refused input's code.
+            let first = crate::contract::incomplete_of(&v).into_iter().next();
+            let reason = first.as_ref().map_or(kc_store::answer::Reason::Failed, |i| i.reason);
             let input = v["input"].as_str().unwrap_or("");
             let what = if v.get("error").is_some() { "failed" } else { "incomplete: see its `incomplete`" };
-            incomplete.push(kc_store::answer::Incomplete::new(reason, format!("results[{k}] ({input}): {what}")));
+            let mut entry = kc_store::answer::Incomplete::new(reason, format!("results[{k}] ({input}): {what}"));
+            entry.code = first.as_ref().and_then(|i| i.code).or_else(|| serde_json::from_value(v["code"].clone()).ok());
+            entry.privacy = first.and_then(|i| i.privacy).or_else(|| serde_json::from_value(v["privacy"].clone()).ok());
+            incomplete.push(entry);
         }
     }
     if !left.is_empty() {
@@ -1467,7 +1851,7 @@ fn placed(symbol: Option<&str>, empty: bool, scope: &Scope) -> anyhow::Result<()
         && let Some(s) = symbol
         && let Some(why) = ops::unresolved_place(s, scope)?
     {
-        anyhow::bail!(why);
+        anyhow::bail!(Refusal::new(Code::NotFound, why));
     }
     Ok(())
 }
@@ -1489,6 +1873,9 @@ fn repo_label(path: &str) -> String {
 ///
 /// The child has the search deadline (see [`kc_store::limits`]) and is killed when the call is cancelled. Killed at
 /// its deadline, it answers no items, `complete: false` and an `incomplete` entry with reason `deadline`.
+/// Starts the line a child (see [`search_in_child`]) gives its refusal's code on, after its message.
+pub const REFUSAL_LINE: &str = "knowcode-refusal: ";
+
 fn search_in_child(args: &[String]) -> anyhow::Result<Value> {
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
@@ -1506,8 +1893,19 @@ fn search_in_child(args: &[String]) -> anyhow::Result<Value> {
         },
     };
     if !out.status.success() {
-        let msg = String::from_utf8_lossy(&out.stderr);
-        anyhow::bail!("{}", msg.trim().trim_start_matches("knowcode: "));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let (msg, coded) = match stderr.trim_end().rsplit_once('\n') {
+            Some((msg, last)) if last.starts_with(REFUSAL_LINE) => (msg, serde_json::from_str::<Value>(&last[REFUSAL_LINE.len()..]).ok()),
+            _ => (stderr.as_ref(), None),
+        };
+        let msg = msg.trim().trim_start_matches("knowcode: ").to_string();
+        if let Some(c) = coded
+            && let Ok(code) = serde_json::from_value::<Code>(c["code"].clone())
+        {
+            let privacy = serde_json::from_value(c["privacy"].clone()).ok();
+            anyhow::bail!(Refusal { code, message: msg, privacy });
+        }
+        anyhow::bail!("{msg}");
     }
     Ok(serde_json::from_slice(&out.stdout)?)
 }
@@ -1628,6 +2026,9 @@ fn refuse_partial_rename(env: &mut Value, path: &str) {
         && !reasons.iter().any(|r| r == why)
     {
         reasons.push(Value::from(why));
+        if let Some(codes) = env["codes"].as_array_mut() {
+            codes.push(Value::from(Code::Cut.as_str()));
+        }
     }
 }
 
@@ -1933,9 +2334,10 @@ impl KnowcodeServer {
     pub fn new(default: Scope, tools: &str) -> Result<Self, String> {
         let mut router = ToolRouter::new();
         let mut schemas = std::collections::BTreeMap::new();
+        let mut descriptions = std::collections::BTreeMap::new();
         for mut route in Self::tool_router() {
             // The full schema documents every parameter in help; the advertised one only the common ones.
-            let full = slim(&route.attr.input_schema);
+            let full = bounded(&route.attr.name, ranged(&route.attr.name, slim(&route.attr.input_schema)));
             route.attr.input_schema = std::sync::Arc::new(advertised(&route.attr.name, &full));
             if ALWAYS_LOADED.contains(&route.attr.name.as_ref()) || route.attr.name == "kc" {
                 let mut meta = rmcp::model::JsonObject::new();
@@ -1943,6 +2345,7 @@ impl KnowcodeServer {
                 route.attr.meta = Some(rmcp::model::MetaObject(meta));
             }
             schemas.insert(route.attr.name.to_string(), full);
+            descriptions.insert(route.attr.name.to_string(), route.attr.description.as_deref().unwrap_or_default().to_string());
             router.add_route(route);
         }
         // `kc` is the `one` profile's alone: `all` is every other tool.
@@ -1953,16 +2356,23 @@ impl KnowcodeServer {
             router.disable_route(t.clone());
         }
         let one = on.iter().any(|t| t == "kc");
-        Ok(Self { default, tool_router: router, schemas: std::sync::Arc::new(schemas), hidden: std::sync::Arc::new(hidden), one })
+        Ok(Self {
+            default,
+            tool_router: router,
+            schemas: std::sync::Arc::new(schemas),
+            descriptions: std::sync::Arc::new(descriptions),
+            hidden: std::sync::Arc::new(hidden),
+            one,
+        })
     }
 
     #[tool(description = "Docs on any tool, parameter or concept; no topic: the index.")]
-    async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, String> {
-        self.help(p.topic.as_deref())
+    async fn kc_help(&self, Parameters(p): Parameters<HelpParams>) -> Result<String, ToolError> {
+        self.help(p.topic.as_deref()).map_err(|e| ToolError::new(Code::InvalidArgument, e))
     }
 
     #[tool(description = "The symbols enclosing a file:line, innermost first: a stack frame's code.")]
-    async fn kc_symbol_at(&self, Parameters(p): Parameters<SymbolAtParams>) -> Result<String, String> {
+    async fn kc_symbol_at(&self, Parameters(p): Parameters<SymbolAtParams>) -> Result<String, ToolError> {
         let scope = if Path::new(&p.file).is_absolute() && p.common.repo.is_none() {
             Scope { repos: Vec::new(), ..self.default.clone() }
         } else {
@@ -1976,7 +2386,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Where a name is defined (name, prefix or `Type.member`): file:line and signature.")]
-    async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, String> {
+    async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let env = ops::find(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
@@ -1987,7 +2397,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Files for a concept, bug report or ticket, ranked. First, when you don't know the names.")]
-    async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, String> {
+    async fn kc_locate(&self, Parameters(p): Parameters<LocateParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, p.workspace)?;
         let limit = p.limit.unwrap_or(10);
         let locate = move |q: &str| -> anyhow::Result<Value> {
@@ -2001,7 +2411,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Every reference to a name, resolved, across repos. What calls X, by hop or across HTTP: kc_impact on X's file:line.")]
-    async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, String> {
+    async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let limit = p.limit.unwrap_or(20);
         let kinds = ref_kinds(&p.kinds, &p.edges)?;
@@ -2018,7 +2428,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "One symbol: source, members, callers, callees and cross-repo links (HTTP, DI, bus, SQL). A repo's name: how it deploys.")]
-    async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, String> {
+    async fn kc_context(&self, Parameters(p): Parameters<ContextParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let source: kc_store::skeleton::SourceMode = p.source.as_deref().unwrap_or("auto").parse().map_err(|e| format!("{e:#}"))?;
         let symbols = inputs(p.symbol, p.symbols, "symbol or symbols")?;
@@ -2046,14 +2456,14 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Call tree of a symbol: callers (`in`), callees (`out`) or both, across DI, HTTP, bus and SQL.")]
-    async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, String> {
+    async fn kc_trace(&self, Parameters(p): Parameters<TraceParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let dir = p.direction.clone().unwrap_or_else(|| "both".into());
         let tree = p.walk.tree()?;
         let filter = p.walk.filter();
         let what = format!("no definition named {}", p.symbol);
         // Asked deeper than a trace goes, the answer says so (`ops::trace`); the notes go by the depth walked.
-        let asked = p.depth.unwrap_or(1).max(1);
+        let asked = p.depth.unwrap_or(TRACE_DEPTH.default as u8).max(1);
         let depth = asked.min(kc_store::trace::MAX_TRACE_DEPTH);
         let limit = p.limit.unwrap_or(25);
         let mode = cite_mode(p.walk.cite.as_deref())?;
@@ -2106,7 +2516,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "How symbol `from` reaches symbol `to`, across repos: the best paths, step by step.")]
-    async fn kc_path(&self, Parameters(p): Parameters<PathParams>) -> Result<String, String> {
+    async fn kc_path(&self, Parameters(p): Parameters<PathParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let to_repo = match &p.to_repo {
             Some(r) => self.scope(&Common { repo: Some(r.clone()), max_chars: None }, false)?.repos.into_iter().next(),
@@ -2117,10 +2527,10 @@ impl KnowcodeServer {
         let path = move || {
             cite(mode);
             let opts = crate::walk::PathOptions {
-                max_hops: p.max_hops.unwrap_or(8),
+                max_hops: p.max_hops.unwrap_or(PATH_HOPS.default as u8),
                 max_nodes: p.max_nodes.unwrap_or(2000).max(1),
                 max_repos: p.max_repos.unwrap_or(16).max(1),
-                paths: p.paths.unwrap_or(3),
+                paths: p.paths.unwrap_or(PATH_COUNT.default),
                 one_way: false,
                 allow_ambiguous: p.allow_ambiguous,
                 edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
@@ -2157,7 +2567,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "What runs end to end from an entry point (route, component, action, method), step by step across repos.")]
-    async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, String> {
+    async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
         let entry = p.entry.clone();
@@ -2165,7 +2575,7 @@ impl KnowcodeServer {
         let flow = move || {
             cite(mode);
             let opts = crate::flow::FlowOptions {
-                depth: p.depth.unwrap_or(10).clamp(1, 16),
+                depth: FLOW_DEPTH.clamp(p.depth.map(usize::from)) as u8,
                 max_steps: p.limit.unwrap_or(40),
                 max_repos: p.max_repos.unwrap_or(16).max(1),
                 edges: ops::edge_filter(&p.edges, p.evidence.as_deref().unwrap_or_default())?,
@@ -2199,7 +2609,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Who calls a method or an HTTP endpoint, from any repo, by hop (`depth` 2: callers' callers): what breaks if it changes. Bus and SQL too.")]
-    async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, String> {
+    async fn kc_impact(&self, Parameters(p): Parameters<ImpactParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         let tree = p.walk.tree()?;
         let order: ops::ImpactOrder = p.order.as_deref().unwrap_or("rank").parse().map_err(|e| format!("{e:#}"))?;
@@ -2214,7 +2624,7 @@ impl KnowcodeServer {
             symbol: p.symbol,
             file: p.file,
             diff: p.diff,
-            depth: p.depth.unwrap_or(1),
+            depth: p.depth.unwrap_or(IMPACT_DEPTH.default as u8),
             limit: p.limit.unwrap_or(30),
             filter: p.walk.filter(),
             order,
@@ -2230,7 +2640,7 @@ impl KnowcodeServer {
                 if out.data.is_empty() {
                     text = format!("{what}\n");
                 } else if params.depth < 2 && out.data.iter().any(|r| !r.impact.affected.is_empty()) {
-                    text.push_str("(one hop: direct dependents only; pass depth 2-16 for more)\n");
+                    text.push_str(&format!("(one hop: direct dependents only; pass depth 2-{} for more)\n", IMPACT_DEPTH.max));
                 }
                 Ok((out.env, text))
             })
@@ -2246,7 +2656,7 @@ impl KnowcodeServer {
                     hints.push(format!("symbol limit {} reached; raise limit, lower depth, or filter with edges/kinds", params.limit));
                 }
                 if params.depth < 2 && out.data.iter().any(|r| !r.impact.affected.is_empty()) {
-                    hints.push("one hop: direct dependents only; pass depth 2-16 for more".to_string());
+                    hints.push(format!("one hop: direct dependents only; pass depth 2-{} for more", IMPACT_DEPTH.max));
                 }
                 if !hints.is_empty() {
                     env["hint"] = Value::from(hints.join("; "));
@@ -2258,7 +2668,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Dead-code candidates: symbols nothing reaches, with reasons.")]
-    async fn kc_unused(&self, Parameters(p): Parameters<UnusedParams>) -> Result<String, String> {
+    async fn kc_unused(&self, Parameters(p): Parameters<UnusedParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let params = crate::refactor::UnusedParams {
@@ -2272,7 +2682,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Every site renaming a C# or TypeScript symbol would edit, and collisions. Edits nothing.")]
-    async fn kc_rename_preview(&self, Parameters(p): Parameters<RenamePreviewParams>) -> Result<String, String> {
+    async fn kc_rename_preview(&self, Parameters(p): Parameters<RenamePreviewParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let params = crate::refactor::RenameParams { symbol: p.symbol, new_name: p.new_name, allow_ambiguous: p.allow_ambiguous };
@@ -2282,7 +2692,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Files that change in the same commits as a file (git history).")]
-    async fn kc_coupled(&self, Parameters(p): Parameters<CoupledParams>) -> Result<String, String> {
+    async fn kc_coupled(&self, Parameters(p): Parameters<CoupledParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no co-change partner of {} in the last 365 days of history", p.file);
@@ -2293,7 +2703,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Tests to run for changed files, symbols or a diff, ranked: a likely sample.")]
-    async fn kc_tests(&self, Parameters(p): Parameters<TestsParams>) -> Result<String, String> {
+    async fn kc_tests(&self, Parameters(p): Parameters<TestsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no test reaches, is named for, or changes with {}", p.diff.as_deref().map_or_else(|| p.targets.join(", "), |d| format!("diff {d}")));
@@ -2304,7 +2714,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Files that keep hurting: churn, fixes, complexity and coupling.")]
-    async fn kc_hotspots(&self, Parameters(p): Parameters<HotspotsParams>) -> Result<String, String> {
+    async fn kc_hotspots(&self, Parameters(p): Parameters<HotspotsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, p.workspace)?;
         run(p.common.max_chars, move || {
             let what = match &p.path {
@@ -2317,7 +2727,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Who wrote a file, directory or repo (git history): top authors, truck factor.")]
-    async fn kc_ownership(&self, Parameters(p): Parameters<OwnershipParams>) -> Result<String, String> {
+    async fn kc_ownership(&self, Parameters(p): Parameters<OwnershipParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no file in history under {}", p.path.as_deref().unwrap_or("the repo"));
@@ -2328,7 +2738,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "A symbol's git history: commits that changed it, first and last, who wrote it, files changed with it.")]
-    async fn kc_history(&self, Parameters(p): Parameters<HistoryParams>) -> Result<String, String> {
+    async fn kc_history(&self, Parameters(p): Parameters<HistoryParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!("no definition {}", p.symbol);
@@ -2339,7 +2749,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Who could review a change (files or a diff), by recent lines written.")]
-    async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, String> {
+    async fn kc_reviewers(&self, Parameters(p): Parameters<ReviewersParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
             let what = format!(
@@ -2353,7 +2763,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "What a repo is: languages, dependencies, entry points, key types and a map.")]
-    async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, String> {
+    async fn kc_overview(&self, Parameters(p): Parameters<OverviewParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, p.workspace)?;
         let budget = p.map_budget.unwrap_or(400);
         let max = p.common.max_chars.or(Some((budget * 4 + 4_000).max(DEFAULT_CHARS)));
@@ -2370,25 +2780,25 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "A repo's functional areas: files clustered by references, co-change and directory.")]
-    async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, String> {
+    async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await
     }
 
     #[tool(description = "Notes on symbols, each current, stale or orphaned.")]
-    async fn kc_notes(&self, Parameters(p): Parameters<NotesParams>) -> Result<String, String> {
+    async fn kc_notes(&self, Parameters(p): Parameters<NotesParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::note_list(p.symbol.as_deref(), &scope)?.env)).await
     }
 
     #[tool(description = "WRITES LOCAL STATE: adds a note to a symbol, kept in KnowCode's data directory, never the repo.")]
-    async fn kc_note_add(&self, Parameters(p): Parameters<NoteAddParams>) -> Result<String, String> {
+    async fn kc_note_add(&self, Parameters(p): Parameters<NoteAddParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || Ok(ops::note_add(&p.symbol, &p.text, p.tag.as_deref(), &scope)?.env)).await
     }
 
     #[tool(description = "Ranked grep over every file, definitions first: for strings and keys that aren't symbol names.")]
-    async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, String> {
+    async fn kc_search(&self, Parameters(p): Parameters<SearchParams>) -> Result<String, ToolError> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let workspace = p.workspace && p.repos.is_empty();
         let mut args: Vec<String> = vec!["search".into(), "--json".into()];
@@ -2396,7 +2806,7 @@ impl KnowcodeServer {
             None | Some("sensitive") => {}
             Some("insensitive") => args.push("-i".into()),
             Some("smart") => args.push("-S".into()),
-            Some(other) => return Err(format!("case must be sensitive, insensitive or smart, not {other}")),
+            Some(other) => return Err(ToolError::new(Code::InvalidArgument, format!("case must be sensitive, insensitive or smart, not {other}"))),
         }
         for (on, flag) in [(p.regex, "-e"), (p.word, "-w"), (p.files_only, "--files")] {
             if on {
@@ -2410,12 +2820,12 @@ impl KnowcodeServer {
         for g in p.paths {
             args.extend(["-g".into(), g]);
         }
-        args.extend(["-C".into(), p.context.unwrap_or(0).min(10).to_string()]);
+        args.extend(["-C".into(), SEARCH_CONTEXT.clamp(p.context).to_string()]);
         // A first page at the default limit shows every hit in code when they fit the answer (at most 60 hits).
         if p.limit.is_none() && p.offset.unwrap_or(0) == 0 && !p.files_only {
-            args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS).to_string()]);
+            args.extend(["--fit".into(), p.common.max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS).to_string()]);
         }
-        args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
+        args.extend(["-n".into(), SEARCH_LIMIT.clamp(p.limit).to_string()]);
         args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
         if let Some(n) = p.max_lines {
             args.extend(["--max-lines".into(), n.max(1).to_string()]);
@@ -2428,7 +2838,7 @@ impl KnowcodeServer {
         run_child(p.common.max_chars, move || {
             let env = noted(workspace, search_in_child(&args)?);
             if let Some(why) = searched_nothing(&env, filtered) {
-                anyhow::bail!(why);
+                anyhow::bail!(Refusal::new(Code::NoFiles, why));
             }
             Ok(explain(env, &what, "limit (or offset=next_offset)"))
         })
@@ -2436,7 +2846,7 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "Structural search: an ast-grep pattern (`$X`, `$$$`) over one language. kc_help kc_grep_ast.")]
-    async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, String> {
+    async fn kc_grep_ast(&self, Parameters(p): Parameters<GrepAstParams>) -> Result<String, ToolError> {
         let scope = if !p.repos.is_empty() { self.scope_many(&p.repos)? } else { self.scope(&p.common, p.workspace)? };
         let workspace = p.workspace && p.repos.is_empty();
         let mut args: Vec<String> = vec!["grep-ast".into(), "--json".into(), "-l".into(), p.lang];
@@ -2455,7 +2865,7 @@ impl KnowcodeServer {
         for g in p.paths {
             args.extend(["-g".into(), g]);
         }
-        args.extend(["-n".into(), p.limit.unwrap_or(20).clamp(1, 500).to_string()]);
+        args.extend(["-n".into(), SEARCH_LIMIT.clamp(p.limit).to_string()]);
         args.extend(["--offset".into(), p.offset.unwrap_or(0).to_string()]);
         if let Some(n) = p.max_matches {
             args.extend(["--max-matches".into(), n.max(1).to_string()]);
@@ -2469,14 +2879,14 @@ impl KnowcodeServer {
     }
 
     #[tool(description = "The next page of a cut list.")]
-    async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, String> {
+    async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, ToolError> {
         // In a child, as a search: a page can be a search's. A handle (see `compact`) stands for the full cursor.
         let args: Vec<String> = vec!["more".into(), "--json".into(), crate::compact::resolve(&p.cursor)?];
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 
     #[tool(description = "Code graph of the workspace's repos, instead of grep and reads. `op`: impact (who calls X or an HTTP endpoint, any repo, by hop; what breaks), find, refs, context, search, locate, history, more, help.")]
-    async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, String> {
+    async fn kc(&self, Parameters(p): Parameters<OneParams>) -> Result<String, ToolError> {
         let (tool, args) = one_call(p)?;
         fn a<T: serde::de::DeserializeOwned>(tool: &str, args: serde_json::Map<String, Value>) -> Result<Parameters<T>, String> {
             serde_json::from_value(Value::Object(args)).map(Parameters).map_err(|e| format!("op {}: {e}", &tool[3..]))
@@ -2490,7 +2900,9 @@ impl KnowcodeServer {
             "kc_search" => self.kc_search(a(t, args)?).await,
             "kc_locate" => self.kc_locate(a(t, args)?).await,
             "kc_more" => self.kc_more(a(t, args)?).await,
-            "kc_help" => return self.kc_help(a(t, args)?).await.map(|h| one_text(&h, true)).map_err(|e| one_text(&e, true)),
+            // Data, as it is: its names are the tools' own.
+            "kc_capabilities" => return self.kc_capabilities(a(t, args)?).await,
+            "kc_help" => return self.kc_help(a(t, args)?).await.map(|h| one_text(&h, true)).map_err(|e| e.reworded(|m| one_text(m, true))),
             "kc_trace" => self.kc_trace(a(t, args)?).await,
             "kc_path" => self.kc_path(a(t, args)?).await,
             "kc_flow" => self.kc_flow(a(t, args)?).await,
@@ -2509,13 +2921,19 @@ impl KnowcodeServer {
             "kc_note_add" => self.kc_note_add(a(t, args)?).await,
             "kc_grep_ast" => self.kc_grep_ast(a(t, args)?).await,
             "kc_status" => self.kc_status(a(t, args)?).await,
-            other => Err(format!("no op {other}")),
+            other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
-        out.map(|o| one_text(&o, false)).map_err(|e| one_text(&e, false))
+        out.map(|o| one_text(&o, false)).map_err(|e| e.reworded(|m| one_text(m, false)))
+    }
+
+    #[tool(description = "Every op as data: its parameters with ranges and choices, whether it writes, its answer's shape.")]
+    async fn kc_capabilities(&self, Parameters(p): Parameters<CapabilitiesParams>) -> Result<String, ToolError> {
+        let doc = crate::capabilities::document(&self.surface(), p.of.as_deref())?;
+        Ok(serde_json::to_string(&doc).unwrap_or_default())
     }
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
-    async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, String> {
+    async fn kc_status(&self, Parameters(p): Parameters<RepoOnlyParams>) -> Result<String, ToolError> {
         // Every repo of the workspace, those not indexed yet included.
         let scope = if p.workspace {
             Scope { repos: kc_index::indexed_roots().map_err(|e| format!("{e:#}"))?, no_sync: false }
@@ -2553,7 +2971,7 @@ impl ServerHandler for KnowcodeServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
-            return Ok(rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!("{e:#}"))]).into());
+            return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(e));
         }
         // `provenance: true` on any call asks for its provenance record (see `crate::record`), as a second content
         // block; the tool itself never sees the argument.
@@ -2572,6 +2990,14 @@ impl ServerHandler for KnowcodeServer {
                 // The work stops soon after; its answer (an error) goes nowhere the client waits for.
                 call.await
             }
+        };
+        // An error raised before the tool ran (its arguments didn't fit its parameters) is coded by what it says.
+        let response = match response {
+            Ok(rmcp::model::CallToolResponse::Complete(result)) if result.is_error == Some(true) && result.structured_content.is_none() => {
+                let text: String = result.content.iter().filter_map(|c| c.as_text().map(|t| t.text.clone())).collect();
+                Ok(coded(result, &ToolError::from(text)).into())
+            }
+            r => r,
         };
         match (response, recording) {
             (Ok(rmcp::model::CallToolResponse::Complete(mut result)), Some(envs)) => {
@@ -2599,12 +3025,17 @@ impl ServerHandler for KnowcodeServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListResourcesResult, rmcp::ErrorData> {
-        let resources = crate::help::TOPICS
+        let mut resources: Vec<rmcp::model::Resource> = crate::help::TOPICS
             .iter()
             .map(|t| {
                 rmcp::model::Resource::new(format!("{HELP_URI}{}", t.name), t.name).with_description(t.summary).with_mime_type("text/markdown")
             })
             .collect();
+        resources.push(
+            rmcp::model::Resource::new(CAPABILITIES_URI, "capabilities")
+                .with_description("every op as data (kc_help capabilities)")
+                .with_mime_type("application/json"),
+        );
         Ok(rmcp::model::ListResourcesResult::with_all_items(resources))
     }
 
@@ -2613,6 +3044,11 @@ impl ServerHandler for KnowcodeServer {
         request: rmcp::model::ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        if request.uri == CAPABILITIES_URI {
+            let doc = crate::capabilities::document(&self.surface(), None).map_err(|e| rmcp::ErrorData::internal_error(e, None))?;
+            let text = serde_json::to_string(&doc).unwrap_or_default();
+            return Ok(rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(text, request.uri)]).into());
+        }
         let topic = request.uri.strip_prefix(HELP_URI).ok_or_else(|| rmcp::ErrorData::resource_not_found(format!("no resource {}", request.uri), None))?;
         let text = self.help(Some(topic)).map_err(|e| rmcp::ErrorData::resource_not_found(e, None))?;
         Ok(rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(text, request.uri)]).into())
@@ -2621,6 +3057,9 @@ impl ServerHandler for KnowcodeServer {
 
 /// Where the help topics are served as resources.
 const HELP_URI: &str = "knowcode://help/";
+
+/// Where the capabilities are served as a resource.
+const CAPABILITIES_URI: &str = "knowcode://capabilities";
 
 /// The server's instructions: what KnowCode is for and which core tool answers which question (a short map; each
 /// tool's description says more), callers and HTTP endpoints first, the questions agents most often took to grep; the
@@ -2701,6 +3140,76 @@ mod tests {
     /// What tool discovery costs an agent's context, held to a budget so it can't creep back: the advertised schema
     /// (every tool, as `tools/list` sends it), each description, each parameter's line, and the instructions.
     #[test]
+    fn bounds_are_said_as_answers_apply_them() {
+        let s = server("all");
+        let advertised: std::collections::HashMap<String, rmcp::model::Tool> =
+            s.tool_router.list_all().into_iter().map(|t| (t.name.to_string(), t)).collect();
+        for (tool, param, r) in RANGES.iter().filter(|(t, _, _)| *t != "*") {
+            // The schema's line, the help topic's and the advertised one.
+            let full = &s.schemas[*tool]["properties"][*param];
+            assert_eq!(full["description"].as_str(), Some(r.line().as_str()), "{tool}.{param}");
+            let help = s.help(Some(tool)).unwrap();
+            assert!(help.contains(&format!("`{param}` (integer): {}\n", r.line())), "{tool}.{param}: {help}");
+            if let Some(shown) = advertised[*tool].input_schema["properties"].get(*param).and_then(|p| p["description"].as_str()) {
+                assert_eq!(shown, format!("{}.", r.span()), "{tool}.{param}");
+            }
+            // The clamp.
+            assert_eq!((r.clamp(Some(r.max + 1)), r.clamp(Some(r.min)), r.clamp(None)), (r.max, r.min, r.default), "{tool}.{param}");
+        }
+        assert!(s.help(Some("kc_find")).unwrap().contains(&format!("`max_chars` (integer): {}\n", ANSWER_CHARS.line())));
+        // The ranges are the runtime's.
+        assert_eq!(TRACE_DEPTH.max, kc_store::trace::MAX_TRACE_DEPTH as usize);
+        assert_eq!(IMPACT_DEPTH.max, kc_store::trace::MAX_IMPACT_DEPTH as usize);
+        assert_eq!(FLOW_DEPTH.max, crate::flow::MAX_DEPTH as usize);
+        assert_eq!((PATH_HOPS.max, PATH_COUNT.max), (crate::walk::MAX_PATH_HOPS as usize, crate::walk::MAX_PATHS));
+        // Help prose names bounds by placeholder only: every one fills, and no topic says a stale one.
+        for t in crate::help::TOPICS {
+            let text = crate::help::fill(t.text);
+            for p in ["{min:", "{max:", "{default:", "{span:"] {
+                assert!(!text.contains(p), "{}: unfilled {p}", t.name);
+            }
+        }
+        let impact = s.help(Some("impact")).unwrap();
+        assert!(impact.contains(&format!("up to {} hops", IMPACT_DEPTH.max)) && impact.contains(&format!("pass depth 2-{} for more", IMPACT_DEPTH.max)), "{impact}");
+        assert!(!impact.contains("to 5"), "{impact}");
+    }
+
+    /// A refusal raised with its code keeps it, through `anyhow` and its context; one raised as English is coded by
+    /// what it says, each family the ops raise; and a refused call carries its code beside the English.
+    #[test]
+    fn every_refusal_is_coded() {
+        let policy = kc_store::answer::PrivacyPolicy { repo: "app".into(), file: ".knowcode-privacy.yml".into(), block_at: 1, blocks: "paths".into() };
+        let e = anyhow::Error::new(Refusal::withheld("withheld: AI privacy level 1 in app", policy.clone())).context("asking");
+        let t = ToolError::from(e);
+        assert_eq!((t.code, t.privacy.as_ref()), (Code::Withheld, Some(&policy)));
+        assert_eq!(t.json()["privacy"]["blocks"], "paths");
+        for (message, code) in [
+            ("failed to deserialize parameters: invalid type: string \"x\", expected u8", Code::InvalidArgument),
+            ("op trace: missing field `symbol`", Code::InvalidArgument),
+            ("direction must be in, out or both, not sideways", Code::InvalidArgument),
+            ("no op \"nope\": one of impact, find", Code::InvalidArgument),
+            ("give a symbol or symbols", Code::InvalidArgument),
+            ("21 inputs: at most 20 per call; split them across calls", Code::InvalidArgument),
+            ("unknown evidence \"sometimes\": a preset (default, confirmed, all)", Code::InvalidArgument),
+            ("pattern `class {` doesn't parse as csharp: …", Code::InvalidArgument),
+            ("cursor kc~ff is no longer held by this server (it keeps the last 4096, until it restarts)", Code::StaleCursor),
+            ("stale cursor: the list changed since this cursor was made", Code::StaleCursor),
+            ("paths matched 0 files (nowhere/**): in shop; nothing was searched", Code::NoFiles),
+            ("no repo at nowhere and no indexed repo named nowhere", Code::NotIndexed),
+            ("no definition named Nope in shop", Code::NotFound),
+            ("Save names 3 definitions; pass Type.member or file:line:", Code::Ambiguous),
+            ("git log failed in /x: fatal", Code::Failed),
+            ("something nobody expected", Code::Internal),
+        ] {
+            assert_eq!(code_of(message), code, "{message}");
+        }
+        let r = rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::new(Code::NotFound, "no definition named X"));
+        let Ok(rmcp::model::CallToolResponse::Complete(r)) = r else { panic!("{r:?}") };
+        assert_eq!(r.is_error, Some(true));
+        assert_eq!(r.structured_content, Some(json!({ "error": { "code": "not_found", "message": "no definition named X" } })));
+    }
+
+    #[test]
     fn invariant_the_advertised_schema_keeps_within_its_budget() {
         let tools = server("all").tool_router.list_all();
         let bytes = serde_json::to_string(&tools).unwrap().len();
@@ -2762,7 +3271,7 @@ mod tests {
     /// tool is described in its schema or in that topic; every topic a description or topic points to exists.
     #[test]
     fn invariant_every_parameter_is_documented_where_an_agent_can_reach_it() {
-        let s = server("all");
+        let s = server("all,kc_capabilities");
         let one = server("one");
         let mut tools = s.tool_router.list_all();
         tools.extend(one.tool_router.list_all());
@@ -2834,6 +3343,7 @@ mod tests {
             "kc_grep_ast" => as_::<GrepAstParams>(args),
             "kc_more" => as_::<MoreParams>(args),
             "kc_status" => as_::<RepoOnlyParams>(args),
+            "kc_capabilities" => as_::<CapabilitiesParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -2845,7 +3355,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all");
+        let s = server("all,kc_capabilities");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -2888,7 +3398,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all");
+        let s = server("all,kc_capabilities");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
@@ -2926,6 +3436,11 @@ mod tests {
                 assert!(parse(&t, Value::Object(args)).unwrap().contains("zq-main"), "{op}: q");
             } else {
                 assert!(kc(json!({ "op": op, "q": "x" })).is_err(), "{op} takes no q");
+                // An empty or absent `q` is none.
+                for args in [json!({ "op": op }), json!({ "op": op, "q": "" }), json!({ "op": op, "q": " " })] {
+                    let (t, args) = kc(args.clone()).unwrap_or_else(|e| panic!("{args}: {e}"));
+                    assert!(parse(&t, Value::Object(args)).is_ok(), "{op}");
+                }
             }
             if !many.is_empty() {
                 assert!(all.contains_key(*many), "{op}: qs fills {many}, which {tool} doesn't take");
@@ -2937,6 +3452,10 @@ mod tests {
                 assert!(parse(&t, Value::Object(args)).unwrap().contains("zq-many"), "{op}: qs");
             }
         }
+        // The `kc` topic names the ops taking no `q`.
+        let no_q: Vec<&str> = ONE_OPS.iter().filter(|(_, main, _)| main.is_empty()).map(|(o, _, _)| *o).collect();
+        let kc_topic = crate::help::fill(crate::help::topic("kc").unwrap().text);
+        assert!(kc_topic.contains(&format!("- {}: no `q`", no_q.join(", "))), "{no_q:?}");
         // With or without the prefix; an unknown op is refused, naming the ops.
         assert_eq!(kc(json!({ "op": "kc_find", "q": "A" })).unwrap().0, "kc_find");
         assert!(kc(json!({ "op": "nope" })).unwrap_err().contains("impact, find, refs"));
@@ -3084,7 +3603,7 @@ mod tests {
         assert!(!v["items"].as_array().unwrap().is_empty());
     }
 
-    fn batch(max: usize, n: usize) -> Result<String, String> {
+    fn batch(max: usize, n: usize) -> Result<String, ToolError> {
         let inputs: Vec<String> = (0..n).map(|i| format!("name{i}")).collect();
         let answer = |i: &str| -> anyhow::Result<Value> {
             let items: Vec<Value> = (0..40).map(|k| json!({ "file": format!("src/{i}/F{k}.cs"), "line": k })).collect();
@@ -3357,7 +3876,7 @@ mod tests {
             Parameters(serde_json::from_value(v).unwrap())
         }
         let rt = runtime();
-        let mut answers: Vec<(&str, Result<String, String>)> = rt.block_on(async {
+        let mut answers: Vec<(&str, Result<String, ToolError>)> = rt.block_on(async {
             vec![
                 ("kc_symbol_at", s.kc_symbol_at(p(json!({ "file": "src/Orders.cs", "line": 4 }))).await),
                 ("kc_find", s.kc_find(p(json!({ "query": "Orders" }))).await),
@@ -3472,6 +3991,14 @@ mod tests {
         assert!(!impact.lines().any(|l| l.contains("called by method") && l.contains(" at ")), "{impact}");
         let trace = rt.block_on(s.kc_trace(p(json!({ "symbol": "Audit.Log", "direction": "in" })))).unwrap();
         assert!(trace.contains("truncated at the node limit") && trace.contains("raise limit"), "{trace}");
+        // Asked deeper than they go, they walk as deep as their schema and help say (`RANGES`).
+        for (range, v) in [
+            (&IMPACT_DEPTH, rt.block_on(s.kc_impact(p(json!({ "symbol": "Audit.Log", "depth": 99, "format": "json" }))))),
+            (&TRACE_DEPTH, rt.block_on(s.kc_trace(p(json!({ "symbol": "Audit.Log", "depth": 99, "format": "json" }))))),
+        ] {
+            let v: Value = serde_json::from_str(&v.unwrap()).unwrap();
+            assert_eq!(v["depth"], json!({ "asked": 99, "walked": range.max }), "{v}");
+        }
         assert!(!trace.lines().next().unwrap().ends_with("; complete"), "{trace}");
 
         // kc_context: within its cap; its callers list cut, with the cursor that continues it: more to read, the
@@ -3590,6 +4117,22 @@ mod tests {
     }
 
     #[test]
+    fn a_capped_tree_leaves_out_its_rows_other_ways_first() {
+        let deep = format!("src/{}/g.cs", "deep/".repeat(40));
+        let rows = format!(
+            "a\n  called by method A.b  src/a.cs:12  [exact] direct (also via C.d at src/a.cs:14) (also via E.f at src/a.cs:20)\n  called by method G.h  {deep}:3  [exact] direct (also via C.d at {deep}:9)\n"
+        );
+        // From the last row up, until enough is gone (room for the note included); each way counted.
+        let (text, left) = unway_text(&rows, 1);
+        assert_eq!(
+            (text, left),
+            (format!("a\n  called by method A.b  src/a.cs:12  [exact] direct (also via C.d at src/a.cs:14) (also via E.f at src/a.cs:20)\n  called by method G.h  {deep}:3  [exact] direct\n"), 1)
+        );
+        let (text, left) = unway_text(&rows, usize::MAX);
+        assert_eq!((text, left), (format!("a\n  called by method A.b  src/a.cs:12  [exact] direct\n  called by method G.h  {deep}:3  [exact] direct\n"), 3));
+    }
+
+    #[test]
     fn use_sites_in_the_same_file_are_said_by_their_line() {
         assert_eq!(lean_site("  used by method A.b  src/a.cs:10  [exact] direct at src/a.cs:12"), "  used by method A.b  src/a.cs:10  [exact] direct at line 12");
         assert_eq!(lean_site("  used by method A.b  src/a.cs:10  [exact] direct at src/a.cs:10"), "  used by method A.b  src/a.cs:10  [exact] direct");
@@ -3601,6 +4144,9 @@ mod tests {
         // A prefix of another file's name isn't the same file.
         let prefix = "  used by method A.b  src/a.cs:10  [exact] direct at a.cs:12";
         assert_eq!(lean_site(prefix), prefix);
+        // A row leading with its own site already says each place once.
+        let led = "  called by method A.b  src/a.cs:12  [exact] direct (also src/a.cs:14) (declared at line 10)";
+        assert_eq!(lean_site(led), led);
     }
 
     /// Every tool listing locations quotes the lines under them (`cite`), unless the call says `cite: none`; the mode

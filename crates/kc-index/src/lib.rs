@@ -204,8 +204,14 @@ fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>
     }
     let mut origin = None;
     if !db.exists() && !privacy.whole() {
-        // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed.
-        if let Err(e) = base::clone_into(root, &db, &key) {
+        // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed. Without
+        // one, a checkout of a commit another process is building a base for waits for it.
+        let cloned = base::clone_into(root, &db, &key).and_then(|b| match b {
+            Some(b) => Ok(Some(b)),
+            None if base::wait_or_claim(root)? == base::Turn::Waited => base::clone_into(root, &db, &key),
+            None => Ok(None),
+        });
+        if let Err(e) = cloned {
             eprintln!("knowcode: {}: not started from a shared base: {e:#}", root.display());
         }
     }
@@ -952,6 +958,28 @@ pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
     let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
     let generation = store.generation()?;
     Ok(areas::needs_refresh(root, store)? || store.derived_gen(&rank_key)?.is_some_and(|g| g != generation))
+}
+
+/// The state of one kind of derived data, for `status`: computed for the index as it is (`current`), carried from the
+/// shared base the index was cloned from while no file differs from it (`from_base`, the same as computing it now),
+/// computed at an earlier generation (`stale`: an answer drawing on it says so), or never computed (`missing`: the
+/// first answer needing it computes it).
+pub fn derived_state(root: &Path, store: &Store) -> Result<(&'static str, &'static str)> {
+    let rank_key = format!("rank_graph:{}", kc_store::rank::RANK_VERSION);
+    let generation = store.generation()?;
+    let from_base = base::cloned(store)?.is_some_and(|c| c.unchanged);
+    let current = if from_base { "from_base" } else { "current" };
+    let rank = match store.derived_gen(&rank_key)? {
+        None => "missing",
+        Some(g) if g == generation => current,
+        Some(_) => "stale",
+    };
+    let areas = match store.derived_gen("areas")? {
+        None => "missing",
+        Some(_) if areas::needs_refresh(root, store)? => "stale",
+        Some(_) => current,
+    };
+    Ok((rank, areas))
 }
 
 /// Whether the file ranking (the reference graph) was never computed for `store`'s index.

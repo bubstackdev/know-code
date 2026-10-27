@@ -40,6 +40,9 @@ const META_BUILD: &str = "base.build";
 const META_DIRNAME: &str = "base.dirname";
 /// In a checkout's index: the base it was cloned from (`<file name>`), for provenance.
 pub const META_FROM: &str = "base.from";
+/// In a checkout's index: the index generation (`tree_gen`) it was cloned at. While its generation is still that one,
+/// no file differs from the base and the derived data the base carried is the checkout's own.
+const META_GEN: &str = "base.generation";
 
 /// What a checkout's state at its last sync leaves in its index and a base must not carry: the checkout's root, its
 /// discovery and `git status` caches, failed reads, when its `node_modules` was last read, and the SCIP file it was
@@ -190,6 +193,7 @@ pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Bas
         conn.execute_batch(&checkout_reset(dirname != base.dirname))?;
         relocate_path_deps(&conn, root)?;
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)", [META_FROM, base.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_str()])?;
+        conn.execute(&format!("INSERT OR REPLACE INTO meta(key, value) SELECT '{META_GEN}', value FROM meta WHERE key = 'tree_gen'"), [])?;
         Ok(())
     })();
     if let Err(e) = reset.and_then(|()| Ok(fs::rename(&tmp, db)?)) {
@@ -244,6 +248,13 @@ static LOOKED: Mutex<Option<HashSet<(PathBuf, String, String)>>> = Mutex::new(No
 /// build and policy is within a few files of its commit.
 /// Best effort, after the checkout's derived data is built so the base carries it. Returns the base's path.
 pub fn publish(root: &Path) -> Result<Option<PathBuf>> {
+    let published = publish_claimed(root);
+    // Published or not, the processes waiting for it go on: to clone it, or to index on their own.
+    release(root);
+    published
+}
+
+fn publish_claimed(root: &Path) -> Result<Option<PathBuf>> {
     if !crate::config::shared_bases()?.0 {
         return Ok(None);
     }
@@ -302,6 +313,7 @@ fn adopt(db: &Path, base: &Path) -> Result<bool> {
             put.execute([k, v])?;
         }
         put.execute([META_FROM, base.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_str()])?;
+        conn.execute(&format!("INSERT OR REPLACE INTO meta(key, value) SELECT '{META_GEN}', value FROM meta WHERE key = 'tree_gen'"), [])?;
         drop(put);
         conn.close().map_err(|(_, e)| e)?;
         fs::rename(&tmp, db)?;
@@ -361,7 +373,7 @@ fn publish_from(root: &Path, source: &kc_store::Store, commit: &str, key: &str) 
         source.conn().execute("VACUUM INTO ?1", [tmp.to_string_lossy()])?;
         let conn = Connection::open(&tmp)?;
         let dirname = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        conn.execute_batch(&format!("PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; DELETE FROM meta WHERE {CHECKOUT_META} OR key = '{META_FROM}';"))?;
+        conn.execute_batch(&format!("PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; DELETE FROM meta WHERE {CHECKOUT_META} OR key IN ('{META_FROM}', '{META_GEN}');"))?;
         let mut put = conn.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)")?;
         for (k, v) in [(META_COMMIT, commit), (META_BUILD, crate::fresh::build().as_str()), (META_DIRNAME, dirname.as_str())] {
             put.execute([k, v])?;
@@ -389,6 +401,84 @@ fn shared(root: &Path, id: &Identity) -> Result<bool> {
         return Ok(true);
     }
     Ok(workspace::all_summaries()?.iter().any(|s| s.root != root && identity_hash(s.origin.as_deref(), &s.root).as_deref() == Some(id.hash.as_str())))
+}
+
+/// What [`wait_or_claim`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    /// Nothing to wait for or build: bases are off, the repo has no other checkout, or no commit.
+    None,
+    /// This process builds the commit's base: the checkout is clean, and no other process was building it.
+    Building,
+    /// Another process was building a base for the commit; it has published it, given up or run out of time.
+    Waited,
+}
+
+/// How long a new checkout waits for another process to publish the base of its commit before indexing cold: about
+/// what indexing the checkout cold takes, by its size (its git index holds about 100 bytes a tracked file; a cold
+/// index with its derived data takes up to about 50 ms a file on a loaded machine), within a minute and 15 minutes.
+fn wait_for(root: &Path) -> std::time::Duration {
+    let files = crate::git_index_bytes(root) / 100;
+    std::time::Duration::from_millis(files.saturating_mul(50).clamp(60_000, 900_000))
+}
+
+/// The claims this process holds on bases it is building (see [`wait_or_claim`]), by checkout: released by [`publish`],
+/// whatever it decides, and with the process.
+static BUILDING: Mutex<Vec<(PathBuf, fs::File)>> = Mutex::new(Vec::new());
+
+/// For a checkout whose index starts with no base to clone (see [`clone_into`]): N jobs that start at once on a commit
+/// should index it once, not N times. A clean checkout of the commit claims its base (a lock per repository and
+/// commit) and builds it: its index, published when it is synced and its derived data built. A checkout of a commit
+/// whose base another process has claimed waits for that process to let go (at most [`wait_for`]), then the caller tries
+/// the clone again; a clean one that still finds no base claims it in turn.
+pub fn wait_or_claim(root: &Path) -> Result<Turn> {
+    if !crate::config::shared_bases()?.0 {
+        return Ok(Turn::None);
+    }
+    let (Some(id), Some(commit)) = (Identity::of(root), crate::head_commit(root)) else { return Ok(Turn::None) };
+    if !shared(root, &id)? {
+        return Ok(Turn::None);
+    }
+    if BUILDING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(r, _)| r == root) {
+        return Ok(Turn::Building);
+    }
+    let locks = crate::cache_dir()?.join("locks");
+    fs::create_dir_all(&locks)?;
+    // Named like a repository's lock (`<name>-<12 hex digits>.lock`), so uninstall recognises it.
+    let lock = writer::lock_file(&locks.join(format!("build{}-{}.lock", &commit[..commit.len().min(12)], id.hash)))?;
+    let clean = git::run(root, &["status", "--porcelain=v1", "--untracked-files=normal", "-z"]).is_ok_and(|s| s.is_empty());
+    let claim = |lock: fs::File| -> Turn {
+        if clean {
+            BUILDING.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), lock));
+            Turn::Building
+        } else {
+            Turn::None
+        }
+    };
+    match lock.try_lock() {
+        Ok(()) => return Ok(claim(lock)),
+        Err(TryLockError::WouldBlock) => {}
+        Err(TryLockError::Error(e)) => return Err(e.into()),
+    }
+    let deadline = std::time::Instant::now() + wait_for(root);
+    loop {
+        kc_store::limits::check()?;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        match lock.try_lock() {
+            Ok(()) => {
+                drop(lock);
+                return Ok(Turn::Waited);
+            }
+            Err(TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {}
+            Err(TryLockError::WouldBlock) => return Ok(Turn::Waited),
+            Err(TryLockError::Error(e)) => return Err(e.into()),
+        }
+    }
+}
+
+/// Lets go of this process's claim on the base of `root`'s commit, if it holds one.
+fn release(root: &Path) {
+    BUILDING.lock().unwrap_or_else(|e| e.into_inner()).retain(|(r, _)| r != root);
 }
 
 /// When a base was last cloned or published.
@@ -424,13 +514,31 @@ fn retire(id: &Identity, keep: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The base the index of the checkout at `root` was cloned from, by file name; `None` when it wasn't, or has no index.
-pub fn cloned_from(root: &Path) -> Option<String> {
+/// [`cloned`] for the index of the checkout at `root`; `None` when it wasn't cloned, or has no index.
+pub fn cloned_from(root: &Path) -> Option<Cloned> {
     let db = crate::db_path(root).ok()?;
     if !db.exists() {
         return None;
     }
-    crate::open_index(&db, false).ok()?.meta(META_FROM).ok().flatten()
+    cloned(&crate::open_index(&db, false).ok()?).ok().flatten()
+}
+
+/// Where a checkout's index came from and whether it still holds only the base's facts, for `status`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Cloned {
+    /// The base's file name and commit.
+    pub base: String,
+    pub commit: String,
+    /// No file has differed from the base since the clone: the derived data it carried is this checkout's own.
+    pub unchanged: bool,
+}
+
+/// [`Cloned`] for `store`, the index of a checkout cloned from a base; `None` for one that wasn't.
+pub fn cloned(store: &kc_store::Store) -> Result<Option<Cloned>> {
+    let Some(base) = store.meta(META_FROM)? else { return Ok(None) };
+    let commit = Path::new(&base).file_stem().and_then(|s| s.to_str()).and_then(|s| s.rsplit_once('-')).map(|(_, c)| c.to_string()).unwrap_or_default();
+    let unchanged = store.meta(META_GEN)?.is_some_and(|g| store.meta("tree_gen").ok().flatten().as_deref() == Some(g.as_str()));
+    Ok(Some(Cloned { base, commit, unchanged }))
 }
 
 /// The identity hash of a checkout from its workspace summary: of its origin, else of its git common directory.

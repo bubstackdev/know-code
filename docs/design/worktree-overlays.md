@@ -100,8 +100,10 @@ matches is never used and goes at the next maintenance.
 - Cloning needs no lock: a clone is a snapshot of the file at that instant, and an unlink during it fails the clone,
   which falls back to the sibling seed or a cold index.
 - Many processes on one worktree: unchanged (the writer lock serializes syncs; readers hold WAL snapshots).
-- Not in the first version: N jobs that start at once on a commit with no base each index cold. Waiting for the
-  first one's base is a follow-up, measured first.
+- N jobs that start at once on a commit with no base: the first clean checkout claims the base (a lock per repository
+  and commit) and builds it; the others wait until it is published or given up, at most about a cold index's time
+  (by the checkout's size, between a minute and 15 minutes), then clone it or index on their own. A dirty checkout
+  never claims (it couldn't publish), so no job waits on one that won't publish.
 
 ### Privacy, per worktree
 

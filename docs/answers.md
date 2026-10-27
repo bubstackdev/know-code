@@ -51,6 +51,40 @@ an assembly scan exposing only other services.
 The text rendering ends with one line per entry, for example
 `incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}`.
 
+### Codes
+
+Every refusal and every partial answer carries a machine code, so a client never reads the English to tell them apart.
+The English stays, for people.
+
+- **An `incomplete` or `more` entry:** its code is its `reason`, above. Where the reason alone doesn't say what to do,
+  the entry also has `code`: `indexing` (a `stale` repo still being indexed: ask again after it finishes),
+  `not_indexed` (a `missing_repo` not indexed yet) or `gone` (a `missing_repo` whose checkout is gone).
+- **A refused call** (an MCP tool error): the text is the English, and the result's `structuredContent` is
+  `{"error": {"code", "message"}}`.
+- **A rename preview refused:** `refused: true` with `reasons` in English and `codes` beside them, one each.
+- **Privacy:** a `withheld` entry, a call refused for naming a blocked path, and a repo refused whole all carry
+  `privacy`: `{repo, file, block_at, blocks}`, where `blocks` is `repo` or `paths`. It never names a blocked path.
+
+| code | meaning |
+| --- | --- |
+| `invalid_argument` | a parameter is missing, of the wrong type, outside its set, or contradicts another; or the op is unknown |
+| `not_found` | nothing the call names exists: no definition, file, symbol or commit by that name |
+| `ambiguous` | the call names several things and nothing decides between them; the message lists them, to pick one (a rename's ambiguous sites too) |
+| `no_files` | the paths or globs given match no file, so nothing was searched |
+| `not_indexed` | a repo the call needs isn't indexed, or isn't a repo |
+| `indexing` | a repo is being indexed: the answer is from its last index, or there is none yet; ask again after it finishes |
+| `gone` | a repo's checkout is gone |
+| `withheld` | an AI privacy file blocks what was asked (with `privacy`) |
+| `stale_cursor` | the cursor is from before the index or the list changed, or the server no longer holds it; start again with the original call |
+| `unsupported` | a construct or language the analysis doesn't model (a rename of a member the index can't see too) |
+| `collision` | a rename's new name is taken where the symbol is in scope |
+| `cut` | a rename preview cut to fit `max_chars`, which can't be applied as it is |
+| `cancelled` | the client cancelled the call |
+| `failed` | files, the index or git could not be read |
+| `internal` | anything else: a fault in KnowCode, worth reporting |
+
+The capabilities (`kc {op: capabilities}`) list the codes and the reasons.
+
 ### More is not incomplete
 
 `complete` speaks about what was asked. A list on the side of it that a limit or `max_chars` cut is a `more` entry
@@ -145,7 +179,8 @@ block holds `{"record": …}`). Compact answers in a conversation don't carry it
   answer read; its `worktree` (git directory, common directory and identity: the normalized origin, else the common
   directory); `uncommitted`, the number of files that differ from the commit (changed, deleted, untracked) and a digest
   of their paths, statuses and contents, leaving out the paths the privacy file blocks; `base`, the
-  shared base the index was cloned from (see [architecture](architecture.md#the-cache-lifecycle)); and `privacy`, the
+  shared base the index was cloned from, with its `commit` and whether any file differs from it yet (`unchanged`;
+  see [architecture](architecture.md#the-cache-lifecycle)); and `privacy`, the
   digests of the policy's key (what it blocks, absent when nothing is) and of the privacy file, and `block_at`.
 
 Hashes are `blake3:<hex>`.

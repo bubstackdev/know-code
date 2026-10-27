@@ -1401,3 +1401,66 @@ fn declared_clients_link_through_their_installed_package() {
     assert!(note.contains("media-apiclient wasn't read: installed 1.2.0, but package-lock.json pins 1.1.0"), "{note}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn a_seeded_worktree_hashes_files_whose_stat_matches_the_seed() {
+    let turn = turn();
+    let base = turn.dir("seed-stats");
+    let git = |dir: &Path, args: &[&str]| assert!(Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+    let main = scratch(&base, "cart");
+    for i in 0..6 {
+        write(&main, &format!("src/s{i}.ts"), &format!("export class Store{i} {{ load(): number {{ return {i}; }} }}\n"));
+    }
+    git(&main, &["remote", "add", "origin", "https://example.test/group/cart.git"]);
+    git(&main, &["add", "."]);
+    git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let main_root = kc_index::repo_root(&main).unwrap();
+    sync(&main_root, &mut kc_index::open(&main_root).unwrap(), &opts).unwrap();
+
+    // A worktree whose file has the size and the mtime the seed recorded (a copy that kept mtimes), and other content.
+    let wt = base.join("cart-wt");
+    git(&main, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+    let recorded = std::fs::metadata(main.join("src/s2.ts")).unwrap().modified().unwrap();
+    write(&wt, "src/s2.ts", "export class Store9 { load(): number { return 2; } }\n");
+    std::fs::File::options().write(true).open(wt.join("src/s2.ts")).unwrap().set_modified(recorded).unwrap();
+    assert_eq!(std::fs::metadata(wt.join("src/s2.ts")).unwrap().len(), std::fs::metadata(main.join("src/s2.ts")).unwrap().len());
+    let wt_root = kc_index::repo_root(&wt).unwrap();
+    let mut store = kc_index::open(&wt_root).unwrap();
+    let report = sync(&wt_root, &mut store, &opts).unwrap();
+    assert_eq!(report.parsed, 1, "{report:?}");
+    assert!(!query::find(store.conn(), "Store9", None, 5).unwrap().0.is_empty());
+    assert!(query::find(store.conn(), "Store2", None, 5).unwrap().0.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_seeded_worktree_names_its_root_role_after_its_own_directory() {
+    let turn = turn();
+    let base = turn.dir("seed-role");
+    let git = |dir: &Path, args: &[&str]| assert!(Command::new("git").arg("-C").arg(dir).args(args).status().unwrap().success());
+    let main = scratch(&base, "web-role");
+    std::fs::create_dir_all(main.join("tasks")).unwrap();
+    write(&main, "tasks/main.yml", "- name: Install the web server\n  ansible.builtin.package:\n    name: nginx\n");
+    git(&main, &["remote", "add", "origin", "https://example.test/group/web-role.git"]);
+    git(&main, &["add", "."]);
+    git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]);
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let main_root = kc_index::repo_root(&main).unwrap();
+    let store = {
+        let mut s = kc_index::open(&main_root).unwrap();
+        sync(&main_root, &mut s, &opts).unwrap();
+        s
+    };
+    assert!(!query::find(store.conn(), "web-role", None, 5).unwrap().0.is_empty());
+    drop(store);
+
+    let wt = base.join("web-role-wt");
+    git(&main, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+    let wt_root = kc_index::repo_root(&wt).unwrap();
+    let mut store = kc_index::open(&wt_root).unwrap();
+    sync(&wt_root, &mut store, &opts).unwrap();
+    assert!(!query::find(store.conn(), "web-role-wt", None, 5).unwrap().0.is_empty());
+    assert!(query::find(store.conn(), "web-role", None, 5).unwrap().0.iter().all(|h| h.symbol.name != "web-role"));
+    let _ = std::fs::remove_dir_all(&base);
+}

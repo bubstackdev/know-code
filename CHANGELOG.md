@@ -8,16 +8,91 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
   cold index of the same tree: `scripts/worktree-gate.py` checks it on public repos, with the freshness cases (a new
-  untracked file, a same-size edit with its mtime restored) in every worktree. `cache.shared_bases` turns it off.
-- A new checkout seeded from another checkout's index hashes every file, so a copy that kept its files' mtimes no
-  longer keeps another checkout's facts for a file of the same size; a repo that is one Ansible role is named after
-  its own directory, not the other checkout's.
+  untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
+  commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
+  `cache.shared_bases` turns it off.
 - **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
   for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
   hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
   commit, a digest of its uncommitted content, index generation, the base it was cloned from and its privacy policy's
   digests. Compact answers are unchanged.
 - `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
+- Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
+  describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
+  schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
+  whether an op reads or writes (notes are the only writes), the evidence presets, the answer's format and the keys
+  it always has, and the server, MCP protocol and index schema versions. It is read from the tables help and the
+  advertised schemas come from, and a test checks each op's entry against the running server. It costs nothing up
+  front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
+  topic's list of what `q` fills is now made from the same table.
+- `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
+- Stable codes: every refused call carries a machine code beside its English, in the tool result's
+  `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
+  `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
+  code, with `code` where it says more: `indexing` (ask again after it finishes), `not_indexed`, `gone`. A refused
+  input of a batch, and the batch's entry for it, carry the code too, and a refused rename preview has `codes` beside
+  its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
+  blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
+  replay gate fails a build that codes its refusals if any refusal it replays has none.
+- A new worktree or clone seeded from another checkout's index kept that checkout's facts for a file whose size and
+  mtime matched what the other checkout recorded (a copy that kept mtimes, `cp -p`), whatever its content: the first
+  sync now hashes every file. A repo that is one Ansible role (`tasks/main.yml` at its root) named its role after the
+  other checkout's directory; its Ansible files are extracted again.
+- `unused` counted another worktree (or clone) of the same repo as a user of the repo's packages, so its answer
+  changed with how many checkouts of the repo were indexed: their public API turned `possibly unused` and
+  `published` named the packages. Checkouts of one origin are one repo here too.
+
+- Swift files with constructs tree-sitter-swift doesn't read lose less of their code. When a file has parse errors,
+  it is parsed again with them blanked (positions kept), and the tree with less of the file in errors is used: the
+  underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`), `@_lifetime(…)`, module
+  selectors (`Mod::Name`, `#Mod::macro`), `nonisolated(unsafe)`, `unsafe` and `sending` before an operand, and then
+  `#if` blocks whose branches are whole (around attributes, between a switch's cases). An empty tuple (`f(())`) and a
+  member named by a keyword (`case .try:`) no longer count as parse errors: the grammar reads them with a zero-width
+  `!` and the tree is whole. Over 4,845 files of 15 public Swift repos, files with parse errors fall from 605 to 160,
+  and 256 declarations are read that weren't, none lost. Swift files are re-extracted once.
+- `status` says where each of the worst files' first parse errors are (`first`: `at` line:col and the text there).
+- `context` on a type lists the members and extensions of the declaration it picks, not those of every type with its
+  name. Two Swift modules each declaring `Tile`, or a file's `private struct Tile` beside a module's public one, used
+  to share one member list. An extension goes to the declaration it can see: the one in its file, else its module's,
+  else that of a module its file imports; a `private` or `fileprivate` type is seen from its own file only. An
+  extension nothing narrows to one (its file imports two modules declaring the type) is listed under each, and each
+  context says so (`extensions_ambiguous`).
+- A C# call written on a type reached a same-named extension method of another type: `string.IsNullOrEmpty(s)`
+  resolved to a repo's `IsNullOrEmpty(this Guid? g)`, and `string.Compare(a, b, c)` to repo `Compare` methods, so
+  `impact`, `refs` and `trace` listed those calls as callers. A predefined type keyword (`string`, `int`, …) as
+  receiver is now the type, and a call on a type reaches only that type's members and extensions on it.
+- `impact` listed each dependent once, by its best way, and dropped the others with their lines: a method calling
+  the change on one line (hop 1) and, on others, a method that calls it (hop 2) named only the first line. A row now
+  keeps its other ways in `ways` (`{via, hop, confidence, site, also}`), and in text last on its
+  row (`(also via Store.Drop [exact] at Bin.cs:8, Bin.cs:9)`). A capped text answer leaves them out first, from the last row up,
+  and says how many, so no row is cut for them.
+- A C# override or implementation that leaves out its base member's default parameter value
+  (`virtual M(User u, bool deep, Query q = null)`, `override M(User u, bool deep, Query q)`) wasn't matched to the base
+  member, so calls through the base (`folder.M(user, true)`) never reached it: `impact` on the override answered
+  "nothing affected" and called that complete. Members now match by how many parameters they take, whichever have
+  defaults, and then by parameter types as before.
+- In `impact` and `trace` (callers) text, a row now leads with its use site, the line to open (`Till.cs:8`), then
+  its other sites as `file:line` and the line its symbol is declared at (`(declared at line 6)`). Before, a row led
+  with the declaration and gave the site as `at line 8`, which an agent or a script reading `file:line` places
+  missed: since rows across a library boundary joined the walk, their call sites too. The JSON is unchanged.
+- A constructor is found by the name its source gives it: `Factory.__init__` (Python), `Cart.constructor`
+  (TypeScript, JavaScript) and `Ledger.Ledger` (C#), as well as by `init`, the name the index stores. Where a class also
+  has a method named `init`, `Factory.init` is that method, with the constructor listed after it to pick by place.
+  Before, `Factory.__init__` found no definition. A call written `init` (`self.init()`, `this.init()`) now resolves
+  to that method alone, no longer to the constructor too.
+- `kc_impact`'s help said its walk goes up to 16 hops while its `depth` parameter said 1 to 5; it walks up to 16.
+  Every bounded parameter (`depth` of impact, trace and flow; path's `max_hops` and `paths`; search's `limit` and
+  `context`; grep_ast's `limit`; `max_chars`) now takes its schema line, its help text and the clamp its answers apply
+  from one table, so they can't disagree. `max_chars` now says its maximum doubles for several inputs, as it always has.
+- `kc {op: status, q: ""}` (and `unused`, `hotspots`): an op taking no query takes an empty `q` as none, where it
+  was an error. The `kc` topic says which ops take no `q`.
+- `impact`, `trace` (callers) and `history` reach an implementation of a library's interface member from the calls
+  in the repo through that interface (`_cached.ForContext<T>()` on Serilog's `ILogger`, in a class implementing
+  `ILogger`) when no indexed repo defines the interface. Before, such a call resolved to nothing and reached no
+  implementation. It is `ambiguous` (the library's own implementation may run instead), so listed, not walked past;
+  a call of another overload (by argument count and the argument types the call site gives) isn't listed. With the
+  library indexed, the call is listed once, in the walk, not again in `cross_repo`. `history`'s
+  `callers_changed_with` marks such a caller `ambiguous`.
 
 ## 0.5.0 (2026-10-27)
 

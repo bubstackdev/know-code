@@ -152,6 +152,43 @@ pub fn split_dotted(query: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// How a constructor is written in its file's language. The index stores every constructor as `init`, Swift's word;
+/// Python writes `__init__`, TypeScript and JavaScript `constructor`, and C# the type's own name.
+pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option<&'a str> {
+    match file.rsplit('.').next().unwrap_or("") {
+        "swift" => Some("init"),
+        "py" => Some("__init__"),
+        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
+        "cs" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        _ => None,
+    }
+}
+
+/// The name a definition has in its source: a constructor's (see [`constructor_written`]), or its indexed name.
+pub fn written_name(s: &SymbolRow) -> &str {
+    if s.kind == "init" { constructor_written(&s.file, s.container.as_deref()).unwrap_or(&s.name) } else { &s.name }
+}
+
+/// The constructors in a container named `container` (any, when `None`) whose source writes them `name` (see
+/// [`constructor_written`]): `Factory.__init__`, `Cart.constructor`, C#'s `Cart.Cart`. Empty for any other name.
+fn written_constructors(conn: &Connection, container: Option<&str>, name: &str) -> Result<Vec<SymbolRow>> {
+    let langs = match name {
+        "__init__" => "'python'",
+        "constructor" => "'typescript', 'tsx', 'javascript'",
+        _ if container.is_some_and(|c| c.rsplit('.').next() == Some(name)) => "'csharp'",
+        _ => return Ok(Vec::new()),
+    };
+    let sql = format!(
+        "SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE s.name = 'init' AND s.kind = 'init' AND f.lang IN ({langs}) ORDER BY f.path, s.start_byte"
+    );
+    let rows = conn.prepare_cached(&sql)?.query_map([], symbol_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|s| written_name(s) == name && container.is_none_or(|c| s.container.as_deref().is_some_and(|sc| names_type(sc, c))))
+        .collect())
+}
+
 /// Whether `qualified` is the type `c` names: `c` itself or ending in `.c`.
 fn names_type(qualified: &str, c: &str) -> bool {
     qualified == c || qualified.strip_suffix(c).is_some_and(|head| head.ends_with('.'))
@@ -289,6 +326,11 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
             hits.entry(row.id).or_insert((3, FindHit { symbol: row, matched: "token" }));
         }
     }
+    for row in written_constructors(conn, container, name)? {
+        if kind_matches(kind, &row.kind) {
+            hits.insert(row.id, (0, FindHit { symbol: row, matched: "exact" }));
+        }
+    }
 
     let mut ranked: Vec<(u8, FindHit)> = hits.into_values().collect();
     ranked.sort_by(|(ta, a), (tb, b)| {
@@ -356,10 +398,13 @@ fn definitions_split(conn: &Connection, _query: &str, (container, name): (Option
             })
             .collect();
     }
+    rows.extend(written_constructors(conn, container, name)?);
     // Code before tests and copies, whatever its kind (a test helper sharing the name of the code it tests never comes
     // first), then by kind; an Ansible role's meta symbol after its main tasks.
     let meta = |s: &SymbolRow| s.kind == "role" && s.tags == "meta";
-    let key = |s: &SymbolRow| (crate::path_rank(&s.file), kind_rank(&s.kind), meta(s), s.file.clone(), s.line);
+    // A constructor the index names `init` comes after a definition its source writes `init` (Python's `__init__` after
+    // a method named `init`).
+    let key = |s: &SymbolRow| (crate::path_rank(&s.file), s.kind == "init" && written_name(s) != name, kind_rank(&s.kind), meta(s), s.file.clone(), s.line);
     rows.sort_by_cached_key(key);
     Ok(rows)
 }
@@ -1803,6 +1848,11 @@ fn cs_receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<(Receiver, Optio
         };
         return Ok((Receiver::Known(supers), None));
     }
+    // A predefined type (`string.IsNullOrEmpty(s)`): the type itself, so only its own members and extensions declared
+    // on it, never a same-named member of another type.
+    if let Some(k) = r.filter(|r| CS_PREDEFINED_TYPES.contains(r)) {
+        return Ok((Receiver::Foreign(vec![k.to_string()]), None));
+    }
     oracle.origin = Origin::Here;
     let mut ty = None;
     if let Some(r) = r
@@ -1866,6 +1916,10 @@ fn cs_receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<(Receiver, Optio
         Seen::Library => (Receiver::Foreign(vec![last_segment(&written).to_string()]), Some(Vec::new())),
     })
 }
+
+/// C#'s predefined type keywords: as a receiver, a type, never a variable.
+const CS_PREDEFINED_TYPES: &[&str] =
+    &["string", "object", "bool", "char", "sbyte", "byte", "short", "ushort", "int", "uint", "long", "ulong", "nint", "nuint", "float", "double", "decimal"];
 
 /// `Name` for a receiver written `Name` or `Name<T, …>` with `Name` capitalised: a property or a type.
 fn bare_name(receiver: &str) -> Option<&str> {
@@ -1984,6 +2038,9 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         .iter()
         .copied()
         .filter(|d| compatible(&hit.kind, &d.kind) && (case_ok || d.kind != "case"))
+        // A call written `init` reaches a constructor only where constructors are written `init`: in Python
+        // `self.init()` is a method named `init`, never `__init__`.
+        .filter(|d| !(hit.name == "init" && d.kind == "init" && matches!(d.lang.as_str(), "python" | "typescript" | "tsx" | "javascript")))
         .filter(|d| !implicit || d.kind == "case" || d.is_static)
         .filter(|d| !key_path || matches!(d.kind.as_str(), "property" | "subscript"))
         // Anything a script defines is visible only inside that script.
@@ -2040,7 +2097,11 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             found.retain(|d| d.kind != "method");
         }
         if found.is_empty() {
-            if matches!(recv, Receiver::Foreign(_)) {
+            // A C# call on a type written as its receiver (`string.IsNullOrEmpty(s)`, `Convert.ToInt32(x)`) reaches
+            // that type's static members, none of which the repo declares: never another type's extension method.
+            let on_type = hit.file.ends_with(".cs")
+                && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
+            if matches!(recv, Receiver::Foreign(_)) && !on_type {
                 // A framework type may conform to a framework protocol the repo extends.
                 let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container).collect();
                 return group_confidence(&ext);
@@ -2524,6 +2585,34 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         params: r.get(12)?,
         lang: r.get(13)?,
     })
+}
+
+/// The overloads of one name, for telling which a call the repo couldn't resolve (one through a library's type) may
+/// call: see [`Overloads::may_call`].
+pub struct Overloads<'c> {
+    defs: Vec<Def>,
+    oracle: TypeOracle<'c>,
+}
+
+impl<'c> Overloads<'c> {
+    pub fn named(conn: &'c Connection, name: &str) -> Result<Self> {
+        Ok(Overloads { defs: defs_named(conn, name)?, oracle: TypeOracle::new(conn) })
+    }
+
+    /// Whether `hit` may call `id` among its type's overloads: `id` takes as many arguments as it passes, and the
+    /// argument types the call site gives don't pick another overload over it (see [`narrow_by_argument_types`]).
+    pub fn may_call(&mut self, hit: &RefHit, id: i64) -> Result<bool> {
+        let Some(me) = self.defs.iter().find(|d| d.id == id) else { return Ok(false) };
+        if hit.args.is_some_and(|n| !me.accepts(n)) {
+            return Ok(false);
+        }
+        let fitting: Vec<&Def> =
+            self.defs.iter().filter(|d| d.container == me.container && d.kind == me.kind && hit.args.is_none_or(|n| d.accepts(n))).collect();
+        if fitting.len() < 2 || hit.arg_types.is_none() {
+            return Ok(true);
+        }
+        Ok(narrow_by_argument_types(&mut self.oracle, hit, fitting)?.iter().any(|d| d.id == id))
+    }
 }
 
 fn defs_named(conn: &Connection, name: &str) -> Result<Vec<Def>> {
@@ -5431,6 +5520,11 @@ pub struct Context {
     pub relations: Vec<RelationHit>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<SymbolRow>,
+    /// Extensions listed that may extend another type of this name instead (each imported module declaring one, say),
+    /// one line per set of other types: `2 extensions may extend this or file:line (Module): file:line, file:line`.
+    /// Their members are listed as this type's too.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions_ambiguous: Vec<String>,
     /// For a C# `partial` type declared in several parts: every part, `file:line`, this one among them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<String>,
@@ -5595,6 +5689,16 @@ pub fn constructors(conn: &Connection, ty: &SymbolRow, files: &[&str]) -> Result
     Ok(rows.into_iter().filter(|r| files.is_empty() || files.contains(&r.file.as_str())).collect())
 }
 
+/// The types other than `ty` (and its `parts`) declared with its qualified name: another module's type of that name,
+/// a file's `private` one.
+fn same_named_types(conn: &Connection, ty: &SymbolRow, parts: &HashSet<i64>) -> Result<Vec<SymbolRow>> {
+    let qualified = ty.qualified();
+    Ok(definitions_split(conn, &ty.name, (None, &ty.name))?
+        .into_iter()
+        .filter(|d| d.id != ty.id && !parts.contains(&d.id) && TYPE_KINDS.contains(&d.kind.as_str()) && d.qualified() == qualified)
+        .collect())
+}
+
 /// At most this many of a type's conformers are listed in its context.
 pub const CONFORMERS_SHOWN: usize = 50;
 /// At most this many other definitions of a name are listed in a context.
@@ -5670,6 +5774,7 @@ pub fn context_with(
     let is_type = TYPE_KINDS.contains(&symbol.kind.as_str()) || symbol.kind == "extension";
 
     let mut extensions = Vec::new();
+    let mut extensions_ambiguous = Vec::new();
     let mut relations = Vec::new();
     let mut members = Vec::new();
     let mut members_total = 0;
@@ -5692,6 +5797,49 @@ pub fn context_with(
             .into_iter()
             .filter(|e| e.qualified() == qualified)
             .collect();
+        let found = partial_parts(conn, &symbol)?;
+        if found.len() > 1 {
+            parts = found.iter().map(|p| format!("{}:{}", p.file, p.line)).collect();
+            part_ids = found.iter().map(|p| p.id).collect();
+        }
+        // Other types of this qualified name (another module's, a file's `private` one): their members, and the
+        // extensions of theirs, are not this one's.
+        let others = if symbol.kind == "extension" { Vec::new() } else { same_named_types(conn, &symbol, &part_ids)? };
+        let mut not_ours: HashSet<i64> = others.iter().map(|o| o.id).collect();
+        if !others.is_empty() {
+            let decls: Vec<SymbolRow> = std::iter::once(symbol.clone()).chain(others).collect();
+            let mut kept = Vec::with_capacity(extensions.len());
+            let mut ambiguous: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+            for e in extensions {
+                let targets = crate::identity::extended_by(conn, &e, &decls)?;
+                if !targets.contains(&symbol.id) {
+                    not_ours.insert(e.id);
+                    continue;
+                }
+                if targets.len() > 1 {
+                    let mut also: Vec<String> = Vec::new();
+                    for d in decls.iter().filter(|d| d.id != symbol.id && targets.contains(&d.id)) {
+                        let ns = crate::identity::namespace_of(conn, d)?.map(|n| format!(" ({n})")).unwrap_or_default();
+                        also.push(format!("{}:{}{ns}", d.file, d.line));
+                    }
+                    let at = format!("{}:{}", e.file, e.line);
+                    match ambiguous.iter_mut().find(|(a, _)| *a == also) {
+                        Some((_, exts)) => exts.push(at),
+                        None => ambiguous.push((also, vec![at])),
+                    }
+                }
+                kept.push(e);
+            }
+            extensions = kept;
+            // One line per set of other types: a type declared twice under `#if` has every extension in both.
+            for (also, exts) in ambiguous {
+                let n = exts.len();
+                let shown: Vec<&str> = exts.iter().take(3).map(String::as_str).collect();
+                let more = if n > 3 { ", …" } else { "" };
+                let word = if n == 1 { "extension" } else { "extensions" };
+                extensions_ambiguous.push(format!("{n} {word} may extend this or {}: {}{more}", also.join(", "), shown.join(", ")));
+            }
+        }
 
         let from_ids: Vec<i64> = std::iter::once(symbol.id).chain(extensions.iter().map(|e| e.id)).collect();
         let mut stmt = conn.prepare_cached(
@@ -5720,6 +5868,17 @@ pub fn context_with(
         );
         let mut stmt = conn.prepare_cached(&sql)?;
         let mut all: Vec<SymbolRow> = stmt.query_map([&qualified], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+        if !not_ours.is_empty() {
+            let mut parent = conn.prepare_cached("SELECT parent_id FROM symbols WHERE id = ?1")?;
+            let mut kept = Vec::with_capacity(all.len());
+            for m in all {
+                let p: Option<i64> = parent.query_row([m.id], |r| r.get(0)).optional()?.flatten();
+                if p.is_none_or(|p| !not_ours.contains(&p)) {
+                    kept.push(m);
+                }
+            }
+            all = kept;
+        }
         // Constructors first: how the type is made is what a cut list should keep.
         all.sort_by_key(|m| m.kind != "init");
         members_total = all.len();
@@ -5743,11 +5902,6 @@ pub fn context_with(
             let (found, n) = indirect_conformers(conn, &symbol.name, limits.conformers)?;
             conformers_indirect_total = (n > found.len()).then_some(n);
             conformers_indirect = found;
-        }
-        let found = partial_parts(conn, &symbol)?;
-        if found.len() > 1 {
-            parts = found.iter().map(|p| format!("{}:{}", p.file, p.line)).collect();
-            part_ids = found.iter().map(|p| p.id).collect();
         }
     }
 
@@ -5858,6 +6012,7 @@ pub fn context_with(
         source_changed,
         relations,
         extensions,
+        extensions_ambiguous,
         parts,
         members,
         members_total,
@@ -5935,6 +6090,13 @@ pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Imp
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let parents = supertypes(conn, &short)?;
     implemented_in(conn, conn, sym, parents, HashSet::from([short]), false)
+}
+
+/// Whether a member taking `a` (min_args, max_args) and one taking `b` take the same parameters, as an
+/// implementation and the member it implements or overrides do: as many, whichever have default values (an override
+/// may leave its base's defaults out, `M(x, y = null)` and `override M(x, y)`). Unknown on either side: the same.
+pub fn same_parameters(a: (Option<u32>, Option<u32>), b: (Option<u32>, Option<u32>)) -> bool {
+    a == b || a.0.is_none() || b.0.is_none() || (a.1.is_some() && a.1 == b.1)
 }
 
 /// [`implemented_members`] declared in a dependency `dep` (a package's base class or interface): the supertypes
@@ -6124,12 +6286,12 @@ fn implemented_in(
                         && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}")))
                 })
                 .collect();
-            // An implementation takes the arguments the member does (a WCF client's `XAsync()` doesn't implement
+            // An implementation takes the parameters the member does (a WCF client's `XAsync()` doesn't implement
             // the channel's `XAsync(request)`).
             let mut same = Vec::new();
             for m in members {
                 let theirs = arity(types, m.id)?;
-                if theirs == own || theirs.0.is_none() || own.0.is_none() {
+                if same_parameters(theirs, own) {
                     same.push(m);
                 }
             }

@@ -69,6 +69,13 @@ CALL_SITES = re.compile(r'\] \w+ at line (\d+)(?: \(also ([\d, ]+)\))?')
 PROFILES = ('one', 'core', 'all')
 # Refusals by design: the answer says what the call asked for doesn't exist here, rather than failing.
 REFUSALS = (re.compile(r'\bmatched 0 files \('),)
+# Refusals by design, by code, for builds that code their errors (0.6 on); REFUSALS reads older builds' English.
+REFUSAL_CODES = {'no_files'}
+# The reasons an `incomplete` or `more` entry may give, and the codes it or a refused call may carry (docs/answers.md).
+REASONS = {'capped', 'budget', 'deadline', 'stale', 'failed', 'missing_repo', 'unsupported', 'policy', 'withheld', 'depth'}
+CODES = {'invalid_argument', 'not_found', 'ambiguous', 'no_files', 'not_indexed', 'indexing', 'gone', 'withheld',
+         'stale_cursor', 'unsupported', 'collision', 'cut', 'cancelled', 'failed', 'internal'}
+TREE_ENTRY = re.compile(r'^(?:incomplete|more) \((\w+)\)', re.M)
 GIT_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null',
            'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0'}
 # The fast subset: the questions whose repositories are all small. About 12 MB of source, 22 questions, 119 calls.
@@ -227,12 +234,18 @@ class Server:
                 self.buffer += chunk
 
     def call(self, tool, args, timeout=120):
+        error, text, _ = self.call_coded(tool, args, timeout)
+        return error, text
+
+    def call_coded(self, tool, args, timeout=120):
+        """(whether it was an error, its text, the error's code when the build gives one)."""
         reply = self.request('tools/call', {'name': tool, 'arguments': args}, timeout)
         result = reply.get('result') or {}
         text = '\n'.join(part.get('text', '') for part in result.get('content') or [] if part.get('type') == 'text')
         if 'error' in reply:
-            return True, json.dumps(reply['error'])
-        return bool(result.get('isError')), text
+            return True, json.dumps(reply['error']), None
+        code = ((result.get('structuredContent') or {}).get('error') or {}).get('code')
+        return bool(result.get('isError')), text, code
 
     def close(self):
         self.process.stdin.close()
@@ -332,14 +345,14 @@ def run(args):
                 continue
             question = banks[row['study']][0][row['question']]
             try:
-                error, text = server.call(row['tool'], row['args'])
-                refused = error and any(r.search(text) for r in REFUSALS)
+                error, text, code = server.call_coded(row['tool'], row['args'])
+                refused = error and (code in REFUSAL_CODES or any(r.search(text) for r in REFUSALS))
                 error = error and not refused
             except TimeoutError:
-                error, refused, text = True, False, 'timeout'
+                error, refused, text, code = True, False, 'timeout', None
             calls.append(dict(study=row['study'], question=row['question'], stratum=question['stratum'], tool=row['tool'],
-                              args=row['args'], error=error, refused=refused, bytes=len(text.encode()),
-                              places=[] if error else places(text, question['repos'], roots)))
+                              args=row['args'], error=error, refused=refused, code=code, entries=entry_codes(text),
+                              bytes=len(text.encode()), places=[] if error else places(text, question['repos'], roots)))
     finally:
         server.close()
     timing['calls_s'] = round(time.monotonic() - t0, 1)
@@ -383,11 +396,49 @@ def run(args):
                    skipped=skipped, repos=sorted(roots), strata=strata, tools=tools,
                    errors=[dict(question=c['question'], tool=c['tool'], args=c['args']) for c in calls if c['error']],
                    refusals=[dict(question=c['question'], tool=c['tool'], args=c['args']) for c in calls if c['refused']],
+                   coded=any(c['code'] for c in calls), uncoded=uncoded(calls),
                    schemas=profile_schemas, timing=timing, questions=per_question)
     out = Path(args.out) if args.out else base/'summary.json'
     out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
     (base/'calls.jsonl').write_text(''.join(json.dumps(c, sort_keys=True) + '\n' for c in calls))
     return summary
+
+
+def entry_codes(text):
+    """The codes of an answer's `incomplete` and `more` entries: each one's `code`, else its `reason`; from a tree's
+    header lines when the answer is text."""
+    try:
+        v = json.loads(text)
+    except ValueError:
+        return sorted(set(TREE_ENTRY.findall(text)))
+    found = set()
+
+    def walk(x):
+        if isinstance(x, dict):
+            for key in ('incomplete', 'more'):
+                for e in x.get(key) or []:
+                    if isinstance(e, dict):
+                        found.add(e.get('code') or e.get('reason') or '')
+            for y in x.values():
+                walk(y)
+        elif isinstance(x, list):
+            for y in x:
+                walk(y)
+    walk(v)
+    return sorted(found)
+
+
+def uncoded(calls):
+    """The calls whose refusal has no code (or `internal`), or that give an entry a reason or code outside the closed
+    sets: every one of them is something a client can't act on without reading the English."""
+    out = []
+    for c in calls:
+        bad = [e for e in c.get('entries', []) if e not in REASONS and e not in CODES]
+        if (c['error'] or c['refused']) and c.get('code') in (None, 'internal'):
+            bad.append(f"refused with code {c.get('code')}")
+        if bad:
+            out.append(dict(question=c['question'], tool=c['tool'], args=c['args'], why=bad))
+    return out
 
 
 # --- compare --------------------------------------------------------------------------------------------------------
@@ -414,6 +465,10 @@ def compare(base, cand, tolerances=TOLERANCES):
     for e in cand.get('refusals', []):
         if key(e) not in refused:
             out.append(f"newly refused: {e['tool']} {json.dumps(e['args'], sort_keys=True)} ({e['question']})")
+    # A build that codes its refusals codes every one, and every entry's reason is one the contract names.
+    if cand.get('coded'):
+        for e in cand.get('uncoded', []):
+            out.append(f"uncoded: {e['tool']} {json.dumps(e['args'], sort_keys=True)} ({e['question']}): {', '.join(e['why'])}")
     for tool, b in base['tools'].items():
         c = cand['tools'].get(tool)
         if c and b['bytes_total'] and c['bytes_total'] > b['bytes_total'] * (1 + tolerances['bytes']):

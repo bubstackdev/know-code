@@ -35,6 +35,20 @@ pub enum Reason {
     Depth,
 }
 
+/// Every [`Reason`], in its documented order.
+pub const REASONS: &[Reason] = &[
+    Reason::Capped,
+    Reason::Budget,
+    Reason::Deadline,
+    Reason::Stale,
+    Reason::Failed,
+    Reason::MissingRepo,
+    Reason::Unsupported,
+    Reason::Policy,
+    Reason::Withheld,
+    Reason::Depth,
+];
+
 impl Reason {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -52,6 +66,124 @@ impl Reason {
     }
 }
 
+/// A machine code: what a refused call (a tool error) is, or, on an [`Incomplete`] entry, what its reason is more
+/// precisely. Stable: clients branch on it, never on the English beside it. Documented in docs/answers.md; a new
+/// member is a contract change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Code {
+    /// A parameter is missing, of the wrong type, out of its set, or contradicts another; or the op is unknown.
+    InvalidArgument,
+    /// Nothing the call names exists: no definition, file, symbol or commit by that name.
+    NotFound,
+    /// The call names several things and nothing decides between them: the message lists them, to pick one.
+    Ambiguous,
+    /// The paths or globs given match no file, so nothing was searched.
+    NoFiles,
+    /// A repo the call needs isn't indexed (or isn't a repo at all).
+    NotIndexed,
+    /// A repo is being indexed: the answer is from its last index, or there is none yet. Ask again after it finishes.
+    Indexing,
+    /// A repo's checkout is gone.
+    Gone,
+    /// An AI privacy file blocks what was asked (see `privacy` beside it).
+    Withheld,
+    /// A cursor from before the index or the list changed: start again with the original call.
+    StaleCursor,
+    /// A construct or language the analysis doesn't model.
+    Unsupported,
+    /// A rename's new name is taken where the symbol is in scope.
+    Collision,
+    /// The answer would be cut where a part of it is useless: a rename preview cut to fit `max_chars`.
+    Cut,
+    /// The client cancelled the call.
+    Cancelled,
+    /// Files, the index or git could not be read.
+    Failed,
+    /// Anything else: a fault in KnowCode.
+    Internal,
+}
+
+/// Every [`Code`], in its documented order.
+pub const CODES: &[Code] = &[
+    Code::InvalidArgument,
+    Code::NotFound,
+    Code::Ambiguous,
+    Code::NoFiles,
+    Code::NotIndexed,
+    Code::Indexing,
+    Code::Gone,
+    Code::Withheld,
+    Code::StaleCursor,
+    Code::Unsupported,
+    Code::Collision,
+    Code::Cut,
+    Code::Cancelled,
+    Code::Failed,
+    Code::Internal,
+];
+
+impl Code {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Code::InvalidArgument => "invalid_argument",
+            Code::NotFound => "not_found",
+            Code::Ambiguous => "ambiguous",
+            Code::NoFiles => "no_files",
+            Code::NotIndexed => "not_indexed",
+            Code::Indexing => "indexing",
+            Code::Gone => "gone",
+            Code::Withheld => "withheld",
+            Code::StaleCursor => "stale_cursor",
+            Code::Unsupported => "unsupported",
+            Code::Collision => "collision",
+            Code::Cut => "cut",
+            Code::Cancelled => "cancelled",
+            Code::Failed => "failed",
+            Code::Internal => "internal",
+        }
+    }
+}
+
+/// The AI privacy policy that withheld something, said the same way on a tool error, a `withheld` entry and a repo
+/// refused whole: the repo, the policy file's name, the level it blocks at and below, and whether it blocks the whole
+/// repo or paths in it. Never a blocked path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivacyPolicy {
+    pub repo: String,
+    pub file: String,
+    pub block_at: u8,
+    /// `repo` (the whole repo) or `paths`.
+    pub blocks: String,
+}
+
+/// A call refused for a reason a client can act on: its [`Code`], the English for people, and the privacy policy
+/// for a `withheld` one. Raised as an error (`anyhow`), read back by the MCP server into the tool error's code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub code: Code,
+    pub message: String,
+    pub privacy: Option<PrivacyPolicy>,
+}
+
+impl Refusal {
+    pub fn new(code: Code, message: impl Into<String>) -> Self {
+        Refusal { code, message: message.into(), privacy: None }
+    }
+
+    pub fn withheld(message: impl Into<String>, policy: PrivacyPolicy) -> Self {
+        Refusal { code: Code::Withheld, message: message.into(), privacy: Some(policy) }
+    }
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
 /// One reason an answer is partial: what is missing and, when there is one, how to get it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Incomplete {
@@ -59,16 +191,39 @@ pub struct Incomplete {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// What the reason is more precisely, where the reason alone doesn't say what to do: `indexing` (a `stale`
+    /// repo still being indexed: ask again), `not_indexed` and `gone` (a `missing_repo` not indexed yet, or whose
+    /// checkout is gone). Otherwise the reason is the entry's code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<Code>,
+    /// For `withheld`: the policy withholding it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<PrivacyPolicy>,
 }
 
 impl Incomplete {
     pub fn new(reason: Reason, detail: impl Into<String>) -> Self {
-        Incomplete { reason, detail: detail.into(), hint: None }
+        Incomplete { reason, detail: detail.into(), hint: None, code: None, privacy: None }
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
+    }
+
+    pub fn with_code(mut self, code: Code) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    pub fn with_privacy(mut self, policy: PrivacyPolicy) -> Self {
+        self.privacy = Some(policy);
+        self
+    }
+
+    /// The entry's machine code: its `code`, else its reason's.
+    pub fn code_str(&self) -> &'static str {
+        self.code.map_or(self.reason.as_str(), Code::as_str)
     }
 
     /// A list cut by a limit: `list` showing `shown` of `total`.
