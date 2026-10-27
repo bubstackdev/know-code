@@ -15,6 +15,7 @@ mod history;
 mod hook;
 mod mcp;
 mod ops;
+mod record;
 mod refactor;
 mod refresh;
 mod removed;
@@ -60,6 +61,11 @@ struct RepoArgs {
     /// Emit the JSON envelope instead of text.
     #[arg(long)]
     json: bool,
+    /// Emit the JSON envelope with a provenance record, for durable records: the build, the call's and the answer's
+    /// hashes, and per repo read its worktree, full commit, uncommitted content's digest, index generation and base,
+    /// and privacy policy (see docs/answers.md, "The provenance record").
+    #[arg(long)]
+    provenance: bool,
 }
 
 /// Whether an answer's rows quote the source lines they rest on.
@@ -1335,6 +1341,15 @@ fn emit(args: &RepoArgs, env: &serde_json::Value, text: impl FnOnce()) -> Result
     // them (see `mcp::search_in_child`).
     if std::env::var_os(KEEP_RESUME).is_none() {
         cursor::seal(&mut env);
+    }
+    if args.provenance {
+        let answer = serde_json::to_string_pretty(&env)?;
+        // The call as given, less the flags that only choose this output.
+        let call: Vec<String> = std::env::args().skip(1).filter(|a| a != "--provenance" && a != "--json").collect();
+        let record = record::record(&serde_json::json!(call), answer.as_bytes(), std::slice::from_ref(&env));
+        env["record"] = record;
+        println!("{}", serde_json::to_string_pretty(&env)?);
+        return Ok(());
     }
     let env = &env;
     if args.json {

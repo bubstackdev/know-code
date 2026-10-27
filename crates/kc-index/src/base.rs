@@ -422,6 +422,15 @@ fn retire(id: &Identity, keep: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The base the index of the checkout at `root` was cloned from, by file name; `None` when it wasn't, or has no index.
+pub fn cloned_from(root: &Path) -> Option<String> {
+    let db = crate::db_path(root).ok()?;
+    if !db.exists() {
+        return None;
+    }
+    crate::open_index(&db, false).ok()?.meta(META_FROM).ok().flatten()
+}
+
 /// The identity hash of a checkout from its workspace summary: of its origin, else of its git common directory.
 pub(crate) fn identity_hash(origin: Option<&str>, root: &Path) -> Option<String> {
     let key = match origin {

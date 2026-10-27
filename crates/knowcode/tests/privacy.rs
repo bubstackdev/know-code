@@ -623,3 +623,43 @@ fn a_new_checkout_of_a_repo_with_blocked_paths_is_never_seeded_with_them() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn a_provenance_record_never_names_blocked_changes() {
+    let base = scratch("record");
+    let (app, _) = fixture(&base, true);
+    let env = Env::new(&base);
+    // Uncommitted: an allowed file and a blocked one.
+    write(&app.join("src/helpers.py"), "def shared_helper():\n    return 3\n");
+    write(&app.join("vault/zqx_secret_store.py"), "class ZqxVaultCipher:\n    pass\n");
+    let v = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_clean("find --provenance", &v.to_string());
+    let repo = &v["record"]["repos"][0];
+    assert_eq!(repo["uncommitted"]["files"], json!(1), "{v}");
+    assert!(repo["privacy"]["key"].as_str().unwrap().starts_with("blake3:"), "{v}");
+    assert!(repo["privacy"]["file"].as_str().unwrap().starts_with("blake3:"), "{v}");
+    assert_eq!(repo["commit"].as_str().unwrap().len(), 40, "{v}");
+    // The same question gives the same evidence; the uncommitted digest moves with the content, blocked or not only
+    // when allowed content moves.
+    let again = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_eq!(again["record"]["answer"]["evidence"], v["record"]["answer"]["evidence"]);
+    write(&app.join("vault/zqx_secret_store.py"), "class ZqxVaultCipher:\n    zqx = 2\n");
+    let blocked_edit = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_eq!(blocked_edit["record"]["repos"][0]["uncommitted"], repo["uncommitted"]);
+    write(&app.join("src/helpers.py"), "def shared_helper():\n    return 4\n");
+    let edited = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_ne!(edited["record"]["repos"][0]["uncommitted"]["digest"], repo["uncommitted"]["digest"]);
+    // Over MCP: the answer as it is, and the record in a block of its own.
+    let mut mcp = Mcp::start(&env, &app);
+    let r = mcp.call("tools/call", json!({ "name": "kc_find", "arguments": { "query": "shared_helper", "provenance": true } }));
+    assert_clean("kc_find provenance", &r.to_string());
+    let content = r["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2, "{r}");
+    let record: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(record["record"]["answer"]["bytes"], json!(content[0]["text"].as_str().unwrap().len()));
+    assert_eq!(record["record"]["call"]["query"], json!({ "tool": "kc_find", "arguments": { "query": "shared_helper" } }));
+    let plain = mcp.call("tools/call", json!({ "name": "kc_find", "arguments": { "query": "shared_helper" } }));
+    assert_eq!(plain["result"]["content"].as_array().unwrap().len(), 1, "{plain}");
+    drop(mcp);
+    let _ = std::fs::remove_dir_all(&base);
+}

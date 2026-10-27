@@ -12,6 +12,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - A new checkout seeded from another checkout's index hashes every file, so a copy that kept its files' mtimes no
   longer keeps another checkout's facts for a file of the same size; a repo that is one Ansible role is named after
   its own directory, not the other checkout's.
+- **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
+  for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
+  hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
+  commit, a digest of its uncommitted content, index generation, the base it was cloned from and its privacy policy's
+  digests. Compact answers are unchanged.
 - `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
 
 ## 0.5.0 (2026-10-27)

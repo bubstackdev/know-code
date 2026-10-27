@@ -1051,20 +1051,39 @@ async fn lane(child: bool) -> Result<Lane, String> {
     }
 }
 
+/// The envelopes a call's answer was made from, kept when the call asked for its provenance record.
+type Recording = Option<std::sync::Arc<std::sync::Mutex<Vec<Value>>>>;
+
 tokio::task_local! {
     /// The operation a tool call runs as: cancelled when the client cancels the request (see `call_tool`).
     static OPERATION: std::sync::Arc<kc_store::limits::Operation>;
+    /// Where a call that asked for its provenance record keeps its envelopes (see `call_tool`).
+    static RECORDING: Recording;
+}
+
+/// The call's [`RECORDING`], when it asked for one.
+fn recording() -> Recording {
+    RECORDING.try_with(Clone::clone).ok().flatten()
+}
+
+/// Keeps `env` for the call's provenance record, when it asked for one.
+fn note(recording: &Recording, env: &Value) {
+    if let Some(r) = recording {
+        r.lock().unwrap_or_else(|e| e.into_inner()).push(env.clone());
+    }
 }
 
 /// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
 async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
     let env = blocking(false, with_cuts(f)).await?;
+    note(&recording(), &env);
     Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
 }
 
 /// [`run`] for an operation that runs a child process (a search): in the children's lane.
 async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, String> {
     let env = blocking(true, with_cuts(f)).await?;
+    note(&recording(), &env);
     Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS)))
 }
 
@@ -1125,6 +1144,7 @@ async fn run_text(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<(
         Ok((env, text))
     })
     .await?;
+    note(&recording(), &env);
     let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS);
     let body = notes_first(&lean_sites(&mcp_names(&text)));
     // Complete when the envelope says so and the tree says nothing was cut (its cut notes come first).
@@ -1293,6 +1313,7 @@ async fn run_batch(
         return Err(format!("{} inputs: at most {MAX_BATCH} per call; split them across calls", inputs.len()));
     }
     let max = max_chars.unwrap_or(DEFAULT_CHARS).clamp(1_000, MAX_CHARS * 2);
+    let recording = recording();
     blocking(false, move || {
         let n = inputs.len();
         let mut results: Vec<String> = Vec::new();
@@ -1308,6 +1329,7 @@ async fn run_batch(
                 Ok(mut env) => {
                     ops::add_cuts(&mut env);
                     env["input"] = Value::from(i.as_str());
+                    note(&recording, &env);
                     cap(env, share)
                 }
                 Err(e) => serde_json::json!({ "input": i, "error": format!("{e:#}") }).to_string(),
@@ -2527,24 +2549,41 @@ impl ServerHandler for KnowcodeServer {
     /// than leaving the blocking work to run on unseen.
     async fn call_tool(
         &self,
-        request: rmcp::model::CallToolRequestParams,
+        mut request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
             return Ok(rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(format!("{e:#}"))]).into());
         }
+        // `provenance: true` on any call asks for its provenance record (see `crate::record`), as a second content
+        // block; the tool itself never sees the argument.
+        let provenance = request.arguments.as_mut().and_then(|a| a.remove("provenance")).is_some_and(|v| v == Value::Bool(true));
+        let recording: Recording = provenance.then(Default::default);
+        let call_desc = serde_json::json!({ "tool": request.name, "arguments": request.arguments.clone().unwrap_or_default() });
         let ct = context.ct.clone();
         let op = kc_store::limits::Operation::new();
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        let call = OPERATION.scope(op.clone(), self.tool_router.call(tcc));
+        let call = OPERATION.scope(op.clone(), RECORDING.scope(recording.clone(), self.tool_router.call(tcc)));
         tokio::pin!(call);
-        tokio::select! {
+        let response = tokio::select! {
             r = &mut call => r,
             _ = ct.cancelled() => {
                 op.cancel();
                 // The work stops soon after; its answer (an error) goes nowhere the client waits for.
                 call.await
             }
+        };
+        match (response, recording) {
+            (Ok(rmcp::model::CallToolResponse::Complete(mut result)), Some(envs)) => {
+                let answer: String = result.content.iter().filter_map(|c| c.as_text().map(|t| t.text.as_str())).collect();
+                let envs = envs.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let record = tokio::task::spawn_blocking(move || crate::record::record(&call_desc, answer.as_bytes(), &envs))
+                    .await
+                    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+                result.content.push(rmcp::model::ContentBlock::text(serde_json::json!({ "record": record }).to_string()));
+                Ok(result.into())
+            }
+            (response, _) => response,
         }
     }
 

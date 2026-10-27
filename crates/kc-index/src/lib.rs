@@ -37,6 +37,7 @@ pub mod notes;
 pub mod revision;
 pub mod ownership;
 pub mod privacy;
+pub mod provenance;
 pub mod roots;
 pub mod scip;
 pub mod sdk;
