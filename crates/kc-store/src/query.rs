@@ -1969,12 +1969,31 @@ fn stdlib_member(file: &str, name: &str) -> bool {
     }
 }
 
-/// The types named `…` through the qualifier `q`, among `cands`: those nested in a type named `q` (`Ring.Index` in
-/// `struct Ring { struct Index }`), else those declared at the top of a module named `q` (`Rings.Ring`). A leading
-/// module qualifies the rest (`Rings.Ring.Index`). With neither, the qualifier is a type or module the repo doesn't
-/// declare (`Array<T>.Index`, `String.UnicodeScalarView`, `globalThis.Event`, a C module's type), and so is the name:
-/// `unresolved`, never the repo's same-named type.
-fn qualified_type(q: &str, cands: &[&Def]) -> (&'static str, Vec<i64>) {
+/// Of `defs`, those code in the Swift file `file` can name: declared in its own SwiftPM target or one it imports, or
+/// where the target can't be told (outside a `Sources/<Target>/` layout, as is `file`'s own).
+fn swift_seen<'a>(conn: &Connection, file: &str, defs: Vec<&'a Def>) -> Result<Vec<&'a Def>> {
+    let Some(here) = crate::identity::module_of(file, "swift") else { return Ok(defs) };
+    let imports: Vec<String> = conn
+        .prepare_cached("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?
+        .query_map([file], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(defs
+        .into_iter()
+        .filter(|d| match crate::identity::module_of(&d.file, &d.lang) {
+            None => true,
+            Some(m) => m == here || imports.iter().any(|i| imports_module(i, &m)),
+        })
+        .collect())
+}
+
+/// The types named `…` through the qualifier `q`, among `cands`: those nested in the type `q` names (`Ring.Index` in
+/// `struct Ring { struct Index }`), the qualifier read as the code around it reads it (`self_chain`: the caller's type
+/// and the types enclosing it, so `Child.State` inside `Parent` is `Parent.Child.State` first), then as written, then
+/// any type whose name ends with it; else those declared at the top of a module named `q` (`Rings.Ring`). A leading
+/// module qualifies the rest (`Rings.Ring.Index`). With none, the qualifier is a type or module the repo doesn't
+/// declare (`Array<T>.Index`, `String.UnicodeScalarView`, `globalThis.Event`, a generic parameter's `Base.Element`, a C
+/// module's type), and so is the name: `unresolved`, never the repo's same-named type.
+fn qualified_type(q: &str, self_chain: &[String], cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let module = |d: &Def| crate::identity::module_of(&d.file, &d.lang);
     let one = |found: Vec<&Def>| {
         let mut owners: Vec<(Option<&str>, Option<String>)> = found.iter().map(|d| (d.container.as_deref(), module(d))).collect();
@@ -1982,15 +2001,25 @@ fn qualified_type(q: &str, cands: &[&Def]) -> (&'static str, Vec<i64>) {
         owners.dedup();
         (if owners.len() == 1 { "exact" } else { "ambiguous" }, found.iter().map(|d| d.id).collect())
     };
+    let in_container = |c: &str| -> Vec<&Def> { cands.iter().copied().filter(|d| d.container.as_deref() == Some(c)).collect() };
     let mut q = q;
     loop {
-        let nested: Vec<&Def> = cands
-            .iter()
-            .copied()
-            .filter(|d| d.container.as_deref().is_some_and(|c| c == q || c.ends_with(&format!(".{q}"))))
-            .collect();
+        for scope in self_chain {
+            let found = in_container(&format!("{scope}.{q}"));
+            if !found.is_empty() {
+                return one(found);
+            }
+        }
+        let exact = in_container(q);
+        if !exact.is_empty() {
+            return one(exact);
+        }
+        // Only the name's end matches: likely, not certain (the qualifier may be a generic parameter of that name).
+        let nested: Vec<&Def> =
+            cands.iter().copied().filter(|d| d.container.as_deref().is_some_and(|c| c.ends_with(&format!(".{q}")))).collect();
         if !nested.is_empty() {
-            return one(nested);
+            let (confidence, ids) = one(nested);
+            return (if confidence == "exact" { "unique_name" } else { confidence }, ids);
         }
         let top: Vec<&Def> = cands.iter().copied().filter(|d| d.container.is_none() && module(d).as_deref() == Some(q)).collect();
         if !top.is_empty() {
@@ -2152,7 +2181,7 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             Some("super") if crate::ts::is_ts_path(&hit.file) => first_in(self_chain.get(1..).unwrap_or_default(), false),
             // A type written through a qualifier (`Outer.Inner`, `Module.Type`, `Array<T>.Index`) is looked up there.
             Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
-                return qualified_type(r, &cands);
+                return qualified_type(r, self_chain, &cands);
             }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
@@ -4578,6 +4607,12 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // Overloads the argument types rule out.
             let usable = if cs && hit.kind == "call" && hit.arg_types.is_some() && usable.len() > 1 {
                 narrow_by_argument_types(&mut oracle, hit, usable)?
+            } else {
+                usable
+            };
+            // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
+            let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
+                swift_seen(conn, &hit.file, usable)?
             } else {
                 usable
             };

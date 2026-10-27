@@ -89,3 +89,22 @@ fn a_typescript_type_named_through_globalthis_is_the_global() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The qualifier is read as the code around it reads it, and only modules the file sees declare it.
+#[test]
+fn a_swift_qualifier_is_read_in_scope_and_in_the_modules_the_file_sees() {
+    let root = scratch("qualified-scope");
+    write(
+        &root,
+        "Sources/Game/Game.swift",
+        "struct Parent {\n    struct Child { struct State {} }\n    var s: Child.State\n}\nstruct Other {\n    struct Child { struct State {} }\n}\n",
+    );
+    // Another module declares `Node.Handle`; this one names its own `Node` (a typealias to a type the repo lacks).
+    write(&root, "Sources/Tree/Node.swift", "public struct Node {\n    public struct Handle {}\n}\n");
+    write(&root, "Sources/Hash/Hash.swift", "typealias Node = LibraryNode\n\nstruct Hash {\n    var h: Node.Handle\n}\n");
+    let store = index(&root);
+    let conn = store.conn();
+    assert_eq!(uses(conn, "State"), [("Sources/Game/Game.swift:3".to_string(), "exact", vec!["Parent.Child.State".to_string()])]);
+    assert_eq!(uses(conn, "Handle"), [("Sources/Hash/Hash.swift:4".to_string(), "unresolved", vec![])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
