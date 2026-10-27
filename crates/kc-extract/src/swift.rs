@@ -1349,6 +1349,8 @@ fn call_labels(src: &str, call: Node) -> Option<String> {
     if let Some(list) = children(suffix).find(|c| c.kind() == "value_arguments") {
         for arg in children(list) {
             match arg.kind() {
+                // `f(for:in:)` names a function by its labels: a reference, not a call with arguments.
+                "value_argument" if arg.child_by_field_name("value").is_none() => return None,
                 "value_argument" => args.push(arg.child_by_field_name("name").map(label)),
                 "(" | ")" | "," | "comment" | "multiline_comment" => {}
                 _ => return None,
@@ -1433,6 +1435,10 @@ mod tests {
             g.arg_types.get(&i).map(String::as_str)
         };
         assert_eq!(labels("make"), Some(r#"{"l":["at"],"t":[null]}"#));
+        // A function named by its labels (`xs.map { $0.scope(for:in:) }`) records none.
+        let named = extract("let a = xs.map { $0.scope(for:in:) }\n");
+        let i = named.refs.iter().position(|r| r.name == "scope").unwrap();
+        assert_eq!(named.arg_types.get(&i), None);
         assert_eq!(labels("load"), Some(r#"{"l":["from"],"t":[null]}"#));
     }
 
