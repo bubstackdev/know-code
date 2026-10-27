@@ -658,6 +658,9 @@ pub const GUESSED_MODULE: &str = "module placed by file name: no tsconfig paths 
 pub const UNPLACED_MODULE: &str = "tsconfig maps the import to no indexed file";
 /// [`RefHit::basis`]: several dependencies the file imports declare the name, and the import doesn't say which.
 pub const AMBIGUOUS_DEPENDENCY: &str = "several imported dependencies declare it";
+/// [`RefHit::basis`]: the target is a protocol requirement the receiver's type satisfies with a member of its own that
+/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`).
+pub const VIA_PROTOCOL: &str = "via protocol: the receiver's type satisfies this requirement outside the repo";
 
 impl RefHit {
     /// Whether the reference can point at symbol `id`, directly or as the implementation the container binds.
@@ -741,9 +744,17 @@ const GENERIC_PROJECTIONS: &[&str] =
 
 /// Standard-library types whose members are never defined in the repo (unless it extends them, which lookup finds).
 const STDLIB_TYPES: &[&str] = &[
-    "Array", "Bool", "CGFloat", "Character", "Data", "Date", "Dictionary", "Double", "Float", "Int", "Int64", "Set",
-    "String", "Substring", "UInt", "URL", "UUID",
+    "Array", "Bool", "CGFloat", "Character", "Data", "Date", "Decimal", "Dictionary", "Double", "Float", "Float16",
+    "Float32", "Float64", "Float80", "Int", "Int8", "Int16", "Int32", "Int64", "Set", "String", "Substring", "UInt",
+    "UInt8", "UInt16", "UInt32", "UInt64", "URL", "UUID",
 ];
+
+/// Whether `d` is a member the repo adds to a standard-library type (`extension Int32 { var isFinite … }`). These are
+/// concrete types: no other type conforms to one, so its members are never another type's, and the library declares
+/// same-named members on its other types (`Float.isFinite`).
+fn on_stdlib_type(d: &Def) -> bool {
+    d.external_container && d.container.as_deref().is_some_and(|c| STDLIB_TYPES.contains(&last_segment(c)))
+}
 
 /// .NET collection types a sequence (`TypeExpr::Array`) may be, for extension methods declared on them.
 const DOTNET_SEQUENCES: &[&str] = &[
@@ -2102,8 +2113,8 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             let on_type = hit.file.ends_with(".cs")
                 && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
             if matches!(recv, Receiver::Foreign(_)) && !on_type {
-                // A framework type may conform to a framework protocol the repo extends.
-                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container).collect();
+                // A framework type may conform to a framework protocol the repo extends, never be a library struct.
+                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
                 return group_confidence(&ext);
             }
             // The receiver's type is known and nothing on it or its supertypes has this name: the member lives
@@ -2164,6 +2175,11 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     }
     let instance_receiver = hit.receiver.as_deref().is_some_and(|r| r != "." && !type_like(r));
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
+        return ("external_likely", cands.iter().map(|d| d.id).collect());
+    }
+    // Only members the repo adds to library structs have the name: through an untyped value, the library's own
+    // same-named member on another type is as likely, so the name alone doesn't settle it.
+    if matches!(recv, Receiver::Unknown) && instance_receiver && cands.iter().all(|d| on_stdlib_type(d)) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
     }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -4138,8 +4154,8 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
                     }
                     if found.is_empty() {
                         // A framework type (`NavigationStack`) may conform to a framework protocol the dependency
-                        // extends (`extension View`).
-                        let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container).collect();
+                        // extends (`extension View`), never be a library struct (`extension Int32`).
+                        let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
                         let (conf, _) = group_confidence(&ext);
                         (conf, ext)
                     } else {
@@ -4184,7 +4200,13 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
                     let mut groups: Vec<Option<&str>> = picked.iter().map(|d| d.container.as_deref()).collect();
                     groups.sort();
                     groups.dedup();
-                    (if groups.len() == 1 { "unique_name" } else { "ambiguous" }, picked)
+                    // As in the repo itself: members added to library structs, through an untyped value.
+                    let instance = receiver.is_some_and(|r| r != "." && !type_like(r));
+                    if instance && !picked.is_empty() && picked.iter().all(|d| on_stdlib_type(d)) {
+                        ("external_likely", picked)
+                    } else {
+                        (if groups.len() == 1 { "unique_name" } else { "ambiguous" }, picked)
+                    }
                 }
             };
             // Overloads: those taking as many arguments as the call passes, when any does.
@@ -4239,6 +4261,24 @@ pub fn resolve_external(conn: &Connection, hits: &mut [RefHit], deps: &[Dependen
         }
     }
     Ok(())
+}
+
+/// Whether a member reference typed by its receiver (`v.isFinite`, `v: Float`) reached only protocol requirements
+/// (members declared in a protocol's body) of a protocol other than the receiver's type: the type conforms, and the
+/// member it has is its own, outside the repo, not the requirement's declaration.
+fn through_requirement(conn: &Connection, hit: &RefHit, ids: &[i64]) -> Result<bool> {
+    let Some(ty) = hit.receiver_type.as_deref() else { return Ok(false) };
+    if ids.is_empty() || !matches!(hit.kind.as_str(), "member" | "call") {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare_cached("SELECT p.kind, p.name FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1")?;
+    for &id in ids {
+        let parent: Option<(String, String)> = stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        if !parent.is_some_and(|(kind, name)| kind == "protocol" && name != last_segment(ty)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Definitions visible from other modules: declared `public` or `open`, or members of a `public extension`. In
@@ -4617,6 +4657,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     (confidence, ids) = ("unresolved", Vec::new());
                 }
             }
+        }
+        if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
+            hit.basis = Some(VIA_PROTOCOL);
         }
         hit.confidence = confidence;
         hit.evidence = if matches!(confidence, "unresolved" | "external_likely") { None } else { evidence };
