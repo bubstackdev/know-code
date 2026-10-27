@@ -247,6 +247,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
     (&["coupled", "src/Api/OrderService.cs", "--as-of", "HEAD~1"], false),
     (&["tests", "src/Api/OrderService.cs"], false),
     (&["tests", "--diff", "HEAD~2"], false),
+    (&["test-targets"], false),
     (&["hotspots"], false),
     (&["hotspots", "src/Api/OrderService.cs"], false),
     (&["ownership"], false),
