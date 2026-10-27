@@ -1,6 +1,0 @@
-{"type": "system", "subtype": "init", "session_id": "s", "permissionMode": "dontAsk"}
-{"type": "assistant", "session_id": "s", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "rg -n 'translatePlural' /study/source/jellyfin-web/src"}}], "usage": {"input_tokens": 10, "output_tokens": 5}}}
-{"type": "user", "session_id": "s", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": ""}]}]}}
-{"type": "assistant", "session_id": "s", "message": {"id": "m2", "content": [{"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": "/study/source/jellyfin-web/src/lib/globalize/index.ts", "offset": 130, "limit": 30}}], "usage": {"input_tokens": 10, "output_tokens": 5}}}
-{"type": "user", "session_id": "s", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": [{"type": "text", "text": "     1\t// file contents elided\n"}]}]}}
-{"type": "result", "subtype": "success", "is_error": false, "session_id": "s", "result": "{\"status\": \"answered\", \"items\": [], \"notes\": \"\"}"}
