@@ -4,6 +4,17 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The repository moved to [bubstackdev/know-code](https://github.com/bubstackdev/know-code); the binary, crate and
+  plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 through 0.5.0 get no update notice,
+  and their `self-update` fails** ("installer URL is outside the expected KnowCode release"): they accept releases
+  only under the old name. Re-run the installer once:
+
+  ```sh
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
+  ```
+
+  From then on `self-update` works, accepting installer receipts that name either repository. Homebrew installs are
+  unaffected.
 - A member a Swift repo adds to a standard-library struct (`extension Int32 { var isFinite … }`) no longer captures
   uses of the same name on other library types. On a value of another library type (`v: Float`), or of a generic
   parameter, it is never linked: the fallback that links a framework type's member to the repo's extension of a
