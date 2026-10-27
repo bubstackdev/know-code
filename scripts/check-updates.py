@@ -20,9 +20,9 @@ import tempfile
 import time
 
 
-API = "https://api.github.com/repos/bubstackdev/knowcode/releases/latest"
-RELEASES = "https://github.com/bubstackdev/knowcode/releases/download"
-LATEST = "https://github.com/bubstackdev/knowcode/releases/latest"
+API = "https://api.github.com/repos/bubstackdev/know-code/releases/latest"
+RELEASES = "https://github.com/bubstackdev/know-code/releases/download"
+LATEST = "https://github.com/bubstackdev/know-code/releases/latest"
 # The release archive self-update falls back to on this platform, as dist-workspace.toml names its targets.
 TARGET = {("Darwin", "arm64"): "aarch64-apple-darwin", ("Linux", "x86_64"): "x86_64-unknown-linux-gnu",
           ("Linux", "aarch64"): "aarch64-unknown-linux-gnu"}.get((platform.system(), platform.machine()))
@@ -60,7 +60,7 @@ if os.environ.get("MOCK_CURL_SLEEP"):
 def fail(status, code):
     sys.stderr.write(f"curl: ({code}) The requested URL returned error: {status}\\n")
     raise SystemExit(code)
-if url == "https://api.github.com/repos/bubstackdev/knowcode/releases/latest":
+if url == "https://api.github.com/repos/bubstackdev/know-code/releases/latest":
     if (base / "api-reset").exists():
         headers.write_text("HTTP/2 403 \\r\\nx-ratelimit-limit: 60\\r\\nx-ratelimit-remaining: 0\\r\\n"
                            f"x-ratelimit-reset: {(base / 'api-reset').read_text()}\\r\\n\\r\\n")
@@ -83,7 +83,7 @@ else:
 assert not auth or url.startswith("https://api.github.com/"), "the token goes only to the API"
 pathlib.Path(args[args.index("--output") + 1]).write_bytes(source.read_bytes())
 '''.replace("@DOWNLOAD@", download).replace("@ARCHIVE@", archive_url).replace("@LATEST@", LATEST)
-            .replace("@TAG@", f"https://github.com/bubstackdev/knowcode/releases/tag/v{new}"))
+            .replace("@TAG@", f"https://github.com/bubstackdev/know-code/releases/tag/v{new}"))
         curl.chmod(0o700)
         env = dict(os.environ)
         env.update(PATH=str(tools) + os.pathsep + env["PATH"], UPDATE_FIXTURE=str(root),
@@ -166,17 +166,19 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         original = binary.read_bytes()
         receipt = root / "xdg/knowcode/knowcode-receipt.json"
         receipt.parent.mkdir(parents=True)
-        receipt_text = json.dumps({"provider": {"source": "cargo-dist"}, "source": {
-            "owner": "bubstackdev", "name": "knowcode", "app_name": "knowcode"},
-            "install_layout": "flat", "install_prefix": str(prefix)})
-        def reset() -> None:
+        def receipt_for(name: str) -> str:
+            return json.dumps({"provider": {"source": "cargo-dist"}, "source": {
+                "owner": "bubstackdev", "name": name, "app_name": "knowcode"},
+                "install_layout": "flat", "install_prefix": str(prefix)})
+        receipt_text = receipt_for("know-code")
+        def reset(text: str = receipt_text) -> None:
             # A new file renamed into place, as self-update installs one: rewriting the installed file where it is
             # makes macOS kill the next run of it (SIGKILL, no output), the kernel holding the signature of the
             # binary that file held before. Under load that came up in about half the runs.
             fresh = prefix / ".knowcode.reset"
             shutil.copy2(binary, fresh)
             os.replace(fresh, installed)
-            receipt.write_text(receipt_text)
+            receipt.write_text(text)
             requests.unlink(missing_ok=True)
         reset()
         run("self-update", executable=installed, extra={"KNOWCODE_DOWNLOAD_URL": "https://invalid.example"})
@@ -184,6 +186,13 @@ mv "$KNOWCODE_INSTALL_DIR/.new" "$KNOWCODE_INSTALL_DIR/knowcode"
         assert (root / "invoked").read_text().split() == ["--version", "_refresh-plugin"]
         assert run("--version", executable=installed).stdout.strip() == f"knowcode {new}"
         assert [c["url"] for c in calls()] == [API, download]
+        # An install made before the repository moved names its former name; any other name is refused.
+        reset(receipt_for("knowcode"))
+        run("self-update", executable=installed, extra={"KNOWCODE_DOWNLOAD_URL": "https://invalid.example"})
+        assert run("--version", executable=installed).stdout.strip() == f"knowcode {new}"
+        reset(receipt_for("other"))
+        refused = run("self-update", executable=installed, ok=False)
+        assert "unrecognized shell-install receipt" in refused.stderr and installed.read_bytes() == original
 
         reset()
         release(good_script, tag_name="v0.1.0")

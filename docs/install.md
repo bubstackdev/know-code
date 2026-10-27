@@ -9,7 +9,7 @@ KnowCode runs on macOS (Apple silicon) and Linux (x86_64 or arm64). It needs `gi
 `claude` CLI for Claude Code, or Codex or Cursor. Windows is not supported yet.
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
 ```
 
 The shell installer puts `knowcode` in `~/.local/bin` and adds that directory to your shell's `PATH` if it isn't
@@ -63,6 +63,10 @@ it leaves an empty entry in its place so that Codex still trusts them.
 
 `self-update` updates a shell-installer installation. For a Homebrew installation it refuses and names
 `brew upgrade bubstackdev/tap/knowcode`, which updates it instead.
+
+The repository moved from `bubstackdev/knowcode` to `bubstackdev/know-code` after 0.5.0. A shell installation of
+0.3.0 to 0.5.0 can't update itself across the move: its update check and `self-update` say "installer URL is outside
+the expected KnowCode release". Re-run the installer once; from then on `self-update` works.
 
 Updating keeps the Claude Code plugin in step with the binary. After `self-update` installs a release, and whenever
 `serve` starts and finds that the plugin bundle setup wrote is older than the binary, KnowCode rewrites the bundle

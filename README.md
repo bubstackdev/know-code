@@ -33,7 +33,7 @@ You need macOS (Apple silicon) or Linux (x86_64 or arm64), `git`, and the client
 1. Install:
 
    ```sh
-   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/knowcode/releases/latest/download/knowcode-installer.sh | sh
+   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh
    ```
 
    or `brew install bubstackdev/tap/knowcode`. The shell installer puts `knowcode` in `~/.local/bin`; open a new
