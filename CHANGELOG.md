@@ -4,6 +4,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Swift files with constructs tree-sitter-swift doesn't read lose less of their code. When a file has parse errors,
+  it is parsed again with them blanked (positions kept), and the tree with less of the file in errors is used: the
+  underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`), `@_lifetime(…)`, module
+  selectors (`Mod::Name`, `#Mod::macro`), `nonisolated(unsafe)`, `unsafe` and `sending` before an operand, and then
+  `#if` blocks whose branches are whole (around attributes, between a switch's cases). An empty tuple (`f(())`) and a
+  member named by a keyword (`case .try:`) no longer count as parse errors: the grammar reads them with a zero-width
+  `!` and the tree is whole. Over 4,845 files of 15 public Swift repos, files with parse errors fall from 605 to 160,
+  and 256 declarations are read that weren't, none lost. Swift files are re-extracted once.
+- `status` says where each of the worst files' first parse errors are (`first`: `at` line:col and the text there).
 - `context` on a type lists the members and extensions of the declaration it picks, not those of every type with its
   name. Two Swift modules each declaring `Tile`, or a file's `private struct Tile` beside a module's public one, used
   to share one member list. An extension goes to the declaration it can see: the one in its file, else its module's,
