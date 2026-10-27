@@ -135,9 +135,11 @@ def index_finish(root, p):
     m = INSTRUCTIONS.search(err)
     row = json.loads(out)["repos"][0]
     phases = row.get("phases", [])
-    derived = sum(ph["instructions"] for ph in phases if ph["name"].startswith("derived."))
-    answerable = sum(ph["instructions"] for ph in phases if not ph["name"].startswith("derived."))
-    return {"process": int(m.group(1)) if m else None, "answerable": answerable, "derived": derived}, row
+    # Instructions are counted on macOS; elsewhere the phases give CPU time only.
+    derived = sum(ph.get("instructions", 0) for ph in phases if ph["name"].startswith("derived."))
+    answerable = sum(ph.get("instructions", 0) for ph in phases if not ph["name"].startswith("derived."))
+    cpu_ms = sum(ph.get("cpu_ms", 0) for ph in phases)
+    return {"process": int(m.group(1)) if m else None, "answerable": answerable, "derived": derived, "cpu_ms": cpu_ms}, row
 
 
 def ask(binary, root, env, query, verify=False):
@@ -454,7 +456,7 @@ def concurrent(binary, repo, work, k, volatile):
     built = [row for row in rows if row["parsed"] > 0]
     if len(built) != 1:
         failures.append(f"at once: {len(built)} of {k} worktrees indexed cold, where one should build the base")
-    total = lambda xs: {key: sum((x[key] or 0) for x in xs) for key in ("process", "answerable", "derived")}
+    total = lambda xs: {key: sum((x[key] or 0) for x in xs) for key in ("process", "answerable", "derived", "cpu_ms")}
     return {"k": k, "rows": rows, "shared": total([row["instructions"] for row in rows]), "separate": total([ins for ins, _ in sep]),
             "failures": failures}
 
