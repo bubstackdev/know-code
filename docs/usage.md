@@ -40,6 +40,7 @@ command, run `knowcode <command> --help`.
 | --- | --- | --- |
 | Definitions by name, prefix or camelCase words (`settings view`, `Store.load`) | `knowcode find` | `kc_find` |
 | The files for a concept, bug report or ticket title, when you don't know the names | `knowcode locate "refund approval"` | `kc_locate` |
+| One answer for a goal in words: the files involved, what depends on them, the tests to run, what the index can't settle | `knowcode task "refunds fail for partial captures"` | `kc_task` |
 | The symbols enclosing a `file:line` (a stack frame) | `knowcode at src/app/filter.service.ts:419` | `kc_symbol_at` |
 | Text or regex over every file, ranked definitions first | `knowcode search` | `kc_search` |
 | Code patterns over syntax trees ([ast-grep](https://ast-grep.github.io) patterns) | `knowcode grep-ast 'new HttpClient($$$)' -l cs` | `kc_grep_ast` |
@@ -248,6 +249,7 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_more` | `more` | `kc_more`, `cursors` |
 | `kc_help` | | `kc_help` |
 | `kc_capabilities` | `capabilities` | `kc_capabilities` |
+| `kc_task` | `task` | `kc_task` |
 | `kc_test_targets` | `test-targets` | `kc_test_targets` |
 
 `kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
@@ -329,6 +331,7 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `index` | `--workspace DIR`, `--threads N`, `--jobs N`, `--rebuild`, `--scip FILE`, `--verify`, `--phases` |
 | `find` | `-k/--kind`, `-n/--limit` |
 | `locate` | `-n/--limit` |
+| `task` | `--files`, `--dependents`, `--tests` |
 | `at` | |
 | `refs` | `-k/--kind` (alias `--edges`), `-n/--limit`, `--cite brief\|lines\|check\|none` |
 | `context` | `--budget`, `--source full\|skeleton\|none\|auto`, `--limit` (rows per list of a repo's deploy answer), `--cite brief\|lines\|check\|none` |

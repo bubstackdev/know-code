@@ -232,6 +232,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
     (&["at", "src/Api/OrderService.cs:9"], false),
     (&["find", "Order"], false),
     (&["locate", "order total discount"], false),
+    (&["task", "order total discount"], false),
     (&["refs", "Save"], false),
     (&["context", "OrderService.Place"], false),
     (&["trace", "OrderService.Place", "--depth", "3"], false),
