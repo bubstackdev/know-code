@@ -79,7 +79,10 @@ fn quote(s: &str) -> String {
 
 /// The functions and methods tagged `test` in files under `dir` (the whole repo for `""`): (container, name, file,
 /// line), in file and line order, and how many there are.
-fn tests_under(store: &Store, dir: &str) -> Result<(Vec<(Option<String>, String, String, u32)>, usize)> {
+/// A test function or method: container, name, file, line.
+type Found = (Option<String>, String, String, u32);
+
+fn tests_under(store: &Store, dir: &str) -> Result<(Vec<Found>, usize)> {
     let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
     let mut stmt = store.conn().prepare(
         "SELECT s.container, s.name, f.path, s.start_line FROM symbols s JOIN files f ON f.id = s.file_id
@@ -87,7 +90,7 @@ fn tests_under(store: &Store, dir: &str) -> Result<(Vec<(Option<String>, String,
             AND substr(f.path, 1, length(?1)) = ?1
           ORDER BY f.path, s.start_line",
     )?;
-    let rows: Vec<(Option<String>, String, String, u32)> =
+    let rows: Vec<Found> =
         stmt.query_map(params![prefix], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
     let total = rows.len();
     Ok((rows.into_iter().take(MAX_TESTS).collect(), total))

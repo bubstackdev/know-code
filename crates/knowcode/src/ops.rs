@@ -6594,10 +6594,13 @@ fn is_repo_file(conn: &rusqlite::Connection, rel: &str) -> Result<bool> {
 
 /// Files that historically change in the same commits as `file`, ranked by shared commits, then recency. `file`
 /// may be any file of the repo, indexed or not: co-change needs only its history.
+/// A repo's declared test targets.
+pub type RepoTestTargets = (PathBuf, Vec<kc_index::test_targets::TestTarget>);
+
 /// The declared test targets of the selected repos (see [`kc_index::test_targets`]): SwiftPM test targets, .NET test
 /// projects and `package.json` test scripts, each with its tests and the commands to run them; `name` keeps the
 /// targets of that name. Declared, not ranked: which tests a change needs is [`tests`].
-pub fn test_targets(name: Option<&str>, args: &Scope) -> Result<Out<Vec<(PathBuf, Vec<kc_index::test_targets::TestTarget>)>>> {
+pub fn test_targets(name: Option<&str>, args: &Scope) -> Result<Out<Vec<RepoTestTargets>>> {
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
     let mut data = Vec::new();

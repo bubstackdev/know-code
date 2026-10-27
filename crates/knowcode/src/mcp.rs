@@ -3443,7 +3443,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all,kc_capabilities");
+        let s = server("all,kc_capabilities,kc_test_targets");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -3486,7 +3486,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all,kc_capabilities");
+        let s = server("all,kc_capabilities,kc_test_targets");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());

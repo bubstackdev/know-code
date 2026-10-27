@@ -1009,7 +1009,7 @@ fn loc_file(root: Option<&Path>, file: &str) -> String {
     }
 }
 
-pub fn test_targets(repos: &[(std::path::PathBuf, Vec<kc_index::test_targets::TestTarget>)]) {
+pub fn test_targets(repos: &[crate::ops::RepoTestTargets]) {
     if repos.iter().all(|(_, ts)| ts.is_empty()) {
         println!("no declared test target: no SwiftPM test target, .NET test project or package.json test script");
     }
