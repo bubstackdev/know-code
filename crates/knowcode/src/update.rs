@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 
 /// The GitHub repository releases come from, `owner/name`: the one place the update check and `self-update` read it.
 /// Cargo.toml's `repository` must match (checked by a test below).
-macro_rules! release_repo { () => { "bubstackdev/knowcode" } }
+macro_rules! release_repo { () => { "bubstackdev/know-code" } }
 const REPO: &str = release_repo!();
+/// The repository's name before it moved (2026-10-27): receipts of installs made then name it, and GitHub redirects it.
+const FORMER_NAME: &str = "knowcode";
 const API: &str = concat!("https://api.github.com/repos/", release_repo!(), "/releases/latest");
 const DOWNLOAD: &str = concat!("https://github.com/", release_repo!(), "/releases/download");
 /// The release pages. `latest` redirects to `tag/<tag>`; it is not the API, so the API's rate limit does not apply.
@@ -389,7 +391,7 @@ pub(crate) fn installation() -> Result<(PathBuf, PathBuf, String)> {
     let data: serde_json::Value = serde_json::from_str(&text)?;
     if data.pointer("/provider/source").and_then(|s| s.as_str()) != Some("cargo-dist")
         || data.pointer("/source/owner").and_then(|s| s.as_str()) != Some(owner())
-        || data.pointer("/source/name").and_then(|s| s.as_str()) != Some(repo_name())
+        || !data.pointer("/source/name").and_then(|s| s.as_str()).is_some_and(|n| n == repo_name() || n == FORMER_NAME)
         || data.pointer("/source/app_name").and_then(|s| s.as_str()) != Some("knowcode")
         || data["install_layout"] != "flat"
     { bail!("unrecognized shell-install receipt; update through the original installer"); }
@@ -511,7 +513,7 @@ mod tests {
     #[test]
     fn the_release_repository_is_named_once_and_matches_the_package() {
         assert_eq!(env!("CARGO_PKG_REPOSITORY"), format!("https://github.com/{REPO}"));
-        assert_eq!((owner(), repo_name()), ("bubstackdev", "knowcode"));
+        assert_eq!((owner(), repo_name()), ("bubstackdev", "know-code"));
         // Releases publish the formula to the tap that self-update names, under the package's name.
         let dist = include_str!("../../../dist-workspace.toml");
         assert_eq!(tap_repo!(), format!("{}/homebrew-tap", owner()));
@@ -537,7 +539,7 @@ mod tests {
         for bad in [format!("{PAGES}/tag/v0.4.0-rc.1"), format!("{PAGES}/tag/latest"), format!("{PAGES}/tag/"),
             format!("{PAGES}/tag/v0.4.0/../../x"), format!("{PAGES}/tag/v0.4.0?x=1"), format!("{PAGES}/v0.4.0"),
             "https://github.com/someone/else/releases/tag/v9.0.0".into(), "https://example.com/releases/tag/v0.4.0".into(),
-            "/bubstackdev/knowcode/releases/tag/v0.4.0".into(), format!("{PAGES}tag/v0.4.0")] {
+            "/bubstackdev/know-code/releases/tag/v0.4.0".into(), format!("{PAGES}tag/v0.4.0")] {
             assert!(latest_tag(&redirect(&bad)).is_err(), "{bad}");
         }
         // Not a redirect, or a redirect with no location.

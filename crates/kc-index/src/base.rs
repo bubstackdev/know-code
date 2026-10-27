@@ -514,6 +514,15 @@ fn retire(id: &Identity, keep: &Path) -> Result<()> {
     Ok(())
 }
 
+/// [`cloned`] for the index of the checkout at `root`; `None` when it wasn't cloned, or has no index.
+pub fn cloned_from(root: &Path) -> Option<Cloned> {
+    let db = crate::db_path(root).ok()?;
+    if !db.exists() {
+        return None;
+    }
+    cloned(&crate::open_index(&db, false).ok()?).ok().flatten()
+}
+
 /// Where a checkout's index came from and whether it still holds only the base's facts, for `status`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Cloned {

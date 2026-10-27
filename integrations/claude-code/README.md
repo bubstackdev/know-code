@@ -37,7 +37,7 @@ The repository is also a plugin marketplace for an installation that uses
 `knowcode` from `PATH`:
 
 ```sh
-claude plugin install knowcode --marketplace bubstackdev/knowcode
+claude plugin install knowcode --marketplace bubstackdev/know-code
 ```
 
 Choose one installation method. An older manual MCP registration or manually

@@ -118,6 +118,8 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
 
 **Release gates**, with no model calls, compare each release candidate with the previous release:
 
+- [Release gate, 0.5.1](../eval/release-gate/0.5.1.md): the same checks as 0.5.0's, against 0.5.0, with whether
+  each of 0.5.0's misses is now met, and the update across the repository's new name.
 - [Release gate, 0.5.0](../eval/release-gate/0.5.0.md): tool cost per turn in tokens, the replay of recorded calls,
   the history questions, the workspace gate, clean-machine acceptance and the update from 0.4.0.
 - [Release gate, 0.4.0](../eval/release-gate/0.4.0.md): tool cost per turn in tokens, the replay of recorded calls,

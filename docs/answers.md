@@ -35,6 +35,12 @@ include or Angular lazy route in a form not read, an HTTP endpoint registration 
 as a `MapGet` template that isn't a constant or `MapControllerRoute`). The entry names them with `file:line` and says what the answer
 may lack because of them; [languages.md](languages.md#constructs-recognised-but-not-read) lists them all.
 
+A file the extractor couldn't read whole (parse errors) that the answer names is an `unsupported` entry too: the
+answer's `coverage` lists each such file (`{repo, file, errors, first, inside}`, at most 5): `first` is its first
+error's `line:col`, and `inside` the answer's own symbol when the error lies in its span, so that symbol's calls and
+members are the ones most likely missing. Declarations, members, calls and references in those files may be missing.
+`status` lists every file with parse errors.
+
 Files KnowCode doesn't read as code (Razor markup, vendored or built JavaScript) are checked as text before an
 answer says uses there may be missing. `refs` names the lines there that name the symbol, as an `unsupported` entry;
 when no Razor file names a C# symbol, `checked` says so (`"none of 59 Razor files (.razor, .cshtml), checked as text,
@@ -186,6 +192,29 @@ item. Each entry is `{repo, commit, generation, dirty, fresh}`:
 The text rendering prints an `also consulted:` line for other repos, marking those read `from its last sync`.
 
 Every JSON answer also carries `knowcode`: the version, the commit the binary was built from, and the index schema.
+
+### The provenance record
+
+For a durable record of an answer, ask for its provenance record: `--provenance` on the command line (the JSON
+envelope gains `record`), or `provenance: true` on any MCP tool call (the answer is unchanged and a second content
+block holds `{"record": …}`). Compact answers in a conversation don't carry it. The record (`format` 1) holds:
+
+- `knowcode`: the version, the commit the binary was built from, the index schema, the resolver, and every
+  extractor's version;
+- `call`: the call as given (the command's arguments; the tool and its arguments) and the hash of its canonical JSON;
+- `answer`: the hash of the bytes returned without the record, their length, and `evidence`: the hash of the answer's
+  content without what names or measures one index or one moment (row ids, cursors, generations, timings, how much a
+  sync reparsed, a search's work counters, how long ago a cached value was computed). The same question asked again of
+  the same code gives the same `evidence`, from another index, process or worktree;
+- `repos`: for each repo the answer read, its `repo`, the full `commit` and the `generation`, `dirty` and `fresh` the
+  answer read; its `worktree` (git directory, common directory and identity: the normalized origin, else the common
+  directory); `uncommitted`, the number of files that differ from the commit (changed, deleted, untracked) and a digest
+  of their paths, statuses and contents, leaving out the paths the privacy file blocks; `base`, the
+  shared base the index was cloned from, with its `commit` and whether any file differs from it yet (`unchanged`;
+  see [architecture](architecture.md#the-cache-lifecycle)); and `privacy`, the
+  digests of the policy's key (what it blocks, absent when nothing is) and of the privacy file, and `block_at`.
+
+Hashes are `blake3:<hex>`.
 
 ## Confidence and evidence
 

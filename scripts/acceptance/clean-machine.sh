@@ -19,8 +19,8 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 HELPER="$HERE/clean_machine.py"
-REPO_URL=https://github.com/bubstackdev/knowcode.git
-RELEASES=https://github.com/bubstackdev/knowcode/releases
+REPO_URL=https://github.com/bubstackdev/know-code.git
+RELEASES=https://github.com/bubstackdev/know-code/releases
 COMMIT=""
 ARTIFACTS=""
 RELEASE=latest
