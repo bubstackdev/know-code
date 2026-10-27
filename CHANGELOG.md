@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A query opening a repo whose AI privacy file had just changed, while another query or a background link step was
+  still reading that repo's index, failed with "index is in use: …; close its readers and retry". Removing the index
+  made under the old policy now waits up to 30 seconds for those readers to finish. `knowcode forget` still refuses
+  at once while the index is in use.
 - The repository moved to [bubstackdev/know-code](https://github.com/bubstackdev/know-code); the binary, crate and
   plugin are still `knowcode`, and old links redirect. **Shell installs of 0.3.0 through 0.5.0 get no update notice,
   and their `self-update` fails** ("installer URL is outside the expected KnowCode release"): they accept releases
