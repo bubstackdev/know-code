@@ -201,7 +201,7 @@ const QUESTIONS: &[&[&str]] = &[
 ];
 
 /// Commands that answer no question about code (see `invariants.rs`).
-const NOT_QUESTIONS: &[&str] = &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "hook", "bench"];
+const NOT_QUESTIONS: &[&str] = &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "hook", "bench", "capabilities"];
 
 #[test]
 fn invariant_setup_never_indexes_or_exposes_a_blocked_repository() {
