@@ -84,7 +84,8 @@ pub fn extract(source: &str) -> FileFacts {
 /// `#else` and `#endif` lines, which the grammar doesn't read around attributes or between a switch's cases. With
 /// those lines blank, every branch's code is read, as the grammar reads branches elsewhere. A copy wins only when
 /// less of the file is in errors (then fewer errors): branches that don't read as one (`#if` around half a
-/// declaration) can leave fewer, larger errors.
+/// declaration) can leave fewer, larger errors. A copy is parsed incrementally from the first tree, edited where
+/// the copy differs, so only the blanked spans and what they change are read again.
 pub(crate) fn parse(source: &str) -> Option<tree_sitter::Tree> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_swift::LANGUAGE.into()).expect("tree-sitter-swift ABI matches tree-sitter");
@@ -96,7 +97,21 @@ pub(crate) fn parse(source: &str) -> Option<tree_sitter::Tree> {
     let modifiers = blank_modifiers(source);
     let directives = blank_directives(modifiers.as_deref().unwrap_or(source));
     for copy in [modifiers.as_deref(), directives.as_deref()].into_iter().flatten() {
-        if let Some(t) = parser.parse(copy, None) {
+        // Only blanked spans changed: parsing again from the first tree, edited there, reuses the rest of it.
+        let mut old = tree.clone();
+        let mut lines = LineIndex::default();
+        for (start, end) in changed(source, copy) {
+            let (at, to) = (lines.point(source, start), lines.point(source, end));
+            old.edit(&tree_sitter::InputEdit {
+                start_byte: start,
+                old_end_byte: end,
+                new_end_byte: end,
+                start_position: at,
+                old_end_position: to,
+                new_end_position: to,
+            });
+        }
+        if let Some(t) = parser.parse(copy, Some(&old)) {
             let d = errors(t.root_node());
             if d < damage {
                 (tree, damage) = (t, d);
@@ -107,6 +122,41 @@ pub(crate) fn parse(source: &str) -> Option<tree_sitter::Tree> {
         }
     }
     Some(tree)
+}
+
+/// The byte ranges where `copy` (of the same length) differs from `source`, in order.
+fn changed(source: &str, copy: &str) -> Vec<(usize, usize)> {
+    let (a, b) = (source.as_bytes(), copy.as_bytes());
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for i in (0..a.len()).filter(|&i| a[i] != b[i]) {
+        match out.last_mut() {
+            Some((_, end)) if *end == i => *end = i + 1,
+            _ => out.push((i, i + 1)),
+        }
+    }
+    out
+}
+
+/// Rows and columns of byte offsets asked for in increasing order, counting lines once.
+#[derive(Default)]
+struct LineIndex {
+    at: usize,
+    row: usize,
+    line_start: usize,
+}
+
+impl LineIndex {
+    /// The row and column of byte `at` of `source`, at or after the last one asked for.
+    fn point(&mut self, source: &str, at: usize) -> tree_sitter::Point {
+        for (i, &c) in source.as_bytes()[self.at..at].iter().enumerate() {
+            if c == b'\n' {
+                self.row += 1;
+                self.line_start = self.at + i + 1;
+            }
+        }
+        self.at = at;
+        tree_sitter::Point { row: self.row, column: at - self.line_start }
+    }
 }
 
 /// Whether `node` is a parse error. A missing `!` isn't: the grammar inserts one, zero-width, to read an empty tuple
