@@ -29,7 +29,4 @@
 # declared clients' node_modules, symbol history, coupled-file ranking, more route forms, the Codex hook's trust status,
 # and the workspace and replay gates' tool fallback (36975376, up 347168; measured on integration/0.5 d2642c8's dist
 # build).
-# 0.6 so far: capabilities and stable codes (integration/0.6), shared worktree bases with their status and cache
-# accounting (#167), and provenance records (#172): 37438528, up 463152; measured on #172's dist build, which is
-# 115728 over #167's (37322800).
-37438528
+36975376
