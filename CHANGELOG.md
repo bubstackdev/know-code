@@ -71,6 +71,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
   gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
   (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
+- A type written through a qualifier is looked up in that qualifier, where it was taken by its last name alone:
+  `String.UnicodeScalarView` no longer links to a repo's `BigString.UnicodeScalarView`, nor
+  `UnsafeMutableBufferPointer<Element>.Index` to `Deque.Index` (Swift; TypeScript's `globalThis.FocusEvent` likewise).
+  A qualifier the repo doesn't declare (a library type, a generic parameter, `globalThis`) leaves the name unresolved.
+  Swift and TypeScript files are read again.
+- A TypeScript name links to the repo's declaration only where the file can name it: it declares, imports or
+  re-exports it, or the repo declares it in a script. A test calling the platform's `Response.json(…)` no longer
+  links to an exported `interface Response` it never imported; such a receiver is the platform's type. JavaScript files
+  and files importing nothing are read as before. TypeScript `exact` precision on the identity gate rises to 0.995.
+- A Swift `private` or `fileprivate` declaration is a candidate only in its own file: `extension Array { fileprivate
+  mutating func append(optional:) }` no longer captures `results.append(x)` elsewhere. `private(set)` doesn't count.
+- A use on a library type that reaches only a protocol requirement of the repo (`a.count` on a `Set`, to
+  `SetAPIChecker.count`) is `external_likely`, the requirement listed as its target, where it was `exact`: the member
+  that runs is the library type's own.
 
 ## 0.5.1 (2026-10-27)
 
