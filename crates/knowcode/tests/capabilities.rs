@@ -175,7 +175,7 @@ fn case(op: &str) -> Option<Value> {
         "reviewers" => json!({ "q": "src/Orders.cs" }),
         "overview" => json!({}),
         "areas" => json!({}),
-        "unused" | "hotspots" | "status" => json!({}),
+        "unused" | "hotspots" | "status" | "test_targets" => json!({}),
         other => panic!("no case for op {other}: add one"),
     })
 }
