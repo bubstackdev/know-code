@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -423,7 +423,7 @@ fn valid_dir_name(name: &str) -> bool {
 
 /// The `origin` remote of the checkout at `dir`, as configured.
 fn own_origin(dir: &Path) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(["config", "--get", "remote.origin.url"]).stderr(Stdio::null()).output().ok()?;
+    let out = kc_index::git_command().arg("-C").arg(dir).args(["config", "--get", "remote.origin.url"]).stderr(Stdio::null()).output().ok()?;
     let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !url.is_empty()).then_some(url)
 }
@@ -456,7 +456,7 @@ enum Cloned {
 }
 
 fn git(dir: Option<&Path>, args: &[&str]) -> std::result::Result<Vec<u8>, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = kc_index::git_command();
     if let Some(d) = dir {
         cmd.arg("-C").arg(d);
     }
