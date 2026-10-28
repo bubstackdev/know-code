@@ -15,6 +15,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   apple/swift-argument-parser (285 files) three goals took 349,478, 215,267 and 438,423 page reads and now take 3,133,
   2,960 and 3,561, and 3,583 to 4,238 `stat` calls, now 2,553 to 3,206. The answers are the same bytes. A query's
   first repo now keeps its full page cache however often it is opened; other repos' are held smaller as before.
+- `impact` reads the workspace's repo summaries once per call rather than once per symbol, and checks each repo for
+  changes once. Each read lists the cache and `stat`s every indexed repo, so the cost grew with the symbols in scope
+  times the repos indexed. On apple/swift-argument-parser, `impact --file` on a file of 53 symbols listed the cache 84
+  times and made 1,614 `stat` calls; it now lists it 10 times and makes 289. `task`, which runs `impact` on three
+  files, went from 195 listings to 27 and from 3,175 `stat` calls to 1,324. The answers are the same bytes. `tests`
+  and `task` check each repo for changes once too.
 - YAML files are read within limits. A YAML file over 2 MiB is not read, nor one whose aliases stand for more than
   100,000 nodes in all (each alias counted as the size of its anchor's node), so a small file of nested aliases can no
   longer exhaust memory while a repo is indexed. Anchors and aliases as GitLab CI and compose files use them are read

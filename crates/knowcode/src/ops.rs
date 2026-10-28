@@ -399,9 +399,22 @@ pub struct Consulted {
     pending: std::cell::RefCell<Vec<PathBuf>>,
     partial: std::cell::RefCell<Vec<Incomplete>>,
     withheld: std::cell::RefCell<Vec<PathBuf>>,
+    /// The workspace's summaries as [`planned_summaries`] gave them, once [`Consulted::keep_planned`] asked for them
+    /// to be kept: `None` until then.
+    planned: std::cell::RefCell<Option<Option<Summaries>>>,
 }
 
+/// The workspace's summaries, shared.
+type Summaries = std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>;
+
 impl Consulted {
+    /// Keeps what [`planned_summaries`] gives for the rest of the query, rather than reading the summaries again per
+    /// symbol (each read lists the cache and `stat`s every indexed repo). Only under [`kc_index::memo_changes`]: a
+    /// repo seen changed then stays so, and is opened whatever its kept summary says.
+    pub fn keep_planned(&self) {
+        self.planned.borrow_mut().get_or_insert(None);
+    }
+
     /// Records a repo opened (and synced unless `no_sync`) on the side. Its HEAD is read from `.git` (no `git`
     /// process); whether it is dirty is not checked (`git status`, or even finding its cached answer, costs more than a
     /// side repo's part in the answer: ~1.4 M instructions each, measured on a reference answer opening 30).
@@ -4082,7 +4095,14 @@ pub(crate) fn full_summaries(o: &Opened) -> Result<std::sync::Arc<Vec<kc_index::
 }
 
 pub(crate) fn planned_summaries(o: &Opened) -> Result<std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>> {
-    ensure_summaries(o, std::slice::from_ref(&o.root), false)
+    if let Some(Some(kept)) = o.consulted.planned.borrow().as_ref() {
+        return Ok(kept.clone());
+    }
+    let summaries = ensure_summaries(o, std::slice::from_ref(&o.root), false)?;
+    if let Some(kept) = o.consulted.planned.borrow_mut().as_mut() {
+        *kept = Some(summaries.clone());
+    }
+    Ok(summaries)
 }
 
 pub(crate) fn full_workspace(opened: &[Opened], roots: &[PathBuf]) -> Result<std::sync::Arc<Vec<kc_index::workspace::RepoSummary>>> {
@@ -6062,6 +6082,8 @@ impl ImpactRepo {
 }
 
 pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
+    // Each repo checked for changes once, however many symbols ask about its dependents.
+    let _memo = kc_index::memo_changes();
     let _rivals = edge_filter(&[], &p.filter.evidence).ok().and_then(|f| f.explain_rivals());
     let given = [p.symbol.is_some(), p.file.is_some(), p.diff.is_some()].iter().filter(|b| **b).count();
     if given != 1 {
@@ -6075,6 +6097,8 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
     let edges = p.filter.edges()?;
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
+        // The dependents of each symbol in scope are looked up in the same summaries.
+        o.consulted.keep_planned();
         let conn = o.store.conn();
         let mut changes = Vec::new();
         let (mut old_defs, mut base) = (Vec::new(), None);
@@ -6843,6 +6867,7 @@ pub const TESTS_ARE: &str = "most likely relevant: the tests whose signals (reve
 /// The tests to run for a change: test files ranked by reverse edges, naming and co-change, the most likely relevant
 /// first and the rest as left out.
 pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
+    let _memo = kc_index::memo_changes();
     if p.targets.is_empty() == p.diff.is_none() {
         bail!("give targets (files or symbols) or a diff, not both");
     }
@@ -13270,5 +13295,22 @@ public class CatalogService(HttpClient httpClient)
         let none = at("src/nowhere.py", 1, &both).err().unwrap().to_string();
         assert!(none.contains("in none of the 2 repos searched"), "{none}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `impact` reads the workspace's summaries once per call, whatever the symbols in scope: once kept, the same
+    /// summaries are handed out again; never kept, each call reads them.
+    #[test]
+    fn kept_summaries_are_read_once() {
+        let cache = test_cache();
+        let base = cache.dir("kept-summaries");
+        let root = repo(&base, "app", &[("src/App.cs", "namespace App;\npublic class App { public void Run() { } }\n")]);
+        let o = open_fresh(&root, false).unwrap();
+        let (a, b) = (planned_summaries(&o).unwrap(), planned_summaries(&o).unwrap());
+        assert!(a.iter().any(|s| s.root == root));
+        o.consulted.keep_planned();
+        let kept = planned_summaries(&o).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&kept, &planned_summaries(&o).unwrap()));
+        assert_eq!(a.len(), b.len());
+        assert_eq!(kept.len(), a.len());
     }
 }
