@@ -26,6 +26,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - A `package.json` test script's `line` is its key under `scripts`. It was the first line naming `"test"` anywhere in
   the file, such as `"name": "test"` or `"keywords": ["test"]` above the scripts.
 
+- Restricted mode keeps to its bound repos and ops on every path. A repo is checked against the bound ones wherever an
+  op opens it, so a path relative to the server's directory, a cursor or a dependency can no longer reach another
+  repo; a bound repo's name always means the bound repo, even with a directory of that name under the server's
+  current directory; and `more` continues only a cursor of an op the server runs.
+- Cursors are signed. `more` takes only a cursor this KnowCode made (signed with a random key kept in the cache
+  directory as `cursor.key`), with its page and offsets bounded; any other is refused as `invalid_argument`. Cursors
+  made before this release are refused: ask the original question again.
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for

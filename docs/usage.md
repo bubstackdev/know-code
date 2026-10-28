@@ -280,10 +280,13 @@ knowcode serve --restricted --repo /work/job-17/shop --ops find,refs,context,imp
 
 - **Bound repos.** It answers about the `--repo`s only (each a repo's root; repeat the flag for more). The workspace
   is those repos: nothing else is discovered or indexed, a workspace-wide call covers them alone, and a call naming
-  another repo, or an absolute path outside them, is refused with code `not_allowed`.
+  another repo by name or by any path (absolute or relative), or reaching one through a cursor or a dependency, is
+  refused with code `not_allowed`. A bound repo's name always means the bound repo, never a directory of that name
+  under the server's current directory.
 - **An op allowlist.** `--ops` lists the ops it runs. Any other is refused with `not_allowed`, and under a profile
   of separate tools (`--tools all`) isn't listed. `capabilities` is
-  always allowed. List `more` too if answers should continue, and `note_add` only if the job may write notes.
+  always allowed. List `more` too if answers should continue, and `note_add` only if the job may write notes. `more`
+  continues only a cursor of an op the server runs.
 - **Explicit directories.** `--cache-dir` and `--config-dir` (or `KNOWCODE_CACHE_DIR` and `KNOWCODE_CONFIG_DIR`) are
   required, so nothing of the user's is read or written. Notes go to `--data-dir`, by default `data` in the cache.
   The server writes nothing outside the cache (and data) directory.
