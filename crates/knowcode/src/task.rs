@@ -48,6 +48,8 @@ const UNSETTLED: &[Reason] = &[Reason::Policy, Reason::Unsupported, Reason::With
 /// The task answer for `p.goal` over `scope`'s repos.
 pub fn task(p: &TaskParams, scope: &Scope) -> Result<Out<Value>> {
     let goal = p.goal.trim();
+    // `locate`, `impact` and `tests` consult the same repos: each is checked for changes once.
+    let _memo = kc_index::memo_changes();
     let loc = ops::locate(goal, p.files, scope)?;
     let multi = loc.data.multi;
     let place = |root: &Path, file: &str| if multi { format!("{}/{file}", ops::repo_name(root)) } else { file.to_string() };

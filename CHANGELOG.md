@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `impact` reads the workspace's repo summaries once per call rather than once per symbol, and checks each repo for
+  changes once. Each read lists the cache and `stat`s every indexed repo, so the cost grew with the symbols in scope
+  times the repos indexed. On apple/swift-argument-parser, `impact --file` on a file of 53 symbols listed the cache 84
+  times and made 1,546 `stat` calls; it now lists it 10 times and makes 289. `task`, which runs `impact` on three
+  files, went from 195 listings to 27. The answers are the same bytes. `tests` and `task` check each repo for changes
+  once too.
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
