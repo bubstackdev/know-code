@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 23;
+pub const VERSION: u32 = 24;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -181,6 +181,22 @@ const EAGER_CALLS: &[&str] = &[
     "rxResource", "createEffect",
 ];
 
+/// The namespaces enclosing `node`, outermost first, joined by `.` (`Outer.Inner`); `None` at a module's top.
+fn namespaces_around(src: &str, node: Node) -> Option<String> {
+    let mut names = Vec::new();
+    let mut at = node.parent();
+    while let Some(p) = at {
+        if matches!(p.kind(), "internal_module" | "module")
+            && let Some(n) = p.child_by_field_name("name").filter(|n| n.kind() != "string")
+        {
+            names.push(&src[n.byte_range()]);
+        }
+        at = p.parent();
+    }
+    names.reverse();
+    (!names.is_empty()).then(|| names.join("."))
+}
+
 impl<'a> Cx<'a> {
     fn text(&self, n: Node) -> &'a str {
         &self.src[n.byte_range()]
@@ -239,6 +255,17 @@ impl<'a> Cx<'a> {
             },
             "class_declaration" | "abstract_class_declaration" | "class" => self.class(node, outer),
             "interface_declaration" => self.interface(node, outer),
+            // `namespace Shapes { … }`, `declare namespace Express { … }`, `module Legacy { … }`: a symbol for the
+            // namespace, named as written within the namespaces around it, so a type named through it
+            // (`Shapes.Circle`) is found among the declarations it spans. Its members keep their own containers: a
+            // namespace scopes names, it is no type. `declare module "pkg"` names a module, not a namespace.
+            "internal_module" | "module" => {
+                if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() != "string") {
+                    let container = namespaces_around(self.src, node);
+                    self.push(node, outer, self.text(n).to_string(), SymbolKind::Module, container, None);
+                }
+                self.visit_children(node)
+            }
             "enum_declaration" => {
                 let Some(n) = node.child_by_field_name("name") else { return };
                 let name = self.text(n).to_string();
@@ -2375,6 +2402,16 @@ export const toLines = (cart: Cart): CartLine[] => cart.items.map((i) => i.line)
 
 export abstract class BaseComponent {}
 "#;
+
+    #[test]
+    fn a_namespace_is_a_symbol_spanning_its_declarations() {
+        let f = extract("export namespace Shapes { export interface Circle { r: number } }\ndeclare global { namespace Express { interface Request {} } }\nnamespace A.B { namespace C { type D = 1 } }\ndeclare module \"pkg\" { interface X {} }\n", false);
+        let ns: Vec<(&str, Option<&str>)> =
+            f.symbols.iter().filter(|s| s.kind == SymbolKind::Module).map(|s| (s.name.as_str(), s.container.as_deref())).collect();
+        assert_eq!(ns, [("Shapes", None), ("Express", None), ("A.B", None), ("C", Some("A.B"))]);
+        // Members keep their own containers.
+        assert!(f.symbols.iter().any(|s| s.name == "Circle" && s.container.is_none()));
+    }
 
     #[test]
     fn a_qualified_type_keeps_its_qualifier() {

@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` declared in `declare global`, nested
+  `Outer.Inner.Leaf`) links to the namespace's own declaration again, and `find` lists the namespace itself. 0.6 looks
+  a qualified type up in its qualifier, but namespaces weren't extracted, so these came out `unresolved`. A namespace is
+  now a `module` symbol spanning its declarations, and a name through it is the declaration whose innermost enclosing
+  namespace it is, never a same-named type outside it. TypeScript files are extracted again and references resolved
+  again on the first sync.
+
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
