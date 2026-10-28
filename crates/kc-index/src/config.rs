@@ -708,7 +708,7 @@ pub fn bound() -> Option<&'static [PathBuf]> {
 pub fn check_bound(root: &Path) -> Result<()> {
     let Some(repos) = bound() else { return Ok(()) };
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    if repos.iter().any(|r| *r == canonical) {
+    if repos.contains(&canonical) {
         return Ok(());
     }
     let names: Vec<String> = repos.iter().map(|r| r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
