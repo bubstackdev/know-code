@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `task` reads its repo's index once per page rather than hundreds of times over, and checks the repo against its
+  working tree once. It opens the repo five times (`locate`, `impact` for three files, `tests`); every open past the
+  first was given the small page cache meant for a workspace answer's other repos, and was checked again. On
+  apple/swift-argument-parser (285 files) three goals took 349,478, 215,267 and 438,423 page reads and now take 3,133,
+  2,960 and 3,561, and 3,583 to 4,238 `stat` calls, now 2,553 to 3,206. The answers are the same bytes. A query's
+  first repo now keeps its full page cache however often it is opened; other repos' are held smaller as before.
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for

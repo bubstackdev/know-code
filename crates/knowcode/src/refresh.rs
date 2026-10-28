@@ -482,10 +482,25 @@ fn background_priority() {
 /// Returns a pinned committed snapshot and its sync report, or no report when freshness was not established.
 /// CLI calls retain their blocking behavior. MCP calls share one deadline across all repositories they consult.
 pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
-    let mut store = kc_index::open(root)?;
+    let store = kc_index::open(root)?;
     if no_sync {
         return Ok((store, None));
     }
+    // Synced already by this query, which composes others (see `kc_store::limits::Operation::remember_syncs`): one
+    // check per repo, and each part says what it reported.
+    let query = kc_store::limits::current();
+    if let Some(report) = query.synced::<SyncReport>(root) {
+        return Ok((store, Some((*report).clone())));
+    }
+    let (store, report) = open_synced(root, store)?;
+    if let Some(report) = &report {
+        query.note_synced(root, report.clone());
+    }
+    Ok((store, report))
+}
+
+/// [`open`]'s check of `root`'s index `store` against its working tree, under the query's freshness budget.
+fn open_synced(root: &Path, mut store: Store) -> Result<(Store, Option<SyncReport>)> {
     let Some(deadline) = deadline() else {
         let report = kc_index::sync(root, &mut store, &SyncOptions::default())?;
         return Ok((store, Some(report)));
