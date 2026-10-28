@@ -9,8 +9,27 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
   (`channel.pipeline` on an `EmbeddedChannel` linked to `Channel.pipeline`). Neither is a statement now, and a file
   with parse errors is no script either: its top level is recovery's misreading. In swift-nio, 35 library files were
-  taken for scripts. On the identity gate, Swift `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to
+  taken for scripts. On the identity gate (measured before the overload and extension-scope fixes above), Swift
+  `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to
   0.571 (linked) and from 0.813 to 0.851 (among candidates), with no label newly wrong. Swift files are read again.
+- A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
+  where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
+  `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
+  `append(optional:)`. It is judged by argument count (C#) and argument labels (Swift) on the declarations the
+  receiver or scope picks. Swift argument labels count a trailing closure after `try` or `await`
+  (`try make(at: 1) { … }`), a function named by its labels (`xs.map { $0.scope(for:in:) }`) records none, and a
+  parameter list ending in a comma has no extra parameter. Swift files are re-extracted once.
+- Swift code in `extension A.B` reads unqualified names as Swift does: B's members and the file's declarations, not
+  A's. In `extension Box.Keyed { func sup() -> Decoder }`, `Decoder` is Swift's protocol, not `Box.Decoder`, and
+  `extension Box.Decoder: Decoder` reads its conformance at the file's scope. Code written inside `A`, and an
+  extension of a top-level type, read as before. `X.Y.init(…)` keeps `X` as its qualifier, as `X.Y(…)` does. Swift
+  files are re-extracted once.
+- Swift files using newer constructs lose less of their code to parse errors. Read now: `borrow`, `mutate`,
+  `unsafeAddress` and `borrowing get` accessors; `@_specialize(where …)`; `#error(…)` and `#warning(…)`; `@Sendable` on
+  a function declared in a body; `()` as a statement; and `consume`, or `unsafe` before `!` or a number. Over 4,297
+  files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
+  declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
+  ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
@@ -20,7 +39,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
   changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
   index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
-  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does.
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does. Its
+  keys are written in reading order (files, tests, dependents, what is unsettled, then what the answer says about
+  itself), not by name, so the tests come within the first part a client reads.
 - `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
   tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
   (`dotnet test`) and `package.json` test scripts (run with the package manager
