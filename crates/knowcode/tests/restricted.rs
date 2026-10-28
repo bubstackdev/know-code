@@ -275,3 +275,79 @@ fn a_restricted_server_stays_in_its_repos_ops_and_cache() {
     assert!(changed.is_empty(), "files outside the cache changed: {changed:?}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A cursor and a path name a repo too: a restricted server answers from neither unless it is bound, nor continues a
+/// cursor of an op it doesn't run, nor one it didn't make. A bound repo's name is that repo, never a directory of
+/// that name under the current one.
+#[test]
+fn a_restricted_server_takes_no_repo_from_a_cursor_a_relative_path_or_a_name_under_its_directory() {
+    let base = scratch("bypass");
+    let shop = repo(&base.join("bound"), "app", &[("src/Orders.cs", "namespace Shop;\npublic class Orders\n{\n    public void Place() { }\n    public void PlaceTwice() { Place(); Place(); }\n}\n")]);
+    // The server's current directory, with a repo of the bound one's name and another repo beside it.
+    let cwd = base.join("cwd");
+    let decoy = repo(&cwd, "app", &[("src/Decoy.cs", "namespace Decoy;\npublic class Orders\n{\n    public void Place() { }\n}\n")]);
+    let other = repo(&cwd, "other", &[("src/Ledger.cs", "namespace Books;\npublic class Ledger\n{\n    public void Post() { Ledger.Mark(); Ledger.Mark(); }\n    public static void Mark() { }\n}\n")]);
+    let (cache, config) = (base.join("cache"), base.join("config"));
+    std::fs::create_dir_all(&config).unwrap();
+    let cli = |args: &[&str]| -> Value {
+        let out = Command::new(KC)
+            .args(args)
+            .current_dir(&base)
+            .env("KNOWCODE_CACHE_DIR", &cache)
+            .env("KNOWCODE_CONFIG_DIR", &config)
+            .env("KNOWCODE_DATA_DIR", cache.join("data"))
+            .env("KNOWCODE_UPDATE_CHECK", "0")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    // Cursors this KnowCode made, with the same cache: one of an op the server doesn't run, about its own repo, and
+    // one of an op it runs, about the other repo.
+    let search = cli(&["search", "Place", "--repo", shop.to_str().unwrap(), "--limit", "1", "--json"]);
+    let search_cursor = search["cursor"].as_str().unwrap_or_else(|| panic!("{search}")).to_string();
+    let refs = cli(&["refs", "Mark", "--repo", other.to_str().unwrap(), "--limit", "1", "--json"]);
+    let refs_cursor = refs["cursor"].as_str().unwrap_or_else(|| panic!("{refs}")).to_string();
+
+    let mut cmd = Command::new(KC);
+    cmd.args(["serve", "--restricted", "--repo", shop.to_str().unwrap(), "--ops", "find,refs,path,more", "--cache-dir", cache.to_str().unwrap(), "--config-dir", config.to_str().unwrap()])
+        .current_dir(&cwd)
+        .env("KNOWCODE_UPDATE_CHECK", "0")
+        .stderr(Stdio::null());
+    let mut s = Server::start(&mut cmd);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    // The bound repo by its name: the bound one, never `./app`.
+    loop {
+        let (text, code) = s.kc("find", json!({ "q": "Orders", "repo": "app" }));
+        assert!(code.is_none(), "{text}");
+        assert!(!text.contains("Decoy"), "{text}");
+        if text.contains("src/Orders.cs") {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "the bound repo was never indexed: {text}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // With no repo named, from a directory in none, the other repo indexed in the same cache is not one it reads.
+    let (text, code) = s.kc("find", json!({ "q": "Ledger" }));
+    assert!(code.is_none() && !text.contains("Ledger.cs"), "{text}");
+    let (text, code) = s.kc("find", json!({ "q": "Orders", "repos": ["app"] }));
+    assert!(code.is_none() && text.contains("src/Orders.cs") && !text.contains("Decoy"), "{text}");
+    // A repo named by a path relative to the current directory.
+    let (text, code) = s.kc("path", json!({ "from": "Orders.Place", "to": "Ledger.Post", "to_repo": "other" }));
+    assert_eq!(code.as_deref(), Some("not_allowed"), "{text}");
+    // A cursor of an op it doesn't run.
+    let (text, code) = s.kc("more", json!({ "q": search_cursor }));
+    assert_eq!(code.as_deref(), Some("not_allowed"), "{text}");
+    // A cursor of an op it runs, about a repo it isn't bound to.
+    let (text, code) = s.kc("more", json!({ "q": refs_cursor }));
+    assert_eq!(code.as_deref(), Some("not_allowed"), "{text}");
+    assert!(!text.contains("Ledger.cs"), "{text}");
+    // A cursor it didn't make: the same request with another repo, or as written by hand.
+    let (body, mac) = search_cursor.trim_start_matches("kc1.").rsplit_once('.').unwrap();
+    for forged in [format!("kc1.{body}"), format!("kc1.{body}x.{mac}"), "kc1.e30.AAAAAAAAAAAAAAAAAAAAAA".to_string()] {
+        let (text, code) = s.kc("more", json!({ "q": forged }));
+        assert_eq!(code.as_deref(), Some("invalid_argument"), "{forged}: {text}");
+    }
+    drop(s);
+    let _ = (decoy, std::fs::remove_dir_all(&base));
+}

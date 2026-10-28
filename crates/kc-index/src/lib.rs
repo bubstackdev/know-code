@@ -179,6 +179,8 @@ impl Seeds {
 fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>)> {
     // A cancelled operation (see `kc_store::limits`) opens no further repo: a workspace query stops here.
     kc_store::limits::check()?;
+    // A restricted server's process opens only the repos it is bound to.
+    config::check_bound(root)?;
     let db = db_path(root)?;
     // Schema creation, migration and seeding are writers too. Opening a current index remains independent of
     // the indexing lease, so readers can use their committed WAL snapshot while a sync is running.
@@ -333,7 +335,7 @@ pub fn prune() -> Result<Vec<PathBuf>> {
 /// without, every repo with an index in the cache. An index whose checkout is gone (until [`prune`]) is no repo of
 /// the workspace: a workspace-wide answer has nothing there to read.
 pub fn indexed_roots() -> Result<Vec<PathBuf>> {
-    Ok(workspace::summaries(&[])?.iter().filter(|s| !s.blocked.whole && !s.gone).map(|s| s.root.clone()).collect())
+    Ok(workspace::summaries(&[])?.iter().filter(|s| !s.blocked.whole && !s.gone && config::check_bound(&s.root).is_ok()).map(|s| s.root.clone()).collect())
 }
 
 /// Repos found under the workspace roots whose full index isn't built yet: no index (only discovered, or scanned for
@@ -343,7 +345,7 @@ pub fn indexed_roots() -> Result<Vec<PathBuf>> {
 pub fn unindexed_roots() -> Result<Vec<PathBuf>> {
     let mut roots: Vec<(u64, PathBuf)> = workspace::summaries(&[])?
         .iter()
-        .filter(|s| s.light && !s.blocked.whole && !s.gone)
+        .filter(|s| s.light && !s.blocked.whole && !s.gone && config::check_bound(&s.root).is_ok())
         .map(|s| (git_index_bytes(&s.root), s.root.clone()))
         .collect();
     roots.sort();
@@ -363,7 +365,8 @@ pub fn blocked_roots() -> Result<Vec<(PathBuf, privacy::Blocked)>> {
 
 /// Roots of every repo with an index in the cache, in the workspace or not.
 pub fn all_indexed_roots() -> Result<Vec<PathBuf>> {
-    Ok(workspace::all_summaries()?.iter().map(|s| s.root.clone()).collect())
+    // A bound process lists only its repos (see [`config::bind`]).
+    Ok(workspace::all_summaries()?.iter().map(|s| s.root.clone()).filter(|r| config::check_bound(r).is_ok()).collect())
 }
 
 /// Which of `roots` declares each package, by repo identity, from the workspace summary (see

@@ -218,6 +218,9 @@ fn scope_repos_any(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         }
         (roots, true)
     };
+    for r in &roots {
+        kc_index::config::check_bound(r)?;
+    }
     Ok((roots, workspace))
 }
 

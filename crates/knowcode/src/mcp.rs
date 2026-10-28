@@ -3077,6 +3077,9 @@ impl ServerHandler for KnowcodeServer {
         {
             return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(anyhow::Error::new(e)));
         }
+        if let Some(r) = &self.restriction {
+            r.resolve(request.arguments.as_mut());
+        }
         if let Err(e) = self.guard_privacy(request.arguments.as_ref()) {
             return rmcp::handler::server::tool::IntoCallToolResult::into_call_tool_result(ToolError::from(e));
         }

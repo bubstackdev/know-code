@@ -10,6 +10,7 @@ description = "A lightweight, local code graph for coding agents."
 
 [dependencies]
 anyhow.workspace = true
+blake3.workspace = true
 clap.workspace = true
 dirs.workspace = true
 kc-extract.workspace = true

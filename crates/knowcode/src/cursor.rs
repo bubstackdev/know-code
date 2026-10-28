@@ -454,15 +454,99 @@ fn chain(h: u64, rows: &[Value]) -> u64 {
     rows.iter().fold(h, |h, r| fnv(fnv(h, key(r).as_bytes()), b"\x1e"))
 }
 
+/// The key cursors are signed with: random, kept in the cache directory (`cursor.key`, readable by its owner only) so
+/// that `knowcode more` in another process continues a cursor; per process when the cache can't keep it. A cursor
+/// names an operation and the repos it reads, so one the client wrote itself could ask for any of them: only a cursor
+/// signed with this key is taken.
+fn signing_key() -> &'static [u8; 32] {
+    static KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| kept_key().unwrap_or_else(|_| fresh_key()))
+}
+
+fn fresh_key() -> [u8; 32] {
+    use std::io::Read as _;
+    let mut k = [0u8; 32];
+    if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut k)).is_err() {
+        // Never without a secret: what the process alone knows, hashed.
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        k = *blake3::hash(format!("{:?}{}{:p}", t, std::process::id(), &k).as_bytes()).as_bytes();
+    }
+    k
+}
+
+fn kept_key() -> Result<[u8; 32]> {
+    use std::io::Write as _;
+    let path = kc_index::cache_dir()?.join("cursor.key");
+    let read = |p: &std::path::Path| -> Result<[u8; 32]> {
+        let bytes = std::fs::read(p)?;
+        bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("{} is not a key", p.display()))
+    };
+    if let Ok(k) = read(&path) {
+        return Ok(k);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let k = fresh_key();
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    match opts.open(&path) {
+        Ok(mut f) => {
+            f.write_all(&k)?;
+            Ok(k)
+        }
+        // Another process made it first.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(&path),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The signature of a cursor's body.
+fn sign(body: &str) -> String {
+    b64(&blake3::keyed_hash(signing_key(), body.as_bytes()).as_bytes()[..16])
+}
+
+/// The most a cursor's page, offset or count of rows shown may be.
+const MAX_PAGE: usize = 100_000;
+const MAX_OFFSET: usize = 10_000_000;
+
 fn encode(c: &Cursor) -> String {
-    format!("{PREFIX}{}", b64(serde_json::to_string(c).unwrap_or_default().as_bytes()))
+    let body = b64(serde_json::to_string(c).unwrap_or_default().as_bytes());
+    let mac = sign(&body);
+    format!("{PREFIX}{body}.{mac}")
 }
 
 fn decode(s: &str) -> Result<Cursor> {
     let bad = || anyhow::anyhow!(Refusal::new(Code::InvalidArgument, "not a cursor this KnowCode made: pass the `cursor` (or `<list>_cursor`) of an answer as it is"));
-    let body = s.trim().strip_prefix(PREFIX).ok_or_else(bad)?;
+    let (body, mac) = s.trim().strip_prefix(PREFIX).and_then(|r| r.rsplit_once('.')).ok_or_else(bad)?;
+    let want = sign(body);
+    // Compared in constant time.
+    if want.len() != mac.len() || want.bytes().zip(mac.bytes()).fold(0u8, |d, (a, b)| d | (a ^ b)) != 0 {
+        return Err(bad());
+    }
     let bytes = unb64(body).ok_or_else(bad)?;
-    serde_json::from_slice(&bytes).map_err(|_| bad())
+    let c: Cursor = serde_json::from_slice(&bytes).map_err(|_| bad())?;
+    if c.n > MAX_PAGE || c.o > MAX_OFFSET || c.b > c.o || c.k > MAX_OFFSET {
+        return Err(bad());
+    }
+    Ok(c)
+}
+
+/// The tool whose answer a cursor continues (`kc_refs`), for a server that runs only some: refused when the cursor
+/// isn't one this KnowCode made.
+pub fn tool_of(cursor: &str) -> Result<&'static str> {
+    Ok(match decode(cursor)?.q.req {
+        Request::Refs { .. } => "kc_refs",
+        Request::Context { .. } => "kc_context",
+        Request::Trace { .. } => "kc_trace",
+        Request::Impact { .. } => "kc_impact",
+        Request::Path { .. } => "kc_path",
+        Request::Rename { .. } => "kc_rename_preview",
+        Request::Search { .. } => "kc_search",
+        Request::GrepAst { .. } => "kc_grep_ast",
+    })
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -1232,9 +1316,26 @@ mod tests {
             n: 5,
             k: 5,
         };
+        let _cache = test_cache();
         let back = decode(&encode(&c)).unwrap();
-        assert_eq!((back.q, back.l, back.o), (c.q, c.l, c.o));
+        assert_eq!((back.q, back.l, back.o), (c.q.clone(), c.l.clone(), c.o));
         assert!(decode("kc1.!!").is_err() && decode("abc").is_err());
+        // A cursor written rather than made, or one changed, is refused: its signature doesn't match.
+        let body = encode(&c).trim_start_matches(PREFIX).split('.').next().unwrap().to_string();
+        assert!(decode(&format!("{PREFIX}{body}")).is_err());
+        assert!(decode(&format!("{PREFIX}{body}.AAAAAAAAAAAAAAAAAAAAAA")).is_err());
+        let mut other = c.clone();
+        other.q.req = Request::Search {
+            pattern: "x".into(), regex: false, case: "sensitive".into(), word: false, langs: Vec::new(), globs: Vec::new(),
+            max_lines: 1, context: 0, files_only: false, limit: 5,
+        };
+        let forged = format!("{PREFIX}{}.{}", b64(serde_json::to_string(&other).unwrap().as_bytes()), encode(&c).rsplit('.').next().unwrap());
+        assert!(decode(&forged).is_err());
+        assert_eq!(tool_of(&encode(&other)).unwrap(), "kc_search");
+        // Its page and offsets are bounded.
+        let mut wide = c.clone();
+        wide.n = MAX_PAGE + 1;
+        assert!(decode(&encode(&wide)).is_err());
         assert_eq!(readable("/items/0/callers"), "items[0].callers");
         assert_eq!(cursor_field("/items"), (String::new(), "cursor".to_string()));
         assert_eq!(cursor_field("/items/2/nodes"), ("/items/2".to_string(), "nodes_cursor".to_string()));
