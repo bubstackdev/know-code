@@ -2,6 +2,14 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+- A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
+  last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
+  device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
+  the new index's and a workspace query could keep that repo's summary from before the rebuild. The creation time is
+  now part of the file's identity.
+
 ## 0.6.0 (2026-10-28)
 
 0.6 is about four things: references that name the declaration the compiler would, a server other tools can drive,

@@ -18,15 +18,16 @@ use serde::{Deserialize, Serialize};
 use crate::{Sniffed, discovery_inputs, git, names_hash};
 
 /// Bumped when [`Snapshot`] changes.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     format: u32,
     /// The schema and every extractor's version: an index another build wrote may be stale for this one.
     build: String,
-    /// Device and inode of the index file: a rebuilt or replaced index is a different file.
-    index: (u64, u64),
+    /// Device, inode and creation time of the index file: a rebuilt or replaced index is a different file. The
+    /// creation time because a file recreated at once can get the inode just freed (ext4 does).
+    index: (u64, u64, u128),
     /// [`discovery_inputs`] and the `.gitignore` files they cover.
     inputs: String,
     ignores: Vec<String>,
@@ -55,9 +56,12 @@ pub(crate) fn db_of(store: &Store) -> Option<PathBuf> {
     store.conn().path().filter(|p| !p.is_empty()).map(PathBuf::from)
 }
 
-fn identity(db: &Path) -> Option<(u64, u64)> {
+fn identity(db: &Path) -> Option<(u64, u64, u128)> {
     use std::os::unix::fs::MetadataExt;
-    std::fs::metadata(db).ok().map(|m| (m.dev(), m.ino()))
+    let m = std::fs::metadata(db).ok()?;
+    // 0 where the file system keeps no creation time: device and inode alone, as before.
+    let created = m.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Some((m.dev(), m.ino(), created))
 }
 
 /// Removes the snapshot: before a write that changes what the index holds, or when it can't be trusted.

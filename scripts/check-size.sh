@@ -1,15 +1,16 @@
 #!/bin/sh
 # Check the installed (`dist` profile) binary against the budget in size-budget.txt.
 #
-# Usage: scripts/check-size.sh [--no-build]
+# Usage: scripts/check-size.sh [--no-build [BINARY]]
 #
-# Builds `target/dist/knowcode` (unless --no-build), then exits 1 if it is more than 1% over the budget. If it is
+# Builds `target/dist/knowcode` (unless --no-build; then BINARY, if given, is measured instead, as CI measures the
+# binary it packaged), then exits 1 if it is more than 1% over the budget. If it is
 # more than 1% under, it passes and prints the new budget to commit, so the budget only ever ratchets down.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 budget_file="$root/size-budget.txt"
-bin="${CARGO_TARGET_DIR:-$root/target}/dist/knowcode"
+bin="${2:-${CARGO_TARGET_DIR:-$root/target}/dist/knowcode}"
 tolerance_pct=1
 
 if [ "${1:-}" != "--no-build" ]; then
