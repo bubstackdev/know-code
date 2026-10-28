@@ -16,6 +16,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `extension Box.Decoder: Decoder` reads its conformance at the file's scope. Code written inside `A`, and an
   extension of a top-level type, read as before. `X.Y.init(…)` keeps `X` as its qualifier, as `X.Y(…)` does. Swift
   files are re-extracted once.
+- Swift files using newer constructs lose less of their code to parse errors. Read now: `borrow`, `mutate`,
+  `unsafeAddress` and `borrowing get` accessors; `@_specialize(where …)`; `#error(…)` and `#warning(…)`; `@Sendable` on
+  a function declared in a body; `()` as a statement; and `consume`, or `unsafe` before `!` or a number. Over 4,297
+  files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
+  declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
+  ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the

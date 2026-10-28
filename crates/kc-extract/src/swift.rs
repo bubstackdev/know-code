@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 20;
+pub const VERSION: u32 = 21;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -79,8 +79,11 @@ pub fn extract(source: &str) -> FileFacts {
 /// Parses Swift `source`. When the tree has errors, constructs tree-sitter-swift doesn't read are blanked out of a
 /// copy (spaces of the same length, so every position stays) and the copy parsed again; the tree with fewer errors is
 /// kept. Blanked first: the underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`),
-/// `@_lifetime(…)` attributes, module selectors (`Mod::name`, `#Mod::macro`), `nonisolated(unsafe)`, and `unsafe` and
-/// `sending` before an operand (`if unsafe p.pointee > 0`, `() -> sending T`); then, also, `#if`, `#elseif`,
+/// `@_lifetime(…)` and `@_specialize(…)` attributes, `#error(…)` and `#warning(…)`, module selectors (`Mod::name`,
+/// `#Mod::macro`), `nonisolated(unsafe)`, `@Sendable` before a `func` in a body, `()` as a statement, and `unsafe`,
+/// `sending` and `consume` before an operand (`if unsafe p.pointee > 0`, `() -> sending T`, `switch consume x`),
+/// with accessors the grammar doesn't know read as `get` and `set` (`borrow`, `mutate`, `unsafeAddress`,
+/// `borrowing get`); then, also, `#if`, `#elseif`,
 /// `#else` and `#endif` lines, which the grammar doesn't read around attributes or between a switch's cases. With
 /// those lines blank, every branch's code is read, as the grammar reads branches elsewhere. A copy wins only when
 /// less of the file is in errors (then fewer errors): branches that don't read as one (`#if` around half a
@@ -206,14 +209,32 @@ pub fn error_sites(source: &str, limit: usize) -> Vec<(u32, u32, String)> {
     out
 }
 
-/// `source` with the underscored ownership modifiers, `@_lifetime(…)` attributes, module selectors,
-/// `nonisolated(unsafe)` and `unsafe` and `sending` before an operand blanked (see [`parse`]), or `None` when it has
-/// none of them.
+/// `source` with the underscored ownership modifiers, `@_lifetime(…)` and `@_specialize(…)` attributes, `#error(…)`
+/// and `#warning(…)`, module selectors, `nonisolated(unsafe)`, `@Sendable` before `func`, `()` as a statement, and
+/// `unsafe`, `sending` and `consume` before an operand blanked, and accessors the grammar
+/// doesn't know rewritten as `get` and `set` (see [`parse`]), or `None` when it has none of them.
 fn blank_modifiers(source: &str) -> Option<String> {
     let b = source.as_bytes();
     let mut out = b.to_vec();
     let mut changed = false;
     let word = |i: usize| i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_');
+    // `()` as a statement (a line of its own, or a closure's only one: `{ () }`), which the grammar reads as a call
+    // missing its callee.
+    let mut at = 0;
+    for line in source.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let trimmed = body.trim();
+        let tuple = if trimmed == "()" {
+            body.find("()")
+        } else {
+            body.find("{ () }").map(|k| k + 2)
+        };
+        if let Some(k) = tuple {
+            out[at + k..at + k + 2].fill(b' ');
+            changed = true;
+        }
+        at += line.len();
+    }
     let mut i = 0;
     while i < b.len() {
         if word(i) && (i == 0 || !word(i - 1)) {
@@ -223,17 +244,18 @@ fn blank_modifiers(source: &str) -> Option<String> {
             }
             let w = &source[start..i];
             let spaced = b.get(i).is_some_and(u8::is_ascii_whitespace);
-            // What follows the space starts a type or an expression: `unsafe x`, `sending T`, never `unsafe = 1`.
+            // What follows the space starts a type or an expression: `unsafe x`, `unsafe !done`, `unsafe 0 <= i`,
+            // `sending T`; never `unsafe = 1`.
             let operand = || {
                 let mut j = i;
                 while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
                     j += 1;
                 }
-                j > i && b.get(j).is_some_and(|&c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'&' | b'(' | b'[' | b'@'))
+                j > i && b.get(j).is_some_and(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'&' | b'(' | b'[' | b'@' | b'!' | b'$' | b'"'))
             };
             let member = start > 0 && b[start - 1] == b'.';
             if matches!(w, "__shared" | "__owned" | "__consuming" | "_const") && spaced
-                || matches!(w, "unsafe" | "sending") && !member && operand()
+                || matches!(w, "unsafe" | "sending" | "consume") && !member && operand()
             {
                 out[start..i].fill(b' ');
                 changed = true;
@@ -251,7 +273,25 @@ fn blank_modifiers(source: &str) -> Option<String> {
                 }
                 changed = true;
                 i += 2;
-            } else if w == "_lifetime" && start > 0 && b[start - 1] == b'@' && b.get(i) == Some(&b'(') {
+            } else if w == "Sendable" && start > 0 && b[start - 1] == b'@' && source[i..].trim_start_matches([' ', '\t']).starts_with("func ") {
+                // `@Sendable func` declared inside a body, which the grammar reads only without its attribute.
+                out[start - 1..i].fill(b' ');
+                changed = true;
+            } else if matches!(w, "error" | "warning") && start > 0 && b[start - 1] == b'#' && b.get(i) == Some(&b'(') {
+                // `#error("…")` and `#warning("…")`, a build diagnostic the grammar reads only in some places: blank
+                // when it closes on its line.
+                if let Some(close) = source[i..].find(")\n").map(|k| i + k).filter(|&k| !source[i..k].contains('\n')) {
+                    out[start - 1..=close].fill(b' ');
+                    changed = true;
+                    i = close + 1;
+                }
+            } else if let Some(read) = accessor(source, start, i) {
+                // An accessor the grammar doesn't know, read as the one it does: `borrow`/`unsafeAddress` as `get`,
+                // `mutate`/`unsafeMutableAddress` as `set`, `borrowing get` as `get`.
+                out[start..i].fill(b' ');
+                out[start..start + read.len()].copy_from_slice(read.as_bytes());
+                changed = true;
+            } else if matches!(w, "_lifetime" | "_specialize") && start > 0 && b[start - 1] == b'@' && b.get(i) == Some(&b'(') {
                 let mut depth = 0;
                 let mut end = i;
                 while end < b.len() && b[end] != b'\n' {
@@ -277,8 +317,35 @@ fn blank_modifiers(source: &str) -> Option<String> {
             i += 1;
         }
     }
-    // Only ASCII bytes were replaced, each by a space, so the text stays UTF-8.
+    // Only ASCII bytes were replaced, each by a space or an ASCII letter, so the text stays UTF-8.
     changed.then(|| String::from_utf8(out).expect("ASCII replaced by ASCII"))
+}
+
+/// What the word at `start..end` of `source` reads as when it opens an accessor the grammar doesn't know: `borrow`
+/// and `unsafeAddress` as `get`, `mutate` and `unsafeMutableAddress` as `set`, and `borrowing` before `get` as
+/// nothing. An accessor's word is the first on its line or follows `{`, and is followed by `{`, `}` or another
+/// accessor's word (`{ borrow mutate }` in a protocol).
+fn accessor(source: &str, start: usize, end: usize) -> Option<&'static str> {
+    let read = match &source[start..end] {
+        "borrow" | "unsafeAddress" => "get",
+        "mutate" | "unsafeMutableAddress" => "set",
+        "borrowing" => "",
+        _ => return None,
+    };
+    let before = source[..start].trim_end_matches([' ', '\t']);
+    // After a getter in a protocol's requirement too: `{ borrow mutate }`.
+    let after_getter = ["{ borrow", "{ get", "{ unsafeAddress"].iter().any(|g| before.ends_with(g));
+    if !(before.is_empty() || before.ends_with(['\n', '{']) || after_getter) {
+        return None;
+    }
+    let after = source[end..].trim_start_matches([' ', '\t']);
+    let next_word = |w: &str| after.strip_prefix(w).is_some_and(|r| r.starts_with([' ', '\t', '\n', '{', '}']));
+    let opens = if read.is_empty() {
+        next_word("get")
+    } else {
+        after.starts_with(['{', '}']) || ["borrow", "mutate", "unsafeMutableAddress"].iter().any(|w| next_word(w))
+    };
+    opens.then_some(read)
 }
 
 /// `source` with the `#if`, `#elseif`, `#else` and `#endif` lines of each conditional block whose branches are whole
@@ -1453,6 +1520,65 @@ mod tests {
         let f = extract("func f(_ k: Kind) -> Int {\n    done(.success(()))\n    switch k { case .try: return 1 default: return 2 }\n}\n");
         assert_eq!(f.parse_errors, 0);
         assert!(error_sites("let x = ()\n", 5).is_empty());
+    }
+
+    #[test]
+    fn newer_accessors_attributes_and_operators_are_read_around() {
+        let src = "struct Ring {
+    @_specialize(where T == Array<UInt8>)
+    init<T>(_ bytes: T) {}
+    subscript(i: Int) -> Int {
+        @_transparent
+        unsafeAddress { fatalError() }
+        unsafeMutableAddress { fatalError() }
+    }
+    subscript(slot s: Int) -> Int {
+        borrow { 0 }
+        mutate { fatalError() }
+    }
+    var first: Int {
+        borrowing get { 0 }
+    }
+    func drain(_ x: consuming Box) -> Int {
+        switch consume x {
+        case .empty: return 0
+        }
+        if unsafe !done { return 1 }
+        while unsafe 0 < count {}
+        @Sendable func step() -> Int { 1 }
+        do { try run() } catch {
+            ()
+        }
+        return step()
+    }
+}
+
+#if os(Plan9)
+#error(\"Unsupported platform\")
+#endif
+protocol Cell {
+    subscript(i: Int) -> Int { borrow mutate }
+}
+";
+        let f = extract(src);
+        assert_eq!(f.parse_errors, 0, "{:?}", error_sites(src, 5));
+        assert_eq!(
+            decls(&f),
+            [
+                (SymbolKind::Struct, "Ring".into()),
+                (SymbolKind::Init, "Ring.init".into()),
+                (SymbolKind::Subscript, "Ring.subscript".into()),
+                (SymbolKind::Subscript, "Ring.subscript".into()),
+                (SymbolKind::Property, "Ring.first".into()),
+                (SymbolKind::Method, "Ring.drain".into()),
+                (SymbolKind::Function, "step".into()),
+                (SymbolKind::Protocol, "Cell".into()),
+                (SymbolKind::Subscript, "Cell.subscript".into()),
+            ]
+        );
+        // `borrow` read as `get` only where it opens an accessor: a call of a function named `borrow` stays one.
+        assert_eq!(accessor("x = borrow(1)", 4, 10), None);
+        assert_eq!(accessor("    borrow {", 4, 10), Some("get"));
     }
 
     #[test]
