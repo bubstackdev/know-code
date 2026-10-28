@@ -351,3 +351,37 @@ fn a_restricted_server_takes_no_repo_from_a_cursor_a_relative_path_or_a_name_und
     drop(s);
     let _ = (decoy, std::fs::remove_dir_all(&base));
 }
+
+/// A repo named in a call is the bound repo of that name, never a same-named directory under the server's working
+/// directory: that is another repo, outside the scope.
+#[test]
+fn a_bound_repo_name_never_resolves_against_the_working_directory() {
+    let base = scratch("cwd-name");
+    let shop = repo(&base.join("bound"), "shop", &[("src/Orders.cs", "namespace Shop;\npublic class Orders\n{\n    public void Place() { }\n}\n")]);
+    let decoy = repo(&base.join("cwd"), "shop", &[("src/Ledger.cs", "namespace Books;\npublic class Ledger\n{\n    public void Post() { }\n}\n")]);
+    let (cache, config) = (base.join("cache"), base.join("config"));
+    std::fs::create_dir_all(cache.join("tmp")).unwrap();
+    let mut cmd = Command::new(KC);
+    cmd.args(["serve", "--restricted", "--repo", shop.to_str().unwrap(), "--ops", "find", "--cache-dir", cache.to_str().unwrap(), "--config-dir", config.to_str().unwrap()])
+        .current_dir(decoy.parent().unwrap())
+        .env("KNOWCODE_UPDATE_CHECK", "0")
+        .env("TMPDIR", cache.join("tmp"))
+        .stderr(Stdio::null());
+    let mut s = Server::start(&mut cmd);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let (text, code) = s.kc("find", json!({ "q": "Orders", "repo": "shop" }));
+        assert!(code.is_none() && !text.contains("Ledger"), "{text}");
+        if text.contains("src/Orders.cs") {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "the bound repo was never answered for: {text}");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let (text, code) = s.kc("find", json!({ "q": "Ledger", "repo": "shop" }));
+    assert!(code.is_none() && !text.contains("Ledger.cs"), "{text}");
+    drop(s);
+    // The directory under the working directory was never indexed.
+    assert!(!String::from_utf8_lossy(&Command::new("find").arg(&cache).output().unwrap().stdout).contains("Ledger"));
+    let _ = std::fs::remove_dir_all(&base);
+}
