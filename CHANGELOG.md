@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `test-targets` reads a repo's test functions from its index once for all its targets, and gives each `package.json`
+  its test files in one pass over the repo's files. Each SwiftPM target and .NET test project read every symbol of the
+  repo again, and each package filtered every file. Counted in instructions, MassTransit/MassTransit (25 test
+  projects) went from 390.4 million to 277.3 million, babel/babel from 193.3 million to 178.5 million, vuejs/core from
+  73.7 million to 71.4 million; the answers are the same bytes.
 - Git runs the same way whatever a repo's own config or the inherited environment says. Every git command KnowCode
   starts turns off the file system monitor and hooks and refuses the `ext::` transport, so a repo's `.git/config`
   can't name a command for git to run while KnowCode indexes or answers about it. `GIT_DIR`, `GIT_WORK_TREE` and

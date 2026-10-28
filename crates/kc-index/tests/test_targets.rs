@@ -55,6 +55,9 @@ let package = Package(
     write(&repo, "web/yarn.lock", "\n");
     write(&repo, "web/src/cart.ts", "export class Cart {}\n");
     write(&repo, "web/src/cart.test.ts", "import { Cart } from './cart';\n");
+    // A package nested in another: its test files are its own, never the outer package's too.
+    write(&repo, "web/packages/ui/package.json", "{\n  \"name\": \"ui\",\n  \"scripts\": { \"test\": \"vitest run\" }\n}\n");
+    write(&repo, "web/packages/ui/button.test.ts", "export {};\n");
     let root = kc_index::repo_root(&repo).unwrap();
     let mut store = kc_index::open(&root).unwrap();
     sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
@@ -69,6 +72,7 @@ let package = Package(
             ("dotnet", "Ledger.Tests", "dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj", vec!["BalanceTests.Adds"]),
             ("npm", "test", "cd web && yarn test", vec!["web/src/cart.test.ts"]),
             ("npm", "test:unit", "cd web && yarn test:unit", vec!["web/src/cart.test.ts"]),
+            ("npm", "test", "cd web/packages/ui && yarn test", vec!["web/packages/ui/button.test.ts"]),
         ],
         "{targets:#?}"
     );
