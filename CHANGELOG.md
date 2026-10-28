@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
+  freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
+  So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
+  (`channel.pipeline` on an `EmbeddedChannel` linked to `Channel.pipeline`). Neither is a statement now, and a file
+  with parse errors is no script either: its top level is recovery's misreading. In swift-nio, 35 library files were
+  taken for scripts. On the identity gate, Swift `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to
+  0.571 (linked) and from 0.813 to 0.851 (among candidates), with no label newly wrong. Swift files are read again.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
