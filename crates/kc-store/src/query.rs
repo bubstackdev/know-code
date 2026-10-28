@@ -4846,6 +4846,93 @@ pub struct Resolution {
     precise: Option<crate::scip::Precise>,
 }
 
+/// Rivals an edge's evidence lists at most (`rivals_total` counts them all).
+const RIVALS_SHOWN: usize = 5;
+
+thread_local! {
+    /// Whether references resolved on this thread say which same-named declarations they were resolved past.
+    static EXPLAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While the returned guard lives, references resolved on this thread list their rivals (see
+/// [`crate::answer::Rival`]): what `evidence: all` asks for. Off otherwise, so no other answer pays for it.
+pub fn explain_rivals() -> ExplainRivals {
+    let was = EXPLAIN.with(|e| e.replace(true));
+    ExplainRivals(was)
+}
+
+/// Turns [`explain_rivals`] back off when dropped.
+pub struct ExplainRivals(bool);
+
+impl Drop for ExplainRivals {
+    fn drop(&mut self) {
+        let was = self.0;
+        EXPLAIN.with(|e| e.set(was));
+    }
+}
+
+fn explaining() -> bool {
+    EXPLAIN.with(|e| e.get())
+}
+
+/// Records, for each of `before` that `after` dropped, `why` (the first reason recorded wins).
+fn dropped_by(dropped: &mut HashMap<i64, &'static str>, on: bool, before: &[&Def], after: &[&Def], why: &'static str) {
+    if !on {
+        return;
+    }
+    for d in before {
+        if !after.iter().any(|a| a.id == d.id) {
+            dropped.entry(d.id).or_insert(why);
+        }
+    }
+}
+
+/// Whether a declaration in `lang` is one code in `file` can name: TypeScript, TSX and JavaScript count as one.
+fn same_language(file: &str, lang: &str) -> bool {
+    let family = if matches!(lang, "typescript" | "tsx" | "javascript") { "ts" } else { lang };
+    let ext = file.rsplit_once('.').map_or("", |(_, e)| e);
+    let of_file = match ext {
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
+        "cs" => Some("csharp"),
+        "swift" => Some("swift"),
+        "py" => Some("python"),
+        "rs" => Some("rust"),
+        _ => None,
+    };
+    of_file.is_none_or(|l| l == family)
+}
+
+/// Why [`resolve`] ruled out `d` for `hit`: the first of its checks `d` fails, else `scope` (a nearer declaration
+/// was picked).
+fn why_not(hit: &RefHit, recv: &Receiver, self_chain: &[String], d: &Def) -> &'static str {
+    if !compatible(&hit.kind, &d.kind) {
+        return "kind";
+    }
+    if d.in_script && d.file != hit.file {
+        return "visibility";
+    }
+    if hit.kind == "call"
+        && hit.file.ends_with(".swift")
+        && let Some(call) = SwiftCall::decode(hit.arg_types.as_deref())
+        && d.swift_params.as_ref().is_some_and(|p| !call.fits(p))
+    {
+        return "argument_labels";
+    }
+    if hit.kind == "call"
+        && let Some(n) = hit.args
+        && !d.accepts(n)
+    {
+        return "arity";
+    }
+    let on = |chain: &[String]| d.container.as_deref().is_some_and(|c| chain.iter().any(|t| c == t || c.ends_with(&format!(".{t}")) || last_segment(c) == last_segment(t)));
+    match recv {
+        Receiver::Known(chain) | Receiver::Foreign(chain) if !chain.is_empty() && !on(chain) => "receiver_type",
+        _ if hit.receiver.is_some() && d.container.is_none() && !matches!(hit.kind.as_str(), "instantiate" | "type_ref") => "receiver_type",
+        _ if hit.receiver.is_none() && d.container.is_some() && !on(self_chain) => "receiver_type",
+        _ => "scope",
+    }
+}
+
 fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: &mut Resolution) -> Result<()> {
     let mut precise = match (use_scip, shared.precise.take()) {
         (false, _) => None,
@@ -4962,6 +5049,10 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         let mut seen_ns: Option<Vec<String>> = None;
         let by_import = scoped.is_some();
         let mut receiver_known = false;
+        // Under `evidence: all`, why each same-named declaration was ruled out, by the first check that did (see
+        // [`crate::answer::Rival`]).
+        let explain = explaining();
+        let mut dropped: HashMap<i64, &'static str> = HashMap::new();
         let (mut confidence, mut ids) = if let Some(r) = scoped {
             r
         } else if !named.iter().any(|d| compatible(&hit.kind, &d.kind)) {
@@ -5059,6 +5150,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => named.iter().collect(),
             };
+            let all_named: Vec<&Def> = named.iter().collect();
+            dropped_by(&mut dropped, explain, &all_named, &usable, "namespace");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // Of same-named C# extension methods, those whose declaring class's namespace the file sees. When it
             // sees none, they all stay: the file may rely on a `global using`, which isn't read.
             let usable = if cs && hit.receiver.is_some() && usable.iter().filter(|d| d.extension).nth(1).is_some() {
@@ -5072,18 +5166,24 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             } else {
                 usable
             };
+            dropped_by(&mut dropped, explain, &before, &usable, "namespace");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // Overloads the argument types rule out.
             let usable = if cs && hit.kind == "call" && hit.arg_types.is_some() && usable.len() > 1 {
                 narrow_by_argument_types(&mut oracle, hit, usable)?
             } else {
                 usable
             };
+            dropped_by(&mut dropped, explain, &before, &usable, "argument_types");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
             let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
                 swift_seen(conn, &hit.file, usable)?
             } else {
                 usable
             };
+            dropped_by(&mut dropped, explain, &before, &usable, "module");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // A qualifier naming a type the repo declares in scope: the name is nested there or nowhere in the repo
             // (a member a macro generates, `@Reducer enum Destination`'s `State`), never a same-named type elsewhere.
             let usable = match hit.receiver.as_deref() {
@@ -5095,9 +5195,17 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => usable,
             };
+            dropped_by(&mut dropped, explain, &before, &usable, "receiver_type");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // A Swift `private` or `fileprivate` declaration is named only in its own file.
             let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
+            dropped_by(&mut dropped, explain, &before, &usable, "visibility");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
+            if explain {
+                for d in usable.iter().filter(|d| !ids.contains(&d.id)) {
+                    dropped.entry(d.id).or_insert_with(|| why_not(hit, &recv, &self_chains[&caller], d));
+                }
+            }
             if takes_none(hit, named, &ids) { ("unresolved", Vec::new()) } else { (confidence, ids) }
         };
         // How an exact answer was reached, recorded where it is decided.
@@ -5117,8 +5225,12 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 positions.insert(seen_key.clone(), named.iter().enumerate().map(|(i, d)| (d.id, i)).collect());
             }
             let before = confidence;
+            let before_ns = if explain { ids.clone() } else { Vec::new() };
             (confidence, ids) =
                 cs_namespaces(conn, hit, qualifier.as_deref(), named, &positions[&seen_key], (confidence, ids), &mut oracle.vis)?;
+            for id in before_ns.iter().filter(|i| !ids.contains(i)) {
+                dropped.entry(*id).or_insert("namespace");
+            }
             if before != "exact" && confidence == "exact" {
                 exact_by = Mechanism::Namespace;
             }
@@ -5137,7 +5249,11 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             }
         }
         if confidence == "exact" && ids.len() > 1 {
+            let before_settle = if explain { ids.clone() } else { Vec::new() };
             (confidence, ids) = settle(hit, ids, &defs[&hit.name]);
+            for id in before_settle.iter().filter(|i| !ids.contains(i)) {
+                dropped.entry(*id).or_insert("overload");
+            }
         }
         let mut evidence = Evidence::by_confidence(confidence, exact_by);
         if hit.basis == Some(GUESSED_MODULE) {
@@ -5187,6 +5303,39 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 (confidence, ids) = ("unresolved", Vec::new());
                 evidence = None;
             }
+        }
+        if explain
+            && !hit.precise
+            && matches!(confidence, "exact" | "unique_name")
+            && let Some(e) = evidence.as_mut()
+        {
+            let named_ids: HashSet<i64> = named.iter().map(|d| d.id).collect();
+            let rivals: Vec<crate::answer::Rival> = defs[&hit.name]
+                .iter()
+                .filter(|d| !ids.contains(&d.id) && compatible(&hit.kind, &d.kind) && same_language(&hit.file, &d.lang))
+                .map(|d| {
+                    let why = match dropped.get(&d.id) {
+                        Some(w) => *w,
+                        // Not among the declarations code here can see at all.
+                        None if !named_ids.contains(&d.id) => {
+                            if cs {
+                                "project"
+                            } else if d.file_private {
+                                "visibility"
+                            } else {
+                                "module"
+                            }
+                        }
+                        None => "scope",
+                    };
+                    let target = d.container.as_ref().map_or(hit.name.clone(), |c| format!("{c}.{}", hit.name));
+                    crate::answer::Rival { target, at: format!("{}:{}", d.file, d.line), why: why.to_string() }
+                })
+                .collect();
+            if rivals.len() > RIVALS_SHOWN {
+                e.rivals_total = Some(rivals.len());
+            }
+            e.rivals = rivals.into_iter().take(RIVALS_SHOWN).collect();
         }
         hit.confidence = confidence;
         hit.evidence = if matches!(confidence, "unresolved" | "external_likely") { None } else { evidence };

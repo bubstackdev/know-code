@@ -3890,6 +3890,7 @@ pub struct TraceData {
 }
 
 pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &WalkFilter, args: &Scope) -> Result<Out<TraceData>> {
+    let _rivals = edge_filter(&[], &filter.evidence).ok().and_then(|f| f.explain_rivals());
     let direction_word = direction;
     let direction = match direction {
         "in" => trace::Direction::In,
@@ -6058,6 +6059,7 @@ impl ImpactRepo {
 }
 
 pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
+    let _rivals = edge_filter(&[], &p.filter.evidence).ok().and_then(|f| f.explain_rivals());
     let given = [p.symbol.is_some(), p.file.is_some(), p.diff.is_some()].iter().filter(|b| **b).count();
     if given != 1 {
         bail!("give exactly one of symbol, file or diff");
@@ -8316,6 +8318,45 @@ pub(crate) mod tests {
     /// A fan-out's workers run as the query that started it: what they note is the query's, and its cancellation
     /// stops them.
     /// An answer naming a file the extractor couldn't read whole says so: the file, its first error, and the
+    /// Under `evidence: all`, an edge resolved among same-named declarations says which it was resolved past and
+    /// why (another namespace, another number of arguments, not on the receiver's type), in JSON and in the tree;
+    /// under the default policy nothing more is said.
+    #[test]
+    fn evidence_all_says_which_rivals_an_edge_was_resolved_past_and_why() {
+        let cache = test_cache();
+        let base = cache.dir("rivals");
+        let root = repo(
+            &base,
+            "till",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/Audit.cs", "namespace Shop;\npublic static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/BooksAudit.cs", "namespace Books;\npublic static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/Ledger.cs", "namespace Shop;\npublic class Ledger\n{\n    public void Post() { }\n    public void Post(int amount) { }\n}\n"),
+                (
+                    "src/Till.cs",
+                    "namespace Shop;\npublic class Till\n{\n    private readonly Ledger _ledger = new Ledger();\n    public void Ring() { Audit.Log(); _ledger.Post(); }\n    public void Log() { }\n}\n",
+                ),
+            ],
+        );
+        let s = Scope { repos: vec![root], no_sync: false };
+        let rivals = |evidence: &str| -> Vec<(String, Vec<(String, String)>)> {
+            let f = WalkFilter { evidence: evidence.into(), ..Default::default() };
+            let out = trace("Till.Ring", "out", 1, 50, &f, &s).unwrap();
+            out.data.found[0].1.nodes.iter().filter_map(|n| {
+                let e = n.evidence.as_ref()?;
+                Some((n.qualified.clone(), e.rivals.iter().map(|r| (r.at.clone(), r.why.clone())).collect()))
+            }).collect()
+        };
+        let all = rivals("all");
+        let of = |q: &str| all.iter().find(|(n, _)| n == q).map(|(_, r)| r.clone()).unwrap_or_default();
+        assert_eq!(of("Audit.Log"), vec![("src/BooksAudit.cs:4".to_string(), "namespace".to_string()), ("src/Till.cs:6".to_string(), "receiver_type".to_string())]);
+        assert_eq!(of("Ledger.Post"), vec![("src/Ledger.cs:5".to_string(), "arity".to_string())]);
+        // The default policy says nothing of rivals.
+        assert!(rivals("default").iter().all(|(_, r)| r.is_empty()));
+        assert!(rivals("").iter().all(|(_, r)| r.is_empty()));
+    }
+
     /// answer's symbol whose span holds it, as `coverage` and an `unsupported` entry. One without errors says nothing.
     #[test]
     fn an_answer_says_which_of_its_files_have_parse_errors() {

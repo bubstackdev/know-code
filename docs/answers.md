@@ -355,6 +355,29 @@ index (scip-dotnet), an ambiguous C# reference usually lists the right target am
 so per candidate edge only a few percent are the call the compiler binds, and that compounds at every hop. The walk
 lists them and names what lies past them instead (see below); `all` walks past them, marked `ambiguous`.
 
+### Why this one
+
+Under `evidence: all` (or a policy starting with `all`), an edge resolved among declarations sharing its name says
+which it was resolved past and why: its evidence lists `rivals`, each `{target, at, why}` (the first 5;
+`rivals_total` counts them when more). `why` is the first check that ruled the rival out:
+
+| why | the rival |
+| --- | --- |
+| `project` | isn't compiled by the caller's project or one it references (C#) |
+| `visibility` | is private to its file or script |
+| `namespace` | is in a namespace the file doesn't see, or isn't the one the receiver's type is in |
+| `module` | is in a module the file is neither in nor imports |
+| `kind` | is another kind of declaration (a property where a call is made) |
+| `argument_labels` | doesn't take the call's argument labels (Swift) |
+| `arity` | takes another number of arguments |
+| `argument_types` | doesn't take the call's argument types (C#) |
+| `receiver_type` | isn't a member of the receiver's type or its supertypes |
+| `scope` | isn't in the caller's type, file or module where a nearer declaration is |
+| `overload` | is another overload of the member picked, one that fits less well |
+
+In JSON the compact evidence reads `receiver_type; not Audit.Log at src/BooksAudit.cs:4 (namespace)`; a text tree
+gives the same under the row. Under any other policy nothing is said, and answers are as they were.
+
 ## Where a walk stops
 
 A walk never ends short without saying so. `impact` goes up to 16 hops, its budget being the symbol limit

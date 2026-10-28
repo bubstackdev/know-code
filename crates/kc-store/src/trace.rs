@@ -341,6 +341,13 @@ struct Excluded {
 }
 
 impl EdgeFilter {
+    /// Under `evidence: all` (as written first: `all`, `all,-filename_guess`), references resolved during the walk
+    /// say which same-named declarations they were resolved past (see [`crate::query::explain_rivals`]). The guard
+    /// keeps it on while it lives.
+    pub fn explain_rivals(&self) -> Option<crate::query::ExplainRivals> {
+        (self.policy.name().split(',').next() == Some("all")).then(crate::query::explain_rivals)
+    }
+
     /// A filter from edge names, comma-separated or not (`["calls,http"]`, `["calls", "http"]`).
     pub fn new(names: &[String]) -> Result<EdgeFilter> {
         let mut edges = Vec::new();

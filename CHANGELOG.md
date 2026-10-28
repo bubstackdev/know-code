@@ -12,6 +12,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   taken for scripts. On the identity gate (measured before the overload and extension-scope fixes below), Swift
   `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to 0.571 (linked) and from 0.813 to 0.851 (among
   candidates), with no label newly wrong. Swift files are read again.
+- Why this one: under `evidence: all`, an edge resolved among declarations sharing its name says which it was resolved
+  past and why, the first check that ruled each out: another project, namespace or module, private to its file,
+  another kind, argument labels, number or types of arguments, not on the receiver's type, out of scope, or a worse
+  overload. JSON evidence reads `receiver_type; not Audit.Log at src/BooksAudit.cs:4 (namespace)`; trees say it under
+  the row. Other policies, and the default answers, are unchanged.
 - A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
   where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
   `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside

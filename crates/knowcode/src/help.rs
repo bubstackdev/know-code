@@ -1012,6 +1012,10 @@ Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which
 - `all`: every edge, ambiguous ones followed too;
 - mechanisms alone (`scip,receiver_type`) follow only those; a preset changed adds or takes away (`confirmed,name_unique`,
   `all,-filename_guess`); `-<assumption>` leaves out the edges making it (`default,-same_deployment`).
+Under `all` (or a policy starting with it), an edge resolved among same-named declarations says which it was resolved
+past and why: its evidence ends `; not X at a.cs:4 (namespace), Y at b.cs:9 (arity)` (`rivals` in full JSON: project,
+visibility, namespace, module, kind, argument_labels, arity, argument_types, receiver_type, scope, overload), and a
+tree says it under the row.
 Under any policy but `default` the answer has `policy: {evidence, excluded, excluded_by}`, counting the edges left out
 (a lower bound: nothing past them was read), and is incomplete (reason `policy`)."#,
     },

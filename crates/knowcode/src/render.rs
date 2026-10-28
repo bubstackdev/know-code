@@ -716,6 +716,9 @@ pub fn trace_text(root: &Path, t: &kc_store::trace::Trace, multi: bool) -> Strin
             };
             let binding = n.binding.as_deref().map(|b| format!(" (bound at {b})")).unwrap_or_default();
             w!(out, "{indent}{tag}{} {}  {}{conf}{site}{binding}", kw(&n.kind, &n.file), n.qualified, loc_in(r, n.repo.as_deref(), &n.file, line));
+            if let Some(r) = rivals_line(n.evidence.as_ref()) {
+                w!(out, "{indent}  {r}");
+            }
             cite_text(&mut out, &indent, n.cite.as_ref(), &mut seen);
         }
     }
@@ -781,6 +784,15 @@ fn declared(line: u32, at: u32) -> String {
 /// One affected symbol's line in the impact tree. A dependent's site is in its own code (a call, a use): the row
 /// leads with it, and with each of its other sites in the file as a place of its own, then says the line its symbol
 /// is declared at.
+/// Under `evidence: all`, the same-named declarations an edge was resolved past, each with why: `not X at a.cs:4
+/// (namespace), Y at b.cs:9 (arity)`.
+fn rivals_line(e: Option<&kc_store::answer::Evidence>) -> Option<String> {
+    let e = e.filter(|e| !e.rivals.is_empty())?;
+    let listed: Vec<String> = e.rivals.iter().map(|r| format!("{} at {} ({})", r.target, r.at, r.why)).collect();
+    let more = e.rivals_total.map(|t| format!(", {t} in all")).unwrap_or_default();
+    Some(format!("not {}{more}", listed.join(", ")))
+}
+
 fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
     let own = a.site.as_deref().and_then(|s| own_line(&a.file, s));
     let mut site = match own {
@@ -909,6 +921,9 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
                 shown[k] = true;
                 let a = &i.affected[k];
                 w!(out, "{}{}", "  ".repeat(d), affected_line(root, a));
+                if let Some(r) = rivals_line(a.evidence.as_ref()) {
+                    w!(out, "{}  {r}", "  ".repeat(d));
+                }
                 cite_text(out, &"  ".repeat(d), a.cite.as_ref(), seen);
                 push(&mut stack, (a.qualified.as_str(), a.hop), d + 1, shown);
             }
@@ -943,6 +958,9 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         for (k, a) in i.affected.iter().enumerate() {
             if !shown[k] {
                 w!(out, "  {}  (via {})", affected_line(root, a), a.via);
+                if let Some(r) = rivals_line(a.evidence.as_ref()) {
+                    w!(out, "    {r}");
+                }
                 cite_text(&mut out, "  ", a.cite.as_ref(), &mut seen);
             }
         }
