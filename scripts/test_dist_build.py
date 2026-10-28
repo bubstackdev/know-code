@@ -272,7 +272,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("uses: ./.github/workflows/ci.yml", self.release)
         # The tagged commit must have a passing ci.yml run; the gate may read Actions and nothing more.
         passed = gate.split("\n  ci-passed:\n", 1)[1].split("\n\n  ", 1)[0]
-        self.assertIn("actions/workflows/ci.yml/runs?head_sha=$SHA", passed)
+        self.assertIn("actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main", passed)
+        self.assertIn('compare/main...$SHA', passed)
         self.assertIn('select(.conclusion == "success")', passed)
         self.assertIn("permissions:\n      actions: read\n", passed)
         self.assertIn("permissions:\n  contents: read\n", gate)
