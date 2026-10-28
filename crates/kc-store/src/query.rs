@@ -2097,6 +2097,45 @@ fn takes_none(hit: &RefHit, named: &[Def], ids: &[i64]) -> bool {
     false
 }
 
+/// Where Swift code stands with respect to an extension.
+#[derive(Clone, PartialEq)]
+enum ExtensionScope {
+    /// In the header of an extension of a nested type: the extended type and its conformances, read in the file's
+    /// scope.
+    Header,
+    /// Inside the body of an extension of the nested type named here (qualified), or in a type declared there: the
+    /// extended type and the types nested in it are in scope, the types enclosing it aren't.
+    Body(String),
+    /// Elsewhere.
+    None,
+}
+
+/// Where the Swift symbol `from` stands with respect to an extension (see [`ExtensionScope`]).
+fn swift_extension_scope(conn: &Connection, from: &FromSymbol) -> Result<ExtensionScope> {
+    // Only an extension of a nested type (`extension A.B`) changes what is in scope.
+    if from.kind == "extension" {
+        return Ok(if from.container.is_some() { ExtensionScope::Header } else { ExtensionScope::None });
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT p.id, p.kind, CASE WHEN p.container IS NULL THEN p.name ELSE p.container || '.' || p.name END
+         FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1",
+    )?;
+    let mut id = from.id;
+    // Declarations nest shallowly; the bound guards against a malformed parent chain.
+    for _ in 0..16 {
+        let Some((parent, kind, qualified)) =
+            stmt.query_row([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).optional()?
+        else {
+            return Ok(ExtensionScope::None);
+        };
+        if kind == "extension" {
+            return Ok(if qualified.contains('.') { ExtensionScope::Body(qualified) } else { ExtensionScope::None });
+        }
+        id = parent;
+    }
+    Ok(ExtensionScope::None)
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -4819,7 +4858,11 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     // Kept for the next call; an error leaves `shared` without them, to be read again.
     oracle.vis = std::mem::take(&mut shared.vis);
     // Per caller type, or per C# extension method's declaring class: the types an unqualified name is looked up in.
-    let mut self_chains: HashMap<(Option<String>, bool), Vec<String>> = HashMap::new();
+    // The caller's type, whether it is a C# extension method's extended type, and whether the code is in a Swift
+    // extension's body.
+    let mut self_chains: HashMap<(Option<String>, bool, bool), Vec<String>> = HashMap::new();
+    // Swift code in an extension, by the referencing symbol (see [`ExtensionScope`]).
+    let mut in_extension: HashMap<i64, ExtensionScope> = HashMap::new();
     // Per C# method: the static class declaring it, when it is an extension method.
     let mut declaring: HashMap<i64, Option<String>> = HashMap::new();
     // Per service, member, argument count and registration: the implementation's member it is bound to.
@@ -4965,12 +5008,33 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 _ => None,
             };
             let caller = (extended.clone().or_else(|| hit.caller_type()), extended.is_some());
+            // Swift code in `extension A.B` (declared at a file's top) sees B's members, not A's: the extension's scope
+            // is the file. Its header (the extended type, the conformances) is read in the file's scope alone.
+            let extension_scope = match &hit.from {
+                Some(f) if hit.file.ends_with(".swift") => {
+                    if let std::collections::hash_map::Entry::Vacant(e) = in_extension.entry(f.id) {
+                        e.insert(swift_extension_scope(conn, f)?);
+                    }
+                    in_extension[&f.id].clone()
+                }
+                _ => ExtensionScope::None,
+            };
+            let caller = match &extension_scope {
+                ExtensionScope::Header => (None, false, false),
+                ExtensionScope::Body(_) => (caller.0, caller.1, true),
+                ExtensionScope::None => (caller.0, caller.1, false),
+            };
             if !self_chains.contains_key(&caller) {
                 let mut chain = Vec::new();
                 let mut s = caller.0.clone();
                 while let Some(cur) = s {
                     s = cur.rsplit_once('.').map(|(p, _)| p.to_string());
+                    let last = matches!(&extension_scope, ExtensionScope::Body(extended) if *extended == cur);
                     chain.push(cur);
+                    // Types enclosing the extended type aren't in scope in its extension.
+                    if last {
+                        break;
+                    }
                 }
                 if let Some(c) = caller.0.as_ref().filter(|_| !caller.1) {
                     for sup in oracle.chain(c)?.into_iter().skip(1) {
