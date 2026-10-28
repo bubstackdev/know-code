@@ -131,7 +131,7 @@ fn a_worktree_deleted_under_a_workspace_root_leaves_the_rest_of_the_answer() {
     let bin = base.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let script = format!(
-        "#!/bin/sh\nif [ \"$3\" = {:?} ] && [ \"$4\" = ls-files ]; then rm -rf {:?}; fi\nexec {:?} \"$@\"\n",
+        "#!/bin/sh\ncase \" $* \" in *\" -C {} ls-files \"*) rm -rf {:?};; esac\nexec {:?} \"$@\"\n",
         app.to_str().unwrap(),
         wt.to_str().unwrap(),
         real_git().to_str().unwrap()
