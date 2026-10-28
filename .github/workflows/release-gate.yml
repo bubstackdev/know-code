@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  # The tagged commit's ci.yml run, from its push to main (or a pull request whose head it is): it must have passed.
-  # One still running is waited for, up to an hour; a failed one is re-run (`gh run rerun --failed`), then the
-  # release workflow after it.
+  # The tagged commit must be on main, and its ci.yml run from the push to main must have passed. Pull request runs
+  # don't count: they run the pull request's own ci.yml. One still running is waited for, up to an hour; a failed one
+  # is re-run (`gh run rerun --failed`), then the release workflow after it.
   ci-passed:
     runs-on: ubuntu-24.04
     permissions:
@@ -24,8 +24,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
         run: |
+          on_main=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status)
+          if [ "$on_main" != identical ] && [ "$on_main" != behind ]; then
+            echo "::error::$SHA isn't on main ($on_main). Tag a commit on main."
+            exit 1
+          fi
           for _ in $(seq 120); do
-            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100" \
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&per_page=100" \
               --jq '[.workflow_runs[] | {id, status, conclusion}]')
             if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")" -gt 0 ]; then
               echo "ci.yml passed on $SHA: run $(jq -r '[.[] | select(.conclusion == "success")][0].id' <<<"$runs")."
