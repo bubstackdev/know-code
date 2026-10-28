@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
+  where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
+  `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
+  `append(optional:)`. It is judged by argument count (C#) and argument labels (Swift) on the declarations the
+  receiver or scope picks. Swift argument labels count a trailing closure after `try` or `await`
+  (`try make(at: 1) { … }`), a function named by its labels (`xs.map { $0.scope(for:in:) }`) records none, and a
+  parameter list ending in a comma has no extra parameter. Swift files are re-extracted once.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the

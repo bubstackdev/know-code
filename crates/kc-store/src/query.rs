@@ -2073,6 +2073,30 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
+/// Whether call `hit` is one none of the declarations resolution picked for it (`ids`, of `named`) can take: each is a
+/// function whose parameters are known, and none takes the call's argument labels (Swift) or as many arguments as it
+/// passes (C#). Such a call is another declaration's, outside the repo (`Equals(a, b)` is `object.Equals`,
+/// `xs.Contains(x)` LINQ's, `xs.append(1)` the library's when the repo declares only `append(optional:)`).
+fn takes_none(hit: &RefHit, named: &[Def], ids: &[i64]) -> bool {
+    if hit.kind != "call" || ids.is_empty() {
+        return false;
+    }
+    let callable: Vec<&Def> = named.iter().filter(|d| ids.contains(&d.id)).collect();
+    if callable.len() < ids.len() {
+        return false;
+    }
+    if hit.file.ends_with(".swift") {
+        let Some(call) = SwiftCall::decode(hit.arg_types.as_deref()) else { return false };
+        return callable.iter().all(|d| d.swift_params.as_ref().is_some_and(|p| !call.fits(p)));
+    }
+    if hit.file.ends_with(".cs")
+        && let Some(n) = hit.args
+    {
+        return callable.iter().all(|d| d.min_args.is_some() && !d.accepts(n));
+    }
+    false
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -2161,8 +2185,9 @@ fn type_like(receiver: &str) -> bool {
 /// `recv_chain` is the receiver's type followed by its supertypes; `self_chain` is the caller's type, its enclosing
 /// types, then its supertypes.
 ///
-/// A call's overloads are first narrowed to those taking as many arguments as it passes; when that leaves nothing to
-/// point to, all of them are considered.
+/// A call's overloads are first narrowed to those taking its argument labels (Swift) or as many arguments as it passes
+/// (C#); when that leaves nothing to point to, all of them are considered. (A call none of the picked declarations can
+/// take is settled after: see [`takes_none`].)
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
     let all: Vec<&Def> = defs.to_vec();
     // A Swift call's argument labels rule out the overloads it can't call.
@@ -2834,6 +2859,8 @@ fn swift_params(signature: &str) -> Option<Vec<SwiftParam>> {
     }
     split_top(list, ',')
         .into_iter()
+        // A trailing comma (`in context: _Context,`) leaves no parameter after it.
+        .filter(|param| !param.trim().is_empty())
         .map(|param| {
             let parts = split_top(param, ':');
             let head = parts.first()?.split_whitespace().filter(|w| !w.starts_with('@')).collect::<Vec<_>>();
@@ -5006,7 +5033,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             // A Swift `private` or `fileprivate` declaration is named only in its own file.
             let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
-            resolve(hit, &recv, &self_chains[&caller], &usable)
+            let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
+            if takes_none(hit, named, &ids) { ("unresolved", Vec::new()) } else { (confidence, ids) }
         };
         // How an exact answer was reached, recorded where it is decided.
         let mut exact_by = if by_import {
