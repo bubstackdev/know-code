@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- C#'s "Color Color": a property named like its type (`public SourceType SourceType { get; }`) took the qualifier of
+  `SourceType.Channel`, so the enum's cases read as the property's members. In `X.Y`, where `X` names both a member in
+  scope and a type, and `Y` is one of that type's cases or static members, `X` is now the type. A read of the property
+  alone, or a member of its value (`SourceType.ToString()`), stays the property.
 - A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
   where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
   `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside

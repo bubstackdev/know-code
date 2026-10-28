@@ -2998,6 +2998,44 @@ impl<'c> Overloads<'c> {
     }
 }
 
+/// The type a C# member reference `X` names when it qualifies a member of that type (`X.Y`, read where `Y` follows
+/// it on its line). C# binds `X` in `X.Y` to the type when `X` is also a member of the type `X` ("Color Color":
+/// `SourceType == SourceType.Channel` in a class with a `SourceType SourceType` property) and `Y` is one of the type's
+/// enum cases or static members. Among `named` (the declarations of the name in scope), the one type declaring `Y`;
+/// `None` when no member of the name is in scope too, or `Y` settles nothing.
+fn color_color(conn: &Connection, hit: &RefHit, named: &[Def]) -> Result<Option<i64>> {
+    let types: Vec<&Def> = named.iter().filter(|d| matches!(d.kind.as_str(), "enum" | "class" | "struct")).collect();
+    if types.is_empty() || hit.col == 0 || !named.iter().any(|d| compatible("member", &d.kind)) {
+        return Ok(None);
+    }
+    // The member read through this occurrence: the reference right after `X.` on the line.
+    let next: Option<String> = conn
+        .prepare_cached(
+            "SELECT r.name FROM refs r JOIN files f ON f.id = r.file_id
+              WHERE f.path = ?1 AND r.line = ?2 AND r.receiver = ?3 AND r.col = ?4",
+        )?
+        .query_row(params![hit.file, hit.line, hit.name, hit.col + hit.name.len() as u32 + 1], |r| r.get(0))
+        .optional()?;
+    let Some(member) = next else { return Ok(None) };
+    let mut owners = Vec::new();
+    for t in types {
+        let qualified = match &t.container {
+            Some(c) => format!("{c}.{}", hit.name),
+            None => hit.name.clone(),
+        };
+        let declares: bool = conn
+            .prepare_cached(
+                "SELECT EXISTS (SELECT 1 FROM symbols s WHERE s.name = ?1 AND s.container = ?2
+                   AND (s.kind = 'case' OR s.signature LIKE '%static %' OR s.signature LIKE '%const %'))",
+            )?
+            .query_row(params![member, qualified], |r| r.get(0))?;
+        if declares {
+            owners.push(t.id);
+        }
+    }
+    Ok(if owners.len() == 1 { owners.pop() } else { None })
+}
+
 fn defs_named(conn: &Connection, name: &str) -> Result<Vec<Def>> {
     let sql = format!(
         "SELECT {DEF_COLS} FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id
@@ -4962,8 +5000,12 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         let mut seen_ns: Option<Vec<String>> = None;
         let by_import = scoped.is_some();
         let mut receiver_known = false;
+        // C#'s "Color Color": `X.Y`, where `X` names both a member in scope and a type whose member `Y` is.
+        let color = if cs && hit.kind == "member" && hit.receiver.is_none() { color_color(conn, hit, named)? } else { None };
         let (mut confidence, mut ids) = if let Some(r) = scoped {
             r
+        } else if let Some(id) = color {
+            ("exact", vec![id])
         } else if !named.iter().any(|d| compatible(&hit.kind, &d.kind)) {
             ("unresolved", Vec::new())
         } else {
