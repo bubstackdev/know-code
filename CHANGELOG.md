@@ -22,6 +22,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
   declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
   ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
+- `capabilities` says what the server does at each end of a bounded number, where it said every out-of-range value
+  is "clamped": past `max` it is clamped (`above_max`), up to the `type_max` a depth's type holds (255), past which it
+  is refused; under `min` it is clamped up when `min` is above 0 (`below_min`); a negative number is refused
+  (`negative`: `invalid_argument`), as `search` with `context: -1` always was. The server's behaviour is unchanged.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
