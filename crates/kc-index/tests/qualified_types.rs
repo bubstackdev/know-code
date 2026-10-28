@@ -90,6 +90,66 @@ fn a_typescript_type_named_through_globalthis_is_the_global() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A type named through a TypeScript namespace is the namespace's own declaration of the name: in a namespace of the
+/// file, a nested one, or one `declare global` augments. Never a same-named declaration outside that namespace.
+#[test]
+fn a_typescript_type_named_through_a_namespace_is_the_namespaces() {
+    let root = scratch("qualified-ts-namespace");
+    write(&root, "src/ns.ts", "export namespace Shapes { export interface Circle { r: number } }\nexport let c: Shapes.Circle\n");
+    write(&root, "src/other.ts", "export interface Circle { x: number }\nnamespace Outer { export namespace Inner { export type Leaf = 1 } }\nexport type Leaf = 2\nlet l: Outer.Inner.Leaf\n");
+    write(
+        &root,
+        "src/global.d.ts",
+        "declare global {\n  namespace Express {\n    interface Request { user?: string }\n  }\n}\nexport {}\n",
+    );
+    write(&root, "src/app.ts", "interface Request { url: string }\nexport function handle(r: Express.Request, q: Request) {}\n");
+    let store = index(&root);
+    let conn = store.conn();
+    let circle: Vec<(String, &str, usize)> =
+        query::refs(conn, "Circle", &["type_ref"], 50).unwrap().0.iter().map(|h| (format!("{}:{}", h.file, h.line), h.confidence, h.target_ids.len())).collect();
+    assert_eq!(circle, [("src/ns.ts:2".to_string(), "exact", 1)]);
+    let target = |name: &str, at: &str| -> Option<(&'static str, Vec<String>)> {
+        let (hits, _) = query::refs(conn, name, &["type_ref"], 50).unwrap();
+        hits.iter().find(|h| format!("{}:{}", h.file, h.line) == at).map(|h| (h.confidence, h.targets.iter().map(|t| format!("{}:{}", t.file, t.line)).collect()))
+    };
+    assert_eq!(target("Circle", "src/ns.ts:2"), Some(("exact", vec!["src/ns.ts:1".to_string()])));
+    assert_eq!(target("Leaf", "src/other.ts:4"), Some(("exact", vec!["src/other.ts:2".to_string()])));
+    // `Express.Request` is the augmented global's; the bare `Request` beside it, the file's own.
+    let requests = query::refs(conn, "Request", &["type_ref"], 50).unwrap().0;
+    let by = |receiver: Option<&str>| -> Vec<(&str, String)> {
+        requests.iter().filter(|h| h.receiver.as_deref() == receiver).flat_map(|h| h.targets.iter().map(|t| (h.confidence, format!("{}:{}", t.file, t.line)))).collect()
+    };
+    assert_eq!(by(Some("Express")), [("exact", "src/global.d.ts:3".to_string())]);
+    assert_eq!(by(None), [("exact", "src/app.ts:1".to_string())]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A namespace a file imports is the one in the module it imports it from, under an alias too; one imported from a
+/// package is none of the repo's, however the repo names its own.
+#[test]
+fn an_imported_typescript_namespace_is_the_one_in_its_module() {
+    let root = scratch("qualified-ts-imported-namespace");
+    write(&root, "package.json", "{ \"name\": \"app\", \"dependencies\": { \"react\": \"18.3.1\" } }\n");
+    write(&root, "src/jsx/base.ts", "export namespace JSX {\n  export type Element = 1\n}\n");
+    write(&root, "src/jsx/other.ts", "export namespace JSX {\n  export type Element = 2\n}\n");
+    write(&root, "src/use.ts", "import type { JSX } from './jsx/base'\nexport let a: JSX.Element\n");
+    write(&root, "src/alias.ts", "import type { JSX as Other } from './jsx/other'\nexport let b: Other.Element\n");
+    write(&root, "src/ext.ts", "import type { JSX } from 'react'\nexport let c: JSX.Element\n");
+    let store = index(&root);
+    let (hits, _) = query::refs(store.conn(), "Element", &["type_ref"], 50).unwrap();
+    let got: Vec<(String, &str, Vec<String>)> =
+        hits.iter().map(|h| (h.file.clone(), h.confidence, h.targets.iter().map(|t| format!("{}:{}", t.file, t.line)).collect())).collect();
+    assert_eq!(
+        got,
+        [
+            ("src/alias.ts".to_string(), "exact", vec!["src/jsx/other.ts:2".to_string()]),
+            ("src/ext.ts".to_string(), "unresolved", vec![]),
+            ("src/use.ts".to_string(), "exact", vec!["src/jsx/base.ts:2".to_string()]),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The qualifier is read as the code around it reads it, and only modules the file sees declare it.
 #[test]
 fn a_swift_qualifier_is_read_in_scope_and_in_the_modules_the_file_sees() {

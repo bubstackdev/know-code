@@ -43,6 +43,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   or panicked, its query read the index without syncing, or the derived data couldn't start. Until the process ended,
   each new worktree of that commit opened elsewhere waited for a base no one would publish (up to 15 minutes), then
   indexed from scratch anyway. Opening a checkout only to read it no longer claims its base at all.
+- A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` declared in `declare global`, nested
+  `Outer.Inner.Leaf`) links to the namespace's own declaration again, and `find` lists the namespace itself. 0.6 looks
+  a qualified type up in its qualifier, but namespaces weren't extracted, so these came out `unresolved`. A namespace is
+  now a `module` symbol spanning its declarations, and a name through it is the declaration whose innermost enclosing
+  namespace it is, never a same-named type outside it. A namespace the file imports is the one in the module it
+  imports it from, and one imported from a package is none of the repo's. TypeScript files are extracted again and references resolved
+  again on the first sync.
 
 - Restricted mode keeps to its bound repos and ops on every path. A repo is checked against the bound ones wherever an
   op opens it, so a path relative to the server's directory, a cursor or a dependency can no longer reach another
