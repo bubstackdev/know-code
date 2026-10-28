@@ -2070,6 +2070,18 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
+/// Whether `d` was found on the receiver chain `chain` only because its container ends with a chain type's bare name
+/// (`MinimalDecoder.Decoder` for `Decoder`), the container being nested in a type that doesn't enclose the code
+/// (`self_chain`) and isn't itself on the chain.
+fn nested_elsewhere(d: &Def, chain: &[String], self_chain: &[String]) -> bool {
+    let Some(c) = d.container.as_deref() else { return false };
+    if chain.iter().any(|t| t == c) {
+        return false;
+    }
+    let Some(bare) = chain.iter().find(|t| !t.contains('.') && c.ends_with(&format!(".{t}"))) else { return false };
+    !self_chain.iter().any(|s| c == format!("{s}.{bare}"))
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -2260,6 +2272,15 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         let mut found = first_in(chain, false);
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
+        }
+        // A Swift receiver typed by a bare name that only a type nested elsewhere carries (`decoder: Decoder`, where
+        // the repo nests `MinimalDecoder.Decoder`) is the type of that name the code sees: the library's protocol,
+        // unless the nesting type encloses the code. Its members are listed, never linked to the nested type's.
+        if hit.file.ends_with(".swift")
+            && !found.is_empty()
+            && found.iter().all(|d| nested_elsewhere(d, chain, self_chain))
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
         }
         if found.is_empty() {
             // A C# call on a type written as its receiver (`string.IsNullOrEmpty(s)`, `Convert.ToInt32(x)`) reaches

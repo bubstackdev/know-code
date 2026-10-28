@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A Swift receiver whose type is named like a type the repo nests elsewhere is the library's type of that name: in
+  `init(from decoder: Decoder)`, `decoder.singleValueContainer()` is Swift's `Decoder`'s, listed as
+  `external_likely`, not linked to a test helper's nested `Minimal.Decoder`. Code inside the nesting type reads the
+  nested one as before.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
