@@ -6,8 +6,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## 0.6.1 (2026-10-28)
 
-0.6.0 was tagged but never published: its release build couldn't get a macOS runner. 0.6.1 is the first published
-0.6 release, so the 0.6.0 section below also describes what an update from 0.5.1 brings.
+0.6.0 was tagged but never published: its release build couldn't get a macOS runner. 0.6.1 is the first published 0.6
+release, so the 0.6.0 section below also describes what an update from 0.5.1 brings. The fix for outside-workspace links
+that 0.6.0's notes planned for 0.6.1 moves to the next release; 0.6.1 carries the review's security, bug and performance
+fixes.
 
 - Restricted mode keeps to its bound repos and ops on every path. A repo is checked against the bound ones wherever an
   op opens it, so a path relative to the server's directory, a cursor or a dependency can no longer reach another
