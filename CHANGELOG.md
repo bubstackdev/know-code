@@ -8,6 +8,21 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   packages, Cargo crates): `modules` lists them with the areas holding their files, and each area gives its files by
   module, with `spans_modules` when a cluster crosses module boundaries. Both views stay: the declared one says what
   the build keeps apart, the inferred one what references and co-change tie together.
+- `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
+  end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
+  can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
+  file. A file the AI privacy file blocks still answers nothing.
+- Task context: `kc {op: task, q: "refunds fail for partial captures"}` (and `knowcode task`) answers a goal in words in
+  one bounded answer, where a client joined `locate`, `context`, `impact` and `tests` itself: the files most likely
+  involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
+  changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
+  index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does.
+- `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
+  tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
+  (`dotnet test`) and `package.json` test scripts (run with the package manager
+  the lockfile names, with the package's test files). Declared, never ranked: `tests` still ranks what a change
+  needs. Served on request, so it costs nothing up front.
 - **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
   at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
   the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
@@ -15,6 +30,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
   commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
   `cache.shared_bases` turns it off.
+- A shared base a worktree still uses is never evicted; bases nothing uses are evicted with the other idle indexes,
+  least recently used first. A removed worktree's index goes at the next query, `status` or `prune`.
 - **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
   for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
   hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
@@ -63,6 +80,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
   gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
   (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
+- A type written through a qualifier is looked up in that qualifier, where it was taken by its last name alone:
+  `String.UnicodeScalarView` no longer links to a repo's `BigString.UnicodeScalarView`, nor
+  `UnsafeMutableBufferPointer<Element>.Index` to `Deque.Index` (Swift; TypeScript's `globalThis.FocusEvent` likewise).
+  A qualifier the repo doesn't declare (a library type, a generic parameter, `globalThis`) leaves the name unresolved.
+  Swift and TypeScript files are read again.
+- A TypeScript name links to the repo's declaration only where the file can name it: it declares, imports or
+  re-exports it, or the repo declares it in a script. A test calling the platform's `Response.json(…)` no longer
+  links to an exported `interface Response` it never imported; such a receiver is the platform's type. JavaScript files
+  and files importing nothing are read as before. TypeScript `exact` precision on the identity gate rises to 0.995.
+- A Swift `private` or `fileprivate` declaration is a candidate only in its own file: `extension Array { fileprivate
+  mutating func append(optional:) }` no longer captures `results.append(x)` elsewhere. `private(set)` doesn't count.
+- A use on a library type that reaches only a protocol requirement of the repo (`a.count` on a `Set`, to
+  `SetAPIChecker.count`) is `external_likely`, the requirement listed as its target, where it was `exact`: the member
+  that runs is the library type's own.
 
 ## 0.5.1 (2026-10-27)
 

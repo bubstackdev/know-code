@@ -101,6 +101,8 @@ pub(crate) struct Modules {
     in_force: HashMap<String, Vec<Settings>>,
     /// npm packages the repo depends on from a registry, and those it provides itself.
     packages: Option<(HashSet<String>, HashSet<String>)>,
+    /// Per file, whether it is a script (no import or export): its top-level declarations are global.
+    scripts: HashMap<String, bool>,
 }
 
 /// A TypeScript or JavaScript module's path, by its extension: its imports resolve through [`Modules`].
@@ -484,6 +486,65 @@ impl Modules {
     }
 
     /// Whether `file` imports the type `ty` from a package outside the repo.
+    /// Whether code in the TypeScript `file` can name the repo's top-level declaration `name`: the file declares it,
+    /// imports or re-exports it, or the repo declares it in a script (a file with no import or export, whose declarations are
+    /// global). A name the file neither declares nor imports is otherwise a global of the platform's (`Response`,
+    /// `Event`), even when one of the repo's modules exports a declaration of that name. A file importing nothing is
+    /// read as before: it sees every declaration.
+    pub(crate) fn sees(&mut self, conn: &Connection, file: &str, name: &str) -> Result<bool> {
+        let bindings = self.file_bindings(conn, file)?;
+        // A file importing nothing at all: its imports may be ones the index doesn't read (triple-slash references,
+        // a bundler's globals), so any of the repo's declarations may be what it names.
+        if !bindings.iter().any(|b| !b.export) {
+            return Ok(true);
+        }
+        // Imported, or re-exported (`export { X } from './x'` names the module's `X`).
+        if bindings.iter().any(|b| b.local == name) {
+            return Ok(true);
+        }
+        let files: Vec<String> = conn
+            .prepare_cached(
+                "SELECT DISTINCT f.path FROM symbols s JOIN files f ON f.id = s.file_id
+                 WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container IS NULL",
+            )?
+            .query_map([name], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for f in files {
+            if f == file || !is_ts_path(&f) || self.script(conn, &f)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Whether `file` is a script: it neither imports nor exports anything.
+    fn script(&mut self, conn: &Connection, file: &str) -> Result<bool> {
+        if let Some(&s) = self.scripts.get(file) {
+            return Ok(s);
+        }
+        let module: bool = conn
+            .prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM import_bindings b JOIN files f ON f.id = b.file_id WHERE f.path = ?1)
+                 OR EXISTS(SELECT 1 FROM symbols s JOIN files f ON f.id = s.file_id
+                           WHERE f.path = ?1 AND s.container IS NULL AND ' ' || s.signature LIKE '% export %')",
+            )?
+            .query_row([file], |r| r.get(0))?;
+        self.scripts.insert(file.to_string(), !module);
+        Ok(!module)
+    }
+
+    /// Whether the repo declares `name` at the top level of a TypeScript or JavaScript file.
+    pub(crate) fn declared(&mut self, conn: &Connection, name: &str) -> Result<bool> {
+        let files: Vec<String> = conn
+            .prepare_cached(
+                "SELECT DISTINCT f.path FROM symbols s JOIN files f ON f.id = s.file_id
+                 WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container IS NULL",
+            )?
+            .query_map([name], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(files.iter().any(|f| is_ts_path(f)))
+    }
+
     pub(crate) fn imports_external(&mut self, conn: &Connection, file: &str, ty: &str) -> Result<bool> {
         let Some(b) = self.imported(conn, file, ty)? else { return Ok(false) };
         Ok(b.name != "*" && self.origin(conn, file, &b.module)? == Origin::External)

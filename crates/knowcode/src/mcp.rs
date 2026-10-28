@@ -76,6 +76,9 @@ pub const FLOW_DEPTH: Range = Range { what: "Steps deep", min: 1, default: 10, m
 pub const PATH_HOPS: Range = Range { what: "Hops a path may have", min: 1, default: 8, max: crate::walk::MAX_PATH_HOPS as usize, note: "" };
 pub const PATH_COUNT: Range = Range { what: "Paths to return", min: 1, default: 3, max: crate::walk::MAX_PATHS, note: "" };
 pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, default: 20, max: 500, note: "" };
+pub const TASK_FILES: Range = Range { what: "Files to list", min: 1, default: 6, max: 30, note: "" };
+pub const TASK_DEPENDENTS: Range = Range { what: "Dependents to list", min: 0, default: 6, max: 40, note: "" };
+pub const TASK_TESTS: Range = Range { what: "Tests to list", min: 0, default: 4, max: 30, note: "" };
 pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "" };
 pub const ANSWER_CHARS: Range = Range {
     what: "Answer size cap in characters",
@@ -95,6 +98,9 @@ pub const RANGES: &[(&str, &str, &Range)] = &[
     ("kc_search", "limit", &SEARCH_LIMIT),
     ("kc_search", "context", &SEARCH_CONTEXT),
     ("kc_grep_ast", "limit", &SEARCH_LIMIT),
+    ("kc_task", "files", &TASK_FILES),
+    ("kc_task", "dependents", &TASK_DEPENDENTS),
+    ("kc_task", "tests", &TASK_TESTS),
     ("*", "max_chars", &ANSWER_CHARS),
 ];
 
@@ -333,6 +339,23 @@ pub struct LocateParams {
     /// Rank files across every indexed repo.
     #[serde(default)]
     pub workspace: bool,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TaskParams {
+    /// The goal, in plain words: a bug report, a ticket title, what the change should do.
+    pub goal: String,
+    /// Files to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub files: Option<usize>,
+    /// Dependents to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub dependents: Option<usize>,
+    /// Tests to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub tests: Option<usize>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -824,6 +847,15 @@ pub struct MoreParams {
     pub max_chars: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestTargetsParams {
+    /// Only the targets of this name (a SwiftPM target, a .NET project, a script); none: every one.
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct CapabilitiesParams {
     /// One op (`impact`) or tool (`kc_impact`) to describe; none: every op.
@@ -900,6 +932,8 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("grep_ast", "pattern", ""),
     ("status", "", ""),
     ("capabilities", "of", ""),
+    ("task", "goal", ""),
+    ("test_targets", "name", ""),
 ];
 
 /// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
@@ -1120,6 +1154,8 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_more", &[("cursor", "")]),
     ("kc_status", &[]),
     ("kc_capabilities", &[("of", "")]),
+    ("kc_task", &[("goal", "")]),
+    ("kc_test_targets", &[("name", "")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -1154,7 +1190,7 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
 
 /// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
 /// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
-pub const ON_REQUEST: &[&str] = &["kc_capabilities"];
+pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -2443,6 +2479,22 @@ impl KnowcodeServer {
         }
     }
 
+    #[tool(description = "One bounded answer for a goal in words: the files involved, what depends on them, the tests to run, what the index can't settle.")]
+    async fn kc_task(&self, Parameters(p): Parameters<TaskParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        let params = crate::task::TaskParams {
+            goal: p.goal,
+            files: TASK_FILES.clamp(p.files),
+            dependents: TASK_DEPENDENTS.clamp(p.dependents),
+            tests: TASK_TESTS.clamp(p.tests),
+        };
+        run(p.common.max_chars, move || {
+            let what = format!("no file matches a word of {:?} (filler words dropped)", params.goal);
+            Ok(explain(crate::task::task(&params, &scope)?.env, &what, ""))
+        })
+        .await
+    }
+
     #[tool(description = "Every reference to a name, resolved, across repos. What calls X, by hop or across HTTP: kc_impact on X's file:line.")]
     async fn kc_refs(&self, Parameters(p): Parameters<RefsParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
@@ -2954,6 +3006,8 @@ impl KnowcodeServer {
             "kc_note_add" => self.kc_note_add(a(t, args)?).await,
             "kc_grep_ast" => self.kc_grep_ast(a(t, args)?).await,
             "kc_status" => self.kc_status(a(t, args)?).await,
+            "kc_task" => self.kc_task(a(t, args)?).await,
+            "kc_test_targets" => self.kc_test_targets(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
         out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
@@ -2963,6 +3017,16 @@ impl KnowcodeServer {
     async fn kc_capabilities(&self, Parameters(p): Parameters<CapabilitiesParams>) -> Result<String, ToolError> {
         let doc = crate::capabilities::document(&self.surface(), p.of.as_deref())?;
         Ok(serde_json::to_string(&doc).unwrap_or_default())
+    }
+
+    #[tool(description = "Declared test targets (SwiftPM, .NET test projects, package.json test scripts): their tests and how to run them.")]
+    async fn kc_test_targets(&self, Parameters(p): Parameters<TestTargetsParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = "no declared test target: no SwiftPM test target, .NET test project or package.json test script".to_string();
+            Ok(explain(ops::test_targets(p.name.as_deref(), &scope)?.env, &what, ""))
+        })
+        .await
     }
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
@@ -3409,6 +3473,8 @@ mod tests {
             "kc_more" => as_::<MoreParams>(args),
             "kc_status" => as_::<RepoOnlyParams>(args),
             "kc_capabilities" => as_::<CapabilitiesParams>(args),
+            "kc_task" => as_::<TaskParams>(args),
+            "kc_test_targets" => as_::<TestTargetsParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -3420,7 +3486,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all,kc_capabilities");
+        let s = server("all,kc_capabilities,kc_test_targets");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -3463,7 +3529,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all,kc_capabilities");
+        let s = server("all,kc_capabilities,kc_test_targets");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());

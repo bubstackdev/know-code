@@ -136,7 +136,9 @@ When several definitions share the name (copies, template variants), the live on
 its namespace or module (`B.Worker.Run`). A place may be written after its repo's name (`shop/src/a.cs:12`), here and
 in kc_impact, kc_trace and kc_refs (which answers for the definition there); one naming no definition is refused, saying
 what didn't resolve (no such file, or the definitions nearest the line). A stored procedure or table defined in another
-indexed repo (a schema repo) is found there.
+indexed repo (a schema repo) is found there. A file path gives the file's top-level declarations in line order
+(`declarations`: kind, name, line, end_line, and `members` for a type), at most 40 (the rest by cursor), with its area and
+the notes on its symbols: pick one by name or `file:line` for its bundle, rather than reading the file.
 
 `source` is `auto` by default: a long symbol comes as a skeleton (signatures, types and doc comments with bodies elided
 as `{ … }`, plus the lines making its calls into the indexed code and its return/throw lines; `source_lines` lists the
@@ -787,6 +789,42 @@ among, other, missed, external_ok, external_false), upgraded and corrected count
 privacy file blocks anything or is malformed): the file's state (read, empty, malformed with why), its global level,
 `block_at`, and what is `blocked` ("repo", or the folders and files its rules name); a workspace status also lists the
 repos blocked whole. `workspace` for every indexed repo."#,
+    },
+    Topic {
+        name: "kc_task",
+        summary: "one bounded answer for a goal in words",
+        text: r#"One bounded answer for a goal in words (a bug report, a ticket title, what a change should do), where
+otherwise kc_locate, kc_context, kc_impact and kc_tests are joined by hand. Four sections:
+
+- `items`: the files most likely involved, kc_locate's ranking, each `path | symbols matching the goal (kind :line)`;
+  the first two also quote the line declaring their best symbol (`| 42: public void Refund(…)`).
+- `dependents`: what depends on the first three files, one hop (`path:line Caller → Callee [confidence]`, confident
+  edges first), and the files that usually change with them (`path (changes with …: n of m commits)`).
+- `tests`: the tests to run for those files, each with its likelihood (0-1). Advisory: the most likely tests, not all;
+  a test not listed may still fail, and is never said to be safe to skip.
+- `unsettled`: what the index can't settle: goal words no listed file matches, edges left as ambiguous (a call that
+  may reach several implementations), constructs not read, content withheld, repos not read.
+
+`sections` says for each list whether it is whole (`complete`) and the call that continues it (`next`); a cut list is a
+`capped` entry of `incomplete` too. Rows are short text, so the answer costs about what kc_locate's does alone. Bounds:
+`files`, `dependents` and `tests`."#,
+    },
+    Topic {
+        name: "kc_test_targets",
+        summary: "declared test targets with their tests and how to run them",
+        text: r#"The test targets a repo's manifests declare, each with its tests and the command to run it, and each test's:
+
+- SwiftPM test targets (`.testTarget` in `Package.swift`): the tests (XCTest and Swift Testing) under `Tests/<target>/`,
+  `swift test --filter`.
+- .NET test projects (a project referencing a test SDK or framework: `Microsoft.NET.Test.Sdk`, `MSTest.Sdk`, xUnit,
+  NUnit, …): the test methods under the project's directory, `dotnet test <project>` and `--filter
+  FullyQualifiedName~Class.Method`.
+- `package.json` test scripts (`test`, `test:…`): the package's test files (`*.test.*`, `*.spec.*`, `__tests__/`),
+  run with the package manager its lockfile names.
+
+Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
+200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change
+needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; the `kc` op is `test_targets`."#,
     },
     Topic {
         name: "kc_capabilities",

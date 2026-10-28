@@ -538,6 +538,8 @@ struct Def {
     swift_params: Option<Vec<SwiftParam>>,
     /// Declared `export` (TypeScript): at a module's top level.
     exported: bool,
+    /// Declared `private` or `fileprivate` (Swift): named only in its own file.
+    file_private: bool,
 }
 
 impl Def {
@@ -667,7 +669,8 @@ pub const UNPLACED_MODULE: &str = "tsconfig maps the import to no indexed file";
 /// [`RefHit::basis`]: several dependencies the file imports declare the name, and the import doesn't say which.
 pub const AMBIGUOUS_DEPENDENCY: &str = "several imported dependencies declare it";
 /// [`RefHit::basis`]: the target is a protocol requirement the receiver's type satisfies with a member of its own that
-/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`).
+/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`). The row is `external_likely`, the requirement
+/// listed as its target.
 pub const VIA_PROTOCOL: &str = "via protocol: the receiver's type satisfies this requirement outside the repo";
 
 impl RefHit {
@@ -2735,7 +2738,8 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
      CASE WHEN f.lang = 'csharp' THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
-     s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %'";
+     s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
+     f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %')";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2758,6 +2762,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         partial: r.get(15)?,
         swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
         exported: r.get(17)?,
+        file_private: r.get(18)?,
     })
 }
 
@@ -4999,6 +5004,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => usable,
             };
+            // A Swift `private` or `fileprivate` declaration is named only in its own file.
+            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
             resolve(hit, &recv, &self_chains[&caller], &usable)
         };
         // How an exact answer was reached, recorded where it is decided.
@@ -5079,7 +5086,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
+                // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);
+                confidence = "external_likely";
             } else {
                 // The library type conforms in a module this code neither is in nor imports: the call is the
                 // library type's own member, never the requirement.
@@ -5362,6 +5371,21 @@ fn ts_top_level_compatible(ref_kind: &str, def_kind: &str) -> bool {
 
 /// The TypeScript import rules' answer for `hit`, when they have one: an imported name resolves in its module's file
 /// (or outside the repo, for a package), and a name neither imported nor a member resolves in its own file.
+/// Whether the reference's receiver is typed, as written, by a name other than `ty` that the file sees: an alias that
+/// leads to `ty` (`(i as ItemLike).tags`, `type ItemLike = Item`).
+fn seen_alias(conn: &Connection, hit: &RefHit, ty: &str, modules: &mut crate::ts::Modules) -> Result<bool> {
+    match hit.receiver_type.as_deref().and_then(TypeExpr::decode) {
+        Some(TypeExpr::Named(n)) if last_segment(&n) != ty => modules.sees(conn, &hit.file, last_segment(&n)),
+        _ => Ok(false),
+    }
+}
+
+/// A JavaScript file, whose imports (CommonJS `require`, globals a bundler provides) the index reads only in part: its
+/// names aren't held to [`crate::ts::Modules::sees`].
+fn is_js(path: &str) -> bool {
+    matches!(path.rsplit_once('.').map(|(_, e)| e), Some("js" | "jsx" | "mjs" | "cjs"))
+}
+
 fn ts_scoped(
     conn: &Connection,
     hit: &mut RefHit,
@@ -5405,7 +5429,14 @@ fn ts_scoped(
         }
         None if hit.receiver.is_none() && hit.kind != "member" => {
             let own: Vec<i64> = defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).map(|d| d.id).collect();
-            Ok((!own.is_empty()).then_some(("exact", own)))
+            if !own.is_empty() {
+                return Ok(Some(("exact", own)));
+            }
+            // Neither declared here nor imported: a global, the repo's only when a script of its declares it.
+            if !is_js(&hit.file) && !modules.sees(conn, &hit.file, &hit.name)? {
+                return Ok(Some(("unresolved", Vec::new())));
+            }
+            Ok(None)
         }
         None => Ok(None),
     }
@@ -5454,6 +5485,17 @@ fn ts_receiver(
 ) -> Result<Receiver> {
     Ok(match recv {
         Receiver::Known(chain) if modules.imports_external(conn, &hit.file, &chain[0])? => Receiver::Foreign(vec![chain[0].clone()]),
+        // A type the file neither declares nor imports is the platform's (`Response`), whatever the repo's modules
+        // export under that name; unless the receiver's type is written by another name the file does see, an
+        // alias of it (`ItemLike = Item`).
+        Receiver::Known(chain)
+            if !is_js(&hit.file)
+                && modules.declared(conn, &chain[0])?
+                && !modules.sees(conn, &hit.file, &chain[0])?
+                && !seen_alias(conn, hit, &chain[0], modules)? =>
+        {
+            Receiver::Foreign(vec![chain[0].clone()])
+        }
         Receiver::Unknown => match hit.receiver_type.as_deref() {
             Some(enc) => match oracle.foreign_prefix(enc, hit.caller_type().as_deref())? {
                 Some(t) => Receiver::Foreign(vec![t]),

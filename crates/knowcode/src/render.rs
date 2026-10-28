@@ -1009,6 +1009,27 @@ fn loc_file(root: Option<&Path>, file: &str) -> String {
     }
 }
 
+pub fn test_targets(repos: &[crate::ops::RepoTestTargets]) {
+    if repos.iter().all(|(_, ts)| ts.is_empty()) {
+        println!("no declared test target: no SwiftPM test target, .NET test project or package.json test script");
+    }
+    for (root, targets) in repos {
+        for t in targets {
+            if repos.len() > 1 {
+                print!("{}/", root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            }
+            println!("{} {} ({}:{}): {} test(s)", t.kind, t.name, t.manifest, t.line, t.tests_total);
+            println!("  run: {}", t.command);
+            for c in &t.tests {
+                println!("  {} {}:{}", c.name, c.file, c.line);
+            }
+            if t.tests_total > t.tests.len() {
+                println!("  … {} more", t.tests_total - t.tests.len());
+            }
+        }
+    }
+}
+
 pub fn coupled(repos: &[crate::ops::CoupledRepo], file: &str) {
     if repos.is_empty() {
         println!("no file {file} in the repo");
@@ -1506,12 +1527,23 @@ pub fn notes(repos: &[crate::ops::NotesRepo]) {
     }
 }
 
-/// `context` on a file: its area and the notes on its symbols.
+/// `context` on a file: its top-level declarations, its area and the notes on its symbols.
 pub fn file_hit(f: &crate::ops::FileHit, multi: bool) {
     println!("file {}{}", if multi { format!("{}/", f.repo) } else { String::new() }, f.file);
     area_line(f.area.as_ref());
     if f.area.is_none() {
         println!("  in no area");
+    }
+    if !f.declarations.is_empty() {
+        let total = f.declarations_total.unwrap_or(f.declarations.len());
+        println!("declarations ({total}; pick one with {}:<line> or its name):", f.file);
+        for d in &f.declarations {
+            let members = if d.members > 0 { format!(" ({} members)", d.members) } else { String::new() };
+            println!("  {:<9} {}  {}-{}{members}", kw(&d.kind, &f.file), d.name, d.line, d.end_line);
+        }
+        if total > f.declarations.len() {
+            println!("  … {} more", total - f.declarations.len());
+        }
     }
     note_lines(&f.notes);
 }
