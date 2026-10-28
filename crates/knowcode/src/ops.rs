@@ -309,9 +309,9 @@ const FANOUT_CACHE_KIB: i64 = 256;
 /// later read sees that one generation, whatever another process reindexes meanwhile.
 pub fn open_fresh(root: &Path, no_sync: bool) -> Result<Opened> {
     let (store, sync) = crate::refresh::open(root, no_sync)?;
-    // A query keeps the indexes it reads open until it answers: past its first, each one's page caches are held
-    // smaller, so a workspace-wide answer over 500 repos stays within 256 MiB of them (see `FANOUT_CACHE_KIB`).
-    if kc_store::limits::current().note_opened() > 1 {
+    // A query keeps the indexes it reads open until it answers: past its first repo's, each one's page caches are
+    // held smaller, so a workspace-wide answer over 500 repos stays within 256 MiB of them (see `FANOUT_CACHE_KIB`).
+    if kc_store::limits::current().note_opened(root) {
         store.limit_cache(FANOUT_CACHE_KIB)?;
     }
     store.begin_snapshot()?;
