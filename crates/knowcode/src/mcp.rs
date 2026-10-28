@@ -2493,6 +2493,7 @@ impl KnowcodeServer {
             Ok(explain(crate::task::task(&params, &scope)?.env, &what, ""))
         })
         .await
+        .map(|text| crate::task::reading_order(&text))
     }
 
     #[tool(description = "Every reference to a name, resolved, across repos. What calls X, by hop or across HTTP: kc_impact on X's file:line.")]
