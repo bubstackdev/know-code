@@ -2073,15 +2073,27 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
-/// Whether `d` was found on the receiver chain `chain` only because its container ends with a chain type's bare name
-/// (`MinimalDecoder.Decoder` for `Decoder`), the container being nested in a type that doesn't enclose the code
-/// (`self_chain`) and isn't itself on the chain.
+/// Standard-library and Foundation protocols and types a repo's own nested types also get named after (a test
+/// support's `MinimalDecoder.Decoder`): a receiver typed by one of these bare names is the library's.
+const SWIFT_LIBRARY_NAMES: &[&str] = &[
+    "Decoder", "Encoder", "Error", "Sequence", "Collection", "IteratorProtocol", "AsyncSequence", "AsyncIteratorProtocol",
+    "Hashable", "Equatable", "Comparable", "Identifiable", "Codable", "Decodable", "Encodable", "Sendable",
+    "CustomStringConvertible", "SingleValueDecodingContainer", "SingleValueEncodingContainer",
+    "UnkeyedDecodingContainer", "UnkeyedEncodingContainer", "KeyedDecodingContainerProtocol",
+    "KeyedEncodingContainerProtocol", "CodingKey", "Clock", "Executor", "Actor",
+];
+
+/// Whether `d` was found on the receiver chain `chain` only because its container ends with a chain type's bare name,
+/// one of [`SWIFT_LIBRARY_NAMES`] (`MinimalDecoder.Decoder` for `Decoder`), the container being nested in a type that
+/// doesn't enclose the code (`self_chain`) and isn't itself on the chain.
 fn nested_elsewhere(d: &Def, chain: &[String], self_chain: &[String]) -> bool {
     let Some(c) = d.container.as_deref() else { return false };
     if chain.iter().any(|t| t == c) {
         return false;
     }
-    let Some(bare) = chain.iter().find(|t| !t.contains('.') && c.ends_with(&format!(".{t}"))) else { return false };
+    let Some(bare) = chain.iter().find(|t| SWIFT_LIBRARY_NAMES.contains(&t.as_str()) && c.ends_with(&format!(".{t}"))) else {
+        return false;
+    };
     !self_chain.iter().any(|s| c == format!("{s}.{bare}"))
 }
 
@@ -2276,9 +2288,9 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
-        // A Swift receiver typed by a bare name that only a type nested elsewhere carries (`decoder: Decoder`, where
-        // the repo nests `MinimalDecoder.Decoder`) is the type of that name the code sees: the library's protocol,
-        // unless the nesting type encloses the code. Its members are listed, never linked to the nested type's.
+        // A Swift receiver typed by a standard-library protocol's or type's name that only a type nested elsewhere
+        // also carries (`decoder: Decoder`, where the repo nests `MinimalDecoder.Decoder`) is the library's, unless
+        // the nesting type encloses the code. Its members are listed, never linked to the nested type's.
         if hit.file.ends_with(".swift")
             && !found.is_empty()
             && found.iter().all(|d| nested_elsewhere(d, chain, self_chain))
