@@ -263,19 +263,31 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("    needs:\n      - plan\n      - host\n", job)
         self.assertIn("needs.publish-homebrew-formula.result == 'success'", self.job("announce"))
 
-    def test_tag_ci_checks_the_tap_and_prs_need_no_secret(self):
+    def test_release_gate_checks_ci_and_the_tap_and_prs_need_no_secret(self):
         workflows = Path(__file__).resolve().parent.parent / ".github/workflows"
         ci = (workflows / "ci.yml").read_text()
+        gate = (workflows / "release-gate.yml").read_text()
         self.assertIn("secrets: inherit", self.release)
-        tap = ci.split("\n  homebrew-tap:\n", 1)[1].split("\n\n  ", 1)[0]
-        self.assertIn("if: startsWith(github.ref, 'refs/tags/')", tap)
+        self.assertIn("uses: ./.github/workflows/release-gate.yml", self.release)
+        self.assertNotIn("uses: ./.github/workflows/ci.yml", self.release)
+        # The tagged commit must have a passing ci.yml run; the gate may read Actions and nothing more.
+        passed = gate.split("\n  ci-passed:\n", 1)[1].split("\n\n  ", 1)[0]
+        self.assertIn("actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main", passed)
+        self.assertIn('compare/main...$SHA', passed)
+        self.assertIn('select(.conclusion == "success")', passed)
+        self.assertIn("permissions:\n      actions: read\n", passed)
+        self.assertIn("permissions:\n  contents: read\n", gate)
+        self.assertNotIn(": write", gate)
+        tap = gate.split("\n  homebrew-tap:\n", 1)[1]
         self.assertIn("gh api repos/bubstackdev/homebrew-tap", tap)
         self.assertIn(".permissions.push", tap)
         self.assertIn(".private", tap)
         self.assertIn("HOMEBREW_TAP_TOKEN is not set", tap)
-        # No other CI job reads a secret, so pull requests and pushes to main run without one.
-        self.assertEqual(ci.count("secrets."), 1)
+        self.assertEqual(gate.count("secrets."), 1)
         self.assertIn("secrets.HOMEBREW_TAP_TOKEN", tap)
+        # No CI job reads a secret, so pull requests and pushes to main run without one.
+        self.assertNotIn("secrets.", ci)
+        self.assertNotIn("workflow_call", ci)
 
     def test_dist_publishes_the_shell_installer_and_the_homebrew_formula(self):
         settings = (Path(__file__).resolve().parent.parent / "dist-workspace.toml").read_text()

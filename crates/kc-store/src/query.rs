@@ -2025,6 +2025,44 @@ fn qualifier_in_scope(conn: &Connection, q: &str, chain: &[String]) -> Result<Op
     Ok(chain.iter().map(|scope| format!("{scope}.{q}")).chain(std::iter::once(q.to_string())).find(|c| declared.contains(c)))
 }
 
+/// Of `defs`, the ids of those declared directly in the TypeScript namespace the code in `file` names `q` (`Shapes`, or
+/// `Outer.Inner` for one nested in another): the innermost namespace spanning the declaration is that one. A namespace
+/// is no type, so its members have no container; the extractor records each namespace as a `module` symbol with its
+/// span. A namespace `file` imports is the one in the file it imports it from (none for a package's); one it doesn't
+/// is its own when it declares one of that name, else a global one (`declare namespace`, `declare global`).
+fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, file: &str, q: &str, defs: &[&Def]) -> Result<Vec<i64>> {
+    let (from, q) = match modules.qualifier_source(conn, file, q)? {
+        Some(Some((from, inner))) => (Some(from), inner),
+        Some(None) => return Ok(Vec::new()),
+        None => (None, q.to_string()),
+    };
+    let found = ts_namespace_declared(conn, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
+    // Of a namespace declared in several places, the file's own shadows the others.
+    if from.is_none() && found.iter().any(|(_, f)| f == file) {
+        return Ok(found.into_iter().filter(|(_, f)| f == file).map(|(id, _)| id).collect());
+    }
+    Ok(found.into_iter().map(|(id, _)| id).collect())
+}
+
+/// Of `defs`, the ids and files of those whose innermost enclosing TypeScript namespace is named `q`.
+fn ts_namespace_declared<'a>(conn: &Connection, q: &str, defs: impl Iterator<Item = &'a Def>) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT CASE WHEN s.container IS NULL THEN s.name ELSE s.container || '.' || s.name END, s.start_line, s.end_line
+           FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.kind = 'module'",
+    )?;
+    let mut out = Vec::new();
+    for d in defs.filter(|d| d.container.is_none() && crate::ts::is_ts_path(&d.file)) {
+        let spans: Vec<(String, u32, u32)> = stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let innermost = spans.iter().filter(|(_, start, end)| *start <= d.line && d.line <= *end)
+            // The tightest span; of nested ones on one line, the deeper.
+            .min_by_key(|(name, start, end)| (end - start, std::cmp::Reverse(name.len())));
+        if innermost.is_some_and(|(name, _, _)| name == q) {
+            out.push((d.id, d.file.clone()));
+        }
+    }
+    Ok(out)
+}
+
 /// Of `defs`, those code in the Swift file `file` can name: declared in its own SwiftPM target or one it imports, or
 /// where the target can't be told (outside a `Sources/<Target>/` layout, as is `file`'s own).
 fn swift_seen<'a>(conn: &Connection, file: &str, defs: Vec<&'a Def>) -> Result<Vec<&'a Def>> {
@@ -5353,6 +5391,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
+            // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
+            // which no type or module the lookup reads declares: the namespace's own declarations of the name.
+            let (confidence, ids) = match hit.receiver.as_deref() {
+                Some(q) if ts && hit.kind == "type_ref" && confidence == "unresolved" => match ts_namespace_members(conn, modules, &hit.file, q, &usable)? {
+                    found if found.is_empty() => (confidence, ids),
+                    found => (if found.len() == 1 { "exact" } else { "ambiguous" }, found),
+                },
+                _ => (confidence, ids),
+            };
             if explain {
                 for d in usable.iter().filter(|d| !ids.contains(&d.id)) {
                     dropped.entry(d.id).or_insert_with(|| why_not(hit, &recv, &self_chains[&caller], d));

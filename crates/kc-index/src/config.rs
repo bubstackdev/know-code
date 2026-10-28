@@ -702,6 +702,22 @@ pub fn bound() -> Option<&'static [PathBuf]> {
     (!repos.is_empty()).then_some(repos.as_slice())
 }
 
+/// Refuses the repo at `root` in a bound process (see [`bind`]) unless it is one of the bound repos: whatever named it
+/// (a repo argument, a path relative to the current directory, a cursor, a dependency), nothing else is opened,
+/// indexed or answered about.
+pub fn check_bound(root: &Path) -> Result<()> {
+    let Some(repos) = bound() else { return Ok(()) };
+    let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if repos.contains(&canonical) {
+        return Ok(());
+    }
+    let names: Vec<String> = repos.iter().map(|r| r.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+    Err(anyhow!(kc_store::answer::Refusal::new(
+        kc_store::answer::Code::NotAllowed,
+        format!("repo {} is not one this server answers about; it answers about {}", root.display(), names.join(", "))
+    )))
+}
+
 /// The configured workspace roots (`~` expanded, as written otherwise) and how deep under them repos are looked for.
 /// For a bound process, its repos, each a root of depth 0.
 pub fn workspace() -> Result<(Vec<PathBuf>, usize)> {

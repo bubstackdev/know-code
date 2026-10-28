@@ -1,0 +1,72 @@
+# The release workflow's gate before it builds anything (dist-workspace.toml's plan-jobs): the tagged commit passed
+# ci.yml, and the Homebrew tap can take the formula. CI isn't run again on the tag: the commit a release tags is on
+# main, and every push to main runs ci.yml on it. Only the release workflow calls this one.
+# Actions are GitHub-owned and pinned to commit SHAs, as the repository's Actions policy requires.
+name: release-gate
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # The tagged commit must be on main, and its ci.yml run from the push to main must have passed. Pull request runs
+  # don't count: they run the pull request's own ci.yml. One still running is waited for, up to an hour; a failed one
+  # is re-run (`gh run rerun --failed`), then the release workflow after it.
+  ci-passed:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - name: ci.yml passed on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          on_main=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$SHA" --jq .status)
+          if [ "$on_main" != identical ] && [ "$on_main" != behind ]; then
+            echo "::error::$SHA isn't on main ($on_main). Tag a commit on main."
+            exit 1
+          fi
+          for _ in $(seq 120); do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&per_page=100" \
+              --jq '[.workflow_runs[] | {id, status, conclusion}]')
+            if [ "$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$runs")" -gt 0 ]; then
+              echo "ci.yml passed on $SHA: run $(jq -r '[.[] | select(.conclusion == "success")][0].id' <<<"$runs")."
+              exit 0
+            fi
+            if [ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")" -eq 0 ]; then
+              echo "::error::No passing ci.yml run on $SHA ($(jq -c 'map(.conclusion)' <<<"$runs")). Tag a commit on main whose CI passed, or re-run its failed jobs and then this workflow."
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "::error::ci.yml on $SHA didn't finish within an hour."
+          exit 1
+
+  # The Homebrew tap must be public and the tap token able to push to it, before anything is published.
+  homebrew-tap:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The Homebrew tap is public and HOMEBREW_TAP_TOKEN can push to it
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set. A maintainer creates it as docs/releasing.md describes."
+            exit 1
+          fi
+          if ! repo=$(gh api repos/bubstackdev/homebrew-tap); then
+            echo "::error::HOMEBREW_TAP_TOKEN can't read bubstackdev/homebrew-tap (expired, or not scoped to it)."
+            exit 1
+          fi
+          if [ "$(jq -r '.private' <<<"$repo")" != "false" ]; then
+            echo "::error::bubstackdev/homebrew-tap is private; Homebrew users couldn't tap it."
+            exit 1
+          fi
+          if [ "$(jq -r '.permissions.push' <<<"$repo")" != "true" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN can't push to bubstackdev/homebrew-tap (needs Contents: read and write)."
+            exit 1
+          fi
+          echo "bubstackdev/homebrew-tap is public and the tap token can push to it."

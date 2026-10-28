@@ -109,8 +109,11 @@ pub struct Operation {
     cached_reads: Mutex<std::collections::HashMap<PathBuf, String>>,
     /// Repos whose indexes the query used, for cache upkeep after it.
     touched: Mutex<std::collections::BTreeSet<PathBuf>>,
-    /// How many indexes the query has opened (see [`Operation::note_opened`]).
-    opened: std::sync::atomic::AtomicUsize,
+    /// The repos whose indexes the query has opened, in the order first opened (see [`Operation::note_opened`]).
+    opened: Mutex<Vec<PathBuf>>,
+    /// While a [`SyncMemo`] holds, the repos the query synced, each with what its sync reported (see
+    /// [`Operation::synced`]).
+    synced: Mutex<Option<std::collections::HashMap<PathBuf, Arc<dyn std::any::Any + Send + Sync>>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -199,12 +202,39 @@ impl Operation {
         lock(&self.cached_reads).clone()
     }
 
-    /// Records that the query used the index of the repo at `root`.
-    /// Counts an index the query opens; returns how many it has opened, this one included.
-    pub fn note_opened(&self) -> usize {
-        self.opened.fetch_add(1, Ordering::Relaxed) + 1
+    /// Records that the query opens the index of the repo at `root`; whether it is another repo's than the first the
+    /// query opened. The first repo's index is opened again by a query composing others (`task`), and each time
+    /// needs its full page cache: held smaller, its reads went to the file hundreds of times over.
+    pub fn note_opened(&self, root: &Path) -> bool {
+        let mut opened = lock(&self.opened);
+        if !opened.iter().any(|r| r == root) {
+            opened.push(root.to_path_buf());
+        }
+        opened.first().is_some_and(|first| first != root)
     }
 
+    /// Remembers, until the guard drops, what each repo the query syncs reported (see [`Operation::note_synced`]): a
+    /// query composing others (`task`) opens one repo several times, and checks it once.
+    pub fn remember_syncs(self: &Arc<Self>) -> SyncMemo {
+        let mut synced = lock(&self.synced);
+        let outermost = synced.is_none();
+        synced.get_or_insert_with(Default::default);
+        SyncMemo(outermost.then(|| self.clone()))
+    }
+
+    /// Records `report`, what syncing the repo at `root` reported, while a [`SyncMemo`] holds.
+    pub fn note_synced<T: std::any::Any + Send + Sync>(&self, root: &Path, report: T) {
+        if let Some(synced) = lock(&self.synced).as_mut() {
+            synced.insert(root.to_path_buf(), Arc::new(report));
+        }
+    }
+
+    /// What syncing the repo at `root` reported, when the query synced it while a [`SyncMemo`] holds.
+    pub fn synced<T: std::any::Any + Send + Sync>(&self, root: &Path) -> Option<Arc<T>> {
+        lock(&self.synced).as_ref()?.get(root)?.clone().downcast::<T>().ok()
+    }
+
+    /// Records that the query used the index of the repo at `root`.
     pub fn note_touched(&self, root: &Path) {
         lock(&self.touched).insert(root.to_path_buf());
     }
@@ -228,6 +258,17 @@ impl Operation {
         out.append(&mut lock(&LOOSE));
         out.dedup();
         out
+    }
+}
+
+/// Holds [`Operation::remember_syncs`]; the outermost one forgets the syncs when dropped.
+pub struct SyncMemo(Option<Arc<Operation>>);
+
+impl Drop for SyncMemo {
+    fn drop(&mut self) {
+        if let Some(op) = self.0.take() {
+            *lock(&op.synced) = None;
+        }
     }
 }
 
@@ -601,5 +642,30 @@ mod tests {
         c.arg("-");
         let out = output(c, Kind::Git, "cat", Some(b"hello")).unwrap();
         assert_eq!(out.stdout, b"hello");
+    }
+
+    /// A query's first repo keeps its full page cache however often it is opened again; any other is held smaller.
+    /// Syncs are remembered only while a memo holds, and forgotten when the outermost one drops.
+    #[test]
+    fn reopening_the_first_repo_and_remembered_syncs() {
+        let op = Operation::new();
+        let (a, b) = (Path::new("/r/a"), Path::new("/r/b"));
+        assert!(!op.note_opened(a));
+        assert!(op.note_opened(b));
+        assert!(!op.note_opened(a), "the first repo opened again");
+        assert!(op.note_opened(b));
+
+        op.note_synced(a, 1u32);
+        assert!(op.synced::<u32>(a).is_none(), "no memo held");
+        let outer = op.remember_syncs();
+        op.note_synced(a, 1u32);
+        {
+            let _inner = op.remember_syncs();
+            assert_eq!(op.synced::<u32>(a).as_deref(), Some(&1));
+        }
+        assert_eq!(op.synced::<u32>(a).as_deref(), Some(&1), "an inner memo keeps the outer one's");
+        assert!(op.synced::<u64>(a).is_none() && op.synced::<u32>(b).is_none());
+        drop(outer);
+        assert!(op.synced::<u32>(a).is_none());
     }
 }

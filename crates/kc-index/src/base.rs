@@ -516,6 +516,36 @@ fn release(root: &Path) {
     BUILDING.lock().unwrap_or_else(|e| e.into_inner()).retain(|(r, _)| r != root);
 }
 
+/// Whether this process holds the claim on the base of `root`'s commit.
+pub(crate) fn holds(root: &Path) -> bool {
+    BUILDING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(r, _)| r == root)
+}
+
+/// This process's claim on building the base of a checkout's commit (see [`wait_or_claim`]), let go when dropped:
+/// whatever ends the build (an error, a panic, a call that never syncs, a derive that couldn't start), the processes
+/// waiting for the base go on. [`publish`] lets go of it too. Handed from the code that opened the checkout to the
+/// code that goes on building it with [`Claim::keep`] and [`Claim::adopt`].
+#[must_use]
+pub struct Claim(PathBuf);
+
+impl Claim {
+    /// The claim this process holds on `root`'s base, if it holds one: owned, and let go of, from here on.
+    pub fn adopt(root: &Path) -> Option<Claim> {
+        holds(root).then(|| Claim(root.to_path_buf()))
+    }
+
+    /// Leaves the claim held, for the code going on with the build to [`Claim::adopt`].
+    pub fn keep(self) {
+        std::mem::forget(self);
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        release(&self.0);
+    }
+}
+
 /// When a base was last cloned or published.
 fn used(base: &Path) -> std::time::SystemTime {
     fs::metadata(base.with_extension("used")).or_else(|_| fs::metadata(base)).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH)

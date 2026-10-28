@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "kc-extract"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "kc-index"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -620,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "kc-store"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -632,9 +632,10 @@ dependencies = [
 
 [[package]]
 name = "knowcode"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "dirs",
  "kc-extract",

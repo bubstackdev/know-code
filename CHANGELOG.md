@@ -2,6 +2,76 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
+## Unreleased
+
+## 0.6.1 (2026-10-28)
+
+0.6.0 was tagged but never published: its release build couldn't get a macOS runner. 0.6.1 is the first published 0.6
+release, so the 0.6.0 section below also describes what an update from 0.5.1 brings. The fix for outside-workspace links
+that 0.6.0's notes planned for 0.6.1 moves to the next release; 0.6.1 carries the review's security, bug and performance
+fixes.
+
+- Restricted mode keeps to its bound repos and ops on every path. A repo is checked against the bound ones wherever an
+  op opens it, so a path relative to the server's directory, a cursor or a dependency can no longer reach another
+  repo; a bound repo's name always means the bound repo, even with a directory of that name under the server's
+  current directory; and `more` continues only a cursor of an op the server runs.
+- Cursors are signed. `more` takes only a cursor this KnowCode made (signed with a random key kept in the cache
+  directory as `cursor.key`), with its page and offsets bounded; any other is refused as `invalid_argument`. Cursors
+  made before this release are refused: ask the original question again.
+- Git runs the same way whatever a repo's own config or the inherited environment says. Every git command KnowCode
+  starts turns off the file system monitor and hooks and refuses the `ext::` transport, so a repo's `.git/config`
+  can't name a command for git to run while KnowCode indexes or answers about it. `GIT_DIR`, `GIT_WORK_TREE` and
+  config passed in the environment (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its keys) are no longer inherited,
+  so git always reads the repo asked about.
+- YAML files are read within limits. A YAML file over 2 MiB is not read, nor one whose aliases stand for more than
+  100,000 nodes in all (each alias counted as the size of its anchor's node), so a small file of nested aliases can no
+  longer exhaust memory while a repo is indexed. Anchors and aliases as GitLab CI and compose files use them are read
+  as before. A privacy file past either limit is malformed: by default its repo is blocked whole until it is fixed.
+- A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` declared in `declare global`, nested
+  `Outer.Inner.Leaf`) links to the namespace's own declaration again, and `find` lists the namespace itself. 0.6 looks
+  a qualified type up in its qualifier, but namespaces weren't extracted, so these came out `unresolved`. A namespace is
+  now a `module` symbol spanning its declarations, and a name through it is the declaration whose innermost enclosing
+  namespace it is, never a same-named type outside it. A namespace the file imports is the one in the module it
+  imports it from, and one imported from a package is none of the repo's. TypeScript files are extracted again and references resolved
+  again on the first sync.
+- A .NET test's command in `test_targets` runs that one test: `--filter
+  'FullyQualifiedName=Shop.Tests.MathTests.Add|FullyQualifiedName~Shop.Tests.MathTests.Add\('`, the name with its
+  namespace exactly, or followed by the arguments NUnit names a parameterized case with. `FullyQualifiedName~` is a
+  substring match, so `MathTests.Add` also ran `MathTests.AddMany` and `MathTests.Add_Negative`.
+- A `package.json` test script's `line` is its key under `scripts`. It was the first line naming `"test"` anywhere in
+  the file, such as `"name": "test"` or `"keywords": ["test"]` above the scripts.
+- `knowcode index` over several repos no longer stops indexing the others while a new worktree waits for another
+  checkout to publish its commit's shared base. The list of checkouts to seed from was locked across the whole open of
+  a repo, wait included, so every other repo's thread waited at its own open.
+- A checkout that claimed its commit's shared base and then didn't build it lets the claim go: its first index failed
+  or panicked, its query read the index without syncing, or the derived data couldn't start. Until the process ended,
+  each new worktree of that commit opened elsewhere waited for a base no one would publish (up to 15 minutes), then
+  indexed from scratch anyway. Opening a checkout only to read it no longer claims its base at all.
+- A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
+  last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
+  device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
+  the new index's and a workspace query could keep that repo's summary from before the rebuild. The creation time is
+  now part of the file's identity.
+- `task` reads its repo's index once per page rather than hundreds of times over, and checks the repo against its
+  working tree once. It opens the repo five times (`locate`, `impact` for three files, `tests`); every open past the
+  first was given the small page cache meant for a workspace answer's other repos, and was checked again. On
+  apple/swift-argument-parser (285 files) three goals took 349,478, 215,267 and 438,423 page reads and now take 3,133,
+  2,960 and 3,561, and 3,583 to 4,238 `stat` calls, now 2,553 to 3,206. The answers are the same bytes. A query's
+  first repo now keeps its full page cache however often it is opened; other repos' are held smaller as before.
+- `impact` reads the workspace's repo summaries once per call rather than once per symbol, and checks each repo for
+  changes once. Each read lists the cache and `stat`s every indexed repo, so the cost grew with the symbols in scope
+  times the repos indexed. On apple/swift-argument-parser, `impact --file` on a file of 53 symbols listed the cache 84
+  times and made 1,614 `stat` calls; it now lists it 10 times and makes 289. `task`, which runs `impact` on three
+  files, went from 195 listings to 27 and from 3,175 `stat` calls to 1,324. The answers are the same bytes. `tests`
+  and `task` check each repo for changes once too.
+- `test-targets` reads a repo's test functions from its index once for all its targets, and gives each `package.json`
+  its test files in one pass over the repo's files. Each SwiftPM target and .NET test project read every symbol of the
+  repo again, and each package filtered every file. Counted in instructions, MassTransit/MassTransit (25 test
+  projects) went from 390.4 million to 277.3 million, babel/babel from 193.3 million to 178.5 million, vuejs/core from
+  73.7 million to 71.4 million; the answers are the same bytes.
+- Release builds for Apple-silicon macOS run on GitHub's `macos-14` runners, and a release tag builds only from a
+  commit on `main` whose own CI run passed.
+
 ## 0.6.0 (2026-10-28)
 
 0.6 is about four things: references that name the declaration the compiler would, a server other tools can drive,

@@ -111,7 +111,7 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(config::cache_dir()?.0)
 }
 
-pub use git::repo_root;
+pub use git::{command as git_command, repo_root};
 
 /// A full rediscovery is forced at least this often, as a backstop for changes the cheap check can't see (a file
 /// added to a directory that held no listed files).
@@ -132,8 +132,17 @@ pub fn db_path(root: &Path) -> Result<PathBuf> {
 }
 
 /// Opens (creating if needed) the index for a repo root and records the root in it.
+///
+/// Builds no shared base: a claim the open took on building one (see [`base::wait_or_claim`]) is let go of at once.
+/// A caller that goes on to sync the index, and publish its base, opens it with [`open_claiming`].
 pub fn open(root: &Path) -> Result<Store> {
-    open_with(root, None).map(|(store, _)| store)
+    open_with(root, None).map(|(store, _, _)| store)
+}
+
+/// [`open`], keeping the claim the open took on building the checkout's shared base, if it took one: let go of when
+/// it is dropped, or by [`base::publish`].
+pub fn open_claiming(root: &Path) -> Result<(Store, Option<base::Claim>)> {
+    open_with(root, None).map(|(store, _, claim)| (store, claim))
 }
 
 /// Opens an index with an eviction lease. Summary reads do not recreate an index removed since discovery.
@@ -148,14 +157,18 @@ pub(crate) fn open_index(db: &Path, create: bool) -> Result<Store> {
 /// [`open`] reads them from the workspace summary, which it refreshes, each time it seeds an index. Indexing many
 /// repos in one run loads them once and adds each repo as it is indexed instead: refreshing the summary for every
 /// new repo rewrote it whole each time, which took most of the run's time and memory over a few hundred repos.
+///
+/// Shared by the threads of one run. Locked only to read or add a checkout, never while a repo is opened: opening a new
+/// checkout may wait for another process, or thread, to publish the base it starts from (see
+/// [`base::wait_or_claim`]), and the other repos' threads must not wait with it.
 #[derive(Default)]
 pub struct Seeds {
     /// Loaded when the first new index is seeded: one cloned from a shared base (see [`base`]) needs none.
-    checkouts: Option<Vec<(String, PathBuf, i64)>>,
+    checkouts: std::sync::Mutex<Option<Vec<(String, PathBuf, i64)>>>,
 }
 
 /// Where [`open_with`] finds the checkouts to seed from, loading them on first need.
-type Checkouts<'a> = Option<&'a mut Option<Vec<(String, PathBuf, i64)>>>;
+type Checkouts<'a> = Option<&'a std::sync::Mutex<Option<Vec<(String, PathBuf, i64)>>>>;
 
 impl Seeds {
     fn load() -> Vec<(String, PathBuf, i64)> {
@@ -164,21 +177,24 @@ impl Seeds {
 
     /// [`open`], seeding a new index from these checkouts. A new index's repo becomes a candidate for the repos opened
     /// after it.
-    pub fn open(&mut self, root: &Path) -> Result<Store> {
-        let (store, origin) = open_with(root, Some(&mut self.checkouts))?;
-        if let (Some(origin), Some(checkouts)) = (origin, self.checkouts.as_mut()) {
+    pub fn open(&self, root: &Path) -> Result<(Store, Option<base::Claim>)> {
+        let (store, origin, claim) = open_with(root, Some(&self.checkouts))?;
+        if let (Some(origin), Some(checkouts)) = (origin, self.checkouts.lock().unwrap_or_else(|e| e.into_inner()).as_mut()) {
             checkouts.retain(|(_, r, _)| r != root);
             checkouts.push((origin, root.to_path_buf(), now_nanos() as i64));
         }
-        Ok(store)
+        Ok((store, claim))
     }
 }
 
 /// [`open`], seeding from `checkouts` (loaded from the workspace summary when first needed). Returns the repo's normalized
-/// origin when it was looked up, which is only for a new seeded index.
-fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>)> {
+/// origin when it was looked up, which is only for a new seeded index, and the claim on building the checkout's base
+/// this open took (see [`base::wait_or_claim`]).
+fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>, Option<base::Claim>)> {
     // A cancelled operation (see `kc_store::limits`) opens no further repo: a workspace query stops here.
     kc_store::limits::check()?;
+    // A restricted server's process opens only the repos it is bound to.
+    config::check_bound(root)?;
     let db = db_path(root)?;
     // Schema creation, migration and seeding are writers too. Opening a current index remains independent of
     // the indexing lease, so readers can use their committed WAL snapshot while a sync is running.
@@ -204,6 +220,9 @@ fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>
         }
     }
     let mut origin = None;
+    // A claim held before this open is another caller's to let go of.
+    let held = base::holds(root);
+    let mut claim = None;
     if !db.exists() && !privacy.whole() {
         // Best effort: a clone of the nearest base made under the same policy (see [`base`]), else a seed. Without
         // one, a checkout of a commit another process is building a base for waits for it.
@@ -212,6 +231,9 @@ fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>
             None if base::wait_or_claim(root)? == base::Turn::Waited => base::clone_into(root, &db, &key),
             None => Ok(None),
         });
+        if !held {
+            claim = base::Claim::adopt(root);
+        }
         if let Err(e) = cloned {
             eprintln!("knowcode: {}: not started from a shared base: {e:#}", root.display());
         }
@@ -235,7 +257,7 @@ fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>
     store.begin_snapshot()?;
     cache::touch(root, &db);
     drop(writer);
-    Ok((store, origin))
+    Ok((store, origin, claim))
 }
 
 /// Starts a new checkout's index from a copy of another checkout's of the same repo (same `origin`: a worktree, a
@@ -247,9 +269,11 @@ fn open_with(root: &Path, checkouts: Checkouts) -> Result<(Store, Option<String>
 fn seed(root: &Path, db: &Path, checkouts: Checkouts) -> Result<Option<String>> {
     let out = git::run(root, &["config", "--get", "remote.origin.url"])?;
     let Some(origin) = workspace::normalize_remote(String::from_utf8_lossy(&out).trim()) else { return Ok(None) };
-    let mut local = None;
-    let cell = checkouts.unwrap_or(&mut local);
-    let checkouts: &[(String, PathBuf, i64)] = cell.get_or_insert_with(Seeds::load);
+    let local = std::sync::Mutex::new(None);
+    let checkouts: Vec<(String, PathBuf, i64)> = {
+        let mut cell = checkouts.unwrap_or(&local).lock().unwrap_or_else(|e| e.into_inner());
+        cell.get_or_insert_with(Seeds::load).iter().filter(|(o, r, _)| *o == origin && r != root).cloned().collect()
+    };
     // The checkout a worktree was made from shares its git directory and usually its files: the best seed. Otherwise
     // the most recently indexed checkout of the repo.
     let common = |dir: &Path| git::run(dir, &["rev-parse", "--git-common-dir"]).ok().map(|o| dir.join(String::from_utf8_lossy(&o).trim())).and_then(|p| std::fs::canonicalize(p).ok());
@@ -333,7 +357,7 @@ pub fn prune() -> Result<Vec<PathBuf>> {
 /// without, every repo with an index in the cache. An index whose checkout is gone (until [`prune`]) is no repo of
 /// the workspace: a workspace-wide answer has nothing there to read.
 pub fn indexed_roots() -> Result<Vec<PathBuf>> {
-    Ok(workspace::summaries(&[])?.iter().filter(|s| !s.blocked.whole && !s.gone).map(|s| s.root.clone()).collect())
+    Ok(workspace::summaries(&[])?.iter().filter(|s| !s.blocked.whole && !s.gone && config::check_bound(&s.root).is_ok()).map(|s| s.root.clone()).collect())
 }
 
 /// Repos found under the workspace roots whose full index isn't built yet: no index (only discovered, or scanned for
@@ -343,7 +367,7 @@ pub fn indexed_roots() -> Result<Vec<PathBuf>> {
 pub fn unindexed_roots() -> Result<Vec<PathBuf>> {
     let mut roots: Vec<(u64, PathBuf)> = workspace::summaries(&[])?
         .iter()
-        .filter(|s| s.light && !s.blocked.whole && !s.gone)
+        .filter(|s| s.light && !s.blocked.whole && !s.gone && config::check_bound(&s.root).is_ok())
         .map(|s| (git_index_bytes(&s.root), s.root.clone()))
         .collect();
     roots.sort();
@@ -363,7 +387,8 @@ pub fn blocked_roots() -> Result<Vec<(PathBuf, privacy::Blocked)>> {
 
 /// Roots of every repo with an index in the cache, in the workspace or not.
 pub fn all_indexed_roots() -> Result<Vec<PathBuf>> {
-    Ok(workspace::all_summaries()?.iter().map(|s| s.root.clone()).collect())
+    // A bound process lists only its repos (see [`config::bind`]).
+    Ok(workspace::all_summaries()?.iter().map(|s| s.root.clone()).filter(|r| config::check_bound(r).is_ok()).collect())
 }
 
 /// Which of `roots` declares each package, by repo identity, from the workspace summary (see

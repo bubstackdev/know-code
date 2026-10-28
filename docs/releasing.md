@@ -33,8 +33,11 @@ dist plan --output-format=json --no-local-paths
 ```
 
 Use this wrapper instead of running `dist generate` directly. The generated
-release workflow calls the existing CI gates before builds and additionally
-requires their success and successful local/global builds at the publishing step.
+release workflow calls `release-gate.yml` before builds: it doesn't run CI again, but requires a passing `ci.yml` run
+on the tagged commit (the run from its push to main; one still running is waited for), and checks the Homebrew tap.
+A tagged commit whose CI failed, say on a flaky test, needs that run's failed jobs re-run (`gh run rerun --failed`),
+then the release workflow. The publishing step additionally requires the gate's success and successful local/global
+builds.
 That explicit condition prevents failed gates from being mistaken for intentionally skipped builds. The config's
 `allow-dirty = ["ci"]` exists solely to preserve this reviewed customization. The release workflow runs on release
 tags only (`pr-run-mode = "skip"`): pull requests are gated by `ci.yml`, whose `release-plan` job checks this
@@ -113,7 +116,8 @@ Add the release's entry to [CHANGELOG.md](../CHANGELOG.md) before tagging.
 
 A release ships on its release gate, measured with no model calls against the
 previous release and published with it under [`eval/release-gate/`](../eval/release-gate)
-([0.6.0](../eval/release-gate/0.6.0.md), [0.5.1](../eval/release-gate/0.5.1.md), [0.5.0](../eval/release-gate/0.5.0.md), [0.4.0](../eval/release-gate/0.4.0.md)): tool cost per turn, the
+([0.6.1](../eval/release-gate/0.6.1.md), [0.6.0](../eval/release-gate/0.6.0.md), [0.5.1](../eval/release-gate/0.5.1.md), [0.5.0](../eval/release-gate/0.5.0.md),
+[0.4.0](../eval/release-gate/0.4.0.md)): tool cost per turn, the
 [replay gate](../eval/replay-gate/README.md), the workspace gate, clean-machine
 acceptance ([first-run-acceptance.md](first-run-acceptance.md)) and the update
 from the previous release. From 0.6, it also includes the [identity gate](../eval/identity-v1/README.md):

@@ -158,6 +158,49 @@ pub fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
         .map_or(0, |d| d.as_nanos() as i64)
 }
 
+/// Settings every git call runs with, whatever the repo's own `.git/config` says. A repo KnowCode reads may come from
+/// anywhere (an archive unpacked with its `.git`, say), and its config could otherwise name a command for git to run:
+/// a file system monitor (`git status` runs it), a hook, or a transport (`ext::`, for a partial clone's lazy fetch).
+pub const SAFE_CONFIG: [&str; 6] = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.ext.allow=never"];
+
+/// Whether the inherited variable `name` would change what git reads, or which repo, from what the call names: the
+/// repo and work tree (`GIT_DIR`, `GIT_WORK_TREE`, and the object and index locations), and config given in the
+/// environment (`GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` with its `GIT_CONFIG_KEY_<n>` and
+/// `GIT_CONFIG_VALUE_<n>`). `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM` stay: they choose the
+/// user's own config files.
+fn redirects_git(name: &str) -> bool {
+    matches!(
+        name,
+        "GIT_DIR"
+            | "GIT_WORK_TREE"
+            | "GIT_COMMON_DIR"
+            | "GIT_INDEX_FILE"
+            | "GIT_OBJECT_DIRECTORY"
+            | "GIT_ALTERNATE_OBJECT_DIRECTORIES"
+            | "GIT_NAMESPACE"
+            | "GIT_CEILING_DIRECTORIES"
+            | "GIT_DISCOVERY_ACROSS_FILESYSTEM"
+            | "GIT_EXTERNAL_DIFF"
+            | "GIT_CONFIG"
+            | "GIT_CONFIG_PARAMETERS"
+            | "GIT_CONFIG_COUNT"
+    ) || name.starts_with("GIT_CONFIG_KEY_")
+        || name.starts_with("GIT_CONFIG_VALUE_")
+}
+
+/// A `git` command with [`SAFE_CONFIG`], and without the inherited variables that would point it elsewhere (see
+/// [`redirects_git`]). Every git KnowCode runs starts here.
+pub fn command() -> Command {
+    let mut cmd = Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name.to_str().is_some_and(redirects_git) {
+            cmd.env_remove(&name);
+        }
+    }
+    cmd.args(SAFE_CONFIG);
+    cmd
+}
+
 /// Runs `git` read-only in `dir` and returns its standard output, within the git deadline (see
 /// [`kc_store::limits`]): a command past it, or in a cancelled operation, is killed and fails with a
 /// [`kc_store::limits::Cut`], recorded for the answer to say it is incomplete.
@@ -186,7 +229,7 @@ pub fn run_with_input(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>
 /// (a query's time budget), and a walk stopped at either returns what it printed so far with the cut, which is
 /// recorded for the answer to say it is incomplete.
 pub fn run_walk_until(dir: &Path, args: &[&str], until: Option<std::time::Instant>) -> Result<(Vec<u8>, Option<kc_store::limits::Cut>)> {
-    let mut cmd = Command::new("git");
+    let mut cmd = command();
     cmd.args(WALK_MEMORY).arg("--no-optional-locks").arg("-C").arg(dir).args(args);
     let what = format!("git {}", args.first().copied().unwrap_or_default());
     let (out, cut) = kc_store::limits::output_until(cmd, kc_store::limits::Kind::Git, &what, until).context("running git")?;
@@ -197,7 +240,7 @@ pub fn run_walk_until(dir: &Path, args: &[&str], until: Option<std::time::Instan
 }
 
 fn run_inner(dir: &Path, config: &[&str], args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
-    let mut cmd = Command::new("git");
+    let mut cmd = command();
     // Read-only: `--no-optional-locks` keeps `git status` from refreshing and rewriting the repo's `.git/index`.
     cmd.args(config).arg("--no-optional-locks").arg("-C").arg(dir).args(args);
     let what = format!("git {}", args.first().copied().unwrap_or_default());
@@ -300,6 +343,18 @@ mod tests {
         assert_eq!(walk, run(&root, &args).unwrap());
         assert!(String::from_utf8_lossy(&walk).contains("old.txt => new.txt"), "{}", String::from_utf8_lossy(&walk));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn git_runs_without_variables_that_point_it_elsewhere() {
+        for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] {
+            assert!(redirects_git(name), "{name}");
+        }
+        for name in ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_NO_LAZY_FETCH", "GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT", "HOME"] {
+            assert!(!redirects_git(name), "{name}");
+        }
+        let args: Vec<String> = command().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, SAFE_CONFIG);
     }
 
     #[test]

@@ -135,6 +135,18 @@ impl Restriction {
             return Err(Refusal::new(Code::NotAllowed, format!("op {} is not allowed by this server; it runs {}", tool.trim_start_matches("kc_"), ops.join(", "))));
         }
         let Some(args) = args else { return Ok(()) };
+        // A cursor continues another op's answer: that op must be allowed too.
+        if tool == "kc_more" {
+            let cursor = args.get("cursor").or_else(|| args.get("q")).and_then(Value::as_str).unwrap_or("");
+            let full = crate::compact::resolve(cursor).map_err(|e| Refusal::new(Code::InvalidArgument, e))?;
+            let of = crate::cursor::tool_of(&full).map_err(|e| match e.downcast::<Refusal>() {
+                Ok(r) => r,
+                Err(e) => Refusal::new(Code::InvalidArgument, format!("{e:#}")),
+            })?;
+            if !self.allows(of) {
+                return Err(Refusal::new(Code::NotAllowed, format!("the cursor continues op {}, which this server doesn't run", of.trim_start_matches("kc_"))));
+            }
+        }
         let mut repos: Vec<&str> = args.get("repo").and_then(Value::as_str).into_iter().collect();
         repos.extend(args.get("repos").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str));
         for r in repos {
@@ -164,6 +176,23 @@ impl Restriction {
             }
         }
         Ok(())
+    }
+
+    /// Names each `repo` (and `repos`) argument [`check`](Self::check) let through by its bound repo's path, so a name
+    /// is never read as a path relative to the current directory, where another repo of that name may be.
+    pub fn resolve(&self, args: Option<&mut serde_json::Map<String, Value>>) {
+        let Some(args) = args else { return };
+        let path = |v: &mut Value| {
+            if let Some(r) = v.as_str().and_then(|n| self.repo(n)) {
+                *v = Value::from(r.to_string_lossy().into_owned());
+            }
+        };
+        if let Some(v) = args.get_mut("repo") {
+            path(v);
+        }
+        if let Some(Value::Array(a)) = args.get_mut("repos") {
+            a.iter_mut().for_each(path);
+        }
     }
 
     fn names(&self) -> Vec<String> {

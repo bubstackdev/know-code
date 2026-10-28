@@ -21,6 +21,7 @@ mod tsconfig;
 mod typescript;
 
 pub use manifest::implicit_usings;
+pub use yaml::{MAX_BYTES as YAML_MAX_BYTES, check as check_yaml};
 pub use typescript::{action_name, api_tag, is_minified};
 pub mod types;
 pub mod urls;

@@ -485,6 +485,25 @@ impl Modules {
         Ok(self.imported(conn, file, local)?.map(|b| b.module))
     }
 
+    /// Where the qualifier `q` of a type named in `file` (`JSX`, `HonoJSX.Inner`) is declared when its first name is
+    /// imported: `Some(Some((file, q)))` for a repo file, with `q` as that file names it (an alias undone, a namespace
+    /// import's own name dropped), `Some(None)` for a package or a module the index can't place. `None` when `file`
+    /// imports no such name: the namespace is the file's own or a global one.
+    pub(crate) fn qualifier_source(&mut self, conn: &Connection, file: &str, q: &str) -> Result<Option<Option<(String, String)>>> {
+        let (head, rest) = q.split_once('.').map_or((q, None), |(h, r)| (h, Some(r)));
+        let Some(b) = self.imported(conn, file, head)? else { return Ok(None) };
+        let inner = match (b.name.as_str(), rest) {
+            ("*", Some(rest)) => rest.to_string(),
+            ("*", None) => return Ok(Some(None)),
+            (name, Some(rest)) => format!("{name}.{rest}"),
+            (name, None) => name.to_string(),
+        };
+        Ok(Some(match self.origin(conn, file, &b.module)? {
+            Origin::File(f) | Origin::Guess(f) => Some((f, inner)),
+            _ => None,
+        }))
+    }
+
     /// Whether `file` imports the type `ty` from a package outside the repo.
     /// Whether code in the TypeScript `file` can name the repo's top-level declaration `name`: the file declares it,
     /// imports or re-exports it, or the repo declares it in a script (a file with no import or export, whose declarations are

@@ -20,16 +20,19 @@ def gate(text: str) -> str:
     text = text.replace(build, wrapped)
     anchor = "  host:\n    needs:\n      - plan\n"
     assert text.count(anchor) == 1, "cargo-dist host layout changed; review the publishing gate"
-    if anchor + "      - custom-ci\n" not in text:
-        text = text.replace(anchor, anchor + "      - custom-ci\n", 1)
+    if anchor + "      - custom-release-gate\n" not in text:
+        text = text.replace(anchor, anchor + "      - custom-release-gate\n", 1)
     old = "if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}"
-    new = "if: ${{ always() && needs.plan.result == 'success' && needs.custom-ci.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-global-artifacts.result == 'success' && needs.build-local-artifacts.result == 'success' }}"
+    new = "if: ${{ always() && needs.plan.result == 'success' && needs.custom-release-gate.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-global-artifacts.result == 'success' && needs.build-local-artifacts.result == 'success' }}"
     if new not in text:
         assert text.count(old) == 1, "cargo-dist publishing condition changed; review it"
         text = text.replace(old, new, 1)
+    # The gate (release-gate.yml) reads the tagged commit's ci.yml runs: its job may read Actions, and nothing more.
+    gate_job = "  custom-release-gate:\n    uses: ./.github/workflows/release-gate.yml\n"
+    text = replace(text, gate_job, gate_job.replace("    uses:", '    permissions:\n      "actions": "read"\n      "contents": "read"\n    uses:'), "release gate")
     text = harden(text)
-    # Pull requests are gated by ci.yml alone (pr-run-mode = "skip"); the release workflow runs on tag pushes only, so
-    # its full CI call and macOS builds never queue behind, or ahead of, a pull request.
+    # Pull requests are gated by ci.yml alone (pr-run-mode = "skip"); the release workflow runs on tag pushes only, and
+    # doesn't run CI again: release-gate.yml requires ci.yml to have passed on the tagged commit.
     assert "\n  pull_request:\n" not in text, "release.yml runs on pull requests; keep pr-run-mode = \"skip\""
     note = "# Regenerate with scripts/generate-release.py; it adds the required successful-test gate on host.\n"
     if not text.startswith(note):
