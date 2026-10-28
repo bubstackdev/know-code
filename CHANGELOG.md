@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# extension method called on a value took the value as one of the call's arguments, as if called through its
+  class: `items.FirstOrDefault(i => …)` linked to a repo's `FirstOrDefault<T>(this IReadOnlyList<T>)`, which takes no
+  argument besides its receiver, and `Expression.Not(x)` to a repo's `Not<T>(this Expression<…>)`. Such a call is
+  LINQ's or the framework's: `unresolved`. Called through its class (`Lists.FirstOrDefault(xs)`) or unqualified, the
+  receiver is still the first argument.
 - A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
   where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
   `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside

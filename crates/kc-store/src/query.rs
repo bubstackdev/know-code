@@ -550,6 +550,21 @@ impl Def {
         let fits = |n: u32| n >= min && self.max_args.is_none_or(|m| n <= m);
         fits(args) || (self.extension && args > 0 && fits(args - 1))
     }
+
+    /// [`Def::accepts`] for call `hit`: an extension method takes its receiver as an argument only when called as a
+    /// static method, unqualified or through its declaring class (`Sequences.FirstOrDefault(xs)`). Called on a value
+    /// (`xs.FirstOrDefault(p)`, `Expression.Not(x)` on another type), the receiver is no argument.
+    fn accepts_call(&self, hit: &RefHit, args: u32) -> bool {
+        let as_static = match hit.receiver.as_deref() {
+            None => true,
+            Some(r) => self.declaring.as_deref().is_some_and(|c| last_segment(c) == last_segment(r)),
+        };
+        if self.extension && !as_static {
+            let Some(min) = self.min_args else { return true };
+            return args >= min && self.max_args.is_none_or(|m| args <= m);
+        }
+        self.accepts(args)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2092,7 +2107,7 @@ fn takes_none(hit: &RefHit, named: &[Def], ids: &[i64]) -> bool {
     if hit.file.ends_with(".cs")
         && let Some(n) = hit.args
     {
-        return callable.iter().all(|d| d.min_args.is_some() && !d.accepts(n));
+        return callable.iter().all(|d| d.min_args.is_some() && !d.accepts_call(hit, n));
     }
     false
 }
@@ -2245,7 +2260,7 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
     if hit.kind == "call"
         && let Some(n) = hit.args
     {
-        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
+        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts_call(hit, n)).collect();
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {

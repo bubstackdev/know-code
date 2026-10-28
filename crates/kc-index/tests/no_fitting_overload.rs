@@ -81,3 +81,31 @@ fn a_call_some_overload_takes_stays_linked() {
     assert!(checks.iter().any(|(at, c, _)| at == "src/Check.cs:13" && *c != "unresolved"), "{checks:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// An extension method called on a value takes its receiver as `this`, not as an argument: `xs.FirstOrDefault(p)`
+/// passes one argument to a `FirstOrDefault` taking none (LINQ's), and `Expression.Not(x)` on the framework's
+/// `Expression` class is no call of a repo extension of `Expression<T>`. Called as a static method, through its class,
+/// the receiver is the first argument.
+#[test]
+fn an_extension_called_on_a_value_takes_no_receiver_argument() {
+    let root = scratch("extension-receiver-fit");
+    write(
+        &root,
+        "src/Lists.cs",
+        "using System;\nusing System.Collections.Generic;\nusing System.Linq.Expressions;\nnamespace Shop;\npublic static class Lists\n{\n    public static T? FirstOrDefault<T>(this IReadOnlyList<T>? source) => default;\n    public static Expression<Func<T, bool>> Not<T>(this Expression<Func<T, bool>> p) => p;\n}\n",
+    );
+    write(
+        &root,
+        "src/Shelf.cs",
+        "using System.Linq.Expressions;\nnamespace Shop;\npublic class Shelf\n{\n    public string[] Tags = new string[0];\n    public string? First() => Tags.FirstOrDefault();\n    public string? Match() => Tags.FirstOrDefault(t => t.Length > 1);\n    public string? Static() => Lists.FirstOrDefault(Tags);\n    public Expression Negate(Expression e) => Expression.Not(e);\n}\n",
+    );
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let firsts = calls(&store, "FirstOrDefault");
+    assert!(firsts.iter().any(|(at, c, n)| at == "src/Shelf.cs:6" && *c != "unresolved" && *n == 1), "{firsts:?}");
+    assert!(firsts.contains(&("src/Shelf.cs:7".to_string(), "unresolved", 0)), "{firsts:?}");
+    assert!(firsts.iter().any(|(at, c, n)| at == "src/Shelf.cs:8" && *c != "unresolved" && *n == 1), "{firsts:?}");
+    let nots = calls(&store, "Not");
+    assert!(nots.contains(&("src/Shelf.cs:9".to_string(), "unresolved", 0)), "{nots:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
