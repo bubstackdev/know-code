@@ -538,6 +538,8 @@ struct Def {
     swift_params: Option<Vec<SwiftParam>>,
     /// Declared `export` (TypeScript): at a module's top level.
     exported: bool,
+    /// Declared `private` or `fileprivate` (Swift): named only in its own file.
+    file_private: bool,
 }
 
 impl Def {
@@ -667,7 +669,8 @@ pub const UNPLACED_MODULE: &str = "tsconfig maps the import to no indexed file";
 /// [`RefHit::basis`]: several dependencies the file imports declare the name, and the import doesn't say which.
 pub const AMBIGUOUS_DEPENDENCY: &str = "several imported dependencies declare it";
 /// [`RefHit::basis`]: the target is a protocol requirement the receiver's type satisfies with a member of its own that
-/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`).
+/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`). The row is `external_likely`, the requirement
+/// listed as its target.
 pub const VIA_PROTOCOL: &str = "via protocol: the receiver's type satisfies this requirement outside the repo";
 
 impl RefHit {
@@ -2756,7 +2759,8 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
      CASE WHEN f.lang = 'csharp' THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
-     s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %'";
+     s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
+     f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %')";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2779,6 +2783,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         partial: r.get(15)?,
         swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
         exported: r.get(17)?,
+        file_private: r.get(18)?,
     })
 }
 
@@ -5020,6 +5025,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => usable,
             };
+            // A Swift `private` or `fileprivate` declaration is named only in its own file.
+            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
             resolve(hit, &recv, &self_chains[&caller], &usable)
         };
         // How an exact answer was reached, recorded where it is decided.
@@ -5100,7 +5107,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
+                // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);
+                confidence = "external_likely";
             } else {
                 // The library type conforms in a module this code neither is in nor imports: the call is the
                 // library type's own member, never the requirement.

@@ -847,6 +847,15 @@ pub struct MoreParams {
     pub max_chars: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TestTargetsParams {
+    /// Only the targets of this name (a SwiftPM target, a .NET project, a script); none: every one.
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct CapabilitiesParams {
     /// One op (`impact`) or tool (`kc_impact`) to describe; none: every op.
@@ -924,6 +933,7 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("status", "", ""),
     ("capabilities", "of", ""),
     ("task", "goal", ""),
+    ("test_targets", "name", ""),
 ];
 
 /// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
@@ -1145,6 +1155,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_status", &[]),
     ("kc_capabilities", &[("of", "")]),
     ("kc_task", &[("goal", "")]),
+    ("kc_test_targets", &[("name", "")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -1179,7 +1190,7 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
 
 /// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
 /// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
-pub const ON_REQUEST: &[&str] = &["kc_capabilities"];
+pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -2996,6 +3007,7 @@ impl KnowcodeServer {
             "kc_grep_ast" => self.kc_grep_ast(a(t, args)?).await,
             "kc_status" => self.kc_status(a(t, args)?).await,
             "kc_task" => self.kc_task(a(t, args)?).await,
+            "kc_test_targets" => self.kc_test_targets(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
         out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
@@ -3005,6 +3017,16 @@ impl KnowcodeServer {
     async fn kc_capabilities(&self, Parameters(p): Parameters<CapabilitiesParams>) -> Result<String, ToolError> {
         let doc = crate::capabilities::document(&self.surface(), p.of.as_deref())?;
         Ok(serde_json::to_string(&doc).unwrap_or_default())
+    }
+
+    #[tool(description = "Declared test targets (SwiftPM, .NET test projects, package.json test scripts): their tests and how to run them.")]
+    async fn kc_test_targets(&self, Parameters(p): Parameters<TestTargetsParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        run(p.common.max_chars, move || {
+            let what = "no declared test target: no SwiftPM test target, .NET test project or package.json test script".to_string();
+            Ok(explain(ops::test_targets(p.name.as_deref(), &scope)?.env, &what, ""))
+        })
+        .await
     }
 
     #[tool(description = "Index status: coverage, parse errors, freshness, config, SCIP.")]
@@ -3452,6 +3474,7 @@ mod tests {
             "kc_status" => as_::<RepoOnlyParams>(args),
             "kc_capabilities" => as_::<CapabilitiesParams>(args),
             "kc_task" => as_::<TaskParams>(args),
+            "kc_test_targets" => as_::<TestTargetsParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -3463,7 +3486,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all,kc_capabilities");
+        let s = server("all,kc_capabilities,kc_test_targets");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -3506,7 +3529,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all,kc_capabilities");
+        let s = server("all,kc_capabilities,kc_test_targets");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
