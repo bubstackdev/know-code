@@ -804,6 +804,23 @@ otherwise kc_locate, kc_context, kc_impact and kc_tests are joined by hand. Four
 `files`, `dependents` and `tests`."#,
     },
     Topic {
+        name: "kc_test_targets",
+        summary: "declared test targets with their tests and how to run them",
+        text: r#"The test targets a repo's manifests declare, each with its tests and the command to run it, and each test's:
+
+- SwiftPM test targets (`.testTarget` in `Package.swift`): the tests (XCTest and Swift Testing) under `Tests/<target>/`,
+  `swift test --filter`.
+- .NET test projects (a project referencing a test SDK or framework: `Microsoft.NET.Test.Sdk`, `MSTest.Sdk`, xUnit,
+  NUnit, …): the test methods under the project's directory, `dotnet test <project>` and `--filter
+  FullyQualifiedName~Class.Method`.
+- `package.json` test scripts (`test`, `test:…`): the package's test files (`*.test.*`, `*.spec.*`, `__tests__/`),
+  run with the package manager its lockfile names.
+
+Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
+200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change
+needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; the `kc` op is `test_targets`."#,
+    },
+    Topic {
         name: "kc_capabilities",
         summary: "every op as data, for a client building its tool surface",
         text: r#"Every op as JSON, for a client that builds its own tool surface instead of copying this help: read from the

@@ -175,6 +175,7 @@ const QUESTIONS: &[&[&str]] = &[
     &["coupled", "src/helpers.py", "--since", "all"],
     &["tests", "src/helpers.py"],
     &["tests", "--diff", "HEAD~2"],
+    &["test-targets"],
     &["hotspots"],
     &["hotspots", "src/helpers.py"],
     &["ownership"],

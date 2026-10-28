@@ -6652,6 +6652,52 @@ fn is_repo_file(conn: &rusqlite::Connection, rel: &str) -> Result<bool> {
 
 /// Files that historically change in the same commits as `file`, ranked by shared commits, then recency. `file`
 /// may be any file of the repo, indexed or not: co-change needs only its history.
+/// A repo's declared test targets.
+pub type RepoTestTargets = (PathBuf, Vec<kc_index::test_targets::TestTarget>);
+
+/// The declared test targets of the selected repos (see [`kc_index::test_targets`]): SwiftPM test targets, .NET test
+/// projects and `package.json` test scripts, each with its tests and the commands to run them; `name` keeps the
+/// targets of that name. Declared, not ranked: which tests a change needs is [`tests`].
+pub fn test_targets(name: Option<&str>, args: &Scope) -> Result<Out<Vec<RepoTestTargets>>> {
+    let roots = target_repos(&args.repos)?;
+    let mut opened = Vec::new();
+    let mut data = Vec::new();
+    for root in &roots {
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
+        let mut targets = kc_index::test_targets::list(root, &o.store)?;
+        if let Some(n) = name.filter(|n| !n.is_empty()) {
+            targets.retain(|t| t.name.eq_ignore_ascii_case(n));
+        }
+        data.push((root.clone(), targets));
+        opened.push(o);
+    }
+    let many = data.len() > 1;
+    let items: Vec<Value> = data
+        .iter()
+        .flat_map(|(root, ts)| {
+            ts.iter().map(move |t| {
+                let mut v = json!(t);
+                if many {
+                    v["repo"] = json!(repo_name(root));
+                }
+                v
+            })
+        })
+        .collect();
+    let total = items.len();
+    let mut env = envelope(&opened, Value::Array(items), total, total);
+    for (_, ts) in &data {
+        for t in ts.iter().filter(|t| t.tests_total > t.tests.len()) {
+            push_incomplete(
+                &mut env,
+                Incomplete::new(Reason::Capped, format!("tests of {}: {} of {} listed", t.name, t.tests.len(), t.tests_total))
+                    .with_hint(format!("its command runs them all: {}", t.command)),
+            );
+        }
+    }
+    Ok(Out { env, data })
+}
+
 pub fn coupled(file: &str, limit: usize, span: &vitals::Span, args: &Scope) -> Result<Out<Vec<CoupledRepo>>> {
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
