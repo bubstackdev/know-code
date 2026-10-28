@@ -136,6 +136,7 @@ pub enum FileState {
 /// isn't the format.
 pub fn parse(text: &str, format: &Format) -> Result<Option<Levels>, String> {
     let Format { global_key: global, rules_key: rules, path_key: path_k, level_key: level_k, .. } = format;
+    kc_extract::check_yaml(text).map_err(|e| format!("not read: {e}"))?;
     let docs = YamlLoader::load_from_str(text).map_err(|e| format!("not valid YAML: {e}"))?;
     let doc = match docs.as_slice() {
         [] | [Yaml::Null] => return Ok(None),
@@ -242,6 +243,7 @@ impl Privacy {
         let text = match std::fs::symlink_metadata(&path) {
             Err(_) => None,
             Ok(m) if m.is_symlink() || !m.is_file() => Some(Err("not a regular file".to_string())),
+            Ok(m) if m.len() > kc_extract::YAML_MAX_BYTES as u64 => Some(Err(format!("not read: larger than {} MiB", kc_extract::YAML_MAX_BYTES >> 20))),
             Ok(_) => Some(std::fs::read(&path).map_err(|e| format!("unreadable: {e}")).map(|b| String::from_utf8_lossy(&b).into_owned())),
         };
         let p = Privacy::from_text(text, &format, block_at, malformed);
@@ -427,6 +429,21 @@ mod tests {
         assert_eq!(parse("").unwrap(), None);
         assert_eq!(parse("# nothing here\n").unwrap(), None);
         assert_eq!(parse("rules:\n").unwrap().unwrap().global, DEFAULT_LEVEL);
+    }
+
+    #[test]
+    fn a_file_whose_aliases_stand_for_too_much_is_malformed() {
+        // Nested anchors, each ten aliases of the one before: 10^7 nodes in a few hundred bytes.
+        let mut text = String::from("level: 3\nx0: &x0 [a, a, a, a, a, a, a, a, a, a]\n");
+        for i in 1..7 {
+            text.push_str(&format!("x{i}: &x{i} [{}]\n", vec![format!("*x{}", i - 1); 10].join(", ")));
+        }
+        let p = policy(&text, 1);
+        let FileState::Malformed { error } = &p.state else { panic!("{:?}", p.state) };
+        assert!(error.contains("aliases"), "{error}");
+        assert!(p.whole());
+        // An anchor used once is read.
+        assert_eq!(parse("level: &l 2\nrules:\n  - path: keys/\n    level: *l\n").unwrap().unwrap().rules[0].level, 2);
     }
 
     #[test]

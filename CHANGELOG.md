@@ -15,6 +15,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   apple/swift-argument-parser (285 files) three goals took 349,478, 215,267 and 438,423 page reads and now take 3,133,
   2,960 and 3,561, and 3,583 to 4,238 `stat` calls, now 2,553 to 3,206. The answers are the same bytes. A query's
   first repo now keeps its full page cache however often it is opened; other repos' are held smaller as before.
+- YAML files are read within limits. A YAML file over 2 MiB is not read, nor one whose aliases stand for more than
+  100,000 nodes in all (each alias counted as the size of its anchor's node), so a small file of nested aliases can no
+  longer exhaust memory while a repo is indexed. Anchors and aliases as GitLab CI and compose files use them are read
+  as before. A privacy file past either limit is malformed: by default its repo is blocked whole until it is fixed.
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
