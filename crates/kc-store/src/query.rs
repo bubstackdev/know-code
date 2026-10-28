@@ -536,6 +536,8 @@ struct Def {
     partial: bool,
     /// A Swift function's parameters, read from its signature; `None` elsewhere, or when the signature was cut.
     swift_params: Option<Vec<SwiftParam>>,
+    /// A Swift function declared `async` (or `reasync`).
+    is_async: bool,
     /// Declared `export` (TypeScript): at a module's top level.
     exported: bool,
 }
@@ -2161,6 +2163,20 @@ fn type_like(receiver: &str) -> bool {
 /// A call's overloads are first narrowed to those taking as many arguments as it passes; when that leaves nothing to
 /// point to, all of them are considered.
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
+    // An awaited Swift call is made in an async context, where Swift prefers an `async` overload (a protocol
+    // extension's `async` member over the class's own synchronous one): when some candidate is `async`, only those.
+    let awaited: Vec<&Def>;
+    let defs = if hit.kind == "call"
+        && hit.file.ends_with(".swift")
+        && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| c.a)
+        && defs.iter().any(|d| d.is_async)
+        && defs.iter().any(|d| !d.is_async)
+    {
+        awaited = defs.iter().copied().filter(|d| d.is_async).collect();
+        &awaited[..]
+    } else {
+        defs
+    };
     let all: Vec<&Def> = defs.to_vec();
     // A Swift call's argument labels rule out the overloads it can't call.
     if hit.kind == "call"
@@ -2757,8 +2773,41 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         line: r.get(14)?,
         partial: r.get(15)?,
         swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
+        is_async: r.get::<_, Option<String>>(16)?.as_deref().is_some_and(swift_async),
         exported: r.get(17)?,
     })
+}
+
+/// Whether a Swift function's signature declares it `async` (or `reasync`): the effects after its parameter list,
+/// not a closure parameter's (`_ body: () async -> Void`).
+fn swift_async(signature: &str) -> bool {
+    let Some(at) = signature.find("func ") else { return false };
+    let after = &signature[at + 5..];
+    let mut depth = 0i32;
+    let Some(open) = after.char_indices().find_map(|(i, c)| {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            '(' if depth == 0 => return Some(i),
+            _ => {}
+        }
+        None
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    let Some(close) = after[open..].char_indices().find_map(|(i, c)| {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(open + i)
+    }) else {
+        return false;
+    };
+    let effects = after[close + 1..].split("->").next().unwrap_or("");
+    effects.split_whitespace().any(|w| w == "async" || w == "reasync")
 }
 
 /// A Swift function's parameter, as its signature declares it: what a call has to write for it.
@@ -2849,6 +2898,9 @@ fn swift_params(signature: &str) -> Option<Vec<SwiftParam>> {
 struct SwiftCall {
     l: Vec<Option<String>>,
     t: Vec<Option<String>>,
+    /// Awaited (`await f(…)`): in an async context, where Swift prefers an `async` overload.
+    #[serde(default)]
+    a: bool,
 }
 
 impl SwiftCall {
@@ -7119,6 +7171,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn swift_async_is_the_functions_own_effect() {
+        assert!(swift_async("func option(_ k: Int) async throws -> Int"));
+        assert!(swift_async("public func map<T>(_ f: (Element) async throws -> T) reasync rethrows -> [T]"));
+        assert!(!swift_async("func run(_ body: () async -> Void) -> Int"));
+        assert!(!swift_async("func option(_ k: Int) -> EventLoopFuture<Int>"));
+    }
+
+    #[test]
     fn import_sites_keep_the_imports_order() {
         let row = |f: &str, m: &str, l: u32| (f.to_string(), m.to_string(), l);
         let imports = [row("a.cs", "Lib.Data", 1), row("a.cs", "System", 2), row("b.cs", "Lib", 1), row("c.cs", "Lib.Data", 3), row("c.cs", "Library", 4)];
@@ -7150,6 +7210,7 @@ mod tests {
         let call = |l: &[Option<&str>], t: &[Option<&str>]| SwiftCall {
             l: l.iter().map(|x| x.map(str::to_string)).collect(),
             t: t.iter().map(|x| x.map(str::to_string)).collect(),
+            a: false,
         };
         let put = swift_params("func put(_ item: Int, at slot: Int = 0, ids: Int..., then done: () -> Void)").unwrap();
         assert!(call(&[None], &[None]).fits(&put));

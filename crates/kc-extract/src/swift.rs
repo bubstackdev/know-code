@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 22;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -1364,6 +1364,14 @@ fn call_labels(src: &str, call: Node) -> Option<String> {
             _ => {}
         }
     }
+    // `await f(…)`, `try await f(…)`, `await (f(…))`: the call is awaited.
+    let mut up = call.parent();
+    while let Some(p) = up.filter(|p| p.kind() == "tuple_expression" && p.named_child_count() == 1) {
+        up = p.parent();
+    }
+    if up.is_some_and(|p| p.kind() == "await_expression") {
+        return Some(serde_json::json!({ "l": args, "t": trailing, "a": true }).to_string());
+    }
     Some(serde_json::json!({ "l": args, "t": trailing }).to_string())
 }
 
@@ -1407,6 +1415,18 @@ mod tests {
         ] {
             assert!(types.contains(&want), "{want:?} in {types:?}");
         }
+    }
+
+    #[test]
+    fn an_awaited_call_says_so() {
+        let f = extract("func g() async throws {\n    let a = try await p.option(1)\n    let b = await (q.load())\n    let c = r.sync(2)\n}\n");
+        let labels = |name: &str| -> Option<&str> {
+            let i = f.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call)?;
+            f.arg_types.get(&i).map(String::as_str)
+        };
+        assert_eq!(labels("option"), Some(r#"{"a":true,"l":[null],"t":[]}"#));
+        assert_eq!(labels("load"), Some(r#"{"a":true,"l":[],"t":[]}"#));
+        assert_eq!(labels("sync"), Some(r#"{"l":[null],"t":[]}"#));
     }
 
     #[test]

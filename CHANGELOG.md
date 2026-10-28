@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- An awaited Swift call picks an `async` overload when its name has one: `try await channel.getOption(x)` is the
+  protocol extension's `async` member, not the channel class's own synchronous `getOption` returning a future, as
+  Swift prefers an `async` overload in an async context. Calls without `await` read as before. Swift files are
+  re-extracted once.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
