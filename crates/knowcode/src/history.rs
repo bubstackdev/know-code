@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -72,7 +72,7 @@ impl Depth {
 }
 
 fn git(root: &Path, args: &[&str], stdin: bool) -> Result<Vec<u8>, String> {
-    let out = Command::new("git")
+    let out = kc_index::git_command()
         .arg("-C")
         .arg(root)
         .args(args)

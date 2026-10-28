@@ -111,7 +111,7 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(config::cache_dir()?.0)
 }
 
-pub use git::repo_root;
+pub use git::{command as git_command, repo_root};
 
 /// A full rediscovery is forced at least this often, as a backstop for changes the cheap check can't see (a file
 /// added to a directory that held no listed files).

@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Git runs the same way whatever a repo's own config or the inherited environment says. Every git command KnowCode
+  starts turns off the file system monitor and hooks and refuses the `ext::` transport, so a repo's `.git/config`
+  can't name a command for git to run while KnowCode indexes or answers about it. `GIT_DIR`, `GIT_WORK_TREE` and
+  config passed in the environment (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and its keys) are no longer inherited,
+  so git always reads the repo asked about.
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
