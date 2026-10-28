@@ -260,17 +260,21 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
     let bases = bases(mode)?;
     let mut total: u64 = entries.iter().map(|e| e.bytes).sum::<u64>() + bases.kept + global_bytes()?;
     report.bytes_before = Some(total);
-    // Shared bases go before any index: a checkout's index never needs its base after the clone.
-    for (path, bytes) in bases.idle {
-        if !limit.is_some_and(|n| total > n) { break; }
-        crate::base::remove(&path)?;
-        total = total.saturating_sub(bytes);
-    }
+    // Shared bases are evicted like indexes, in the same least-recently-used order and only while the cache is over
+    // its budget, but never one a worktree still uses (see `crate::base::in_use`).
+    let mut bases = bases.idle.into_iter().peekable();
     // An oversized checkout must remain usable: never evict the most recently queried index just to rebuild it
     // on the next call. Active stores and explicitly queried roots are protected independently.
     let newest = entries.last().map(|e| e.root.clone());
     let notes = notes_paths()?;
     for entry in entries {
+        while let Some((path, bytes, _)) = bases.next_if(|(_, _, at)| *at <= entry.used) {
+            if mode == Mode::Maintain && limit.is_some_and(|n| total > n) && !crate::base::in_use(&path) {
+                crate::base::remove(&path)?;
+                total = total.saturating_sub(bytes);
+                report.removed.push(Removed { root: path, reason: "base" });
+            }
+        }
         let missing = gone(&entry.root);
         let over = limit.is_some_and(|n| total > n);
         if !(mode == Mode::Purge || missing || (mode == Mode::Maintain && over)) { continue; }
@@ -303,6 +307,13 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
         total = total.saturating_sub(entry.bytes).saturating_sub(previous_global) + global_bytes()?;
         report.removed.push(Removed { root: entry.root, reason: if missing { "deleted" } else if mode == Mode::Purge { "purge" } else { "size" } });
     }
+    for (path, bytes, _) in bases {
+        if mode == Mode::Maintain && limit.is_some_and(|n| total > n) && !crate::base::in_use(&path) {
+            crate::base::remove(&path)?;
+            total = total.saturating_sub(bytes);
+            report.removed.push(Removed { root: path, reason: "base" });
+        }
+    }
     if mode == Mode::Purge && !is_notes(&cache.join("workspace.json"), &notes) {
         crate::workspace::clear_orphan_summary()?;
     } else if !is_notes(&cache.join("workspace.json"), &notes) {
@@ -314,9 +325,10 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
     Ok(report)
 }
 
-/// The shared bases after [`run`] removed what `mode` removes outright: every base with a purge, else those of
-/// another build and those whose repository has no checkout left. What stays, with its bytes, least recently used first.
-struct Bases { kept: u64, idle: Vec<(PathBuf, u64)> }
+/// The shared bases after [`run`] removed what `mode` removes outright: every base with a purge, else those no
+/// worktree uses that are of another build or whose repository has no checkout left. What stays, with its bytes and
+/// when it was last used (on the scale of [`access_stamp`]), least recently used first.
+struct Bases { kept: u64, idle: Vec<(PathBuf, u64, u128)> }
 
 fn bases(mode: Mode) -> Result<Bases> {
     let all = crate::base::all()?;
@@ -326,14 +338,15 @@ fn bases(mode: Mode) -> Result<Bases> {
         Some(crate::workspace::all_summaries()?.iter().filter(|s| !gone(&s.root)).filter_map(|s| crate::base::identity_hash(s.origin.as_deref(), &s.root)).collect())
     };
     for (path, bytes, _) in all {
-        let keep = live.as_ref().is_some_and(|live| crate::base::hash_of(&path).is_some_and(|h| live.contains(h)) && crate::base::current(&path));
+        let keep = live.as_ref().is_some_and(|live| crate::base::hash_of(&path).is_some_and(|h| live.contains(h)) && crate::base::current(&path))
+            || (mode != Mode::Purge && crate::base::in_use(&path));
         if !keep {
             crate::base::remove(&path)?;
             continue;
         }
         let bytes = own_bytes(&path, bytes);
         out.kept += bytes;
-        out.idle.push((path, bytes));
+        out.idle.push((path.clone(), bytes, access_stamp(&path)));
     }
     Ok(out)
 }

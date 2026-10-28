@@ -2058,6 +2058,56 @@ pub struct FileHit {
     pub area: Option<AreaRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<kc_index::notes::NoteView>,
+    /// Its top-level declarations in line order, at most [`FILE_DECLARATIONS`] (more when a cursor raises it).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub declarations: Vec<Declaration>,
+    /// How many there are, when `declarations` is cut.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declarations_total: Option<usize>,
+}
+
+/// A file's top-level declaration: what `context` takes next (`Type.member`, or `file:line`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Declaration {
+    pub kind: String,
+    pub name: String,
+    pub line: u32,
+    pub end_line: u32,
+    /// Declarations inside it (a type's members).
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    pub members: usize,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Top-level declarations a file's `context` lists before cutting the list (continued by cursor).
+const FILE_DECLARATIONS: usize = 40;
+
+/// The top-level declarations of the indexed file `file`, in line order, at most `limit`, and how many there are.
+fn file_declarations(conn: &rusqlite::Connection, file: &str, limit: usize) -> Result<(Vec<Declaration>, usize)> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT s.kind, s.name, s.container, s.start_line, s.end_line, (SELECT count(*) FROM symbols c WHERE c.parent_id = s.id)
+         FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.parent_id IS NULL
+         ORDER BY s.start_line, s.start_byte",
+    )?;
+    let mut rows = stmt.query([file])?;
+    let (mut out, mut total) = (Vec::new(), 0);
+    while let Some(r) = rows.next()? {
+        total += 1;
+        if out.len() < limit {
+            let (name, container): (String, Option<String>) = (r.get(1)?, r.get(2)?);
+            out.push(Declaration {
+                kind: r.get(0)?,
+                name: container.map_or_else(|| name.clone(), |c| format!("{c}.{name}")),
+                line: r.get(3)?,
+                end_line: r.get(4)?,
+                members: r.get::<_, i64>(5)? as usize,
+            });
+        }
+    }
+    Ok((out, total))
 }
 
 /// The Ansible side of a context's symbol: roles it uses from other repos, the plays and roles in other repos using
@@ -3485,7 +3535,10 @@ pub fn context_raised(
             });
             found.push((o.root.clone(), ctx, http, angular, bus));
         } else if let Some(file) = indexed_file(&o, symbol)? {
-            // A file: its area, and the notes on its symbols.
+            // A file: its top-level declarations, its area, and the notes on its symbols.
+            let page = raise.map_or(FILE_DECLARATIONS, |r| r.max(FILE_DECLARATIONS));
+            let (declarations, total) = file_declarations(o.store.conn(), &file, page)?;
+            let declarations_total = (total > declarations.len()).then_some(total);
             let (cached_areas, from) = kc_index::areas::cached_at(&o.root, &o.store)?;
             if let Some(g) = from {
                 stale_derived.push(kc_store::answer::stale_derived(&format!("context area ({})", repo_name(&o.root)), &g, &o.generation));
@@ -3496,7 +3549,7 @@ pub fn context_raised(
                 on_file = kc_index::notes::all(&o.root, &o.store)?;
                 on_file.retain(|n| n.note.file == file || n.now_at.as_deref().is_some_and(|at| at.rsplit_once(':').is_some_and(|(f, _)| f == file)));
             }
-            file_hits.push(FileHit { repo: repo_name(&o.root), file, area, notes: on_file });
+            file_hits.push(FileHit { repo: repo_name(&o.root), file, area, notes: on_file, declarations, declarations_total });
         } else {
             // Not a symbol: perhaps a table.
             let model = o.store.db_model()?;
@@ -3650,6 +3703,11 @@ pub fn context_raised(
             let cut = t.accessors_total.is_some_and(|n| n > t.accessors.len());
             lists.push(cursor::List::new(format!("{at}/tables/{j}/accessors"), limits.callers, cut));
         }
+    }
+    // A file's declarations continue too.
+    for (i, f) in file_hits.iter().enumerate() {
+        let at = format!("/items/{}/declarations", repo_items_n + found.len() + i);
+        lists.push(cursor::List::new(at, FILE_DECLARATIONS, f.declarations_total.is_some()));
     }
     let source_word = match source {
         kc_store::skeleton::SourceMode::Full => "full",
@@ -6594,6 +6652,52 @@ fn is_repo_file(conn: &rusqlite::Connection, rel: &str) -> Result<bool> {
 
 /// Files that historically change in the same commits as `file`, ranked by shared commits, then recency. `file`
 /// may be any file of the repo, indexed or not: co-change needs only its history.
+/// A repo's declared test targets.
+pub type RepoTestTargets = (PathBuf, Vec<kc_index::test_targets::TestTarget>);
+
+/// The declared test targets of the selected repos (see [`kc_index::test_targets`]): SwiftPM test targets, .NET test
+/// projects and `package.json` test scripts, each with its tests and the commands to run them; `name` keeps the
+/// targets of that name. Declared, not ranked: which tests a change needs is [`tests`].
+pub fn test_targets(name: Option<&str>, args: &Scope) -> Result<Out<Vec<RepoTestTargets>>> {
+    let roots = target_repos(&args.repos)?;
+    let mut opened = Vec::new();
+    let mut data = Vec::new();
+    for root in &roots {
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
+        let mut targets = kc_index::test_targets::list(root, &o.store)?;
+        if let Some(n) = name.filter(|n| !n.is_empty()) {
+            targets.retain(|t| t.name.eq_ignore_ascii_case(n));
+        }
+        data.push((root.clone(), targets));
+        opened.push(o);
+    }
+    let many = data.len() > 1;
+    let items: Vec<Value> = data
+        .iter()
+        .flat_map(|(root, ts)| {
+            ts.iter().map(move |t| {
+                let mut v = json!(t);
+                if many {
+                    v["repo"] = json!(repo_name(root));
+                }
+                v
+            })
+        })
+        .collect();
+    let total = items.len();
+    let mut env = envelope(&opened, Value::Array(items), total, total);
+    for (_, ts) in &data {
+        for t in ts.iter().filter(|t| t.tests_total > t.tests.len()) {
+            push_incomplete(
+                &mut env,
+                Incomplete::new(Reason::Capped, format!("tests of {}: {} of {} listed", t.name, t.tests.len(), t.tests_total))
+                    .with_hint(format!("its command runs them all: {}", t.command)),
+            );
+        }
+    }
+    Ok(Out { env, data })
+}
+
 pub fn coupled(file: &str, limit: usize, span: &vitals::Span, args: &Scope) -> Result<Out<Vec<CoupledRepo>>> {
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
@@ -12132,6 +12236,50 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         let o = overview(&scope, None, 0).unwrap().env;
         assert_eq!(o["items"][0]["areas_total"], 2);
         assert_eq!(o["items"][0]["areas"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn context_on_a_file_lists_its_top_level_declarations_to_pick_from() {
+        let cache = test_cache();
+        let base = cache.dir("file-declarations");
+        let many: String = (0..50).map(|i| format!("def step_{i}():\n    return {i}\n\n")).collect();
+        let root = repo(
+            &base,
+            "shop",
+            &[
+                ("Ledger.cs", "namespace Shop;\npublic class Ledger {\n  public Ledger() { }\n  public void Post() { }\n}\npublic enum Kind { A, B }\n"),
+                ("steps.py", many.as_str()),
+                ("vault/keys.py", "def hidden_key():\n    return 1\n"),
+                (".knowcode-privacy.yml", "level: 3\nrules:\n  - path: vault/\n    level: 1\n"),
+            ],
+        );
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let none = kc_store::skeleton::SourceMode::None;
+
+        // Each top-level declaration with its kind, lines and member count, in line order; members are not listed.
+        let ledger = context("Ledger.cs", 2000, none, &scope).unwrap().env;
+        let decls: Vec<(String, String, u64, u64)> = ledger["items"][0]["declarations"].as_array().unwrap().iter()
+            .map(|d| (d["kind"].as_str().unwrap().into(), d["name"].as_str().unwrap().into(), d["line"].as_u64().unwrap(), d["members"].as_u64().unwrap_or(0)))
+            .collect();
+        assert_eq!(decls, [("class".into(), "Ledger".into(), 2, 2), ("enum".into(), "Kind".into(), 6, 2)], "{ledger}");
+        assert!(ledger["items"][0].get("declarations_total").is_none());
+        // What it lists is what `context` takes next.
+        assert_eq!(context("Ledger.cs:2", 2000, none, &scope).unwrap().env["items"][0]["symbol"]["name"], "Ledger");
+
+        // Bounded: the first FILE_DECLARATIONS, the total, and the rest when a cursor raises the limit.
+        let steps = context("steps.py", 2000, none, &scope).unwrap().env;
+        assert_eq!(steps["items"][0]["declarations"].as_array().unwrap().len(), FILE_DECLARATIONS);
+        assert_eq!(steps["items"][0]["declarations_total"], 50);
+        assert_eq!(steps["complete"], false, "{steps}");
+        let all = context_raised("steps.py", 2000, none, None, Some(100), &scope).unwrap().env;
+        assert_eq!(all["items"][0]["declarations"].as_array().unwrap().len(), 50);
+        assert_eq!(all["items"][0]["declarations"][49]["name"], "step_49");
+
+        assert!(crate::help::topic("kc_context").unwrap().text.contains(&format!("at most {FILE_DECLARATIONS} (the rest by cursor)")));
+        // A blocked file lists nothing.
+        let blocked = context("vault/keys.py", 2000, none, &scope);
+        assert!(blocked.as_ref().map_or(true, |o| !o.env.to_string().contains("hidden_key")), "{:?}", blocked.map(|o| o.env));
         let _ = std::fs::remove_dir_all(&base);
     }
 

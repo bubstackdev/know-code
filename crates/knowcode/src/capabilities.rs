@@ -44,6 +44,7 @@ fn shape(tool: &str) -> Shape {
         "kc_trace" | "kc_impact" | "kc_path" | "kc_flow" => TREE,
         "kc_status" => Shape { format: "json", formats: &["json"], keys: &["complete", "schema", "coverage", "freshness"], list: None },
         "kc_rename_preview" => Shape { keys: &["complete", "items", "total", "symbol", "new_name", "refused"], ..LIST },
+        "kc_task" => Shape { keys: &["complete", "items", "total", "dependents", "tests", "unsettled", "sections"], ..LIST },
         "kc_help" => Shape { format: "text", formats: &["text"], keys: &[], list: None },
         "kc_capabilities" => Shape { format: "json", formats: &["json"], keys: &["capabilities", "server", "protocol", "ops"], list: Some("ops") },
         _ => LIST,
