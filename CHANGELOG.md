@@ -52,6 +52,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   packages, Cargo crates): `modules` lists them with the areas holding their files, and each area gives its files by
   module, with `spans_modules` when a cluster crosses module boundaries. Both views stay: the declared one says what
   the build keeps apart, the inferred one what references and co-change tie together.
+- An awaited Swift call on a typed receiver picks the `async` member up the receiver's type chain when the type's own
+  members of that name are all synchronous: `try await channel.getOption(x)` is `extension Channel`'s `async`
+  `getOption`, not the channel class's own one returning a future, as Swift prefers an `async` overload in an async
+  context. Calls without `await`, and an actor's own members (`await cache.get(k)` awaits a synchronous one from
+  outside the actor), read as before. Swift files are re-extracted once.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
