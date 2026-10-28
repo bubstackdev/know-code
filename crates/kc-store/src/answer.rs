@@ -363,11 +363,36 @@ pub struct Evidence {
     pub mechanism: Mechanism,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<Assumption>,
+    /// Under `evidence: all`: the same-named declarations the reference was resolved past, each with why it was
+    /// ruled out (see [`Rival`]), the first few; `rivals_total` counts them all when more.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rivals: Vec<Rival>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rivals_total: Option<usize>,
 }
+
+/// A declaration sharing a reference's name that the reference was resolved past: `target` (its qualified name),
+/// `at` (`file:line`) and `why`, the first check that ruled it out: `kind` (a different kind of declaration),
+/// `arity` (takes another number of arguments), `argument_labels` (Swift labels it doesn't take), `argument_types`,
+/// `receiver_type` (not a member of the receiver's type or its supertypes), `namespace` (a namespace the file doesn't
+/// see, or not the one its receiver's type is in), `module` (a module the file is neither in nor imports), `project`
+/// (not compiled by the caller's project or one it references), `visibility` (private to its file or script),
+/// `scope` (not in the caller's type, file or module where a nearer one is), `overload` (a nearer or better-fitting
+/// overload of the same member was picked).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rival {
+    pub target: String,
+    pub at: String,
+    pub why: String,
+}
+
+/// Every reason a [`Rival`] gives, in the order the checks run.
+pub const RIVAL_REASONS: &[&str] =
+    &["project", "visibility", "namespace", "module", "kind", "argument_labels", "arity", "argument_types", "receiver_type", "scope", "overload"];
 
 impl Evidence {
     pub fn new(mechanism: Mechanism) -> Self {
-        Evidence { mechanism, assumptions: Vec::new() }
+        Evidence { mechanism, assumptions: Vec::new(), rivals: Vec::new(), rivals_total: None }
     }
 
     pub fn assuming(mut self, a: Assumption) -> Self {

@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Why this one: under `evidence: all`, an edge resolved among declarations sharing its name says which it was resolved
+  past and why, the first check that ruled each out: another project, namespace or module, private to its file,
+  another kind, argument labels, number or types of arguments, not on the receiver's type, out of scope, or a worse
+  overload. JSON evidence reads `receiver_type; not Audit.Log at src/BooksAudit.cs:4 (namespace)`; trees say it under
+  the row. Other policies, and the default answers, are unchanged.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the

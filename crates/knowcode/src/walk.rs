@@ -1781,6 +1781,7 @@ fn ends_elsewhere(g: &mut Graph, summaries: &[RepoSummary], to: &str, skip: usiz
 /// `knowcode path`: how `from` (in the queried repo) reaches `to` (in `to_repo`; by default the queried repo, else the
 /// other indexed repos defining it, at most [`MAX_END_REPOS`]).
 pub fn path(from: &str, to: &str, to_repo: Option<&Path>, opts: &PathOptions, args: &Scope) -> Result<Out<PathAnswer>> {
+    let _rivals = opts.edges.explain_rivals();
     let roots = ops::target_repos(&args.repos)?;
     let Some(root) = roots.first() else { bail!("no repo to query") };
     // The repo `to` is in is resolved like the queried one, and both are in the workspace the walk crosses.
