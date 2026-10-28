@@ -19,6 +19,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   100,000 nodes in all (each alias counted as the size of its anchor's node), so a small file of nested aliases can no
   longer exhaust memory while a repo is indexed. Anchors and aliases as GitLab CI and compose files use them are read
   as before. A privacy file past either limit is malformed: by default its repo is blocked whole until it is fixed.
+- A .NET test's command in `test_targets` runs that one test: `--filter
+  'FullyQualifiedName=Shop.Tests.MathTests.Add|FullyQualifiedName~Shop.Tests.MathTests.Add\('`, the name with its
+  namespace exactly, or followed by the arguments NUnit names a parameterized case with. `FullyQualifiedName~` is a
+  substring match, so `MathTests.Add` also ran `MathTests.AddMany` and `MathTests.Add_Negative`.
+- A `package.json` test script's `line` is its key under `scripts`. It was the first line naming `"test"` anywhere in
+  the file, such as `"name": "test"` or `"keywords": ["test"]` above the scripts.
+
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for

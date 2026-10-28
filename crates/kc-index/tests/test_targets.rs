@@ -51,7 +51,7 @@ let package = Package(
 "#);
     write(&repo, "dotnet/Ledger.Tests/BalanceTests.cs", "using Xunit;\nnamespace Ledger.Tests;\npublic class BalanceTests\n{\n    [Fact]\n    public void Adds() { }\n    public void Helper() { }\n}\n");
     write(&repo, "dotnet/Ledger/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
-    write(&repo, "web/package.json", r#"{ "name": "web", "scripts": { "build": "tsc", "test": "vitest run", "test:unit": "vitest run unit" } }"#);
+    write(&repo, "web/package.json", "{\n  \"name\": \"web\",\n  \"keywords\": [\"test\"],\n  \"scripts\": { \"build\": \"tsc\", \"test\": \"vitest run\", \"test:unit\": \"vitest run unit\" }\n}\n");
     write(&repo, "web/yarn.lock", "\n");
     write(&repo, "web/src/cart.ts", "export class Cart {}\n");
     write(&repo, "web/src/cart.test.ts", "import { Cart } from './cart';\n");
@@ -75,7 +75,13 @@ let package = Package(
     let swift = &targets[0].tests[0];
     assert_eq!((swift.file.as_str(), swift.line), ("Tests/KitTests/KitTests.swift", 5));
     assert_eq!(swift.command, r"swift test --filter '^KitTests\.KitTests/testMakes\b'");
-    assert_eq!(targets[1].tests[0].command, "dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj --filter 'FullyQualifiedName~BalanceTests.Adds'");
+    // Exactly the one test (with its namespace), not every test whose name starts with it.
+    assert_eq!(
+        targets[1].tests[0].command,
+        r"dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj --filter 'FullyQualifiedName=Ledger.Tests.BalanceTests.Adds|FullyQualifiedName~Ledger.Tests.BalanceTests.Adds\('"
+    );
+    // A script's line is its key under `scripts`, not an earlier `"test"`.
+    assert_eq!((targets[2].manifest.as_str(), targets[2].line), ("web/package.json", 4));
     assert_eq!(targets[2].tests[0].command, "cd web && yarn test -- src/cart.test.ts");
     let _ = std::fs::remove_dir_all(&base);
 }
