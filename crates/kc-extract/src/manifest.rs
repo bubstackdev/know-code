@@ -89,6 +89,10 @@ fn swiftpm_dep(a: &Args, line: u32) -> PackageDep {
 
 pub fn xcodegen(source: &str) -> FileFacts {
     let mut facts = FileFacts::default();
+    if crate::yaml::check(source).is_err() {
+        facts.parse_errors = 1;
+        return facts;
+    }
     let Ok(docs) = YamlLoader::load_from_str(source) else {
         facts.parse_errors = 1;
         return facts;

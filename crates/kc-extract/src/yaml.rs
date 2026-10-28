@@ -4,6 +4,11 @@
 //! The events give every node's line. Duplicate keys are kept (Ansible and GitLab take the last); a syntax error keeps
 //! what was read before it; `!vault` values read as `<vault>`; an alias is a copy of its anchor's node; a sequence
 //! tagged `!reference` (GitLab CI) reads as the string `!reference a b`.
+//!
+//! Every YAML text KnowCode reads is checked by [`check`] first: at most [`MAX_BYTES`], and its aliases expanding to at
+//! most [`MAX_ALIAS_NODES`] nodes in all. Anchors and aliases are ordinary in GitLab CI and compose files, so they are
+//! read; but each alias is a copy of its anchor's node, and aliases of aliases nest, so a few hundred bytes could
+//! otherwise stand for billions of nodes.
 
 use std::collections::HashMap;
 
@@ -189,8 +194,76 @@ impl MarkedEventReceiver for Builder {
     }
 }
 
-/// The documents of a YAML text, and whether it had a syntax error (what came before it is kept).
+/// The largest YAML text read, in bytes.
+pub const MAX_BYTES: usize = 2 << 20;
+
+/// The most nodes a YAML text's aliases may stand for in all, each alias counted as the size of its anchor's node.
+/// Real files stay far below it: an anchor of a few dozen nodes used a few dozen times.
+pub const MAX_ALIAS_NODES: u64 = 100_000;
+
+/// Sizes the nodes of a YAML text, in its events, without building them: each alias as its anchor's node's size.
+#[derive(Default)]
+struct Sizer {
+    /// Open collections: their anchor and size so far.
+    open: Vec<(usize, u64)>,
+    anchors: HashMap<usize, u64>,
+    expanded: u64,
+}
+
+impl Sizer {
+    fn add(&mut self, anchor: usize, size: u64) {
+        if anchor > 0 {
+            self.anchors.insert(anchor, size);
+        }
+        if let Some((_, n)) = self.open.last_mut() {
+            *n = n.saturating_add(size);
+        }
+    }
+}
+
+impl MarkedEventReceiver for Sizer {
+    fn on_event(&mut self, ev: Event, _: Marker) {
+        if self.expanded > MAX_ALIAS_NODES {
+            return;
+        }
+        match ev {
+            Event::Scalar(_, _, anchor, _) => self.add(anchor, 1),
+            Event::SequenceStart(anchor, _) | Event::MappingStart(anchor, _) => self.open.push((anchor, 1)),
+            Event::SequenceEnd | Event::MappingEnd => {
+                if let Some((anchor, size)) = self.open.pop() {
+                    self.add(anchor, size);
+                }
+            }
+            Event::Alias(id) => {
+                let size = self.anchors.get(&id).copied().unwrap_or(1);
+                self.expanded = self.expanded.saturating_add(size);
+                self.add(0, size);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether KnowCode reads the YAML text `src`: refused (saying why) when it is over [`MAX_BYTES`] or its aliases stand
+/// for over [`MAX_ALIAS_NODES`] nodes. A syntax error isn't refused here; the reader says what it kept.
+pub fn check(src: &str) -> Result<(), String> {
+    if src.len() > MAX_BYTES {
+        return Err(format!("larger than {} MiB", MAX_BYTES >> 20));
+    }
+    let mut sizer = Sizer::default();
+    let _ = Parser::new_from_str(src).load(&mut sizer, true);
+    if sizer.expanded > MAX_ALIAS_NODES {
+        return Err(format!("its aliases stand for more than {MAX_ALIAS_NODES} nodes"));
+    }
+    Ok(())
+}
+
+/// The documents of a YAML text, and whether it had a syntax error (what came before it is kept). A text [`check`]
+/// refuses has no documents, and counts as an error.
 pub(crate) fn parse(src: &str) -> (Vec<Node>, bool) {
+    if check(src).is_err() {
+        return (Vec::new(), true);
+    }
     let mut b = Builder::default();
     let mut parser = Parser::new_from_str(src);
     let failed = parser.load(&mut b, true).is_err();
@@ -209,5 +282,62 @@ mod tests {
         assert_eq!(job.get("<<").and_then(|b| b.get("image")).and_then(Node::str), Some("x"));
         let script: Vec<&str> = job.get("script").unwrap().strings().into_iter().map(|(s, _)| s).collect();
         assert_eq!(script, ["!reference .setup script", "make"]);
+    }
+
+    /// Nested anchors, each a list of ten aliases of the one before: `levels` of them stand for 10^levels nodes.
+    fn nested(levels: usize) -> String {
+        let mut s = String::from("a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n");
+        for i in 1..levels {
+            s.push_str(&format!("a{i}: &a{i} [{}]\n", vec![format!("*a{}", i - 1); 10].join(", ")));
+        }
+        s
+    }
+
+    #[test]
+    fn aliases_standing_for_too_many_nodes_are_refused() {
+        assert!(check(&nested(3)).is_ok());
+        let err = check(&nested(9)).unwrap_err();
+        assert!(err.contains("aliases"), "{err}");
+        let (docs, failed) = parse(&nested(9));
+        assert!(docs.is_empty() && failed);
+        let big = format!("k: {}\n", "x".repeat(MAX_BYTES));
+        assert!(check(&big).unwrap_err().contains("larger"));
+    }
+
+    #[test]
+    fn a_gitlab_ci_file_with_anchors_is_read_whole() {
+        let src = "\
+.defaults: &defaults
+  image: ruby:3.3
+  tags: [docker]
+  before_script: &setup
+    - bundle install
+    - yarn install
+.rules: &on_main
+  rules:
+    - if: $CI_COMMIT_BRANCH == \"main\"
+stages: [test, deploy]
+test:
+  <<: *defaults
+  stage: test
+  script:
+    - *setup
+    - bundle exec rspec
+lint:
+  <<: *defaults
+  stage: test
+  script: [bundle exec rubocop]
+deploy:
+  <<: [*defaults, *on_main]
+  stage: deploy
+  script: [./deploy.sh]
+";
+        assert!(check(src).is_ok());
+        let (docs, failed) = parse(src);
+        assert!(!failed);
+        let deploy = docs[0].get("deploy").unwrap();
+        assert_eq!(deploy.get("stage").and_then(Node::str), Some("deploy"));
+        let lint = docs[0].get("lint").unwrap();
+        assert_eq!(lint.get("<<").and_then(|d| d.get("image")).and_then(Node::str), Some("ruby:3.3"));
     }
 }
