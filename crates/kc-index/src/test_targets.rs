@@ -3,11 +3,11 @@
 //! SDK or framework) and `package.json` test scripts (`test`, `test:…`). Read from the index and the manifests as
 //! declared, never ranked: which tests matter for a change is `test_select`'s question, kept apart from this one.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
 use kc_store::Store;
-use rusqlite::params;
 use serde::Serialize;
 
 use crate::privacy::Privacy;
@@ -51,8 +51,9 @@ pub struct TestTarget {
 /// Every declared test target of the repo at `root`, in manifest and line order.
 pub fn list(root: &Path, store: &Store) -> Result<Vec<TestTarget>> {
     let privacy = Privacy::load(root);
-    let mut out = swiftpm(store)?;
-    out.extend(dotnet(store)?);
+    let tests = Tests { store, rows: std::cell::OnceCell::new() };
+    let mut out = swiftpm(&tests)?;
+    out.extend(dotnet(&tests)?);
     out.extend(npm(root, store, &privacy)?);
     out.sort_by(|a, b| (&a.manifest, a.line, &a.name).cmp(&(&b.manifest, b.line, &b.name)));
     Ok(out)
@@ -77,33 +78,51 @@ fn quote(s: &str) -> String {
     }
 }
 
-/// The functions and methods tagged `test` in files under `dir` (the whole repo for `""`): (container, name, file,
-/// line), in file and line order, and how many there are.
 /// A test function or method: container, name, file, line, and its C# namespace when the index knows it.
 type Found = (Option<String>, String, String, u32, Option<String>);
 
-fn tests_under(store: &Store, dir: &str) -> Result<(Vec<Found>, usize)> {
-    let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
-    let mut stmt = store.conn().prepare(
+/// The repo's functions and methods tagged `test`, read from the index once for all its targets: a read per target
+/// went through every symbol of the repo each time, as neither the tag nor a directory prefix can use an index.
+struct Tests<'s> {
+    store: &'s Store,
+    rows: std::cell::OnceCell<Vec<Found>>,
+}
+
+impl Tests<'_> {
+    /// Every test function and method, in file and line order.
+    fn all(&self) -> Result<&[Found]> {
+        if let Some(rows) = self.rows.get() {
+            return Ok(rows);
+        }
+        let mut stmt = self.store.conn().prepare(
         "SELECT s.container, s.name, f.path, s.start_line,
                 CASE WHEN f.lang = 'csharp' THEN coalesce(
                   CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
                   CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END
            FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id
           WHERE s.kind IN ('function', 'method') AND (',' || s.tags || ',') LIKE '%,test,%'
-            AND substr(f.path, 1, length(?1)) = ?1
           ORDER BY f.path, s.start_line",
-    )?;
-    let rows: Vec<Found> =
-        stmt.query_map(params![prefix], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
-    let total = rows.len();
-    Ok((rows.into_iter().take(MAX_TESTS).collect(), total))
+        )?;
+        let rows: Vec<Found> =
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(self.rows.get_or_init(|| rows))
+    }
+
+    /// The tests in files under `dir` (the whole repo for `""`), in file and line order, at most [`MAX_TESTS`], and
+    /// how many there are.
+    fn under(&self, dir: &str) -> Result<(Vec<Found>, usize)> {
+        let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+        let mut rows = self.all()?.iter().filter(|r| r.2.starts_with(&prefix));
+        let shown: Vec<Found> = rows.by_ref().take(MAX_TESTS).cloned().collect();
+        let total = shown.len() + rows.count();
+        Ok((shown, total))
+    }
 }
 
 /// SwiftPM test targets: `swift test --filter`, from the package's directory. A target's tests are under
 /// `Tests/<target>/` (SwiftPM's default; a custom `path:` isn't read).
-fn swiftpm(store: &Store) -> Result<Vec<TestTarget>> {
-    let mut stmt = store.conn().prepare(
+fn swiftpm(tests: &Tests) -> Result<Vec<TestTarget>> {
+    let mut stmt = tests.store.conn().prepare(
         "SELECT t.name, f.path, t.line FROM package_targets t JOIN files f ON f.id = t.file_id WHERE t.kind = 'testTarget'",
     )?;
     let targets: Vec<(String, String, u32)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -112,7 +131,7 @@ fn swiftpm(store: &Store) -> Result<Vec<TestTarget>> {
         let pkg = dir_of(&manifest);
         let dir = under(&pkg, &format!("Tests/{name}"));
         let package_path = if pkg.is_empty() { String::new() } else { format!(" --package-path {}", quote(&pkg)) };
-        let (rows, total) = tests_under(store, &dir)?;
+        let (rows, total) = tests.under(&dir)?;
         let tests = rows
             .into_iter()
             .map(|(container, test, file, line, _)| {
@@ -145,9 +164,9 @@ fn swiftpm(store: &Store) -> Result<Vec<TestTarget>> {
 }
 
 /// .NET test projects: a project file referencing a test SDK or framework. `dotnet test <project>`.
-fn dotnet(store: &Store) -> Result<Vec<TestTarget>> {
+fn dotnet(tests: &Tests) -> Result<Vec<TestTarget>> {
     let marks: Vec<String> = DOTNET_TEST_PACKAGES.iter().map(|p| format!("'{}'", p.to_lowercase())).collect();
-    let mut stmt = store.conn().prepare(&format!(
+    let mut stmt = tests.store.conn().prepare(&format!(
         "SELECT f.path, MIN(d.line) FROM package_deps d JOIN files f ON f.id = d.file_id
           WHERE f.lang = 'csproj' AND (lower(d.name) IN ({0}) OR lower(substr(d.name, 1, instr(d.name || '/', '/') - 1)) IN ({0}))
           GROUP BY f.path",
@@ -158,7 +177,7 @@ fn dotnet(store: &Store) -> Result<Vec<TestTarget>> {
     for (manifest, line) in projects {
         let dir = dir_of(&manifest);
         let name = manifest.rsplit('/').next().unwrap_or(&manifest).trim_end_matches(".csproj").to_string();
-        let (rows, total) = tests_under(store, &dir)?;
+        let (rows, total) = tests.under(&dir)?;
         let tests = rows
             .into_iter()
             .map(|(container, test, file, line, ns)| {
@@ -252,6 +271,23 @@ fn npm(root: &Path, store: &Store, privacy: &Privacy) -> Result<Vec<TestTarget>>
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     let files: Vec<String> = store.conn().prepare("SELECT path FROM files ORDER BY path")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    // Each test file goes to the package nearest it, the one whose directory holds it and no package nested there:
+    // read once for all packages, as filtering every file per package grew with packages times files.
+    let packages: HashSet<String> = manifests.iter().map(|m| dir_of(m)).collect();
+    let mut by_package: HashMap<String, Vec<&String>> = HashMap::new();
+    for f in files.iter().filter(|f| is_js_test_file(f) && !privacy.blocks(f)) {
+        let mut dir = dir_of(f);
+        loop {
+            if packages.contains(&dir) {
+                by_package.entry(dir).or_default().push(f);
+                break;
+            }
+            if dir.is_empty() {
+                break;
+            }
+            dir = dir_of(&dir);
+        }
+    }
     let mut out = Vec::new();
     for manifest in &manifests {
         if privacy.blocks(manifest) {
@@ -264,14 +300,7 @@ fn npm(root: &Path, store: &Store, privacy: &Privacy) -> Result<Vec<TestTarget>>
         let run = runner(root, &pkg);
         let cd = if pkg.is_empty() { String::new() } else { format!("cd {} && ", quote(&pkg)) };
         let prefix = if pkg.is_empty() { String::new() } else { format!("{pkg}/") };
-        // Test files of this package: under its directory and not in a package nested in it.
-        let nested: Vec<String> =
-            manifests.iter().map(|m| dir_of(m)).filter(|d| d.len() > pkg.len() && d.starts_with(&prefix)).map(|d| format!("{d}/")).collect();
-        let test_files: Vec<&String> = files
-            .iter()
-            .filter(|f| f.starts_with(&prefix) && is_js_test_file(f) && !privacy.blocks(f))
-            .filter(|f| !nested.iter().any(|n| f.starts_with(n.as_str())))
-            .collect();
+        let test_files: &[&String] = by_package.get(&pkg).map_or(&[], Vec::as_slice);
         for (name, _) in scripts.iter().filter(|(k, v)| (*k == "test" || k.starts_with("test:") || k.starts_with("test-")) && v.is_string()) {
             let line = script_line(&text, name);
             let command = if run == "npm run" && name == "test" { format!("{cd}npm test") } else { format!("{cd}{run} {}", quote(name)) };
