@@ -5,7 +5,7 @@ tool that doesn't exist, or a reference page leaves out one that does.
 Read from the binary: commands and flags (`knowcode --help`, `knowcode <command> --help`, recursively), MCP tools and
 their parameters (`tools/list` from `knowcode serve`, and each tool's `kc_help` topic), and config keys (`knowcode config list`). Read from the source:
 environment variables (`"KNOWCODE_…"` in `crates/*/src`) and the answer contract's closed sets (`Reason`,
-`Mechanism`, `Assumption` in `crates/kc-store/src/answer.rs`).
+`Mechanism`, `Assumption`, `Code` in `crates/kc-store/src/answer.rs`).
 
 Checked docs: README.md, CHANGELOG.md, docs/*.md, integrations/claude-code/README.md and its skills.
 
@@ -13,8 +13,8 @@ Checked docs: README.md, CHANGELOG.md, docs/*.md, integrations/claude-code/READM
   and `kc_help` topics, config keys (`cache.dir`), `KNOWCODE_*` variables, and an MCP tool's `param:` in a call
   written as `kc_tool(param: …)`.
 - Missing from the page that documents them: every command and every flag in docs/usage.md, every MCP tool in
-  docs/usage.md, every config key and user-facing variable in docs/configuration.md, every reason, mechanism and
-  assumption in docs/answers.md.
+  docs/usage.md, every config key and user-facing variable in docs/configuration.md, every reason, mechanism,
+  assumption and code in docs/answers.md.
 
 Usage: scripts/check-docs.py [path/to/knowcode]   (default target/debug/knowcode; exit 1 listing each problem)
 """
@@ -29,9 +29,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = {"kc_store", "kc_index", "kc_extract"}
-COMMON_FLAGS = {"--repo", "--no-sync", "--json", "--help", "--version"}
+COMMON_FLAGS = {"--repo", "--no-sync", "--json", "--provenance", "--help", "--version"}
 # Variables that are not user settings: build stamps, test hooks and internal handshakes.
-INTERNAL_ENV = {"KNOWCODE_BUILD", "KNOWCODE_KEEP_RESUME", "KNOWCODE_INSERT_REVERSED"}
+INTERNAL_ENV = {"KNOWCODE_BUILD", "KNOWCODE_KEEP_RESUME", "KNOWCODE_INSERT_REVERSED", "KNOWCODE_BOUND_REPOS"}
 INTERNAL_ENV_PREFIXES = ("KNOWCODE_TEST_",)
 # Variables of the cargo-dist installer, which self-update passes on or clears; documented by example only.
 INSTALLER_ENV = {"KNOWCODE_INSTALL_DIR", "KNOWCODE_NO_MODIFY_PATH", "KNOWCODE_UNMANAGED_INSTALL", "KNOWCODE_DOWNLOAD_URL",
@@ -149,7 +149,7 @@ def contract_sets():
     """{enum name: set of snake_case members} from answer.rs."""
     text = (ROOT / "crates" / "kc-store" / "src" / "answer.rs").read_text()
     out = {}
-    for name in ("Reason", "Mechanism", "Assumption"):
+    for name in ("Reason", "Mechanism", "Assumption", "Code"):
         body = re.search(r"pub enum " + name + r" \{(.*?)\n\}", text, re.S).group(1)
         members = re.findall(r"^\s{4}([A-Z]\w*),", body, re.M)
         out[name] = {re.sub(r"(?<!^)([A-Z])", r"_\1", m).lower() for m in members}

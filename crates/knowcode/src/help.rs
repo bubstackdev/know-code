@@ -136,7 +136,9 @@ When several definitions share the name (copies, template variants), the live on
 its namespace or module (`B.Worker.Run`). A place may be written after its repo's name (`shop/src/a.cs:12`), here and
 in kc_impact, kc_trace and kc_refs (which answers for the definition there); one naming no definition is refused, saying
 what didn't resolve (no such file, or the definitions nearest the line). A stored procedure or table defined in another
-indexed repo (a schema repo) is found there.
+indexed repo (a schema repo) is found there. A file path gives the file's top-level declarations in line order
+(`declarations`: kind, name, line, end_line, and `members` for a type), at most 40 (the rest by cursor), with its area and
+the notes on its symbols: pick one by name or `file:line` for its bundle, rather than reading the file.
 
 `source` is `auto` by default: a long symbol comes as a skeleton (signatures, types and doc comments with bodies elided
 as `{ … }`, plus the lines making its calls into the indexed code and its return/throw lines; `source_lines` lists the
@@ -678,7 +680,13 @@ directory), dir, files, lines, cohesion (0-1: the share of its reference and co-
 tokens, key_files (PageRank within the area), entry_points, exposed (the files other areas use most) and depends_on
 (other areas its references go into, with file_edges). modularity says how clear the split is (above 0.3 is clear);
 cochange_pairs 0 means no history helped. With area (an id, name or directory, or a fragment of one name), that area
-and every file in it (`members`). kc_context on a symbol or a file path says which area it is in."#,
+and every file in it (`members`). kc_context on a symbol or a file path says which area it is in.
+
+Where the repo's manifests declare modules (SwiftPM targets, .NET projects, npm packages and workspace members, Cargo
+crates), both views are given: `modules` lists them (name, kind, dir, manifest, files, and the areas holding them), and
+each area its files by module (`modules`), `spans_modules` when they are in more than one, and `outside_modules` for
+files in none. Declared boundaries say what the build keeps apart; areas say what references and co-change tie
+together, so an area spanning modules is a feature cut across them."#,
     },
     Topic {
         name: "kc_notes",
@@ -783,21 +791,90 @@ privacy file blocks anything or is malformed): the file's state (read, empty, ma
 repos blocked whole. `workspace` for every indexed repo."#,
     },
     Topic {
+        name: "kc_task",
+        summary: "one bounded answer for a goal in words",
+        text: r#"One bounded answer for a goal in words (a bug report, a ticket title, what a change should do), where
+otherwise kc_locate, kc_context, kc_impact and kc_tests are joined by hand. Four sections:
+
+- `items`: the files most likely involved, kc_locate's ranking, each `path | symbols matching the goal (kind :line)`;
+  the first two also quote the line declaring their best symbol (`| 42: public void Refund(…)`).
+- `dependents`: what depends on the first three files, one hop (`path:line Caller → Callee [confidence]`, confident
+  edges first), and the files that usually change with them (`path (changes with …: n of m commits)`).
+- `tests`: the tests to run for those files, each with its likelihood (0-1). Advisory: the most likely tests, not all;
+  a test not listed may still fail, and is never said to be safe to skip.
+- `unsettled`: what the index can't settle: goal words no listed file matches, edges left as ambiguous (a call that
+  may reach several implementations), constructs not read, content withheld, repos not read.
+
+The answer is written in reading order: `items`, `tests`, `dependents`, `unsettled`, then what it says about
+itself. `sections` says for each list whether it is whole (`complete`) and the call that continues it (`next`); a cut list is a
+`capped` entry of `incomplete` too. Rows are short text, so the answer costs about what kc_locate's does alone. Bounds:
+`files`, `dependents` and `tests`."#,
+    },
+    Topic {
+        name: "kc_test_targets",
+        summary: "declared test targets with their tests and how to run them",
+        text: r#"The test targets a repo's manifests declare, each with its tests and the command to run it, and each test's:
+
+- SwiftPM test targets (`.testTarget` in `Package.swift`): the tests (XCTest and Swift Testing) under `Tests/<target>/`,
+  `swift test --filter`.
+- .NET test projects (a project referencing a test SDK or framework: `Microsoft.NET.Test.Sdk`, `MSTest.Sdk`, xUnit,
+  NUnit, …): the test methods under the project's directory, `dotnet test <project>` and `--filter
+  FullyQualifiedName~Class.Method`.
+- `package.json` test scripts (`test`, `test:…`): the package's test files (`*.test.*`, `*.spec.*`, `__tests__/`),
+  run with the package manager its lockfile names.
+
+Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
+200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change
+needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; the `kc` op is `test_targets`."#,
+    },
+    Topic {
+        name: "kc_capabilities",
+        summary: "every op as data, for a client building its tool surface",
+        text: r#"Every op as JSON, for a client that builds its own tool surface instead of copying this help: read from the
+same schemas, ranges and tables that help and the advertised schemas are made from, so they can't disagree. `of` names
+one op (`impact` or `kc_impact`); none: every op.
+
+The document has `capabilities` (its own version, raised when a field changes meaning or goes), `server` (name and
+version), `protocol` (the MCP version the server speaks), `index_schema` (the graph schema it reads), `profile`
+(`one`, or the tools advertised), `common` (the parameters every op takes), `evidence` (the presets, mechanisms and
+assumptions an evidence policy is written with), `reasons` and `codes` (the closed sets an `incomplete` entry and a
+refused call are coded with; see `contract`), `partial` (the keys a partial JSON answer adds: `completeness`, `size`),
+`errors` (where a refused call's code is), `scope` (`restricted`, and for a server started with `serve --restricted`
+its repos, ops and directories) and `ops`, one entry per op:
+
+- `op` and `tool` (`impact`, `kc_impact`), `summary`, `description` (the tool's), `help` (its topic's resource), and
+  `advertised` (whether this server lists it as a tool; under `one` every op is reached through `kc`), and `allowed`
+  (false for an op a restricted server refuses).
+- `access`: `read`, or `write` (note_add: notes are the only writes).
+- `q` and `qs`: the parameters they fill as `kc` ops, or null; `takes_query` false for an op taking no `q`.
+- `input`: the full JSON schema of its parameters: `minimum`, `maximum` and `default` for a bounded number,
+  `enum` for a closed set of words (the default first). `ranges` and `choices` say the same per parameter. A number
+  past its `max` is clamped, and the answer says what it walked (`depth: {asked, walked}`), up to the `type_max` its
+  type holds where it has one (255 for a depth), past which it is refused; under its `min` it is clamped up
+  (`below_min`), but a negative number is refused (`invalid_argument`), as is a word outside its set or a value of the
+  wrong type. Parameters not in the schema are ignored. `aliases` names parameters that
+  stand for another (refs' `edges` for `kinds`).
+- `batch`: the parameter taking several inputs in one call, and how many at most; the answer is then
+  `{"results": [...]}`.
+- `evidence`: the policy an op taking `evidence` uses by default.
+- `output`: its `format` by default and the `formats` it takes, `keys` an answer in JSON always has, and `list`, the
+  list the answer is about. `tree` is text: a header line (`repo <name> @ <commit>`, then `; complete`, or one line
+  per `incomplete` and `more` entry), then the tree.
+
+Served as the `kc` tool's `capabilities` op, as the resource `knowcode://capabilities`, and by `knowcode
+capabilities`; `KNOWCODE_TOOLS=all,kc_capabilities` advertises it as a tool. It isn't in `all`: a client reads it once,
+not on every turn."#,
+    },
+    Topic {
         name: "kc",
         summary: "the one tool of the default profile: every tool as an `op`",
         text: r#"The default profile (`one`) advertises a single tool, `kc`, so a client carries one schema on every turn.
-`op` names the tool to run, without `kc_`: impact, find, refs, context, search, locate, more and help, and every other
-tool (trace, path, flow, symbol_at, unused, rename_preview, coupled, tests, hotspots, ownership, reviewers, history,
-overview, areas, notes, note_add, grep_ast, status). `q` fills the op's main parameter, `qs` its list of several:
+`op` names the tool to run, without `kc_`: {kc_ops}. `q` fills the op's main parameter, `qs` its list of
+several:
 
-- impact, context, trace, rename_preview, history, notes, note_add: `symbol`; context: `symbols` from `qs`
-- find: `query`; locate: `query`, `queries` from `qs`
-- refs: `name`, `names` from `qs`
-- search, grep_ast: `pattern`
-- more: `cursor`; help: `topic` (an op's name is its tool's topic: `impact`, `impact.crossings`)
-- path: `from`; flow: `entry`; symbol_at: `file`; coupled: `file`; ownership: `path`; overview: `focus`; areas: `area`
-- tests: `targets`, reviewers: `files` (`q` as a list of one, or `qs`)
-- unused, hotspots, status: no `q` (an empty one is ignored)
+{kc_q}
+
+An op's name is its tool's help topic (`impact`, `impact.crossings`).
 
 Every other parameter of the op's tool is passed by its own name, as that tool's topic lists it (`kc {op: impact,
 q: Orders.Place, depth: 2, repo: shop}`, `kc {op: search, q: "retry", regex: true}`, `kc {op: path, q: A, to: B}`).
@@ -835,7 +912,9 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   links and named where it would have joined one, or where the answer spans it), `unsupported` (a
   construct the analysis doesn't model, where known to be present: also one an extractor recognises but doesn't read,
   named with file:line, such as a DI assembly scan, SQL naming its table at run time, a publish of a message of unknown
-  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read),
+  type, a Jinja-named include, a Terraform `moved` block, a CI include or Angular lazy route in a form not read; and
+  a file the answer names with parse errors, listed in `coverage` with its first error and the answer's symbol holding
+  it, `inside`),
   `policy` (the evidence policy left edges out; see
   `evidence`), `withheld` (an AI privacy file blocks content; see `privacy`), `depth` (a walk stopped at its depth,
   asked or the deepest it goes, where symbols lead further: its `frontier` names them).
@@ -845,6 +924,10 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
 - `provenance`: the repos the answer consulted besides its own (dependencies and dependents opened, repos crossed over
   HTTP, the bus, SQL or Terraform, repos whose workspace summary an item came from), each `{repo, commit, generation,
   dirty, fresh}`; `fresh` says the index was checked against the working tree for this answer and matched it.
+- `provenance: true` on any call adds a second content block, `{"record": …}`, for durable records: the build and
+  extractor versions, the call's hash, the answer's hash and its `evidence` hash (the same for the same answer from any
+  index), and per repo read its worktree, full commit, uncommitted content's digest, generation, base and privacy
+  policy's digests.
 - Every edge, reference, trace or impact row, path or flow step carries `confidence` (exact, unique_name, ambiguous,
   external_likely, unresolved) and `evidence` (see `evidence`). Ambiguous edges are listed, never guessed.
 - `cite`: on every row with a location (trace nodes, impact rows, path and flow steps, references, a context's callers
@@ -859,6 +942,18 @@ topics are MCP resources, `knowcode://help/<topic>`."#,
   file with the index the answer read: `verified` (unchanged), `changed` (edited, the line still names what it cites),
   `moved` (`at` is where it is now, `was` where the index had it), `gone`, or `unchecked`; `drift` says what moved,
   and any drift makes the answer `stale`.
+- `completeness` and `size` (JSON answers, only when something is partial): `completeness` says apart whether the
+  graph the answer read was whole (`graph`: no `depth`, `policy`, `stale`, `failed`, `missing_repo`, `unsupported`,
+  `withheld` or `deadline` entry), whether the source it quotes is (`source`: no skeleton or cut source), and whether
+  its lists are all there (`lists`: none cut or continuing). `size` gives `max_chars` asked, `chars` returned, the
+  `source` mode in effect, and `continue`: each list that continues, `{list, cursor, rest, chars}`, the rows left and
+  about how many characters they take at the rate of the rows shown, to decide whether the next page is worth it.
+  They take only the room `max_chars` leaves (`continue` goes first, then `size`), never a row's.
+- Codes: an entry's code is its `reason`, or its `code` where that says more (`indexing`: ask again after it
+  finishes; `not_indexed`, `gone`). A refused call's code is in the tool result's `structuredContent.error.code`
+  (invalid_argument, not_found, ambiguous, no_files, not_indexed, indexing, gone, withheld, stale_cursor,
+  unsupported, collision, cut, not_allowed, cancelled, failed, internal); a rename refused says `codes` beside its `reasons`.
+  Anything `withheld` carries `privacy`: `{repo, file, block_at, blocks}`. Branch on codes, not on the English.
 - An empty answer says what was searched (`note`). Older fields agree with `incomplete`: `truncated`, `total`,
   `capped`, `freshness.failed`, `left_out` and `hint`.
 
@@ -917,6 +1012,10 @@ Evidence policy: kc_trace, kc_impact, kc_path and kc_flow take `evidence`, which
 - `all`: every edge, ambiguous ones followed too;
 - mechanisms alone (`scip,receiver_type`) follow only those; a preset changed adds or takes away (`confirmed,name_unique`,
   `all,-filename_guess`); `-<assumption>` leaves out the edges making it (`default,-same_deployment`).
+Under `all` (or a policy starting with it), an edge resolved among same-named declarations says which it was resolved
+past and why: its evidence ends `; not X at a.cs:4 (namespace), Y at b.cs:9 (arity)` (`rivals` in full JSON: project,
+visibility, namespace, module, kind, argument_labels, arity, argument_types, receiver_type, scope, overload), and a
+tree says it under the row.
 Under any policy but `default` the answer has `policy: {evidence, excluded, excluded_by}`, counting the edges left out
 (a lower bound: nothing past them was read), and is incomplete (reason `policy`)."#,
     },
@@ -949,11 +1048,11 @@ is named only as blocked. An answer that may have drawn on blocked content is in
 so a client carries one schema and short instructions on every turn, whether or not it defers tools. Answers, the
 instructions and the Claude Code plugin's notes and skills then name calls as ops (`kc {op: refs, q: Save}`).
 `KNOWCODE_TOOLS=core` (or `knowcode serve --tools core`) advertises the separate core tools instead: kc_find,
-kc_locate, kc_context, kc_refs, kc_impact, kc_search, kc_more and kc_help. `all` advertises every tool; a comma list
-adds tools by name (`core,kc_trace,kc_tests`). Under those, tools left out are listed in the help index and can't be
-called until the server is started with them; kc_find, kc_context, kc_refs, kc_impact and kc_search are marked always
-loaded (`anthropic/alwaysLoad`), so Claude Code loads them up front and defers the rest to tool search, among them
-kc_locate, kc_more and kc_help. A cut answer's `hint` names the call that continues it."#,
+kc_locate, kc_context, kc_refs, kc_impact, kc_search, kc_more and kc_help. `all` advertises every tool but
+kc_capabilities (read once: see `kc_capabilities`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under
+those, tools left out are listed in the help index and can't be called until the server is started with them; kc_find,
+kc_context, kc_refs, kc_impact and kc_search are marked always loaded (`anthropic/alwaysLoad`), so Claude Code loads
+them up front and defers the rest to tool search, among them kc_locate, kc_more and kc_help. A cut answer's `hint` names the call that continues it."#,
     },
 ];
 
@@ -1002,8 +1101,11 @@ pub fn render(t: &Topic, schema: Option<&serde_json::Map<String, serde_json::Val
 /// `text` with each bounds placeholder filled from `mcp::RANGES`: `{max:kc_impact.depth}`, and `min`, `default` and
 /// `span` likewise, so the prose says the bounds the answers apply. Any other braces are left as they are.
 pub fn fill(text: &str) -> String {
+    // The `kc` topic's ops and what `q` fills, from `mcp::ONE_OPS`.
+    let ops: Vec<&str> = crate::mcp::ONE_OPS.iter().map(|(o, _, _)| *o).collect();
+    let text = text.replace("{kc_ops}", &ops.join(", ")).replace("{kc_q}", &crate::mcp::one_q_lines());
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
+    let mut rest = text.as_str();
     while let Some(at) = rest.find('{') {
         out.push_str(&rest[..at]);
         let tail = &rest[at..];

@@ -295,6 +295,22 @@ impl Pairs {
     }
 }
 
+/// The `meta` key set on an index started from another checkout's (a shared base, a seed), whose content index holds
+/// that checkout's file stats: the first content sync takes them from the file index instead (see [`carry_stats`]).
+pub(crate) const CARRY: &str = "content.carry";
+
+/// For each file the content index holds the content of, as the file index just hashed it (the content hash is the
+/// first half of the file's), this checkout's stat: the file isn't read again. Others keep the other checkout's stat,
+/// and are read and compared as usual.
+fn carry_stats(store: &Store) -> Result<()> {
+    store.conn().execute_batch(&format!(
+        "UPDATE cfiles SET (mtime_ns, size) = (SELECT f.mtime_ns, f.size FROM files f WHERE f.path = cfiles.path)
+           WHERE EXISTS (SELECT 1 FROM files f WHERE f.path = cfiles.path AND f.size >= 0 AND substr(f.hash, 1, 32) = cfiles.hash);
+         DELETE FROM meta WHERE key = '{CARRY}';"
+    ))?;
+    Ok(())
+}
+
 /// Brings the content index for `root` up to date with the working tree. Run after [`crate::sync`], which keeps
 /// the file list current.
 pub fn sync_content(root: &Path, store: &mut Store, threads: usize) -> Result<ContentReport> {
@@ -311,6 +327,9 @@ fn sync_content_locked(root: &Path, store: &mut Store, threads: usize) -> Result
     let mut report = ContentReport::default();
     let version = CONTENT_VERSION.to_string();
     let stale_version = store.meta("content.version")?.as_deref() != Some(version.as_str());
+    if store.meta(CARRY)?.is_some() {
+        carry_stats(store)?;
+    }
     let mut files = store.cfiles()?;
     // Discovery never lists what the repo's AI privacy file blocks; this keeps a file from being read should the
     // file have changed since.

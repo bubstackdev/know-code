@@ -526,6 +526,24 @@ pub fn status(v: &serde_json::Value) {
         s("/index/path").as_str().unwrap_or(""),
         s("/index/bytes").as_f64().unwrap_or(0.0) / 1e6
     );
+    if let Some(commit) = s("/base/commit").as_str() {
+        println!(
+            "base     cloned from base {commit}{}",
+            if s("/base/unchanged").as_bool() == Some(true) { "; no file differs from it" } else { "" }
+        );
+    }
+    if v.pointer("/index/counted").and_then(|c| c.as_str()) == Some("length") && v.get("base").is_some() {
+        println!("         the cache counts this index's whole length: this file system can't tell what it shares with the base");
+    }
+    if let Some(d) = v.get("derived") {
+        let say = |k: &str| match d[k].as_str().unwrap_or("") {
+            "from_base" => "carried from the base (no file differs)",
+            "current" => "computed for this index",
+            "stale" => "computed at an earlier generation; answers using it say so",
+            _ => "not computed yet; the first answer needing it computes it",
+        };
+        println!("derived  ranking {}; areas {}", say("ranking"), say("areas"));
+    }
     println!(
         "fresh    {} stale, {} removed (checked in {} ms{})",
         s("/freshness/stale_files"),
@@ -698,6 +716,9 @@ pub fn trace_text(root: &Path, t: &kc_store::trace::Trace, multi: bool) -> Strin
             };
             let binding = n.binding.as_deref().map(|b| format!(" (bound at {b})")).unwrap_or_default();
             w!(out, "{indent}{tag}{} {}  {}{conf}{site}{binding}", kw(&n.kind, &n.file), n.qualified, loc_in(r, n.repo.as_deref(), &n.file, line));
+            if let Some(r) = rivals_line(n.evidence.as_ref()) {
+                w!(out, "{indent}  {r}");
+            }
             cite_text(&mut out, &indent, n.cite.as_ref(), &mut seen);
         }
     }
@@ -763,6 +784,15 @@ fn declared(line: u32, at: u32) -> String {
 /// One affected symbol's line in the impact tree. A dependent's site is in its own code (a call, a use): the row
 /// leads with it, and with each of its other sites in the file as a place of its own, then says the line its symbol
 /// is declared at.
+/// Under `evidence: all`, the same-named declarations an edge was resolved past, each with why: `not X at a.cs:4
+/// (namespace), Y at b.cs:9 (arity)`.
+fn rivals_line(e: Option<&kc_store::answer::Evidence>) -> Option<String> {
+    let e = e.filter(|e| !e.rivals.is_empty())?;
+    let listed: Vec<String> = e.rivals.iter().map(|r| format!("{} at {} ({})", r.target, r.at, r.why)).collect();
+    let more = e.rivals_total.map(|t| format!(", {t} in all")).unwrap_or_default();
+    Some(format!("not {}{more}", listed.join(", ")))
+}
+
 fn affected_line(root: Option<&Path>, a: &kc_store::trace::Affected) -> String {
     let own = a.site.as_deref().and_then(|s| own_line(&a.file, s));
     let mut site = match own {
@@ -891,6 +921,9 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
                 shown[k] = true;
                 let a = &i.affected[k];
                 w!(out, "{}{}", "  ".repeat(d), affected_line(root, a));
+                if let Some(r) = rivals_line(a.evidence.as_ref()) {
+                    w!(out, "{}  {r}", "  ".repeat(d));
+                }
                 cite_text(out, &"  ".repeat(d), a.cite.as_ref(), seen);
                 push(&mut stack, (a.qualified.as_str(), a.hop), d + 1, shown);
             }
@@ -925,6 +958,9 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         for (k, a) in i.affected.iter().enumerate() {
             if !shown[k] {
                 w!(out, "  {}  (via {})", affected_line(root, a), a.via);
+                if let Some(r) = rivals_line(a.evidence.as_ref()) {
+                    w!(out, "    {r}");
+                }
                 cite_text(&mut out, "  ", a.cite.as_ref(), &mut seen);
             }
         }
@@ -988,6 +1024,27 @@ fn loc_file(root: Option<&Path>, file: &str) -> String {
     match root {
         Some(r) => format!("{}/{file}", repo_name(r)),
         None => file.to_string(),
+    }
+}
+
+pub fn test_targets(repos: &[crate::ops::RepoTestTargets]) {
+    if repos.iter().all(|(_, ts)| ts.is_empty()) {
+        println!("no declared test target: no SwiftPM test target, .NET test project or package.json test script");
+    }
+    for (root, targets) in repos {
+        for t in targets {
+            if repos.len() > 1 {
+                print!("{}/", root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            }
+            println!("{} {} ({}:{}): {} test(s)", t.kind, t.name, t.manifest, t.line, t.tests_total);
+            println!("  run: {}", t.command);
+            for c in &t.tests {
+                println!("  {} {}:{}", c.name, c.file, c.line);
+            }
+            if t.tests_total > t.tests.len() {
+                println!("  … {} more", t.tests_total - t.tests.len());
+            }
+        }
     }
 }
 
@@ -1412,11 +1469,25 @@ pub fn areas(repos: &[crate::ops::AreasRepo], picked: Option<&str>, env: &serde_
                 let deps: Vec<String> = area.depends_on.iter().map(|d| format!("#{} {} ({} file edges)", d.area, d.name, d.file_edges)).collect();
                 println!("  depends on: {}", deps.join(", "));
             }
+            if let Some((modules, outside)) = r.declared.by_area.get(&area.id).filter(|_| !r.declared.modules.is_empty()) {
+                let listed: Vec<String> = modules.iter().map(|m| format!("{} ({})", m.name, m.files)).collect();
+                let outside = if *outside > 0 { format!(", {outside} files in no module") } else { String::new() };
+                let spans = if modules.len() > 1 { "spans modules: " } else { "module: " };
+                println!("  {spans}{}{outside}", listed.join(", "));
+            }
             if picked.is_some() {
                 println!("  files:");
                 for f in &area.files {
                     println!("    {f}");
                 }
+            }
+        }
+        if picked.is_none() && !r.declared.modules.is_empty() {
+            println!("declared modules ({}):", r.declared.modules.len());
+            for m in &r.declared.modules {
+                let areas: Vec<String> = m.areas.iter().map(|id| format!("#{id}")).collect();
+                let dir = if m.dir.is_empty() { "(repo root)" } else { &m.dir };
+                println!("  {} {}  {dir}, {} files, areas {}", m.kind, m.name, m.files, if areas.is_empty() { "none".to_string() } else { areas.join(", ") });
             }
         }
         if picked.is_none() && !a.ungrouped.is_empty() {
@@ -1474,12 +1545,23 @@ pub fn notes(repos: &[crate::ops::NotesRepo]) {
     }
 }
 
-/// `context` on a file: its area and the notes on its symbols.
+/// `context` on a file: its top-level declarations, its area and the notes on its symbols.
 pub fn file_hit(f: &crate::ops::FileHit, multi: bool) {
     println!("file {}{}", if multi { format!("{}/", f.repo) } else { String::new() }, f.file);
     area_line(f.area.as_ref());
     if f.area.is_none() {
         println!("  in no area");
+    }
+    if !f.declarations.is_empty() {
+        let total = f.declarations_total.unwrap_or(f.declarations.len());
+        println!("declarations ({total}; pick one with {}:<line> or its name):", f.file);
+        for d in &f.declarations {
+            let members = if d.members > 0 { format!(" ({} members)", d.members) } else { String::new() };
+            println!("  {:<9} {}  {}-{}{members}", kw(&d.kind, &f.file), d.name, d.line, d.end_line);
+        }
+        if total > f.declarations.len() {
+            println!("  … {} more", total - f.declarations.len());
+        }
     }
     note_lines(&f.notes);
 }

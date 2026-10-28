@@ -124,12 +124,16 @@ lists what it doesn't. The full contract is in [docs/answers.md](docs/answers.md
 KnowCode is checked on public repositories, and every result is published with its misses.
 
 - **Cost per turn.** The default `kc` tool and the server's instructions take 501 tokens of every turn's context,
-  where 0.3's eight tools took 1,276 ([0.5.1 release gate](eval/release-gate/0.5.1.md),
+  where 0.3's eight tools took 1,276 ([0.6.0 release gate](eval/release-gate/0.6.0.md),
   [0.4's](eval/release-gate/0.4.0.md)).
+- **Identity, against a compiler.** On [identity-v1](eval/identity-v1/README.md)'s references, labelled by each
+  language's toolchain, links KnowCode marks `exact` are right 0.993 of the time in C#, 0.995 in Swift and 0.998 in
+  TypeScript. Some names the toolchain resolves outside the workspace are still linked inside it (C# 6, Swift 22,
+  TypeScript 37), which the gate counts as missed ([0.6.0 release gate](eval/release-gate/0.6.0.md)).
 - **History questions.** On [history-v1](eval/history-v1/README.md)'s 10 method-level questions, labelled from git
   alone, `history` has recall 1.0 at precision 1.0; of the plain-git approaches, `git log -L :name:` has 0.526 at 1.0
   and `git log --follow` 0.965 at 0.062. On its caller questions it matches `git log -S`'s recall at higher precision
-  ([0.5.1 release gate](eval/release-gate/0.5.1.md); 0.5.0 missed one, [stated](eval/release-gate/0.5.0.md)).
+  ([0.6.0 release gate](eval/release-gate/0.6.0.md); 0.5.0 missed one, [stated](eval/release-gate/0.5.0.md)).
 - **Answers on recorded questions.** The release gate replays the 1,092 KnowCode calls agents made in the public studies
   and scores the answers against the studies' labels, with no model calls. The gate reports recall per question type
   and compares builds; it says nothing about how agents use the answers

@@ -530,6 +530,20 @@ struct Def {
     params: Option<String>,
     /// The defining file's language (`files.lang`).
     lang: String,
+    /// The line the declaration starts on.
+    line: u32,
+    /// Declared `partial` (C#): one declaration with its other parts.
+    partial: bool,
+    /// A Swift function's parameters, read from its signature; `None` elsewhere, or when the signature was cut.
+    swift_params: Option<Vec<SwiftParam>>,
+    /// A Swift function declared `async` (or `reasync`).
+    is_async: bool,
+    /// Declared `export` (TypeScript): at a module's top level.
+    exported: bool,
+    /// Declared `private` or `fileprivate` (Swift): named only in its own file.
+    file_private: bool,
+    /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
+    on_actor: bool,
 }
 
 impl Def {
@@ -539,6 +553,21 @@ impl Def {
         let Some(min) = self.min_args else { return true };
         let fits = |n: u32| n >= min && self.max_args.is_none_or(|m| n <= m);
         fits(args) || (self.extension && args > 0 && fits(args - 1))
+    }
+
+    /// [`Def::accepts`] for call `hit`: an extension method takes its receiver as an argument only when called as a
+    /// static method, unqualified or through its declaring class (`Sequences.FirstOrDefault(xs)`). Called on a value
+    /// (`xs.FirstOrDefault(p)`, `Expression.Not(x)` on another type), the receiver is no argument.
+    fn accepts_call(&self, hit: &RefHit, args: u32) -> bool {
+        let as_static = match hit.receiver.as_deref() {
+            None => true,
+            Some(r) => self.declaring.as_deref().is_some_and(|c| last_segment(c) == last_segment(r)),
+        };
+        if self.extension && !as_static {
+            let Some(min) = self.min_args else { return true };
+            return args >= min && self.max_args.is_none_or(|m| args <= m);
+        }
+        self.accepts(args)
     }
 }
 
@@ -659,7 +688,8 @@ pub const UNPLACED_MODULE: &str = "tsconfig maps the import to no indexed file";
 /// [`RefHit::basis`]: several dependencies the file imports declare the name, and the import doesn't say which.
 pub const AMBIGUOUS_DEPENDENCY: &str = "several imported dependencies declare it";
 /// [`RefHit::basis`]: the target is a protocol requirement the receiver's type satisfies with a member of its own that
-/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`).
+/// isn't in the repo (`Float`'s `isFinite` for `GridScalar.isFinite`). The row is `external_likely`, the requirement
+/// listed as its target.
 pub const VIA_PROTOCOL: &str = "via protocol: the receiver's type satisfies this requirement outside the repo";
 
 impl RefHit {
@@ -1981,6 +2011,181 @@ fn stdlib_member(file: &str, name: &str) -> bool {
     }
 }
 
+/// The type the qualifier `q` of a type reference names, read as code inside the types of `chain` (innermost first)
+/// reads it: the qualified name of a type the repo declares as `<scope>.q` for a scope in the chain, else as `q`.
+/// `None` when the repo declares no such type.
+fn qualifier_in_scope(conn: &Connection, q: &str, chain: &[String]) -> Result<Option<String>> {
+    let name = q.rsplit('.').next().unwrap_or(q);
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT CASE WHEN container IS NULL THEN name ELSE container || '.' || name END FROM symbols
+         WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ({}, 'typealias')",
+        TYPE_KINDS.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(", ")
+    ))?;
+    let declared: HashSet<String> = stmt.query_map([name], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(chain.iter().map(|scope| format!("{scope}.{q}")).chain(std::iter::once(q.to_string())).find(|c| declared.contains(c)))
+}
+
+/// Of `defs`, those code in the Swift file `file` can name: declared in its own SwiftPM target or one it imports, or
+/// where the target can't be told (outside a `Sources/<Target>/` layout, as is `file`'s own).
+fn swift_seen<'a>(conn: &Connection, file: &str, defs: Vec<&'a Def>) -> Result<Vec<&'a Def>> {
+    let Some(here) = crate::identity::module_of(file, "swift") else { return Ok(defs) };
+    let imports: Vec<String> = conn
+        .prepare_cached("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?
+        .query_map([file], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(defs
+        .into_iter()
+        .filter(|d| match crate::identity::module_of(&d.file, &d.lang) {
+            None => true,
+            Some(m) => m == here || imports.iter().any(|i| imports_module(i, &m)),
+        })
+        .collect())
+}
+
+/// The types named `…` through the qualifier `q`, among `cands`: those nested in the type `q` names (`Ring.Index` in
+/// `struct Ring { struct Index }`), the qualifier read as the code around it reads it (`self_chain`: the caller's type
+/// and the types enclosing it, so `Child.State` inside `Parent` is `Parent.Child.State` first), then as written, then
+/// any type whose name ends with it; else those declared at the top of a module named `q` (`Rings.Ring`). A leading
+/// module qualifies the rest (`Rings.Ring.Index`). With none, the qualifier is a type or module the repo doesn't
+/// declare (`Array<T>.Index`, `String.UnicodeScalarView`, `globalThis.Event`, a generic parameter's `Base.Element`, a C
+/// module's type), and so is the name: `unresolved`, never the repo's same-named type. Of several declarations of the
+/// one name, one in `file` is the one meant.
+fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) -> (&'static str, Vec<i64>) {
+    let module = |d: &Def| crate::identity::module_of(&d.file, &d.lang);
+    let one = |found: Vec<&Def>| {
+        // Of several declarations of one name, the one in the referencing file is the one it means.
+        let here: Vec<&Def> = found.iter().copied().filter(|d| d.file == file).collect();
+        let found = if here.is_empty() { found } else { here };
+        let mut owners: Vec<(Option<&str>, Option<String>)> = found.iter().map(|d| (d.container.as_deref(), module(d))).collect();
+        owners.sort();
+        owners.dedup();
+        (if owners.len() == 1 { "exact" } else { "ambiguous" }, found.iter().map(|d| d.id).collect())
+    };
+    let in_container = |c: &str| -> Vec<&Def> { cands.iter().copied().filter(|d| d.container.as_deref() == Some(c)).collect() };
+    let mut q = q;
+    loop {
+        for scope in self_chain {
+            let found = in_container(&format!("{scope}.{q}"));
+            if !found.is_empty() {
+                return one(found);
+            }
+        }
+        let exact = in_container(q);
+        if !exact.is_empty() {
+            return one(exact);
+        }
+        // Only the name's end matches: likely, not certain (the qualifier may be a generic parameter of that name).
+        let nested: Vec<&Def> =
+            cands.iter().copied().filter(|d| d.container.as_deref().is_some_and(|c| c.ends_with(&format!(".{q}")))).collect();
+        if !nested.is_empty() {
+            let (confidence, ids) = one(nested);
+            return (if confidence == "exact" { "unique_name" } else { confidence }, ids);
+        }
+        let top: Vec<&Def> = cands.iter().copied().filter(|d| d.container.is_none() && module(d).as_deref() == Some(q)).collect();
+        if !top.is_empty() {
+            return one(top);
+        }
+        match q.split_once('.') {
+            Some((head, rest)) if cands.iter().any(|d| module(d).as_deref() == Some(head)) => q = rest,
+            _ => return ("unresolved", Vec::new()),
+        }
+    }
+}
+
+/// Standard-library and Foundation protocols and types a repo's own nested types also get named after (a test
+/// support's `MinimalDecoder.Decoder`): a receiver typed by one of these bare names is the library's.
+const SWIFT_LIBRARY_NAMES: &[&str] = &[
+    "Decoder", "Encoder", "Error", "Sequence", "Collection", "IteratorProtocol", "AsyncSequence", "AsyncIteratorProtocol",
+    "Hashable", "Equatable", "Comparable", "Identifiable", "Codable", "Decodable", "Encodable", "Sendable",
+    "CustomStringConvertible", "SingleValueDecodingContainer", "SingleValueEncodingContainer",
+    "UnkeyedDecodingContainer", "UnkeyedEncodingContainer", "KeyedDecodingContainerProtocol",
+    "KeyedEncodingContainerProtocol", "CodingKey", "Clock", "Executor", "Actor",
+];
+
+/// Whether the signature of `from` (the code a reference is in) writes the type name `bare` qualified, as
+/// `JSON.Encodable` for `Encodable`.
+fn signature_qualifies(conn: &Connection, from: Option<&FromSymbol>, bare: &str) -> Result<bool> {
+    let Some(from) = from else { return Ok(false) };
+    let mut stmt = conn.prepare_cached("SELECT signature FROM symbols WHERE id = ?1")?;
+    let sig: Option<String> = stmt.query_row([from.id], |r| r.get(0)).optional()?.flatten();
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    Ok(sig.is_some_and(|sig| {
+        sig.match_indices(&format!(".{bare}")).any(|(i, m)| {
+            sig[..i].chars().next_back().is_some_and(ident) && !sig[i + m.len()..].chars().next().is_some_and(ident)
+        })
+    }))
+}
+
+/// Whether `d` is a member of a type named `bare` nested in another (`MinimalDecoder.Decoder` for `Decoder`), that
+/// other type not enclosing the code (`self_chain`).
+fn nested_elsewhere(d: &Def, bare: &str, self_chain: &[String]) -> bool {
+    let Some(c) = d.container.as_deref() else { return false };
+    c.ends_with(&format!(".{bare}")) && !self_chain.iter().any(|s| c == format!("{s}.{bare}"))
+}
+
+/// Whether call `hit` is one none of the declarations resolution picked for it (`ids`, of `named`) can take: each is a
+/// function whose parameters are known, and none takes the call's argument labels (Swift) or as many arguments as it
+/// passes (C#). Such a call is another declaration's, outside the repo (`Equals(a, b)` is `object.Equals`,
+/// `xs.Contains(x)` LINQ's, `xs.append(1)` the library's when the repo declares only `append(optional:)`).
+fn takes_none(hit: &RefHit, named: &[Def], ids: &[i64]) -> bool {
+    if hit.kind != "call" || ids.is_empty() {
+        return false;
+    }
+    let callable: Vec<&Def> = named.iter().filter(|d| ids.contains(&d.id)).collect();
+    if callable.len() < ids.len() {
+        return false;
+    }
+    if hit.file.ends_with(".swift") {
+        let Some(call) = SwiftCall::decode(hit.arg_types.as_deref()) else { return false };
+        return callable.iter().all(|d| d.swift_params.as_ref().is_some_and(|p| !call.fits(p)));
+    }
+    if hit.file.ends_with(".cs")
+        && let Some(n) = hit.args
+    {
+        return callable.iter().all(|d| d.min_args.is_some() && !d.accepts_call(hit, n));
+    }
+    false
+}
+
+/// Where Swift code stands with respect to an extension.
+#[derive(Clone, PartialEq)]
+enum ExtensionScope {
+    /// In the header of an extension of a nested type: the extended type and its conformances, read in the file's
+    /// scope.
+    Header,
+    /// Inside the body of an extension of the nested type named here (qualified), or in a type declared there: the
+    /// extended type and the types nested in it are in scope, the types enclosing it aren't.
+    Body(String),
+    /// Elsewhere.
+    None,
+}
+
+/// Where the Swift symbol `from` stands with respect to an extension (see [`ExtensionScope`]).
+fn swift_extension_scope(conn: &Connection, from: &FromSymbol) -> Result<ExtensionScope> {
+    // Only an extension of a nested type (`extension A.B`) changes what is in scope.
+    if from.kind == "extension" {
+        return Ok(if from.container.is_some() { ExtensionScope::Header } else { ExtensionScope::None });
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT p.id, p.kind, CASE WHEN p.container IS NULL THEN p.name ELSE p.container || '.' || p.name END
+         FROM symbols s JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1",
+    )?;
+    let mut id = from.id;
+    // Declarations nest shallowly; the bound guards against a malformed parent chain.
+    for _ in 0..16 {
+        let Some((parent, kind, qualified)) =
+            stmt.query_row([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))).optional()?
+        else {
+            return Ok(ExtensionScope::None);
+        };
+        if kind == "extension" {
+            return Ok(if qualified.contains('.') { ExtensionScope::Body(qualified) } else { ExtensionScope::None });
+        }
+        id = parent;
+    }
+    Ok(ExtensionScope::None)
+}
+
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
 fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
@@ -1992,6 +2197,57 @@ fn group_confidence(cands: &[&Def]) -> (&'static str, Vec<i64>) {
         1 => ("unique_name", ids),
         _ => ("ambiguous", ids),
     }
+}
+
+/// An `exact` answer names one declaration. Of several (overloads, same-named members of one type, same-named types
+/// in two modules), the one the evidence decides: parts of one declaration stay together (TypeScript's merged
+/// declarations, a Python redefinition, a C# `partial` member); in Swift and TypeScript, a static or an instance member as the
+/// receiver is a type's bare name or a value; in Swift, of one name declared in several modules, the caller's own
+/// module's. Otherwise the answer is `ambiguous`, with every candidate listed. C# overloads aren't picked by arity
+/// here: a `params` method called in its normal form, or a generic one, takes as many arguments as another overload;
+/// the argument types decide them before resolution (`narrow_by_argument_types`).
+fn settle(hit: &RefHit, ids: Vec<i64>, named: &[Def]) -> (&'static str, Vec<i64>) {
+    let cands: Vec<&Def> = ids.iter().filter_map(|id| named.iter().find(|d| d.id == *id)).collect();
+    if cands.len() < ids.len() {
+        return ("ambiguous", ids);
+    }
+    let first = cands[0];
+    let same_name = cands.iter().all(|d| d.container == first.container && d.kind == first.kind);
+    let one_file = cands.iter().all(|d| d.container == first.container && d.file == first.file);
+    // TypeScript merges same-named declarations of one scope (overload signatures, a `const` and a `type`): a class's
+    // members, or a module's exports. Same-named declarations local to different functions are different ones.
+    let merged = one_file
+        && matches!(first.lang.as_str(), "typescript" | "tsx" | "javascript")
+        && (first.container.is_some() || cands.iter().all(|d| d.exported));
+    let one_declaration = cands.iter().all(|d| d.file == first.file && d.line == first.line)
+        || merged
+        || one_file && first.lang == "python"
+        || one_file && same_name && cands.iter().all(|d| d.partial);
+    if one_declaration {
+        return ("exact", ids);
+    }
+    let one = |picked: Vec<&Def>| (picked.len() == 1).then(|| ("exact", vec![picked[0].id]));
+    let swift = hit.file.ends_with(".swift");
+    if swift || crate::ts::is_ts_path(&hit.file) {
+        // `Type.member` reaches a static member, `value.member` an instance one. A dotted receiver (`Type.shared`)
+        // may be either.
+        let receiver = hit.receiver.as_deref().unwrap_or("");
+        let through_type = receiver.starts_with(char::is_uppercase) && receiver.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let through_value = receiver.starts_with(|c: char| c.is_lowercase()) && receiver.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if (through_type || through_value)
+            && let Some(r) = one(cands.iter().copied().filter(|d| d.is_static == through_type).collect())
+        {
+            return r;
+        }
+    }
+    // A Swift module's own declaration shadows one of the same name it imports.
+    if swift && same_name {
+        let module = module_of(&hit.file);
+        if let Some(r) = one(cands.iter().copied().filter(|d| module_of(&d.file) == module).collect()) {
+            return r;
+        }
+    }
+    ("ambiguous", ids)
 }
 
 /// The module a file most likely belongs to: `Sources/<Name>` or `Tests/<Name>` for SwiftPM layouts, else its
@@ -2018,13 +2274,29 @@ fn type_like(receiver: &str) -> bool {
 /// `recv_chain` is the receiver's type followed by its supertypes; `self_chain` is the caller's type, its enclosing
 /// types, then its supertypes.
 ///
-/// A call's overloads are first narrowed to those taking as many arguments as it passes; when that leaves nothing to
-/// point to, all of them are considered.
+/// A call's overloads are first narrowed to those taking its argument labels (Swift) or as many arguments as it passes
+/// (C#); when that leaves nothing to point to, all of them are considered. (A call none of the picked declarations can
+/// take is settled after: see [`takes_none`].)
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
     let all: Vec<&Def> = defs.to_vec();
+    // A Swift call's argument labels rule out the overloads it can't call.
+    if hit.kind == "call"
+        && hit.file.ends_with(".swift")
+        && let Some(call) = SwiftCall::decode(hit.arg_types.as_deref())
+    {
+        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.swift_params.as_ref().is_none_or(|p| call.fits(p))).collect();
+        if fitting.len() < all.len() {
+            let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
+            if !ids.is_empty() {
+                return (confidence, ids);
+            }
+        }
+    }
     if hit.kind == "call"
         && let Some(n) = hit.args
     {
+        // Narrowed as either call form allows: the receiver-aware fit only rules a call out (see `takes_none`), never
+        // picks among overloads, as an outside type's own method may be the one a value's call reaches.
         let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
@@ -2105,6 +2377,26 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     };
     let narrowed: Vec<&Def> = if let Receiver::Known(chain) | Receiver::Foreign(chain) = recv {
         let mut found = first_in(chain, false);
+        // An awaited Swift call is made in an async context, where Swift prefers an `async` overload: when the
+        // receiver's own type has only synchronous members of the name (each signature read whole) and a type further
+        // up its chain has an `async` one (`try await channel.getOption(x)`: the channel class's `getOption` returns a
+        // future, `extension Channel`'s is `async`), the `async` one. An actor's synchronous member is awaited from
+        // outside it anyway (`await cache.get(k)`), so there `await` says nothing.
+        if hit.kind == "call"
+            && hit.file.ends_with(".swift")
+            && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| c.a)
+            && !found.is_empty()
+            && found.iter().all(|d| !d.is_async && !d.on_actor && d.swift_params.is_some())
+        {
+            let later: Vec<&Def> = chain
+                .iter()
+                .map(|c| in_container(c).into_iter().filter(|d| d.is_async).collect::<Vec<_>>())
+                .find(|f| !f.is_empty())
+                .unwrap_or_default();
+            if !later.is_empty() {
+                found = later;
+            }
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
@@ -2128,6 +2420,10 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             Some("self") | Some("Self") => first_in(self_chain, false),
             // TypeScript's `super.m()`: the nearest supertype defining it, never the caller's own override.
             Some("super") if crate::ts::is_ts_path(&hit.file) => first_in(self_chain.get(1..).unwrap_or_default(), false),
+            // A type written through a qualifier (`Outer.Inner`, `Module.Type`, `Array<T>.Index`) is looked up there.
+            Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
+                return qualified_type(r, &hit.file, self_chain, &cands);
+            }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
                 let mut found = in_container(r);
@@ -2577,7 +2873,10 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
      CASE WHEN f.lang = 'csharp' THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
-       CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang";
+       CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
+     s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
+     f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2596,7 +2895,189 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         ns: r.get::<_, Option<String>>(11)?.filter(|n| !n.is_empty()),
         params: r.get(12)?,
         lang: r.get(13)?,
+        line: r.get(14)?,
+        partial: r.get(15)?,
+        swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
+        is_async: r.get::<_, Option<String>>(16)?.as_deref().is_some_and(swift_async),
+        exported: r.get(17)?,
+        file_private: r.get(18)?,
+        on_actor: r.get(19)?,
     })
+}
+
+/// Whether a Swift function's signature declares it `async` (or `reasync`): the effects after its parameter list,
+/// not a closure parameter's (`_ body: () async -> Void`).
+fn swift_async(signature: &str) -> bool {
+    let Some(at) = signature.find("func ") else { return false };
+    let after = &signature[at + 5..];
+    let mut depth = 0i32;
+    let Some(open) = after.char_indices().find_map(|(i, c)| {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            '(' if depth == 0 => return Some(i),
+            _ => {}
+        }
+        None
+    }) else {
+        return false;
+    };
+    let mut depth = 0i32;
+    let Some(close) = after[open..].char_indices().find_map(|(i, c)| {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(open + i)
+    }) else {
+        return false;
+    };
+    let effects = after[close + 1..].split("->").next().unwrap_or("");
+    effects.split_whitespace().any(|w| w == "async" || w == "reasync")
+}
+
+/// A Swift function's parameter, as its signature declares it: what a call has to write for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwiftParam {
+    /// The argument label; `None` for `_`.
+    label: Option<String>,
+    /// Has a default value: a call may leave it out.
+    default: bool,
+    /// `T...`: takes the unlabeled arguments that follow its own.
+    variadic: bool,
+    /// A function type: a trailing closure can pass it.
+    closure: bool,
+}
+
+/// `s` split at `sep` where no bracket, angle bracket or string is open.
+fn split_top(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0i32, false, 0);
+    let mut prev = ' ';
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' | '<' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth -= 1,
+            // `->` isn't a closing angle bracket.
+            '>' if !quoted && prev != '-' => depth -= 1,
+            c if c == sep && depth == 0 && !quoted => {
+                out.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+        prev = c;
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// A Swift function's parameters from its signature (`func parse(_ s: String, from base: Int = 10)`); `None` when the
+/// signature has no complete parameter list (cut at its cap).
+fn swift_params(signature: &str) -> Option<Vec<SwiftParam>> {
+    let after = &signature[signature.find("func ")? + 5..];
+    // The parameter list opens at the first parenthesis outside the generic parameters.
+    let mut depth = 0i32;
+    let open = after.char_indices().find_map(|(i, c)| {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            '(' if depth == 0 => return Some(i),
+            _ => {}
+        }
+        None
+    })?;
+    let list = &after[open + 1..];
+    let mut depth = 1i32;
+    let close = list.char_indices().find_map(|(i, c)| {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(i)
+    })?;
+    let list = list[..close].trim();
+    if list.is_empty() {
+        return Some(Vec::new());
+    }
+    split_top(list, ',')
+        .into_iter()
+        // A trailing comma (`in context: _Context,`) leaves no parameter after it.
+        .filter(|param| !param.trim().is_empty())
+        .map(|param| {
+            let parts = split_top(param, ':');
+            let head = parts.first()?.split_whitespace().filter(|w| !w.starts_with('@')).collect::<Vec<_>>();
+            let rest = parts[1..].join(":");
+            let (ty, default) = match split_top(&rest, '=').as_slice() {
+                [ty] => (ty.trim().to_string(), false),
+                [ty, ..] => (ty.trim().to_string(), true),
+                [] => return None,
+            };
+            let label = head.first().filter(|w| **w != "_").map(|w| w.to_string());
+            Some(SwiftParam { label, default, variadic: ty.ends_with("..."), closure: ty.contains("->") })
+        })
+        .collect()
+}
+
+/// A Swift call's argument labels (see `kc_extract`'s `call_labels`): in parentheses, then the trailing closures'.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+struct SwiftCall {
+    l: Vec<Option<String>>,
+    t: Vec<Option<String>>,
+    /// Awaited (`await f(…)`): in an async context, where Swift prefers an `async` overload.
+    #[serde(default)]
+    a: bool,
+}
+
+impl SwiftCall {
+    fn decode(json: Option<&str>) -> Option<SwiftCall> {
+        serde_json::from_str(json?).ok()
+    }
+
+    /// Whether a call writing these labels can call a function with `params`: each argument takes the next
+    /// parameter with its label, past parameters with defaults; a variadic one takes the unlabeled arguments after
+    /// it; a trailing closure takes the next parameter it can pass; the parameters left over all have defaults.
+    fn fits(&self, params: &[SwiftParam]) -> bool {
+        let mut i = 0;
+        let mut k = 0;
+        while k < self.l.len() {
+            let Some(p) = params.get(i) else { return false };
+            if p.label == self.l[k] {
+                i += 1;
+                k += 1;
+                if p.variadic {
+                    while k < self.l.len() && self.l[k].is_none() {
+                        k += 1;
+                    }
+                }
+            } else if p.default || p.variadic {
+                i += 1;
+            } else {
+                return false;
+            }
+        }
+        for label in &self.t {
+            loop {
+                let Some(p) = params.get(i) else { return false };
+                i += 1;
+                let takes = match label {
+                    Some(l) => p.label.as_deref() == Some(l.as_str()),
+                    // A closure parameter, or one whose type isn't written as a function (a type alias).
+                    None => p.closure || !(p.default || p.variadic),
+                };
+                if takes {
+                    break;
+                }
+                if !(p.default || p.variadic) {
+                    return false;
+                }
+            }
+        }
+        params[i.min(params.len())..].iter().all(|p| p.default || p.variadic)
+    }
 }
 
 /// The overloads of one name, for telling which a call the repo couldn't resolve (one through a library's type) may
@@ -2625,6 +3106,44 @@ impl<'c> Overloads<'c> {
         }
         Ok(narrow_by_argument_types(&mut self.oracle, hit, fitting)?.iter().any(|d| d.id == id))
     }
+}
+
+/// The type a C# member reference `X` names when it qualifies a member of that type (`X.Y`, read where `Y` follows
+/// it on its line). C# binds `X` in `X.Y` to the type when `X` is also a member of the type `X` ("Color Color":
+/// `SourceType == SourceType.Channel` in a class with a `SourceType SourceType` property) and `Y` is one of the type's
+/// enum cases or static members. Among `named` (the declarations of the name in scope), the one type declaring `Y`;
+/// `None` when no member of the name is in scope too, or `Y` settles nothing.
+fn color_color(conn: &Connection, hit: &RefHit, named: &[Def]) -> Result<Option<i64>> {
+    let types: Vec<&Def> = named.iter().filter(|d| matches!(d.kind.as_str(), "enum" | "class" | "struct")).collect();
+    if types.is_empty() || hit.col == 0 || !named.iter().any(|d| compatible("member", &d.kind)) {
+        return Ok(None);
+    }
+    // The member read through this occurrence: the reference right after `X.` on the line.
+    let next: Option<String> = conn
+        .prepare_cached(
+            "SELECT r.name FROM refs r JOIN files f ON f.id = r.file_id
+              WHERE f.path = ?1 AND r.line = ?2 AND r.receiver = ?3 AND r.col = ?4",
+        )?
+        .query_row(params![hit.file, hit.line, hit.name, hit.col + hit.name.len() as u32 + 1], |r| r.get(0))
+        .optional()?;
+    let Some(member) = next else { return Ok(None) };
+    let mut owners = Vec::new();
+    for t in types {
+        let qualified = match &t.container {
+            Some(c) => format!("{c}.{}", hit.name),
+            None => hit.name.clone(),
+        };
+        let declares: bool = conn
+            .prepare_cached(
+                "SELECT EXISTS (SELECT 1 FROM symbols s WHERE s.name = ?1 AND s.container = ?2
+                   AND (s.kind = 'case' OR s.signature LIKE '%static %' OR s.signature LIKE '%const %'))",
+            )?
+            .query_row(params![member, qualified], |r| r.get(0))?;
+        if declares {
+            owners.push(t.id);
+        }
+    }
+    Ok(if owners.len() == 1 { owners.pop() } else { None })
 }
 
 fn defs_named(conn: &Connection, name: &str) -> Result<Vec<Def>> {
@@ -4475,6 +4994,93 @@ pub struct Resolution {
     precise: Option<crate::scip::Precise>,
 }
 
+/// Rivals an edge's evidence lists at most (`rivals_total` counts them all).
+const RIVALS_SHOWN: usize = 5;
+
+thread_local! {
+    /// Whether references resolved on this thread say which same-named declarations they were resolved past.
+    static EXPLAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While the returned guard lives, references resolved on this thread list their rivals (see
+/// [`crate::answer::Rival`]): what `evidence: all` asks for. Off otherwise, so no other answer pays for it.
+pub fn explain_rivals() -> ExplainRivals {
+    let was = EXPLAIN.with(|e| e.replace(true));
+    ExplainRivals(was)
+}
+
+/// Turns [`explain_rivals`] back off when dropped.
+pub struct ExplainRivals(bool);
+
+impl Drop for ExplainRivals {
+    fn drop(&mut self) {
+        let was = self.0;
+        EXPLAIN.with(|e| e.set(was));
+    }
+}
+
+fn explaining() -> bool {
+    EXPLAIN.with(|e| e.get())
+}
+
+/// Records, for each of `before` that `after` dropped, `why` (the first reason recorded wins).
+fn dropped_by(dropped: &mut HashMap<i64, &'static str>, on: bool, before: &[&Def], after: &[&Def], why: &'static str) {
+    if !on {
+        return;
+    }
+    for d in before {
+        if !after.iter().any(|a| a.id == d.id) {
+            dropped.entry(d.id).or_insert(why);
+        }
+    }
+}
+
+/// Whether a declaration in `lang` is one code in `file` can name: TypeScript, TSX and JavaScript count as one.
+fn same_language(file: &str, lang: &str) -> bool {
+    let family = if matches!(lang, "typescript" | "tsx" | "javascript") { "ts" } else { lang };
+    let ext = file.rsplit_once('.').map_or("", |(_, e)| e);
+    let of_file = match ext {
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
+        "cs" => Some("csharp"),
+        "swift" => Some("swift"),
+        "py" => Some("python"),
+        "rs" => Some("rust"),
+        _ => None,
+    };
+    of_file.is_none_or(|l| l == family)
+}
+
+/// Why [`resolve`] ruled out `d` for `hit`: the first of its checks `d` fails, else `scope` (a nearer declaration
+/// was picked).
+fn why_not(hit: &RefHit, recv: &Receiver, self_chain: &[String], d: &Def) -> &'static str {
+    if !compatible(&hit.kind, &d.kind) {
+        return "kind";
+    }
+    if d.in_script && d.file != hit.file {
+        return "visibility";
+    }
+    if hit.kind == "call"
+        && hit.file.ends_with(".swift")
+        && let Some(call) = SwiftCall::decode(hit.arg_types.as_deref())
+        && d.swift_params.as_ref().is_some_and(|p| !call.fits(p))
+    {
+        return "argument_labels";
+    }
+    if hit.kind == "call"
+        && let Some(n) = hit.args
+        && !d.accepts(n)
+    {
+        return "arity";
+    }
+    let on = |chain: &[String]| d.container.as_deref().is_some_and(|c| chain.iter().any(|t| c == t || c.ends_with(&format!(".{t}")) || last_segment(c) == last_segment(t)));
+    match recv {
+        Receiver::Known(chain) | Receiver::Foreign(chain) if !chain.is_empty() && !on(chain) => "receiver_type",
+        _ if hit.receiver.is_some() && d.container.is_none() && !matches!(hit.kind.as_str(), "instantiate" | "type_ref") => "receiver_type",
+        _ if hit.receiver.is_none() && d.container.is_some() && !on(self_chain) => "receiver_type",
+        _ => "scope",
+    }
+}
+
 fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: &mut Resolution) -> Result<()> {
     let mut precise = match (use_scip, shared.precise.take()) {
         (false, _) => None,
@@ -4487,7 +5093,11 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     // Kept for the next call; an error leaves `shared` without them, to be read again.
     oracle.vis = std::mem::take(&mut shared.vis);
     // Per caller type, or per C# extension method's declaring class: the types an unqualified name is looked up in.
-    let mut self_chains: HashMap<(Option<String>, bool), Vec<String>> = HashMap::new();
+    // The caller's type, whether it is a C# extension method's extended type, and whether the code is in a Swift
+    // extension's body.
+    let mut self_chains: HashMap<(Option<String>, bool, bool), Vec<String>> = HashMap::new();
+    // Swift code in an extension, by the referencing symbol (see [`ExtensionScope`]).
+    let mut in_extension: HashMap<i64, ExtensionScope> = HashMap::new();
     // Per C# method: the static class declaring it, when it is an extension method.
     let mut declaring: HashMap<i64, Option<String>> = HashMap::new();
     // Per service, member, argument count and registration: the implementation's member it is bound to.
@@ -4587,8 +5197,16 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         let mut seen_ns: Option<Vec<String>> = None;
         let by_import = scoped.is_some();
         let mut receiver_known = false;
+        // Under `evidence: all`, why each same-named declaration was ruled out, by the first check that did (see
+        // [`crate::answer::Rival`]).
+        let explain = explaining();
+        let mut dropped: HashMap<i64, &'static str> = HashMap::new();
+        // C#'s "Color Color": `X.Y`, where `X` names both a member in scope and a type whose member `Y` is.
+        let color = if cs && hit.kind == "member" && hit.receiver.is_none() { color_color(conn, hit, named)? } else { None };
         let (mut confidence, mut ids) = if let Some(r) = scoped {
             r
+        } else if let Some(id) = color {
+            ("exact", vec![id])
         } else if !named.iter().any(|d| compatible(&hit.kind, &d.kind)) {
             ("unresolved", Vec::new())
         } else {
@@ -4633,12 +5251,33 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 _ => None,
             };
             let caller = (extended.clone().or_else(|| hit.caller_type()), extended.is_some());
+            // Swift code in `extension A.B` (declared at a file's top) sees B's members, not A's: the extension's scope
+            // is the file. Its header (the extended type, the conformances) is read in the file's scope alone.
+            let extension_scope = match &hit.from {
+                Some(f) if hit.file.ends_with(".swift") => {
+                    if let std::collections::hash_map::Entry::Vacant(e) = in_extension.entry(f.id) {
+                        e.insert(swift_extension_scope(conn, f)?);
+                    }
+                    in_extension[&f.id].clone()
+                }
+                _ => ExtensionScope::None,
+            };
+            let caller = match &extension_scope {
+                ExtensionScope::Header => (None, false, false),
+                ExtensionScope::Body(_) => (caller.0, caller.1, true),
+                ExtensionScope::None => (caller.0, caller.1, false),
+            };
             if !self_chains.contains_key(&caller) {
                 let mut chain = Vec::new();
                 let mut s = caller.0.clone();
                 while let Some(cur) = s {
                     s = cur.rsplit_once('.').map(|(p, _)| p.to_string());
+                    let last = matches!(&extension_scope, ExtensionScope::Body(extended) if *extended == cur);
                     chain.push(cur);
+                    // Types enclosing the extended type aren't in scope in its extension.
+                    if last {
+                        break;
+                    }
                 }
                 if let Some(c) = caller.0.as_ref().filter(|_| !caller.1) {
                     for sup in oracle.chain(c)?.into_iter().skip(1) {
@@ -4663,6 +5302,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
                 _ => named.iter().collect(),
             };
+            let all_named: Vec<&Def> = named.iter().collect();
+            dropped_by(&mut dropped, explain, &all_named, &usable, "namespace");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // Of same-named C# extension methods, those whose declaring class's namespace the file sees. When it
             // sees none, they all stay: the file may rely on a `global using`, which isn't read.
             let usable = if cs && hit.receiver.is_some() && usable.iter().filter(|d| d.extension).nth(1).is_some() {
@@ -4676,13 +5318,67 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             } else {
                 usable
             };
+            dropped_by(&mut dropped, explain, &before, &usable, "namespace");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // Overloads the argument types rule out.
             let usable = if cs && hit.kind == "call" && hit.arg_types.is_some() && usable.len() > 1 {
                 narrow_by_argument_types(&mut oracle, hit, usable)?
             } else {
                 usable
             };
-            resolve(hit, &recv, &self_chains[&caller], &usable)
+            dropped_by(&mut dropped, explain, &before, &usable, "argument_types");
+            let before = if explain { usable.clone() } else { Vec::new() };
+            // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
+            let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
+                swift_seen(conn, &hit.file, usable)?
+            } else {
+                usable
+            };
+            dropped_by(&mut dropped, explain, &before, &usable, "module");
+            let before = if explain { usable.clone() } else { Vec::new() };
+            // A qualifier naming a type the repo declares in scope: the name is nested there or nowhere in the repo
+            // (a member a macro generates, `@Reducer enum Destination`'s `State`), never a same-named type elsewhere.
+            let usable = match hit.receiver.as_deref() {
+                Some(q) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || ts) => {
+                    match qualifier_in_scope(conn, q, &self_chains[&caller])? {
+                        Some(owner) => usable.into_iter().filter(|d| d.container.as_deref() == Some(owner.as_str())).collect(),
+                        None => usable,
+                    }
+                }
+                _ => usable,
+            };
+            dropped_by(&mut dropped, explain, &before, &usable, "receiver_type");
+            let before = if explain { usable.clone() } else { Vec::new() };
+            // A Swift `private` or `fileprivate` declaration is named only in its own file.
+            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
+            dropped_by(&mut dropped, explain, &before, &usable, "visibility");
+            let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
+            if explain {
+                for d in usable.iter().filter(|d| !ids.contains(&d.id)) {
+                    dropped.entry(d.id).or_insert_with(|| why_not(hit, &recv, &self_chains[&caller], d));
+                }
+            }
+            // A Swift receiver whose type is written, by the code itself, as a standard-library protocol's name that
+            // only a type nested elsewhere also carries (`init(from decoder: Decoder)`, where the repo nests
+            // `MinimalDecoder.Decoder`) is the library's, unless the nesting type encloses the code: its members are
+            // listed, never linked to the nested type's. A type inferred from elsewhere (a property's, a call's
+            // result) was written in another scope, and stays as resolved; so does one the caller's signature writes
+            // qualified (`some JSON.Encodable`), as the bare name is all the receiver's type records.
+            let written = written_receiver.as_deref().and_then(TypeExpr::decode);
+            if takes_none(hit, named, &ids) {
+                ("unresolved", Vec::new())
+            } else if confidence == "exact"
+                && hit.file.ends_with(".swift")
+                && let Some(TypeExpr::Named(n)) = &written
+                && SWIFT_LIBRARY_NAMES.contains(&n.as_str())
+                && !ids.is_empty()
+                && named.iter().filter(|d| ids.contains(&d.id)).all(|d| nested_elsewhere(d, n, &self_chains[&caller]))
+                && !signature_qualifies(conn, hit.from.as_ref(), n)?
+            {
+                ("external_likely", ids)
+            } else {
+                (confidence, ids)
+            }
         };
         // How an exact answer was reached, recorded where it is decided.
         let mut exact_by = if by_import {
@@ -4701,8 +5397,12 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 positions.insert(seen_key.clone(), named.iter().enumerate().map(|(i, d)| (d.id, i)).collect());
             }
             let before = confidence;
+            let before_ns = if explain { ids.clone() } else { Vec::new() };
             (confidence, ids) =
                 cs_namespaces(conn, hit, qualifier.as_deref(), named, &positions[&seen_key], (confidence, ids), &mut oracle.vis)?;
+            for id in before_ns.iter().filter(|i| !ids.contains(i)) {
+                dropped.entry(*id).or_insert("namespace");
+            }
             if before != "exact" && confidence == "exact" {
                 exact_by = Mechanism::Namespace;
             }
@@ -4718,6 +5418,13 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 named.iter().filter(|d| ids.contains(&d.id)).map(|d| (d.container.as_deref(), d.ns.as_deref())).collect();
             if owners.len() > 1 {
                 confidence = "ambiguous";
+            }
+        }
+        if confidence == "exact" && ids.len() > 1 {
+            let before_settle = if explain { ids.clone() } else { Vec::new() };
+            (confidence, ids) = settle(hit, ids, &defs[&hit.name]);
+            for id in before_settle.iter().filter(|i| !ids.contains(i)) {
+                dropped.entry(*id).or_insert("overload");
             }
         }
         let mut evidence = Evidence::by_confidence(confidence, exact_by);
@@ -4759,13 +5466,48 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
+                // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);
+                confidence = "external_likely";
             } else {
                 // The library type conforms in a module this code neither is in nor imports: the call is the
                 // library type's own member, never the requirement.
                 (confidence, ids) = ("unresolved", Vec::new());
                 evidence = None;
             }
+        }
+        if explain
+            && !hit.precise
+            && matches!(confidence, "exact" | "unique_name")
+            && let Some(e) = evidence.as_mut()
+        {
+            let named_ids: HashSet<i64> = named.iter().map(|d| d.id).collect();
+            let rivals: Vec<crate::answer::Rival> = defs[&hit.name]
+                .iter()
+                .filter(|d| !ids.contains(&d.id) && compatible(&hit.kind, &d.kind) && same_language(&hit.file, &d.lang))
+                .map(|d| {
+                    let why = match dropped.get(&d.id) {
+                        Some(w) => *w,
+                        // Not among the declarations code here can see at all.
+                        None if !named_ids.contains(&d.id) => {
+                            if cs {
+                                "project"
+                            } else if d.file_private {
+                                "visibility"
+                            } else {
+                                "module"
+                            }
+                        }
+                        None => "scope",
+                    };
+                    let target = d.container.as_ref().map_or(hit.name.clone(), |c| format!("{c}.{}", hit.name));
+                    crate::answer::Rival { target, at: format!("{}:{}", d.file, d.line), why: why.to_string() }
+                })
+                .collect();
+            if rivals.len() > RIVALS_SHOWN {
+                e.rivals_total = Some(rivals.len());
+            }
+            e.rivals = rivals.into_iter().take(RIVALS_SHOWN).collect();
         }
         hit.confidence = confidence;
         hit.evidence = if matches!(confidence, "unresolved" | "external_likely") { None } else { evidence };
@@ -5042,6 +5784,21 @@ fn ts_top_level_compatible(ref_kind: &str, def_kind: &str) -> bool {
 
 /// The TypeScript import rules' answer for `hit`, when they have one: an imported name resolves in its module's file
 /// (or outside the repo, for a package), and a name neither imported nor a member resolves in its own file.
+/// Whether the reference's receiver is typed, as written, by a name other than `ty` that the file sees: an alias that
+/// leads to `ty` (`(i as ItemLike).tags`, `type ItemLike = Item`).
+fn seen_alias(conn: &Connection, hit: &RefHit, ty: &str, modules: &mut crate::ts::Modules) -> Result<bool> {
+    match hit.receiver_type.as_deref().and_then(TypeExpr::decode) {
+        Some(TypeExpr::Named(n)) if last_segment(&n) != ty => modules.sees(conn, &hit.file, last_segment(&n)),
+        _ => Ok(false),
+    }
+}
+
+/// A JavaScript file, whose imports (CommonJS `require`, globals a bundler provides) the index reads only in part: its
+/// names aren't held to [`crate::ts::Modules::sees`].
+fn is_js(path: &str) -> bool {
+    matches!(path.rsplit_once('.').map(|(_, e)| e), Some("js" | "jsx" | "mjs" | "cjs"))
+}
+
 fn ts_scoped(
     conn: &Connection,
     hit: &mut RefHit,
@@ -5085,7 +5842,14 @@ fn ts_scoped(
         }
         None if hit.receiver.is_none() && hit.kind != "member" => {
             let own: Vec<i64> = defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).map(|d| d.id).collect();
-            Ok((!own.is_empty()).then_some(("exact", own)))
+            if !own.is_empty() {
+                return Ok(Some(("exact", own)));
+            }
+            // Neither declared here nor imported: a global, the repo's only when a script of its declares it.
+            if !is_js(&hit.file) && !modules.sees(conn, &hit.file, &hit.name)? {
+                return Ok(Some(("unresolved", Vec::new())));
+            }
+            Ok(None)
         }
         None => Ok(None),
     }
@@ -5134,6 +5898,17 @@ fn ts_receiver(
 ) -> Result<Receiver> {
     Ok(match recv {
         Receiver::Known(chain) if modules.imports_external(conn, &hit.file, &chain[0])? => Receiver::Foreign(vec![chain[0].clone()]),
+        // A type the file neither declares nor imports is the platform's (`Response`), whatever the repo's modules
+        // export under that name; unless the receiver's type is written by another name the file does see, an
+        // alias of it (`ItemLike = Item`).
+        Receiver::Known(chain)
+            if !is_js(&hit.file)
+                && modules.declared(conn, &chain[0])?
+                && !modules.sees(conn, &hit.file, &chain[0])?
+                && !seen_alias(conn, hit, &chain[0], modules)? =>
+        {
+            Receiver::Foreign(vec![chain[0].clone()])
+        }
         Receiver::Unknown => match hit.receiver_type.as_deref() {
             Some(enc) => match oracle.foreign_prefix(enc, hit.caller_type().as_deref())? {
                 Some(t) => Receiver::Foreign(vec![t]),
@@ -6766,6 +7541,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn swift_async_is_the_functions_own_effect() {
+        assert!(swift_async("func option(_ k: Int) async throws -> Int"));
+        assert!(swift_async("public func map<T>(_ f: (Element) async throws -> T) reasync rethrows -> [T]"));
+        assert!(!swift_async("func run(_ body: () async -> Void) -> Int"));
+        assert!(!swift_async("func option(_ k: Int) -> EventLoopFuture<Int>"));
+    }
+
+    #[test]
     fn import_sites_keep_the_imports_order() {
         let row = |f: &str, m: &str, l: u32| (f.to_string(), m.to_string(), l);
         let imports = [row("a.cs", "Lib.Data", 1), row("a.cs", "System", 2), row("b.cs", "Lib", 1), row("c.cs", "Lib.Data", 3), row("c.cs", "Library", 4)];
@@ -6777,6 +7560,36 @@ mod tests {
         assert_eq!(lines(&["Lib"]), [("a.cs".to_string(), 1), ("b.cs".to_string(), 1), ("c.cs".to_string(), 3)]);
         assert_eq!(lines(&["System", "Library"]), [("a.cs".to_string(), 2), ("c.cs".to_string(), 4)]);
         assert!(lines(&["Other"]).is_empty());
+    }
+
+    #[test]
+    fn swift_parameters_and_argument_labels() {
+        let p = |label: Option<&str>, default: bool, variadic: bool, closure: bool| SwiftParam {
+            label: label.map(str::to_string),
+            default,
+            variadic,
+            closure,
+        };
+        assert_eq!(
+            swift_params("@discardableResult public func put<T: Box<Int>>(_ item: T, at slot: [Int] = [], ids: Int..., then done: @escaping (Int) -> Void) throws -> Int"),
+            Some(vec![p(None, false, false, false), p(Some("at"), true, false, false), p(Some("ids"), false, true, false), p(Some("then"), false, false, true)])
+        );
+        assert_eq!(swift_params("func run()"), Some(vec![]));
+        // Cut at the signature's cap: unknown.
+        assert_eq!(swift_params("func run(_ a: Int, b: Str…"), None);
+        let call = |l: &[Option<&str>], t: &[Option<&str>]| SwiftCall {
+            l: l.iter().map(|x| x.map(str::to_string)).collect(),
+            t: t.iter().map(|x| x.map(str::to_string)).collect(),
+            a: false,
+        };
+        let put = swift_params("func put(_ item: Int, at slot: Int = 0, ids: Int..., then done: () -> Void)").unwrap();
+        assert!(call(&[None], &[None]).fits(&put));
+        assert!(call(&[None, Some("at"), Some("ids"), None, None], &[None]).fits(&put));
+        assert!(call(&[None, Some("ids")], &[Some("then")]).fits(&put));
+        // A required parameter left out, a label it doesn't have, or one argument too many.
+        assert!(!call(&[None], &[]).fits(&put));
+        assert!(!call(&[Some("item")], &[None]).fits(&put));
+        assert!(!call(&[None, None], &[None]).fits(&put));
     }
 
     #[test]

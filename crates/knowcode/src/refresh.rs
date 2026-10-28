@@ -180,6 +180,10 @@ fn index_in_background(root: &Path, threads: usize) -> Outcome {
         // index doesn't wait for them too, nor does the next repo's indexing.
         if kc_index::derived_missing(&store)? {
             Deriver::shared().queue(root);
+        } else {
+            drop(store);
+            // Best effort, as after a derive (see `derive_in_background`).
+            let _ = kc_index::base::publish(root);
         }
         Ok(report)
     });
@@ -295,6 +299,10 @@ fn derive_in_background(root: &Path) -> std::result::Result<bool, String> {
         use kc_index::machine::{Mode, plan, rank_threads, sniff};
         let workers = kc_store::rank::Workers { threads: rank_threads(plan(&sniff(), Mode::Background, 1, 0)), init: Some(background_priority) };
         kc_store::rank::with_workers(workers, || kc_index::build_derived(root, &store))?;
+        drop(store);
+        // A base other checkouts of the repo start from, carrying the derived data just built. Best effort: they
+        // index from a sibling or cold without it.
+        let _ = kc_index::base::publish(root);
         Ok(true)
     });
     match result {
@@ -540,7 +548,9 @@ pub fn pending(root: &Path) -> kc_store::answer::Incomplete {
     kc_store::answer::Incomplete::new(
         kc_store::answer::Reason::Stale,
         format!("{}: changed since its last index, and indexing is queued or running; this answer uses the available committed snapshot and may be empty or incomplete", crate::ops::repo_name(root)),
-    ).with_hint("indexing continues in the background; ask again after it finishes")
+    )
+    .with_code(kc_store::answer::Code::Indexing)
+    .with_hint("indexing continues in the background; ask again after it finishes")
 }
 
 #[cfg(test)]

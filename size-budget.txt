@@ -29,4 +29,10 @@
 # declared clients' node_modules, symbol history, coupled-file ranking, more route forms, the Codex hook's trust status,
 # and the workspace and replay gates' tool fallback (36975376, up 347168; measured on integration/0.5 d2642c8's dist
 # build).
-36975376
+# 0.5.1's fixes and the 0.6 build so far: walked rows led by the call site, optional history labels, library-interface
+# callers, static type receivers, Swift member identity and parse recovery, one declaration per exact reference, and
+# worktrees sharing an index base by copy-on-write clone (37355856, up 380480; measured on integration/0.6 with #167).
+# The 0.6 build's task-level answers and checks: task context, test targets, file context, cache lifetime for shared
+# bases, the contract and task gates, and the Swift and TypeScript identity fixes (37752672, up 396816; measured on
+# integration/0.6 with #191).
+37752672

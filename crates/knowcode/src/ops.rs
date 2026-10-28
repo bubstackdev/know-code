@@ -12,7 +12,7 @@ use kc_index::{Head, SyncOptions, SyncReport};
 use kc_index::ownership::{self, Ownership};
 use kc_index::vitals::{self, FileVitals};
 use kc_store::Store;
-use kc_store::answer::{Assumption, Evidence, Incomplete, Mechanism, Provenance, Reason, Verdict};
+use kc_store::answer::{Assumption, Code, Evidence, Incomplete, Mechanism, Provenance, Reason, Refusal, Verdict};
 use kc_store::db::{self, DbModel, SymbolTables};
 use kc_store::locate as query_locate;
 use kc_store::manifests::{self, ManifestHit, RepoEdge};
@@ -52,11 +52,12 @@ fn scope_repos(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         if p.whole() {
             // Opening purges what an index made before the policy holds.
             drop(kc_index::open(r)?); // also replaces an evicted index's cached summary with the blocked marker
-            bail!(
+            let message = format!(
                 "withheld: {}: its {} blocks the whole repo, so KnowCode indexes and answers nothing from it (`knowcode status` shows the policy)",
                 p.detail(&repo_name(r)),
                 kc_index::privacy::file_name()
             );
+            bail!(Refusal::withheld(message, p.policy(&repo_name(r))));
         }
     }
     Ok((roots, workspace))
@@ -140,6 +141,7 @@ pub fn withheld(root: &Path) -> Option<Incomplete> {
     p.blocks_anything().then(|| {
         let what = if p.whole() { "the whole repo" } else { "paths in it" };
         Incomplete::new(Reason::Withheld, p.detail(&repo_name(root)))
+            .with_privacy(p.policy(&repo_name(root)))
             .with_hint(format!("its {} blocks {what}; KnowCode never reads or answers from blocked content", kc_index::privacy::file_name()))
     })
 }
@@ -163,11 +165,12 @@ pub fn guard_inputs(repos: &[PathBuf], inputs: &[String]) -> Result<()> {
         let here = cwd.strip_prefix(&root).ok().map(Path::to_path_buf);
         for s in inputs {
             if names_blocked(&root, here.as_deref(), &p, s) {
-                bail!(
+                let message = format!(
                     "withheld: {}: the path asked about is in an area its {} blocks, so KnowCode answers nothing about it",
                     p.detail(&repo_name(&root)),
                     kc_index::privacy::file_name()
                 );
+                bail!(Refusal::withheld(message, p.policy(&repo_name(&root))));
             }
         }
     }
@@ -209,9 +212,9 @@ fn scope_repos_any(args: &[PathBuf]) -> Result<(Vec<PathBuf>, bool)> {
         let roots = kc_index::indexed_roots()?;
         if roots.is_empty() {
             if kc_index::config::workspace()?.0.is_empty() {
-                bail!("not in a git repo and nothing is indexed; run `knowcode index <repo>` or pass --repo");
+                bail!(Refusal::new(Code::NotIndexed, "not in a git repo and nothing is indexed; run `knowcode index <repo>` or pass --repo"));
             }
-            bail!("not in a git repo and no repo under the workspace roots is indexed; run `knowcode index <repo>` or pass --repo");
+            bail!(Refusal::new(Code::NotIndexed, "not in a git repo and no repo under the workspace roots is indexed; run `knowcode index <repo>` or pass --repo"));
         }
         (roots, true)
     };
@@ -362,7 +365,7 @@ pub fn left_out(roots: &[PathBuf], root: &Path, e: anyhow::Error) -> Result<()> 
 pub fn unreadable(root: &Path, e: &anyhow::Error) -> Incomplete {
     let name = repo_name(root);
     if !root.join(".git").exists() {
-        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display()))
+        Incomplete::new(Reason::MissingRepo, format!("{name}: its checkout at {} is gone; left out of this answer ({e:#})", root.display())).with_code(Code::Gone)
             .with_hint("clone it there again, or `knowcode prune` to forget its index")
     } else {
         Incomplete::new(Reason::Failed, format!("{name}: could not be read at {}; left out of this answer: {e:#}", root.display()))
@@ -435,6 +438,7 @@ impl Consulted {
             .iter()
             .map(|r| {
                 Incomplete::new(Reason::MissingRepo, format!("{}: indexed, but its checkout at {r} is gone; references into it are not resolved", repo_name(Path::new(r))))
+                    .with_code(Code::Gone)
                     .with_hint("clone it there again, or `knowcode purge` and re-index")
             })
             .collect();
@@ -528,7 +532,7 @@ fn add_missing_of(query: &kc_store::limits::Operation, env: &mut Value) {
             continue;
         }
         let detail = format!("{}: indexed, but its checkout at {path} is gone; links into it are left out", repo_name(&r));
-        push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_hint("clone it there again, or `knowcode prune` to forget its index"));
+        push_incomplete(env, Incomplete::new(Reason::MissingRepo, detail).with_code(Code::Gone).with_hint("clone it there again, or `knowcode prune` to forget its index"));
     }
 }
 
@@ -562,7 +566,7 @@ pub fn unindexed_note() -> Option<Incomplete> {
     } else {
         format!("the cache is near cache.max_size, so {they} not indexed in the background: raise cache.max_size, or ask about one by name to index it now")
     };
-    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_hint(hint))
+    Some(Incomplete::new(Reason::MissingRepo, format!("workspace: {n} {repos} found, not yet indexed ({listed}); nothing from {them} is in this answer")).with_code(Code::NotIndexed).with_hint(hint))
 }
 
 /// Whether `i` is the entry [`unindexed_note`] makes.
@@ -680,6 +684,7 @@ fn workspace_envelope(opened: &[Opened], workspace: bool, items: serde_json::Val
         push_incomplete(&mut env, i);
     }
     add_missing(&mut env);
+    parse_coverage(opened, &mut env);
     let mut seen = HashSet::new();
     for r in held.iter().filter(|r| seen.insert(r.to_path_buf())) {
         if let Some(i) = withheld(r) {
@@ -688,6 +693,96 @@ fn workspace_envelope(opened: &[Opened], workspace: bool, items: serde_json::Val
     }
     finish(&mut env);
     env
+}
+
+/// Files of an answer looked up for parse errors at most, and named at most.
+const COVERAGE_FILES: usize = 64;
+const COVERAGE_NAMED: usize = 5;
+
+/// Says in the answer which of the files it names the extractor couldn't read whole (parse errors, see
+/// `kc_extract::parse_error_sites`): `coverage`, each `{repo, file, errors, first, inside}` (`first` the first
+/// error's `line:col`, `inside` the answer's own symbol when the error lies in its span, so its body's edges are
+/// suspect), and an `unsupported` entry naming them, since declarations, members, calls and references there may be
+/// missing. A file the privacy file blocks gives no place.
+fn parse_coverage(opened: &[Opened], env: &mut Value) {
+    // The (repo, file) pairs the items name, and the symbols they are about (file, start, end, name).
+    fn walk(v: &Value, repo: Option<&str>, files: &mut Vec<(Option<String>, String)>, spans: &mut Vec<(String, u64, u64, String)>) {
+        match v {
+            Value::Object(m) => {
+                let repo = m.get("repo").and_then(Value::as_str).or(repo);
+                if let Some(f) = m.get("file").and_then(Value::as_str)
+                    && !files.iter().any(|(r, x)| x == f && r.as_deref() == repo)
+                {
+                    files.push((repo.map(str::to_string), f.to_string()));
+                }
+                if let (Some(f), Some(l), Some(e)) = (m.get("file").and_then(Value::as_str), m.get("line").and_then(Value::as_u64), m.get("end_line").and_then(Value::as_u64)) {
+                    let name = match (m.get("qualified").and_then(Value::as_str), m.get("container").and_then(Value::as_str), m.get("name").and_then(Value::as_str)) {
+                        (Some(q), _, _) => q.to_string(),
+                        (None, Some(c), Some(n)) => format!("{c}.{n}"),
+                        (None, None, Some(n)) => n.to_string(),
+                        _ => String::new(),
+                    };
+                    spans.push((f.to_string(), l, e, name));
+                }
+                m.iter().filter(|(k, _)| !matches!(k.as_str(), "cite" | "incomplete" | "more")).for_each(|(_, x)| walk(x, repo, files, spans));
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, repo, files, spans)),
+            _ => {}
+        }
+    }
+    let (mut files, mut spans) = (Vec::new(), Vec::new());
+    walk(&env["items"], None, &mut files, &mut spans);
+    let mut found: Vec<Value> = Vec::new();
+    let mut flagged = 0;
+    for (repo, file) in files.into_iter().take(COVERAGE_FILES) {
+        let o = match (&repo, opened) {
+            (_, [one]) => Some(one),
+            (Some(r), many) => many.iter().find(|o| repo_name(&o.root) == *r || o.root.to_string_lossy() == *r),
+            (None, _) => None,
+        };
+        let Some(o) = o else { continue };
+        let errors: u32 = o.store.conn().query_row("SELECT parse_errors FROM files WHERE path = ?1", [&file], |r| r.get(0)).unwrap_or(0);
+        if errors == 0 {
+            continue;
+        }
+        flagged += 1;
+        if found.len() >= COVERAGE_NAMED {
+            continue;
+        }
+        let privacy = kc_index::privacy::Privacy::load(&o.root);
+        let mut row = worst_parse_errors(&o.root, &privacy, &file, errors);
+        row["repo"] = Value::from(repo_name(&o.root));
+        // The first error, and the answer's symbol whose span holds it.
+        let first = row["first"].as_array().and_then(|f| f.first()).and_then(|f| f["at"].as_str()).map(str::to_string);
+        if let Some(at) = &first {
+            let line: u64 = at.split(':').next().and_then(|l| l.parse().ok()).unwrap_or(0);
+            if let Some((_, _, _, name)) = spans.iter().find(|(f, l, e, _)| *f == file && (*l..=*e).contains(&line)) {
+                row["inside"] = Value::from(name.as_str());
+            }
+            row["first"] = Value::from(at.as_str());
+        } else if let Some(r) = row.as_object_mut() {
+            r.remove("first");
+        }
+        found.push(row);
+    }
+    if found.is_empty() {
+        return;
+    }
+    let named: Vec<String> = found
+        .iter()
+        .map(|r| {
+            let at = r["first"].as_str().map(|a| format!(", first at {a}")).unwrap_or_default();
+            let inside = r["inside"].as_str().map(|s| format!(", inside {s}")).unwrap_or_default();
+            format!("{} ({} parse error{}{at}{inside})", r["file"].as_str().unwrap_or(""), r["errors"], if r["errors"] == 1 { "" } else { "s" })
+        })
+        .collect();
+    let more = if flagged > found.len() { format!(" and {} more", flagged - found.len()) } else { String::new() };
+    let detail = format!(
+        "files the answer names that the extractor couldn't read whole: {}{more}; declarations, members, calls and references there may be missing",
+        named.join(", ")
+    );
+    env["coverage"] = Value::Array(found);
+    push_incomplete(env, Incomplete::new(Reason::Unsupported, detail).with_hint("kc_search reads them as text; kc_status lists every file with parse errors"));
 }
 
 /// Which KnowCode answered: its version, the git commit it was built from, and the index schema.
@@ -712,7 +807,7 @@ fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> 
             return Ok(s.qualified());
         }
     }
-    bail!("{}", unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}")))
+    bail!(Refusal::new(Code::NotFound, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
 }
 
 /// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos
@@ -1339,10 +1434,13 @@ fn at_file(file: &str, args: &Scope) -> Result<(PathBuf, String)> {
     let one = |found: Vec<(PathBuf, String)>, what: &str| -> Result<(PathBuf, String)> {
         match found.as_slice() {
             [one] => Ok(one.clone()),
-            [] => bail!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"),
+            [] => bail!(Refusal::new(Code::NotFound, format!("{file} {what}: write it relative to its repo after the repo's name (`<repo>/path/to/file`), or pass the repo"))),
             many => {
                 let names: Vec<String> = many.iter().map(|(r, _)| repo_name(r)).collect();
-                bail!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+                bail!(Refusal::new(
+                    Code::Ambiguous,
+                    format!("{file} is in {} repos ({}): write it after the repo's name (`<repo>/path/to/file`), or pass the repo", many.len(), names.join(", "))
+                ))
             }
         }
     };
@@ -1960,6 +2058,56 @@ pub struct FileHit {
     pub area: Option<AreaRef>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<kc_index::notes::NoteView>,
+    /// Its top-level declarations in line order, at most [`FILE_DECLARATIONS`] (more when a cursor raises it).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub declarations: Vec<Declaration>,
+    /// How many there are, when `declarations` is cut.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declarations_total: Option<usize>,
+}
+
+/// A file's top-level declaration: what `context` takes next (`Type.member`, or `file:line`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Declaration {
+    pub kind: String,
+    pub name: String,
+    pub line: u32,
+    pub end_line: u32,
+    /// Declarations inside it (a type's members).
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    pub members: usize,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Top-level declarations a file's `context` lists before cutting the list (continued by cursor).
+const FILE_DECLARATIONS: usize = 40;
+
+/// The top-level declarations of the indexed file `file`, in line order, at most `limit`, and how many there are.
+fn file_declarations(conn: &rusqlite::Connection, file: &str, limit: usize) -> Result<(Vec<Declaration>, usize)> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT s.kind, s.name, s.container, s.start_line, s.end_line, (SELECT count(*) FROM symbols c WHERE c.parent_id = s.id)
+         FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.parent_id IS NULL
+         ORDER BY s.start_line, s.start_byte",
+    )?;
+    let mut rows = stmt.query([file])?;
+    let (mut out, mut total) = (Vec::new(), 0);
+    while let Some(r) = rows.next()? {
+        total += 1;
+        if out.len() < limit {
+            let (name, container): (String, Option<String>) = (r.get(1)?, r.get(2)?);
+            out.push(Declaration {
+                kind: r.get(0)?,
+                name: container.map_or_else(|| name.clone(), |c| format!("{c}.{name}")),
+                line: r.get(3)?,
+                end_line: r.get(4)?,
+                members: r.get::<_, i64>(5)? as usize,
+            });
+        }
+    }
+    Ok((out, total))
 }
 
 /// The Ansible side of a context's symbol: roles it uses from other repos, the plays and roles in other repos using
@@ -3387,7 +3535,10 @@ pub fn context_raised(
             });
             found.push((o.root.clone(), ctx, http, angular, bus));
         } else if let Some(file) = indexed_file(&o, symbol)? {
-            // A file: its area, and the notes on its symbols.
+            // A file: its top-level declarations, its area, and the notes on its symbols.
+            let page = raise.map_or(FILE_DECLARATIONS, |r| r.max(FILE_DECLARATIONS));
+            let (declarations, total) = file_declarations(o.store.conn(), &file, page)?;
+            let declarations_total = (total > declarations.len()).then_some(total);
             let (cached_areas, from) = kc_index::areas::cached_at(&o.root, &o.store)?;
             if let Some(g) = from {
                 stale_derived.push(kc_store::answer::stale_derived(&format!("context area ({})", repo_name(&o.root)), &g, &o.generation));
@@ -3398,7 +3549,7 @@ pub fn context_raised(
                 on_file = kc_index::notes::all(&o.root, &o.store)?;
                 on_file.retain(|n| n.note.file == file || n.now_at.as_deref().is_some_and(|at| at.rsplit_once(':').is_some_and(|(f, _)| f == file)));
             }
-            file_hits.push(FileHit { repo: repo_name(&o.root), file, area, notes: on_file });
+            file_hits.push(FileHit { repo: repo_name(&o.root), file, area, notes: on_file, declarations, declarations_total });
         } else {
             // Not a symbol: perhaps a table.
             let model = o.store.db_model()?;
@@ -3552,6 +3703,11 @@ pub fn context_raised(
             let cut = t.accessors_total.is_some_and(|n| n > t.accessors.len());
             lists.push(cursor::List::new(format!("{at}/tables/{j}/accessors"), limits.callers, cut));
         }
+    }
+    // A file's declarations continue too.
+    for (i, f) in file_hits.iter().enumerate() {
+        let at = format!("/items/{}/declarations", repo_items_n + found.len() + i);
+        lists.push(cursor::List::new(at, FILE_DECLARATIONS, f.declarations_total.is_some()));
     }
     let source_word = match source {
         kc_store::skeleton::SourceMode::Full => "full",
@@ -3734,6 +3890,7 @@ pub struct TraceData {
 }
 
 pub fn trace(symbol: &str, direction: &str, depth: u8, limit: usize, filter: &WalkFilter, args: &Scope) -> Result<Out<TraceData>> {
+    let _rivals = edge_filter(&[], &filter.evidence).ok().and_then(|f| f.explain_rivals());
     let direction_word = direction;
     let direction = match direction {
         "in" => trace::Direction::In,
@@ -3942,6 +4099,7 @@ fn ensure_summaries(o: &Opened, focus: &[PathBuf], full: bool) -> Result<std::sy
     for s in summaries.iter().filter(|s| s.light && !s.blocked.whole && !s.gone && s.root != o.root && (full || !kc_index::light::unchanged(&s.root))) {
         if no_sync {
             o.consulted.partial.borrow_mut().push(Incomplete::new(Reason::Stale, format!("{}: only manifests and names were scanned; graph joins are not indexed", repo_name(&s.root)))
+                .with_code(Code::NotIndexed)
                 .with_hint("ask again without --no-sync to index the needed checkout automatically"));
         } else {
             // A checkout that can't be read (gone since the summaries were read, a failing `git`) is left out.
@@ -5200,7 +5358,16 @@ impl<'a> HttpCrossing<'a> {
                     }
                 },
             };
-            let group: Vec<trace::Stop> = stops.iter().filter(|s| s.repo == label).cloned().collect();
+            // In the order of their places, not of their row ids: which stops fit the budget, and the order they are
+            // listed in, never depend on the order files were stored in.
+            type Placed = (Option<(String, u32, String)>, trace::Stop);
+            let mut group: Vec<Placed> = Vec::new();
+            for s in stops.iter().filter(|s| s.repo == label) {
+                let at = trace::symbol(self.store(&root).conn(), s.id)?.map(|sym| (sym.file.clone(), sym.line, sym.qualified()));
+                group.push((at, s.clone()));
+            }
+            group.sort_by(|(a, x), (b, y)| a.cmp(b).then(x.dir.cmp(y.dir)).then(x.hop.cmp(&y.hop)));
+            let group: Vec<trace::Stop> = group.into_iter().map(|(_, s)| s).collect();
             let room = budget.saturating_sub(out.len());
             let mine = |id: i64| listed(label.as_deref(), id);
             let mut theirs = trace::EdgeCache::default();
@@ -5459,6 +5626,7 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
                     value["background"] = json!(b);
                 }
                 push_incomplete(&mut value, withheld(root).unwrap_or_else(|| Incomplete::new(Reason::Stale, "index: this checkout has no full index yet; discovery contains only manifests and names")
+                    .with_code(Code::Indexing)
                     .with_hint(hint)));
                 finish(&mut value);
                 out.push(value);
@@ -5521,6 +5689,16 @@ pub fn status_with(args: &Scope, verify: bool) -> Result<Out<Vec<Value>>> {
         if let Some(scip) = scip_status(&store)? {
             value["scip"] = scip;
         }
+        // A checkout started from a shared base: which, and what the cache counts of it (see `kc_index::base`).
+        let db = kc_index::db_path(root)?;
+        let len = std::fs::metadata(&db).map_or(0, |m| m.len());
+        value["index"]["own_bytes"] = json!(kc_index::cache::own_bytes(&db, len));
+        value["index"]["counted"] = json!(if kc_index::cache::counts_shared_apart(&db) { "own_bytes" } else { "length" });
+        if let Some(c) = kc_index::base::cloned(&store)? {
+            value["base"] = json!(c);
+        }
+        let (ranking, areas) = kc_index::derived_state(root, &store)?;
+        value["derived"] = json!({ "ranking": ranking, "areas": areas });
         // Opened by a query whose budget ran out before its first sync finished.
         if let Some(b) = background(root) {
             value["background"] = json!(b);
@@ -5881,6 +6059,7 @@ impl ImpactRepo {
 }
 
 pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
+    let _rivals = edge_filter(&[], &p.filter.evidence).ok().and_then(|f| f.explain_rivals());
     let given = [p.symbol.is_some(), p.file.is_some(), p.diff.is_some()].iter().filter(|b| **b).count();
     if given != 1 {
         bail!("give exactly one of symbol, file or diff");
@@ -6475,6 +6654,52 @@ fn is_repo_file(conn: &rusqlite::Connection, rel: &str) -> Result<bool> {
 
 /// Files that historically change in the same commits as `file`, ranked by shared commits, then recency. `file`
 /// may be any file of the repo, indexed or not: co-change needs only its history.
+/// A repo's declared test targets.
+pub type RepoTestTargets = (PathBuf, Vec<kc_index::test_targets::TestTarget>);
+
+/// The declared test targets of the selected repos (see [`kc_index::test_targets`]): SwiftPM test targets, .NET test
+/// projects and `package.json` test scripts, each with its tests and the commands to run them; `name` keeps the
+/// targets of that name. Declared, not ranked: which tests a change needs is [`tests`].
+pub fn test_targets(name: Option<&str>, args: &Scope) -> Result<Out<Vec<RepoTestTargets>>> {
+    let roots = target_repos(&args.repos)?;
+    let mut opened = Vec::new();
+    let mut data = Vec::new();
+    for root in &roots {
+        let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
+        let mut targets = kc_index::test_targets::list(root, &o.store)?;
+        if let Some(n) = name.filter(|n| !n.is_empty()) {
+            targets.retain(|t| t.name.eq_ignore_ascii_case(n));
+        }
+        data.push((root.clone(), targets));
+        opened.push(o);
+    }
+    let many = data.len() > 1;
+    let items: Vec<Value> = data
+        .iter()
+        .flat_map(|(root, ts)| {
+            ts.iter().map(move |t| {
+                let mut v = json!(t);
+                if many {
+                    v["repo"] = json!(repo_name(root));
+                }
+                v
+            })
+        })
+        .collect();
+    let total = items.len();
+    let mut env = envelope(&opened, Value::Array(items), total, total);
+    for (_, ts) in &data {
+        for t in ts.iter().filter(|t| t.tests_total > t.tests.len()) {
+            push_incomplete(
+                &mut env,
+                Incomplete::new(Reason::Capped, format!("tests of {}: {} of {} listed", t.name, t.tests.len(), t.tests_total))
+                    .with_hint(format!("its command runs them all: {}", t.command)),
+            );
+        }
+    }
+    Ok(Out { env, data })
+}
+
 pub fn coupled(file: &str, limit: usize, span: &vitals::Span, args: &Scope) -> Result<Out<Vec<CoupledRepo>>> {
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
@@ -7937,6 +8162,8 @@ fn overview_areas(areas: &kc_index::areas::Areas) -> Value {
 pub struct AreasRepo {
     pub root: PathBuf,
     pub areas: kc_index::areas::Areas,
+    /// The modules its manifests declare, with the areas over them.
+    pub declared: kc_index::areas::Declared,
     /// The id of the area asked for.
     pub picked: Option<u32>,
 }
@@ -7951,17 +8178,31 @@ pub fn areas(area: Option<&str>, args: &Scope) -> Result<Out<Vec<AreasRepo>>> {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let areas = kc_index::areas::areas(root, &o.store)?;
         let picked = area.and_then(|q| areas.find(q)).map(|a| a.id);
-        found.push(AreasRepo { root: o.root.clone(), areas, picked });
+        let declared = kc_index::areas::declared(&o.store, &areas)?;
+        found.push(AreasRepo { root: o.root.clone(), areas, declared, picked });
         opened.push(o);
     }
     let multi = found.len() > 1;
     let mut items = Vec::new();
     for r in &found {
-        let listed: Vec<Value> = match (area, r.picked) {
+        let mut listed: Vec<Value> = match (area, r.picked) {
             (Some(_), Some(id)) => r.areas.areas.iter().filter(|a| a.id == id).map(|a| area_json(a, true)).collect(),
             (Some(_), None) => Vec::new(),
             (None, _) => r.areas.areas.iter().map(|a| area_json(a, false)).collect(),
         };
+        // Over the declared modules: each area's files by module, and whether it spans several.
+        if !r.declared.modules.is_empty() {
+            for v in &mut listed {
+                let id = v["id"].as_u64().unwrap_or_default() as u32;
+                if let Some((modules, outside)) = r.declared.by_area.get(&id) {
+                    v["modules"] = json!(modules);
+                    v["spans_modules"] = json!(modules.len() > 1);
+                    if *outside > 0 {
+                        v["outside_modules"] = json!(outside);
+                    }
+                }
+            }
+        }
         if area.is_some() && listed.is_empty() && multi {
             continue;
         }
@@ -7974,6 +8215,9 @@ pub fn areas(area: Option<&str>, args: &Scope) -> Result<Out<Vec<AreasRepo>>> {
             "areas": listed,
             "ungrouped": r.areas.ungrouped,
         }));
+        if !r.declared.modules.is_empty() {
+            items.last_mut().expect("pushed")["modules"] = json!(r.declared.modules);
+        }
     }
     let n = items.len();
     let mut env = envelope(&opened, json!(items), n, n);
@@ -8023,7 +8267,7 @@ pub fn note_add(symbol: &str, text: &str, tag: Option<&str>, args: &Scope) -> Re
         opened.push(o);
     }
     if found.is_empty() {
-        bail!("no definition named {symbol} in the repos searched");
+        bail!(Refusal::new(Code::NotFound, format!("no definition named {symbol} in the repos searched")));
     }
     Ok(Out { env: notes_env(&opened, &found), data: found })
 }
@@ -8073,6 +8317,70 @@ pub(crate) mod tests {
 
     /// A fan-out's workers run as the query that started it: what they note is the query's, and its cancellation
     /// stops them.
+    /// An answer naming a file the extractor couldn't read whole says so: the file, its first error, and the
+    /// Under `evidence: all`, an edge resolved among same-named declarations says which it was resolved past and
+    /// why (another namespace, another number of arguments, not on the receiver's type), in JSON and in the tree;
+    /// under the default policy nothing more is said.
+    #[test]
+    fn evidence_all_says_which_rivals_an_edge_was_resolved_past_and_why() {
+        let cache = test_cache();
+        let base = cache.dir("rivals");
+        let root = repo(
+            &base,
+            "till",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/Audit.cs", "namespace Shop;\npublic static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/BooksAudit.cs", "namespace Books;\npublic static class Audit\n{\n    public static void Log() { }\n}\n"),
+                ("src/Ledger.cs", "namespace Shop;\npublic class Ledger\n{\n    public void Post() { }\n    public void Post(int amount) { }\n}\n"),
+                (
+                    "src/Till.cs",
+                    "namespace Shop;\npublic class Till\n{\n    private readonly Ledger _ledger = new Ledger();\n    public void Ring() { Audit.Log(); _ledger.Post(); }\n    public void Log() { }\n}\n",
+                ),
+            ],
+        );
+        let s = Scope { repos: vec![root], no_sync: false };
+        let rivals = |evidence: &str| -> Vec<(String, Vec<(String, String)>)> {
+            let f = WalkFilter { evidence: evidence.into(), ..Default::default() };
+            let out = trace("Till.Ring", "out", 1, 50, &f, &s).unwrap();
+            out.data.found[0].1.nodes.iter().filter_map(|n| {
+                let e = n.evidence.as_ref()?;
+                Some((n.qualified.clone(), e.rivals.iter().map(|r| (r.at.clone(), r.why.clone())).collect()))
+            }).collect()
+        };
+        let all = rivals("all");
+        let of = |q: &str| all.iter().find(|(n, _)| n == q).map(|(_, r)| r.clone()).unwrap_or_default();
+        assert_eq!(of("Audit.Log"), vec![("src/BooksAudit.cs:4".to_string(), "namespace".to_string()), ("src/Till.cs:6".to_string(), "receiver_type".to_string())]);
+        assert_eq!(of("Ledger.Post"), vec![("src/Ledger.cs:5".to_string(), "arity".to_string())]);
+        // The default policy says nothing of rivals.
+        assert!(rivals("default").iter().all(|(_, r)| r.is_empty()));
+        assert!(rivals("").iter().all(|(_, r)| r.is_empty()));
+    }
+
+    /// answer's symbol whose span holds it, as `coverage` and an `unsupported` entry. One without errors says nothing.
+    #[test]
+    fn an_answer_says_which_of_its_files_have_parse_errors() {
+        let cache = test_cache();
+        let base = cache.dir("parse-coverage");
+        let root = repo(
+            &base,
+            "till",
+            &[(
+                "Sources/Till.swift",
+                "class Till {\n    func ring() {\n        log()\n    }\n    func broken() {\n        let x = [1, 2\n        log()\n    }\n}\nfunc log() {}\n",
+            ), ("Sources/Clean.swift", "func clean() {}\n")],
+        );
+        let s = Scope { repos: vec![root], no_sync: false };
+        let env = context("Till.broken", 2000, Default::default(), &s).unwrap().env;
+        let c = &env["coverage"][0];
+        assert_eq!((c["file"].as_str(), c["errors"].as_u64(), c["inside"].as_str()), (Some("Sources/Till.swift"), Some(1), Some("Till.broken")), "{env}");
+        assert!(c["first"].as_str().is_some_and(|a| a.starts_with("6:")), "{env}");
+        let entry = crate::contract::incomplete_of(&env).into_iter().find(|i| i.reason == Reason::Unsupported).expect("an unsupported entry");
+        assert!(entry.detail.contains("Sources/Till.swift (1 parse error, first at 6:") && entry.detail.contains("inside Till.broken"), "{}", entry.detail);
+        let clean = context("clean", 2000, Default::default(), &s).unwrap().env;
+        assert!(clean.get("coverage").is_none(), "{clean}");
+    }
+
     #[test]
     fn pool_workers_run_as_the_query() {
         let query = kc_store::limits::Operation::new();
@@ -10014,6 +10322,95 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// An `exact` reference names one declaration: of several, the one its argument labels, its receiver or its module
+    /// decides; otherwise it is `ambiguous`, every candidate listed.
+    #[test]
+    fn an_exact_reference_names_one_declaration() {
+        let cache = test_cache();
+        let base = cache.dir("one-exact");
+        let shelf = repo(
+            &base,
+            "shelf",
+            &[
+                (
+                    "Sources/Shelf/Shelf.swift",
+                    "struct Shelf {\n    func put(_ item: Int) {}\n    func put(_ item: Int, at slot: Int = 0, then done: () -> Void) {}\n\
+                     \x20   func put(into bin: Int) {}\n    static func make() -> Shelf { Shelf() }\n    func make() {}\n\
+                     \x20   func fill(_ n: Int) {}\n    func fill(_ s: String) {}\n}\n",
+                ),
+                (
+                    "Sources/Shelf/Use.swift",
+                    "func use(shelf: Shelf) {\n    shelf.put(1)\n    shelf.put(1, at: 2) { }\n    shelf.put(into: 3)\n\
+                     \x20   _ = Shelf.make()\n    shelf.make()\n    shelf.fill(1)\n}\n",
+                ),
+            ],
+        );
+        let at = |root: &Path, name: &str, file: &str, line: u32| -> (&'static str, Vec<u32>) {
+            let r = refs(name, &[], 100, &Scope { repos: vec![root.to_path_buf()], no_sync: false }).unwrap();
+            let (_, h) = r.data.items.iter().find(|(_, h)| h.file == file && h.line == line).unwrap_or_else(|| panic!("{name} at {file}:{line}"));
+            (h.confidence, h.targets.iter().map(|t| t.line).collect())
+        };
+        let use_swift = "Sources/Shelf/Use.swift";
+        // Argument labels: `put(_:)`, `put(_:at:then:)` with its trailing closure, `put(into:)`.
+        assert_eq!(at(&shelf, "put", use_swift, 2), ("exact", vec![2]));
+        assert_eq!(at(&shelf, "put", use_swift, 3), ("exact", vec![3]));
+        assert_eq!(at(&shelf, "put", use_swift, 4), ("exact", vec![4]));
+        // A type reaches the static member, a value the instance one.
+        assert_eq!(at(&shelf, "make", use_swift, 5), ("exact", vec![5]));
+        assert_eq!(at(&shelf, "make", use_swift, 6), ("exact", vec![6]));
+        // The labels and the receiver can't tell `fill(Int)` from `fill(String)`: both, never `exact`.
+        assert_eq!(at(&shelf, "fill", use_swift, 7), ("ambiguous", vec![7, 8]));
+
+        let web = repo(
+            &base,
+            "web",
+            &[
+                ("src/kind.ts", "export const Kind = { A: 'a' } as const;\nexport type Kind = typeof Kind[keyof typeof Kind];\n"),
+                (
+                    "src/kind.test.ts",
+                    "import { Kind } from './kind';\ndescribe('k', () => {\n  it('a', () => {\n    type Expected = string;\n    const x: Expected = Kind.A;\n  });\n\
+                     \x20 it('b', () => {\n    type Expected = number;\n    const y: Expected = 1;\n  });\n});\n",
+                ),
+            ],
+        );
+        // One module's `const` and `type` of one name are one declaration; same-named types local to two callbacks
+        // aren't.
+        assert_eq!(at(&web, "Kind", "src/kind.test.ts", 5), ("exact", vec![1, 2]));
+        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 5).0, "ambiguous");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A library file whose `#if` has an `#error(…)` branch is no script: the members it declares are reached from
+    /// other modules, not their protocol's requirements.
+    #[test]
+    fn a_diagnostic_in_an_if_branch_leaves_a_files_declarations_visible() {
+        let cache = test_cache();
+        let base = cache.dir("diagnostic-visible");
+        let root = repo(
+            &base,
+            "rig",
+            &[
+                (
+                    "Package.swift",
+                    "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"Rig\", targets: [\n\
+                     \x20   .target(name: \"Core\"),\n    .target(name: \"Rig\", dependencies: [\"Core\"]),\n\
+                     \x20   .testTarget(name: \"RigTests\", dependencies: [\"Core\", \"Rig\"]),\n])\n",
+                ),
+                ("Sources/Core/Pipe.swift", "public protocol Pipe {\n    var flow: Int { get }\n}\n"),
+                (
+                    "Sources/Rig/Rig.swift",
+                    "#if canImport(Glibc)\nimport Glibc\n#else\n#error(\"Unknown C library.\")\n#endif\nimport Core\n\n\
+                     public final class Rig: Pipe {\n    public init() {}\n    public var flow: Int { 0 }\n}\n",
+                ),
+                ("Tests/RigTests/RigTests.swift", "import Core\nimport Rig\n\nfunc check() {\n    let rig = Rig()\n    _ = rig.flow\n}\n"),
+            ],
+        );
+        let r = refs("flow", &[], 20, &Scope { repos: vec![root.clone()], no_sync: false }).unwrap();
+        let (_, hit) = r.data.items.iter().find(|(_, h)| h.file == "Tests/RigTests/RigTests.swift").expect("the test's use");
+        assert_eq!((hit.confidence, hit.targets.iter().map(|t| t.qualified.as_str()).collect::<Vec<_>>()), ("exact", vec!["Rig.flow"]));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn calls_through_an_interface_reach_the_overload_taking_their_arguments() {
         let cache = test_cache();
@@ -11930,6 +12327,102 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         let o = overview(&scope, None, 0).unwrap().env;
         assert_eq!(o["items"][0]["areas_total"], 2);
         assert_eq!(o["items"][0]["areas"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn areas_overlay_the_declared_modules_and_say_when_one_spans_several() {
+        let cache = test_cache();
+        let base = cache.dir("declared-areas");
+        let package = "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Core\"),\n        .executableTarget(name: \"App\", dependencies: [\"Core\"]),\n        .testTarget(name: \"CoreTests\", dependencies: [\"Core\"]),\n    ]\n)\n";
+        let mut files: Vec<(String, String)> = vec![("Package.swift".into(), package.into())];
+        for n in ["Cart", "Order", "Price", "Stock"] {
+            files.push((format!("Sources/Core/{n}.swift"), format!("public struct {n} {{\n    public init() {{}}\n    public func total() -> Int {{ 1 }}\n}}\n")));
+        }
+        for n in ["Main", "Screen", "Menu"] {
+            files.push((format!("Sources/App/{n}.swift"), format!("import Core\nstruct {n} {{\n    let c = Cart()\n    let o = Order()\n    func run() -> Int {{ c.total() + o.total() + Price().total() }}\n}}\n")));
+        }
+        for n in ["CartTests", "OrderTests"] {
+            files.push((format!("Tests/CoreTests/{n}.swift"), format!("import Core\nfinal class {n} {{\n    func test() {{ _ = Cart().total(); _ = Order().total(); _ = Stock().total() }}\n}}\n")));
+        }
+        // Projects of other kinds: a .NET project and an npm package, each its directory.
+        files.push(("tools/Ledger/Ledger.csproj".into(), "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n".into()));
+        files.push(("tools/Ledger/Ledger.cs".into(), "public class Ledger { public int Post() => 1; }\n".into()));
+        files.push(("tools/site/package.json".into(), "{\"name\": \"site\"}\n".into()));
+        files.push(("tools/site/index.ts".into(), "export function render(): number { return 1; }\n".into()));
+        let refs: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        let root = repo(&base, "shop", &refs);
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+
+        let out = areas(None, &scope).unwrap();
+        let declared = &out.data[0].declared;
+        let modules: Vec<(&str, &str, &str)> = declared.modules.iter().map(|m| (m.name.as_str(), m.kind.as_str(), m.dir.as_str())).collect();
+        assert_eq!(
+            modules,
+            [("App", "executableTarget", "Sources/App"), ("Core", "target", "Sources/Core"), ("CoreTests", "testTarget", "Tests/CoreTests"),
+             ("Ledger", "csproj", "tools/Ledger"), ("site", "npm", "tools/site")]
+        );
+        // Both views: every clustered file is counted once, under its area and its module.
+        let a = &out.data[0].areas;
+        for area in &a.areas {
+            let (by_module, outside) = &declared.by_area[&area.id];
+            assert_eq!(by_module.iter().map(|m| m.files).sum::<usize>() + outside, area.files.len(), "{area:?}");
+        }
+        // The area holding the app's files also holds the core types they use most: it spans two targets.
+        let app = a.of("Sources/App/Main.swift").unwrap();
+        assert!(declared.spans(app.id), "{:?}", declared.by_area);
+        let env = &out.env;
+        let listed = env["items"][0]["areas"].as_array().unwrap().iter().find(|x| x["id"] == app.id).unwrap();
+        assert_eq!(listed["spans_modules"], true, "{listed}");
+        assert_eq!(env["items"][0]["modules"].as_array().unwrap().len(), 5, "{env}");
+        // A repo declaring nothing gets no overlay.
+        let plain = repo(&base, "plain", &[("a.py", "def a():\n    return b()\n"), ("b.py", "def b():\n    return 1\n")]);
+        let plain_env = areas(None, &Scope { repos: vec![plain], no_sync: false }).unwrap().env;
+        assert!(plain_env["items"][0].get("modules").is_none(), "{plain_env}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn context_on_a_file_lists_its_top_level_declarations_to_pick_from() {
+        let cache = test_cache();
+        let base = cache.dir("file-declarations");
+        let many: String = (0..50).map(|i| format!("def step_{i}():\n    return {i}\n\n")).collect();
+        let root = repo(
+            &base,
+            "shop",
+            &[
+                ("Ledger.cs", "namespace Shop;\npublic class Ledger {\n  public Ledger() { }\n  public void Post() { }\n}\npublic enum Kind { A, B }\n"),
+                ("steps.py", many.as_str()),
+                ("vault/keys.py", "def hidden_key():\n    return 1\n"),
+                (".knowcode-privacy.yml", "level: 3\nrules:\n  - path: vault/\n    level: 1\n"),
+            ],
+        );
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+        let none = kc_store::skeleton::SourceMode::None;
+
+        // Each top-level declaration with its kind, lines and member count, in line order; members are not listed.
+        let ledger = context("Ledger.cs", 2000, none, &scope).unwrap().env;
+        let decls: Vec<(String, String, u64, u64)> = ledger["items"][0]["declarations"].as_array().unwrap().iter()
+            .map(|d| (d["kind"].as_str().unwrap().into(), d["name"].as_str().unwrap().into(), d["line"].as_u64().unwrap(), d["members"].as_u64().unwrap_or(0)))
+            .collect();
+        assert_eq!(decls, [("class".into(), "Ledger".into(), 2, 2), ("enum".into(), "Kind".into(), 6, 2)], "{ledger}");
+        assert!(ledger["items"][0].get("declarations_total").is_none());
+        // What it lists is what `context` takes next.
+        assert_eq!(context("Ledger.cs:2", 2000, none, &scope).unwrap().env["items"][0]["symbol"]["name"], "Ledger");
+
+        // Bounded: the first FILE_DECLARATIONS, the total, and the rest when a cursor raises the limit.
+        let steps = context("steps.py", 2000, none, &scope).unwrap().env;
+        assert_eq!(steps["items"][0]["declarations"].as_array().unwrap().len(), FILE_DECLARATIONS);
+        assert_eq!(steps["items"][0]["declarations_total"], 50);
+        assert_eq!(steps["complete"], false, "{steps}");
+        let all = context_raised("steps.py", 2000, none, None, Some(100), &scope).unwrap().env;
+        assert_eq!(all["items"][0]["declarations"].as_array().unwrap().len(), 50);
+        assert_eq!(all["items"][0]["declarations"][49]["name"], "step_49");
+
+        assert!(crate::help::topic("kc_context").unwrap().text.contains(&format!("at most {FILE_DECLARATIONS} (the rest by cursor)")));
+        // A blocked file lists nothing.
+        let blocked = context("vault/keys.py", 2000, none, &scope);
+        assert!(blocked.as_ref().map_or(true, |o| !o.env.to_string().contains("hidden_key")), "{:?}", blocked.map(|o| o.env));
         let _ = std::fs::remove_dir_all(&base);
     }
 

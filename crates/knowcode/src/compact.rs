@@ -256,11 +256,16 @@ fn one_stale(list: &mut Vec<Value>, names: &Names) {
             if subjects.is_empty() { what } else { format!("{}: {what}", subjects.join(", ")) }
         })
         .collect();
+    // A repo still being indexed is the code to act on: ask again.
+    let indexing = at.iter().any(|&i| list[i]["code"] == "indexing");
     let mut one = Map::new();
     one.insert("reason".into(), Value::from("stale"));
     one.insert("detail".into(), Value::from(detail.join("; ")));
     if !hints.is_empty() {
         one.insert("hint".into(), Value::from(hints.join("; ")));
+    }
+    if indexing {
+        one.insert("code".into(), Value::from("indexing"));
     }
     list[first] = Value::Object(one);
     for &i in at.iter().skip(1).rev() {
@@ -580,7 +585,14 @@ fn link_row(v: &Value) -> Option<String> {
 fn evidence(e: &Value) -> String {
     let m = e["mechanism"].as_str().unwrap_or("");
     let a: Vec<&str> = e["assumptions"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-    if a.is_empty() { m.to_string() } else { format!("{m} [{}]", a.join(", ")) }
+    let mut s = if a.is_empty() { m.to_string() } else { format!("{m} [{}]", a.join(", ")) };
+    // Under `evidence: all`: the same-named declarations ruled out, each with why.
+    if let Some(r) = e["rivals"].as_array().filter(|r| !r.is_empty()) {
+        let listed: Vec<String> = r.iter().map(|x| format!("{} at {} ({})", x["target"].as_str().unwrap_or(""), x["at"].as_str().unwrap_or(""), x["why"].as_str().unwrap_or(""))).collect();
+        let more = e["rivals_total"].as_u64().map(|t| format!(", {} in all", t)).unwrap_or_default();
+        s.push_str(&format!("; not {}{more}", listed.join(", ")));
+    }
+    s
 }
 
 /// A continuation hint without its CLI form; with `value`, naming the cursor itself rather than its field.

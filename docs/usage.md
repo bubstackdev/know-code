@@ -40,6 +40,7 @@ command, run `knowcode <command> --help`.
 | --- | --- | --- |
 | Definitions by name, prefix or camelCase words (`settings view`, `Store.load`) | `knowcode find` | `kc_find` |
 | The files for a concept, bug report or ticket title, when you don't know the names | `knowcode locate "refund approval"` | `kc_locate` |
+| One answer for a goal in words: the files involved, what depends on them, the tests to run, what the index can't settle | `knowcode task "refunds fail for partial captures"` | `kc_task` |
 | The symbols enclosing a `file:line` (a stack frame) | `knowcode at src/app/filter.service.ts:419` | `kc_symbol_at` |
 | Text or regex over every file, ranked definitions first | `knowcode search` | `kc_search` |
 | Code patterns over syntax trees ([ast-grep](https://ast-grep.github.io) patterns) | `knowcode grep-ast 'new HttpClient($$$)' -l cs` | `kc_grep_ast` |
@@ -80,6 +81,7 @@ listed symbols with `--kinds` and walk through the rest.
 | --- | --- | --- |
 | What depends on a symbol, a file or a diff, by proximity: `direct` (hop 1), `near` (2), `far` (3+), `test`; plus files history couples to it | `knowcode impact [SYMBOL] \| --file F \| --diff working` | `kc_impact` (topics `kc_impact.crossings`, `kc_impact.history`) |
 | The tests to run, ranked, with reasons and a confidence | `knowcode tests FILE... \| --diff REV` | `kc_tests` |
+| Declared test targets (SwiftPM, .NET test projects, `package.json` test scripts): their tests and how to run them, not ranked | `knowcode test-targets [NAME]` | `kc_test_targets` (the `kc` op `test_targets`) |
 | Files that usually change in the same commits | `knowcode coupled FILE` | `kc_coupled` |
 | Who could review a change | `knowcode reviewers FILE... \| --diff REV` | `kc_reviewers` |
 | Dead-code candidates, `unused` or `possibly unused` with reasons (C#, TypeScript) | `knowcode unused` | `kc_unused` |
@@ -167,6 +169,8 @@ A note records the declaration's identity and a hash of its body: it goes `stale
 | Connect Claude Code, Codex or Cursor | `knowcode setup claude\|codex\|cursor` |
 | Remove client registrations and cached indexes | `knowcode uninstall` |
 | Run the MCP server on stdio | `knowcode serve` |
+| Run it for a pipeline: bound repos, an op allowlist, its own cache | `knowcode serve --restricted --repo DIR --ops LIST --cache-dir DIR --config-dir DIR` |
+| Every MCP op as JSON, for a client building its own tool surface | `knowcode capabilities [OP]` |
 | Show or change settings | `knowcode config path\|list\|get\|set\|unset\|migrate` |
 | Manage workspace roots | `knowcode workspace add\|remove\|list` |
 | Clone the git repos this repo depends on, for cross-repo answers | `knowcode fetch-deps --into DIR [--dry-run]` |
@@ -193,7 +197,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 26 tools; a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 27 tools (every tool but `kc_capabilities` and `kc_test_targets`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
@@ -244,6 +248,67 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_status` | `status` | `kc_status` |
 | `kc_more` | `more` | `kc_more`, `cursors` |
 | `kc_help` | | `kc_help` |
+| `kc_capabilities` | `capabilities` | `kc_capabilities` |
+| `kc_task` | `task` | `kc_task` |
+| `kc_test_targets` | `test-targets` | `kc_test_targets` |
+
+`kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
+and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it. Nor is `kc_test_targets`, read by an
+automated client once per task: it is the `kc` op `test_targets`, and `--tools all,kc_test_targets` advertises it.
+
+## Capabilities
+
+A client that builds its own tool surface (an automated pipeline offering an agent a subset of the ops, say) reads
+`kc {op: capabilities}` instead of copying this page. It describes every op as JSON: the full input schema, with the
+bounds of each number (`minimum`, `maximum`, `default`) and the words a closed set takes (`enum`); what `q` and `qs`
+fill and whether the op takes a query at all; whether it reads or writes (`note_add` is the only write); the
+evidence presets it takes; and its answer's format, the keys a JSON answer always has, and the list it is about. A
+number past its range is clamped, and a walk says how deep it went (`depth: {asked, walked}`); a word outside its set
+or a value of the wrong type is refused. The document also names the server's version, the MCP protocol version and
+the index schema. It is read from the same tables as help and the advertised schemas, and a test checks every op's
+entry against the running server. `kc_help kc_capabilities` describes each field.
+
+## Restricted mode
+
+An automated pipeline that gives an agent KnowCode, rather than a person's session, can start the server bound to
+what the job needs:
+
+```sh
+knowcode serve --restricted --repo /work/job-17/shop --ops find,refs,context,impact,more \
+  --cache-dir /work/kc-cache --config-dir /work/kc-config
+```
+
+- **Bound repos.** It answers about the `--repo`s only (each a repo's root; repeat the flag for more). The workspace
+  is those repos: nothing else is discovered or indexed, a workspace-wide call covers them alone, and a call naming
+  another repo, or an absolute path outside them, is refused with code `not_allowed`.
+- **An op allowlist.** `--ops` lists the ops it runs. Any other is refused with `not_allowed`, and under a profile
+  of separate tools (`--tools all`) isn't listed. `capabilities` is
+  always allowed. List `more` too if answers should continue, and `note_add` only if the job may write notes.
+- **Explicit directories.** `--cache-dir` and `--config-dir` (or `KNOWCODE_CACHE_DIR` and `KNOWCODE_CONFIG_DIR`) are
+  required, so nothing of the user's is read or written. Notes go to `--data-dir`, by default `data` in the cache.
+  The server writes nothing outside the cache (and data) directory.
+- **Nothing else.** No update checks, no Claude Code plugin refresh, and git kept off the network: a partial clone's
+  missing objects aren't fetched (`GIT_NO_LAZY_FETCH`), and only local git protocols are allowed. The MCP server never
+  clones or fetches in any mode.
+- **Its scope, said.** The `initialize` reply carries it under `capabilities.experimental["knowcode/scope"]`: the
+  repos, ops and directories, and `discovery`, `update_checks`, `plugin_refresh` and `git_network`, all false. The
+  same is the first line on stderr and the capabilities' `scope`, beside each op's `allowed`.
+
+A headless run, for example in a sandbox that allows writes to the cache only:
+
+- Start it from a clean environment: `env -i HOME=… PATH=… TMPDIR=<cache>/tmp knowcode serve --restricted …`, with
+  `TMPDIR` inside the cache.
+- On macOS, put the real git first on `PATH`, not `/usr/bin/git`. That is a shim that runs `xcrun`, which may need to
+  write its own cache files outside yours. The real one is in the directory above `git --exec-path`'s parent, `bin`
+  (`/Library/Developer/CommandLineTools/usr/bin` with the Command Line Tools).
+- Index the repos once before the jobs (`knowcode index DIR` with the same `KNOWCODE_CACHE_DIR` and
+  `KNOWCODE_CONFIG_DIR`). The server also indexes a bound repo itself on its first question.
+
+The acceptance check (`crates/knowcode/tests/restricted.rs`) starts it this way on macOS under a sandbox profile
+that kills the server on any write outside its cache and on any network connection. It then checks that the server
+says its scope, answers the ops allowed about its repo, refuses other ops, repos and paths with `not_allowed`, and is
+still running at the end. Elsewhere it runs the same calls without the sandbox, and compares the files outside the
+cache before and after.
 
 Every tool takes `repo` and `max_chars`. Shared concepts have their own topics: `contract`, `evidence`, `cursors`,
 `privacy` and `profiles`.
@@ -258,13 +323,15 @@ it, and `kc_search` and `kc_grep_ast` run in a child process of their own. Cance
 
 ## Command flags
 
-Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not repeated below.
+Every query command takes `-r/--repo`, `--no-sync`, `--json` and `--provenance` (the JSON envelope with a provenance
+record, for durable records; see [answers](answers.md#the-provenance-record)); they are not repeated below.
 
 | Command | Flags |
 | --- | --- |
 | `index` | `--workspace DIR`, `--threads N`, `--jobs N`, `--rebuild`, `--scip FILE`, `--verify`, `--phases` |
 | `find` | `-k/--kind`, `-n/--limit` |
 | `locate` | `-n/--limit` |
+| `task` | `--files`, `--dependents`, `--tests` |
 | `at` | |
 | `refs` | `-k/--kind` (alias `--edges`), `-n/--limit`, `--cite brief\|lines\|check\|none` |
 | `context` | `--budget`, `--source full\|skeleton\|none\|auto`, `--limit` (rows per list of a repo's deploy answer), `--cite brief\|lines\|check\|none` |
@@ -293,7 +360,8 @@ Every query command takes `-r/--repo`, `--no-sync` and `--json`; they are not re
 | `note export`, `note import` | `--repo` |
 | `more` | |
 | `status` | `--verify` |
-| `serve` | `--tools` |
+| `serve` | `--tools`; restricted mode: `--restricted`, `--ops`, `--cache-dir`, `--config-dir`, `--data-dir` |
+| `capabilities` | `--tools` |
 | `setup` | `--client-dir`, `--print`, `--replace` |
 | `uninstall` | `--delete-config`, `--delete-notes` |
 | `self-update` | `--check` |

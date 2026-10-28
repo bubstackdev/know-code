@@ -232,6 +232,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
     (&["at", "src/Api/OrderService.cs:9"], false),
     (&["find", "Order"], false),
     (&["locate", "order total discount"], false),
+    (&["task", "order total discount"], false),
     (&["refs", "Save"], false),
     (&["context", "OrderService.Place"], false),
     (&["trace", "OrderService.Place", "--depth", "3"], false),
@@ -246,6 +247,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
     (&["coupled", "src/Api/OrderService.cs", "--as-of", "HEAD~1"], false),
     (&["tests", "src/Api/OrderService.cs"], false),
     (&["tests", "--diff", "HEAD~2"], false),
+    (&["test-targets"], false),
     (&["hotspots"], false),
     (&["hotspots", "src/Api/OrderService.cs"], false),
     (&["ownership"], false),
@@ -268,7 +270,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
 /// `fetch_deps.rs`), or manage the cache and config. `more` continues another answer's list from its cursor (see the
 /// cursor invariants in `cursor.rs`).
 const NOT_QUESTIONS: &[&str] =
-    &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "fetch-deps", "history"];
+    &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "fetch-deps", "history", "capabilities"];
 
 /// The commands `knowcode --help` lists.
 fn listed_commands() -> BTreeSet<String> {

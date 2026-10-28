@@ -71,3 +71,44 @@ fn unused_never_counts_another_worktree_as_a_user_of_its_packages() {
     assert_eq!(alone["items"], beside["items"], "{beside}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The index files in the cache, by name.
+fn indexes(base: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(base.join("cache/repos"))
+        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".sqlite")).collect())
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+#[test]
+fn a_worktrees_index_goes_with_the_worktree() {
+    let base = scratch("gone");
+    std::fs::create_dir_all(base.join("config")).unwrap();
+    let main = base.join("depot");
+    std::fs::create_dir_all(&main).unwrap();
+    git(&main, &["init", "-q"]);
+    write(&main.join("src/shelf.ts"), "export class Shelf { count(): number { return 1; } }\n");
+    git(&main, &["remote", "add", "origin", "https://example.test/group/depot.git"]);
+    git(&main, &["add", "-A"]);
+    git(&main, &["commit", "-qm", "Add the depot"]);
+    let (one, two) = (base.join("depot-one"), base.join("depot-two"));
+    for wt in [&one, &two] {
+        git(&main, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+    }
+    kc(&base, &main, &["index", main.to_str().unwrap(), one.to_str().unwrap(), two.to_str().unwrap()]);
+    assert_eq!(indexes(&base).len(), 3, "{:?}", indexes(&base));
+    // A worktree removed: the next status in any checkout drops its index.
+    git(&main, &["worktree", "remove", "--force", one.to_str().unwrap()]);
+    kc(&base, &main, &["status"]);
+    let left = indexes(&base);
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.iter().all(|n| !n.starts_with("depot-one-")), "{left:?}");
+    // And `prune`, the explicit sweep.
+    git(&main, &["worktree", "remove", "--force", two.to_str().unwrap()]);
+    kc(&base, &main, &["prune"]);
+    let left = indexes(&base);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(left[0].starts_with("depot-"), "{left:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -158,6 +158,7 @@ const QUESTIONS: &[&[&str]] = &[
     &["find", "shared_helper"],
     &["find", "Cipher"],
     &["locate", "secret store vault cipher seal"],
+    &["task", "secret store vault cipher seal"],
     &["refs", "shared_helper"],
     &["context", "shared_helper"],
     &["context", "run_app"],
@@ -174,6 +175,7 @@ const QUESTIONS: &[&[&str]] = &[
     &["coupled", "src/helpers.py", "--since", "all"],
     &["tests", "src/helpers.py"],
     &["tests", "--diff", "HEAD~2"],
+    &["test-targets"],
     &["hotspots"],
     &["hotspots", "src/helpers.py"],
     &["ownership"],
@@ -201,7 +203,7 @@ const QUESTIONS: &[&[&str]] = &[
 ];
 
 /// Commands that answer no question about code (see `invariants.rs`).
-const NOT_QUESTIONS: &[&str] = &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "hook", "bench"];
+const NOT_QUESTIONS: &[&str] = &["index", "forget", "prune", "serve", "purge", "config", "workspace", "setup", "uninstall", "self-update", "help", "more", "hook", "bench", "capabilities"];
 
 #[test]
 fn invariant_setup_never_indexes_or_exposes_a_blocked_repository() {
@@ -539,6 +541,7 @@ fn invariant_no_mcp_tool_shows_blocked_content() {
         ("kc_find", json!({ "query": "Cipher" })),
         ("kc_locate", json!({ "query": "secret vault cipher seal" })),
         ("kc_locate", json!({ "query": "secret vault cipher seal", "workspace": true })),
+        ("kc_task", json!({ "goal": "secret vault cipher seal shared helper" })),
         ("kc_symbol_at", json!({ "file": "src/main.py", "line": 4 })),
         ("kc_symbol_at", json!({ "file": "vault/zqx_secret_store.py", "line": 2 })),
         ("kc_refs", json!({ "name": "shared_helper" })),
@@ -590,6 +593,44 @@ fn invariant_no_mcp_tool_shows_blocked_content() {
         assert_clean(&format!("{tool} {args}"), &text);
         withheld += usize::from(text.contains("withheld"));
         answered += usize::from(r["result"]["isError"] != json!(true));
+        // Every refusal has its code; a privacy refusal and every `withheld` entry carry the same policy.
+        let policy = |p: &Value, what: &str| {
+            assert_eq!(p["file"], json!(".knowcode-privacy.yml"), "{tool} {args} {what}: {r}");
+            assert_eq!(p["block_at"], json!(1), "{tool} {args} {what}: {r}");
+            let whole = p["repo"] == json!("locked-lib");
+            assert!(whole || p["repo"] == json!("app"), "{tool} {args} {what}: {r}");
+            assert_eq!(p["blocks"], json!(if whole { "repo" } else { "paths" }), "{tool} {args} {what}: {r}");
+        };
+        if r["result"]["isError"] == json!(true) {
+            let e = &r["result"]["structuredContent"]["error"];
+            let body = r["result"]["content"][0]["text"].as_str().unwrap_or_default();
+            if body.starts_with("withheld") {
+                assert_eq!(e["code"], json!("withheld"), "{tool} {args}: {r}");
+                policy(&e["privacy"], "refusal");
+            } else {
+                assert!(e["code"].is_string() && e["code"] != json!("internal"), "{tool} {args}: {r}");
+            }
+        } else if let Ok(v) = serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap_or_default()) {
+            fn entries(v: &Value, out: &mut Vec<Value>) {
+                match v {
+                    Value::Object(m) => {
+                        for (k, x) in m {
+                            if k == "incomplete" && let Some(list) = x.as_array() {
+                                out.extend(list.iter().filter(|e| e["reason"] == json!("withheld")).cloned());
+                            }
+                            entries(x, out);
+                        }
+                    }
+                    Value::Array(a) => a.iter().for_each(|x| entries(x, out)),
+                    _ => {}
+                }
+            }
+            let mut found = Vec::new();
+            entries(&v, &mut found);
+            for e in &found {
+                policy(&e["privacy"], "entry");
+            }
+        }
         if *tool == "kc_find" && args["query"] == "shared_helper" && args.get("repo").is_none() {
             assert!(text.contains("src/helpers.py"), "{text}");
         }
@@ -621,5 +662,45 @@ fn a_new_checkout_of_a_repo_with_blocked_paths_is_never_seeded_with_them() {
             assert!(!text.contains(MARK), "{} holds blocked content", p.display());
         }
     }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_provenance_record_never_names_blocked_changes() {
+    let base = scratch("record");
+    let (app, _) = fixture(&base, true);
+    let env = Env::new(&base);
+    // Uncommitted: an allowed file and a blocked one.
+    write(&app.join("src/helpers.py"), "def shared_helper():\n    return 3\n");
+    write(&app.join("vault/zqx_secret_store.py"), "class ZqxVaultCipher:\n    pass\n");
+    let v = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_clean("find --provenance", &v.to_string());
+    let repo = &v["record"]["repos"][0];
+    assert_eq!(repo["uncommitted"]["files"], json!(1), "{v}");
+    assert!(repo["privacy"]["key"].as_str().unwrap().starts_with("blake3:"), "{v}");
+    assert!(repo["privacy"]["file"].as_str().unwrap().starts_with("blake3:"), "{v}");
+    assert_eq!(repo["commit"].as_str().unwrap().len(), 40, "{v}");
+    // The same question gives the same evidence; the uncommitted digest moves with the content, blocked or not only
+    // when allowed content moves.
+    let again = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_eq!(again["record"]["answer"]["evidence"], v["record"]["answer"]["evidence"]);
+    write(&app.join("vault/zqx_secret_store.py"), "class ZqxVaultCipher:\n    zqx = 2\n");
+    let blocked_edit = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_eq!(blocked_edit["record"]["repos"][0]["uncommitted"], repo["uncommitted"]);
+    write(&app.join("src/helpers.py"), "def shared_helper():\n    return 4\n");
+    let edited = env.json(&app, &["find", "shared_helper", "--provenance"]);
+    assert_ne!(edited["record"]["repos"][0]["uncommitted"]["digest"], repo["uncommitted"]["digest"]);
+    // Over MCP: the answer as it is, and the record in a block of its own.
+    let mut mcp = Mcp::start(&env, &app);
+    let r = mcp.call("tools/call", json!({ "name": "kc_find", "arguments": { "query": "shared_helper", "provenance": true } }));
+    assert_clean("kc_find provenance", &r.to_string());
+    let content = r["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2, "{r}");
+    let record: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(record["record"]["answer"]["bytes"], json!(content[0]["text"].as_str().unwrap().len()));
+    assert_eq!(record["record"]["call"]["query"], json!({ "tool": "kc_find", "arguments": { "query": "shared_helper" } }));
+    let plain = mcp.call("tools/call", json!({ "name": "kc_find", "arguments": { "query": "shared_helper" } }));
+    assert_eq!(plain["result"]["content"].as_array().unwrap().len(), 1, "{plain}");
+    drop(mcp);
     let _ = std::fs::remove_dir_all(&base);
 }

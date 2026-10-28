@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 16;
+pub const VERSION: u32 = 23;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -63,24 +63,31 @@ pub fn extract(source: &str) -> FileFacts {
         seen_bare: HashSet::new(),
     };
     cx.visit(tree.root_node());
-    cx.facts.script = children(tree.root_node()).any(|c| {
-        c.is_named()
-            && !matches!(
-                c.kind(),
-                "import_declaration" | "class_declaration" | "protocol_declaration" | "function_declaration"
-                    | "property_declaration" | "typealias_declaration" | "comment" | "multiline_comment"
-                    | "operator_declaration" | "precedence_group_declaration" | "macro_declaration" | "directive"
-                    | "shebang_line" | "associatedtype_declaration"
-            )
-    });
+    // A file runs top-level statements: a script, or a target's `main.swift`. A build diagnostic (`#error(…)` in a
+    // branch of `#if`) or a freestanding macro (`#Preview { … }`) is no statement, and in a file with parse errors
+    // what lies at the top level is no evidence: there, statements are recovery's misreadings.
+    cx.facts.script = cx.facts.parse_errors == 0
+        && children(tree.root_node()).any(|c| {
+            c.is_named()
+                && !matches!(
+                    c.kind(),
+                    "import_declaration" | "class_declaration" | "protocol_declaration" | "function_declaration"
+                        | "property_declaration" | "typealias_declaration" | "comment" | "multiline_comment"
+                        | "operator_declaration" | "precedence_group_declaration" | "macro_declaration" | "directive"
+                        | "shebang_line" | "associatedtype_declaration" | "diagnostic" | "macro_invocation"
+                )
+        });
     cx.facts
 }
 
 /// Parses Swift `source`. When the tree has errors, constructs tree-sitter-swift doesn't read are blanked out of a
 /// copy (spaces of the same length, so every position stays) and the copy parsed again; the tree with fewer errors is
 /// kept. Blanked first: the underscored ownership modifiers (`__shared`, `__owned`, `__consuming`, `_const`),
-/// `@_lifetime(…)` attributes, module selectors (`Mod::name`, `#Mod::macro`), `nonisolated(unsafe)`, and `unsafe` and
-/// `sending` before an operand (`if unsafe p.pointee > 0`, `() -> sending T`); then, also, `#if`, `#elseif`,
+/// `@_lifetime(…)` and `@_specialize(…)` attributes, `#error(…)` and `#warning(…)`, module selectors (`Mod::name`,
+/// `#Mod::macro`), `nonisolated(unsafe)`, `@Sendable` before a `func` in a body, `()` as a statement, and `unsafe`,
+/// `sending` and `consume` before an operand (`if unsafe p.pointee > 0`, `() -> sending T`, `switch consume x`),
+/// with accessors the grammar doesn't know read as `get` and `set` (`borrow`, `mutate`, `unsafeAddress`,
+/// `borrowing get`); then, also, `#if`, `#elseif`,
 /// `#else` and `#endif` lines, which the grammar doesn't read around attributes or between a switch's cases. With
 /// those lines blank, every branch's code is read, as the grammar reads branches elsewhere. A copy wins only when
 /// less of the file is in errors (then fewer errors): branches that don't read as one (`#if` around half a
@@ -206,14 +213,32 @@ pub fn error_sites(source: &str, limit: usize) -> Vec<(u32, u32, String)> {
     out
 }
 
-/// `source` with the underscored ownership modifiers, `@_lifetime(…)` attributes, module selectors,
-/// `nonisolated(unsafe)` and `unsafe` and `sending` before an operand blanked (see [`parse`]), or `None` when it has
-/// none of them.
+/// `source` with the underscored ownership modifiers, `@_lifetime(…)` and `@_specialize(…)` attributes, `#error(…)`
+/// and `#warning(…)`, module selectors, `nonisolated(unsafe)`, `@Sendable` before `func`, `()` as a statement, and
+/// `unsafe`, `sending` and `consume` before an operand blanked, and accessors the grammar
+/// doesn't know rewritten as `get` and `set` (see [`parse`]), or `None` when it has none of them.
 fn blank_modifiers(source: &str) -> Option<String> {
     let b = source.as_bytes();
     let mut out = b.to_vec();
     let mut changed = false;
     let word = |i: usize| i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_');
+    // `()` as a statement (a line of its own, or a closure's only one: `{ () }`), which the grammar reads as a call
+    // missing its callee.
+    let mut at = 0;
+    for line in source.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let trimmed = body.trim();
+        let tuple = if trimmed == "()" {
+            body.find("()")
+        } else {
+            body.find("{ () }").map(|k| k + 2)
+        };
+        if let Some(k) = tuple {
+            out[at + k..at + k + 2].fill(b' ');
+            changed = true;
+        }
+        at += line.len();
+    }
     let mut i = 0;
     while i < b.len() {
         if word(i) && (i == 0 || !word(i - 1)) {
@@ -223,17 +248,18 @@ fn blank_modifiers(source: &str) -> Option<String> {
             }
             let w = &source[start..i];
             let spaced = b.get(i).is_some_and(u8::is_ascii_whitespace);
-            // What follows the space starts a type or an expression: `unsafe x`, `sending T`, never `unsafe = 1`.
+            // What follows the space starts a type or an expression: `unsafe x`, `unsafe !done`, `unsafe 0 <= i`,
+            // `sending T`; never `unsafe = 1`.
             let operand = || {
                 let mut j = i;
                 while j < b.len() && (b[j] == b' ' || b[j] == b'\t') {
                     j += 1;
                 }
-                j > i && b.get(j).is_some_and(|&c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'&' | b'(' | b'[' | b'@'))
+                j > i && b.get(j).is_some_and(|&c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'&' | b'(' | b'[' | b'@' | b'!' | b'$' | b'"'))
             };
             let member = start > 0 && b[start - 1] == b'.';
             if matches!(w, "__shared" | "__owned" | "__consuming" | "_const") && spaced
-                || matches!(w, "unsafe" | "sending") && !member && operand()
+                || matches!(w, "unsafe" | "sending" | "consume") && !member && operand()
             {
                 out[start..i].fill(b' ');
                 changed = true;
@@ -251,7 +277,25 @@ fn blank_modifiers(source: &str) -> Option<String> {
                 }
                 changed = true;
                 i += 2;
-            } else if w == "_lifetime" && start > 0 && b[start - 1] == b'@' && b.get(i) == Some(&b'(') {
+            } else if w == "Sendable" && start > 0 && b[start - 1] == b'@' && source[i..].trim_start_matches([' ', '\t']).starts_with("func ") {
+                // `@Sendable func` declared inside a body, which the grammar reads only without its attribute.
+                out[start - 1..i].fill(b' ');
+                changed = true;
+            } else if matches!(w, "error" | "warning") && start > 0 && b[start - 1] == b'#' && b.get(i) == Some(&b'(') {
+                // `#error("…")` and `#warning("…")`, a build diagnostic the grammar reads only in some places: blank
+                // when it closes on its line.
+                if let Some(close) = source[i..].find(")\n").map(|k| i + k).filter(|&k| !source[i..k].contains('\n')) {
+                    out[start - 1..=close].fill(b' ');
+                    changed = true;
+                    i = close + 1;
+                }
+            } else if let Some(read) = accessor(source, start, i) {
+                // An accessor the grammar doesn't know, read as the one it does: `borrow`/`unsafeAddress` as `get`,
+                // `mutate`/`unsafeMutableAddress` as `set`, `borrowing get` as `get`.
+                out[start..i].fill(b' ');
+                out[start..start + read.len()].copy_from_slice(read.as_bytes());
+                changed = true;
+            } else if matches!(w, "_lifetime" | "_specialize") && start > 0 && b[start - 1] == b'@' && b.get(i) == Some(&b'(') {
                 let mut depth = 0;
                 let mut end = i;
                 while end < b.len() && b[end] != b'\n' {
@@ -277,8 +321,35 @@ fn blank_modifiers(source: &str) -> Option<String> {
             i += 1;
         }
     }
-    // Only ASCII bytes were replaced, each by a space, so the text stays UTF-8.
+    // Only ASCII bytes were replaced, each by a space or an ASCII letter, so the text stays UTF-8.
     changed.then(|| String::from_utf8(out).expect("ASCII replaced by ASCII"))
+}
+
+/// What the word at `start..end` of `source` reads as when it opens an accessor the grammar doesn't know: `borrow`
+/// and `unsafeAddress` as `get`, `mutate` and `unsafeMutableAddress` as `set`, and `borrowing` before `get` as
+/// nothing. An accessor's word is the first on its line or follows `{`, and is followed by `{`, `}` or another
+/// accessor's word (`{ borrow mutate }` in a protocol).
+fn accessor(source: &str, start: usize, end: usize) -> Option<&'static str> {
+    let read = match &source[start..end] {
+        "borrow" | "unsafeAddress" => "get",
+        "mutate" | "unsafeMutableAddress" => "set",
+        "borrowing" => "",
+        _ => return None,
+    };
+    let before = source[..start].trim_end_matches([' ', '\t']);
+    // After a getter in a protocol's requirement too: `{ borrow mutate }`.
+    let after_getter = ["{ borrow", "{ get", "{ unsafeAddress"].iter().any(|g| before.ends_with(g));
+    if !(before.is_empty() || before.ends_with(['\n', '{']) || after_getter) {
+        return None;
+    }
+    let after = source[end..].trim_start_matches([' ', '\t']);
+    let next_word = |w: &str| after.strip_prefix(w).is_some_and(|r| r.starts_with([' ', '\t', '\n', '{', '}']));
+    let opens = if read.is_empty() {
+        next_word("get")
+    } else {
+        after.starts_with(['{', '}']) || ["borrow", "mutate", "unsafeMutableAddress"].iter().any(|w| next_word(w))
+    };
+    opens.then_some(read)
 }
 
 /// `source` with the `#if`, `#elseif`, `#else` and `#endif` lines of each conditional block whose branches are whole
@@ -513,10 +584,12 @@ impl<'a> Cx<'a> {
                 }
             }
             "user_type" => {
-                let name = type_name(self.src, node);
-                let name = last_component(&name);
-                if !COMMON_TYPES.contains(&name) {
-                    self.add_ref(name.to_string(), None, RefKind::TypeRef, node);
+                let full = type_name(self.src, node);
+                let (qualifier, name) = split_qualified(&full);
+                // A qualified name (`Array<T>.Index`, `Module.Type`) keeps its qualifier: the name is looked up there,
+                // never in the scope around it.
+                if qualifier.is_some() || !COMMON_TYPES.contains(&name) {
+                    self.add_ref(name.to_string(), qualifier.map(str::to_string), RefKind::TypeRef, node);
                 }
                 for child in children(node) {
                     if child.kind() == "type_arguments" {
@@ -616,9 +689,9 @@ impl<'a> Cx<'a> {
         let sym = self.push_symbol(node, name, kind, container);
         if kind == SymbolKind::Extension {
             // Extending a type uses it; across repos this is often the only trace of the dependency.
-            let extended = last_component(&qualified).to_string();
+            let (qualifier, extended) = split_qualified(&qualified);
             self.scopes.push(Scope { sym, type_name: None, callable: false, locals: HashMap::new(), bound: HashSet::new() });
-            self.add_ref(extended, None, RefKind::TypeRef, name_node);
+            self.add_ref(extended.to_string(), qualifier.map(str::to_string), RefKind::TypeRef, name_node);
             self.scopes.pop();
         }
 
@@ -636,7 +709,8 @@ impl<'a> Cx<'a> {
                     kind: RelationKind::Inherits,
                     line: line(target),
                 });
-                self.add_ref(last_component(&target_name).to_string(), None, RefKind::TypeRef, target);
+                let (qualifier, name) = split_qualified(&target_name);
+                self.add_ref(name.to_string(), qualifier.map(str::to_string), RefKind::TypeRef, target);
                 targets.push(target_name);
             }
         }
@@ -995,7 +1069,8 @@ impl<'a> Cx<'a> {
             "simple_identifier" => {
                 let name = self.text(callee).to_string();
                 let kind = if starts_upper(&name) { RefKind::Instantiate } else { RefKind::Call };
-                self.add_ref(name, None, kind, callee);
+                let at = self.add_typed_ref(name, None, None, kind, callee);
+                self.label_call(at, kind, node);
             }
             "navigation_expression" => {
                 let Some(suffix) = callee
@@ -1021,14 +1096,16 @@ impl<'a> Cx<'a> {
                 if name == "init" {
                     // `Foo.init(...)` instantiates Foo; `self.init` and `super.init` delegate.
                     if let Some(r) = receiver.as_deref().filter(|r| starts_upper(r)) {
-                        let ty = last_component(r).to_string();
-                        self.add_ref(ty, None, RefKind::Instantiate, suffix);
+                        // `ABI.EncodedTestCase.init(…)` keeps its qualifier, as `ABI.EncodedTestCase(…)` does.
+                        let (qualifier, ty) = split_qualified(r);
+                        self.add_ref(ty.to_string(), qualifier.map(str::to_string), RefKind::Instantiate, suffix);
                     } else {
                         self.add_ref(name, receiver, RefKind::Call, suffix);
                     }
                 } else {
                     let kind = if starts_upper(&name) { RefKind::Instantiate } else { RefKind::Call };
-                    self.add_typed_ref(name, receiver, receiver_type, kind, suffix);
+                    let at = self.add_typed_ref(name, receiver, receiver_type, kind, suffix);
+                    self.label_call(at, kind, node);
                 }
             }
             "prefix_expression" => {
@@ -1038,7 +1115,8 @@ impl<'a> Cx<'a> {
                 {
                     let name = self.text(target).to_string();
                     if name != "init" {
-                        self.add_ref(name, Some(".".into()), RefKind::Call, target);
+                        let at = self.add_typed_ref(name, Some(".".into()), None, RefKind::Call, target);
+                        self.label_call(at, RefKind::Call, node);
                     }
                 }
             }
@@ -1123,11 +1201,23 @@ impl<'a> Cx<'a> {
         self.add_typed_ref(name, receiver, None, kind, at);
     }
 
-    fn add_typed_ref(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) {
+    /// The reference's index in `refs`, when it is a new one.
+    fn add_typed_ref(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) -> Option<usize> {
         let from = self.current_sym();
         let (l, col) = (line(at), name_col(self.src, at, &name));
         if self.seen_refs.insert((from, name.clone(), kind, l, col)) {
             self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: l, col, args: None });
+            return Some(self.facts.refs.len() - 1);
+        }
+        None
+    }
+
+    /// A call's argument labels, which tell Swift overloads apart (see [`call_labels`]), recorded for call `at`.
+    fn label_call(&mut self, at: Option<usize>, kind: RefKind, call: Node) {
+        if let Some(i) = at.filter(|_| kind == RefKind::Call)
+            && let Some(labels) = call_labels(self.src, call)
+        {
+            self.facts.arg_types.insert(i, labels);
         }
     }
 }
@@ -1264,6 +1354,15 @@ fn is_subscript(call: Node) -> bool {
         .is_some_and(|open| open.kind() == "[")
 }
 
+/// A dotted type name's qualifier and last name: `Array.Index` gives `(Some("Array"), "Index")`, `Index` gives
+/// `(None, "Index")`.
+fn split_qualified(name: &str) -> (Option<&str>, &str) {
+    match name.rsplit_once('.') {
+        Some((q, n)) if !q.is_empty() => (Some(q), n),
+        _ => (None, name),
+    }
+}
+
 pub(crate) fn last_component(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or(name)
 }
@@ -1312,6 +1411,51 @@ fn doc_comment(src: &str, node: Node) -> Option<String> {
     (!cleaned.is_empty()).then(|| collapse(cleaned, DOC_CAP))
 }
 
+/// A call's argument labels as JSON: `{"l": [...], "t": [...]}`, the labels of the arguments in parentheses and of the
+/// trailing closures, `null` for one without (`f(1, from: x) { }` is `{"l": [null, "from"], "t": [null]}`). `None`
+/// for a call without a suffix (a function reference) or with an argument tree-sitter couldn't read.
+fn call_labels(src: &str, call: Node) -> Option<String> {
+    let suffix = children(call).find(|c| c.kind() == "call_suffix")?;
+    let label = |n: Node| collapse(&src[n.byte_range()], 80);
+    let mut args = Vec::new();
+    if let Some(list) = children(suffix).find(|c| c.kind() == "value_arguments") {
+        for arg in children(list) {
+            match arg.kind() {
+                // `f(for:in:)` names a function by its labels: a reference, not a call with arguments.
+                "value_argument" if arg.child_by_field_name("value").is_none() => return None,
+                "value_argument" => args.push(arg.child_by_field_name("name").map(label)),
+                "(" | ")" | "," | "comment" | "multiline_comment" => {}
+                _ => return None,
+            }
+        }
+    }
+    let mut trailing = Vec::new();
+    let mut pending = None;
+    // `try f(x) { … }` reads as a call of `try f(x)` with the closure: the closure is `f`'s.
+    let outer = call
+        .parent()
+        .filter(|p| matches!(p.kind(), "try_expression" | "await_expression"))
+        .and_then(|p| p.parent().filter(|g| g.kind() == "call_expression" && g.named_child(0) == Some(p)))
+        .and_then(|g| children(g).find(|c| c.kind() == "call_suffix"))
+        .filter(|s| !children(*s).any(|c| c.kind() == "value_arguments"));
+    for c in children(suffix).chain(outer.into_iter().flat_map(children)) {
+        match c.kind() {
+            "lambda_literal" => trailing.push(pending.take()),
+            "simple_identifier" => pending = Some(label(c)),
+            _ => {}
+        }
+    }
+    // `await f(…)`, `try await f(…)`, `await (f(…))`: the call is awaited.
+    let mut up = call.parent();
+    while let Some(p) = up.filter(|p| p.kind() == "tuple_expression" && p.named_child_count() == 1) {
+        up = p.parent();
+    }
+    if up.is_some_and(|p| p.kind() == "await_expression") {
+        return Some(serde_json::json!({ "l": args, "t": trailing, "a": true }).to_string());
+    }
+    Some(serde_json::json!({ "l": args, "t": trailing }).to_string())
+}
+
 pub(crate) fn collapse(s: &str, cap: usize) -> String {
     let mut out = String::with_capacity(s.len().min(cap + 4));
     for word in s.split_whitespace() {
@@ -1336,6 +1480,60 @@ pub(crate) fn collapse(s: &str, cap: usize) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_qualified_type_keeps_its_qualifier() {
+        let f = extract(
+            "struct Ring {\n    func copy() -> UnsafeMutableBufferPointer<Int>.Index { 0 }\n    var s: String.UnicodeScalarView\n    var i: Index\n}\nextension Rings.Ring: Swift.Sendable {}\n",
+        );
+        let types: Vec<(&str, Option<&str>)> =
+            f.refs.iter().filter(|r| r.kind == RefKind::TypeRef).map(|r| (r.name.as_str(), r.receiver.as_deref())).collect();
+        for want in [
+            ("Index", Some("UnsafeMutableBufferPointer")),
+            ("UnicodeScalarView", Some("String")),
+            ("Index", None),
+            ("Ring", Some("Rings")),
+            ("Sendable", Some("Swift")),
+        ] {
+            assert!(types.contains(&want), "{want:?} in {types:?}");
+        }
+    }
+
+    #[test]
+    fn an_awaited_call_says_so() {
+        let f = extract("func g() async throws {\n    let a = try await p.option(1)\n    let b = await (q.load())\n    let c = r.sync(2)\n}\n");
+        let labels = |name: &str| -> Option<&str> {
+            let i = f.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call)?;
+            f.arg_types.get(&i).map(String::as_str)
+        };
+        assert_eq!(labels("option"), Some(r#"{"a":true,"l":[null],"t":[]}"#));
+        assert_eq!(labels("load"), Some(r#"{"a":true,"l":[],"t":[]}"#));
+        assert_eq!(labels("sync"), Some(r#"{"l":[null],"t":[]}"#));
+    }
+
+    #[test]
+    fn a_calls_argument_labels_are_recorded() {
+        let f = extract("func g() {\n    f(1, from: x) { }\n    s.put(into: 3)\n    run { } done: { }\n    let h = f\n}\n");
+        let labels = |name: &str| -> Option<&str> {
+            let i = f.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call)?;
+            f.arg_types.get(&i).map(String::as_str)
+        };
+        assert_eq!(labels("f"), Some(r#"{"l":[null,"from"],"t":[null]}"#));
+        assert_eq!(labels("put"), Some(r#"{"l":["into"],"t":[]}"#));
+        assert_eq!(labels("run"), Some(r#"{"l":[],"t":[null,"done"]}"#));
+        // `try`/`await` before a call with a trailing closure: the grammar hangs the closure on `try f(…)`.
+        let g = extract("func g() async throws {\n    let h = try make(at: 1) { x in x }\n    let k = await load(from: y) { }\n}\n");
+        let labels = |name: &str| -> Option<&str> {
+            let i = g.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call)?;
+            g.arg_types.get(&i).map(String::as_str)
+        };
+        assert_eq!(labels("make"), Some(r#"{"l":["at"],"t":[null]}"#));
+        // A function named by its labels (`xs.map { $0.scope(for:in:) }`) records none.
+        let named = extract("let a = xs.map { $0.scope(for:in:) }\n");
+        let i = named.refs.iter().position(|r| r.name == "scope").unwrap();
+        assert_eq!(named.arg_types.get(&i), None);
+        assert_eq!(labels("load"), Some(r#"{"a":true,"l":["from"],"t":[null]}"#));
+    }
+
     /// `(kind, qualified name)` of each symbol of `f`.
     fn decls(f: &FileFacts) -> Vec<(SymbolKind, String)> {
         f.symbols.iter().map(|s| (s.kind, s.container.as_ref().map_or(s.name.clone(), |c| format!("{c}.{}", s.name)))).collect()
@@ -1346,6 +1544,78 @@ mod tests {
         let f = extract("func f(_ k: Kind) -> Int {\n    done(.success(()))\n    switch k { case .try: return 1 default: return 2 }\n}\n");
         assert_eq!(f.parse_errors, 0);
         assert!(error_sites("let x = ()\n", 5).is_empty());
+    }
+
+    #[test]
+    fn a_file_is_a_script_only_for_its_statements() {
+        // A build diagnostic in a branch of `#if`, or a freestanding macro, isn't a statement.
+        let library = "#if canImport(Glibc)\nimport Glibc\n#else\n#error(\"Unknown C library.\")\n#endif\n\
+                       public final class Rig {\n    public var flow: Int { 0 }\n}\n#Preview {\n    Rig()\n}\n";
+        assert!(!extract(library).script);
+        assert!(extract("import Rig\nlet rig = Rig()\nprint(rig.flow)\n").script);
+        // With parse errors, what lies at the top level is no evidence of statements.
+        let broken = "public final class Rig {\n    public var flow: Int { 0 }\n}\nfunc f( {\n";
+        let f = extract(broken);
+        assert!(f.parse_errors > 0 && !f.script);
+    }
+
+    #[test]
+    fn newer_accessors_attributes_and_operators_are_read_around() {
+        let src = "struct Ring {
+    @_specialize(where T == Array<UInt8>)
+    init<T>(_ bytes: T) {}
+    subscript(i: Int) -> Int {
+        @_transparent
+        unsafeAddress { fatalError() }
+        unsafeMutableAddress { fatalError() }
+    }
+    subscript(slot s: Int) -> Int {
+        borrow { 0 }
+        mutate { fatalError() }
+    }
+    var first: Int {
+        borrowing get { 0 }
+    }
+    func drain(_ x: consuming Box) -> Int {
+        switch consume x {
+        case .empty: return 0
+        }
+        if unsafe !done { return 1 }
+        while unsafe 0 < count {}
+        @Sendable func step() -> Int { 1 }
+        do { try run() } catch {
+            ()
+        }
+        return step()
+    }
+}
+
+#if os(Plan9)
+#error(\"Unsupported platform\")
+#endif
+protocol Cell {
+    subscript(i: Int) -> Int { borrow mutate }
+}
+";
+        let f = extract(src);
+        assert_eq!(f.parse_errors, 0, "{:?}", error_sites(src, 5));
+        assert_eq!(
+            decls(&f),
+            [
+                (SymbolKind::Struct, "Ring".into()),
+                (SymbolKind::Init, "Ring.init".into()),
+                (SymbolKind::Subscript, "Ring.subscript".into()),
+                (SymbolKind::Subscript, "Ring.subscript".into()),
+                (SymbolKind::Property, "Ring.first".into()),
+                (SymbolKind::Method, "Ring.drain".into()),
+                (SymbolKind::Function, "step".into()),
+                (SymbolKind::Protocol, "Cell".into()),
+                (SymbolKind::Subscript, "Cell.subscript".into()),
+            ]
+        );
+        // `borrow` read as `get` only where it opens an accessor: a call of a function named `borrow` stays one.
+        assert_eq!(accessor("x = borrow(1)", 4, 10), None);
+        assert_eq!(accessor("    borrow {", 4, 10), Some("get"));
     }
 
     #[test]

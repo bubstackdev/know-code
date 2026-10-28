@@ -617,6 +617,7 @@ fn stop_incomplete(f: &Flow, opts: &FlowOptions) -> Vec<kc_store::answer::Incomp
 
 /// `knowcode flow`: what happens end to end from `entry` in the queried repo.
 pub fn flow(entry: &str, opts: &FlowOptions, args: &Scope) -> Result<Out<Option<Flow>>> {
+    let _rivals = opts.edges.explain_rivals();
     let roots = ops::target_repos(&args.repos)?;
     let Some(root) = roots.first() else { bail!("no repo to query") };
     let o = ops::open_fresh(root, args.no_sync)?;

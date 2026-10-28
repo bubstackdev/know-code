@@ -1,0 +1,5 @@
+# MSBuild properties identity-v1 restores and loads each C# repository with (eval/identity-v1/README.md): one
+# framework per project, the latest the repository targets, so every file is read once, in one build.
+serilog TargetFrameworks=net10.0
+autofac TargetFrameworks=net10.0
+jellyfin-server

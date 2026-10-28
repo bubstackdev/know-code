@@ -35,6 +35,12 @@ include or Angular lazy route in a form not read, an HTTP endpoint registration 
 as a `MapGet` template that isn't a constant or `MapControllerRoute`). The entry names them with `file:line` and says what the answer
 may lack because of them; [languages.md](languages.md#constructs-recognised-but-not-read) lists them all.
 
+A file the extractor couldn't read whole (parse errors) that the answer names is an `unsupported` entry too: the
+answer's `coverage` lists each such file (`{repo, file, errors, first, inside}`, at most 5): `first` is its first
+error's `line:col`, and `inside` the answer's own symbol when the error lies in its span, so that symbol's calls and
+members are the ones most likely missing. Declarations, members, calls and references in those files may be missing.
+`status` lists every file with parse errors.
+
 Files KnowCode doesn't read as code (Razor markup, vendored or built JavaScript) are checked as text before an
 answer says uses there may be missing. `refs` names the lines there that name the symbol, as an `unsupported` entry;
 when no Razor file names a C# symbol, `checked` says so (`"none of 59 Razor files (.razor, .cshtml), checked as text,
@@ -50,6 +56,65 @@ an assembly scan exposing only other services.
 
 The text rendering ends with one line per entry, for example
 `incomplete (capped): items: 3 of 7 shown; continue: kc_more {cursor: <`cursor`>}`.
+
+### Completeness and size
+
+`complete` says whether the answer is partial for what was asked. A JSON answer that is partial in any way also says
+how, in three parts that call for different things, and what it cost:
+
+```json
+"completeness": {"graph": true, "source": false, "lists": false},
+"size": {"max_chars": 8000, "chars": 7914, "source": "skeleton",
+         "continue": [{"list": "items[0].callers", "cursor": "kc~3", "rest": 37, "chars": 6290}]}
+```
+
+- `graph`: the graph the answer read was whole: no `incomplete` entry saying a walk stopped at its depth, the
+  evidence policy left edges out, or data was stale, unreadable, missing, unmodelled, withheld or out of time. When
+  it is false, a cursor won't help: ask deeper, with another policy, or later.
+- `source`: the source it quotes is whole, not a skeleton or cut short. Ask for `source: full` or a larger budget.
+- `lists`: every list is all there. When it is false, `size.continue` names each list that continues, with its
+  cursor, the rows left (`rest`) and about how many characters they would take (`chars`, at the rate of the rows
+  shown), so a client can tell whether the next page is worth its cost.
+- `size` gives `max_chars` as asked, `chars` returned (the summary included), and the `source` mode in effect.
+
+They take only the room `max_chars` leaves, never a row's: when they don't fit, `continue` is left out first, then
+`size`. A whole answer has neither, and is as it was. A text answer (a tree) says the same in its header lines: one per
+`incomplete` and `more` entry, with the call that continues it.
+
+### Codes
+
+Every refusal and every partial answer carries a machine code, so a client never reads the English to tell them apart.
+The English stays, for people.
+
+- **An `incomplete` or `more` entry:** its code is its `reason`, above. Where the reason alone doesn't say what to do,
+  the entry also has `code`: `indexing` (a `stale` repo still being indexed: ask again after it finishes),
+  `not_indexed` (a `missing_repo` not indexed yet) or `gone` (a `missing_repo` whose checkout is gone).
+- **A refused call** (an MCP tool error): the text is the English, and the result's `structuredContent` is
+  `{"error": {"code", "message"}}`.
+- **A rename preview refused:** `refused: true` with `reasons` in English and `codes` beside them, one each.
+- **Privacy:** a `withheld` entry, a call refused for naming a blocked path, and a repo refused whole all carry
+  `privacy`: `{repo, file, block_at, blocks}`, where `blocks` is `repo` or `paths`. It never names a blocked path.
+
+| code | meaning |
+| --- | --- |
+| `invalid_argument` | a parameter is missing, of the wrong type, outside its set, or contradicts another; or the op is unknown |
+| `not_found` | nothing the call names exists: no definition, file, symbol or commit by that name |
+| `ambiguous` | the call names several things and nothing decides between them; the message lists them, to pick one (a rename's ambiguous sites too) |
+| `no_files` | the paths or globs given match no file, so nothing was searched |
+| `not_indexed` | a repo the call needs isn't indexed, or isn't a repo |
+| `indexing` | a repo is being indexed: the answer is from its last index, or there is none yet; ask again after it finishes |
+| `gone` | a repo's checkout is gone |
+| `withheld` | an AI privacy file blocks what was asked (with `privacy`) |
+| `stale_cursor` | the cursor is from before the index or the list changed, or the server no longer holds it; start again with the original call |
+| `unsupported` | a construct or language the analysis doesn't model (a rename of a member the index can't see too) |
+| `collision` | a rename's new name is taken where the symbol is in scope |
+| `cut` | a rename preview cut to fit `max_chars`, which can't be applied as it is |
+| `not_allowed` | a restricted server (`serve --restricted`) isn't allowed to answer it: an op outside its allowlist, or a repo or path outside the repos it is bound to |
+| `cancelled` | the client cancelled the call |
+| `failed` | files, the index or git could not be read |
+| `internal` | anything else: a fault in KnowCode, worth reporting |
+
+The capabilities (`kc {op: capabilities}`) list the codes and the reasons.
 
 ### More is not incomplete
 
@@ -128,13 +193,36 @@ The text rendering prints an `also consulted:` line for other repos, marking tho
 
 Every JSON answer also carries `knowcode`: the version, the commit the binary was built from, and the index schema.
 
+### The provenance record
+
+For a durable record of an answer, ask for its provenance record: `--provenance` on the command line (the JSON
+envelope gains `record`), or `provenance: true` on any MCP tool call (the answer is unchanged and a second content
+block holds `{"record": …}`). Compact answers in a conversation don't carry it. The record (`format` 1) holds:
+
+- `knowcode`: the version, the commit the binary was built from, the index schema, the resolver, and every
+  extractor's version;
+- `call`: the call as given (the command's arguments; the tool and its arguments) and the hash of its canonical JSON;
+- `answer`: the hash of the bytes returned without the record, their length, and `evidence`: the hash of the answer's
+  content without what names or measures one index or one moment (row ids, cursors, generations, timings, how much a
+  sync reparsed, a search's work counters, how long ago a cached value was computed). The same question asked again of
+  the same code gives the same `evidence`, from another index, process or worktree;
+- `repos`: for each repo the answer read, its `repo`, the full `commit` and the `generation`, `dirty` and `fresh` the
+  answer read; its `worktree` (git directory, common directory and identity: the normalized origin, else the common
+  directory); `uncommitted`, the number of files that differ from the commit (changed, deleted, untracked) and a digest
+  of their paths, statuses and contents, leaving out the paths the privacy file blocks; `base`, the
+  shared base the index was cloned from, with its `commit` and whether any file differs from it yet (`unchanged`;
+  see [architecture](architecture.md#the-cache-lifecycle)); and `privacy`, the
+  digests of the policy's key (what it blocks, absent when nothing is) and of the privacy file, and `block_at`.
+
+Hashes are `blake3:<hex>`.
+
 ## Confidence and evidence
 
 Every reference, trace or impact row, and path or flow step carries a `confidence`:
 
 | confidence | meaning |
 | --- | --- |
-| `exact` | resolved through scope, type, an import or a compiler index |
+| `exact` | resolved through scope, type, an import or a compiler index, to one declaration (or the parts of one: TypeScript's merged declarations, a C# `partial` member) |
 | `unique_name` | the one definition of the name in scope; a heuristic preference among several HTTP handlers or SQL schemas is also labelled `unique_name`, with evidence `name_dominant` |
 | `ambiguous` | several candidates, all listed, none picked |
 | `external_likely` | probably outside the indexed code (a standard-library member, an unindexed module) |
@@ -179,7 +267,8 @@ MCP it is one string: `"receiver_type [project_unverified]"`.
 | `revision_unverified` | the dependency's checkout is the revision asked for (a Terraform `?ref=`, a CI include `ref:`, a registry version) |
 
 `exact` is a statement about how a name was resolved, not a measured probability. A syntactic `exact` still rests on
-the assumptions listed beside it.
+the assumptions listed beside it. Its precision against the language toolchains is measured by the
+[identity gate](../eval/identity-v1/README.md).
 
 ## Cited source
 
@@ -265,6 +354,29 @@ Ambiguous edges stay leaves under `default` because walking past them mostly wal
 index (scip-dotnet), an ambiguous C# reference usually lists the right target among its candidates, but lists many,
 so per candidate edge only a few percent are the call the compiler binds, and that compounds at every hop. The walk
 lists them and names what lies past them instead (see below); `all` walks past them, marked `ambiguous`.
+
+### Why this one
+
+Under `evidence: all` (or a policy starting with `all`), an edge resolved among declarations sharing its name says
+which it was resolved past and why: its evidence lists `rivals`, each `{target, at, why}` (the first 5;
+`rivals_total` counts them when more). `why` is the first check that ruled the rival out:
+
+| why | the rival |
+| --- | --- |
+| `project` | isn't compiled by the caller's project or one it references (C#) |
+| `visibility` | is private to its file or script |
+| `namespace` | is in a namespace the file doesn't see, or isn't the one the receiver's type is in |
+| `module` | is in a module the file is neither in nor imports |
+| `kind` | is another kind of declaration (a property where a call is made) |
+| `argument_labels` | doesn't take the call's argument labels (Swift) |
+| `arity` | takes another number of arguments |
+| `argument_types` | doesn't take the call's argument types (C#) |
+| `receiver_type` | isn't a member of the receiver's type or its supertypes |
+| `scope` | isn't in the caller's type, file or module where a nearer declaration is |
+| `overload` | is another overload of the member picked, one that fits less well |
+
+In JSON the compact evidence reads `receiver_type; not Audit.Log at src/BooksAudit.cs:4 (namespace)`; a text tree
+gives the same under the row. Under any other policy nothing is said, and answers are as they were.
 
 ## Where a walk stops
 

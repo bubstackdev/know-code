@@ -762,7 +762,8 @@ pub struct FileFacts {
     pub ansible: Vec<AnsibleFact>,
     /// Per call reference (by index in `refs`), its arguments' types as far as the call site tells them, as JSON: an
     /// encoded type or `null` per argument, a named one as `{"n": name, "t": type}` (`["string", {"n": "id", "t":
-    /// null}]`). Absent when an argument is passed `out` or `ref`. C# only.
+    /// null}]`). Absent when an argument is passed `out` or `ref`. Swift: the call's argument labels instead
+    /// (`{"l": [null, "from"], "t": [null]}`, see `swift::call_labels`).
     pub arg_types: std::collections::BTreeMap<usize, String>,
     /// The member references (by index in `refs`) that assign the member: `x.P = …`, `P = …` in the class declaring
     /// `P`, `new T { P = … }`. C# only.

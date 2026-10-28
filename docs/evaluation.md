@@ -118,6 +118,9 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
 
 **Release gates**, with no model calls, compare each release candidate with the previous release:
 
+- [Release gate, 0.6.0](../eval/release-gate/0.6.0.md): tool cost, replay under both scorers, history, identity against
+  a compiler, the contract, task answers, worktrees, workspace, clean-machine acceptance with restricted mode and the
+  update from 0.5.1.
 - [Release gate, 0.5.1](../eval/release-gate/0.5.1.md): the same checks as 0.5.0's, against 0.5.0, with whether
   each of 0.5.0's misses is now met, and the update across the repository's new name.
 - [Release gate, 0.5.0](../eval/release-gate/0.5.0.md): tool cost per turn in tokens, the replay of recorded calls,
@@ -128,6 +131,14 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
   a build and scored against the studies' labels.
 - [History gate](../eval/history-v1/README.md): history questions on full clones, labelled from git alone, with
   KnowCode scored against the plain-git approaches.
+- [Identity gate](../eval/identity-v1/README.md): references from pinned public repositories labelled by each
+  language's toolchain (the Swift index store, Roslyn, the TypeScript compiler), with KnowCode's reference links scored
+  against them: `exact` precision, recall, and links to the workspace where the toolchain resolves outside.
+- [Task answers](../eval/tasks-v1/README.md): tasks from public repositories' fix commits, labelled with the files and
+  tests each commit changed, from git alone, with an op's answers scored by recall within a byte budget against
+  `locate` alone.
+- [Contract gate](../eval/contract/README.md): each op's capabilities entry checked against what the server accepts
+  and answers, restricted mode against its scope, files and network, and refusal codes across the replay.
 - [Schema cost](../eval/schema-cost.md): what the advertised tools and instructions cost a session per turn.
 
 **Agent studies** compare agents with and without KnowCode on pinned public repositories, pre-registered, with the
