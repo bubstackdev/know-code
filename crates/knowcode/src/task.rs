@@ -233,6 +233,29 @@ fn quote(root: &Path, file: &str, line: u32) -> Option<String> {
     Some(l.chars().take(QUOTE_CHARS).collect())
 }
 
+/// The order a task answer's keys are written in: its sections as they are read (the files, the tests to run, what
+/// depends on them, what is unsettled), then what the answer says about itself. A JSON object's keys are otherwise
+/// written in name order, which put `dependents` and `sections` before `tests`, past the first few thousand bytes a
+/// client reads first.
+const READING_ORDER: &[&str] = &["goal", "items", "tests", "dependents", "unsettled", "complete", "incomplete", "completeness", "sections"];
+
+/// The compact answer `text` with its top-level keys in [`READING_ORDER`], the rest after them in name order: the same
+/// bytes, ordered. Anything but a JSON object is returned as it is.
+pub fn reading_order(text: &str) -> String {
+    let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(text) else { return text.to_string() };
+    let mut parts: Vec<String> = Vec::with_capacity(obj.len());
+    let mut put = |k: &str, v: Value| parts.push(format!("{}:{v}", Value::from(k)));
+    for k in READING_ORDER {
+        if let Some(v) = obj.remove(*k) {
+            put(k, v);
+        }
+    }
+    for (k, v) in obj {
+        put(&k, v);
+    }
+    format!("{{{}}}", parts.join(","))
+}
+
 /// The answer as text: each section under its heading, then what isn't whole.
 pub fn render(env: &Value) {
     let rows = |key: &str| env[key].as_array().cloned().unwrap_or_default();
@@ -286,6 +309,13 @@ mod tests {
         assert!(env["tests"].as_array().unwrap().iter().any(|t| t.as_str().is_some_and(|t| t.starts_with("tests/RefundsTests.cs ("))), "{env}");
         assert_eq!(env["sections"]["tests"]["advisory"], ADVISORY);
         assert!(env["unsettled"].as_array().unwrap().iter().any(|u| u.as_str().is_some_and(|u| u.contains("zebra"))), "{env}");
+        // Read in order: the files, then the tests, then what depends on them; the same bytes as the object.
+        let compact = env.to_string();
+        let ordered = reading_order(&compact);
+        assert_eq!(ordered.len(), compact.len());
+        assert_eq!(serde_json::from_str::<Value>(&ordered).unwrap(), env);
+        let at = |k: &str| ordered.find(&format!("\"{k}\":")).unwrap();
+        assert!(at("items") < at("tests") && at("tests") < at("dependents") && at("dependents") < at("sections"), "{ordered}");
         // Each section says whether it is whole and how to continue.
         for key in ["items", "dependents", "tests"] {
             assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["next"].is_string(), "{key}: {env}");

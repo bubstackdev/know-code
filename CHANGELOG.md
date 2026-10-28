@@ -4,6 +4,24 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
+  where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
+  `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
+  `append(optional:)`. It is judged by argument count (C#) and argument labels (Swift) on the declarations the
+  receiver or scope picks. Swift argument labels count a trailing closure after `try` or `await`
+  (`try make(at: 1) { … }`), a function named by its labels (`xs.map { $0.scope(for:in:) }`) records none, and a
+  parameter list ending in a comma has no extra parameter. Swift files are re-extracted once.
+- Swift code in `extension A.B` reads unqualified names as Swift does: B's members and the file's declarations, not
+  A's. In `extension Box.Keyed { func sup() -> Decoder }`, `Decoder` is Swift's protocol, not `Box.Decoder`, and
+  `extension Box.Decoder: Decoder` reads its conformance at the file's scope. Code written inside `A`, and an
+  extension of a top-level type, read as before. `X.Y.init(…)` keeps `X` as its qualifier, as `X.Y(…)` does. Swift
+  files are re-extracted once.
+- Swift files using newer constructs lose less of their code to parse errors. Read now: `borrow`, `mutate`,
+  `unsafeAddress` and `borrowing get` accessors; `@_specialize(where …)`; `#error(…)` and `#warning(…)`; `@Sendable` on
+  a function declared in a body; `()` as a statement; and `consume`, or `unsafe` before `!` or a number. Over 4,297
+  files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
+  declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
+  ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
 - A Swift receiver whose type the code writes as a standard-library protocol's name, which the repo also gives a
   nested type, is the library's: in `init(from decoder: Decoder)`, `decoder.singleValueContainer()` is Swift's
   `Decoder`'s, listed as `external_likely`, not linked to a test helper's nested `Minimal.Decoder`. Code inside the
@@ -17,7 +35,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
   changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
   index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
-  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does.
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does. Its
+  keys are written in reading order (files, tests, dependents, what is unsettled, then what the answer says about
+  itself), not by name, so the tests come within the first part a client reads.
 - `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
   tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
   (`dotnet test`) and `package.json` test scripts (run with the package manager

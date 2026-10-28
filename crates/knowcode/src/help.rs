@@ -799,7 +799,8 @@ otherwise kc_locate, kc_context, kc_impact and kc_tests are joined by hand. Four
 - `unsettled`: what the index can't settle: goal words no listed file matches, edges left as ambiguous (a call that
   may reach several implementations), constructs not read, content withheld, repos not read.
 
-`sections` says for each list whether it is whole (`complete`) and the call that continues it (`next`); a cut list is a
+The answer is written in reading order: `items`, `tests`, `dependents`, `unsettled`, then what it says about
+itself. `sections` says for each list whether it is whole (`complete`) and the call that continues it (`next`); a cut list is a
 `capped` entry of `incomplete` too. Rows are short text, so the answer costs about what kc_locate's does alone. Bounds:
 `files`, `dependents` and `tests`."#,
     },
