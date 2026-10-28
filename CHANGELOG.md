@@ -9,6 +9,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   argument besides its receiver, and `Expression.Not(x)` to a repo's `Not<T>(this Expression<…>)`. Such a call is
   LINQ's or the framework's: `unresolved`. Called through its class (`Lists.FirstOrDefault(xs)`) or unqualified, the
   receiver is still the first argument.
+- A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
+  freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
+  So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
+  (`channel.pipeline` on an `EmbeddedChannel` linked to `Channel.pipeline`). Neither is a statement now, and a file
+  with parse errors is no script either: its top level is recovery's misreading. In swift-nio, 35 library files were
+  taken for scripts. On the identity gate (measured before the overload and extension-scope fixes below), Swift
+  `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to 0.571 (linked) and from 0.813 to 0.851 (among
+  candidates), with no label newly wrong. Swift files are read again.
 - A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
   where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
   `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
@@ -27,6 +35,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
   declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
   ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
+- `capabilities` says what the server does at each end of a bounded number, where it said every out-of-range value
+  is "clamped": past `max` it is clamped (`above_max`), up to the `type_max` a depth's type holds (255), past which it
+  is refused; under `min` it is clamped up when `min` is above 0 (`below_min`); a negative number is refused
+  (`negative`: `invalid_argument`), as `search` with `context: -1` always was. The server's behaviour is unchanged.
+- `areas` overlays the inferred areas on the modules the repo's manifests declare (SwiftPM targets, .NET projects, npm
+  packages, Cargo crates): `modules` lists them with the areas holding their files, and each area gives its files by
+  module, with `spans_modules` when a cluster crosses module boundaries. Both views stay: the declared one says what
+  the build keeps apart, the inferred one what references and co-change tie together.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the

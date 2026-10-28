@@ -680,7 +680,13 @@ directory), dir, files, lines, cohesion (0-1: the share of its reference and co-
 tokens, key_files (PageRank within the area), entry_points, exposed (the files other areas use most) and depends_on
 (other areas its references go into, with file_edges). modularity says how clear the split is (above 0.3 is clear);
 cochange_pairs 0 means no history helped. With area (an id, name or directory, or a fragment of one name), that area
-and every file in it (`members`). kc_context on a symbol or a file path says which area it is in."#,
+and every file in it (`members`). kc_context on a symbol or a file path says which area it is in.
+
+Where the repo's manifests declare modules (SwiftPM targets, .NET projects, npm packages and workspace members, Cargo
+crates), both views are given: `modules` lists them (name, kind, dir, manifest, files, and the areas holding them), and
+each area its files by module (`modules`), `spans_modules` when they are in more than one, and `outside_modules` for
+files in none. Declared boundaries say what the build keeps apart; areas say what references and co-change tie
+together, so an area spanning modules is a feature cut across them."#,
     },
     Topic {
         name: "kc_notes",
@@ -843,8 +849,10 @@ its repos, ops and directories) and `ops`, one entry per op:
 - `q` and `qs`: the parameters they fill as `kc` ops, or null; `takes_query` false for an op taking no `q`.
 - `input`: the full JSON schema of its parameters: `minimum`, `maximum` and `default` for a bounded number,
   `enum` for a closed set of words (the default first). `ranges` and `choices` say the same per parameter. A number
-  beyond its range is clamped, and the answer says what it walked (`depth: {asked, walked}`); a word outside its set,
-  or a value of the wrong type, is refused. Parameters not in the schema are ignored. `aliases` names parameters that
+  past its `max` is clamped, and the answer says what it walked (`depth: {asked, walked}`), up to the `type_max` its
+  type holds where it has one (255 for a depth), past which it is refused; under its `min` it is clamped up
+  (`below_min`), but a negative number is refused (`invalid_argument`), as is a word outside its set or a value of the
+  wrong type. Parameters not in the schema are ignored. `aliases` names parameters that
   stand for another (refs' `edges` for `kinds`).
 - `batch`: the parameter taking several inputs in one call, and how many at most; the answer is then
   `{"results": [...]}`.
