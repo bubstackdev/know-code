@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 21;
+pub const VERSION: u32 = 22;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -63,16 +63,20 @@ pub fn extract(source: &str) -> FileFacts {
         seen_bare: HashSet::new(),
     };
     cx.visit(tree.root_node());
-    cx.facts.script = children(tree.root_node()).any(|c| {
-        c.is_named()
-            && !matches!(
-                c.kind(),
-                "import_declaration" | "class_declaration" | "protocol_declaration" | "function_declaration"
-                    | "property_declaration" | "typealias_declaration" | "comment" | "multiline_comment"
-                    | "operator_declaration" | "precedence_group_declaration" | "macro_declaration" | "directive"
-                    | "shebang_line" | "associatedtype_declaration"
-            )
-    });
+    // A file runs top-level statements: a script, or a target's `main.swift`. A build diagnostic (`#error(…)` in a
+    // branch of `#if`) or a freestanding macro (`#Preview { … }`) is no statement, and in a file with parse errors
+    // what lies at the top level is no evidence: there, statements are recovery's misreadings.
+    cx.facts.script = cx.facts.parse_errors == 0
+        && children(tree.root_node()).any(|c| {
+            c.is_named()
+                && !matches!(
+                    c.kind(),
+                    "import_declaration" | "class_declaration" | "protocol_declaration" | "function_declaration"
+                        | "property_declaration" | "typealias_declaration" | "comment" | "multiline_comment"
+                        | "operator_declaration" | "precedence_group_declaration" | "macro_declaration" | "directive"
+                        | "shebang_line" | "associatedtype_declaration" | "diagnostic" | "macro_invocation"
+                )
+        });
     cx.facts
 }
 
@@ -1520,6 +1524,19 @@ mod tests {
         let f = extract("func f(_ k: Kind) -> Int {\n    done(.success(()))\n    switch k { case .try: return 1 default: return 2 }\n}\n");
         assert_eq!(f.parse_errors, 0);
         assert!(error_sites("let x = ()\n", 5).is_empty());
+    }
+
+    #[test]
+    fn a_file_is_a_script_only_for_its_statements() {
+        // A build diagnostic in a branch of `#if`, or a freestanding macro, isn't a statement.
+        let library = "#if canImport(Glibc)\nimport Glibc\n#else\n#error(\"Unknown C library.\")\n#endif\n\
+                       public final class Rig {\n    public var flow: Int { 0 }\n}\n#Preview {\n    Rig()\n}\n";
+        assert!(!extract(library).script);
+        assert!(extract("import Rig\nlet rig = Rig()\nprint(rig.flow)\n").script);
+        // With parse errors, what lies at the top level is no evidence of statements.
+        let broken = "public final class Rig {\n    public var flow: Int { 0 }\n}\nfunc f( {\n";
+        let f = extract(broken);
+        assert!(f.parse_errors > 0 && !f.script);
     }
 
     #[test]
