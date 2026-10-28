@@ -8160,6 +8160,8 @@ fn overview_areas(areas: &kc_index::areas::Areas) -> Value {
 pub struct AreasRepo {
     pub root: PathBuf,
     pub areas: kc_index::areas::Areas,
+    /// The modules its manifests declare, with the areas over them.
+    pub declared: kc_index::areas::Declared,
     /// The id of the area asked for.
     pub picked: Option<u32>,
 }
@@ -8174,17 +8176,31 @@ pub fn areas(area: Option<&str>, args: &Scope) -> Result<Out<Vec<AreasRepo>>> {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let areas = kc_index::areas::areas(root, &o.store)?;
         let picked = area.and_then(|q| areas.find(q)).map(|a| a.id);
-        found.push(AreasRepo { root: o.root.clone(), areas, picked });
+        let declared = kc_index::areas::declared(&o.store, &areas)?;
+        found.push(AreasRepo { root: o.root.clone(), areas, declared, picked });
         opened.push(o);
     }
     let multi = found.len() > 1;
     let mut items = Vec::new();
     for r in &found {
-        let listed: Vec<Value> = match (area, r.picked) {
+        let mut listed: Vec<Value> = match (area, r.picked) {
             (Some(_), Some(id)) => r.areas.areas.iter().filter(|a| a.id == id).map(|a| area_json(a, true)).collect(),
             (Some(_), None) => Vec::new(),
             (None, _) => r.areas.areas.iter().map(|a| area_json(a, false)).collect(),
         };
+        // Over the declared modules: each area's files by module, and whether it spans several.
+        if !r.declared.modules.is_empty() {
+            for v in &mut listed {
+                let id = v["id"].as_u64().unwrap_or_default() as u32;
+                if let Some((modules, outside)) = r.declared.by_area.get(&id) {
+                    v["modules"] = json!(modules);
+                    v["spans_modules"] = json!(modules.len() > 1);
+                    if *outside > 0 {
+                        v["outside_modules"] = json!(outside);
+                    }
+                }
+            }
+        }
         if area.is_some() && listed.is_empty() && multi {
             continue;
         }
@@ -8197,6 +8213,9 @@ pub fn areas(area: Option<&str>, args: &Scope) -> Result<Out<Vec<AreasRepo>>> {
             "areas": listed,
             "ungrouped": r.areas.ungrouped,
         }));
+        if !r.declared.modules.is_empty() {
+            items.last_mut().expect("pushed")["modules"] = json!(r.declared.modules);
+        }
     }
     let n = items.len();
     let mut env = envelope(&opened, json!(items), n, n);
@@ -12236,6 +12255,58 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         let o = overview(&scope, None, 0).unwrap().env;
         assert_eq!(o["items"][0]["areas_total"], 2);
         assert_eq!(o["items"][0]["areas"].as_array().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn areas_overlay_the_declared_modules_and_say_when_one_spans_several() {
+        let cache = test_cache();
+        let base = cache.dir("declared-areas");
+        let package = "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Core\"),\n        .executableTarget(name: \"App\", dependencies: [\"Core\"]),\n        .testTarget(name: \"CoreTests\", dependencies: [\"Core\"]),\n    ]\n)\n";
+        let mut files: Vec<(String, String)> = vec![("Package.swift".into(), package.into())];
+        for n in ["Cart", "Order", "Price", "Stock"] {
+            files.push((format!("Sources/Core/{n}.swift"), format!("public struct {n} {{\n    public init() {{}}\n    public func total() -> Int {{ 1 }}\n}}\n")));
+        }
+        for n in ["Main", "Screen", "Menu"] {
+            files.push((format!("Sources/App/{n}.swift"), format!("import Core\nstruct {n} {{\n    let c = Cart()\n    let o = Order()\n    func run() -> Int {{ c.total() + o.total() + Price().total() }}\n}}\n")));
+        }
+        for n in ["CartTests", "OrderTests"] {
+            files.push((format!("Tests/CoreTests/{n}.swift"), format!("import Core\nfinal class {n} {{\n    func test() {{ _ = Cart().total(); _ = Order().total(); _ = Stock().total() }}\n}}\n")));
+        }
+        // Projects of other kinds: a .NET project and an npm package, each its directory.
+        files.push(("tools/Ledger/Ledger.csproj".into(), "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n".into()));
+        files.push(("tools/Ledger/Ledger.cs".into(), "public class Ledger { public int Post() => 1; }\n".into()));
+        files.push(("tools/site/package.json".into(), "{\"name\": \"site\"}\n".into()));
+        files.push(("tools/site/index.ts".into(), "export function render(): number { return 1; }\n".into()));
+        let refs: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        let root = repo(&base, "shop", &refs);
+        let scope = Scope { repos: vec![root.clone()], no_sync: false };
+
+        let out = areas(None, &scope).unwrap();
+        let declared = &out.data[0].declared;
+        let modules: Vec<(&str, &str, &str)> = declared.modules.iter().map(|m| (m.name.as_str(), m.kind.as_str(), m.dir.as_str())).collect();
+        assert_eq!(
+            modules,
+            [("App", "executableTarget", "Sources/App"), ("Core", "target", "Sources/Core"), ("CoreTests", "testTarget", "Tests/CoreTests"),
+             ("Ledger", "csproj", "tools/Ledger"), ("site", "npm", "tools/site")]
+        );
+        // Both views: every clustered file is counted once, under its area and its module.
+        let a = &out.data[0].areas;
+        for area in &a.areas {
+            let (by_module, outside) = &declared.by_area[&area.id];
+            assert_eq!(by_module.iter().map(|m| m.files).sum::<usize>() + outside, area.files.len(), "{area:?}");
+        }
+        // The area holding the app's files also holds the core types they use most: it spans two targets.
+        let app = a.of("Sources/App/Main.swift").unwrap();
+        assert!(declared.spans(app.id), "{:?}", declared.by_area);
+        let env = &out.env;
+        let listed = env["items"][0]["areas"].as_array().unwrap().iter().find(|x| x["id"] == app.id).unwrap();
+        assert_eq!(listed["spans_modules"], true, "{listed}");
+        assert_eq!(env["items"][0]["modules"].as_array().unwrap().len(), 5, "{env}");
+        // A repo declaring nothing gets no overlay.
+        let plain = repo(&base, "plain", &[("a.py", "def a():\n    return b()\n"), ("b.py", "def b():\n    return 1\n")]);
+        let plain_env = areas(None, &Scope { repos: vec![plain], no_sync: false }).unwrap().env;
+        assert!(plain_env["items"][0].get("modules").is_none(), "{plain_env}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

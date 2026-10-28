@@ -26,6 +26,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   is "clamped": past `max` it is clamped (`above_max`), up to the `type_max` a depth's type holds (255), past which it
   is refused; under `min` it is clamped up when `min` is above 0 (`below_min`); a negative number is refused
   (`negative`: `invalid_argument`), as `search` with `context: -1` always was. The server's behaviour is unchanged.
+- `areas` overlays the inferred areas on the modules the repo's manifests declare (SwiftPM targets, .NET projects, npm
+  packages, Cargo crates): `modules` lists them with the areas holding their files, and each area gives its files by
+  module, with `spans_modules` when a cluster crosses module boundaries. Both views stay: the declared one says what
+  the build keeps apart, the inferred one what references and co-change tie together.
 - `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
   end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
   can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the

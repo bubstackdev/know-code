@@ -680,7 +680,13 @@ directory), dir, files, lines, cohesion (0-1: the share of its reference and co-
 tokens, key_files (PageRank within the area), entry_points, exposed (the files other areas use most) and depends_on
 (other areas its references go into, with file_edges). modularity says how clear the split is (above 0.3 is clear);
 cochange_pairs 0 means no history helped. With area (an id, name or directory, or a fragment of one name), that area
-and every file in it (`members`). kc_context on a symbol or a file path says which area it is in."#,
+and every file in it (`members`). kc_context on a symbol or a file path says which area it is in.
+
+Where the repo's manifests declare modules (SwiftPM targets, .NET projects, npm packages and workspace members, Cargo
+crates), both views are given: `modules` lists them (name, kind, dir, manifest, files, and the areas holding them), and
+each area its files by module (`modules`), `spans_modules` when they are in more than one, and `outside_modules` for
+files in none. Declared boundaries say what the build keeps apart; areas say what references and co-change tie
+together, so an area spanning modules is a feature cut across them."#,
     },
     Topic {
         name: "kc_notes",
