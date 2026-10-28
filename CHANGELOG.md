@@ -2,8 +2,122 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.6.0 (2026-10-28)
 
+0.6 is about four things: references that name the declaration the compiler would, a server other tools can drive,
+answers for a whole task, and worktrees on one index. Against identity-v1's compiler labels (the Swift index store, the
+TypeScript compiler, Roslyn), `exact` links are right 0.993 of the time in C#, 0.995 in Swift and 0.998 in TypeScript,
+from 0.839, 0.675 and 0.878 in 0.5.1, meeting the gate's 0.99 in all three. One condition of that gate is missed: some
+names the toolchain resolves outside the workspace are still linked to a declaration in it, C# 6, Swift 22 and
+TypeScript 37, nearly all by `unique_name` on a name the repo declares once; they are 0.6.1's first item ([by
+cause](docs/plans/0.6.1-outside-links.md)). Restricted mode, capabilities, stable codes and provenance records make
+KnowCode a bounded tool for automation. `task` answers a goal in one bounded answer: on tasks-v1's 54 public fix commits
+it names more of the changed files (0.527 to 0.560) and tests (0.192 to 0.500) than `locate`, in fewer bytes. Worktrees
+of one repo share an index base and answer as separate indexes do, for 0.28x to 0.40x of the instructions separate
+indexes take before they can answer. The [release gate](eval/release-gate/0.6.0.md) makes no model calls; it measures
+what KnowCode returns, and makes no claim about how agents use it.
+
+- Task context: `kc {op: task, q: "refunds fail for partial captures"}` (and `knowcode task`) answers a goal in words in
+  one bounded answer, where a client joined `locate`, `context`, `impact` and `tests` itself: the files most likely
+  involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
+  changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
+  index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
+  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does. Its
+  keys are written in reading order (files, tests, dependents, what is unsettled, then what the answer says about
+  itself), not by name, so the tests come within the first part a client reads.
+- **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
+  at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
+  the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
+  cold index of the same tree: `scripts/worktree-gate.py` checks it on public repos, with the freshness cases (a new
+  untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
+  commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
+  `cache.shared_bases` turns it off.
+- A shared base a worktree still uses is never evicted; bases nothing uses are evicted with the other idle indexes,
+  least recently used first. A removed worktree's index goes at the next query, `status` or `prune`.
+- Restricted mode: `knowcode serve --restricted --repo DIR --ops find,refs,… --cache-dir DIR --config-dir DIR`, for an
+  automated pipeline. The server is bound to the repos given: nothing else is discovered or indexed, and another repo,
+  or a path outside them, is refused with the new code `not_allowed`, as is any op not in the allowlist. It needs
+  explicit cache and config directories and writes nothing outside the cache. It runs no update check or plugin
+  refresh, and keeps git off the network. It states its scope in the `initialize` reply
+  (`capabilities.experimental["knowcode/scope"]`), on stderr and in the capabilities. docs/usage.md has a headless
+  recipe, with the real git for macOS's `/usr/bin/git` shim. An acceptance test runs it under a macOS sandbox
+  profile that kills it on any write outside the cache or any network connection.
+- Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
+  describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
+  schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
+  whether an op reads or writes (notes are the only writes), the evidence presets, the answer's format and the keys
+  it always has, and the server, MCP protocol and index schema versions. It is read from the tables help and the
+  advertised schemas come from, and a test checks each op's entry against the running server. It costs nothing up
+  front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
+  topic's list of what `q` fills is now made from the same table.
+- `capabilities` says what the server does at each end of a bounded number, where it said every out-of-range value
+  is "clamped": past `max` it is clamped (`above_max`), up to the `type_max` a depth's type holds (255), past which it
+  is refused; under `min` it is clamped up when `min` is above 0 (`below_min`); a negative number is refused
+  (`negative`: `invalid_argument`), as `search` with `context: -1` always was. The server's behaviour is unchanged.
+- Stable codes: every refused call carries a machine code beside its English, in the tool result's
+  `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
+  `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
+  code, with `code` where it says more: `indexing` (ask again after it finishes), `not_indexed`, `gone`. A refused
+  input of a batch, and the batch's entry for it, carry the code too, and a refused rename preview has `codes` beside
+  its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
+  blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
+  replay gate fails a build that codes its refusals if any refusal it replays has none.
+- Completeness said apart: a partial JSON answer adds `completeness` (`graph`: the graph it read was whole; `source`:
+  its quoted source is whole, not a skeleton or cut; `lists`: no list cut or continuing) and `size` (`max_chars` asked,
+  `chars` returned, the source mode in effect, and each continuation's cursor, rows left and about how many
+  characters they take), in the room the size cap leaves, never a row's. A whole answer, and every text answer, is as
+  it was.
+- `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
+  tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
+  (`dotnet test`) and `package.json` test scripts (run with the package manager
+  the lockfile names, with the package's test files). Declared, never ranked: `tests` still ranks what a change
+  needs. Served on request, so it costs nothing up front.
+- `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
+  end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
+  can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
+  file. A file the AI privacy file blocks still answers nothing.
+- `areas` overlays the inferred areas on the modules the repo's manifests declare (SwiftPM targets, .NET projects, npm
+  packages, Cargo crates): `modules` lists them with the areas holding their files, and each area gives its files by
+  module, with `spans_modules` when a cluster crosses module boundaries. Both views stay: the declared one says what
+  the build keeps apart, the inferred one what references and co-change tie together.
+- **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
+  for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
+  hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
+  commit, a digest of its uncommitted content, index generation, the base it was cloned from and its privacy policy's
+  digests. Compact answers are unchanged.
+- Why this one: under `evidence: all`, an edge resolved among declarations sharing its name says which it was resolved
+  past and why, the first check that ruled each out: another project, namespace or module, private to its file,
+  another kind, argument labels, number or types of arguments, not on the receiver's type, out of scope, or a worse
+  overload. JSON evidence reads `receiver_type; not Audit.Log at src/BooksAudit.cs:4 (namespace)`; trees say it under
+  the row. Other policies, and the default answers, are unchanged.
+- An answer naming a file the extractor couldn't read whole says so: `coverage` lists each such file with its count of
+  parse errors, the first error's line and column, and the answer's own symbol when the error lies in its span, with an
+  `unsupported` entry saying declarations, members, calls and references there may be missing. `status` still lists
+  them all.
+- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
+  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
+  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
+  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
+  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
+  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
+  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
+  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
+- A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
+  where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
+  `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
+  `append(optional:)`. It is judged by argument count (C#) and argument labels (Swift) on the declarations the
+  receiver or scope picks. Swift argument labels count a trailing closure after `try` or `await`
+  (`try make(at: 1) { … }`), a function named by its labels (`xs.map { $0.scope(for:in:) }`) records none, and a
+  parameter list ending in a comma has no extra parameter. Swift files are re-extracted once.
+- A type written through a qualifier is looked up in that qualifier, where it was taken by its last name alone:
+  `String.UnicodeScalarView` no longer links to a repo's `BigString.UnicodeScalarView`, nor
+  `UnsafeMutableBufferPointer<Element>.Index` to `Deque.Index` (Swift; TypeScript's `globalThis.FocusEvent` likewise).
+  A qualifier the repo doesn't declare (a library type, a generic parameter, `globalThis`) leaves the name unresolved.
+  Swift and TypeScript files are read again.
+- A TypeScript name links to the repo's declaration only where the file can name it: it declares, imports or
+  re-exports it, or the repo declares it in a script. A test calling the platform's `Response.json(…)` no longer
+  links to an exported `interface Response` it never imported; such a receiver is the platform's type. JavaScript files
+  and files importing nothing are read as before. TypeScript `exact` precision on the identity gate rises to 0.995.
 - A C# extension method called on a value took the value as one of the call's arguments, as if called through its
   class: `items.FirstOrDefault(i => …)` linked to a repo's `FirstOrDefault<T>(this IReadOnlyList<T>)`, which takes no
   argument besides its receiver, and `Expression.Not(x)` to a repo's `Not<T>(this Expression<…>)`. Such a call is
@@ -13,45 +127,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `SourceType.Channel`, so the enum's cases read as the property's members. In `X.Y`, where `X` names both a member in
   scope and a type, and `Y` is one of that type's cases or static members, `X` is now the type. A read of the property
   alone, or a member of its value (`SourceType.ToString()`), stays the property.
-- A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
-  freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
-  So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
-  (`channel.pipeline` on an `EmbeddedChannel` linked to `Channel.pipeline`). Neither is a statement now, and a file
-  with parse errors is no script either: its top level is recovery's misreading. In swift-nio, 35 library files were
-  taken for scripts. On the identity gate (measured before the overload and extension-scope fixes below), Swift
-  `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to 0.571 (linked) and from 0.813 to 0.851 (among
-  candidates), with no label newly wrong. Swift files are read again.
-- Why this one: under `evidence: all`, an edge resolved among declarations sharing its name says which it was resolved
-  past and why, the first check that ruled each out: another project, namespace or module, private to its file,
-  another kind, argument labels, number or types of arguments, not on the receiver's type, out of scope, or a worse
-  overload. JSON evidence reads `receiver_type; not Audit.Log at src/BooksAudit.cs:4 (namespace)`; trees say it under
-  the row. Other policies, and the default answers, are unchanged.
-- A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
-  where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
-  `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
-  `append(optional:)`. It is judged by argument count (C#) and argument labels (Swift) on the declarations the
-  receiver or scope picks. Swift argument labels count a trailing closure after `try` or `await`
-  (`try make(at: 1) { … }`), a function named by its labels (`xs.map { $0.scope(for:in:) }`) records none, and a
-  parameter list ending in a comma has no extra parameter. Swift files are re-extracted once.
 - Swift code in `extension A.B` reads unqualified names as Swift does: B's members and the file's declarations, not
   A's. In `extension Box.Keyed { func sup() -> Decoder }`, `Decoder` is Swift's protocol, not `Box.Decoder`, and
   `extension Box.Decoder: Decoder` reads its conformance at the file's scope. Code written inside `A`, and an
   extension of a top-level type, read as before. `X.Y.init(…)` keeps `X` as its qualifier, as `X.Y(…)` does. Swift
   files are re-extracted once.
-- Swift files using newer constructs lose less of their code to parse errors. Read now: `borrow`, `mutate`,
-  `unsafeAddress` and `borrowing get` accessors; `@_specialize(where …)`; `#error(…)` and `#warning(…)`; `@Sendable` on
-  a function declared in a body; `()` as a statement; and `consume`, or `unsafe` before `!` or a number. Over 4,297
-  files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
-  declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
-  ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
-- `capabilities` says what the server does at each end of a bounded number, where it said every out-of-range value
-  is "clamped": past `max` it is clamped (`above_max`), up to the `type_max` a depth's type holds (255), past which it
-  is refused; under `min` it is clamped up when `min` is above 0 (`below_min`); a negative number is refused
-  (`negative`: `invalid_argument`), as `search` with `context: -1` always was. The server's behaviour is unchanged.
-- `areas` overlays the inferred areas on the modules the repo's manifests declare (SwiftPM targets, .NET projects, npm
-  packages, Cargo crates): `modules` lists them with the areas holding their files, and each area gives its files by
-  module, with `spans_modules` when a cluster crosses module boundaries. Both views stay: the declared one says what
-  the build keeps apart, the inferred one what references and co-change tie together.
+- A Swift `private` or `fileprivate` declaration is a candidate only in its own file: `extension Array { fileprivate
+  mutating func append(optional:) }` no longer captures `results.append(x)` elsewhere. `private(set)` doesn't count.
+- A use on a library type that reaches only a protocol requirement of the repo (`a.count` on a `Set`, to
+  `SetAPIChecker.count`) is `external_likely`, the requirement listed as its target, where it was `exact`: the member
+  that runs is the library type's own.
 - An awaited Swift call on a typed receiver picks the `async` member up the receiver's type chain when the type's own
   members of that name are all synchronous: `try await channel.getOption(x)` is `extension Channel`'s `async`
   `getOption`, not the channel class's own one returning a future, as Swift prefers an `async` overload in an async
@@ -62,94 +147,22 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `Decoder`'s, listed as `external_likely`, not linked to a test helper's nested `Minimal.Decoder`. Code inside the
   nesting type, a type written qualified (`_ d: Minimal.Decoder`), and a receiver whose type comes from a declaration
   elsewhere, read as before.
-- `context` on a file lists the file's top-level declarations in line order (`declarations`: kind, name, line,
-  end_line, and `members` for a type), at most 40 with `declarations_total` and a cursor for the rest, so the next call
-  can pick one by name or `file:line`. Before, it gave only the file's area and notes, which sent a client to read the
-  file. A file the AI privacy file blocks still answers nothing.
-- Task context: `kc {op: task, q: "refunds fail for partial captures"}` (and `knowcode task`) answers a goal in words in
-  one bounded answer, where a client joined `locate`, `context`, `impact` and `tests` itself: the files most likely
-  involved with the symbols that match and the lines declaring the best of them; what depends on them and what usually
-  changes with them; the tests to run, advisory (a test not listed is never said to be safe to skip); and what the
-  index can't settle (goal words nothing matches, ambiguous edges, constructs not read). Each section says whether it
-  is whole and the call that continues it. Rows are short text: the answer costs about what `locate` alone does. Its
-  keys are written in reading order (files, tests, dependents, what is unsettled, then what the answer says about
-  itself), not by name, so the tests come within the first part a client reads.
-- `test-targets` (`kc {op: test_targets}`, `kc_test_targets`): the test targets a repo declares, each with its
-  tests and the command to run it and each test: SwiftPM test targets (`swift test`), .NET test projects
-  (`dotnet test`) and `package.json` test scripts (run with the package manager
-  the lockfile names, with the package's test files). Declared, never ranked: `tests` still ranks what a change
-  needs. Served on request, so it costs nothing up front.
-- **Worktrees share an index base.** Checkouts of one repo (worktrees, clones) share an immutable base of its index
-  at a commit. A checkout clean at a commit publishes one; a new checkout's index starts as a copy-on-write clone of
-  the nearest base (APFS, btrfs, XFS; a copy elsewhere) and indexes only what differs from it. Answers are those of a
-  cold index of the same tree: `scripts/worktree-gate.py` checks it on public repos, with the freshness cases (a new
-  untracked file, a same-size edit with its mtime restored) in every worktree. Worktrees that start at once on a
-  commit with no base index it once: one builds the base, the others wait for it (bounded) and clone it.
-  `cache.shared_bases` turns it off.
-- A shared base a worktree still uses is never evicted; bases nothing uses are evicted with the other idle indexes,
-  least recently used first. A removed worktree's index goes at the next query, `status` or `prune`.
-- **Provenance records.** `--provenance` on the command line, or `provenance: true` on any MCP tool call, adds a record
-  for durable records: the build and every extractor's version; the call's hash; the answer's hash and an `evidence`
-  hash that is the same for the same answer from any index or worktree; and per repo read its worktree identity, full
-  commit, a digest of its uncommitted content, index generation, the base it was cloned from and its privacy policy's
-  digests. Compact answers are unchanged.
+- A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
+  freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
+  So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
+  (`channel.pipeline` on an `EmbeddedChannel` linked to `Channel.pipeline`). Neither is a statement now, and a file
+  with parse errors is no script either: its top level is recovery's misreading. In swift-nio, 35 library files were
+  taken for scripts. On the identity gate (measured before the overload and extension-scope fixes below), Swift
+  `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to 0.571 (linked) and from 0.813 to 0.851 (among
+  candidates), with no label newly wrong. Swift files are read again.
+- Swift files using newer constructs lose less of their code to parse errors. Read now: `borrow`, `mutate`,
+  `unsafeAddress` and `borrowing get` accessors; `@_specialize(where …)`; `#error(…)` and `#warning(…)`; `@Sendable` on
+  a function declared in a body; `()` as a statement; and `consume`, or `unsafe` before `!` or a number. Over 4,297
+  files of 18 public Swift repos, parse errors fall from 716 to 278 and files with errors from 95 to 57. The
+  declarations those files' error recovery made up (locals, members cut off from their types) give way to the real ones
+  ([swift-parse-coverage.md](eval/swift-parse-coverage.md)). Swift files are read again.
 - `impact` and `trace` list the stops past their frontier in the order of their places, not of the index's row ids.
-- An answer naming a file the extractor couldn't read whole says so: `coverage` lists each such file with its count of
-  parse errors, the first error's line and column, and the answer's own symbol when the error lies in its span, with an
-  `unsupported` entry saying declarations, members, calls and references there may be missing. `status` still lists
-  them all.
-- Capabilities: `kc {op: capabilities}` (also the resource `knowcode://capabilities` and `knowcode capabilities`)
-  describes every op as JSON, for a client building its own tool surface instead of copying the help: the full input
-  schema with each number's bounds and each closed set's words, what `q` and `qs` fill and which ops take no query,
-  whether an op reads or writes (notes are the only writes), the evidence presets, the answer's format and the keys
-  it always has, and the server, MCP protocol and index schema versions. It is read from the tables help and the
-  advertised schemas come from, and a test checks each op's entry against the running server. It costs nothing up
-  front: `kc`'s schema is unchanged, and `all` leaves the `kc_capabilities` tool out unless named. The `kc` help
-  topic's list of what `q` fills is now made from the same table.
 - `kc_unused` refuses a `tier` other than unused, possibly or all, where it listed everything.
-- Restricted mode: `knowcode serve --restricted --repo DIR --ops find,refs,… --cache-dir DIR --config-dir DIR`, for an
-  automated pipeline. The server is bound to the repos given: nothing else is discovered or indexed, and another repo,
-  or a path outside them, is refused with the new code `not_allowed`, as is any op not in the allowlist. It needs
-  explicit cache and config directories and writes nothing outside the cache. It runs no update check or plugin
-  refresh, and keeps git off the network. It states its scope in the `initialize` reply
-  (`capabilities.experimental["knowcode/scope"]`), on stderr and in the capabilities. docs/usage.md has a headless
-  recipe, with the real git for macOS's `/usr/bin/git` shim. An acceptance test runs it under a macOS sandbox
-  profile that kills it on any write outside the cache or any network connection.
-- Completeness said apart: a partial JSON answer adds `completeness` (`graph`: the graph it read was whole; `source`:
-  its quoted source is whole, not a skeleton or cut; `lists`: no list cut or continuing) and `size` (`max_chars` asked,
-  `chars` returned, the source mode in effect, and each continuation's cursor, rows left and about how many
-  characters they take), in the room the size cap leaves, never a row's. A whole answer, and every text answer, is as
-  it was.
-- Stable codes: every refused call carries a machine code beside its English, in the tool result's
-  `structuredContent.error` (`invalid_argument`, `not_found`, `ambiguous`, `no_files`, `not_indexed`, `stale_cursor`,
-  `withheld`, …), so a client never tells refusals apart by their wording. An `incomplete` entry's reason stays its
-  code, with `code` where it says more: `indexing` (ask again after it finishes), `not_indexed`, `gone`. A refused
-  input of a batch, and the batch's entry for it, carry the code too, and a refused rename preview has `codes` beside
-  its `reasons`. Privacy now says the same policy (`privacy: {repo, file, block_at, blocks}`) on a call refused for a
-  blocked path, a repo refused whole and a `withheld` entry. The capabilities list the codes and reasons; the
-  replay gate fails a build that codes its refusals if any refusal it replays has none.
-- An `exact` reference names one declaration. A call of an overloaded name, or of same-named members of one type,
-  was `exact` with every candidate as its target. Now a Swift call's argument labels pick its overload (`put(_:)`,
-  `put(into:)`, a trailing closure's parameter), a type's bare name or a value picks a static or an instance member
-  (Swift, TypeScript), and of one name in two Swift modules the caller's own module's wins. Otherwise the reference is
-  `ambiguous`, every candidate listed, and walks no longer follow it as if certain. TypeScript's merged declarations (a
-  module's `const` and `type` of one name, overload signatures) and a C# `partial` member stay one. On the identity
-  gate's compiler labels, `exact` precision rises from 0.675 to 0.924 (Swift), 0.839 to 0.972 (C#) and 0.878 to 0.963
-  (TypeScript), with no label made newly wrong and no recall lost. Swift files are read again (call labels).
-- A type written through a qualifier is looked up in that qualifier, where it was taken by its last name alone:
-  `String.UnicodeScalarView` no longer links to a repo's `BigString.UnicodeScalarView`, nor
-  `UnsafeMutableBufferPointer<Element>.Index` to `Deque.Index` (Swift; TypeScript's `globalThis.FocusEvent` likewise).
-  A qualifier the repo doesn't declare (a library type, a generic parameter, `globalThis`) leaves the name unresolved.
-  Swift and TypeScript files are read again.
-- A TypeScript name links to the repo's declaration only where the file can name it: it declares, imports or
-  re-exports it, or the repo declares it in a script. A test calling the platform's `Response.json(…)` no longer
-  links to an exported `interface Response` it never imported; such a receiver is the platform's type. JavaScript files
-  and files importing nothing are read as before. TypeScript `exact` precision on the identity gate rises to 0.995.
-- A Swift `private` or `fileprivate` declaration is a candidate only in its own file: `extension Array { fileprivate
-  mutating func append(optional:) }` no longer captures `results.append(x)` elsewhere. `private(set)` doesn't count.
-- A use on a library type that reaches only a protocol requirement of the repo (`a.count` on a `Set`, to
-  `SetAPIChecker.count`) is `external_likely`, the requirement listed as its target, where it was `exact`: the member
-  that runs is the library type's own.
 
 ## 0.5.1 (2026-10-27)
 
