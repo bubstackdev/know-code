@@ -842,8 +842,9 @@ its repos, ops and directories) and `ops`, one entry per op:
 - `q` and `qs`: the parameters they fill as `kc` ops, or null; `takes_query` false for an op taking no `q`.
 - `input`: the full JSON schema of its parameters: `minimum`, `maximum` and `default` for a bounded number,
   `enum` for a closed set of words (the default first). `ranges` and `choices` say the same per parameter. A number
-  beyond its range is clamped, and the answer says what it walked (`depth: {asked, walked}`); a word outside its set,
-  or a value of the wrong type, is refused. Parameters not in the schema are ignored. `aliases` names parameters that
+  past its range is clamped (`above_max`, `below_min`), and the answer says what it walked (`depth: {asked, walked}`);
+  one its type can't hold (`negative`, past `type_max`: `above_type_max`), a word outside its set, or a value of the
+  wrong type, is refused with the code given. Parameters not in the schema are ignored. `aliases` names parameters that
   stand for another (refs' `edges` for `kinds`).
 - `batch`: the parameter taking several inputs in one call, and how many at most; the answer is then
   `{"results": [...]}`.

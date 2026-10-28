@@ -211,7 +211,7 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
     let (text, err) = mcp.kc("capabilities", &json!({}));
     assert!(!err, "{text}");
     let doc: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(doc["capabilities"], json!(1));
+    assert_eq!(doc["capabilities"], json!(2));
     assert_eq!(doc["profile"], json!("one"));
     for k in ["server", "protocol", "index_schema", "common", "evidence"] {
         assert!(doc.get(k).is_some(), "no {k}");
@@ -287,11 +287,20 @@ fn every_op_accepts_and_answers_as_its_capabilities_say() {
         for (param, r) in entry["ranges"].as_object().unwrap() {
             let p = &props[param];
             assert_eq!((&p["minimum"], &p["maximum"], &p["default"]), (&r["min"], &r["max"], &r["default"]), "{op}.{param}");
-            assert_eq!(r["beyond"], json!("clamped"));
+            assert_eq!((&r["above_max"], &r["below_min"]), (&json!("clamped"), &json!("clamped")));
             let (min, max) = (r["min"].as_u64().unwrap(), r["max"].as_u64().unwrap());
-            let mut ends = vec![max + 1];
+            let mut ends = vec![max + 1, r["type_max"].as_u64().unwrap()];
             if min > 0 {
                 ends.push(min - 1);
+            }
+            // What its type can't hold is refused with the code the entry names.
+            // Past a 64-bit type's largest, JSON can only say it as a float, which no count takes either.
+            let tmax = r["type_max"].as_u64().unwrap();
+            let past = if tmax < u64::MAX { json!(tmax + 1) } else { json!(tmax as f64 * 2.0) };
+            for v in [json!(-1), past] {
+                let mut a = args.clone();
+                a[param] = v.clone();
+                assert_eq!(mcp.kc_coded(op, &a).1.as_ref(), r["negative"].as_str().map(String::from).as_ref(), "{op} {param}={v}");
             }
             for v in ends {
                 let mut a = args.clone();

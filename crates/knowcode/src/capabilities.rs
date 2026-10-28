@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::mcp;
 
 /// The document's own version: raised when a field changes meaning or goes; new fields don't raise it.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The ops that write. Notes are the only writes.
 pub const WRITES: &[&str] = &["kc_note_add"];
@@ -118,6 +118,14 @@ fn common() -> Value {
     })
 }
 
+/// The largest value `tool`'s bounded parameter `param` can hold: walk depths and hops are bytes, the rest 64 bits.
+fn type_max(tool: &str, param: &str) -> u64 {
+    match (tool, param) {
+        ("kc_trace" | "kc_impact" | "kc_flow", "depth") | ("kc_path", "max_hops") => u8::MAX as u64,
+        _ => u64::MAX,
+    }
+}
+
 fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
     let tool = format!("kc_{op}");
     let input = s.schemas.get(&tool).cloned().unwrap_or_default();
@@ -126,7 +134,18 @@ fn entry(s: &Surface, op: &str, q: &str, qs: &str) -> Value {
     let mut choices = serde_json::Map::new();
     for name in props.keys() {
         if let Some(r) = mcp::range(&tool, name) {
-            ranges.insert(name.clone(), json!({ "min": r.min, "max": r.max, "default": r.default, "beyond": "clamped", "wrong_type": Code::InvalidArgument.as_str() }));
+            // Past either end of its range a number is clamped; one its type can't hold (negative, or past the
+            // type's largest) is refused before the op runs.
+            let refused = Code::InvalidArgument.as_str();
+            ranges.insert(
+                name.clone(),
+                json!({
+                    "min": r.min, "max": r.max, "default": r.default,
+                    "above_max": "clamped", "below_min": "clamped",
+                    "negative": refused, "type_max": type_max(&tool, name), "above_type_max": refused,
+                    "wrong_type": refused,
+                }),
+            );
         }
         if let Some(c) = mcp::choices(&tool, name) {
             choices.insert(name.clone(), json!({ "values": c, "default": c[0], "other": "refused", "code": Code::InvalidArgument.as_str() }));

@@ -77,6 +77,7 @@ SAMPLES = {
     'reviewers': {'files': ['src/Shelf.cs']}, 'history': {'symbol': 'Shelf.Count'}, 'overview': {}, 'areas': {},
     'notes': {}, 'grep_ast': {'pattern': 'Count($$$)', 'lang': 'cs'}, 'status': {}, 'capabilities': {},
     'note_add': {'symbol': 'Shelf.Count', 'text': 'counts by owner'},
+    'task': {'goal': 'count items on a shelf'}, 'test_targets': {},
 }
 
 
@@ -176,6 +177,11 @@ def check_capabilities(binary, work):
     try:
         error, text, code, _ = server.ask('kc_capabilities', {})
         caps = json.loads(text)
+        # The tools served on request only (not in `all`): named too, so every op can be called as its tool.
+        on_request = [e['tool'] for e in caps['ops'] if not e['advertised'] and e['tool'] != 'kc_capabilities']
+        if on_request:
+            server.close()
+            server = Client(binary, ['--tools', ','.join(['all', 'kc_capabilities', *on_request])], env, root)
         tools = {t['name']: t for t in server.tools}
         codes = set(caps['codes'])
         seen = {}

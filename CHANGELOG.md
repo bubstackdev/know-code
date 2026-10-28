@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Capabilities (version 2): each range says what happens past each end, as the server does it: past its maximum or
+  under its minimum a number is clamped (`above_max`, `below_min`); a negative one, or one past its type's largest
+  (`type_max`), is refused (`negative`, `above_type_max`, `invalid_argument`). Version 1's `beyond: clamped` said
+  clamped for both, but `context: -1` is refused. The contract gate also calls the task op and the tools served on
+  request.
 - Why this one: under `evidence: all`, an edge resolved among declarations sharing its name says which it was resolved
   past and why, the first check that ruled each out: another project, namespace or module, private to its file,
   another kind, argument labels, number or types of arguments, not on the receiver's type, out of scope, or a worse
