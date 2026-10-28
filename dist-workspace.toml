@@ -23,7 +23,7 @@ install-updater = false
 install-success-msg = "Run knowcode setup claude (or codex/cursor), then ask about your repository. Indexing starts automatically."
 pr-run-mode = "skip"
 cache-builds = false
-plan-jobs = ["./ci"]
+plan-jobs = ["./release-gate"]
 github-attestations = true
 
 [dist.github-custom-runners]

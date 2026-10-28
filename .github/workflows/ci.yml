@@ -6,7 +6,6 @@
 name: ci
 
 on:
-  workflow_call:
   pull_request:
   push:
     branches: [main]
@@ -16,11 +15,11 @@ permissions:
   contents: read
 
 # A new push to a pull request or a branch cancels that ref's older run: the newest run tests everything before it,
-# so a failure still shows, and merges in quick succession don't queue for runners. A release tag's run is never
-# cancelled.
+# so a failure still shows, and merges in quick succession don't queue for runners. (A release tag runs no CI of its
+# own: release-gate.yml requires a passing run of this workflow on the tagged commit.)
 concurrency:
   group: ${{ github.workflow }}-ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,41 +39,40 @@ jobs:
       - name: Plan all release targets without publishing
         run: dist plan --output-format=json --no-local-paths
 
-  # Release runs only (the release workflow calls this one on a tag push): the Homebrew tap must be public and the
-  # tap token able to push to it, before anything is published. Pull requests and pushes to main skip this job and
-  # need no secret.
-  homebrew-tap:
-    if: startsWith(github.ref, 'refs/tags/')
+  # Whether the change touches anything but prose: docs/, eval/ pages and top-level Markdown. A prose-only change is
+  # still built and tested on Linux (check-docs.py and check-doc-paths.py read it), but skips the macOS test and size
+  # jobs, which wait for scarce macOS runners and can't fail on prose. Anything else, or a base it can't diff
+  # against, counts as code.
+  changes:
     runs-on: ubuntu-24.04
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      test-os: ${{ steps.diff.outputs.code == 'true' && '["ubuntu-24.04", "macos-15"]' || '["ubuntu-24.04"]' }}
     steps:
-      - name: The Homebrew tap is public and HOMEBREW_TAP_TOKEN can push to it
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - id: diff
         env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN is not set. A maintainer creates it as docs/releasing.md describes."
-            exit 1
+          code=true
+          if [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BASE" HEAD)
+            if [ -n "$changed" ] && ! grep -qvE '^(docs/.*|eval/.*\.md|[^/]+\.md)$' <<<"$changed"; then
+              code=false
+            fi
           fi
-          if ! repo=$(gh api repos/bubstackdev/homebrew-tap); then
-            echo "::error::HOMEBREW_TAP_TOKEN can't read bubstackdev/homebrew-tap (expired, or not scoped to it)."
-            exit 1
-          fi
-          if [ "$(jq -r '.private' <<<"$repo")" != "false" ]; then
-            echo "::error::bubstackdev/homebrew-tap is private; Homebrew users couldn't tap it."
-            exit 1
-          fi
-          if [ "$(jq -r '.permissions.push' <<<"$repo")" != "true" ]; then
-            echo "::error::HOMEBREW_TAP_TOKEN can't push to bubstackdev/homebrew-tap (needs Contents: read and write)."
-            exit 1
-          fi
-          echo "bubstackdev/homebrew-tap is public and the tap token can push to it."
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Code changed: $code"
 
   test:
     name: test (${{ matrix.os }})
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: ${{ fromJson(needs.changes.outputs.test-os) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -134,7 +132,10 @@ jobs:
           python-version: "3.12"
       - run: python scripts/check-doc-paths.py
 
+  # One fat-LTO build: the packaged binary is the one measured, so it isn't built a second time for check-size.sh.
   size:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -146,13 +147,14 @@ jobs:
             target
           key: dist-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: dist-${{ runner.os }}-
-      - run: scripts/check-size.sh
       - name: Install the pinned release generator
         run: bash scripts/install-dist.sh
       - name: Package the native macOS binary and installer preview
         env:
           CARGO_BUILD_JOBS: "2"
         run: bash scripts/package-native.sh
+      - name: The packaged binary against size-budget.txt
+        run: scripts/check-size.sh --no-build target/aarch64-apple-darwin/dist/knowcode
       - name: Test the isolated shell installer and installed MCP binary
         run: python3 scripts/check-installer.py target/distrib
 
