@@ -2092,6 +2092,37 @@ fn qualified_type(q: &str, file: &str, self_chain: &[String], cands: &[&Def]) ->
     }
 }
 
+/// Standard-library and Foundation protocols and types a repo's own nested types also get named after (a test
+/// support's `MinimalDecoder.Decoder`): a receiver typed by one of these bare names is the library's.
+const SWIFT_LIBRARY_NAMES: &[&str] = &[
+    "Decoder", "Encoder", "Error", "Sequence", "Collection", "IteratorProtocol", "AsyncSequence", "AsyncIteratorProtocol",
+    "Hashable", "Equatable", "Comparable", "Identifiable", "Codable", "Decodable", "Encodable", "Sendable",
+    "CustomStringConvertible", "SingleValueDecodingContainer", "SingleValueEncodingContainer",
+    "UnkeyedDecodingContainer", "UnkeyedEncodingContainer", "KeyedDecodingContainerProtocol",
+    "KeyedEncodingContainerProtocol", "CodingKey", "Clock", "Executor", "Actor",
+];
+
+/// Whether the signature of `from` (the code a reference is in) writes the type name `bare` qualified, as
+/// `JSON.Encodable` for `Encodable`.
+fn signature_qualifies(conn: &Connection, from: Option<&FromSymbol>, bare: &str) -> Result<bool> {
+    let Some(from) = from else { return Ok(false) };
+    let mut stmt = conn.prepare_cached("SELECT signature FROM symbols WHERE id = ?1")?;
+    let sig: Option<String> = stmt.query_row([from.id], |r| r.get(0)).optional()?.flatten();
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    Ok(sig.is_some_and(|sig| {
+        sig.match_indices(&format!(".{bare}")).any(|(i, m)| {
+            sig[..i].chars().next_back().is_some_and(ident) && !sig[i + m.len()..].chars().next().is_some_and(ident)
+        })
+    }))
+}
+
+/// Whether `d` is a member of a type named `bare` nested in another (`MinimalDecoder.Decoder` for `Decoder`), that
+/// other type not enclosing the code (`self_chain`).
+fn nested_elsewhere(d: &Def, bare: &str, self_chain: &[String]) -> bool {
+    let Some(c) = d.container.as_deref() else { return false };
+    c.ends_with(&format!(".{bare}")) && !self_chain.iter().any(|s| c == format!("{s}.{bare}"))
+}
+
 /// Whether call `hit` is one none of the declarations resolution picked for it (`ids`, of `named`) can take: each is a
 /// function whose parameters are known, and none takes the call's argument labels (Swift) or as many arguments as it
 /// passes (C#). Such a call is another declaration's, outside the repo (`Equals(a, b)` is `object.Equals`,
@@ -5327,7 +5358,27 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     dropped.entry(d.id).or_insert_with(|| why_not(hit, &recv, &self_chains[&caller], d));
                 }
             }
-            if takes_none(hit, named, &ids) { ("unresolved", Vec::new()) } else { (confidence, ids) }
+            // A Swift receiver whose type is written, by the code itself, as a standard-library protocol's name that
+            // only a type nested elsewhere also carries (`init(from decoder: Decoder)`, where the repo nests
+            // `MinimalDecoder.Decoder`) is the library's, unless the nesting type encloses the code: its members are
+            // listed, never linked to the nested type's. A type inferred from elsewhere (a property's, a call's
+            // result) was written in another scope, and stays as resolved; so does one the caller's signature writes
+            // qualified (`some JSON.Encodable`), as the bare name is all the receiver's type records.
+            let written = written_receiver.as_deref().and_then(TypeExpr::decode);
+            if takes_none(hit, named, &ids) {
+                ("unresolved", Vec::new())
+            } else if confidence == "exact"
+                && hit.file.ends_with(".swift")
+                && let Some(TypeExpr::Named(n)) = &written
+                && SWIFT_LIBRARY_NAMES.contains(&n.as_str())
+                && !ids.is_empty()
+                && named.iter().filter(|d| ids.contains(&d.id)).all(|d| nested_elsewhere(d, n, &self_chains[&caller]))
+                && !signature_qualifies(conn, hit.from.as_ref(), n)?
+            {
+                ("external_likely", ids)
+            } else {
+                (confidence, ids)
+            }
         };
         // How an exact answer was reached, recorded where it is decided.
         let mut exact_by = if by_import {
