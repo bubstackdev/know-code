@@ -2166,20 +2166,6 @@ fn type_like(receiver: &str) -> bool {
 /// A call's overloads are first narrowed to those taking as many arguments as it passes; when that leaves nothing to
 /// point to, all of them are considered.
 fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) -> (&'static str, Vec<i64>) {
-    // An awaited Swift call is made in an async context, where Swift prefers an `async` overload (a protocol
-    // extension's `async` member over the class's own synchronous one): when some candidate is `async`, only those.
-    let awaited: Vec<&Def>;
-    let defs = if hit.kind == "call"
-        && hit.file.ends_with(".swift")
-        && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| c.a)
-        && defs.iter().any(|d| d.is_async)
-        && defs.iter().any(|d| !d.is_async)
-    {
-        awaited = defs.iter().copied().filter(|d| d.is_async).collect();
-        &awaited[..]
-    } else {
-        defs
-    };
     let all: Vec<&Def> = defs.to_vec();
     // A Swift call's argument labels rule out the overloads it can't call.
     if hit.kind == "call"
@@ -2277,6 +2263,25 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     };
     let narrowed: Vec<&Def> = if let Receiver::Known(chain) | Receiver::Foreign(chain) = recv {
         let mut found = first_in(chain, false);
+        // An awaited Swift call is made in an async context, where Swift prefers an `async` overload: when the
+        // receiver's own type has only synchronous members of the name (each signature read whole) and a type further
+        // up its chain has an `async` one (`try await channel.getOption(x)`: the channel class's `getOption` returns a
+        // future, `extension Channel`'s is `async`), the `async` one.
+        if hit.kind == "call"
+            && hit.file.ends_with(".swift")
+            && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| c.a)
+            && !found.is_empty()
+            && found.iter().all(|d| !d.is_async && d.swift_params.is_some())
+        {
+            let later: Vec<&Def> = chain
+                .iter()
+                .map(|c| in_container(c).into_iter().filter(|d| d.is_async).collect::<Vec<_>>())
+                .find(|f| !f.is_empty())
+                .unwrap_or_default();
+            if !later.is_empty() {
+                found = later;
+            }
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
