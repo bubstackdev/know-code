@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# extension method called on a value took the value as one of the call's arguments, as if called through its
+  class: `items.FirstOrDefault(i => …)` linked to a repo's `FirstOrDefault<T>(this IReadOnlyList<T>)`, which takes no
+  argument besides its receiver, and `Expression.Not(x)` to a repo's `Not<T>(this Expression<…>)`. Such a call is
+  LINQ's or the framework's: `unresolved`. Called through its class (`Lists.FirstOrDefault(xs)`) or unqualified, the
+  receiver is still the first argument.
 - A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
   freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
   So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
