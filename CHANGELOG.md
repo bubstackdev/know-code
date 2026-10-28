@@ -25,6 +25,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   substring match, so `MathTests.Add` also ran `MathTests.AddMany` and `MathTests.Add_Negative`.
 - A `package.json` test script's `line` is its key under `scripts`. It was the first line naming `"test"` anywhere in
   the file, such as `"name": "test"` or `"keywords": ["test"]` above the scripts.
+- `knowcode index` over several repos no longer stops indexing the others while a new worktree waits for another
+  checkout to publish its commit's shared base. The list of checkouts to seed from was locked across the whole open of
+  a repo, wait included, so every other repo's thread waited at its own open.
+- A checkout that claimed its commit's shared base and then didn't build it lets the claim go: its first index failed
+  or panicked, its query read the index without syncing, or the derived data couldn't start. Until the process ended,
+  each new worktree of that commit opened elsewhere waited for a base no one would publish (up to 15 minutes), then
+  indexed from scratch anyway. Opening a checkout only to read it no longer claims its base at all.
 
 - Restricted mode keeps to its bound repos and ops on every path. A repo is checked against the bound ones wherever an
   op opens it, so a path relative to the server's directory, a cursor or a dependency can no longer reach another
