@@ -10339,6 +10339,37 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// A library file whose `#if` has an `#error(…)` branch is no script: the members it declares are reached from
+    /// other modules, not their protocol's requirements.
+    #[test]
+    fn a_diagnostic_in_an_if_branch_leaves_a_files_declarations_visible() {
+        let cache = test_cache();
+        let base = cache.dir("diagnostic-visible");
+        let root = repo(
+            &base,
+            "rig",
+            &[
+                (
+                    "Package.swift",
+                    "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"Rig\", targets: [\n\
+                     \x20   .target(name: \"Core\"),\n    .target(name: \"Rig\", dependencies: [\"Core\"]),\n\
+                     \x20   .testTarget(name: \"RigTests\", dependencies: [\"Core\", \"Rig\"]),\n])\n",
+                ),
+                ("Sources/Core/Pipe.swift", "public protocol Pipe {\n    var flow: Int { get }\n}\n"),
+                (
+                    "Sources/Rig/Rig.swift",
+                    "#if canImport(Glibc)\nimport Glibc\n#else\n#error(\"Unknown C library.\")\n#endif\nimport Core\n\n\
+                     public final class Rig: Pipe {\n    public init() {}\n    public var flow: Int { 0 }\n}\n",
+                ),
+                ("Tests/RigTests/RigTests.swift", "import Core\nimport Rig\n\nfunc check() {\n    let rig = Rig()\n    _ = rig.flow\n}\n"),
+            ],
+        );
+        let r = refs("flow", &[], 20, &Scope { repos: vec![root.clone()], no_sync: false }).unwrap();
+        let (_, hit) = r.data.items.iter().find(|(_, h)| h.file == "Tests/RigTests/RigTests.swift").expect("the test's use");
+        assert_eq!((hit.confidence, hit.targets.iter().map(|t| t.qualified.as_str()).collect::<Vec<_>>()), ("exact", vec!["Rig.flow"]));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn calls_through_an_interface_reach_the_overload_taking_their_arguments() {
         let cache = test_cache();

@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
+  freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
+  So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
+  (`channel.pipeline` on an `EmbeddedChannel` linked to `Channel.pipeline`). Neither is a statement now, and a file
+  with parse errors is no script either: its top level is recovery's misreading. In swift-nio, 35 library files were
+  taken for scripts. On the identity gate (measured before the overload and extension-scope fixes below), Swift
+  `exact` precision rises from 0.969 to 0.983, and recall from 0.543 to 0.571 (linked) and from 0.813 to 0.851 (among
+  candidates), with no label newly wrong. Swift files are read again.
 - A call none of the repo's declarations of its name can take is `unresolved`, not linked to them: `xs.Contains(x)`
   where the repo declares only `Contains(this IEnumerable<string>, ReadOnlySpan<char>, StringComparison)`,
   `Equals(a, b)` (the static `object.Equals`) beside a one-argument override, `xs.append(1)` beside
