@@ -819,7 +819,7 @@ itself. `sections` says for each list whether it is whole (`complete`) and the c
   `swift test --filter`.
 - .NET test projects (a project referencing a test SDK or framework: `Microsoft.NET.Test.Sdk`, `MSTest.Sdk`, xUnit,
   NUnit, …): the test methods under the project's directory, `dotnet test <project>` and `--filter
-  FullyQualifiedName~Class.Method`.
+  FullyQualifiedName=Namespace.Class.Method` (exactly that test, and its parameterized cases).
 - `package.json` test scripts (`test`, `test:…`): the package's test files (`*.test.*`, `*.spec.*`, `__tests__/`),
   run with the package manager its lockfile names.
 

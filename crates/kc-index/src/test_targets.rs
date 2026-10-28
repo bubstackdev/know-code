@@ -79,19 +79,23 @@ fn quote(s: &str) -> String {
 
 /// The functions and methods tagged `test` in files under `dir` (the whole repo for `""`): (container, name, file,
 /// line), in file and line order, and how many there are.
-/// A test function or method: container, name, file, line.
-type Found = (Option<String>, String, String, u32);
+/// A test function or method: container, name, file, line, and its C# namespace when the index knows it.
+type Found = (Option<String>, String, String, u32, Option<String>);
 
 fn tests_under(store: &Store, dir: &str) -> Result<(Vec<Found>, usize)> {
     let prefix = if dir.is_empty() { String::new() } else { format!("{dir}/") };
     let mut stmt = store.conn().prepare(
-        "SELECT s.container, s.name, f.path, s.start_line FROM symbols s JOIN files f ON f.id = s.file_id
+        "SELECT s.container, s.name, f.path, s.start_line,
+                CASE WHEN f.lang = 'csharp' THEN coalesce(
+                  CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
+                  CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END
+           FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id
           WHERE s.kind IN ('function', 'method') AND (',' || s.tags || ',') LIKE '%,test,%'
             AND substr(f.path, 1, length(?1)) = ?1
           ORDER BY f.path, s.start_line",
     )?;
     let rows: Vec<Found> =
-        stmt.query_map(params![prefix], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+        stmt.query_map(params![prefix], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
     let total = rows.len();
     Ok((rows.into_iter().take(MAX_TESTS).collect(), total))
 }
@@ -111,7 +115,7 @@ fn swiftpm(store: &Store) -> Result<Vec<TestTarget>> {
         let (rows, total) = tests_under(store, &dir)?;
         let tests = rows
             .into_iter()
-            .map(|(container, test, file, line)| {
+            .map(|(container, test, file, line, _)| {
                 // XCTest names a test `Target.Class/method`; Swift Testing `Target.Suite/Nested/function()`, a free
                 // one `Target.function()`. `--filter` takes a regular expression over them.
                 let filter = match container.as_deref() {
@@ -157,10 +161,10 @@ fn dotnet(store: &Store) -> Result<Vec<TestTarget>> {
         let (rows, total) = tests_under(store, &dir)?;
         let tests = rows
             .into_iter()
-            .map(|(container, test, file, line)| {
+            .map(|(container, test, file, line, ns)| {
                 let full = container.as_ref().map_or(test.clone(), |c| format!("{c}.{test}"));
                 TestCase {
-                    command: format!("dotnet test {} --filter {}", quote(&manifest), quote(&format!("FullyQualifiedName~{full}"))),
+                    command: format!("dotnet test {} --filter {}", quote(&manifest), quote(&dotnet_filter(ns.as_deref(), container.as_deref(), &test))),
                     name: full,
                     file,
                     line,
@@ -179,6 +183,40 @@ fn dotnet(store: &Store) -> Result<Vec<TestTarget>> {
         });
     }
     Ok(out)
+}
+
+/// `dotnet test --filter` for the one test method `name` of the class `container` in the namespace `ns`: its
+/// `FullyQualifiedName` exactly (`=`; `~` would also run every test whose name starts with it), or that name followed by
+/// arguments, as NUnit names a parameterized test's cases (`Ns.Class.Method(1,2)`). A nested class is written both ways
+/// the adapters write it (`Outer.Inner`, `Outer+Inner`). Filter operators in a value are escaped with `\`.
+fn dotnet_filter(ns: Option<&str>, container: Option<&str>, name: &str) -> String {
+    let escape = |v: &str| v.chars().fold(String::new(), |mut out, c| {
+        if matches!(c, '\\' | '(' | ')' | '&' | '|' | '=' | '!' | '~') {
+            out.push('\\');
+        }
+        out.push(c);
+        out
+    });
+    let ns = ns.filter(|n| !n.is_empty()).map_or(String::new(), |n| format!("{n}."));
+    let mut classes = vec![container.unwrap_or_default().to_string()];
+    if let Some(c) = container.filter(|c| c.contains('.')) {
+        classes.push(c.replace('.', "+"));
+    }
+    classes
+        .iter()
+        .map(|c| escape(&if c.is_empty() { format!("{ns}{name}") } else { format!("{ns}{c}.{name}") }))
+        .map(|full| format!("FullyQualifiedName={full}|FullyQualifiedName~{full}\\("))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// The line of the key `name` in a `package.json`'s `scripts` object: the first line naming it after the line opening
+/// `scripts`. 1 when it can't be told.
+fn script_line(text: &str, name: &str) -> u32 {
+    let key = format!("\"{name}\"");
+    let Some(scripts) = text.find("\"scripts\"") else { return 1 };
+    let Some(at) = text[scripts..].find(&key) else { return 1 };
+    text[..scripts + at].matches('\n').count() as u32 + 1
 }
 
 /// Whether a repo-relative file is a JavaScript or TypeScript test file by its name.
@@ -235,7 +273,7 @@ fn npm(root: &Path, store: &Store, privacy: &Privacy) -> Result<Vec<TestTarget>>
             .filter(|f| !nested.iter().any(|n| f.starts_with(n.as_str())))
             .collect();
         for (name, _) in scripts.iter().filter(|(k, v)| (*k == "test" || k.starts_with("test:") || k.starts_with("test-")) && v.is_string()) {
-            let line = text.lines().position(|l| l.contains(&format!("\"{name}\""))).map_or(1, |i| i as u32 + 1);
+            let line = script_line(&text, name);
             let command = if run == "npm run" && name == "test" { format!("{cd}npm test") } else { format!("{cd}{run} {}", quote(name)) };
             out.push(TestTarget {
                 kind: "npm",
@@ -267,5 +305,23 @@ mod tests {
         assert_eq!(quote("src/a.test.ts"), "src/a.test.ts");
         assert!(is_js_test_file("web/src/cart.test.ts") && is_js_test_file("web/__tests__/cart.js"));
         assert!(!is_js_test_file("web/src/cart.ts") && !is_js_test_file("node_modules/x/a.test.js"));
+    }
+
+    #[test]
+    fn a_dotnet_test_filter_names_one_test() {
+        assert_eq!(dotnet_filter(Some("Shop.Tests"), Some("MathTests"), "Add"), r"FullyQualifiedName=Shop.Tests.MathTests.Add|FullyQualifiedName~Shop.Tests.MathTests.Add\(");
+        assert_eq!(dotnet_filter(None, Some("MathTests"), "Add"), r"FullyQualifiedName=MathTests.Add|FullyQualifiedName~MathTests.Add\(");
+        assert_eq!(
+            dotnet_filter(Some("N"), Some("Outer.Inner"), "T"),
+            r"FullyQualifiedName=N.Outer.Inner.T|FullyQualifiedName~N.Outer.Inner.T\(|FullyQualifiedName=N.Outer+Inner.T|FullyQualifiedName~N.Outer+Inner.T\("
+        );
+    }
+
+    #[test]
+    fn a_scripts_line_is_its_key_in_scripts() {
+        let text = "{\n  \"name\": \"test\",\n  \"keywords\": [\"test\"],\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"test\": \"vitest\"\n  }\n}\n";
+        assert_eq!(script_line(text, "test"), 6);
+        assert_eq!(script_line(text, "build"), 5);
+        assert_eq!(script_line("{}", "test"), 1);
     }
 }
