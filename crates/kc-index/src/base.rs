@@ -165,6 +165,38 @@ fn touch(base: &Path) {
     let _ = fs::write(base.with_extension("used"), b"");
 }
 
+/// Records that the index of the checkout at `root` is a clone of `base`, in `<base>.users`: a line per checkout,
+/// appended (one short write, whole even when several processes clone at once).
+fn add_user(base: &Path, root: &Path) {
+    use std::io::Write as _;
+    if users(base).iter().any(|r| r == root) {
+        return;
+    }
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(base.with_extension("users")) {
+        let _ = f.write_all(format!("{}\n", root.display()).as_bytes());
+    }
+}
+
+/// The checkouts recorded as cloned from `base` (see [`add_user`]), whatever they are now.
+fn users(base: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = fs::read_to_string(base.with_extension("users")).unwrap_or_default().lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether a worktree still uses `base`: a recorded checkout that exists, whose index exists and was cloned from it.
+/// A base in use is never evicted: its clones share its blocks, so removing it frees nothing they hold, and the next
+/// worktree of its commit would index from scratch.
+pub fn in_use(base: &Path) -> bool {
+    let Some(name) = base.file_name().map(|n| n.to_string_lossy().into_owned()) else { return false };
+    users(base).iter().any(|root| {
+        root.join(".git").exists()
+            && crate::db_path(root).is_ok_and(|db| db.exists())
+            && cloned_from(root).is_some_and(|c| c.base == name)
+    })
+}
+
 /// Starts the index at `db` for the checkout at `root` as a clone of the nearest base, if there is one for its policy's
 /// `key`. The caller holds the checkout's writer lock and `db` doesn't exist. Returns the base cloned.
 pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Base>> {
@@ -201,6 +233,7 @@ pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Bas
         return Err(e);
     }
     touch(&base.path);
+    add_user(&base.path, root);
     Ok(Some(base))
 }
 
@@ -282,7 +315,9 @@ fn publish_claimed(root: &Path) -> Result<Option<PathBuf>> {
     drop(source);
     if let Ok(Some(base)) = &result {
         // Best effort: unadopted, the index keeps its own copy of the pages.
-        let _ = adopt(&db, base);
+        if adopt(&db, base).unwrap_or(false) {
+            add_user(base, root);
+        }
     }
     result
 }
@@ -488,7 +523,7 @@ fn used(base: &Path) -> std::time::SystemTime {
 
 /// Removes a base and its access record. A process cloning it meanwhile has its clone or fails and falls back.
 pub fn remove(base: &Path) -> Result<()> {
-    for p in [base.to_path_buf(), base.with_extension("used")] {
+    for p in [base.to_path_buf(), base.with_extension("used"), base.with_extension("users")] {
         match fs::remove_file(&p) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -505,7 +540,7 @@ fn retire(id: &Identity, keep: &Path) -> Result<()> {
     bases.sort_by_key(|b| std::cmp::Reverse(used(&b.path)));
     let mut kept = 0;
     for b in bases {
-        if b.path == keep || (b.build == build && kept < KEEP - 1) {
+        if b.path == keep || (b.build == build && kept < KEEP - 1) || in_use(&b.path) {
             kept += usize::from(b.path != keep);
             continue;
         }

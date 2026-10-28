@@ -27,6 +27,7 @@ mod restricted;
 mod session_hook;
 mod settings;
 mod summary;
+mod task;
 mod setup;
 mod uninstall;
 mod update;
@@ -206,6 +207,22 @@ enum Cmd {
         query: String,
         #[arg(long, short = 'n', default_value_t = 20)]
         limit: usize,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
+    /// One bounded answer for a goal in words: the files involved, what depends on them, the tests to run, and what
+    /// the index can't settle.
+    Task {
+        goal: String,
+        /// Files to list.
+        #[arg(long, default_value_t = mcp::TASK_FILES.default)]
+        files: usize,
+        /// Dependents to list.
+        #[arg(long, default_value_t = mcp::TASK_DEPENDENTS.default)]
+        dependents: usize,
+        /// Tests to list.
+        #[arg(long, default_value_t = mcp::TASK_TESTS.default)]
+        tests: usize,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -407,6 +424,15 @@ enum Cmd {
         /// Preview even when a site is ambiguous or the new name collides (exit 0).
         #[arg(long)]
         allow_ambiguous: bool,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
+    /// Declared test targets: SwiftPM test targets, .NET test projects and package.json test scripts, each with its
+    /// tests and the command to run it (and each test). Declared, not ranked: `tests` ranks what a change needs
+    #[command(name = "test-targets")]
+    TestTargets {
+        /// Only the targets of this name.
+        name: Option<String>,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -986,6 +1012,16 @@ fn run(cli: Cli) -> Result<()> {
             let out = ops::locate(&query, limit, &repo.scope())?;
             emit(&repo, &out.env, || render::locate(&out.data))
         }
+        Cmd::Task { goal, files, dependents, tests, repo } => {
+            let p = task::TaskParams {
+                goal,
+                files: mcp::TASK_FILES.clamp(Some(files)),
+                dependents: mcp::TASK_DEPENDENTS.clamp(Some(dependents)),
+                tests: mcp::TASK_TESTS.clamp(Some(tests)),
+            };
+            let out = task::task(&p, &repo.scope())?;
+            emit(&repo, &out.env, || task::render(&out.env))
+        }
         Cmd::Refs { name, kind, limit, cite, repo } => {
             cite.enter();
             let out = ops::refs(&name, &kind, limit, &repo.scope())?;
@@ -1094,6 +1130,10 @@ fn run(cli: Cli) -> Result<()> {
                 std::process::exit(2);
             }
             Ok(())
+        }
+        Cmd::TestTargets { name, repo } => {
+            let out = ops::test_targets(name.as_deref(), &repo.scope())?;
+            emit(&repo, &out.env, || render::test_targets(&out.data))
         }
         Cmd::Coupled { file, limit, as_of, since, repo } => {
             let out = ops::coupled(&file, limit, &kc_index::vitals::Span { as_of, since }, &repo.scope())?;

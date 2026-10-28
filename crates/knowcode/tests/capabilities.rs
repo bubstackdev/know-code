@@ -160,6 +160,7 @@ fn case(op: &str) -> Option<Value> {
         "note_add" => json!({ "q": "Audit.Log", "text": "the one audit sink" }),
         "find" => json!({ "q": "Orders" }),
         "locate" => json!({ "q": "place orders" }),
+        "task" => json!({ "q": "place orders and log them" }),
         "refs" => json!({ "q": "Log" }),
         "search" => json!({ "q": "Log" }),
         "grep_ast" => json!({ "q": "Audit.Log()", "lang": "csharp" }),
@@ -175,7 +176,7 @@ fn case(op: &str) -> Option<Value> {
         "reviewers" => json!({ "q": "src/Orders.cs" }),
         "overview" => json!({}),
         "areas" => json!({}),
-        "unused" | "hotspots" | "status" => json!({}),
+        "unused" | "hotspots" | "status" | "test_targets" => json!({}),
         other => panic!("no case for op {other}: add one"),
     })
 }

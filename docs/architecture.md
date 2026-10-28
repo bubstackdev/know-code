@@ -152,8 +152,11 @@ exact call going on from it. Walk answers are pinned by a snapshot test (`crates
   index of its tree holds. A checkout's index never depends on its base after the clone. Jobs that start at once on a
   commit with no base index it once: the first clean checkout claims the commit's base (a lock per repo and commit)
   and builds it, and the others wait for it to be published, at most about what a cold index of the checkout takes
-  (by its size, between a minute and 15 minutes), then clone it or index on their own. Bases go first when the
-  cache is over its budget, with their repo's last checkout, and with `purge`. The cache counts a clone's bytes it
+  (by its size, between a minute and 15 minutes), then clone it or index on their own. Bases are evicted like
+  indexes, least recently used first while the cache is over its budget, but never one a worktree still uses (a
+  checkout recorded as cloned from it whose index exists); one nothing uses also goes with its repo's last checkout,
+  when its build is another, and with `purge`. A worktree's own index goes with the worktree: the next query, `status`
+  or `prune` after the worktree is removed drops it. The cache counts a clone's bytes it
   doesn't share where the file system says (APFS), else its whole length (`status`: `index.counted`). `status` says
   `cloned from base <commit>`, and for the file ranking and the areas whether they are carried from the base (while
   no file differs from it, the same as computing them), computed for this index, stale (an answer drawing on them
