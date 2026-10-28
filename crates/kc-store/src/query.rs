@@ -542,6 +542,8 @@ struct Def {
     exported: bool,
     /// Declared `private` or `fileprivate` (Swift): named only in its own file.
     file_private: bool,
+    /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
+    on_actor: bool,
 }
 
 impl Def {
@@ -2330,12 +2332,13 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         // An awaited Swift call is made in an async context, where Swift prefers an `async` overload: when the
         // receiver's own type has only synchronous members of the name (each signature read whole) and a type further
         // up its chain has an `async` one (`try await channel.getOption(x)`: the channel class's `getOption` returns a
-        // future, `extension Channel`'s is `async`), the `async` one.
+        // future, `extension Channel`'s is `async`), the `async` one. An actor's synchronous member is awaited from
+        // outside it anyway (`await cache.get(k)`), so there `await` says nothing.
         if hit.kind == "call"
             && hit.file.ends_with(".swift")
             && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| c.a)
             && !found.is_empty()
-            && found.iter().all(|d| !d.is_async && d.swift_params.is_some())
+            && found.iter().all(|d| !d.is_async && !d.on_actor && d.swift_params.is_some())
         {
             let later: Vec<&Def> = chain
                 .iter()
@@ -2824,7 +2827,8 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
-     f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %')";
+     f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2849,6 +2853,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         is_async: r.get::<_, Option<String>>(16)?.as_deref().is_some_and(swift_async),
         exported: r.get(17)?,
         file_private: r.get(18)?,
+        on_actor: r.get(19)?,
     })
 }
 

@@ -44,3 +44,21 @@ fn an_awaited_call_picks_the_async_overload() {
     assert!(got.iter().any(|g| g.0 == 3 && g.1 == "exact" && g.2 == [8]), "{got:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn an_actors_own_member_stays_when_awaited() {
+    let root = scratch("swift-async-actor");
+    write(
+        &root,
+        "Sources/Stores/Store.swift",
+        "protocol Store {}\n\nextension Store {\n    func get(_ k: Int) async throws -> Int { 0 }\n}\n\nactor Box: Store {\n    func get(_ k: Int) -> Int { k }\n}\n",
+    );
+    write(&root, "Sources/Stores/Use.swift", "func check(_ b: Box) async {\n    let a = await b.get(1)\n    _ = a\n}\n");
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let (hits, _) = query::refs(store.conn(), "get", &["call"], 50).unwrap();
+    let got: Vec<(u32, &str, Vec<u32>)> = hits.iter().map(|h| (h.line, h.confidence, h.targets.iter().map(|t| t.line).collect())).collect();
+    // Awaited because `Box` is an actor: its own synchronous `get` (line 8).
+    assert!(got.iter().any(|g| g.0 == 2 && g.1 == "exact" && g.2 == [8]), "{got:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
