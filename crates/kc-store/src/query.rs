@@ -2083,18 +2083,11 @@ const SWIFT_LIBRARY_NAMES: &[&str] = &[
     "KeyedEncodingContainerProtocol", "CodingKey", "Clock", "Executor", "Actor",
 ];
 
-/// Whether `d` was found on the receiver chain `chain` only because its container ends with a chain type's bare name,
-/// one of [`SWIFT_LIBRARY_NAMES`] (`MinimalDecoder.Decoder` for `Decoder`), the container being nested in a type that
-/// doesn't enclose the code (`self_chain`) and isn't itself on the chain.
-fn nested_elsewhere(d: &Def, chain: &[String], self_chain: &[String]) -> bool {
+/// Whether `d` is a member of a type named `bare` nested in another (`MinimalDecoder.Decoder` for `Decoder`), that
+/// other type not enclosing the code (`self_chain`).
+fn nested_elsewhere(d: &Def, bare: &str, self_chain: &[String]) -> bool {
     let Some(c) = d.container.as_deref() else { return false };
-    if chain.iter().any(|t| t == c) {
-        return false;
-    }
-    let Some(bare) = chain.iter().find(|t| SWIFT_LIBRARY_NAMES.contains(&t.as_str()) && c.ends_with(&format!(".{t}"))) else {
-        return false;
-    };
-    !self_chain.iter().any(|s| c == format!("{s}.{bare}"))
+    c.ends_with(&format!(".{bare}")) && !self_chain.iter().any(|s| c == format!("{s}.{bare}"))
 }
 
 /// `unique_name` when the candidates share one container, `ambiguous` for several, `unresolved` for none.
@@ -2287,15 +2280,6 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         let mut found = first_in(chain, false);
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
-        }
-        // A Swift receiver typed by a standard-library protocol's or type's name that only a type nested elsewhere
-        // also carries (`decoder: Decoder`, where the repo nests `MinimalDecoder.Decoder`) is the library's, unless
-        // the nesting type encloses the code. Its members are listed, never linked to the nested type's.
-        if hit.file.ends_with(".swift")
-            && !found.is_empty()
-            && found.iter().all(|d| nested_elsewhere(d, chain, self_chain))
-        {
-            return ("external_likely", found.iter().map(|d| d.id).collect());
         }
         if found.is_empty() {
             // A C# call on a type written as its receiver (`string.IsNullOrEmpty(s)`, `Convert.ToInt32(x)`) reaches
@@ -5039,7 +5023,24 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             // A Swift `private` or `fileprivate` declaration is named only in its own file.
             let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
-            resolve(hit, &recv, &self_chains[&caller], &usable)
+            let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
+            // A Swift receiver whose type is written, by the code itself, as a standard-library protocol's name that
+            // only a type nested elsewhere also carries (`init(from decoder: Decoder)`, where the repo nests
+            // `MinimalDecoder.Decoder`) is the library's, unless the nesting type encloses the code: its members are
+            // listed, never linked to the nested type's. A type inferred from elsewhere (a property's, a call's
+            // result) was written in another scope, and stays as resolved.
+            let written = written_receiver.as_deref().and_then(TypeExpr::decode);
+            if confidence == "exact"
+                && hit.file.ends_with(".swift")
+                && let Some(TypeExpr::Named(n)) = &written
+                && SWIFT_LIBRARY_NAMES.contains(&n.as_str())
+                && !ids.is_empty()
+                && named.iter().filter(|d| ids.contains(&d.id)).all(|d| nested_elsewhere(d, n, &self_chains[&caller]))
+            {
+                ("external_likely", ids)
+            } else {
+                (confidence, ids)
+            }
         };
         // How an exact answer was reached, recorded where it is decided.
         let mut exact_by = if by_import {

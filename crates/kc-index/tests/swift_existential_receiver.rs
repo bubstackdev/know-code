@@ -29,12 +29,12 @@ fn a_receiver_named_like_a_type_nested_elsewhere_is_the_librarys() {
     write(
         &root,
         "Sources/Support/Minimal.swift",
-        "enum Minimal {\n    final class Decoder {\n        func singleValueContainer() -> Int { 0 }\n    }\n    static func probe(_ d: Decoder) -> Int {\n        d.singleValueContainer()\n    }\n}\n",
+        "enum Minimal {\n    final class Decoder {\n        func singleValueContainer() -> Int { 0 }\n    }\n    static func probe(_ d: Decoder) -> Int {\n        d.singleValueContainer()\n    }\n    static var current: Decoder?\n}\n",
     );
     write(
         &root,
         "Sources/Sets/Set+Codable.swift",
-        "struct Bag: Decodable {\n    init(from decoder: Decoder) throws {\n        let container = try decoder.singleValueContainer()\n        _ = container\n    }\n}\n",
+        "struct Bag: Decodable {\n    init(from decoder: Decoder) throws {\n        let container = try decoder.singleValueContainer()\n        _ = container\n    }\n}\n\nfunc peek() -> Int {\n    Minimal.current!.singleValueContainer()\n}\n",
     );
     let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
     sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
@@ -44,5 +44,7 @@ fn a_receiver_named_like_a_type_nested_elsewhere_is_the_librarys() {
     assert!(got.contains(&("Sources/Support/Minimal.swift:6".to_string(), "exact")), "{got:?}");
     // Elsewhere, Swift's `Decoder`: listed, not linked.
     assert!(got.contains(&("Sources/Sets/Set+Codable.swift:3".to_string(), "external_likely")), "{got:?}");
+    // A type inferred from a declaration elsewhere (`Minimal.current`'s) is read where it was written.
+    assert!(got.contains(&("Sources/Sets/Set+Codable.swift:9".to_string(), "exact")), "{got:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
