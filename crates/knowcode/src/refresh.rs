@@ -170,7 +170,11 @@ impl Worker {
 fn index_in_background(root: &Path, threads: usize) -> Outcome {
     let result = std::panic::catch_unwind(|| -> Result<SyncReport> {
         let _operation = kc_store::limits::enter(kc_store::limits::Operation::new());
-        let mut store = kc_index::open(root)?;
+        // The claim on building the base, taken by the query that opened the checkout or by this open: let go of
+        // on an error or a panic, handed to the deriver while it builds what the base carries.
+        let claim = kc_index::base::Claim::adopt(root);
+        let (mut store, opened) = kc_index::open_claiming(root)?;
+        let claim = claim.or(opened);
         let report = kc_index::sync(root, &mut store, &SyncOptions { threads, ..Default::default() })?;
         kc_index::content::sync_content(root, &mut store, threads)?;
         // Context intentionally reuses old derived caches for latency. Bring existing caches up to
@@ -179,6 +183,9 @@ fn index_in_background(root: &Path, threads: usize) -> Outcome {
         // Those never computed (a repo new to the index) follow on a thread of their own: a query waiting for this
         // index doesn't wait for them too, nor does the next repo's indexing.
         if kc_index::derived_missing(&store)? {
+            if let Some(claim) = claim {
+                claim.keep();
+            }
             Deriver::shared().queue(root);
         } else {
             drop(store);
@@ -282,6 +289,8 @@ impl Deriver {
 /// the repo is being indexed, and nothing was done.
 fn derive_in_background(root: &Path) -> std::result::Result<bool, String> {
     let result = std::panic::catch_unwind(|| -> Result<bool> {
+        // A claim on building the base handed on by the indexing: let go of however this ends.
+        let _claim = kc_index::base::Claim::adopt(root);
         if !kc_index::db_path(root)?.exists() {
             return Ok(true);
         }
@@ -482,7 +491,9 @@ fn background_priority() {
 /// Returns a pinned committed snapshot and its sync report, or no report when freshness was not established.
 /// CLI calls retain their blocking behavior. MCP calls share one deadline across all repositories they consult.
 pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
-    let mut store = kc_index::open(root)?;
+    // The claim on building the checkout's shared base, if opening took one: let go of on every return but the one
+    // that hands the indexing to the worker, which adopts it (see `index_in_background`).
+    let (mut store, claim) = kc_index::open_claiming(root)?;
     if no_sync {
         return Ok((store, None));
     }
@@ -510,6 +521,9 @@ pub fn open(root: &Path, no_sync: bool) -> Result<(Store, Option<SyncReport>)> {
     }
     // Do not hold the pre-index read snapshot while waiting: it would delay the worker's WAL checkpoint.
     store.end_snapshot()?;
+    if let Some(claim) = claim {
+        claim.keep();
+    }
     let mut report = None;
     // The job this call joins may have read the working tree before its latest change (a job already running, about
     // to finish): its report then answers for an older tree. Still changed when it finishes, the tree is indexed once

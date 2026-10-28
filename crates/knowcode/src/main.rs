@@ -1488,7 +1488,7 @@ fn index(
     let jobs = if phases { 1 } else { jobs.unwrap_or(plan.repos).clamp(1, roots.len()) };
     opts.threads = threads.unwrap_or((plan.threads * plan.repos / jobs).clamp(1, kc_index::machine::MAX_THREADS_PER_REPO)).max(1);
     let started = Instant::now();
-    let seeds = std::sync::Mutex::new(kc_index::Seeds::default());
+    let seeds = kc_index::Seeds::default();
     let changed = std::sync::atomic::AtomicBool::new(false);
     let printing = std::sync::Mutex::new(());
     let one = |root: &PathBuf| -> Result<serde_json::Value> {
@@ -1500,7 +1500,8 @@ fn index(
             changed.store(true, std::sync::atomic::Ordering::Relaxed);
         }
         let mark = meter::Mark::now();
-        let mut store = seeds.lock().unwrap_or_else(|e| e.into_inner()).open(root)?;
+        // Held until the base is published, or let go of if indexing the repo fails first.
+        let (mut store, _claim) = seeds.open(root)?;
         mark.record("open");
         if let Some(file) = &scip {
             kc_index::scip::set_source(&store, file)?;
@@ -1690,7 +1691,82 @@ fn purge() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use clap::CommandFactory;
+    use kc_index::base::{Claim, Turn, wait_or_claim};
+
+    use crate::ops::tests::test_cache;
+
+    /// A committed repo at `base/name` with an origin and a linked worktree at `base/name-wt`, neither indexed: the
+    /// commit's base is one either checkout may claim. Returns both roots.
+    fn checkouts(base: &Path, name: &str) -> (PathBuf, PathBuf) {
+        let dir = base.join(name);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.py"), "def a():\n    return 1\n").unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", &format!("https://example.test/group/{name}.git")]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        let wt = base.join(format!("{name}-wt"));
+        git(&["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+        (kc_index::repo_root(&dir).unwrap(), kc_index::repo_root(&wt).unwrap())
+    }
+
+    /// A checkout whose first index fails after it claimed its commit's base lets the claim go: a worktree of the
+    /// commit opened next claims it at once, instead of waiting for a base no one will publish.
+    #[test]
+    fn a_failed_first_index_lets_go_of_the_base_it_claimed() {
+        let cache = test_cache();
+        let base = cache.dir("claim-failed");
+        let (main, wt) = checkouts(&base, "kiosk");
+        let missing = Some(base.join("missing.scip"));
+        assert!(super::index(vec![main.clone()], None, Some(1), Some(1), false, missing, false, false, true).is_err());
+        assert!(Claim::adopt(&main).is_none(), "the claim outlived the failed index");
+        assert_eq!(wait_or_claim(&wt).unwrap(), Turn::Building);
+        drop(Claim::adopt(&wt));
+    }
+
+    /// A worktree waiting for another checkout to publish its commit's base holds up only itself: repos indexed beside
+    /// it in the same run are indexed meanwhile.
+    #[test]
+    fn a_worktree_waiting_for_a_base_holds_up_no_other_repo() {
+        let cache = test_cache();
+        let base = cache.dir("claim-wait");
+        let (main, wt) = checkouts(&base, "bakery");
+        // Two other repos on a second thread: whichever thread opens first, the second of them is opened while the
+        // worktree waits.
+        let (other, _) = checkouts(&base, "florist");
+        let (later, _) = checkouts(&base, "grocer");
+        // Another build of the commit's base is under way: the worktree waits for it.
+        assert_eq!(wait_or_claim(&main).unwrap(), Turn::Building);
+        let claim = Claim::adopt(&main).unwrap();
+        let roots = vec![wt.clone(), other.clone(), later.clone()];
+        let run = std::thread::spawn(move || super::index(roots, None, Some(1), Some(2), false, None, false, false, true));
+        let indexed = |root: &Path| {
+            kc_index::db_path(root).unwrap().exists() && kc_index::open(root).unwrap().meta("last_sync").unwrap().is_some()
+        };
+        // Within what the worktree waits at the least (a minute), so a run holding the other repo up behind it fails.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        while !(indexed(&other) && indexed(&later)) {
+            assert!(std::time::Instant::now() < until, "the other repos waited behind the worktree");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!run.is_finished(), "the worktree waits for the base");
+        drop(claim);
+        run.join().unwrap().unwrap();
+        assert!(indexed(&wt));
+    }
 
     #[test]
     fn the_cli_says_the_bounds_the_tools_apply() {

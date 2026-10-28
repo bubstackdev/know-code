@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode index` over several repos no longer stops indexing the others while a new worktree waits for another
+  checkout to publish its commit's shared base. The list of checkouts to seed from was locked across the whole open of
+  a repo, wait included, so every other repo's thread waited at its own open.
+- A checkout that claimed its commit's shared base and then didn't build it lets the claim go: its first index failed
+  or panicked, its query read the index without syncing, or the derived data couldn't start. Until the process ended,
+  each new worktree of that commit opened elsewhere waited for a base no one would publish (up to 15 minutes), then
+  indexed from scratch anyway. Opening a checkout only to read it no longer claims its base at all.
+
 - A repo's index rebuilt at once in place is no longer taken for the old one on Linux. Whether a repo changed since its
   last sync is told from a snapshot kept beside its index, which belongs to one index file; the file was known by its
   device and inode, and ext4 can give a file created at once the inode just freed, so the old snapshot could pass for
