@@ -2,7 +2,7 @@
 
 KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x while its surface settles.
 
-## Unreleased
+## 0.6.0 (2026-10-28)
 
 - A C# extension method called on a value took the value as one of the call's arguments, as if called through its
   class: `items.FirstOrDefault(i => …)` linked to a repo's `FirstOrDefault<T>(this IReadOnlyList<T>)`, which takes no

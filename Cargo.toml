@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-version = "0.5.1"
+version = "0.6.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bubstackdev/know-code"
 homepage = "https://github.com/bubstackdev/know-code"
