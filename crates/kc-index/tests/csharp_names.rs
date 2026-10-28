@@ -304,3 +304,23 @@ fn an_extension_on_enum_reaches_enum_receivers_and_the_one_in_scope_wins() {
     assert_eq!(answer(&refs[0]), ("exact", vec!["src/Common/EnumExt.cs:Enum.Describe".to_string()]));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// "Color Color": a property named like its type. In `Shade.Dark` the qualifier is the type, whose case `Dark` is; a
+/// read of the property alone, or a member of the property's value, stays the property.
+#[test]
+fn a_member_named_like_its_type_qualifies_the_types_cases() {
+    let root = scratch("color-color");
+    write(
+        &root,
+        "src/Lamp.cs",
+        "namespace Shop;\npublic enum Shade { Light, Dark }\npublic class Lamp\n{\n    public Shade Shade { get; set; }\n    public bool IsDark() => Shade == Shade.Dark;\n    public string Name() => Shade.ToString();\n}\n",
+    );
+    let store = index(&root);
+    let reads = refs_from(store.conn(), "Shade", "member", "IsDark");
+    let answers: Vec<(u32, (&'static str, Vec<String>))> = reads.iter().map(|r| (r.col, answer(r))).collect();
+    // `Shade.Dark` is the enum.
+    assert!(answers.contains(&(38, ("exact", vec!["src/Lamp.cs:Shade".to_string()]))), "{answers:?}");
+    let named = refs_from(store.conn(), "Shade", "member", "Name");
+    assert_eq!(named.iter().map(answer).collect::<Vec<_>>(), [("exact", vec!["src/Lamp.cs:Lamp.Shade".to_string()])]);
+    let _ = std::fs::remove_dir_all(&root);
+}

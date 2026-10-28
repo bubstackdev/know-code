@@ -9,6 +9,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   argument besides its receiver, and `Expression.Not(x)` to a repo's `Not<T>(this Expression<…>)`. Such a call is
   LINQ's or the framework's: `unresolved`. Called through its class (`Lists.FirstOrDefault(xs)`) or unqualified, the
   receiver is still the first argument.
+- C#'s "Color Color": a property named like its type (`public SourceType SourceType { get; }`) took the qualifier of
+  `SourceType.Channel`, so the enum's cases read as the property's members. In `X.Y`, where `X` names both a member in
+  scope and a type, and `Y` is one of that type's cases or static members, `X` is now the type. A read of the property
+  alone, or a member of its value (`SourceType.ToString()`), stays the property.
 - A Swift library file whose `#if` has an `#error(…)` branch (`#else #error("Unknown C library.")`), or that holds a
   freestanding macro (`#Preview { … }`), was taken for a script, and what it declares was hidden from every other file.
   So calls of a type's members from other files went unresolved, or fell through to a protocol's requirement
