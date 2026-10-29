@@ -85,6 +85,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   no outside label linked; on 508 held-out labels from echo, scored once: 1.000 over 299 links, recall 0.971, none
   outside linked. A file the default build leaves out (`x_windows.go`, `//go:build nomsgpack`) and cgo
   imports are reported as `unsupported`.
+- Go test targets. `test_targets` lists each `go.mod` as a target, `go test ./...` from its directory, with its
+  `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
+  ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
+  Go test files too (`foo_test.go` for `foo.go`).
 
 ## 0.6.1 (2026-10-28)
 
