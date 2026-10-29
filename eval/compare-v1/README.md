@@ -25,7 +25,9 @@ set, compare-v2. The commit that adds them is the one the results cite as the ma
 
 Each tool runs twice: at the version pinned in [tools.toml](tools.toml), and at its latest release when the run
 starts. Both are pinned by digest, and both results are published. Only the pinned run is compared across KnowCode
-releases. If the latest release is still the pinned one, that run is published once and marked as both.
+releases. If the latest release is still the pinned one, that run is published once and marked as both. This is the
+case for the first run (0.7): on 2026-10-29 the latest releases were codebase-memory-mcp v0.12.1 and Serena v2.1.0,
+the pinned versions, so that run counts as both the pinned and the latest run.
 
 ### The container
 
