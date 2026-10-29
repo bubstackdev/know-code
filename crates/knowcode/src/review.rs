@@ -147,14 +147,27 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     let changes_total = by_file.len();
     let changes: Vec<Value> = by_file.into_iter().take(p.changes).map(|(_, row)| row).collect();
 
-    // The tests to run.
+    // The tests to run, each with the command running its target when the repo's manifests declare one (the target
+    // whose directory holds it, the innermost first): the whole target, the narrowest command known.
+    let targets = kc_index::test_targets::list(root, &o.store).unwrap_or_default();
+    let run_of = |file: &str| {
+        targets
+            .iter()
+            .filter(|t| t.dir.is_empty() || file.starts_with(&format!("{}/", t.dir.trim_end_matches('/'))))
+            .max_by_key(|t| t.dir.len())
+            .map(|t| t.command.clone())
+    };
     let (mut test_rows, mut tests_total) = (Vec::new(), 0);
     match &tests {
         Ok(out) => {
             for t in out.data.iter() {
                 tests_total += t.selection.selected.len() + t.selection.left_out.len();
                 for pick in t.selection.selected.iter().take(p.tests) {
-                    test_rows.push(json!({ "id": row_id("test", "", &pick.file, "", ""), "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 }));
+                    let mut row = json!({ "id": row_id("test", "", &pick.file, "", ""), "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 });
+                    if let Some(run) = run_of(&pick.file) {
+                        row["run"] = json!(run);
+                    }
+                    test_rows.push(row);
                 }
             }
             for i in incomplete_of(&out.env).into_iter().filter(|i| UNSETTLED.contains(&i.reason)) {
@@ -333,6 +346,7 @@ mod tests {
                 ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
                 ("src/Ledger.cs", "namespace Shop;\npublic static class Ledger\n{\n    public static void Post() { }\n}\n"),
                 ("src/Refunds.cs", "namespace Shop;\npublic class Refunds\n{\n    public void Refund() { Ledger.Post(); }\n}\n"),
+                ("tests/Shop.Tests.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"xunit\" Version=\"2.9.0\" /></ItemGroup>\n</Project>\n"),
                 ("tests/LedgerTests.cs", "namespace Shop.Tests;\npublic class LedgerTests\n{\n    public void Posts() { Shop.Ledger.Post(); }\n}\n"),
             ],
         );
@@ -353,6 +367,8 @@ mod tests {
         assert_eq!(env["dependents"][0]["file"], "src/Refunds.cs", "{env}");
         assert_eq!(env["dependents"][0]["rows"][0]["symbol"], "Refunds.Refund", "{env}");
         assert_eq!(env["tests"][0]["file"], "tests/LedgerTests.cs", "{env}");
+        // The command running its target, from the test project declaring it.
+        assert!(env["tests"][0]["run"].as_str().is_some_and(|r| r.starts_with("dotnet test")), "{env}");
         assert_eq!(env["sections"]["tests"]["advisory"], ADVISORY);
         for key in ["changes", "tests", "missed", "dependents", "contracts", "rules"] {
             assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["incomplete"].is_array(), "{key}: {env}");
