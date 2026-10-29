@@ -147,9 +147,11 @@ exact call going on from it. Walk answers are pinned by a snapshot test (`crates
   when the repo has another checkout and no base is within a few files of that commit; it is written by `VACUUM
   INTO` (no free pages, no WAL) and the checkout's own index becomes a clone of it. A new checkout's index starts as a
   copy-on-write clone of the nearest base made under its own privacy policy (`clonefile` on APFS, a reflink on btrfs
-  and XFS, a plain copy elsewhere), so the pages it doesn't change stay the base's on disk. Its first sync hashes
-  every file (the clone resets every file's stat), extracts only what differs from the base, and holds what a cold
-  index of its tree holds. A checkout's index never depends on its base after the clone. Jobs that start at once on a
+  and XFS, a plain copy elsewhere), so the pages it doesn't change stay the base's on disk. The clone takes the
+  checkout's own stat for each file git vouches for (tracked, clean in the checkout, and unchanged between the base's
+  commit and HEAD) and resets every other file's, so its first sync hashes only the files that may differ (changed
+  since the base's commit, modified in the checkout, or untracked), extracts only what differs from the base, and
+  holds what a cold index of its tree holds. A checkout's index never depends on its base after the clone. Jobs that start at once on a
   commit with no base index it once: the first clean checkout claims the commit's base (a lock per repo and commit)
   and builds it, and the others wait for it to be published, at most about what a cold index of the checkout takes
   (by its size, between a minute and 15 minutes), then clone it or index on their own. Bases are evicted like
