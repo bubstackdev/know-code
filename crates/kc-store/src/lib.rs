@@ -10,6 +10,7 @@ pub mod ci;
 mod cfml;
 mod csharp;
 pub mod content;
+mod go;
 pub mod db;
 pub mod di;
 pub mod identity;
@@ -41,11 +42,11 @@ use kc_extract::{FileFacts, Lang};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 /// Bumped when query-time resolution changes, so cached derived results (file edges, hotspots, maps) are recomputed.
-pub const RESOLVER_VERSION: u32 = 35;
+pub const RESOLVER_VERSION: u32 = 37;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 23;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -63,7 +64,9 @@ CREATE TABLE IF NOT EXISTS files (
     extractor_version INTEGER NOT NULL,
     parse_errors      INTEGER NOT NULL,
     script            INTEGER NOT NULL DEFAULT 0,
-    lines             INTEGER NOT NULL
+    lines             INTEGER NOT NULL,
+    -- The package the file declares into, as written (`FileFacts::package`): Go's package clause.
+    package           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
@@ -1067,7 +1070,7 @@ impl Batch<'_> {
                 self.tx
                     .prepare_cached(
                         "UPDATE files SET lang = ?2, mtime_ns = ?3, size = ?4, hash = ?5, extractor_version = ?6,
-                         parse_errors = ?7, lines = ?8, script = ?9 WHERE id = ?1",
+                         parse_errors = ?7, lines = ?8, script = ?9, package = ?10 WHERE id = ?1",
                     )?
                     .execute(params![
                         id,
@@ -1078,15 +1081,16 @@ impl Batch<'_> {
                         rec.lang.extractor_version(),
                         rec.facts.parse_errors,
                         rec.lines,
-                        rec.facts.script
+                        rec.facts.script,
+                        rec.facts.package
                     ])?;
                 id
             }
             None => {
                 self.tx
                     .prepare_cached(
-                        "INSERT INTO files(path, lang, mtime_ns, size, hash, extractor_version, parse_errors, lines, script)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        "INSERT INTO files(path, lang, mtime_ns, size, hash, extractor_version, parse_errors, lines, script, package)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     )?
                     .execute(params![
                         rec.path,
@@ -1097,7 +1101,8 @@ impl Batch<'_> {
                         rec.lang.extractor_version(),
                         rec.facts.parse_errors,
                         rec.lines,
-                        rec.facts.script
+                        rec.facts.script,
+                        rec.facts.package
                     ])?;
                 self.tx.last_insert_rowid()
             }
@@ -1347,6 +1352,8 @@ pub fn summary_key(lang: Lang, facts: &FileFacts) -> String {
         param_types: _,
         parse_errors: _,
         script,
+        // Read by resolution per repo (a Go file's package), never from the summary.
+        package: _,
     } = facts;
     let symbols: Vec<_> = symbols
         .iter()

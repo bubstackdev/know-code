@@ -131,6 +131,11 @@ Comparing KnowCode with another tool needs a protocol neither side can tilt. The
   a build and scored against the studies' labels.
 - [History gate](../eval/history-v1/README.md): history questions on full clones, labelled from git alone, with
   KnowCode scored against the plain-git approaches.
+- [compare-v1](../eval/compare-v1/results.md) (0.7, first results): KnowCode, codebase-memory-mcp and Serena asked the
+  same reference and impact questions on identity-v1's repositories, scored against the toolchains' labels, with no
+  model calls. Both the first run and a rerun after an adapter audit are published, with every miss; the
+  [protocol](../eval/compare-v1/README.md) and its [question-to-tool mapping](../eval/compare-v1/mapping.toml) were
+  frozen before the first run.
 - [Identity gate](../eval/identity-v1/README.md): references from pinned public repositories labelled by each
   language's toolchain (the Swift index store, Roslyn, the TypeScript compiler), with KnowCode's reference links scored
   against them: `exact` precision, recall, and links to the workspace where the toolchain resolves outside.

@@ -15,6 +15,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 797 links, linked recall 0.713, and no
   outside label is linked; on a held-out set nothing was tuned on (jackson-core, 455 labels), 1.000 over 248 links,
   linked recall 0.719, and none linked.
+- Java calls and member uses on a chain (`Report.builder().title(t).build()`, `this.store.items()`, a field of an
+  imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
+  identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
+  outside label linked).
 - The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
   0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
   checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.
@@ -62,6 +66,19 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
   from 0.578 to 0.597 and one more outside label is no longer linked (`task.LastExecutionResult.Status` on a package
   type), leaving 2. A type alias's property is reached only through a value of that type, never by its name alone.
+- compare-v1's first results are published ([eval/compare-v1/results.md](eval/compare-v1/results.md)): KnowCode,
+  codebase-memory-mcp and Serena answer the same reference and impact questions on eight public repositories, scored
+  against labels from each language's toolchain, with every miss listed.
+- Go is read. Packages, types, functions, methods (merged onto their receiver's type), struct fields, interface
+  methods, imports, calls and type and member uses are extracted from `.go` files, and `go.mod` gives the module, its
+  requires and its replaces. A Go name resolves the way the compiler scopes it: within the caller's package, through
+  an import placed by the repo's `go.mod` files, or on its receiver's type and what that type embeds. A name from the
+  standard library, a dependency or a released copy of the repo's own module stays unresolved, and a receiver of
+  unknown type lists candidates, so a Go reference is never linked by its name alone. On identity-v2's 1,194 Go labels
+  (cobra, chi, gin, labelled by the Go type checker): `exact` precision 1.000 over 691 links, linked recall 0.980, and
+  no outside label linked; on 508 held-out labels from echo, scored once: 1.000 over 299 links, recall 0.971, none
+  outside linked. A file the default build leaves out (`x_windows.go`, `//go:build nomsgpack`) and cgo
+  imports are reported as `unsupported`.
 
 ## 0.6.1 (2026-10-28)
 
