@@ -774,16 +774,20 @@ impl Tracer<'_> {
                 if from.id == sym.id || (from.kind == "table" && crate::sql::is_sql_path(&h.file)) {
                     continue;
                 }
-                if !seen.insert(from.id) {
+                let from_id = enclosing_callable(this.conn, from.id)?;
+                if from_id == sym.id {
+                    continue;
+                }
+                if !seen.insert(from_id) {
                     // The caller's edge is listed once, at its first site; its other sites are kept beside it.
                     let at = format!("{}:{}", h.file, h.line);
-                    let also = this.also.entry((from.id, sym.id)).or_default();
+                    let also = this.also.entry((from_id, sym.id)).or_default();
                     if !also.contains(&at) {
                         also.push(at);
                     }
                     continue;
                 }
-                if let Some(caller) = this.symbol(from.id)? {
+                if let Some(caller) = this.symbol(from_id)? {
                     let edge = if edge.is_empty() {
                         match h.kind.as_str() {
                             // A call of a factory the container injects, making the class.
@@ -1752,6 +1756,27 @@ pub fn defined_at(conn: &Connection, qualified: &str, file: &str, line: u32) -> 
 }
 
 /// A symbol by id.
+/// The symbol a use made in `id` belongs to: `id` itself, or, when `id` is a function or type declared in a function
+/// body (tagged `local`) or inside one, the function around the outermost of them. A compiler's index reports a use in
+/// a local helper as the enclosing function's, so a walk reaches that function in the same hop rather than through
+/// the helper, whose own callers (same-named locals elsewhere) can't be told apart.
+fn enclosing_callable(conn: &Connection, id: i64) -> Result<i64> {
+    let mut stmt = conn.prepare_cached("SELECT parent_id, tags FROM symbols WHERE id = ?1")?;
+    let (mut at, mut owner) = (id, id);
+    // Bounded: nesting is a handful deep, and a cycle can't be stored but costs nothing to rule out.
+    for _ in 0..16 {
+        let Some((parent, tags)) = stmt.query_map([at], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, String>(1)?)))?.next().transpose()? else {
+            break;
+        };
+        let Some(parent) = parent else { break };
+        if tags.split(',').any(|t| t == "local") {
+            owner = parent;
+        }
+        at = parent;
+    }
+    Ok(owner)
+}
+
 pub fn symbol(conn: &Connection, id: i64) -> Result<Option<SymbolRow>> {
     let sql = format!("SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1");
     let mut stmt = conn.prepare_cached(&sql)?;
