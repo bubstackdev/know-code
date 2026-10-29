@@ -301,7 +301,9 @@ def enumerate_repo(repo, src, index):
 
 OPENERS, CLOSERS = '([{', ')]}'
 # A Kotlin line that continues the expression above it, so a newline before it doesn't end a declaration.
-CONTINUES = re.compile(r'^\s*(?:\.|\?\.|\?:|&&|\|\||[-+*%]|/(?![/*])|as\b|is\b|in\b|!in\b|else\b)')
+CONTINUES = re.compile(r'^\s*(?:\.|\?\.|\?:|&&|\|\||[-+*%]|/(?![/*])|as\b|is\b|in\b|!in\b|else\b'
+                       # a property's accessors on the lines after it (`get() = …`, `private set`)
+                       r'|(?:(?:private|protected|internal|public|override|open|inline)\s+)*(?:get|set)\b(?!\s*[:=]))')
 
 
 def extent(lines, start, lang, body):
