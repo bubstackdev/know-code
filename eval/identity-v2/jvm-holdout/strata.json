@@ -1,0 +1,70 @@
+{
+ "jsoup/java/call/inside/1": {
+  "available": 5380,
+  "drawn": 20
+ },
+ "jsoup/java/call/inside/2-4": {
+  "available": 6467,
+  "drawn": 40
+ },
+ "jsoup/java/call/inside/5+": {
+  "available": 8701,
+  "drawn": 40
+ },
+ "jsoup/java/call/outside/0": {
+  "available": 9086,
+  "drawn": 10
+ },
+ "jsoup/java/call/outside/1+": {
+  "available": 4004,
+  "drawn": 40
+ },
+ "jsoup/java/dispatch/inside/1": {
+  "available": 3,
+  "drawn": 3
+ },
+ "jsoup/java/dispatch/inside/2-4": {
+  "available": 224,
+  "drawn": 40
+ },
+ "jsoup/java/dispatch/inside/5+": {
+  "available": 848,
+  "drawn": 40
+ },
+ "jsoup/java/member/inside/1": {
+  "available": 3626,
+  "drawn": 20
+ },
+ "jsoup/java/member/inside/2-4": {
+  "available": 1709,
+  "drawn": 40
+ },
+ "jsoup/java/member/inside/5+": {
+  "available": 1332,
+  "drawn": 40
+ },
+ "jsoup/java/member/outside/0": {
+  "available": 289,
+  "drawn": 10
+ },
+ "jsoup/java/member/outside/1+": {
+  "available": 65,
+  "drawn": 20
+ },
+ "jsoup/java/type/inside/1": {
+  "available": 13183,
+  "drawn": 20
+ },
+ "jsoup/java/type/inside/2-4": {
+  "available": 953,
+  "drawn": 40
+ },
+ "jsoup/java/type/outside/0": {
+  "available": 10496,
+  "drawn": 10
+ },
+ "jsoup/java/type/outside/1+": {
+  "available": 282,
+  "drawn": 32
+ }
+}

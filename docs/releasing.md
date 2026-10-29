@@ -89,6 +89,21 @@ then a tiny index and two queries). CI's `linux-compat` job does the same with a
 pull request that changes code. To move to a newer manylinux image, update both digests in `dist-workspace.toml`; to
 raise the glibc floor, change it in both scripts and in the install docs.
 
+## Repository settings
+
+Repository rulesets on bubstackdev/know-code protect what a release reads:
+
+- `main` changes only through a squash-merged pull request whose CI passed. It can't be force-pushed or deleted.
+  Admins may merge a pull request past a stuck check, but can't push to `main` directly.
+- `integration/*` can't be force-pushed or deleted; maintainers push to it directly. `release/*` can't be
+  force-pushed.
+- `v*` tags can be created only by an admin and can't be moved or deleted, so a tag names one commit for good.
+  Immutable releases also lock each published release's assets.
+
+The release path works within these rules: the release pull request merges with
+`gh pr merge N --squash --match-head-commit SHA`, the maintainer pushes the `v<version>` tag, and `release-gate.yml`
+reads `main`'s push CI for the tagged commit.
+
 ## Homebrew prerequisites
 
 A release publishes the formula `knowcode.rb` to the public tap repository
