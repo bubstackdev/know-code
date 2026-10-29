@@ -5,11 +5,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 ## Unreleased
 
 - `knowcode rules` runs a repo's own ast-grep rule files and prints their matches, each with its rule's severity and
-  message. Rules are read with the library the ast-grep command line uses (vendored, its YAML read by yaml-rust2), so a rule matches what `ast-grep scan`
-  matches on the same files: on a fixture of 46 rules in six languages, all 89 matches are the same, and so are the
-  rule files it refuses. `fix` is refused,
-  since KnowCode only reports, and so is JavaScript, which KnowCode parses with another grammar. Rule files come from
-  `--rules` or the new `rules.paths` key, and are only read. `--format sarif` prints a SARIF 2.1.0 log.
+  message. Rules are read with the library the ast-grep command line uses (vendored, its YAML read by yaml-rust2), so
+  a rule matches what `ast-grep scan` matches on the same files: on a fixture of 46 rules in six languages, all 89
+  matches are the same, and so are the rule files it refuses. `fix` is refused, since KnowCode only reports, and so is
+  JavaScript, which KnowCode parses with another grammar. Rule files come from `--rules` or the new `rules.paths` key,
+  and are only read. `--format sarif` prints a SARIF 2.1.0 log.
 - `knowcode rules --new-since REF` is a monitor: only the matches REF didn't have, read from the files that differ
   from it, with moved code and renamed files not counted as new. `--regex` monitors a line regex instead of rules.
   Replayed over 600 commits of serilog, Autofac and hono, the rule monitors fired on exactly the 27 commits that
