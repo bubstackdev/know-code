@@ -8,3 +8,10 @@ autofac csharp https://github.com/autofac/Autofac ae9e1e1129b9c22e7ab111381308dc
 jellyfin-server csharp https://github.com/jellyfin/jellyfin aec42b345e1a7da25ee5492183f12209338df688
 jellyfin-web typescript https://github.com/jellyfin/jellyfin-web f21682ad693f87f513f578e2b3da6cc96271e76c
 hono typescript https://github.com/honojs/hono 5ca49b0720755c585c9a9835f0a479ceea36fb52
+# identity-v2, Java and Kotlin (eval/identity-v2): pinned at their heads on 2026-10-29. moshi mixes the two languages.
+gson jvm https://github.com/google/gson 57731049da3e415be3d5d34db1ca3b80f3c73810
+commons-lang jvm https://github.com/apache/commons-lang 5ebe419f3bffd4e451bcdf737dfe3d56871af821
+spring-petclinic jvm https://github.com/spring-projects/spring-petclinic 500158f732419217507c7656904b8e6aa1bcc0d6
+moshi jvm https://github.com/square/moshi 889013ec2edb8d8034902662a1dc8c4f3b3f8111
+kotlinpoet jvm https://github.com/square/kotlinpoet 38990a0bfb9ee00061ff3e4bc3a7f8c58d8c264f
+spring-petclinic-kotlin jvm https://github.com/spring-petclinic/spring-petclinic-kotlin 817dba3b02261e4291f138d5d8bb8c85c7d49758
