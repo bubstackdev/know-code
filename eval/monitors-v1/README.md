@@ -43,7 +43,8 @@ differ. The gate passes with none.
 
 ## Results
 
-On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits:
+On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits, and again, with the same results,
+on `w4/b-rules-op`'s build (the vendored ast-grep-config):
 
 | Repository | Commits | Labelled as firing | Monitor fired | Differ | New matches differ |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -91,7 +92,8 @@ monitor's answer is read: [labels](labels), `<repo>-text-1.jsonl` and `<repo>-te
 
 ## Results
 
-On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits:
+On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits, and again, with the same results,
+on `w4/b-rules-op`'s build (the vendored ast-grep-config):
 
 | Repository | Commits | Labelled as firing | Monitor fired | Differ | New matches differ |
 | --- | ---: | ---: | ---: | ---: | ---: |
