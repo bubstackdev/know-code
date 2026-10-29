@@ -5195,7 +5195,7 @@ pub(crate) fn resolve_heuristic(conn: &Connection, hits: &mut [RefHit]) -> Resul
 }
 
 /// What resolution reads about a repo whatever the name: files' languages and the C# projects they reach, what C#
-/// files see (their namespaces, `using`s and projects), TypeScript and Python imports and where their modules are,
+/// files see (their namespaces, `using`s and projects), TypeScript, Python and Go imports and where their modules are,
 /// which files a SCIP index covers. Each is a function of the index alone, so one `Resolution` serves every call of
 /// [`refs_in`] on one connection at one index state: the reference graph resolves every name in turn, and read each of
 /// these again per name (the repo's C# projects and its whole file list most of all).
@@ -5205,6 +5205,7 @@ pub struct Resolution {
     vis: crate::csharp::Visibility,
     modules: crate::ts::Modules,
     py_modules: crate::py::Modules,
+    go_modules: crate::go::Modules,
     precise: Option<crate::scip::Precise>,
 }
 
@@ -5334,6 +5335,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let mut jvm = crate::jvm::Resolver::default();
     let modules = &mut shared.modules;
     let py_modules = &mut shared.py_modules;
+    let go_modules = &mut shared.go_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
     let mut swift_scoped = SwiftScoped::default();
@@ -5399,6 +5401,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             ts_scoped(conn, hit, modules, &mut defs)?
         } else if hit.file.ends_with(".py") {
             py_scoped(conn, hit, py_modules, &mut defs)?
+        } else if hit.file.ends_with(".go") {
+            Some(go_modules.resolve(conn, hit)?)
         } else if java {
             jvm.scoped(conn, hit)?
         } else {
@@ -5720,7 +5724,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             }
         }
         // A Java call through an interface binds to the interface's method, as javac does; the requirement is the target.
-        if confidence == "exact" && !hit.precise && !java && through_requirement(conn, hit, &ids)? {
+        // A Go answer is the Go rules' own, receivers included (see `crate::go`).
+        if confidence == "exact" && !hit.precise && !java && !hit.file.ends_with(".go") && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
                 // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);

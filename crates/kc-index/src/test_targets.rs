@@ -1,6 +1,7 @@
 //! Declared test targets: what a repo's manifests say runs its tests, with the tests in each and the command to run
 //! them. SwiftPM test targets (`.testTarget` in `Package.swift`), .NET test projects (a project referencing a test
-//! SDK or framework) and `package.json` test scripts (`test`, `test:…`). Read from the index and the manifests as
+//! SDK or framework), `package.json` test scripts (`test`, `test:…`) and Go modules (each `go.mod`, whose packages'
+//! `_test.go` files `go test` runs). Read from the index and the manifests as
 //! declared, never ranked: which tests matter for a change is `test_select`'s question, kept apart from this one.
 
 use std::collections::{HashMap, HashSet};
@@ -31,7 +32,7 @@ pub struct TestCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TestTarget {
-    /// `swiftpm`, `dotnet` or `npm`.
+    /// `swiftpm`, `dotnet`, `npm` or `go`.
     pub kind: &'static str,
     /// The target, project or script name.
     pub name: String,
@@ -55,6 +56,7 @@ pub fn list(root: &Path, store: &Store) -> Result<Vec<TestTarget>> {
     let mut out = swiftpm(&tests)?;
     out.extend(dotnet(&tests)?);
     out.extend(npm(root, store, &privacy)?);
+    out.extend(go(&tests)?);
     out.sort_by(|a, b| (&a.manifest, a.line, &a.name).cmp(&(&b.manifest, b.line, &b.name)));
     Ok(out)
 }
@@ -227,6 +229,65 @@ fn dotnet_filter(ns: Option<&str>, container: Option<&str>, name: &str) -> Strin
         .map(|full| format!("FullyQualifiedName={full}|FullyQualifiedName~{full}\\("))
         .collect::<Vec<_>>()
         .join("|")
+}
+
+/// Go modules: one target per `go.mod`, `go test ./...` from its directory. Its tests are the test functions
+/// (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx`) in `_test.go` files whose nearest module it is, each run from
+/// its package's directory: `go test ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench '^BenchmarkXxx$'`, so
+/// no test runs beside it.
+fn go(tests: &Tests) -> Result<Vec<TestTarget>> {
+    let mut stmt = tests.store.conn().prepare(
+        "SELECT p.name, f.path, p.line FROM packages p JOIN files f ON f.id = p.file_id WHERE p.kind = 'gomod' ORDER BY f.path",
+    )?;
+    let modules: Vec<(String, String, u32)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+    let dirs: HashSet<String> = modules.iter().map(|(_, m, _)| dir_of(m)).collect();
+    // Each test to the module nearest it: a nested module's tests are its own, never the outer module's too.
+    let nearest = |file: &str| {
+        let mut dir = dir_of(file);
+        loop {
+            if dirs.contains(&dir) {
+                return Some(dir);
+            }
+            if dir.is_empty() {
+                return None;
+            }
+            dir = dir_of(&dir);
+        }
+    };
+    let mut by_module: HashMap<String, Vec<&Found>> = HashMap::new();
+    for t in tests.all()?.iter().filter(|t| t.2.ends_with("_test.go")) {
+        if let Some(m) = nearest(&t.2) {
+            by_module.entry(m).or_default().push(t);
+        }
+    }
+    let mut out = Vec::new();
+    for (name, manifest, line) in modules {
+        let dir = dir_of(&manifest);
+        let cd = if dir.is_empty() { String::new() } else { format!("cd {} && ", quote(&dir)) };
+        let found: &[&Found] = by_module.get(&dir).map_or(&[], Vec::as_slice);
+        let tests = found
+            .iter()
+            .take(MAX_TESTS)
+            .map(|(_, test, file, line, _)| {
+                let pkg = dir_of(file.strip_prefix(&format!("{dir}/")).unwrap_or(file));
+                let pkg = if pkg.is_empty() { ".".to_string() } else { format!("./{pkg}") };
+                let pattern = quote(&format!("^{test}$"));
+                let select = if test.starts_with("Benchmark") { format!("-run '^$' -bench {pattern}") } else { format!("-run {pattern}") };
+                TestCase { name: test.clone(), file: file.clone(), line: *line, command: format!("{cd}go test {} {select}", quote(&pkg)) }
+            })
+            .collect();
+        out.push(TestTarget {
+            kind: "go",
+            command: format!("{cd}go test ./..."),
+            name,
+            manifest,
+            line,
+            dir,
+            tests,
+            tests_total: found.len(),
+        });
+    }
+    Ok(out)
 }
 
 /// The line of the key `name` in a `package.json`'s `scripts` object: the first line naming it after the line opening

@@ -1938,7 +1938,7 @@ fn placed(symbol: Option<&str>, empty: bool, scope: &Scope) -> anyhow::Result<()
         && let Some(s) = symbol
         && let Some(why) = ops::unresolved_place(s, scope)?
     {
-        anyhow::bail!(Refusal::new(Code::NotFound, why));
+        anyhow::bail!(crate::pending::unresolved(s, &ops::target_repos(&scope.repos)?, why));
     }
     Ok(())
 }
@@ -3005,6 +3005,7 @@ impl KnowcodeServer {
     async fn kc_more(&self, Parameters(p): Parameters<MoreParams>) -> Result<String, ToolError> {
         // In a child, as a search: a page can be a search's. A handle (see `compact`) stands for the full cursor.
         let args: Vec<String> = vec!["more".into(), "--json".into(), crate::compact::resolve(&p.cursor)?];
+        if crate::more_text::continues_text(&args[2]) { let max = p.max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS); return run_text(p.max_chars, move || crate::more_text::page(&args[2], max)).await; }
         run_child(p.max_chars, move || search_in_child(&args)).await
     }
 

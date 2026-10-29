@@ -62,8 +62,9 @@ one relative to a workspace root, or a repo-relative path in exactly one repo; o
 with a confidence (exact, unique_name, ambiguous, external_likely, unresolved) and `evidence` (see `evidence`). A name
 resolves only to definitions in its own language (TypeScript, TSX and JavaScript count as one), and in C# only to those
 compiled by the caller's project (its .csproj, sources it links in) or a project it references, transitively; where no
-project file decides it, never exact. Edges between languages come from HTTP routes, the bus, SQL and DI, never a
-shared name. Each place a name is written is its own reference, with `col` (1-based byte column) beside `line`:
+project file decides it, never exact. In Go only through the caller's package, its imports (placed by go.mod) and
+receiver types: a Go name is never linked by name alone. Edges between languages come from HTTP routes, the bus, SQL
+and DI, never a shared name. Each place a name is written is its own reference, with `col` (1-based byte column) beside `line`:
 `a.Save(); b.Save();` on one line is two references, each resolved through its own receiver. Includes references from
 repos that depend on this one. Long lists come most certain first, then by how central each file is to the definition
 (personalized PageRank); `total` and the `incomplete` entry say how many more there are and how to get them.
@@ -823,6 +824,8 @@ itself. `sections` says for each list whether it is whole (`complete`) and the c
   FullyQualifiedName=Namespace.Class.Method` (exactly that test, and its parameterized cases).
 - `package.json` test scripts (`test`, `test:…`): the package's test files (`*.test.*`, `*.spec.*`, `__tests__/`),
   run with the package manager its lockfile names.
+- Go modules (each `go.mod`): the test functions (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx`) in the
+  module's `_test.go` files, `go test ./...` and `go test ./pkg -run '^TestXxx$'` from the module's directory.
 
 Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
 200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change
