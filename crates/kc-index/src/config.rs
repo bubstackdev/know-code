@@ -216,8 +216,10 @@ impl Config {
                         match k.as_str() {
                             "paths" => {
                                 let arr = v.as_array().ok_or_else(|| bad("rules.paths", "must be an array of rule file or directory paths"))?;
+                                // Relative paths stay relative: each repo's root is where they are taken from.
                                 for r in arr.iter() {
-                                    c.rules.push(path_value(&Item::Value(r.clone())).map_err(|w| bad("rules.paths", w))?);
+                                    let s = r.as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| bad("rules.paths", "must be an array of rule file or directory paths"))?;
+                                    c.rules.push(expand_tilde(s).unwrap_or_else(|| PathBuf::from(s)));
                                 }
                             }
                             _ => c.unknown.push(format!("rules.{k}")),
@@ -1003,6 +1005,13 @@ mod tests {
 
     fn parse(text: &str) -> Result<Config> {
         Config::parse(text, Path::new("/cfg/config.toml"))
+    }
+
+    #[test]
+    fn rule_paths_stay_relative_to_each_repo() {
+        let c = parse("[rules]\npaths = [\"lint/rules\", \"~/shared.yml\", \"/etc/team.yml\"]\n").unwrap();
+        assert_eq!(c.rules, vec![PathBuf::from("lint/rules"), dirs::home_dir().unwrap().join("shared.yml"), PathBuf::from("/etc/team.yml")]);
+        assert!(parse("[rules]\npaths = \"lint\"\n").is_err());
     }
 
     #[test]
