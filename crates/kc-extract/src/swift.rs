@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 24;
+pub const VERSION: u32 = 25;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -560,7 +560,8 @@ impl<'a> Cx<'a> {
                     && node.child_by_field_name("operation").is_some_and(|o| self.text(o) == ".")
                 {
                     let name = self.text(target).to_string();
-                    self.add_ref(name, Some(".".into()), RefKind::Member, target);
+                    let receiver = generic_owner(self.src, node.start_byte()).unwrap_or_else(|| ".".into());
+                    self.add_ref(name, Some(receiver), RefKind::Member, target);
                 } else {
                     self.visit_children(node);
                 }
@@ -1125,7 +1126,8 @@ impl<'a> Cx<'a> {
                 {
                     let name = self.text(target).to_string();
                     if name != "init" {
-                        let at = self.add_typed_ref(name, Some(".".into()), None, RefKind::Call, target);
+                        let receiver = generic_owner(self.src, callee.start_byte()).unwrap_or_else(|| ".".into());
+                        let at = self.add_typed_ref(name, Some(receiver), None, RefKind::Call, target);
                         self.label_call(at, RefKind::Call, node);
                     }
                 }
@@ -1444,6 +1446,25 @@ fn attributes(src: &str, node: Node) -> Vec<String> {
     out
 }
 
+/// The generic type a member written right after it belongs to (`MemoryLayout<T>.size`, which the grammar reads as
+/// `MemoryLayout < T > .size`): the `Type<Arguments>` ending just before `at`, when the source there is one.
+fn generic_owner(src: &str, at: usize) -> Option<String> {
+    let before = src.get(..at)?.strip_suffix('>')?;
+    let mut depth = 1;
+    let open = before.char_indices().rev().find_map(|(i, c)| {
+        match c {
+            '>' => depth += 1,
+            '<' => depth -= 1,
+            '\n' | ';' | '{' | '}' | '=' => return Some(None),
+            _ => {}
+        }
+        (depth == 0).then_some(Some(i))
+    })??;
+    let head = &before[before[..open].rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + 1)..open];
+    let types = before[open + 1..].split(',').all(|a| a.trim().starts_with(|c: char| c.is_uppercase() || c == '[' || c == '('));
+    (head.starts_with(char::is_uppercase) && types).then(|| format!("{head}{}>", &before[open..]))
+}
+
 /// Where a declaration's leading attributes end (`@available(…) @MainActor`), if it has any.
 fn attributes_end(node: Node) -> Option<usize> {
     let mut end = None;
@@ -1591,6 +1612,17 @@ mod tests {
             [("first", true), ("second", true), ("outer", false), ("inner", true), ("later", true), ("run", false), ("inside", false)]
         {
             assert_eq!(awaited(name), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_member_of_a_generic_type_written_with_its_arguments_names_it() {
+        let f = extract("func g() {\n    n &+= MemoryLayout<T2>.size\n    o = o &+ MemoryLayout<UInt32>.alignment\n    let c: Color = .red\n    let d = a < b ? .blue : .green\n}\n");
+        let receiver = |name: &str| f.refs.iter().find(|r| r.name == name).and_then(|r| r.receiver.clone());
+        assert_eq!(receiver("size").as_deref(), Some("MemoryLayout<T2>"));
+        assert_eq!(receiver("alignment").as_deref(), Some("MemoryLayout<UInt32>"));
+        for implicit in ["red", "blue", "green"] {
+            assert_eq!(receiver(implicit).as_deref(), Some("."), "{implicit}");
         }
     }
 
