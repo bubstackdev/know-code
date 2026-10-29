@@ -53,6 +53,18 @@ type refRow struct {
 	Origin *string  `json:"origin"`
 	Symbol string   `json:"symbol"`
 	Called bool     `json:"called"`
+	// In is compare-v1's field (eval/compare-v1/README.md): the key of the innermost declaration the rule counts that
+	// encloses the reference. Set only with LABEL_ENCLOSING=1; without it the row is identity-v2's, byte for byte.
+	In *string `json:"in,omitempty"`
+}
+
+// enclosing turns on compare-v1's `in` field.
+var enclosing = os.Getenv("LABEL_ENCLOSING") == "1"
+
+// span is a counted declaration's extent in one file, with its key.
+type span struct {
+	from, to token.Pos
+	key      string
 }
 
 // excludedRow is a reference the toolchain binds that the rule leaves out, with why (sample.py counts them).
@@ -256,6 +268,10 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 			}
 		}
 	}
+	var spans []span
+	if enclosing {
+		spans = e.spans(info, f)
+	}
 	for id, obj := range info.Uses {
 		pos := e.fset.Position(id.Pos())
 		if r, ok := e.rel(pos.Filename); !ok || r != rel {
@@ -274,6 +290,9 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 		k := key(obj, e)
 		r := refRow{T: "ref", Repo: e.repo, File: rel, Line: pos.Line, Col: pos.Column, Name: obj.Name(), Key: k,
 			Kind: kind, Symbol: e.symbol(obj), Called: called[id], Locs: [][2]any{}}
+		if enclosing {
+			r.In = innermost(spans, id.Pos())
+		}
 		dpos := e.fset.Position(obj.Pos())
 		if drel, ok := e.rel(dpos.Filename); ok && obj.Pos().IsValid() {
 			r.Inside = true
@@ -289,6 +308,58 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 		}
 		e.refs[fmt.Sprintf("%s:%d:%d:%s", rel, pos.Line, pos.Column, k)] = r
 	}
+}
+
+// spans lists the file's top-level declarations the rule counts, as W1's labeller defines them: a function or method
+// (its body, and any function literal in it), a var or const spec, and a type spec. A local inside a function is not
+// counted, so it never encloses anything.
+func (e *enumerator) spans(info *types.Info, f *ast.File) []span {
+	var out []span
+	add := func(name *ast.Ident, from, to token.Pos) {
+		if obj := info.Defs[name]; obj != nil && e.declGroup(obj) != "" {
+			out = append(out, span{from, to, key(obj, e)})
+		}
+	}
+	for _, d := range f.Decls {
+		switch d := d.(type) {
+		case *ast.FuncDecl:
+			add(d.Name, d.Pos(), d.End())
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch spec := spec.(type) {
+				case *ast.TypeSpec:
+					add(spec.Name, spec.Pos(), spec.End())
+				case *ast.ValueSpec:
+					// One spec may declare several names (`var a, b = f(), g()`): each value belongs to its own name, and
+					// the rest of the spec (its type) to the first, as the wider span the values sit inside.
+					if len(spec.Names) > 0 {
+						add(spec.Names[0], spec.Pos(), spec.End())
+					}
+					if len(spec.Values) == len(spec.Names) {
+						for i, n := range spec.Names {
+							add(n, spec.Values[i].Pos(), spec.Values[i].End())
+						}
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// innermost is the key of the narrowest span holding pos, or nil at file level.
+func innermost(spans []span, pos token.Pos) *string {
+	var best *span
+	for i := range spans {
+		s := &spans[i]
+		if s.from <= pos && pos < s.to && (best == nil || s.to-s.from < best.to-best.from) {
+			best = s
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	return &best.key
 }
 
 func last(x ast.Expr) *ast.Ident {
