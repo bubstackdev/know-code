@@ -1,7 +1,7 @@
 # The merge gates from docs/evaluation.md "Gates per change": tests (the invariant suite as a step of its own), clippy with no
 # warnings, the eval harness's own tests, docs naming only files that exist, the dist binary against
-# size-budget.txt (measured on aarch64-apple-darwin, so that job runs on macOS), and the release replay gate's fast subset
-# against the latest release.
+# size-budget.txt (measured on aarch64-apple-darwin, so that job runs on macOS), the Linux binaries' glibc 2.28 floor,
+# and the release replay gate's fast subset against the latest release.
 # Actions are GitHub-owned and pinned to commit SHAs, as the repository's Actions policy requires.
 name: ci
 
@@ -157,6 +157,47 @@ jobs:
         run: scripts/check-size.sh --no-build target/aarch64-apple-darwin/dist/knowcode
       - name: Test the isolated shell installer and installed MCP binary
         run: python3 scripts/check-installer.py target/distrib
+
+  # The Linux release binaries' portability, before a tag: a build in the manylinux_2_28 image dist-workspace.toml
+  # pins for the release, checked for glibc symbols newer than 2.28 and run on the oldest supported distributions
+  # (the release's own gate, linux-compat.yml, repeats both on the published archives). A debug build: which glibc
+  # symbols get linked depends on the build image, not the profile. Skipped, like size, when only prose changed.
+  linux-compat:
+    name: linux-compat (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/compat
+          key: compat-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'dist-workspace.toml') }}
+          restore-keys: compat-${{ matrix.target }}-
+      - name: build in the release's pinned manylinux_2_28 image
+        run: |
+          image=$(python3 -c 'import sys, tomllib; print(tomllib.load(open("dist-workspace.toml", "rb"))["dist"]["github-custom-runners"][sys.argv[1]]["container"]["image"])' "$TARGET")
+          mkdir -p "$RUNNER_TEMP/compat"
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/compat:/compat" -w /src \
+            -e CARGO_HOME=/compat/cargo -e RUSTUP_HOME=/compat/rustup -e CARGO_TARGET_DIR=/compat/target "$image" \
+            bash -c 'set -e; [ -x /compat/cargo/bin/rustup ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal --no-modify-path; PATH=/compat/cargo/bin:$PATH cargo build --locked -p knowcode'
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/compat"
+      - name: no glibc symbol newer than 2.28
+        run: python3 scripts/check-glibc.py --max 2.28 "$RUNNER_TEMP/compat/target/debug/knowcode"
+      - name: start, index and answer on the oldest supported distributions
+        run: bash scripts/check-linux-compat.sh "$RUNNER_TEMP/compat/target/debug/knowcode"
 
   # The release replay gate on its fast subset (eval/replay-gate/README.md): the recorded KnowCode calls on five small
   # public repositories, replayed against the latest release and against this change's build, with no model calls. It

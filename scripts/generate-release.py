@@ -22,14 +22,20 @@ def gate(text: str) -> str:
     assert text.count(anchor) == 1, "cargo-dist host layout changed; review the publishing gate"
     if anchor + "      - custom-release-gate\n" not in text:
         text = text.replace(anchor, anchor + "      - custom-release-gate\n", 1)
-    old = "if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}"
-    new = "if: ${{ always() && needs.plan.result == 'success' && needs.custom-release-gate.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-global-artifacts.result == 'success' && needs.build-local-artifacts.result == 'success' }}"
+    # Publishing needs every gate to have passed: a skipped build or portability check (linux-compat.yml) isn't enough.
+    old = "if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.publishing == 'true' && (needs.build-global-artifacts.result == 'skipped' || needs.build-global-artifacts.result == 'success') && (needs.custom-linux-compat.result == 'skipped' || needs.custom-linux-compat.result == 'success') && (needs.build-local-artifacts.result == 'skipped' || needs.build-local-artifacts.result == 'success') }}"
+    new = "if: ${{ always() && needs.plan.result == 'success' && needs.custom-release-gate.result == 'success' && needs.plan.outputs.publishing == 'true' && needs.build-global-artifacts.result == 'success' && needs.custom-linux-compat.result == 'success' && needs.build-local-artifacts.result == 'success' }}"
     if new not in text:
         assert text.count(old) == 1, "cargo-dist publishing condition changed; review it"
         text = text.replace(old, new, 1)
     # The gate (release-gate.yml) reads the tagged commit's ci.yml runs: its job may read Actions, and nothing more.
     gate_job = "  custom-release-gate:\n    uses: ./.github/workflows/release-gate.yml\n"
     text = replace(text, gate_job, gate_job.replace("    uses:", '    permissions:\n      "actions": "read"\n      "contents": "read"\n    uses:'), "release gate")
+    # The portability check (linux-compat.yml) reads the built archives and needs no secret and no write access.
+    compat_job = ("  custom-linux-compat:\n    needs:\n      - plan\n      - build-local-artifacts\n"
+                  "    uses: ./.github/workflows/linux-compat.yml\n    with:\n      plan: ${{ needs.plan.outputs.val }}\n")
+    text = replace(text, compat_job + "    secrets: inherit\n",
+                   compat_job.replace("    uses:", '    permissions:\n      "contents": "read"\n    uses:'), "portability check")
     text = harden(text)
     # Pull requests are gated by ci.yml alone (pr-run-mode = "skip"); the release workflow runs on tag pushes only, and
     # doesn't run CI again: release-gate.yml requires ci.yml to have passed on the tagged commit.
