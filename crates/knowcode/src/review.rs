@@ -56,6 +56,12 @@ pub const ADVISORY: &str = crate::task::ADVISORY;
 const SYMBOLS_PER_FILE: usize = 3;
 /// Rows listed per dependent file at most; the rest are counted.
 const ROWS_PER_FILE: usize = 3;
+/// The bytes the dependents and the tests take at most, as compact JSON: past them, rows are counted rather than
+/// listed. The changed files come first and are what a review most needs; the size cap of an MCP answer would cut the
+/// longest list, which is often theirs, so the other sections keep within these and leave the room to them.
+const DEPENDENTS_BYTES: usize = 1600;
+const TESTS_BYTES: usize = 800;
+
 /// The dependents walk: one hop, at most this many symbols.
 const WALK_LIMIT: usize = 60;
 /// The answer's structure, for the renderers built on it: a change to it is a new version.
@@ -192,10 +198,15 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         Ok(out) => {
             for t in out.data.iter() {
                 tests_total += t.selection.selected.len() + t.selection.left_out.len();
+                let mut used = 0;
                 for pick in t.selection.selected.iter().take(p.tests) {
                     let mut row = json!({ "id": row_id("test", &["", &pick.file]), "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 });
                     if let Some(run) = run_of(&pick.file) {
                         row["run"] = json!(run);
+                    }
+                    used += row.to_string().len();
+                    if used > TESTS_BYTES && !test_rows.is_empty() {
+                        break;
                     }
                     test_rows.push(row);
                 }
@@ -257,7 +268,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     // This repo's files first, as the walk ranked them; then other repos'.
     dep_files.sort_by_key(|(repo, ..)| repo.is_some());
     let deps_total = dep_files.len();
-    let deps_cut = deps_total > p.dependents;
+    let mut used = 0;
     let dependents: Vec<Value> = dep_files
         .into_iter()
         .take(p.dependents)
@@ -270,6 +281,10 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
                 v["rows_total"] = json!(n);
             }
             v
+        })
+        .take_while(|v| {
+            used += v.to_string().len();
+            used <= DEPENDENTS_BYTES
         })
         .collect();
 
@@ -310,7 +325,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         "changes": section(shown("changes"), changes_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
         "tests": section(shown("tests"), tests_total, true, format!("kc_tests {{\"diff\": {diff_arg}, \"limit\": 30}}"), &[]),
         "missed": section(shown("missed"), missed_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
-        "dependents": section(shown("dependents"), deps_total, deps_whole && !deps_cut, format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}"),
+        "dependents": section(shown("dependents"), deps_total, deps_whole, format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}"),
                               if deps_whole { &[] } else { &["depth"] }),
         "contracts": section(0, 0, false, String::new(), &["unsupported"]),
         "rules": section(0, 0, true, String::new(), &[]),
@@ -343,7 +358,30 @@ const READING_ORDER: &[&str] = &[
 
 /// The compact answer `text` with its top-level keys in [`READING_ORDER`], the rest after them in name order.
 pub fn reading_order(text: &str) -> String {
-    crate::task::order_keys(text, READING_ORDER)
+    crate::task::order_keys(&budgeted(text), READING_ORDER)
+}
+
+/// The answer `text` with each section's count and completeness made true of the list the answer holds: the MCP
+/// server's size cap may have cut a list after the sections were written, and a section must never say whole of a list
+/// cut short (the cut is the `budget` entry the cap added). Anything but a JSON object is returned as it is.
+fn budgeted(text: &str) -> String {
+    let Ok(mut env) = serde_json::from_str::<Value>(text) else { return text.to_string() };
+    let mut changed = false;
+    for key in ["changes", "tests", "missed", "dependents", "contracts", "rules"] {
+        let held = env[key].as_array().map_or(0, Vec::len) as u64;
+        let s = &mut env["sections"][key];
+        if s["shown"].as_u64().is_some_and(|shown| held < shown) {
+            s["shown"] = json!(held);
+            s["complete"] = json!(false);
+            if let Some(why) = s["incomplete"].as_array_mut()
+                && !why.iter().any(|w| w == "budget")
+            {
+                why.push(json!("budget"));
+            }
+            changed = true;
+        }
+    }
+    if changed { env.to_string() } else { text.to_string() }
 }
 
 #[cfg(test)]
@@ -377,6 +415,14 @@ mod tests {
         let consumer = |link: &str| row_id("consumer", &["web", "src/api.ts", "loadItems", "GET /api/items/{id}", link]);
         assert_ne!(consumer("http_route"), consumer("unique_name"));
         assert_eq!(row_id("change", &["", "src/A.cs"]).len(), 16);
+    }
+
+    /// A list the size cap cut after the sections were written makes its section say so.
+    #[test]
+    fn a_section_the_size_cap_cut_says_it_is_cut() {
+        let env = json!({"changes": [{"file": "a"}], "sections": {"changes": {"complete": true, "shown": 3, "total": 3, "next": "", "incomplete": []}}});
+        let out: Value = serde_json::from_str(&reading_order(&env.to_string())).unwrap();
+        assert_eq!(out["sections"]["changes"], json!({"complete": false, "shown": 1, "total": 3, "next": "", "incomplete": ["budget"]}));
     }
 
     /// A diff gets its changed files with their symbols, the tests reaching them, what depends on them by file, and
