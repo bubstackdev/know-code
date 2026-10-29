@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -538,12 +538,16 @@ struct Def {
     swift_params: Option<Vec<SwiftParam>>,
     /// A Swift function declared `async` (or `reasync`).
     is_async: bool,
+    /// A Swift function declared `async` (not `reasync`): every call of it is awaited.
+    must_await: bool,
     /// Declared `export` (TypeScript): at a module's top level.
     exported: bool,
     /// Declared `private` or `fileprivate` (Swift): named only in its own file.
     file_private: bool,
     /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
     on_actor: bool,
+    /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
+    alias_member: bool,
 }
 
 impl Def {
@@ -779,6 +783,22 @@ const STDLIB_TYPES: &[&str] = &[
     "UInt8", "UInt16", "UInt32", "UInt64", "URL", "UUID",
 ];
 
+/// C library functions a Swift repo may wrap under its own name for one platform (`ioctl`, `unlink`): libc, POSIX and
+/// the Windows CRT.
+const C_LIBRARY_FUNCTIONS: &[&str] = &[
+    "accept", "access", "bind", "chdir", "chmod", "chown", "close", "closedir", "connect", "dup", "dup2", "fchmod", "fchown",
+    "fcntl", "flock", "fstat", "fstatat", "fsync", "ftruncate", "getcwd", "getenv", "getpid", "ioctl", "isatty", "kill",
+    "link", "listen", "lseek", "lstat", "mkdir", "mkdirat", "mmap", "munmap", "open", "openat", "opendir", "pipe", "poll",
+    "pread", "pwrite", "read", "readdir", "readlink", "realpath", "recv", "remove", "rename", "renameat", "rmdir", "send",
+    "setenv", "socket", "stat", "symlink", "sysconf", "truncate", "umask", "unlink", "unlinkat", "unsetenv", "write",
+];
+
+/// Swift standard-library generic types, named with their arguments (`MemoryLayout<T>`, `UnsafePointer<UInt8>`).
+const SWIFT_GENERIC_TYPES: &[&str] = &[
+    "ClosedRange", "KeyPath", "MemoryLayout", "Optional", "Range", "Result", "UnsafeBufferPointer", "UnsafeMutableBufferPointer",
+    "UnsafeMutablePointer", "UnsafeMutableRawBufferPointer", "UnsafePointer", "UnsafeRawBufferPointer",
+];
+
 /// Whether `d` is a member the repo adds to a standard-library type (`extension Int32 { var isFinite … }`). These are
 /// concrete types: no other type conforms to one, so its members are never another type's, and the library declares
 /// same-named members on its other types (`Float.isFinite`).
@@ -790,6 +810,32 @@ fn on_stdlib_type(d: &Def) -> bool {
 const DOTNET_SEQUENCES: &[&str] = &[
     "List", "IList", "ICollection", "IEnumerable", "IReadOnlyList", "IReadOnlyCollection", "IQueryable", "HashSet",
     "ISet",
+];
+
+/// Instance methods of the concrete .NET collections a sequence may be (`List<T>`, `HashSet<T>`, arrays), with the
+/// fewest and most arguments each takes: C# calls one of these before any extension method of the name that the
+/// arguments fit too.
+const DOTNET_COLLECTION_MEMBERS: &[(&str, u32, u32)] = &[
+    ("Add", 1, 1), ("AddRange", 1, 1), ("AsReadOnly", 0, 0), ("BinarySearch", 1, 4), ("Clear", 0, 0), ("Contains", 1, 1),
+    ("ConvertAll", 1, 1), ("CopyTo", 1, 4), ("ExceptWith", 1, 1), ("Exists", 1, 1), ("Find", 1, 1), ("FindAll", 1, 1),
+    ("FindIndex", 1, 3), ("FindLast", 1, 1), ("FindLastIndex", 1, 3), ("ForEach", 1, 1), ("GetRange", 2, 2),
+    ("IndexOf", 1, 3), ("Insert", 2, 2), ("InsertRange", 2, 2), ("IntersectWith", 1, 1), ("IsSubsetOf", 1, 1),
+    ("IsSupersetOf", 1, 1), ("LastIndexOf", 1, 3), ("Overlaps", 1, 1), ("Remove", 1, 1), ("RemoveAll", 1, 1),
+    ("RemoveAt", 1, 1), ("RemoveRange", 2, 2), ("RemoveWhere", 1, 1), ("Reverse", 0, 2), ("SetEquals", 1, 1),
+    ("Slice", 2, 2), ("Sort", 0, 3), ("SymmetricExceptWith", 1, 1), ("ToArray", 0, 0), ("TrimExcess", 0, 0),
+    ("TrueForAll", 1, 1), ("TryGetValue", 2, 2), ("UnionWith", 1, 1),
+];
+
+
+/// Sealed .NET types, with the interfaces each implements that a repo's extension methods may extend: an extension
+/// method declared on any other type never applies to a value of one of them.
+const CS_SEALED_INTERFACES: &[(&str, &[&str])] = &[
+    ("string", &["IEnumerable", "IComparable", "IConvertible", "IEquatable", "ICloneable", "IParsable", "ISpanParsable"]),
+    ("String", &["IEnumerable", "IComparable", "IConvertible", "IEquatable", "ICloneable", "IParsable", "ISpanParsable"]),
+    ("ReadOnlySpan", &[]),
+    ("Span", &[]),
+    ("ReadOnlyMemory", &["IEquatable"]),
+    ("Memory", &["IEquatable"]),
 ];
 
 /// LINQ, Entity Framework and `List<T>` methods returning a sequence of the same elements.
@@ -1975,20 +2021,20 @@ fn bare_name(receiver: &str) -> Option<&str> {
 /// Standard-library and Foundation members that in-repo types often also define. A call to one of these on a
 /// receiver of unknown type is far more likely to be the library's.
 const STDLIB_MEMBERS: &[&str] = &[
-    "append", "allSatisfy", "compactMap", "contains", "count", "decode", "dropFirst", "dropLast", "encode",
+    "allCases", "append", "allSatisfy", "compactMap", "contains", "count", "decode", "decodeIfPresent", "dropFirst", "dropLast", "encode", "endIndex",
     "enumerated", "filter", "first", "firstIndex", "flatMap", "forEach", "formUnion", "index", "insert",
-    "intersection", "isEmpty", "isFinite", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
+    "intersection", "isEmpty", "isFinite", "lowerBound", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
     "last", "lastIndex", "lowercased", "magnitude", "map", "mapValues", "max", "merge", "min", "prefix", "reduce",
     "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences", "reserveCapacity",
-    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "starts", "subtract", "suffix",
-    "trimmingCharacters", "ulp", "union", "updateValue", "uppercased", "write", "zip",
+    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "startIndex", "starts", "subtract", "suffix",
+    "trimmingCharacters", "ulp", "union", "updateValue", "upperBound", "uppercased", "write", "zip",
 ];
 
 /// .NET collection, string, LINQ and object members, for calls from C#.
 const DOTNET_MEMBERS: &[&str] = &[
     "Add", "AddRange", "Any", "All", "Clear", "Concat", "Contains", "ContainsKey", "Count", "Dispose", "Distinct",
-    "EndsWith", "Equals", "First", "FirstOrDefault", "ForEach", "Format", "GetHashCode", "GetType", "GetValueOrDefault",
-    "IndexOf", "Insert", "Join", "Last", "LastOrDefault", "Max", "Min", "OrderBy", "OrderByDescending", "Remove",
+    "EndsWith", "Equals", "First", "FirstOrDefault", "ForEach", "Format", "GetHashCode", "GetMethod", "GetType", "GetValueOrDefault",
+    "IndexOf", "Insert", "Join", "Last", "LastOrDefault", "Max", "Min", "OrderBy", "OrderByDescending", "QueryString", "Remove",
     "RemoveAll", "RemoveAt", "Replace", "Select", "SelectMany", "Single", "SingleOrDefault", "Skip", "Split",
     "StartsWith", "Substring", "Sum", "Take", "ToArray", "ToDictionary", "ToHashSet", "ToList", "ToLower",
     "ToLowerInvariant", "ToString", "ToUpper", "ToUpperInvariant", "Trim", "TryAdd", "TryGetValue", "Where",
@@ -1997,8 +2043,8 @@ const DOTNET_MEMBERS: &[&str] = &[
 /// JavaScript array, string, Map/Set, Promise and RxJS members, for calls from TypeScript.
 const JS_MEMBERS: &[&str] = &[
     "add", "catch", "clear", "complete", "concat", "delete", "emit", "endsWith", "entries", "every", "filter", "find",
-    "findIndex", "flatMap", "forEach", "get", "has", "includes", "indexOf", "join", "keys", "length", "map", "next", "pipe", "pop",
-    "push", "reduce", "replace", "set", "shift", "slice", "some", "sort", "splice", "split", "startsWith", "subscribe",
+    "findIndex", "flatMap", "forEach", "get", "has", "includes", "indexOf", "isError", "join", "keys", "left", "length", "map", "next", "pipe", "pop",
+    "push", "reduce", "replace", "set", "shift", "slice", "some", "sort", "splice", "split", "startsWith", "subscribe", "success",
     "then", "toLowerCase", "toString", "toUpperCase", "trim", "unshift", "unsubscribe", "values",
 ];
 
@@ -2356,6 +2402,8 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     // (`\.member`) only properties.
     let implicit = hit.receiver.as_deref() == Some(".");
     let key_path = hit.receiver.as_deref() == Some("\\");
+    let cs_member = hit.kind == "member" && hit.file.ends_with(".cs");
+    let unawaited = matches!(hit.kind.as_str(), "call" | "instantiate") && hit.file.ends_with(".swift") && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| !c.a);
     let cands: Vec<&Def> = defs
         .iter()
         .copied()
@@ -2369,6 +2417,11 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         .filter(|d| !d.in_script || d.file == hit.file)
         // Through a receiver (`x.f()`, `T.f()`) only members are reachable, never free functions or globals.
         .filter(|d| hit.receiver.is_none() || d.container.is_some() || matches!(hit.kind.as_str(), "instantiate" | "type_ref"))
+        // A C# member read without a call (`results.Count`) is a property or field: an extension method is only called.
+        .filter(|d| !(cs_member && d.extension))
+        // A Swift call no `await` covers can't call an `async` function (it can a `reasync` one): it calls a
+        // synchronous one of the name, the repo's or a library's (`XCTAssertThrowsError`).
+        .filter(|d| !(unawaited && d.must_await))
         .collect();
     // A member used without a call is a property or case; a method only when nothing else has the name, or when the
     // receiver's type has the method (passed or spied on: `service.load.mockReturnValue(…)`).
@@ -2435,6 +2488,29 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 found = later;
             }
         }
+        // A C# sequence's type is one type here (`List<T>`, `T[]` and `IEnumerable<T>` are each a sequence). Called as
+        // a concrete collection's instance method can be (`List<T>.AddRange(xs)`), which C# picks before any extension
+        // method, the repo's extension method is the target only when the sequence is an interface: it is listed, not
+        // linked.
+        if hit.file.ends_with(".cs")
+            && chain.first().is_some_and(|t| t == "Array")
+            && !found.is_empty()
+            && found.iter().all(|d| d.extension)
+            && DOTNET_COLLECTION_MEMBERS.iter().any(|(n, min, max)| *n == hit.name && hit.args.is_none_or(|a| (*min..=*max).contains(&a)))
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
+        // A member the repo adds to a library type in an extension, named like the library's own (`JSONDecoder`'s
+        // `decode(_:from:)`): the library's overloads take other argument types, which a Swift call's arguments aren't
+        // read for, so either may be the one called. Listed, not linked.
+        if hit.kind == "call"
+            && hit.file.ends_with(".swift")
+            && !found.is_empty()
+            && found.iter().all(|d| d.external_container && !on_stdlib_type(d))
+            && STDLIB_MEMBERS.contains(&hit.name.as_str())
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
@@ -2445,7 +2521,15 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
             if matches!(recv, Receiver::Foreign(_)) && !on_type {
                 // A framework type may conform to a framework protocol the repo extends, never be a library struct.
-                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
+                let mut ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
+                // A C# extension method applies through the receiver's own type, its base types and its interfaces.
+                // Those of a sealed library type are known (`ReadOnlySpan<T>` has none), so one declared on any other
+                // type (`this IReadOnlyList<T>`) is never what it calls.
+                if hit.file.ends_with(".cs")
+                    && let Some((_, interfaces)) = chain.first().and_then(|t| CS_SEALED_INTERFACES.iter().find(|(s, _)| s == t))
+                {
+                    ext.retain(|d| !d.extension || d.container.as_deref().is_some_and(|c| interfaces.contains(&last_segment(c))));
+                }
                 return group_confidence(&ext);
             }
             // The receiver's type is known and nothing on it or its supertypes has this name: the member lives
@@ -2461,6 +2545,19 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             // A type written through a qualifier (`Outer.Inner`, `Module.Type`, `Array<T>.Index`) is looked up there.
             Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
                 return qualified_type(r, &hit.file, self_chain, &cands);
+            }
+            // A Swift standard-library generic type written with its arguments (`MemoryLayout<T>.size`): its own members
+            // are the library's; only an extension the repo declares on it is the repo's.
+            Some(r) if hit.file.ends_with(".swift")
+                && r.ends_with('>')
+                && let Some((head, _)) = r.split_once('<')
+                && (STDLIB_TYPES.contains(&head) || SWIFT_GENERIC_TYPES.contains(&head)) =>
+            {
+                let found = in_container(head);
+                if found.is_empty() {
+                    return ("unresolved", Vec::new());
+                }
+                found
             }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
@@ -2484,6 +2581,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 // A script's globals and free functions are visible only inside that script.
                 let free: Vec<&Def> =
                     cands.iter().copied().filter(|d| d.container.is_none() && (!d.in_script || d.file == hit.file)).collect();
+                // A Swift free function named like a C library function (a platform shim, `func unlink(_:)` for
+                // Windows) has the platform's own function beside it, which a call on another platform binds: listed,
+                // not linked.
+                if hit.file.ends_with(".swift") && !free.is_empty() && C_LIBRARY_FUNCTIONS.contains(&hit.name.as_str()) {
+                    return ("external_likely", free.iter().map(|d| d.id).collect());
+                }
                 if free.len() > 1 {
                     // Several free functions share the name (common across standalone scripts): one in the
                     // caller's own file wins, then one in the caller's module.
@@ -2508,9 +2611,24 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     if !narrowed.is_empty() {
         return ("exact", narrowed.iter().map(|d| d.id).collect());
     }
-    let instance_receiver = hit.receiver.as_deref().is_some_and(|r| r != "." && !type_like(r));
+    // A value, or a type the code can't name: a generic parameter (`Element.allCases`), or in C# a capitalised name left
+    // unknown (a property a library base class may declare, `Request.QueryString`: C# names a type it can't find as
+    // foreign instead).
+    let instance_receiver = hit.receiver.as_deref().is_some_and(|r| {
+        r != "."
+            && (!type_like(r)
+                || GENERIC_NAMES.contains(&r)
+                || (r.len() == 1 && r.starts_with(char::is_uppercase))
+                || hit.file.ends_with(".cs") && !r.contains('.'))
+    });
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
+    }
+    // A property of a type alias's object type is reached through a value known to be of that type, never by its
+    // name alone: such shapes (`type Item = { Id: string; Name: string }`) restate a package's types' fields.
+    let cands: Vec<&Def> = if matches!(recv, Receiver::Unknown) { cands.into_iter().filter(|d| !d.alias_member).collect() } else { cands };
+    if cands.is_empty() {
+        return ("unresolved", Vec::new());
     }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
     groups.sort();
@@ -2909,12 +3027,13 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang = 'csharp' THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
-     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
+     p.kind IS 'typealias'";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2937,19 +3056,26 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         partial: r.get(15)?,
         swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
         is_async: r.get::<_, Option<String>>(16)?.as_deref().is_some_and(swift_async),
+        must_await: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_effects).is_some_and(|e| e.split_whitespace().any(|w| w == "async")),
         exported: r.get(17)?,
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
+        alias_member: r.get(20)?,
     })
 }
 
 /// Whether a Swift function's signature declares it `async` (or `reasync`): the effects after its parameter list,
 /// not a closure parameter's (`_ body: () async -> Void`).
 fn swift_async(signature: &str) -> bool {
-    let Some(at) = signature.find("func ") else { return false };
+    swift_effects(signature).is_some_and(|e| e.split_whitespace().any(|w| w == "async" || w == "reasync"))
+}
+
+/// The effects a Swift function's signature declares after its parameter list (`async throws`), before its result.
+fn swift_effects(signature: &str) -> Option<&str> {
+    let at = signature.find("func ")?;
     let after = &signature[at + 5..];
     let mut depth = 0i32;
-    let Some(open) = after.char_indices().find_map(|(i, c)| {
+    let open = after.char_indices().find_map(|(i, c)| {
         match c {
             '<' => depth += 1,
             '>' => depth -= 1,
@@ -2957,22 +3083,17 @@ fn swift_async(signature: &str) -> bool {
             _ => {}
         }
         None
-    }) else {
-        return false;
-    };
+    })?;
     let mut depth = 0i32;
-    let Some(close) = after[open..].char_indices().find_map(|(i, c)| {
+    let close = after[open..].char_indices().find_map(|(i, c)| {
         match c {
             '(' | '[' => depth += 1,
             ')' | ']' => depth -= 1,
             _ => {}
         }
         (depth == 0).then_some(open + i)
-    }) else {
-        return false;
-    };
-    let effects = after[close + 1..].split("->").next().unwrap_or("");
-    effects.split_whitespace().any(|w| w == "async" || w == "reasync")
+    })?;
+    after[close + 1..].split("->").next()
 }
 
 /// A Swift function's parameter, as its signature declares it: what a call has to write for it.
@@ -4892,6 +5013,61 @@ fn refines(conn: &Connection, name: &str, protocols: &[String]) -> Result<bool> 
 }
 
 /// The SwiftPM target a file is in: `<Name>` of `Sources/<Name>/…` or `Tests/<Name>/…`; `None` outside those layouts.
+/// Swift declarations a module imports by name from outside the repo (`@_exported import struct
+/// SystemPackage.FileDescriptor`), per SwiftPM target. Swift prefers a declaration imported by name over one of the
+/// same name from a module imported whole, so a type the repo declares in another module isn't what such a name
+/// means there.
+#[derive(Default)]
+struct SwiftScoped {
+    /// Per target directory, the names it imports by name from a module that isn't one of the repo's, with that module.
+    by_target: HashMap<String, HashMap<String, String>>,
+}
+
+impl SwiftScoped {
+    /// The module outside the repo that `file`'s target imports `name` from by name, if it does.
+    fn imported_from(&mut self, conn: &Connection, file: &str, name: &str) -> Result<Option<String>> {
+        let Some(target) = swiftpm_target(file) else { return Ok(None) };
+        // The target's directory, `…/Sources/<target>/`.
+        let end = target.as_ptr() as usize - file.as_ptr() as usize + target.len() + 1;
+        let prefix = &file[..end];
+        let target = prefix.to_string();
+        if !self.by_target.contains_key(&target) {
+            let rows: Vec<String> = conn
+                .prepare_cached(
+                    "SELECT DISTINCT i.module FROM imports i JOIN files f ON f.id = i.file_id
+                     WHERE f.lang = 'swift' AND substr(f.path, 1, length(?1)) = ?1 AND i.module LIKE '%.%'",
+                )?
+                .query_map([prefix], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut names = HashMap::new();
+            for m in rows {
+                let Some((module, n)) = m.rsplit_once('.') else { continue };
+                let module = module.split('.').next().unwrap_or(module);
+                let repo_module: bool = conn
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM files WHERE lang = 'swift' AND (path LIKE 'Sources/' || ?1 || '/%' OR path LIKE '%/Sources/' || ?1 || '/%'))",
+                    )?
+                    .query_row([module], |r| r.get(0))?;
+                if !repo_module {
+                    names.insert(n.to_string(), module.to_string());
+                }
+            }
+            self.by_target.insert(target.clone(), names);
+        }
+        Ok(self.by_target[&target].get(name).cloned())
+    }
+}
+
+/// Whether a path is under a SwiftPM `Tests/` directory.
+fn in_tests(path: &str) -> bool {
+    path.starts_with("Tests/") || path.contains("/Tests/")
+}
+
+/// Whether a path is under a SwiftPM `Sources/` directory.
+fn in_sources(path: &str) -> bool {
+    path.starts_with("Sources/") || path.contains("/Sources/")
+}
+
 fn swiftpm_target(path: &str) -> Option<&str> {
     ["Sources/", "Tests/"].iter().find_map(|root| {
         let rest = &path[path.find(root)? + root.len()..];
@@ -5080,6 +5256,7 @@ fn same_language(file: &str, lang: &str) -> bool {
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
+        "java" => Some("java"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),
@@ -5154,10 +5331,12 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let mut sql = crate::sql::Resolver::default();
     let mut ansible = crate::ansible::Resolver::default();
     let mut terraform = crate::terraform::Resolver::default();
+    let mut jvm = crate::jvm::Resolver::default();
     let modules = &mut shared.modules;
     let py_modules = &mut shared.py_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
+    let mut swift_scoped = SwiftScoped::default();
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -5213,12 +5392,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         let ts = crate::ts::is_ts_path(&hit.file);
         let cs = hit.file.ends_with(".cs");
+        let java = crate::jvm::handles(&hit.file);
         // In TypeScript an imported name comes from its module, and a bare one from the file itself; in Python a name
         // `from m import`ed, or a member of an `import`ed module, comes from that module.
         let scoped = if ts {
             ts_scoped(conn, hit, modules, &mut defs)?
         } else if hit.file.ends_with(".py") {
             py_scoped(conn, hit, py_modules, &mut defs)?
+        } else if java {
+            jvm.scoped(conn, hit)?
         } else {
             None
         };
@@ -5260,6 +5442,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             if ts {
                 recv = ts_receiver(conn, hit, recv, &mut oracle, modules)?;
+            }
+            // A Swift receiver typed by a name its module imports from a package by name: the package's type.
+            if let Receiver::Known(chain) = &recv
+                && hit.file.ends_with(".swift")
+                && let Some(ty) = chain.first().cloned()
+                && let Some(module) = swift_scoped.imported_from(conn, &hit.file, last_segment(&ty))?
+            {
+                // Named by its module, so the repo's same-named type's members aren't looked up for it.
+                recv = Receiver::Foreign(vec![format!("{module}.{}", last_segment(&ty))]);
             }
             hit.receiver_type = match &recv {
                 Receiver::Known(c) | Receiver::Foreign(c) => c.first().cloned(),
@@ -5369,6 +5560,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
             let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
                 swift_seen(conn, &hit.file, usable)?
+            } else if matches!(hit.kind.as_str(), "type_ref" | "instantiate")
+                && hit.receiver.is_none()
+                && hit.file.ends_with(".swift")
+                && swift_scoped.imported_from(conn, &hit.file, &hit.name)?.is_some()
+            {
+                // Imported by name from a package (`import struct SystemPackage.FileDescriptor`): that declaration wins
+                // over a same-named type of a module imported whole, so only a type nested where the code is remains.
+                usable.into_iter().filter(|d| d.container.is_some()).collect()
             } else {
                 usable
             };
@@ -5387,8 +5586,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             dropped_by(&mut dropped, explain, &before, &usable, "receiver_type");
             let before = if explain { usable.clone() } else { Vec::new() };
-            // A Swift `private` or `fileprivate` declaration is named only in its own file.
-            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
+            // A Swift `private` or `fileprivate` declaration is named only in its own file. A member a test target adds
+            // to a library type in an extension (`extension Deque { mutating func append(contentsOf:) }`) is never
+            // what code under `Sources/` calls: no product target depends on anything under `Tests/`.
+            let usable: Vec<&Def> = usable
+                .into_iter()
+                .filter(|d| !d.file_private || d.file == hit.file)
+                .filter(|d| !(d.lang == "swift" && d.external_container && in_tests(&d.file) && in_sources(&hit.file)))
+                .collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
             // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
@@ -5454,6 +5659,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 exact_by = Mechanism::Namespace;
             }
         }
+        if java && !by_import {
+            (confidence, ids) = jvm.after(conn, hit, receiver_known, (confidence, ids))?;
+        }
         if cs_type && matches!(confidence, "unique_name" | "ambiguous") && scoped_out_type(&defs[&hit.name], named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
             confidence = "exact";
             exact_by = Mechanism::ProjectScope;
@@ -5511,7 +5719,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
             }
         }
-        if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
+        // A Java call through an interface binds to the interface's method, as javac does; the requirement is the target.
+        if confidence == "exact" && !hit.precise && !java && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
                 // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);
@@ -5893,7 +6102,13 @@ fn ts_scoped(
                 return Ok(Some(("exact", own)));
             }
             // Neither declared here nor imported: a global, the repo's only when a script of its declares it.
-            if !is_js(&hit.file) && !modules.sees(conn, &hit.file, &hit.name)? {
+            // An interface or type alias comes only through an import or a global declaration, never a bundler's
+            // globals: a module naming one it doesn't import names the platform's (`Response`).
+            let type_only = hit.kind == "type_ref" && {
+                let mut decls = defs[&hit.name].iter().filter(|d| top(d, &hit.kind)).peekable();
+                decls.peek().is_some() && decls.all(|d| matches!(d.kind.as_str(), "protocol" | "typealias"))
+            };
+            if !is_js(&hit.file) && !modules.sees_as(conn, &hit.file, &hit.name, type_only)? {
                 return Ok(Some(("unresolved", Vec::new())));
             }
             Ok(None)

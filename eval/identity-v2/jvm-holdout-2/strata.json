@@ -1,0 +1,66 @@
+{
+ "jackson-core/java/call/inside/1": {
+  "available": 6807,
+  "drawn": 20
+ },
+ "jackson-core/java/call/inside/2-4": {
+  "available": 7147,
+  "drawn": 40
+ },
+ "jackson-core/java/call/inside/5+": {
+  "available": 5389,
+  "drawn": 40
+ },
+ "jackson-core/java/call/outside/0": {
+  "available": 7050,
+  "drawn": 10
+ },
+ "jackson-core/java/call/outside/1+": {
+  "available": 2181,
+  "drawn": 40
+ },
+ "jackson-core/java/dispatch/inside/1": {
+  "available": 28,
+  "drawn": 5
+ },
+ "jackson-core/java/dispatch/inside/2-4": {
+  "available": 1163,
+  "drawn": 40
+ },
+ "jackson-core/java/dispatch/inside/5+": {
+  "available": 6199,
+  "drawn": 40
+ },
+ "jackson-core/java/member/inside/1": {
+  "available": 10845,
+  "drawn": 20
+ },
+ "jackson-core/java/member/inside/2-4": {
+  "available": 5732,
+  "drawn": 40
+ },
+ "jackson-core/java/member/inside/5+": {
+  "available": 3603,
+  "drawn": 40
+ },
+ "jackson-core/java/member/outside/0": {
+  "available": 333,
+  "drawn": 10
+ },
+ "jackson-core/java/member/outside/1+": {
+  "available": 1018,
+  "drawn": 40
+ },
+ "jackson-core/java/type/inside/1": {
+  "available": 13860,
+  "drawn": 20
+ },
+ "jackson-core/java/type/inside/2-4": {
+  "available": 388,
+  "drawn": 40
+ },
+ "jackson-core/java/type/outside/0": {
+  "available": 11735,
+  "drawn": 10
+ }
+}
