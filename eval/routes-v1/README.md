@@ -141,8 +141,13 @@ Two things are left out of both sides, labels and KnowCode's routes alike, and t
 2. **echo's internal placeholders.** A label whose handler is echo's not-found placeholder (`echo_route_not_found`, a
    handler echo v4 adds itself under a group's prefix and `prefix/*`, not one the code registers) is not a route.
 
-The exclusions are computed by a script run in the labelling container from the clone alone (the type checker, no
-KnowCode answer), and its output is committed beside the labels.
+A route is left out only when its registration site is configuration-dependent on both sides' own evidence: the
+labels' recorded site, and KnowCode's file and line. Where the two disagree (one side's site is configuration-dependent
+and the other's isn't, or the sites differ), the route stays in, and the disagreement is listed with the results.
+
+The exclusions are computed by a script run in the labelling container from the clone alone, with the Go type
+checker. It never reads KnowCode's output: it lists every configuration-dependent registration site in the code, and
+the scorer applies that list to both sides. Its output is committed beside the labels.
 
 ### Held-out repositories
 
