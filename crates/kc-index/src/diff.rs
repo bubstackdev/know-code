@@ -227,10 +227,45 @@ const REMOVABLE_KINDS: &[&str] = &["class", "struct", "enum", "actor", "protocol
 /// lines from: what may be gone after the change. Read from git's object store with one `git cat-file --batch`,
 /// and parsed with the same extractors indexing uses.
 pub fn old_definitions(root: &Path, diff: &Diff) -> Result<Vec<OldDefinition>> {
+    let mut defs = Vec::new();
+    for old in old_facts(root, diff, |c| c.removes_lines || c.renamed_from.is_some())? {
+        for s in &old.facts.symbols {
+            let kind = s.kind.as_str();
+            if !REMOVABLE_KINDS.contains(&kind) {
+                continue;
+            }
+            defs.push(OldDefinition {
+                name: s.name.clone(),
+                kind,
+                container: s.container.clone(),
+                file: old.file.clone(),
+                now: old.now.clone(),
+                line: s.start_line,
+                lang: old.lang.as_str(),
+            });
+        }
+    }
+    Ok(defs)
+}
+
+/// A changed file's version before the change, as the extractor reads it.
+pub struct OldFacts {
+    /// Its path before the change.
+    pub file: String,
+    /// Its path now: `None` when the change deletes it.
+    pub now: Option<String>,
+    pub lang: kc_extract::Lang,
+    pub facts: kc_extract::FileFacts,
+}
+
+/// The pre-change version (at `diff.base`) of each changed file `want` keeps that had one, extracted with the
+/// extractors indexing uses: read from git's object store with one `git cat-file --batch`, never from the working tree.
+/// Manifests aren't read.
+pub fn old_facts(root: &Path, diff: &Diff, want: impl Fn(&FileChange) -> bool) -> Result<Vec<OldFacts>> {
     let wanted: Vec<(&FileChange, &str, kc_extract::Lang)> = diff
         .changes
         .iter()
-        .filter(|c| c.removes_lines || c.renamed_from.is_some())
+        .filter(|c| want(c))
         .filter_map(|c| {
             let blob = c.old_blob.as_deref()?;
             let old = c.renamed_from.as_deref().unwrap_or(&c.file);
@@ -243,7 +278,7 @@ pub fn old_definitions(root: &Path, diff: &Diff) -> Result<Vec<OldDefinition>> {
     }
     let input: String = wanted.iter().map(|(_, b, _)| format!("{b}\n")).collect();
     let out = git::run_with_input(root, &["cat-file", "--batch"], input.as_bytes())?;
-    let mut defs = Vec::new();
+    let mut found = Vec::new();
     let mut at = 0;
     for (c, blob, lang) in wanted {
         // `<sha> <type> <size>\n<content>\n`, or `<sha> missing\n`.
@@ -257,25 +292,11 @@ pub fn old_definitions(root: &Path, diff: &Diff) -> Result<Vec<OldDefinition>> {
         let (Some(_), Some(Ok(size))) = (parts.next(), parts.next().map(str::parse::<usize>)) else { continue };
         let Some(bytes) = out.get(at..at + size) else { break };
         at += size + 1;
-        let old = c.renamed_from.clone().unwrap_or_else(|| c.file.clone());
-        let facts = kc_extract::extract_file(lang, &old, &kc_extract::decode(bytes));
-        for s in &facts.symbols {
-            let kind = s.kind.as_str();
-            if !REMOVABLE_KINDS.contains(&kind) {
-                continue;
-            }
-            defs.push(OldDefinition {
-                name: s.name.clone(),
-                kind,
-                container: s.container.clone(),
-                file: old.clone(),
-                now: (!c.deleted).then(|| c.file.clone()),
-                line: s.start_line,
-                lang: lang.as_str(),
-            });
-        }
+        let file = c.renamed_from.clone().unwrap_or_else(|| c.file.clone());
+        let facts = kc_extract::extract_file(lang, &file, &kc_extract::decode(bytes));
+        found.push(OldFacts { file, now: (!c.deleted).then(|| c.file.clone()), lang, facts });
     }
-    Ok(defs)
+    Ok(found)
 }
 
 #[cfg(test)]

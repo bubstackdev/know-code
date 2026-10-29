@@ -110,6 +110,10 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     let _synced = kc_store::limits::current().remember_syncs();
     let _memo = kc_index::memo_changes();
     let Some(o) = ops::open_member(&roots, root, scope.no_sync)? else { bail!("{} isn't indexed", root.display()) };
+    // The contracts first: reading the workspace's summaries records the repos withheld or missing, which every
+    // section's answer then carries.
+    let rev = Some(p.diff.as_str()).filter(|d| *d != "working");
+    let contracts = ops::full_summaries(&o).and_then(|s| kc_index::contracts::http(root, &o.store, &kc_index::diff::diff(root, rev)?, &s));
     let mut g = crate::walk::Graph::new(&o, &[], scope.no_sync, usize::MAX);
     let ip = ops::ImpactParams { diff: Some(p.diff.clone()), depth: 1, limit: WALK_LIMIT, ..Default::default() };
     let imp = ops::impact_on(&ip, scope, &o, &mut g)?;
@@ -315,8 +319,36 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     env["tests"] = json!(test_rows);
     env["missed"] = json!(missed);
     env["dependents"] = json!(dependents);
-    // Contract changes are read in a later step: until then the section says so, and the answer isn't complete.
-    env["contracts"] = json!([]);
+    // The routes the diff removes or changes, each with the consumers in other repos it breaks.
+    let mut contract_rows: Vec<Value> = Vec::new();
+    match &contracts {
+        Ok(c) => {
+            for ch in &c.changes {
+                let consumers: Vec<Value> = ch
+                    .consumers
+                    .iter()
+                    .map(|u| {
+                        let repo = ops::repo_name(std::path::Path::new(&u.repo));
+                        json!({ "id": row_id("consumer", &[&repo, &u.file, &u.symbol, &ch.contract, &u.link]), "repo": repo, "file": u.file,
+                                "line": u.line, "symbol": u.symbol, "verdict": u.verdict, "confidence": u.confidence, "link": u.link })
+                    })
+                    .collect();
+                let mut row = json!({ "id": row_id("contract", &["", &ch.file, "", &ch.contract]), "kind": ch.kind, "contract": ch.contract,
+                                      "change": ch.change, "file": ch.file, "line": ch.line, "consumers": consumers });
+                if let Some(d) = &ch.detail {
+                    row["detail"] = json!(d);
+                }
+                contract_rows.push(row);
+            }
+            for u in &c.unsettled {
+                said(&mut unsettled, format!("contracts: {u}"));
+            }
+        }
+        Err(e) => said(&mut unsettled, format!("contracts not read ({e:#})")),
+    }
+    let contracts_whole = contracts.as_ref().is_ok_and(|c| c.unsettled.is_empty());
+    let contracts_total = contract_rows.len();
+    env["contracts"] = json!(contract_rows);
     env["rules"] = json!([]);
     env["walkthrough"] = Value::Null;
     env["unsettled"] = json!(unsettled);
@@ -328,7 +360,8 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         "missed": section_json(shown("missed"), missed_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
         "dependents": section_json(shown("dependents"), deps_total, deps_whole, format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}"),
                               if deps_whole { &[] } else { &["depth"] }),
-        "contracts": section_json(0, 0, false, String::new(), &["unsupported"]),
+        // HTTP routes are read; bus messages and table columns aren't yet, so the section is never whole.
+        "contracts": section_json(contracts_total, contracts_total, false, String::new(), if contracts_whole { &["unsupported"] } else { &["unsupported", "failed"] }),
         "rules": section_json(0, 0, true, String::new(), &[]),
     });
     sections["tests"]["advisory"] = json!(ADVISORY);
@@ -344,7 +377,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     if !deps_whole {
         push_incomplete(&mut env, Incomplete::new(Reason::Depth, "dependents: one hop").with_hint("sections.dependents.next"));
     }
-    push_incomplete(&mut env, Incomplete::new(Reason::Unsupported, "contracts: not read yet"));
+    push_incomplete(&mut env, Incomplete::new(Reason::Unsupported, "contracts: bus messages and table columns not read yet"));
     finish(&mut env);
     let data = env.clone();
     Ok(Out { env, data })
@@ -467,6 +500,48 @@ mod tests {
         let env = json!({"changes": [{"file": "a"}], "sections": {"changes": {"complete": true, "shown": 3, "total": 3}}});
         let out: Value = serde_json::from_str(&reading_order(&env.to_string())).unwrap();
         assert_eq!(out["sections"]["changes"], json!({"complete": false, "shown": 1, "total": 3, "incomplete": ["budget"]}));
+    }
+
+    /// A route the diff removes, with the request in another repo it served and nothing serves now: broken.
+    #[test]
+    fn a_removed_route_lists_the_request_it_breaks_in_another_repo() {
+        let cache = test_cache();
+        let base = cache.dir("review-contract");
+        let api = repo(
+            &base,
+            "shop-api",
+            &[
+                ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n"),
+                (
+                    "src/ItemsController.cs",
+                    "using Microsoft.AspNetCore.Mvc;\nnamespace Shop;\n[ApiController]\n[Route(\"api/items\")]\npublic class ItemsController : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    public IActionResult Get(int id) => Ok();\n    [HttpPost]\n    public IActionResult Add() => Ok();\n}\n",
+                ),
+            ],
+        );
+        let _web = repo(
+            &base,
+            "shop-web",
+            &[
+                ("package.json", "{ \"name\": \"shop-web\" }\n"),
+                ("src/api.ts", "export function load(id: number) {\n  return fetch(`/api/items/${id}`);\n}\n"),
+            ],
+        );
+        commit(&api);
+        std::fs::write(
+            api.join("src/ItemsController.cs"),
+            "using Microsoft.AspNetCore.Mvc;\nnamespace Shop;\n[ApiController]\n[Route(\"api/items\")]\npublic class ItemsController : ControllerBase\n{\n    [HttpPost]\n    public IActionResult Add() => Ok();\n}\n",
+        )
+        .unwrap();
+        let env = review(&ReviewParams::new("working".into()), &Scope { repos: vec![api.clone()], no_sync: false }).unwrap().env;
+        let c = &env["contracts"];
+        assert_eq!(c.as_array().map(Vec::len), Some(1), "{env}");
+        assert_eq!(c[0]["contract"], "GET api/items/{id}", "{env}");
+        assert_eq!(c[0]["change"], "removed", "{env}");
+        assert_eq!(c[0]["consumers"][0]["repo"], "shop-web", "{env}");
+        assert_eq!(c[0]["consumers"][0]["file"], "src/api.ts", "{env}");
+        assert_eq!(c[0]["consumers"][0]["verdict"], "broken", "{env}");
+        // The route still served isn't a change.
+        assert!(!env.to_string().contains("POST api/items\""), "{env}");
     }
 
     /// A diff gets its changed files with their symbols, the tests reaching them, what depends on them by file, and
