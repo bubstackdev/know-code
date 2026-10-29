@@ -22,6 +22,10 @@
 //! `symbols`, a missing `change` means `changed` (`removed` is written out). The dependents and the tests are walked on one symbol graph (see
 //! [`crate::walk::Graph::begin_walk`]), as `task` walks them.
 
+// Not dispatched yet: the op's last PR adds its `ops.rs` dispatch line, its MCP tool and CLI command, and takes this
+// out. Until then the module is reached only from its tests.
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, bail};
