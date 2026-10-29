@@ -116,3 +116,60 @@ fn java_and_kotlin_resolve_as_one_family() {
     assert_eq!(answer(&refs_in(c, "save", "call", "src/a/Use.java")[0]), ("exact", vec!["src/a/Store.kt:4".to_string()]));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn imports_over_own_name_this_on_library_receivers_and_private_members() {
+    let root = scratch("kt-heldout-shapes");
+    // An explicit import wins over a top-level class's own name in its body.
+    write(
+        &root,
+        "src/cfg/Loader.kt",
+        "package cfg\n\
+         \n\
+         import org.lib.Loader\n\
+         \n\
+         class Loader(val inner: Loader) {\n\
+           class Part {\n\
+             fun copy(p: Part): Part = p\n\
+           }\n\
+         }\n",
+    );
+    // `this.text` in an extension on a library type is the library's member, never a repository one; a private member,
+    // or a member of a private type, is never seen from another file.
+    write(
+        &root,
+        "src/node/Nodes.kt",
+        "package node\n\
+         \n\
+         import org.lib.Node\n\
+         import rules.Rule\n\
+         \n\
+         fun Node.rename(text: String) {\n\
+           if (this.text != text) { }\n\
+         }\n\
+         \n\
+         fun read(r: Rule, x: Any): String = r.label + x.code\n",
+    );
+    write(
+        &root,
+        "src/rules/Rule.kt",
+        "package rules\n\
+         \n\
+         class Rule {\n\
+           private val label: String = \"\"\n\
+           private data class Ref(val text: String, val code: String)\n\
+           fun own(): String = label\n\
+         }\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    let loader = "src/cfg/Loader.kt";
+    assert_eq!(answer(&refs_in(c, "Loader", "type_ref", loader)[0]), ("unresolved", vec![]), "the imported Loader");
+    assert_eq!(answer(&refs_in(c, "Part", "type_ref", loader)[0]), ("exact", vec!["src/cfg/Loader.kt:6".to_string()]), "nested types unchanged");
+    let nodes = "src/node/Nodes.kt";
+    assert_eq!(answer(&refs_in(c, "text", "member", nodes)[0]), ("unresolved", vec![]), "a library receiver's member");
+    assert_eq!(answer(&refs_in(c, "label", "member", nodes)[0]), ("unresolved", vec![]), "a private member");
+    assert_eq!(answer(&refs_in(c, "code", "member", nodes)[0]), ("unresolved", vec![]), "a private type's member");
+    assert_eq!(answer(&refs_in(c, "label", "member", "src/rules/Rule.kt")[0]), ("exact", vec!["src/rules/Rule.kt:4".to_string()]), "seen in its own type");
+    let _ = std::fs::remove_dir_all(&root);
+}

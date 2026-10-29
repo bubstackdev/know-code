@@ -223,7 +223,11 @@ impl Resolver {
                 Some((c, l)) => (Some(c), l),
                 None => (None, outer.as_str()),
             };
+            // In Kotlin a top-level type's own name, in its body, is read through the file's scope, where an explicit
+            // import of the name wins (`import org.lib.Loader` inside `class Loader` means the library's).
+            let imported_over = container.is_none() && at.0.ends_with(".kt") && file.single.contains_key(name);
             if last == name
+                && !imported_over
                 && let Some((_, t)) = all.iter().find(|(_, t)| in_package(t) && t.container.as_deref() == container)
             {
                 return Found::Inside(vec![t.id]);
@@ -428,6 +432,46 @@ impl Resolver {
     pub fn scoped(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
         self.load(conn)?;
         self.scope(conn, &hit.file)?;
+        let found = self.scoped_by_rules(conn, hit)?;
+        // A reference never reaches a `private` declaration it can't see, whichever rule offered it.
+        Ok(match found {
+            Some((confidence, ids)) if !ids.is_empty() => {
+                let before = ids.len();
+                let ids = visible_ids(conn, hit, ids)?;
+                Some(match (confidence, ids.len()) {
+                    (_, 0) => ("unresolved", ids),
+                    ("exact", _) if ids.len() < before => ("ambiguous", ids),
+                    (c, _) => (c, ids),
+                })
+            }
+            other => other,
+        })
+    }
+
+    fn scoped_by_rules(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
+        // `this` in a Kotlin extension's body is the extension's receiver. On the repository's type its own member
+        // decides; on a library's, the members aren't known, so no repository member is a candidate, only a
+        // repository extension on that type (and a member would still win over it).
+        if hit.file.ends_with(".kt")
+            && hit.receiver.as_deref() == Some("this")
+            && matches!(hit.kind.as_str(), "call" | "member")
+            && let Some(from) = &hit.from
+            && let Some(receiver) = extension_receiver(&signature_of(conn, from.id)?, &from.name)
+        {
+            let file = &self.files[&hit.file];
+            match self.find_type(file, (hit.file.as_str(), hit.line), &Self::nest(hit), &receiver) {
+                Found::Inside(ids) if ids.len() == 1 => {
+                    let members = members_of(conn, hit, ids[0])?;
+                    return Ok(if let [one] = members.as_slice() { Some(("exact", vec![*one])) } else { None });
+                }
+                Found::Outside => {
+                    let fitting: Vec<i64> =
+                        extensions_named(conn, hit)?.into_iter().filter(|(_, r)| *r == receiver).map(|(id, _)| id).collect();
+                    return Ok(Some(if fitting.is_empty() { ("unresolved", fitting) } else { ("ambiguous", fitting) }));
+                }
+                Found::Inside(_) | Found::Unreached(_) => {}
+            }
+        }
         // A receiver the extractor wrote as a path (`builder().setX(…)`, `this.store`, `Type.FIELD`): its type,
         // followed through the repository's declarations by Java's rules.
         let path_type = match hit.receiver_type.as_deref().and_then(kc_extract::TypeExpr::decode) {
@@ -654,6 +698,12 @@ impl Resolver {
         result: (&'static str, Vec<i64>),
     ) -> rusqlite::Result<(&'static str, Vec<i64>)> {
         let (confidence, mut ids) = result;
+        if !ids.is_empty() {
+            ids = visible_ids(conn, hit, ids)?;
+            if ids.is_empty() {
+                return Ok(("unresolved", ids));
+            }
+        }
         let wanted: &[&str] = match hit.kind.as_str() {
             "call" => &["method", "function"],
             "member" => &["property", "case"],
@@ -810,6 +860,53 @@ fn members_with_container(conn: &Connection, hit: &RefHit, container: &str) -> r
     stmt.query_map(params![hit.name, container, hit.file], |r| r.get(0))?.collect()
 }
 
+/// The declarations of `ids` the reference can see. A `private` one, or one inside a `private` type, is seen only
+/// within its own type (Kotlin) or top-level type (Java), so never from another file; the file is the check, as each
+/// of those lies within one.
+fn visible_ids(conn: &Connection, hit: &RefHit, ids: Vec<i64>) -> rusqlite::Result<Vec<i64>> {
+    let mut place = conn.prepare_cached(
+        "SELECT s.file_id, f.path, s.name, s.container, s.signature FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1",
+    )?;
+    let mut outer = conn.prepare_cached(
+        "SELECT signature FROM symbols WHERE file_id = ?1 AND name = ?2 AND name = ?2 COLLATE BINARY AND container IS ?3",
+    )?;
+    let mut out = Vec::new();
+    for id in ids {
+        let row: Option<(i64, String, String, Option<String>, String)> =
+            place.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).optional()?;
+        let Some((file_id, path, name, container, signature)) = row else { continue };
+        if path == hit.file || !crate::jvm::handles(&path) {
+            out.push(id);
+            continue;
+        }
+        let mut hidden = is_private(&signature, &name);
+        if let Some(container) = container.as_deref() {
+            let parts: Vec<&str> = container.split('.').collect();
+            for k in 1..=parts.len() {
+                if hidden {
+                    break;
+                }
+                let within = (k > 1).then(|| parts[..k - 1].join("."));
+                let signatures: Vec<String> =
+                    outer.query_map(params![file_id, parts[k - 1], within], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                hidden = signatures.iter().any(|s| is_private(s, parts[k - 1]));
+            }
+        }
+        if !hidden {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a declaration's signature carries `private` among the modifiers before its name.
+fn is_private(signature: &str, name: &str) -> bool {
+    signature
+        .split_whitespace()
+        .take_while(|w| w.starts_with('@') || (!w.starts_with(name) && !w.contains(['(', ':', '='])))
+        .any(|w| w == "private")
+}
+
 fn signature_of(conn: &Connection, id: i64) -> rusqlite::Result<String> {
     conn.query_row("SELECT signature FROM symbols WHERE id = ?1", params![id], |r| r.get(0)).optional().map(Option::unwrap_or_default)
 }
@@ -901,5 +998,9 @@ mod tests {
         assert_eq!(extension_receiver("public fun <T> Iterable<T>.joinToCode(): CodeBlock", "joinToCode").as_deref(), Some("Iterable"));
         assert_eq!(extension_receiver("val KClass<*>.isData: Boolean", "isData").as_deref(), Some("KClass"));
         assert_eq!(extension_receiver("public fun asTypeName(): TypeName", "asTypeName"), None);
+        assert!(is_private("private data class Reference(", "Reference"));
+        assert!(is_private("@Deprecated private static final int LIMIT = 3", "LIMIT"));
+        assert!(!is_private("val text: String", "text"));
+        assert!(!is_private("fun privateCount(): Int", "privateCount"));
     }
 }
