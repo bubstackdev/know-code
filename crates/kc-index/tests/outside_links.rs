@@ -167,6 +167,46 @@ fn a_swift_async_function_is_called_only_under_await() {
 }
 
 #[test]
+fn a_standard_library_member_through_an_unknown_receiver_is_listed_not_linked() {
+    let (root, store) = repo(
+        "stdlib-names",
+        &[
+            ("Sources/Wire/Header.swift", "struct Header {\n    static let size = 20\n    var startIndex: Int { 0 }\n}\n"),
+            (
+                "Sources/Wire/Read.swift",
+                "func read<T>(_ s: String, _: T.Type) -> Int {\n    var n = 0\n    n &+= MemoryLayout<T>.size\n    let end = s.endIndex\n    _ = end\n    return n + Header.size\n}\n",
+            ),
+        ],
+    );
+    let file = "Sources/Wire/Read.swift";
+    let size = refs(&store, "size", &["member"], file);
+    // `MemoryLayout<T>.size` is the library's; `Header.size` the repo's.
+    assert!(size.iter().any(|g| g.0 == 3 && !linked(g.1)), "{size:?}");
+    assert!(size.iter().any(|g| g.0 == 6 && g.1 == "exact" && g.2 == ["Sources/Wire/Header.swift:2"]), "{size:?}");
+    let end = refs(&store, "endIndex", &["member"], file);
+    assert!(end.iter().all(|g| !linked(g.1)), "{end:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_csharp_member_of_a_property_a_library_base_class_may_declare_is_listed_not_linked() {
+    let (root, store) = repo(
+        "cs-inherited-property",
+        &[
+            ("Shop/Shop.csproj", CS_PROJECT),
+            ("Shop/Basket.cs", "namespace Shop;\n\npublic class BasketForm\n{\n    public string QueryString { get; set; } = \"\";\n}\n"),
+            (
+                "Shop/BasketController.cs",
+                "using Microsoft.AspNetCore.Mvc;\n\nnamespace Shop;\n\npublic class BasketController : ControllerBase\n{\n    public string Describe() => Request.QueryString.ToString();\n}\n",
+            ),
+        ],
+    );
+    let got = refs(&store, "QueryString", &["member"], "Shop/BasketController.cs");
+    assert!(!got.is_empty() && got.iter().all(|g| !linked(g.1)), "{got:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn a_swift_type_a_module_imports_by_name_from_a_package_is_the_packages() {
     let (root, store) = repo(
         "swift-scoped-import",

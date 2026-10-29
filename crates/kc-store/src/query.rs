@@ -791,6 +791,12 @@ const C_LIBRARY_FUNCTIONS: &[&str] = &[
     "setenv", "socket", "stat", "symlink", "sysconf", "truncate", "umask", "unlink", "unlinkat", "unsetenv", "write",
 ];
 
+/// Swift standard-library generic types, named with their arguments (`MemoryLayout<T>`, `UnsafePointer<UInt8>`).
+const SWIFT_GENERIC_TYPES: &[&str] = &[
+    "ClosedRange", "KeyPath", "MemoryLayout", "Optional", "Range", "Result", "UnsafeBufferPointer", "UnsafeMutableBufferPointer",
+    "UnsafeMutablePointer", "UnsafeMutableRawBufferPointer", "UnsafePointer", "UnsafeRawBufferPointer",
+];
+
 /// Whether `d` is a member the repo adds to a standard-library type (`extension Int32 { var isFinite … }`). These are
 /// concrete types: no other type conforms to one, so its members are never another type's, and the library declares
 /// same-named members on its other types (`Float.isFinite`).
@@ -2013,20 +2019,20 @@ fn bare_name(receiver: &str) -> Option<&str> {
 /// Standard-library and Foundation members that in-repo types often also define. A call to one of these on a
 /// receiver of unknown type is far more likely to be the library's.
 const STDLIB_MEMBERS: &[&str] = &[
-    "append", "allSatisfy", "compactMap", "contains", "count", "decode", "dropFirst", "dropLast", "encode",
+    "allCases", "append", "allSatisfy", "compactMap", "contains", "count", "decode", "decodeIfPresent", "dropFirst", "dropLast", "encode", "endIndex",
     "enumerated", "filter", "first", "firstIndex", "flatMap", "forEach", "formUnion", "index", "insert",
-    "intersection", "isEmpty", "isFinite", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
+    "intersection", "isEmpty", "isFinite", "lowerBound", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
     "last", "lastIndex", "lowercased", "magnitude", "map", "mapValues", "max", "merge", "min", "prefix", "reduce",
     "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences", "reserveCapacity",
-    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "starts", "subtract", "suffix",
-    "trimmingCharacters", "ulp", "union", "updateValue", "uppercased", "write", "zip",
+    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "startIndex", "starts", "subtract", "suffix",
+    "trimmingCharacters", "ulp", "union", "updateValue", "upperBound", "uppercased", "write", "zip",
 ];
 
 /// .NET collection, string, LINQ and object members, for calls from C#.
 const DOTNET_MEMBERS: &[&str] = &[
     "Add", "AddRange", "Any", "All", "Clear", "Concat", "Contains", "ContainsKey", "Count", "Dispose", "Distinct",
-    "EndsWith", "Equals", "First", "FirstOrDefault", "ForEach", "Format", "GetHashCode", "GetType", "GetValueOrDefault",
-    "IndexOf", "Insert", "Join", "Last", "LastOrDefault", "Max", "Min", "OrderBy", "OrderByDescending", "Remove",
+    "EndsWith", "Equals", "First", "FirstOrDefault", "ForEach", "Format", "GetHashCode", "GetMethod", "GetType", "GetValueOrDefault",
+    "IndexOf", "Insert", "Join", "Last", "LastOrDefault", "Max", "Min", "OrderBy", "OrderByDescending", "QueryString", "Remove",
     "RemoveAll", "RemoveAt", "Replace", "Select", "SelectMany", "Single", "SingleOrDefault", "Skip", "Split",
     "StartsWith", "Substring", "Sum", "Take", "ToArray", "ToDictionary", "ToHashSet", "ToList", "ToLower",
     "ToLowerInvariant", "ToString", "ToUpper", "ToUpperInvariant", "Trim", "TryAdd", "TryGetValue", "Where",
@@ -2035,8 +2041,8 @@ const DOTNET_MEMBERS: &[&str] = &[
 /// JavaScript array, string, Map/Set, Promise and RxJS members, for calls from TypeScript.
 const JS_MEMBERS: &[&str] = &[
     "add", "catch", "clear", "complete", "concat", "delete", "emit", "endsWith", "entries", "every", "filter", "find",
-    "findIndex", "flatMap", "forEach", "get", "has", "includes", "indexOf", "join", "keys", "length", "map", "next", "pipe", "pop",
-    "push", "reduce", "replace", "set", "shift", "slice", "some", "sort", "splice", "split", "startsWith", "subscribe",
+    "findIndex", "flatMap", "forEach", "get", "has", "includes", "indexOf", "isError", "join", "keys", "left", "length", "map", "next", "pipe", "pop",
+    "push", "reduce", "replace", "set", "shift", "slice", "some", "sort", "splice", "split", "startsWith", "subscribe", "success",
     "then", "toLowerCase", "toString", "toUpperCase", "trim", "unshift", "unsubscribe", "values",
 ];
 
@@ -2538,6 +2544,19 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
                 return qualified_type(r, &hit.file, self_chain, &cands);
             }
+            // A Swift standard-library generic type written with its arguments (`MemoryLayout<T>.size`): its own members
+            // are the library's; only an extension the repo declares on it is the repo's.
+            Some(r) if hit.file.ends_with(".swift")
+                && r.ends_with('>')
+                && let Some((head, _)) = r.split_once('<')
+                && (STDLIB_TYPES.contains(&head) || SWIFT_GENERIC_TYPES.contains(&head)) =>
+            {
+                let found = in_container(head);
+                if found.is_empty() {
+                    return ("unresolved", Vec::new());
+                }
+                found
+            }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
                 let mut found = in_container(r);
@@ -2590,7 +2609,16 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     if !narrowed.is_empty() {
         return ("exact", narrowed.iter().map(|d| d.id).collect());
     }
-    let instance_receiver = hit.receiver.as_deref().is_some_and(|r| r != "." && !type_like(r));
+    // A value, or a type the code can't name: a generic parameter (`Element.allCases`), or in C# a capitalised name left
+    // unknown (a property a library base class may declare, `Request.QueryString`: C# names a type it can't find as
+    // foreign instead).
+    let instance_receiver = hit.receiver.as_deref().is_some_and(|r| {
+        r != "."
+            && (!type_like(r)
+                || GENERIC_NAMES.contains(&r)
+                || (r.len() == 1 && r.starts_with(char::is_uppercase))
+                || hit.file.ends_with(".cs") && !r.contains('.'))
+    });
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
     }
