@@ -29,7 +29,7 @@ met it. The differences are explained here, and the figures below are each run's
 
 - **The first run's repetitions:** 12 of 1,128 answers differ.
   - 11 are Serena's: references that came back empty in one repetition only, 9 of them on swift-nio.
-  - 1 is KnowCode's: on jellyfin-server, an answer in one repetition became the error "no indexed file has the path". KnowCode was still building its index during the first questions; see the README's index-phase fix. KnowCode answered before its index was built; a fix that answers `indexing` instead of `not_found` in that case is in progress. KnowCode's errors are scored as errors.
+  - 1 is KnowCode's: on jellyfin-server, an answer in one repetition became the error "no indexed file has the path". KnowCode was still building its index during the first questions; see the README's index-phase fix. KnowCode answered before its index was built; a fix that answers `indexing` rather than `not_found` in that case is in progress (it is unrelated to #230). KnowCode's errors are scored as errors.
 - **The rerun's repetitions:** 20 of 1,128 answers differ, all of them Serena's on Swift (18 on swift-nio, 2 on swift-argument-parser).
   - The cause is sourcekit-lsp still indexing in the background when asked.
   - Serena documents no way to wait for it, so none was added.
