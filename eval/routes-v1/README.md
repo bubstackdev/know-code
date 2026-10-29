@@ -113,3 +113,50 @@ logging and router-walk examples don't serve), every other repository all of its
 Two labelling passes, each in a container of its own, build identical labels and program records. The listings
 themselves list a route's methods in the order a map gives (chi, echo), so
 [go/listings.sha256](go/listings.sha256) holds each listing's digest over its sorted lines.
+
+## routes-v1.1: configuration-dependent registrations, and echo's placeholders
+
+routes-v1's rule above is unchanged, and its gate figures are scored under it. routes-v1.1 is a second rule, written
+after routes-v1's results were read: it states two exclusions those results showed. Because it was written after
+reading them, it is never scored as a gate on routes-v1's repositories (figures under it there are a post-hoc
+breakdown, said to be one). It is tested out of sample on the held-out repositories below, which were named, and this
+section committed, before any of them was labelled.
+
+Two things are left out of both sides, labels and KnowCode's routes alike, and the counts left out are published:
+
+1. **A configuration-dependent registration.** A route's *registration site* is the call in the repository's code
+   that registered it: on the labels' side, the first stack frame outside the framework's packages and the standard
+   library when the framework adds the route (the labeller records it, as it records net/http's patterns now); on
+   KnowCode's side, the file and line of its server route row. A registration site is configuration-dependent when,
+   by the Go type checker over the packages the repository's listed programs compile:
+   - its call statement lies, within its function, inside the body or `else` of an `if`, a `case` of a `switch` or
+     `select`, or a `for` or `range` loop's body; or
+   - every reference to the function (or function literal) containing it, from those packages, is itself at a
+     configuration-dependent site, recursively; or nothing in those packages refers to that function at all, or its
+     package isn't one of them.
+
+   A program's `main` function, and a harness test's test function, are referred to by the program itself and are
+   never configuration-dependent on that count.
+2. **echo's internal placeholders.** A label whose handler is echo's not-found placeholder (`echo_route_not_found`, a
+   handler echo v4 adds itself under a group's prefix and `prefix/*`, not one the code registers) is not a route.
+
+The exclusions are computed by a script run in the labelling container from the clone alone (the type checker, no
+KnowCode answer), and its output is committed beside the labels.
+
+### Held-out repositories
+
+One per framework, each serving at least 20 routes by a search of its source for registration calls. Pinned at their
+default branches' heads on 2026-10-29:
+
+| Framework | Repository | Commit | Program |
+| --- | --- | --- | --- |
+| gin | gothinkster/golang-gin-realworld-example-app | `626c372d` | the module's main package |
+| echo | xesina/golang-echo-realworld-example-app | `e578590b` | the module's main package |
+| chi | arp242/goatcounter | `c031008a` | `cmd/goatcounter serve`, over a new SQLite database |
+| net/http (Go 1.22 method patterns) | miniflux/v2 | `229035a4` | a harness test building its HTTP handler as its own tests do, since the program connects to PostgreSQL before it routes |
+
+They are labelled once, with routes-v1's labeller and this rule, and KnowCode is scored on them once, after the Go
+route changes this set was used to develop. Their figures are published beside routes-v1's gate figures, under
+v1.1, and aren't tuned against. A held-out repository that can't be listed under the rule is replaced, before any
+KnowCode answer on it is read, by the next candidate for its framework, and the replacement is named here with the
+reason.
