@@ -361,6 +361,15 @@ Every difference, all in gin, has one of two causes, and neither is a labelling 
 | `render/render_test.go:373:3` | `Reps` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
 | `render/render_test.go:390:20` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
 
+### Held out: labstack/echo
+
+The resolver was developed against the three repositories above, so it is also scored once on one it wasn't:
+labstack/echo at `4deac5da0714abbc2037a90067ea82c033a3f266`, the reserve chosen with them. Its labels
+([go/heldout/labels.jsonl](go/heldout/labels.jsonl): 508, 308 inside and 200 outside) were drawn by the same rule,
+labeller and sampler, and committed before KnowCode answered on them. They are scored once, by the build whose
+resolver was tuned on the three, and the result is reported as it is: no change to the resolver is made for them.
+Two runs give byte-identical enumerations; scip-go agrees on all 24,933 references both report.
+
 ### Running it, Go
 
 ```sh
