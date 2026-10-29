@@ -46,8 +46,11 @@ jobs:
           exit 1
 
   # The Homebrew tap must be public and the tap token able to push to it, before anything is published.
+  # HOMEBREW_TAP_TOKEN is a secret of the `release` environment, which only `v*.*.*` tags may deploy to, so no branch's
+  # workflow can read it (docs/releasing.md).
   homebrew-tap:
     runs-on: ubuntu-24.04
+    environment: release
     steps:
       - name: The Homebrew tap is public and HOMEBREW_TAP_TOKEN can push to it
         env:
