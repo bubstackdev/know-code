@@ -24,6 +24,7 @@ SWIFT_IMAGE=swift:6.3-noble@sha256:1038d54c80063f5cdfabc4560990c30af64b5de8ebf28
 # The .NET SDK comes from Ubuntu's archive (dotnet-sdk-10.0), installed while the network is up.
 DOTNET_IMAGE=ubuntu:26.04@sha256:19fcd1bf268f02b60aca3bd30bd8a6d9a11759a430e32921833e65f16d87348a
 NODE_IMAGE=node:24-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
+GO_IMAGE=golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9
 
 read -r _ LANGUAGE URL SHA < <(grep -E "^$REPO " "$HERE/repos.txt") || { echo "run.sh: $REPO is not in repos.txt" >&2; exit 2; }
 if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
@@ -41,6 +42,7 @@ case $LANGUAGE in
   swift) IMAGE=$SWIFT_IMAGE ;;
   csharp) IMAGE=$DOTNET_IMAGE ;;
   typescript) IMAGE=$NODE_IMAGE ;;
+  go) IMAGE=$GO_IMAGE ;;
 esac
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -48,6 +50,7 @@ trap cleanup EXIT
 docker create --name "$NAME" --cpus "$CPUS" --memory "$MEMORY" --network bridge \
   -v "$(cd "$IO/in" && pwd):/in:ro" -v "$(cd "$IO/out" && pwd):/out" \
   -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 -e NUGET_XMLDOC_MODE=skip -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod -e CGO_ENABLED=1 \
   -e npm_config_ignore_scripts=true -e npm_config_audit=false -e npm_config_fund=false \
   --entrypoint sleep "$IMAGE" infinity >/dev/null
 docker start "$NAME" >/dev/null
@@ -70,6 +73,13 @@ case $LANGUAGE in
     run "cd /work/src && node --version >>$LOG
          if [ -f pnpm-lock.yaml ]; then corepack enable >>$LOG 2>&1 && pnpm install --frozen-lockfile --ignore-scripts >>$LOG 2>&1;
          else npm ci --ignore-scripts >>$LOG 2>&1; fi" ;;
+  go)
+    # Every module's dependencies, tests' included, and the labeller's own (x/tools), before the network goes.
+    run "go version >>$LOG
+         cd /work/tools && go mod download >>$LOG 2>&1 && go build -o /work/label . >>$LOG 2>&1
+         cd /work/src && for m in \$(find . -name go.mod -not -path '*/vendor/*' -not -path '*/testdata/*' -not -path '*/.*/*'); do
+           (cd \$(dirname \$m) && go mod download >>$LOG 2>&1 && go list -test -deps ./... >/dev/null 2>>$LOG) || echo \"go: restore failed in \$m\" >>$LOG
+         done" ;;
 esac
 
 # 2. Off the network: build and label.
@@ -88,5 +98,7 @@ case $LANGUAGE in
   typescript)
     CONFIGS=$(grep -E "^$REPO " "$HERE/typescript/configs.txt" | cut -d' ' -f2-)
     run "cd /work/src && node /work/tools/label.cjs --repo $REPO --src /work/src $CONFIGS 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
+  go)
+    run "cd /work/src && GOPROXY=off GOFLAGS=-mod=mod /work/label -repo $REPO -src /work/src 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
 esac
 echo "run.sh: $REPO: $(gzip -dc "$IO/out/enumeration-$REPO.jsonl.gz" | wc -l | tr -d ' ') rows"
