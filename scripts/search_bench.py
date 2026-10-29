@@ -23,6 +23,10 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target" / "release" / "knowcode"
@@ -73,7 +77,7 @@ def main():
 
     ws = Path(a.workspace)
     repos = sorted(str(p) for p in ws.iterdir() if (p / ".git").exists())
-    env = dict(os.environ, KNOWCODE_CACHE_DIR=tempfile.mkdtemp(prefix="knowcode-search-bench-"))
+    env = kc_env.knowcode_env(tempfile.mkdtemp(prefix="knowcode-search-bench-"))
     subprocess.run([str(BIN), "index", *repos], env=env, check=True, capture_output=True)
     files = []
     for line in subprocess.run([str(BIN), "files", *sum((["--repo", r] for r in repos), [])], env=env, check=True, capture_output=True, text=True).stdout.splitlines():

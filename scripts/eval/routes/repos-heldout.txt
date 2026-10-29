@@ -1,0 +1,6 @@
+# routes-v1.1's held-out repositories (eval/routes-v1/README.md, "Held-out repositories"): name, labeller family, URL
+# and the commit labelled, pinned at their default branch's head on 2026-10-29. Named before any was labelled.
+gin-realworld go https://github.com/gothinkster/golang-gin-realworld-example-app 626c372d259472148d93303f74aa9b9a1cdcef24
+echo-realworld go https://github.com/xesina/golang-echo-realworld-example-app e578590b51e93440c5bdfdb5a98578679c0ee383
+goatcounter go https://github.com/arp242/goatcounter c031008a8d28c85b36708824f23b28957e7ed262
+miniflux go https://github.com/miniflux/v2 229035a4df6e60107d1117eb50696b23e08cb4b8

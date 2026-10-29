@@ -59,6 +59,16 @@ class Score(unittest.TestCase):
         self.assertTrue(s['gated'])
         self.assertFalse(s['passed'])
 
+    def test_only_compiled_code_counts(self):
+        programs = [dict(package='cmd/app', status='listed', dirs=['api', 'cmd/app']),
+                    dict(package='test:internal/api', status='listed', dirs=['internal/api']),
+                    dict(package='examples/x', status='no listing', dirs=['examples/x'])]
+        dirs = gate.covered(programs)
+        self.assertTrue(gate.in_dirs('api/crates.go', dirs))
+        self.assertFalse(gate.in_dirs('api/crates_test.go', dirs))
+        self.assertTrue(gate.in_dirs('internal/api/routes_test.go', dirs))
+        self.assertFalse(gate.in_dirs('examples/x/main.go', dirs))
+
     def test_a_small_framework_is_reported_not_gated(self):
         s = gate.summarize({'a': {'gin': dict(routes=3, routes_matched=1, labels=3, labels_matched=1, false=[], missed=[])}})
         self.assertFalse(s['gin']['gated'])

@@ -19,6 +19,8 @@ import sys
 import tempfile
 import threading
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
 
 
 def scaled(seconds: float) -> float:
@@ -35,14 +37,7 @@ def check(binary: Path) -> None:
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         source = repo / "api.ts"
         source.write_text("export function apiHandler() { return 42; }\n")
-        env = dict(os.environ)
-        env.update({
-            "KNOWCODE_CACHE_DIR": str(base / "cache"),
-            "KNOWCODE_CONFIG_DIR": str(base / "config"),
-            "KNOWCODE_DATA_DIR": str(base / "data"),
-            "KNOWCODE_TOOLS": "core",
-            "KNOWCODE_UPDATE_CHECK": "0",
-        })
+        env = kc_env.knowcode_env(base, KNOWCODE_TOOLS="core")
         env.pop("KNOWCODE_VERIFY", None)
         with (base / "stderr.log").open("w+") as stderr:
             process = subprocess.Popen(
