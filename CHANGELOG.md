@@ -20,6 +20,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
   shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
   answer left out as comments.
+- A React component used only through JSX has dependents. A tag (`<Page …>`, `</Page>`) was recorded as a type
+  reference, which `impact`, `trace` and `tests` don't follow from a function, so a component rendered only that way
+  answered "nothing affected". A tag is now a call of its component, as the TypeScript compiler binds it (`<Ns.Comp>`
+  a member of `Ns`), and rendering a class component creates it; `refs` lists these uses as `call` instead of
+  `type_ref`. TypeScript and JavaScript files are read again once. On impact-dev-v1's 92 questions, impact's recall
+  rises from 0.816 to 0.858 (71 more labels found in 5 jellyfin-web questions, no other answer changed), and `tests`
+  for hono's `src/jsx/components.ts` reaches the tests that render its components.
 - `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
   tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
   is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves

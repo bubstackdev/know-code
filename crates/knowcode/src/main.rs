@@ -45,6 +45,8 @@ mod tree;
 mod walk;
 mod unread;
 mod whole;
+#[cfg(test)]
+mod jsx_impact_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;
