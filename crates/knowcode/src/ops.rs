@@ -438,6 +438,28 @@ impl Consulted {
         self.provenance.borrow().clone()
     }
 
+    /// The repo `root`'s entry, as it was recorded.
+    pub fn entry(&self, root: &Path) -> Option<Provenance> {
+        let repo = root.to_string_lossy();
+        self.provenance.borrow().iter().find(|p| p.repo == repo).cloned()
+    }
+
+    /// Records `p` again, as a walk on a shared graph reads a repo an earlier walk opened (see
+    /// [`HttpCrossing::begin_walk`]): in the place it takes when it is read.
+    pub fn replay(&self, p: Provenance) {
+        let mut list = self.provenance.borrow_mut();
+        if !list.iter().any(|q| q.repo == p.repo) {
+            list.push(p);
+        }
+    }
+
+    /// Sets the repos recorded back to `list`: a walk on a shared graph names the repos it read, not those an earlier
+    /// walk on it did. Only provenance is set back. What a walk found missing, pending or withheld stays, so a later
+    /// answer may say more than a graph of its own would, never less.
+    pub fn reset(&self, list: Vec<Provenance>) {
+        *self.provenance.borrow_mut() = list;
+    }
+
     /// Records a repo the answer needed but could not open: indexed once, its checkout is gone.
     pub fn missing(&self, root: &Path) {
         let mut m = self.missing.borrow_mut();
@@ -4615,6 +4637,10 @@ pub(crate) struct HttpCrossing<'a> {
     pub(crate) ci_cut: Vec<String>,
     /// What the CI limits left out of the deploy chains read, kept with them for each walk reading them.
     chains_cut: Vec<String>,
+    /// Each repo opened on the side, as its opening recorded it, and those the current walk has read: a later walk
+    /// on the same crossings records a repo again when it reads it (see [`HttpCrossing::begin_walk`]).
+    recorded: HashMap<PathBuf, Provenance>,
+    touched: HashSet<PathBuf>,
     /// Symbols whose library crossings were looked up (at most [`LIBRARY_CROSSINGS`]), and those past the budget,
     /// whose weren't.
     pub(crate) library_checked: usize,
@@ -4662,6 +4688,8 @@ impl<'a> HttpCrossing<'a> {
             limited: false,
             ci_cut: Vec::new(),
             chains_cut: Vec::new(),
+            recorded: HashMap::new(),
+            touched: HashSet::new(),
             library_checked: 0,
             library_cut: 0,
             library: true,
@@ -4683,6 +4711,7 @@ impl<'a> HttpCrossing<'a> {
         self.library_checked = 0;
         self.library_cut = 0;
         self.ci_cut.clear();
+        self.touched.clear();
     }
 
     /// Opens at most `n` repos, the home repo included.
@@ -4700,6 +4729,15 @@ impl<'a> HttpCrossing<'a> {
             }
             let store = open_synced(self.home, root, self.no_sync)?;
             self.stores.push((root.to_path_buf(), store));
+            if let Some(p) = self.home.consulted.entry(root) {
+                self.recorded.insert(root.to_path_buf(), p);
+            }
+            self.touched.insert(root.to_path_buf());
+        } else if root != self.home.root && self.touched.insert(root.to_path_buf()) {
+            // Opened by an earlier walk on these crossings: this walk reads it too.
+            if let Some(p) = self.recorded.get(root) {
+                self.home.consulted.replay(p.clone());
+            }
         }
         Ok(true)
     }
@@ -6130,9 +6168,12 @@ pub(crate) fn impact_on(p: &ImpactParams, args: &Scope, o: &Opened, g: &mut crat
     impact_asks_one(p)?;
     let (mut stale_rank, mut cite_notes) = (Vec::new(), Vec::new());
     let edges = p.filter.edges()?;
+    let before = o.consulted.list();
     g.begin_walk(edges.clone());
-    let found = impact_repo(p, o, g, &edges, false, args.no_sync, &mut stale_rank, &mut cite_notes)?;
-    impact_answer(p, args, std::slice::from_ref(o), found.into_iter().collect(), stale_rank, cite_notes, &edges)
+    let found = impact_repo(p, o, g, &edges, false, args.no_sync, &mut stale_rank, &mut cite_notes);
+    let out = found.and_then(|found| impact_answer(p, args, std::slice::from_ref(o), found.into_iter().collect(), stale_rank, cite_notes, &edges));
+    o.consulted.reset(before);
+    out
 }
 
 fn impact_asks_one(p: &ImpactParams) -> Result<()> {
@@ -6956,9 +6997,11 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
 pub(crate) fn tests_on(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Out<Vec<TestsRepo>>> {
     let _memo = kc_index::memo_changes();
     let edges = tests_edges(p)?;
+    let before = o.consulted.list();
     g.begin_walk(edges.clone());
-    let found = tests_repo(p, o, g)?;
-    tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges)
+    let out = tests_repo(p, o, g).and_then(|found| tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges));
+    o.consulted.reset(before);
+    out
 }
 
 /// The edges the tests walk follows, after checking `p` asks one thing.
