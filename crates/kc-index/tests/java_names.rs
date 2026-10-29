@@ -157,3 +157,27 @@ fn a_local_class_is_seen_only_in_its_method() {
     assert_eq!(answer(&made[1]), ("exact", vec!["src/app/Tests.java:8".to_string()]));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_field_access_never_means_a_method() {
+    // A class extending a library type reads the library's inherited field while declaring a method of that name.
+    let root = scratch("java-namespaces");
+    write(
+        &root,
+        "src/app/Rows.java",
+        "package app;\n\
+         import java.util.AbstractList;\n\
+         abstract class Rows extends AbstractList<String> {\n\
+           int modCount() { return this.modCount; }\n\
+           void touch() { this.modCount++; modCount(); }\n\
+         }\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    for h in refs_in(c, "modCount", "member", "src/app/Rows.java") {
+        assert_eq!(answer(&h), ("unresolved", vec![]), "line {}", h.line);
+    }
+    let call = refs_in(c, "modCount", "call", "src/app/Rows.java");
+    assert_eq!(answer(&call[0]), ("exact", vec!["src/app/Rows.java:4".to_string()]));
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -5516,7 +5516,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             }
         }
         if java && !by_import {
-            (confidence, ids) = jvm.after(hit, receiver_known, (confidence, ids));
+            (confidence, ids) = jvm.after(conn, hit, receiver_known, (confidence, ids))?;
         }
         if cs_type && matches!(confidence, "unique_name" | "ambiguous") && scoped_out_type(&defs[&hit.name], named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
             confidence = "exact";

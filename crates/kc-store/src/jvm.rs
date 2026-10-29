@@ -418,16 +418,45 @@ impl Resolver {
         Ok(None)
     }
 
-    /// The shared resolution's answer for a Java reference, kept from naming one declaration by name alone: a member
-    /// of a value whose type isn't known is a candidate, never a link (it may well be a library type's member).
-    pub fn after(&self, hit: &RefHit, receiver_known: bool, result: (&'static str, Vec<i64>)) -> (&'static str, Vec<i64>) {
-        let (confidence, ids) = result;
+    /// The shared resolution's answer for a Java reference, kept to what Java can mean by it.
+    ///
+    /// Fields and methods are separate namespaces (JLS 6.5): a member access (`this.modCount`) never means a method
+    /// and a call never a field, though the shared resolution, matching names, may offer one. Kotlin keeps its
+    /// properties and functions apart the same way. And a member of a value whose type isn't known is a candidate,
+    /// never a link by its name alone (it may well be a library type's member).
+    pub fn after(
+        &self,
+        conn: &Connection,
+        hit: &RefHit,
+        receiver_known: bool,
+        result: (&'static str, Vec<i64>),
+    ) -> rusqlite::Result<(&'static str, Vec<i64>)> {
+        let (confidence, mut ids) = result;
+        let wanted: &[&str] = match hit.kind.as_str() {
+            "call" => &["method", "function"],
+            "member" => &["property", "case"],
+            _ => &[],
+        };
+        if !wanted.is_empty() && !ids.is_empty() {
+            let mut stmt = conn.prepare_cached("SELECT kind FROM symbols WHERE id = ?1")?;
+            let mut kept = Vec::new();
+            for id in ids {
+                let kind: Option<String> = stmt.query_row(params![id], |r| r.get(0)).optional()?;
+                if kind.is_some_and(|k| wanted.contains(&k.as_str())) {
+                    kept.push(id);
+                }
+            }
+            ids = kept;
+            if ids.is_empty() {
+                return Ok(("unresolved", ids));
+            }
+        }
         let receiver = hit.receiver.as_deref();
         let self_like = matches!(receiver, Some("this" | "super"));
         if confidence == "unique_name" && receiver.is_some() && !self_like && !receiver_known {
-            return ("ambiguous", ids);
+            return Ok(("ambiguous", ids));
         }
-        (confidence, ids)
+        Ok((confidence, ids))
     }
 }
 
