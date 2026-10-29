@@ -32,6 +32,7 @@ mod rules;
 #[allow(dead_code)]
 mod review_format;
 mod restricted;
+mod review;
 mod session_hook;
 mod settings;
 mod summary;
