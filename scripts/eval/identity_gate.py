@@ -107,12 +107,14 @@ def word(name):
     return re.compile(r'(?<![\w$])' + re.escape(name) + r'(?![\w$])')
 
 
-def name_line(lines, line, name):
+def name_line(lines, line, name, comment=None):
     """The line of a declaration's name: the first of `line` and the next NAME_WINDOW lines that has the name as a
-    word outside comments, attributes and decorators (a declaration that starts at one); `line` when none does."""
+    word outside comments, attributes and decorators (a declaration that starts at one); `line` when none does.
+    `comment` is the file's comment syntax (comment_pattern)."""
     pattern = word(name)
+    comment = comment or COMMENT
     for n in range(line, min(line + NAME_WINDOW, len(lines)) + 1):
-        if n < 1 or COMMENT.match(lines[n - 1]):
+        if n < 1 or comment.match(lines[n - 1]):
             continue
         if pattern.search(ATTRIBUTES.sub('', lines[n - 1], count=1)):
             return n
@@ -136,7 +138,7 @@ def target_matches(target, label, lines_of):
     if target.get('file') not in {f for f, _ in label['locs']}:
         return False
     lines = lines_of(target['file'])
-    at = name_line(lines, int(target.get('line') or 0), label['name'])
+    at = name_line(lines, int(target.get('line') or 0), label['name'], comment_pattern(target['file']))
     return [target['file'], at] in [list(l) for l in label['locs']]
 
 
@@ -258,6 +260,13 @@ def kc_env(base):
 OVERLOAD = re.compile(r'^(\d+): .* at (.+?):(\d+)(?: \([^)]*\))*$')
 # What a declaration's first lines can hold before its name: comments, and attributes or decorators.
 COMMENT = re.compile(r'^\s*(//|/\*|\*|#)')
+# Go doesn't continue block comments with `*`, and a line starting with one is an embedded pointer field (`*Base`).
+GO_COMMENT = re.compile(r'^\s*(//|/\*)')
+
+
+def comment_pattern(path):
+    """The comment syntax name_line skips in a file."""
+    return GO_COMMENT if path.endswith('.go') else COMMENT
 ATTRIBUTES = re.compile(r'^\s*(?:\[[^\]]*\]\s*|@\w+(?:\.\w+)*(?:\([^)]*\))?\s*)+')
 
 
