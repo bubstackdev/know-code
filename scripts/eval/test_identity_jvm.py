@@ -115,6 +115,9 @@ SOURCES = {
         'package a',
         'fun String.shout(): String = uppercase()',
         'fun use() = "x".shout()',
+        'val Shape.big: Boolean get() = area() > 9',
+        'fun small(s: Shape) = !s.big',
+        'fun q(x: java.util.List<String>, y: Square) = y.side()',
     ],
     'build/generated/a/Gen.java': [
         'class Gen { void gen() {} }',
@@ -129,6 +132,7 @@ def index():
     side = PKG + 'a/Square#side().'
     color, red = PKG + 'a/Color#', PKG + 'a/Color#RED.'
     shout = PKG + 'a/ExtKt#shout().'
+    big = PKG + 'a/Shape#big.'
     gen = PKG + 'a/Gen#gen().'
     java = document('src/a/Shape.java', [
         occurrence(1, 17, 21, JDK + 'java/util/List#'),          # an import: left out
@@ -154,7 +158,13 @@ def index():
         occurrence(1, 11, 16, shout, roles=scip.DEFINITION),
         occurrence(1, 29, 38, KT + 'kotlin/text/StringsKt#uppercase().'),  # call, outside, stdlib
         occurrence(2, 16, 21, shout),                                       # extension, inside
-    ], [symbol_info(shout, 26, 'public final fun String.shout(): String')])
+        occurrence(3, 10, 13, big, roles=scip.DEFINITION),
+        occurrence(4, 25, 28, big + 'get().'),                              # the property, read through its getter
+        occurrence(4, 22, 23, KT + 'kotlin/Boolean#not().'),                # an operator: left out
+        occurrence(5, 9, 23, JDK + 'java/util/List#'),                      # a qualified name: the range covers it
+        occurrence(5, 48, 52, PKG + 'a/Square#side(+1).'),                  # no definition under this overload
+    ], [symbol_info(shout, 26, 'public final fun String.shout(): String'),
+        symbol_info(big, 41, 'public final val Shape.big: Boolean')])
     mark, level = PKG + 'a/Mark#', PKG + 'a/Mark#level().'
     base, size = PKG + 'a/Base#', PKG + 'a/Base#size().'
     limits, max_ = PKG + 'a/Limits#', PKG + 'a/Limits#MAX.'
@@ -186,8 +196,16 @@ class JvmLabelTest(unittest.TestCase):
                 (src/path).write_text('\n'.join(lines))
             rows = jvm_label.enumerate_repo('r', src, index())
         refs = {(r['file'], r['line'], r['name']): r for r in rows if r['t'] == 'ref'}
+        excluded = {(r['file'], r['line'], r['name']): r['reason'] for r in rows if r['t'] == 'excluded'}
         java = 'src/a/Shape.java'
         self.assertNotIn((java, 2, 'List'), refs)
+        # Each reference the rule doesn't label is recorded with its reason.
+        self.assertEqual(excluded, {(java, 2, 'List'): 'import', (java, 8, 'values'): 'synthesised',
+                                    (java, 9, 'side'): 'renamed_or_implicit', ('src/a/Ext.kt', 5, 'not'): 'operator',
+                                    ('src/a/Ext.kt', 6, 'side'): 'overload_unmatched'})
+        self.assertEqual(refs[('src/a/Ext.kt', 6, 'List')]['col'], 20)
+        self.assertEqual(refs[('src/a/Ext.kt', 5, 'big')]['kind'], 'extension')
+        self.assertEqual(refs[('src/a/Ext.kt', 5, 'big')]['locs'], [['src/a/Ext.kt', 4]])
         self.assertEqual(refs[(java, 5, 'Shape')]['kind'], 'type')
         self.assertEqual(refs[(java, 5, 'Shape')]['locs'], [[java, 3]])
         self.assertEqual((refs[(java, 6, 'List')]['inside'], refs[(java, 6, 'List')]['origin']), (False, 'stdlib'))
@@ -208,9 +226,10 @@ class JvmLabelTest(unittest.TestCase):
         decls = sorted((r['name'], r['decl']) for r in rows if r['t'] == 'decl')
         # The generated file's `gen` isn't the repository's source.
         self.assertEqual(decls, [('Base', 'type'), ('Color', 'type'), ('Limits', 'type'), ('MAX', 'member'),
-                                 ('Mark', 'type'), ('RED', 'member'), ('Shape', 'type'), ('area', 'callable'), ('area', 'callable'),
-                                 ('level', 'callable'), ('shout', 'callable'), ('side', 'callable'),
-                                 ('size', 'callable')])
+                                 ('Mark', 'type'), ('RED', 'member'), ('Shape', 'type'), ('area', 'callable'),
+                                 ('area', 'callable'),
+                                 ('big', 'member'), ('level', 'callable'), ('shout', 'callable'),
+                                 ('side', 'callable'), ('size', 'callable')])
 
     def test_symbols_split_into_package_and_descriptors(self):
         package, descriptors = jvm_label.split_symbol(PKG + 'a/Outer#`in`.inner(+1).(x)')
@@ -231,6 +250,14 @@ class DrawLanguageTest(unittest.TestCase):
         self.assertEqual(stats['m/java/call/outside/0'], dict(available=3, drawn=3))
         self.assertEqual(stats['m/kotlin/call/outside/0'], dict(available=3, drawn=3))
         self.assertEqual(sorted({l['lang'] for l in labels}), ['java', 'kotlin'])
+
+    def test_exclusions_are_counted_per_language_and_reason(self):
+        rows = [dict(t='excluded', repo='m', lang='java', reason='import'),
+                dict(t='excluded', repo='m', lang='kotlin', reason='import'),
+                dict(t='ref', repo='m', lang='java', file='A.java', line=1, col=1, key='k1'),
+                dict(t='ref', repo='m', lang='java', file='A.java', line=1, col=1, key='k2')]
+        self.assertEqual(sample.exclusions(rows), {('java', 'import'): 1, ('kotlin', 'import'): 1,
+                                                   ('java', 'bound_two_ways'): 1})
 
 
 if __name__ == '__main__':

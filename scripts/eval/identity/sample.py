@@ -2,6 +2,7 @@
 """Draws identity-v1's labels from the labellers' enumerations, by the rule in eval/identity-v1/README.md.
 
     sample.py ENUMERATION.jsonl.gz [...] --out eval/identity-v1/labels.jsonl [--strata strata.json]
+              [--exclusions exclusions.json]
 
 Each enumeration (run.sh's output, one per repository) lists every reference the toolchain binds in the repository's
 own source and every declaration it saw there. The draw depends on the enumerations alone: strata of kind × bucket per
@@ -91,6 +92,24 @@ def draw(rows, lang=None):
     return labels, stats
 
 
+def exclusions(rows, lang=None):
+    """Per language and reason, how many references the toolchain binds go unlabelled: the labeller's `excluded`
+    rows, and the sites the draw leaves out because the toolchain binds them two ways."""
+    lang = lang or {}
+    out = Counter()
+    sites = defaultdict(set)
+    for r in rows:
+        language = r.get('lang') or lang.get(r['repo'], '')
+        if r['t'] == 'excluded':
+            out[(language, r['reason'])] += 1
+        elif r['t'] == 'ref':
+            sites[(language, r['repo'], r['file'], r['line'], r['col'])].add(r['key'])
+    for (language, *_), keys in sites.items():
+        if len(keys) > 1:
+            out[(language, 'bound_two_ways')] += 1
+    return out
+
+
 def read(path):
     opener = gzip.open if str(path).endswith('.gz') else open
     with opener(path, 'rt', encoding='utf-8') as f:
@@ -102,17 +121,23 @@ def main():
     ap.add_argument('enumerations', nargs='+')
     ap.add_argument('--out', required=True)
     ap.add_argument('--strata')
+    ap.add_argument('--exclusions')
     args = ap.parse_args()
     lang = languages()
-    labels, stats = [], {}
+    labels, stats, excluded = [], {}, Counter()
     for path in args.enumerations:
-        got, s = draw(read(path), lang)
+        rows = read(path)
+        got, s = draw(rows, lang)
         labels += got
         stats.update(s)
+        excluded += exclusions(rows, lang)
     labels.sort(key=lambda r: (r['lang'], r['repo'], r['file'], r['line'], r['col']))
     Path(args.out).write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in labels))
     if args.strata:
         Path(args.strata).write_text(json.dumps(stats, indent=1, sort_keys=True) + '\n')
+    if args.exclusions:
+        table = {f'{language}/{reason}': n for (language, reason), n in excluded.items()}
+        Path(args.exclusions).write_text(json.dumps(table, indent=1, sort_keys=True) + '\n')
     print(f'{len(labels)} labels from {len(args.enumerations)} enumerations')
 
 

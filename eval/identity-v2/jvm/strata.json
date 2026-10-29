@@ -44,7 +44,7 @@
   "drawn": 40
  },
  "commons-lang/java/member/outside/0": {
-  "available": 5981,
+  "available": 3621,
   "drawn": 10
  },
  "commons-lang/java/member/outside/1+": {
@@ -116,7 +116,7 @@
   "drawn": 40
  },
  "gson/java/member/outside/0": {
-  "available": 1482,
+  "available": 340,
   "drawn": 10
  },
  "gson/java/member/outside/1+": {
@@ -208,24 +208,24 @@
   "drawn": 40
  },
  "kotlinpoet/kotlin/type/inside/1": {
-  "available": 3705,
+  "available": 3716,
   "drawn": 20
  },
  "kotlinpoet/kotlin/type/inside/2-4": {
-  "available": 45,
-  "drawn": 13
+  "available": 48,
+  "drawn": 16
  },
  "kotlinpoet/kotlin/type/inside/5+": {
-  "available": 258,
-  "drawn": 24
+  "available": 343,
+  "drawn": 25
  },
  "kotlinpoet/kotlin/type/outside/0": {
-  "available": 3067,
+  "available": 3144,
   "drawn": 10
  },
  "kotlinpoet/kotlin/type/outside/1+": {
-  "available": 6,
-  "drawn": 6
+  "available": 18,
+  "drawn": 18
  },
  "moshi/java/call/inside/1": {
   "available": 100,
@@ -262,10 +262,6 @@
  "moshi/java/member/outside/0": {
   "available": 37,
   "drawn": 10
- },
- "moshi/java/member/outside/1+": {
-  "available": 15,
-  "drawn": 15
  },
  "moshi/java/type/inside/1": {
   "available": 532,
@@ -348,24 +344,24 @@
   "drawn": 40
  },
  "moshi/kotlin/type/inside/1": {
-  "available": 832,
+  "available": 849,
   "drawn": 20
  },
  "moshi/kotlin/type/inside/2-4": {
-  "available": 61,
+  "available": 70,
   "drawn": 15
  },
  "moshi/kotlin/type/inside/5+": {
-  "available": 5,
-  "drawn": 3
+  "available": 29,
+  "drawn": 8
  },
  "moshi/kotlin/type/outside/0": {
-  "available": 2367,
+  "available": 2404,
   "drawn": 10
  },
  "moshi/kotlin/type/outside/1+": {
-  "available": 3,
-  "drawn": 3
+  "available": 12,
+  "drawn": 10
  },
  "spring-petclinic-kotlin/kotlin/call/inside/1": {
   "available": 25,
@@ -452,7 +448,7 @@
   "drawn": 40
  },
  "spring-petclinic/java/member/outside/0": {
-  "available": 61,
+  "available": 37,
   "drawn": 10
  },
  "spring-petclinic/java/type/inside/1": {

@@ -15,8 +15,8 @@ Each language's section, with its labels, is committed before KnowCode's answers
 doesn't change to fit them. A change to the rule is a new set.
 
 Each language keeps its labels in its own directory: `labels.jsonl`, `strata.json` (per stratum, how many references
-there were and how many were drawn) and `enumerations.sha256` (the digests of the enumerations drawn from, which
-aren't checked in).
+there were and how many were drawn), `exclusions.json` (per reason, how many references the toolchain binds the rule
+leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in).
 
 ## Java and Kotlin
 
@@ -80,26 +80,57 @@ references. label.py lists those files in its log.
 
 #### What a reference is
 
-As in v1. For Java and Kotlin, left out also:
+As in v1. A Kotlin property that scip-kotlinc binds through its accessor (`rawType.get()`) is a reference to the
+property, since the token names it. A qualified name (`java.util.List`) whose range covers its qualifier is a reference
+at the name that ends it. For Java and Kotlin, left out also, each recorded in the enumeration with its reason (in
+parentheses) and counted below:
 
-- **Imports:** any occurrence on an `import` line. scip-java doesn't mark imports with SCIP's import role.
+- **Imports** (`import`): any occurrence on an `import` line. scip-java doesn't mark imports with SCIP's import role.
+- **Class literals** (`class_literal`): the `class` of `Foo.class`, a keyword. `Foo` is a `type` reference.
+- **Operators** (`operator`): a Kotlin operator's function, called with no token of its name (`!x` calls `not`,
+  `x[i]` calls `get`, `a < b` calls `compareTo`, a `for` loop calls `iterator`, `hasNext` and `next`).
 - **Constructors:** `<init>` (`new Foo(…)`, `Foo(…)` in Kotlin, `super(…)`, `this(…)`), and static initialisers.
   In a Kotlin supertype list (`class Owner : Person()`), scip-kotlinc binds the supertype's name to the class, so
   that name is a `type` reference.
 - **Packages, type parameters, parameters and locals:** SCIP namespace (`a/b/`), type-parameter (`[T]`),
   parameter (`(x)`) and `local` symbols. A Kotlin named argument binds to its parameter, so it isn't labelled.
-- **Renamed references:** the token differs from the declaration's own name. A Kotlin property read from Java through
-  its getter (`getName()`), a Java getter read from Kotlin as a property (`name`), and an import alias are left out.
-- **Synthesised members:** a member the compiler makes for one of the repository's types and declares nowhere in
-  source: an enum's `values()` and `valueOf`, a record's accessors, a Kotlin data class's `copy` and `componentN`.
-  A reference is one when its symbol has no definition and the type it belongs to is defined in the repository.
-- **References into the repository's own types from outside it:** an outside symbol whose outermost type the
-  repository declares. That is a type declared in a file the build didn't compile, or a published build of the
+- **Renamed references** (`renamed_or_implicit`): the token differs from the declaration's own name. A Kotlin property
+  read from Java through its getter (`getName()`), a Java getter read from Kotlin as a property (`name`), and an import
+  alias are left out, as is a reference with no token at all (a `vararg` parameter's implicit `Array`).
+- **Synthesised members** (`synthesised`): a member the compiler makes for one of the repository's types and declares
+  nowhere in source: an enum's `values()` and `valueOf`, a record's accessors, a Kotlin data class's `copy` and
+  `componentN`. A reference is one when its symbol has no definition and the type it belongs to is defined in the
+  repository.
+- **Unmatched overloads** (`overload_unmatched`): the symbol names a member the type declares, but under an overload
+  disambiguator no definition has. scip-kotlinc logs these ("methodDisambiguator … not found"); the toolchain names
+  no one declaration, so there is nothing to score against.
+- **Generated targets** (`generated_target`): the target is declared only in generated sources.
+- **References into the repository's own types from outside it** (`outside_own_type`): an outside symbol whose outermost
+  type the repository declares. That is a type declared in a file the build didn't compile, or a published build of the
   repository's own code that a module depends on (moshi's `examples` module builds against moshi 1.14.0 from Maven
-  Central). Where such a name binds says which version of the code is used, not which declaration the name means,
-  so these references aren't labelled. The repository's declared types are read from every source file's text: its
-  package, every name after `class`, `interface`, `object`, `enum`, `record` or `typealias`, the file's name and its
-  Kotlin facade (`NameKt`, or its `@file:JvmName`). label.py counts what this leaves out in its log.
+  Central). Where such a name binds says which version of the code is used, not which declaration the name means, so
+  these references aren't labelled. The repository's declared types are read from every source file's text: its package,
+  every name after `class`, `interface`, `object`, `enum`, `record` or `typealias`, the file's name and its Kotlin
+  facade (`NameKt`, or its `@file:JvmName`).
+- **Sites bound two ways** (`bound_two_ways`): as in v1, the draw leaves out a place the toolchain binds to two
+  declarations.
+
+Per language, the references the toolchain binds in the source files, how many are references by the rule, and how
+many are left out by each reason ([exclusions.json](jvm/exclusions.json); `sample.py --exclusions` makes it from the
+enumerations):
+
+| Reason | Java | Kotlin |
+| --- | ---: | ---: |
+| References by the rule, the population the set is drawn from | 222031 | 40420 |
+| `import` | 7721 | 3430 |
+| `class_literal` | 6252 | 1 |
+| `operator` | 0 | 2534 |
+| `renamed_or_implicit` | 1 | 289 |
+| `synthesised` | 179 | 136 |
+| `overload_unmatched` | 10 | 400 |
+| `generated_target` | 16 | 1 |
+| `outside_own_type` | 2 | 7 |
+| `bound_two_ways` | 0 | 7 |
 
 #### Kinds
 
@@ -123,7 +154,8 @@ symbol's form alone: a method is a `call`, a term a `member`, a type a `type`. S
 #### The target
 
 The declaration whose SCIP definition occurrence is the symbol's, at the line of its name token. An override is its
-own declaration. A declaration defined in more than one compiled file lists each place.
+own declaration. A declaration defined in more than one compiled file lists each place: a Kotlin `expect`
+declaration and its `actual` share one symbol, so both are listed.
 
 Outside targets have an origin: `stdlib` for the JDK and Kotlin's standard library, `package` for any other library.
 scip-java names a Java symbol's artifact, and the JDK's is `jdk`. It names no artifact for Kotlin symbols, so a
@@ -144,25 +176,26 @@ empty.
 
 ### The set
 
-2673 references: 1516 Java (1118 inside, 398 outside) over four repositories, 1157 Kotlin (890 inside, 267 outside)
-over three. Per repository: commons-lang 524, gson 481, moshi 295 Java and 440 Kotlin, spring-petclinic 216, kotlinpoet
-541, spring-petclinic-kotlin 176. Per language, kind and stratum (inside by bucket, outside by bucket):
+2686 references: 1501 Java (1118 inside, 383 outside) over four repositories, 1185 Kotlin (899 inside, 286 outside)
+over three. Per repository: commons-lang 524, gson 481, moshi 280 Java and 452 Kotlin, spring-petclinic 216, kotlinpoet
+557, spring-petclinic-kotlin 176. Per language, kind and stratum (inside by bucket, outside by bucket):
 
 | Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Java | dispatch | 31 | 62 | 80 | 0 | 0 | 173 |
 | Java | call | 80 | 124 | 120 | 40 | 152 | 516 |
-| Java | member | 80 | 141 | 143 | 40 | 79 | 483 |
+| Java | member | 80 | 141 | 143 | 40 | 64 | 468 |
 | Java | type | 80 | 94 | 83 | 40 | 47 | 344 |
 | Kotlin | extension | 40 | 80 | 51 | 0 | 0 | 171 |
 | Kotlin | dispatch | 19 | 44 | 49 | 0 | 0 | 112 |
 | Kotlin | call | 60 | 82 | 80 | 30 | 88 | 340 |
 | Kotlin | member | 60 | 90 | 120 | 30 | 80 | 380 |
-| Kotlin | type | 60 | 28 | 27 | 30 | 9 | 154 |
+| Kotlin | type | 60 | 31 | 33 | 30 | 28 | 182 |
 
 A stratum short of its quota held fewer references, or fewer distinct targets under the spread limit. The six
-repositories were labelled twice, by two separate runs of run.sh, and the two runs' enumerations hold the same
-references, targets and origins.
+repositories were built twice, by two separate runs of run.sh, and the two builds' enumerations hold the same
+references, targets and origins. The committed enumerations' digests are of label.py's output over the second run's
+SCIP indexes.
 
 ### Scoring
 
@@ -179,5 +212,5 @@ python3 scripts/eval/identity_gate.py check jvm.json
 ```sh
 scripts/eval/identity/run.sh REPO CLONE IO      # each repository; Docker; the enumeration, log and SCIP index come out, in IO/out
 python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/identity-v2/jvm/labels.jsonl \
-  --strata eval/identity-v2/jvm/strata.json
+  --strata eval/identity-v2/jvm/strata.json --exclusions eval/identity-v2/jvm/exclusions.json
 ```

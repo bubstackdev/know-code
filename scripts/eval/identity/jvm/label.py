@@ -24,6 +24,13 @@ GENERATED = ('build', 'target', 'generated', 'out', '.gradle')
 ABSTRACT = re.compile(r'\babstract\b')
 IMPORT_LINE = re.compile(r'\s*import\s')
 IDENT = re.compile(r'[A-Za-z_$][A-Za-z0-9_$]*')
+# A property's accessor, as scip-kotlinc names it: `name.get().` or `name.set().` under the property's term.
+ACCESSOR = re.compile(r'\.(?:get|set)\(\)\.$')
+# Kotlin's operator conventions and the functions a `for` loop or destructuring calls.
+OPERATORS = {'get', 'set', 'contains', 'iterator', 'next', 'hasNext', 'plus', 'minus', 'times', 'div', 'rem', 'mod',
+             'inc', 'dec', 'not', 'unaryMinus', 'unaryPlus', 'compareTo', 'equals', 'invoke', 'rangeTo', 'rangeUntil',
+             'plusAssign', 'minusAssign', 'timesAssign', 'divAssign', 'remAssign', 'getValue', 'setValue',
+             'provideDelegate'} | {f'component{n}' for n in range(1, 23)}
 # SymbolInformation kinds (scip.proto) of the declarations the rule counts, and of the types whose members dispatch.
 INTERFACE, ABSTRACT_METHOD, CONSTRUCTOR, TYPE_PARAMETER = 21, 66, 9, 58
 # Outside packages that are the platform's standard library; any other outside package is a package.
@@ -177,14 +184,13 @@ def enumerate_repo(repo, src, index):
     # Types the repository declares: those the index defines, and those any of its source files may declare.
     own_types = declared_types(src, {d['relative_path'] for d in index['documents']}, generated)
     own_types |= {top_type(symbol) for symbol, d in defs.items() if not d['generated']} - {None}
-    dropped = 0
-
     def synthesised(symbol):
         """A member the compiler makes for one of the repository's types (an enum's `values()`, a record's accessor,
         a data class's `copy`), which has no definition in source: not outside, and not labelled."""
         up = enclosing(symbol)
         return up in defs
 
+    members = {(enclosing(symbol), descriptor_of(symbol)[0]) for symbol, d in defs.items() if not d['generated']}
     seen = set()
     for rel, lang, d in docs:
         lines = lines_of(rel)
@@ -192,36 +198,64 @@ def enumerate_repo(repo, src, index):
             symbol, rng = o['symbol'], o['range']
             if o['symbol_roles'] & DEFINITION or symbol.startswith('local ') or not rng or rng[0] != rng[2]:
                 continue
+            # scip-kotlinc binds some property reads and writes to the property's accessor (`rawType.get()`); the
+            # token names the property, so the reference is the property's.
+            if ACCESSOR.search(symbol):
+                symbol = enclosing(symbol)
             got = name_and_group(symbol)
             if not got:
                 continue
             name, group = got
             line = rng[0] + 1
-            if line > len(lines):
-                continue
-            text = lines[line - 1]
-            # scip-java doesn't mark import occurrences with the Import role; an import is one line in both languages.
-            if IMPORT_LINE.match(text):
-                continue
-            # The token must be the declaration's own name: an implicit reference has none, and a renamed one (a
-            # Kotlin property read through a Java getter, an import alias) has another.
+            text = lines[line - 1] if line <= len(lines) else ''
             col = byte_column(text, rng[1], d['position_encoding'])
-            token = IDENT.match(text.encode('utf-8')[col - 1:].decode('utf-8', 'replace'))
-            if not token or token.group(0) != name:
-                continue
             if (rel, line, col, symbol) in seen:
                 continue
             seen.add((rel, line, col, symbol))
             target = defs.get(symbol)
+
+            def exclude(reason):
+                out.append(dict(t='excluded', reason=reason, repo=repo, lang=lang, file=rel, line=line, col=col,
+                                name=name, key=symbol))
+            # A reference the toolchain binds that the rule doesn't label is recorded with its reason, so that what
+            # the set doesn't judge is counted (eval/identity-v2/README.md).
+            # scip-java doesn't mark import occurrences with the Import role; an import is one line in both languages.
+            if IMPORT_LINE.match(text):
+                exclude('import')
+                continue
+            # The token must be the declaration's own name: an implicit reference has none, and a renamed one (a
+            # Kotlin property read through a Java getter, an import alias) has another.
+            token = IDENT.match(text.encode('utf-8')[col - 1:].decode('utf-8', 'replace'))
+            if token and token.group(0) != name:
+                # scip-kotlinc's range for a qualified name (`java.util.List`) covers the qualifier; the name ends it.
+                end = byte_column(text, rng[3], d['position_encoding'])
+                tail = text.encode('utf-8')[:end - 1].decode('utf-8', 'replace')
+                if tail.endswith(name) and not IDENT.fullmatch(tail[-len(name) - 1:]):
+                    col = end - len(name.encode('utf-8'))
+                    token = IDENT.match(text.encode('utf-8')[col - 1:].decode('utf-8', 'replace'))
+            if group == 'member' and name == 'class':
+                exclude('class_literal')
+                continue
+            if not token or token.group(0) != name:
+                # An operator's function (`!x`, `a < b`, `x[i]`, `for (e in xs)`) has no token of its own name.
+                exclude('operator' if name in OPERATORS else 'renamed_or_implicit')
+                continue
             if target and target['generated']:
+                exclude('generated_target')
+                continue
+            if not target and (enclosing(symbol), name) in members:
+                # The toolchain's symbol names a member the type declares, under another overload's disambiguator
+                # (scip-kotlinc's "methodDisambiguator not found"): no one declaration can be named.
+                exclude('overload_unmatched')
                 continue
             if not target and synthesised(symbol):
+                exclude('synthesised')
                 continue
             # Outside, in a type the repository declares: a file the build didn't compile (a source set for another
             # platform, a module left out), or a published build of the repository's own code that a module depends
             # on. Neither says where a name binds in this source, so neither is labelled.
             if not target and top_type(symbol) in own_types:
-                dropped += 1
+                exclude('outside_own_type')
                 continue
             up = info.get(enclosing(symbol)) if group != 'type' else None
             s = info.get(symbol)
@@ -242,8 +276,6 @@ def enumerate_repo(repo, src, index):
             else:
                 row.update(inside=False, locs=[], origin=origin(symbol))
             out.append(row)
-    if dropped:
-        print(f'label.py: {dropped} outside references into types the repository declares, left out', file=sys.stderr)
     return out
 
 
