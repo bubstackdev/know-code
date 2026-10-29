@@ -15,7 +15,11 @@
 //! The structure is version 1 (`version`), frozen for the renderers built on it (markdown, SARIF, the CI action):
 //! every row has a stable `id` and a `file`, with 1-based lines where there are any, and `repo` only when it isn't the
 //! reviewed repo (a contract's consumer always has it). An `id` is a hash of the row's kind and fields, per kind
-//! ([`row_id`]): never its line, order or page, so a comment a CI job posted can be found again. The dependents and the tests are walked on one symbol graph (see
+//! ([`row_id`]): never its line, order or page, so a comment a CI job posted can be found again.
+//!
+//! A field with nothing to report is left out, as everywhere in an answer: in `sections`, a missing `next` means no call
+//! continues the section (it is whole) and a missing `incomplete` means no reason cut it; in a changed file's
+//! `symbols`, a missing `change` means `changed` (`removed` is written out). The dependents and the tests are walked on one symbol graph (see
 //! [`crate::walk::Graph::begin_walk`]), as `task` walks them.
 
 use std::collections::{HashMap, HashSet};
@@ -156,10 +160,10 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     }
     let mut symbols: HashMap<String, Vec<Value>> = HashMap::new();
     for s in &r.impact.scope {
-        symbols.entry(s.file.clone()).or_default().push(json!({ "symbol": s.qualified, "kind": s.kind, "line": s.line, "change": "changed" }));
+        symbols.entry(s.file.clone()).or_default().push(symbol_row(&s.qualified, &s.kind, s.line, false));
     }
     for d in &r.removed {
-        symbols.entry(d.file.clone()).or_default().push(json!({ "symbol": d.qualified, "kind": d.kind, "line": d.line, "change": "removed" }));
+        symbols.entry(d.file.clone()).or_default().push(symbol_row(&d.qualified, d.kind, d.line, true));
     }
     for (file, row) in &mut by_file {
         // A deleted file's removed definitions are at its own path; a renamed file's at the path it had.
@@ -301,6 +305,12 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     env["repo"] = json!(ops::repo_name(root));
     env["base"] = json!(r.base);
     env["head"] = json!(if p.diff == "working" { "working".to_string() } else { kc_index::head_commit(root).unwrap_or_default() });
+    // The envelope's `commit` is HEAD; against a revision `head` says the same, once.
+    if env["commit"] == env["head"]
+        && let Some(o) = env.as_object_mut()
+    {
+        o.remove("commit");
+    }
     env["changes"] = json!(changes);
     env["tests"] = json!(test_rows);
     env["missed"] = json!(missed);
@@ -312,23 +322,14 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     env["unsettled"] = json!(unsettled);
     let shown = |k: &str| env[k].as_array().map_or(0, Vec::len);
     // Each section: whether it is whole, the reasons that cut it, and the call continuing it.
-    let section = |shown: usize, total: usize, whole: bool, next: String, reasons: &[&str]| {
-        let mut why: Vec<&str> = reasons.to_vec();
-        if total > shown && !why.contains(&"capped") {
-            why.insert(0, "capped");
-        }
-        // The call continuing a section is given only for one that is cut: a whole one has nothing to continue.
-        let complete = whole && total <= shown;
-        json!({ "complete": complete, "shown": shown, "total": total, "next": if complete { String::new() } else { next }, "incomplete": why })
-    };
     let mut sections = json!({
-        "changes": section(shown("changes"), changes_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
-        "tests": section(shown("tests"), tests_total, true, format!("kc_tests {{\"diff\": {diff_arg}, \"limit\": 30}}"), &[]),
-        "missed": section(shown("missed"), missed_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
-        "dependents": section(shown("dependents"), deps_total, deps_whole, format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}"),
+        "changes": section_json(shown("changes"), changes_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
+        "tests": section_json(shown("tests"), tests_total, true, format!("kc_tests {{\"diff\": {diff_arg}, \"limit\": 30}}"), &[]),
+        "missed": section_json(shown("missed"), missed_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
+        "dependents": section_json(shown("dependents"), deps_total, deps_whole, format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}"),
                               if deps_whole { &[] } else { &["depth"] }),
-        "contracts": section(0, 0, false, String::new(), &["unsupported"]),
-        "rules": section(0, 0, true, String::new(), &[]),
+        "contracts": section_json(0, 0, false, String::new(), &["unsupported"]),
+        "rules": section_json(0, 0, true, String::new(), &[]),
     });
     sections["tests"]["advisory"] = json!(ADVISORY);
     env["sections"] = sections;
@@ -347,6 +348,36 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     finish(&mut env);
     let data = env.clone();
     Ok(Out { env, data })
+}
+
+/// A section's entry in `sections`: whether it is whole, how many rows it shows of how many, and, for a cut one, the
+/// call continuing it and the reasons that cut it. A field with nothing to say is left out, as everywhere in an answer:
+/// a missing `next` means there is no call to continue (the section is whole), a missing `incomplete` means no reason
+/// cut it.
+fn section_json(shown: usize, total: usize, whole: bool, next: String, reasons: &[&str]) -> Value {
+    let mut why: Vec<&str> = reasons.to_vec();
+    if total > shown && !why.contains(&"capped") {
+        why.insert(0, "capped");
+    }
+    let complete = whole && total <= shown;
+    let mut v = json!({ "complete": complete, "shown": shown, "total": total });
+    if !complete && !next.is_empty() {
+        v["next"] = json!(next);
+    }
+    if !why.is_empty() {
+        v["incomplete"] = json!(why);
+    }
+    v
+}
+
+/// A changed file's symbol: its name, kind and line, and `change: removed` for a definition the diff removes (its line
+/// at the base). A missing `change` means `changed`: the symbol is in the diff's changed lines.
+fn symbol_row(symbol: &str, kind: &str, line: u32, removed: bool) -> Value {
+    let mut v = json!({ "symbol": symbol, "kind": kind, "line": line });
+    if removed {
+        v["change"] = json!("removed");
+    }
+    v
 }
 
 /// The order a review answer's keys are written in: its sections as they are read, then what the answer says about
@@ -373,10 +404,10 @@ fn budgeted(text: &str) -> String {
         if s["shown"].as_u64().is_some_and(|shown| held < shown) {
             s["shown"] = json!(held);
             s["complete"] = json!(false);
-            if let Some(why) = s["incomplete"].as_array_mut()
-                && !why.iter().any(|w| w == "budget")
-            {
-                why.push(json!("budget"));
+            match s["incomplete"].as_array_mut() {
+                Some(why) if why.iter().any(|w| w == "budget") => {}
+                Some(why) => why.push(json!("budget")),
+                None => s["incomplete"] = json!(["budget"]),
             }
             changed = true;
         }
@@ -417,12 +448,25 @@ mod tests {
         assert_eq!(row_id("change", &["", "src/A.cs"]).len(), 16);
     }
 
+    /// What a field left out means is pinned byte for byte: a whole, empty section is its counts alone; a cut one has
+    /// its call and reasons; a changed symbol has no `change`, a removed one says so.
+    #[test]
+    fn fields_with_nothing_to_report_are_left_out() {
+        assert_eq!(section_json(0, 0, true, "kc_tests {}".into(), &[]).to_string(), r#"{"complete":true,"shown":0,"total":0}"#);
+        assert_eq!(
+            section_json(2, 5, true, "kc_tests {}".into(), &[]).to_string(),
+            r#"{"complete":false,"incomplete":["capped"],"next":"kc_tests {}","shown":2,"total":5}"#
+        );
+        assert_eq!(symbol_row("Ledger.Post", "method", 4, false).to_string(), r#"{"kind":"method","line":4,"symbol":"Ledger.Post"}"#);
+        assert_eq!(symbol_row("Ledger.Void", "method", 9, true).to_string(), r#"{"change":"removed","kind":"method","line":9,"symbol":"Ledger.Void"}"#);
+    }
+
     /// A list the size cap cut after the sections were written makes its section say so.
     #[test]
     fn a_section_the_size_cap_cut_says_it_is_cut() {
-        let env = json!({"changes": [{"file": "a"}], "sections": {"changes": {"complete": true, "shown": 3, "total": 3, "next": "", "incomplete": []}}});
+        let env = json!({"changes": [{"file": "a"}], "sections": {"changes": {"complete": true, "shown": 3, "total": 3}}});
         let out: Value = serde_json::from_str(&reading_order(&env.to_string())).unwrap();
-        assert_eq!(out["sections"]["changes"], json!({"complete": false, "shown": 1, "total": 3, "next": "", "incomplete": ["budget"]}));
+        assert_eq!(out["sections"]["changes"], json!({"complete": false, "shown": 1, "total": 3, "incomplete": ["budget"]}));
     }
 
     /// A diff gets its changed files with their symbols, the tests reaching them, what depends on them by file, and
@@ -463,7 +507,7 @@ mod tests {
         assert!(env["tests"][0]["run"].as_str().is_some_and(|r| r.starts_with("dotnet test")), "{env}");
         assert_eq!(env["sections"]["tests"]["advisory"], ADVISORY);
         for key in ["changes", "tests", "missed", "dependents", "contracts", "rules"] {
-            assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["incomplete"].is_array(), "{key}: {env}");
+            assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["total"].is_u64(), "{key}: {env}");
         }
         assert_eq!(env["complete"], false, "{env}");
         // The answer in reading order: the same bytes, the changes first.
