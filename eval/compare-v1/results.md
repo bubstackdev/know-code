@@ -18,23 +18,26 @@ mapping and the scoring rules are in [README.md](README.md). The mapping's freez
 | Where | One throwaway Linux container per repository and repetition (Docker on an Apple-silicon Mac, 4 CPUs and 12 GB each). The network was up while the tools indexed and cut before the first question. No speed or cost is measured or claimed. |
 | `impact` | Two hops. Serena documents no impact or transitive call, so it has `no_counterpart` for every impact question. That is reported as such, never as a miss or a win. |
 
-## Two runs
+## Three runs
 
 - **The first run** is published as it was scored.
-- **The rerun** followed an audit of the three adapters against the frozen protocol. Four deviations were fixed: three favour KnowCode and one favours Serena. The questions, the mapping and the scoring are unchanged. [README.md, "Changes after the first run"](README.md#changes-after-the-first-run) lists each fix, the tool it favours, and its effect on the first run's stored answers.
-- Both runs used the same images and the same KnowCode build, so the adapters are the only difference between them.
+- **The rerun** followed an audit of the three adapters against the frozen protocol. Four deviations were fixed: three favour KnowCode and one favours Serena.
+- **The third run** followed a second audit, after KnowCode's maintainers found that the adapter never read KnowCode's impact continuation pages (see "A correction" below). That fix favours KnowCode.
+- [README.md, "Changes after the first run"](README.md#changes-after-the-first-run) lists each fix, when and how it was found, the tool it favours, and its effect on the stored answers.
+- The questions, the mapping and the scoring are unchanged throughout. All three runs used the same images and the same KnowCode build, so the adapters are the only difference between them.
 
 Each run is two complete repetitions in fresh containers. The protocol asks for identical scores, and neither run
 met it. The differences are explained here, and the figures below are each run's first repetition:
 
 - **The first run's repetitions:** 12 of 1,128 answers differ.
   - 11 are Serena's: references that came back empty in one repetition only, 9 of them on swift-nio.
-  - 1 is KnowCode's: on jellyfin-server, an answer in one repetition became the error "no indexed file has the path". KnowCode was still building its index during the first questions; see the README's index-phase fix. KnowCode answered before its index was built; a fix that answers `indexing` instead of `not_found` in that case is in progress. KnowCode's errors are scored as errors.
+  - 1 is KnowCode's: on jellyfin-server, an answer in one repetition became the error "no indexed file has the path". KnowCode was still building its index during the first questions; see the README's index-phase fix. KnowCode answered before its index was built; a fix that answers `indexing` rather than `not_found` in that case is in progress (it is unrelated to #230). KnowCode's errors are scored as errors.
 - **The rerun's repetitions:** 20 of 1,128 answers differ, all of them Serena's on Swift (18 on swift-nio, 2 on swift-argument-parser).
   - The cause is sourcekit-lsp still indexing in the background when asked.
   - Serena documents no way to wait for it, so none was added.
   - Serena's Swift `refs` recall on answered questions is 0.589 in the first repetition and 0.524 in the second, and its recall on all languages 0.851 and 0.829 (see "Serena's Swift references vary between repetitions").
   - KnowCode's and codebase-memory-mcp's answers are identical, item for item, in both repetitions.
+- **The third run's repetitions:** 20 of 1,128 answers differ, all of them Serena's on Swift (15 on swift-nio, 5 on swift-argument-parser), for the same reason. KnowCode's and codebase-memory-mcp's answers are again identical, item for item.
 
 ## Reading the figures
 
@@ -61,15 +64,23 @@ Serena starts sourcekit-lsp with background indexing on, and it waits a fixed 5 
 references request. It documents no way to wait for the index, so compare-v1 adds none. Both repetitions are shown
 under each run, in "Figures that differ between the two repetitions".
 
-## A finding about KnowCode: impact stops at its default walk limit
+## A correction: KnowCode's impact pages weren't read
 
-KnowCode's `impact` walk stops at a default limit on how many symbols it visits. An answer cut there says
-`incomplete (depth)`, names the frontier it stopped at, and offers no continuation. The protocol uses each tool's
-defaults and follows only continuations, so these answers are scored as given.
+An earlier version of this page said that KnowCode's impact answers stop at a default walk limit, and gave that as
+the reason for its low impact recall. That cause is wrong. Withdrawn: a claim this page shouldn't have made.
 
-- In the rerun, 43 of KnowCode's 95 impact answers stopped there (41 of 86 in the first run).
-- Following the 24 continuations KnowCode did offer moved its impact recall only from 0.330 to 0.371.
-- The cut is in the walk, not in the paging. The tables under each run count the answers by the incomplete reasons they state.
+- **What was wrong.** The cause was the harness.
+  - A KnowCode impact answer's first page is text, and its continuation pages (`kc_more`) are JSON.
+  - The adapter read only text, so it took no rows from a continuation page and never asked for the page after it.
+  - In the first run and the rerun, every KnowCode impact answer was scored on its first 30 rows at most. The protocol says to follow up to 10 pages.
+- **What `incomplete (depth)` means.** The note says only that there are dependents past hop 2. impact is asked and labelled at exactly two hops, so the note cuts nothing in scope.
+- **How it was found.** KnowCode's maintainers read the rerun's stored answers. On jellyfin-web, for example, page 2 of one answer held 15 rows the score never saw, with 180 more rows past it.
+- **What was done.** The adapters of all three tools were audited again for continuations in every format and every question type. KnowCode's JSON pages were the only deviation found. After the fix, the third run follows every page up to the protocol's 10.
+- **How far the first two runs' figures understate.** Re-parsing the rerun's stored second pages alone adds 359 rows to 24 answers, and moves KnowCode's impact recall on the questions it answered from 0.371 to 0.456. The third run fetches every page.
+- **The third run, every page read.** KnowCode's impact recall on the questions it answered is 0.695 (1429/2055), against 0.371 in the rerun. On every question it is 0.687 (1429/2080), against 0.366. Precision is 0.696 (1434/2061), against 0.716.
+  - By language, recall on answered questions: C# 0.880, Swift 0.516, TypeScript 0.856.
+  - KnowCode's refs figures, and every codebase-memory-mcp figure, are unchanged from the rerun: their pages were already read. Serena's figures differ only by its Swift variance.
+- **The figures kept.** The first run's and the rerun's KnowCode impact figures are kept below as they were scored, for the record. They understate what KnowCode's answers held. The tables under each run still count the answers by the incomplete reasons they state.
 
 ## Run: first
 
@@ -310,10 +321,124 @@ Every other figure is the same in both repetitions. The tables below give the fi
 
 Every miss of every tool: [results/rerun.misses.tsv](results/rerun.misses.tsv).
 
+## Run: third
+
+Repetitions: two complete runs in fresh containers. Scores identical: no. Answers that differ between them (outcome or set of items): 20 of 1128.
+
+| Tool | Answers that differ |
+| --- | ---: |
+| Serena | 20 |
+
+### Figures that differ between the two repetitions
+
+| Tool | Question | Language | Score | Measure | First repetition | Second repetition |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| Serena | refs | All | answered | precision | 0.957 (6335/6620; 0.95–0.96) | 0.956 (6223/6508; 0.95–0.96) |
+| Serena | refs | All | answered | recall | 0.853 (6335/7425; 0.84–0.86) | 0.838 (6223/7425; 0.83–0.85) |
+| Serena | refs | Swift | answered | precision | 0.999 (1505/1506; 1.00–1.00) | 0.999 (1393/1394; 1.00–1.00) |
+| Serena | refs | Swift | answered | recall | 0.596 (1505/2526; 0.58–0.61) | 0.551 (1393/2526; 0.53–0.57) |
+| Serena | refs | All | every question | precision | 0.957 (6335/6620; 0.95–0.96) | 0.956 (6223/6508; 0.95–0.96) |
+| Serena | refs | All | every question | recall | 0.852 (6335/7436; 0.84–0.86) | 0.837 (6223/7436; 0.83–0.85) |
+| Serena | refs | Swift | every question | precision | 0.999 (1505/1506; 1.00–1.00) | 0.999 (1393/1394; 1.00–1.00) |
+| Serena | refs | Swift | every question | recall | 0.596 (1505/2527; 0.58–0.61) | 0.551 (1393/2527; 0.53–0.57) |
+
+Every other figure is the same in both repetitions. The tables below give the first repetition.
+
+### Scored on the questions each tool answered
+
+**refs**
+
+| Tool | Language | Questions | Precision | Recall | Unjudged items | not_found | error | no_counterpart |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| KnowCode | C# | 105 | 0.706 (2414/3419; 0.69–0.72) | 0.844 (2414/2860; 0.83–0.86) | 193 | 1 | 0 | 0 |
+| KnowCode | Swift | 104 | 0.779 (2267/2911; 0.76–0.79) | 0.897 (2267/2527; 0.88–0.91) | 101 | 0 | 0 | 0 |
+| KnowCode | TypeScript | 63 | 0.808 (1326/1642; 0.79–0.83) | 0.786 (1326/1686; 0.77–0.81) | 249 | 7 | 0 | 0 |
+| KnowCode | All | 272 | 0.754 (6007/7972; 0.74–0.76) | 0.849 (6007/7073; 0.84–0.86) | 543 | 8 | 0 | 0 |
+| codebase-memory-mcp | C# | 92 | 0.699 (880/1259; 0.67–0.72) | 0.493 (1217/2471; 0.47–0.51) | 355 | 14 | 0 | 0 |
+| codebase-memory-mcp | Swift | 53 | 0.880 (403/458; 0.85–0.91) | 0.703 (697/992; 0.67–0.73) | 83 | 51 | 0 | 0 |
+| codebase-memory-mcp | TypeScript | 42 | 0.989 (351/355; 0.97–1.00) | 0.837 (829/991; 0.81–0.86) | 373 | 28 | 0 | 0 |
+| codebase-memory-mcp | All | 187 | 0.789 (1634/2072; 0.77–0.81) | 0.616 (2743/4454; 0.60–0.63) | 811 | 93 | 0 | 0 |
+| Serena | C# | 105 | 0.910 (2859/3143; 0.90–0.92) | 1.000 (2859/2859; 1.00–1.00) | 311 | 1 | 0 | 0 |
+| Serena | Swift | 103 | 0.999 (1505/1506; 1.00–1.00) | 0.596 (1505/2526; 0.58–0.61) | 38 | 1 | 0 | 0 |
+| Serena | TypeScript | 66 | 1.000 (1971/1971; 1.00–1.00) | 0.966 (1971/2040; 0.96–0.97) | 691 | 3 | 1 | 0 |
+| Serena | All | 274 | 0.957 (6335/6620; 0.95–0.96) | 0.853 (6335/7425; 0.84–0.86) | 1040 | 5 | 1 | 0 |
+
+**impact**
+
+| Tool | Language | Questions | Precision | Recall | Unjudged items | not_found | error | no_counterpart |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| KnowCode | C# | 36 | 0.726 (533/734; 0.69–0.76) | 0.880 (533/606; 0.85–0.90) | 17 | 0 | 0 | 0 |
+| KnowCode | Swift | 36 | 0.635 (527/830; 0.60–0.67) | 0.516 (523/1013; 0.49–0.55) | 63 | 0 | 0 | 0 |
+| KnowCode | TypeScript | 23 | 0.753 (374/497; 0.71–0.79) | 0.856 (373/436; 0.82–0.89) | 346 | 1 | 0 | 0 |
+| KnowCode | All | 95 | 0.696 (1434/2061; 0.68–0.72) | 0.695 (1429/2055; 0.68–0.71) | 426 | 1 | 0 | 0 |
+| codebase-memory-mcp | C# | 25 | 0.623 (268/430; 0.58–0.67) | 0.810 (268/331; 0.76–0.85) | 7 | 11 | 0 | 0 |
+| codebase-memory-mcp | Swift | 26 | 0.777 (476/613; 0.74–0.81) | 0.575 (474/825; 0.54–0.61) | 115 | 10 | 0 | 0 |
+| codebase-memory-mcp | TypeScript | 22 | 0.756 (322/426; 0.71–0.79) | 0.736 (320/435; 0.69–0.77) | 159 | 2 | 0 | 0 |
+| codebase-memory-mcp | All | 73 | 0.726 (1066/1469; 0.70–0.75) | 0.668 (1062/1591; 0.64–0.69) | 281 | 23 | 0 | 0 |
+| Serena | C# | 0 | – | – | 0 | 0 | 0 | 36 |
+| Serena | Swift | 0 | – | – | 0 | 0 | 0 | 36 |
+| Serena | TypeScript | 0 | – | – | 0 | 0 | 0 | 24 |
+| Serena | All | 0 | – | – | 0 | 0 | 0 | 96 |
+
+
+### Scored on every question (`not_found` and `error` count as every label missed)
+
+**refs**
+
+| Tool | Language | Questions | Precision | Recall | Unjudged items |
+| --- | --- | ---: | ---: | ---: | ---: |
+| KnowCode | C# | 106 | 0.706 (2414/3419; 0.69–0.72) | 0.844 (2414/2861; 0.83–0.86) | 193 |
+| KnowCode | Swift | 104 | 0.779 (2267/2911; 0.76–0.79) | 0.897 (2267/2527; 0.88–0.91) | 101 |
+| KnowCode | TypeScript | 70 | 0.808 (1326/1642; 0.79–0.83) | 0.647 (1326/2048; 0.63–0.67) | 249 |
+| KnowCode | All | 280 | 0.754 (6007/7972; 0.74–0.76) | 0.808 (6007/7436; 0.80–0.82) | 543 |
+| codebase-memory-mcp | C# | 106 | 0.699 (880/1259; 0.67–0.72) | 0.425 (1217/2861; 0.41–0.44) | 355 |
+| codebase-memory-mcp | Swift | 104 | 0.880 (403/458; 0.85–0.91) | 0.276 (697/2527; 0.26–0.29) | 83 |
+| codebase-memory-mcp | TypeScript | 70 | 0.989 (351/355; 0.97–1.00) | 0.405 (829/2048; 0.38–0.43) | 373 |
+| codebase-memory-mcp | All | 280 | 0.789 (1634/2072; 0.77–0.81) | 0.369 (2743/7436; 0.36–0.38) | 811 |
+| Serena | C# | 106 | 0.910 (2859/3143; 0.90–0.92) | 0.999 (2859/2861; 1.00–1.00) | 311 |
+| Serena | Swift | 104 | 0.999 (1505/1506; 1.00–1.00) | 0.596 (1505/2527; 0.58–0.61) | 38 |
+| Serena | TypeScript | 70 | 1.000 (1971/1971; 1.00–1.00) | 0.962 (1971/2048; 0.95–0.97) | 691 |
+| Serena | All | 280 | 0.957 (6335/6620; 0.95–0.96) | 0.852 (6335/7436; 0.84–0.86) | 1040 |
+
+**impact**
+
+| Tool | Language | Questions | Precision | Recall | Unjudged items |
+| --- | --- | ---: | ---: | ---: | ---: |
+| KnowCode | C# | 36 | 0.726 (533/734; 0.69–0.76) | 0.880 (533/606; 0.85–0.90) | 17 |
+| KnowCode | Swift | 36 | 0.635 (527/830; 0.60–0.67) | 0.516 (523/1013; 0.49–0.55) | 63 |
+| KnowCode | TypeScript | 24 | 0.753 (374/497; 0.71–0.79) | 0.809 (373/461; 0.77–0.84) | 346 |
+| KnowCode | All | 96 | 0.696 (1434/2061; 0.68–0.72) | 0.687 (1429/2080; 0.67–0.71) | 426 |
+| codebase-memory-mcp | C# | 36 | 0.623 (268/430; 0.58–0.67) | 0.442 (268/606; 0.40–0.48) | 7 |
+| codebase-memory-mcp | Swift | 36 | 0.777 (476/613; 0.74–0.81) | 0.468 (474/1013; 0.44–0.50) | 115 |
+| codebase-memory-mcp | TypeScript | 24 | 0.756 (322/426; 0.71–0.79) | 0.694 (320/461; 0.65–0.73) | 159 |
+| codebase-memory-mcp | All | 96 | 0.726 (1066/1469; 0.70–0.75) | 0.511 (1062/2080; 0.49–0.53) | 281 |
+| Serena | All | no_counterpart | | | |
+
+
+### KnowCode impact answers by what their first page says is incomplete
+
+| Incomplete reasons | Answers |
+| --- | ---: |
+| complete | 28 |
+| capped,depth | 18 |
+| depth | 17 |
+| policy | 14 |
+| depth,policy | 5 |
+| capped | 3 |
+| policy,unsupported | 3 |
+| capped,unsupported | 2 |
+| unsupported | 2 |
+| capped,depth,unsupported | 1 |
+| depth,policy,unsupported | 1 |
+| depth,unsupported | 1 |
+
+Every miss of every tool: [results/third.misses.tsv](results/third.misses.tsv).
+
 
 ## What these results don't show
 
 - **A fresh test of KnowCode.** KnowCode's resolvers were developed against identity-v1's labels on these same eight repositories ([eval/identity-v1](../identity-v1/README.md)). codebase-memory-mcp and Serena weren't. The questions here are drawn from those repositories' toolchain enumerations, so KnowCode's figures are on code its resolution was tuned on, and they may be higher than on code it hasn't seen. 0.8's Go and Java questions come from repositories nobody tuned on.
+- **A fresh test of KnowCode's impact answers from now on.** KnowCode's maintainers read all 96 impact questions' answers here, on the rerun's build, to diagnose the pagination fault above. Any later KnowCode change to impact is justified on a separate development set drawn from identity-v1's enumerations, which leaves out compare-v1's targets. Still, future KnowCode figures on these impact questions come from a team that has seen them.
 - **Agents.** Whether an agent does better with any of these tools; compare-v1 asks no agent.
 - **Speed and cost.** No timing or cost is measured.
 - **Other languages and questions.** Languages other than C#, TypeScript and Swift, and the questions 0.8 adds (callers, find, locate, task, co-change, cross-repository HTTP).
