@@ -109,6 +109,7 @@ type enumerator struct {
 	fset       *token.FileSet
 	own        []string // module paths the repository's go.mod files declare
 	ownCopies  int
+	bodies     map[string][][2]token.Pos // function bodies by file name, for fields of types declared in them
 }
 
 func (e *enumerator) load(dir string) {
@@ -129,6 +130,26 @@ func (e *enumerator) load(dir string) {
 			fmt.Fprintf(os.Stderr, "label: %s: %v\n", p.PkgPath, err)
 		}
 	})
+	e.bodies = map[string][][2]token.Pos{}
+	for _, p := range pkgs {
+		for _, f := range p.Syntax {
+			name := e.fset.File(f.Pos()).Name()
+			ast.Inspect(f, func(n ast.Node) bool {
+				var body *ast.BlockStmt
+				switch fn := n.(type) {
+				case *ast.FuncDecl:
+					body = fn.Body
+				case *ast.FuncLit:
+					body = fn.Body
+				}
+				if body != nil {
+					e.bodies[name] = append(e.bodies[name], [2]token.Pos{body.Pos(), body.End()})
+					return false // a nested body lies inside this one
+				}
+				return true
+			})
+		}
+	}
 	for _, p := range pkgs {
 		if p.TypesInfo == nil {
 			continue
@@ -210,7 +231,7 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 		if obj == nil {
 			continue
 		}
-		if group := declGroup(obj); group != "" {
+		if group := e.declGroup(obj); group != "" {
 			pos := e.fset.Position(id.Pos())
 			if r, ok := e.rel(pos.Filename); ok && r == rel {
 				k := key(obj, e)
@@ -221,7 +242,7 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 		}
 	}
 	for id, obj := range info.Uses {
-		kind := refKind(obj)
+		kind := e.refKind(origin(obj))
 		if kind == "" || id.Name != obj.Name() {
 			continue
 		}
@@ -276,9 +297,28 @@ func packageLevel(obj types.Object) bool {
 	return obj.Pkg() != nil && obj.Parent() == obj.Pkg().Scope()
 }
 
+// inBody reports a declaration inside a function body: a field of a struct type declared there (a table test's
+// cases) is a local, as the README's rule has it.
+func (e *enumerator) inBody(obj types.Object) bool {
+	if !obj.Pos().IsValid() {
+		return false
+	}
+	f := e.fset.File(obj.Pos())
+	if f == nil {
+		return false
+	}
+	for _, b := range e.bodies[f.Name()] {
+		if b[0] <= obj.Pos() && obj.Pos() < b[1] {
+			return true
+		}
+	}
+	return false
+}
+
 // declGroup is the multiplicity group of a declaration counted by name, or "" for one that isn't counted: locals,
-// parameters, results, type parameters, labels, package names and blank identifiers.
-func declGroup(obj types.Object) string {
+// parameters, results, type parameters, fields of types declared in a function, labels, package names and blank
+// identifiers.
+func (e *enumerator) declGroup(obj types.Object) string {
 	if obj.Name() == "_" || obj.Pkg() == nil {
 		return ""
 	}
@@ -291,7 +331,7 @@ func declGroup(obj types.Object) string {
 	case *types.Func:
 		return "callable"
 	case *types.Var:
-		if o.IsField() || packageLevel(o) {
+		if (o.IsField() && !e.inBody(o)) || packageLevel(o) {
 			return "member"
 		}
 	case *types.Const:
@@ -303,8 +343,8 @@ func declGroup(obj types.Object) string {
 }
 
 // refKind is a reference's kind (README "Kinds"), or "" for one that isn't labelled: package names (qualifiers and
-// imports), builtins, nil, labels, locals, parameters and type parameters, and local types.
-func refKind(obj types.Object) string {
+// imports), builtins, nil, labels, locals, parameters and type parameters, and local types and their fields.
+func (e *enumerator) refKind(obj types.Object) string {
 	if obj.Pkg() == nil || obj.Pkg().Path() == "C" || obj.Name() == "_" {
 		return ""
 	}
@@ -317,7 +357,7 @@ func refKind(obj types.Object) string {
 		}
 		return "call"
 	case *types.Var:
-		if o.IsField() || packageLevel(o) {
+		if (o.IsField() && !e.inBody(o)) || packageLevel(o) {
 			return "member"
 		}
 	case *types.Const:

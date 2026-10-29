@@ -75,8 +75,10 @@ case $LANGUAGE in
          else npm ci --ignore-scripts >>$LOG 2>&1; fi" ;;
   go)
     # Every module's dependencies, tests' included, and the labeller's own (x/tools), before the network goes.
+    # scip-go is the labeller's cross-check (eval/identity-v2/README.md, Go): installed here, run offline below.
     run "go version >>$LOG
          cd /work/tools && go mod download >>$LOG 2>&1 && go build -o /work/label . >>$LOG 2>&1
+         GOBIN=/work/bin go install github.com/scip-code/scip-go/cmd/scip-go@v0.2.9 >>$LOG 2>&1
          cd /work/src && for m in \$(find . -name go.mod -not -path '*/vendor/*' -not -path '*/testdata/*' -not -path '*/.*/*'); do
            (cd \$(dirname \$m) && go mod download >>$LOG 2>&1 && go list -test -deps ./... >/dev/null 2>>$LOG) || echo \"go: restore failed in \$m\" >>$LOG
          done" ;;
@@ -99,6 +101,12 @@ case $LANGUAGE in
     CONFIGS=$(grep -E "^$REPO " "$HERE/typescript/configs.txt" | cut -d' ' -f2-)
     run "cd /work/src && node /work/tools/label.cjs --repo $REPO --src /work/src $CONFIGS 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
   go)
-    run "cd /work/src && GOPROXY=off GOFLAGS=-mod=mod /work/label -repo $REPO -src /work/src 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
+    run "cd /work/src && GOPROXY=off GOFLAGS=-mod=mod /work/label -repo $REPO -src /work/src 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz
+         mkdir -p /out/scip-$REPO && i=0
+         for m in \$(find . -name go.mod -not -path '*/vendor/*' -not -path '*/testdata/*' -not -path '*/.*/*' | sort); do
+           d=\$(dirname \$m); i=\$((i+1))
+           (cd \$d && GOPROXY=off /work/bin/scip-go index --quiet ./... -o /out/scip-$REPO/\$i.scip 2>>$LOG) || echo \"scip-go failed in \$d\" >>$LOG
+           echo \"\$i \${d#./}\" >> /out/scip-$REPO/modules.txt
+         done" ;;
 esac
 echo "run.sh: $REPO: $(gzip -dc "$IO/out/enumeration-$REPO.jsonl.gz" | wc -l | tr -d ' ') rows"
