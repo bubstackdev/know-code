@@ -91,8 +91,10 @@ jobs:
             target
           key: test-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: test-${{ runner.os }}-
-      # Tests commit to throwaway repos. A global identity, not GIT_AUTHOR_* variables, so a test's own
-      # `-c user.name=…` still wins (an author named like a bot is left out of history answers).
+      # The Python checks below commit to throwaway repos with the runner's own HOME, so they need a global identity
+      # (cargo's test binaries get the same one inside scripts/test-runner's sandbox). A global identity, not
+      # GIT_AUTHOR_* variables, so a test's own `-c user.name=…` still wins (an author named like a bot is left out of
+      # history answers).
       - run: git config --global user.name "Test Author" && git config --global user.email test@example.test
       # The invariant suite (every test named `invariant_…`, see docs/evaluation.md) first, so a broken invariant is
       # reported as one; the full run below includes them again.
