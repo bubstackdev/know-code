@@ -341,3 +341,21 @@ fn an_overload_taking_the_arguments_as_typed_beats_a_generic_one_and_one_they_do
     assert_eq!(at_line(conn, "Emit", 23), [("exact", vec![12])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Parameter types written before `rest` was recorded (no `rest` key) still parse, and the tie-break that needs it
+/// stays out: the generic and `params` overloads are left as candidates, as they were.
+#[test]
+fn parameter_types_stored_without_rest_resolve_as_before() {
+    let root = scratch("overload-ties-old-rows");
+    write(&root, "src/App/Sink.cs", SINK);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    let changed = conn.execute("UPDATE symbols SET param_types = json_remove(param_types, '$.rest') WHERE param_types LIKE '%\"rest\"%'", []).unwrap();
+    assert!(changed > 0, "the fixture has `params` overloads");
+    assert_eq!(at_line(conn, "Emit", 12), [("ambiguous", vec![13, 14])]);
+    assert_eq!(at_line(conn, "Emit", 22), [("ambiguous", vec![13, 14])]);
+    // Telling overloads apart by the types they list is unchanged.
+    assert_eq!(at_line(conn, "Info", 20), [("exact", vec![19])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
