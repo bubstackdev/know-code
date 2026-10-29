@@ -4,6 +4,21 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A React component used only through JSX has dependents. A tag (`<Page …>`, `</Page>`) was recorded as a type
+  reference, which `impact`, `trace` and `tests` don't follow from a function, so a component rendered only that way
+  answered "nothing affected". A tag is now a call of its component, as the TypeScript compiler binds it (`<Ns.Comp>`
+  a member of `Ns`), and rendering a class component creates it; `refs` lists these uses as `call` instead of
+  `type_ref`. TypeScript and JavaScript files are read again once. On impact-dev-v1's 92 questions, impact's recall
+  rises from 0.816 to 0.858 (71 more labels found in 5 jellyfin-web questions, no other answer changed), and `tests`
+  for hono's `src/jsx/components.ts` reaches the tests that render its components.
+- `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
+  tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
+  is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves
+  the rows it drops to the next page rather than skipping them. A cursor a JSON answer handed out still gives JSON
+  pages.
+- TypeScript: a member a repo adds to a package's module by augmenting it (`declare module 'pkg' { interface … }`) and
+  reaches through that package's values stays linked; members reached through other packages' values are still the
+  package's. The index records each module a file augments (index schema 24; TypeScript files are read again once).
 - A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
   added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
   indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.

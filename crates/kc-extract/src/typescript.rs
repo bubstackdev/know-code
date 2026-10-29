@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 27;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -260,6 +260,10 @@ impl<'a> Cx<'a> {
             // (`Shapes.Circle`) is found among the declarations it spans. Its members keep their own containers: a
             // namespace scopes names, it is no type. `declare module "pkg"` names a module, not a namespace.
             "internal_module" | "module" => {
+                if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() == "string") {
+                    let module = self.text(n).trim_matches(['"', '\'', '`']).to_string();
+                    self.facts.augments.push(Import { module, line: line(node) });
+                }
                 if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() != "string") {
                     let container = namespaces_around(self.src, node);
                     self.push(node, outer, self.text(n).to_string(), SymbolKind::Module, container, None);
@@ -378,6 +382,18 @@ impl<'a> Cx<'a> {
                 }
                 if let Some(o) = node.child_by_field_name("object") {
                     self.visit(o);
+                }
+            }
+            // `<Page …>`, `</Page>`, `<Dialog.Title />`: rendering a component calls it, so its tag is a call (a member
+            // of its namespace for `Ns.Comp`), as the compiler binds it, and not the type reference a capitalised name
+            // used as a value is. Attributes and children are visited as before.
+            "jsx_opening_element" | "jsx_self_closing_element" | "jsx_closing_element" => {
+                let tag = node.child_by_field_name("name");
+                if let Some(t) = tag {
+                    self.jsx_tag(t);
+                }
+                for c in children(node).filter(|c| Some(c.id()) != tag.map(|t| t.id())) {
+                    self.visit(c);
                 }
             }
             // A class used as a value (`component: X`, `open(X)`, `declarations: [X]`): a type reference.
@@ -1255,6 +1271,22 @@ impl<'a> Cx<'a> {
                 });
                 let name = self.text(p).trim_start_matches('#').to_string();
                 self.add(name, receiver, rt.map(|t| t.encode()), RefKind::Call, p);
+            }
+            _ => {}
+        }
+    }
+
+    /// A JSX tag's name: a component (`Page`) is called, a namespaced one (`Dialog.Title`) is a member of its
+    /// namespace; an intrinsic element (`div`) or a namespaced name (`svg:rect`) names no declaration.
+    fn jsx_tag(&mut self, tag: Node) {
+        match tag.kind() {
+            "identifier" if starts_upper(self.text(tag)) => self.add(self.text(tag).to_string(), None, None, RefKind::Call, tag),
+            "member_expression" => {
+                let (Some(o), Some(p)) = (tag.child_by_field_name("object"), tag.child_by_field_name("property")) else { return };
+                let receiver = Some(collapse(self.text(o), RECEIVER_CAP));
+                let rt = self.expr_type(o).map(|t| t.encode());
+                self.add(self.text(p).to_string(), receiver, rt, RefKind::Member, p);
+                self.visit(o);
             }
             _ => {}
         }
@@ -3021,6 +3053,22 @@ function direct(id) {
         assert_eq!(f.parse_errors, 0);
         assert!(f.symbols.iter().any(|s| s.name == "Cart" && s.kind == SymbolKind::Function));
         assert!(f.refs.iter().any(|r| r.name == "load" && r.kind == RefKind::Call));
+    }
+
+    #[test]
+    fn a_jsx_tag_calls_its_component() {
+        let src = "export function Shelf({ items }: Props) {\n    return <Panel title={<Badge />}>\n        <Dialog.Title>{items.length}</Dialog.Title>\n        <div>{render(items)}</div>\n    </Panel>;\n}\n";
+        let f = extract(src, true);
+        assert_eq!(f.parse_errors, 0);
+        let got: Vec<(&str, RefKind, Option<&str>, u32)> =
+            f.refs.iter().map(|r| (r.name.as_str(), r.kind, r.receiver.as_deref(), r.line)).collect();
+        // The opening and closing tags each call `Panel`, as the compiler binds both; `div` names nothing.
+        for want in [("Panel", RefKind::Call, None, 2), ("Badge", RefKind::Call, None, 2), ("Panel", RefKind::Call, None, 5),
+            ("Title", RefKind::Member, Some("Dialog"), 3), ("render", RefKind::Call, None, 4)]
+        {
+            assert!(got.contains(&want), "{want:?} in {got:?}");
+        }
+        assert!(!got.iter().any(|r| r.0 == "div" || (r.0 == "Panel" && r.1 == RefKind::TypeRef)), "{got:?}");
     }
 
     #[test]

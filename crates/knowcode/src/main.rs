@@ -15,6 +15,7 @@ mod help;
 mod history;
 mod hook;
 mod mcp;
+mod more_text;
 mod ops;
 mod pending;
 mod record;
@@ -37,6 +38,8 @@ mod tree;
 mod walk;
 mod unread;
 mod whole;
+#[cfg(test)]
+mod jsx_impact_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;
