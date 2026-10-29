@@ -32,8 +32,9 @@ ONE_OPS = {'impact': ('symbol', ''), 'find': ('query', ''), 'refs': ('name', 'na
            'hotspots': ('', ''), 'ownership': ('path', ''), 'reviewers': ('files', 'files'), 'history': ('symbol', ''),
            'overview': ('focus', ''),
            'areas': ('area', ''), 'notes': ('symbol', ''), 'note_add': ('symbol', ''), 'grep_ast': ('pattern', ''),
-           'status': ('', ''), 'capabilities': ('of', ''), 'task': ('goal', ''), 'test_targets': ('name', '')}
-ONE_LISTS = ('targets', 'files')
+           'status': ('', ''), 'capabilities': ('of', ''), 'task': ('goal', ''), 'test_targets': ('name', ''),
+           'rules': ('rules', 'rules')}
+ONE_LISTS = ('targets', 'files', 'rules')
 
 
 def knowcode_tool(name, inp):
