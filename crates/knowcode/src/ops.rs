@@ -823,7 +823,7 @@ fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> 
             return Ok(s.qualified());
         }
     }
-    bail!(Refusal::new(Code::NotFound, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
+    bail!(crate::pending::unresolved(place, roots, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
 }
 
 /// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos

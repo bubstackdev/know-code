@@ -823,6 +823,8 @@ itself. `sections` says for each list whether it is whole (`complete`) and the c
   FullyQualifiedName=Namespace.Class.Method` (exactly that test, and its parameterized cases).
 - `package.json` test scripts (`test`, `test:…`): the package's test files (`*.test.*`, `*.spec.*`, `__tests__/`),
   run with the package manager its lockfile names.
+- Go modules (each `go.mod`): the test functions (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx`) in the
+  module's `_test.go` files, `go test ./...` and `go test ./pkg -run '^TestXxx$'` from the module's directory.
 
 Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
 200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change

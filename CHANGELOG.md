@@ -7,6 +7,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - TypeScript: a member a repo adds to a package's module by augmenting it (`declare module 'pkg' { interface … }`) and
   reaches through that package's values stays linked; members reached through other packages' values are still the
   package's. The index records each module a file augments (index schema 24; TypeScript files are read again once).
+- A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
+  added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
+  indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.
 
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
@@ -19,6 +22,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
   identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
   outside label linked).
+- Two indexes of one tree give the same `tests`, `task` and `impact` answers. A reverse walk cut at its limit kept
+  the dependents it reached first, in the order the index happened to store files (which parallel indexing varies),
+  so two cold indexes of swift-nio could select 127 or 136 candidate tests for the same change. The walk now takes
+  each step's symbols in file, line and name order. A text or structural search cut at its line limit likewise reads
+  files in path order, so an index updated with new files keeps the same files as one built cold.
+
 - The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
   0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
   checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.
@@ -79,6 +88,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   no outside label linked; on 508 held-out labels from echo, scored once: 1.000 over 299 links, recall 0.971, none
   outside linked. A file the default build leaves out (`x_windows.go`, `//go:build nomsgpack`) and cgo
   imports are reported as `unsupported`.
+- Go test targets. `test_targets` lists each `go.mod` as a target, `go test ./...` from its directory, with its
+  `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
+  ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
+  Go test files too (`foo_test.go` for `foo.go`).
 
 ## 0.6.1 (2026-10-28)
 
