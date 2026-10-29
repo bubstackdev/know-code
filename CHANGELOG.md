@@ -27,6 +27,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   those changed since the base's commit, modified in the worktree, or untracked. Every other file git reports clean and
   unchanged since that commit keeps the worktree's own stat when the base is cloned, so it isn't read. `--verify` still
   hashes every file.
+- Swift: fewer links to a repo declaration where the compiler binds a package's or the platform's. On identity-v1,
+  outside labels linked drop from 19 to 11 (with the standard-library names above, to 0), with no label newly wrong:
+  - A type a module imports by name from a package (`@_exported import struct SystemPackage.FileDescriptor`) is the
+    package's in that module, as are its members, never a same-named type of a module imported whole.
+  - A member a test target adds to a library type in an extension isn't what code under `Sources/` calls.
+  - A member the repo adds to a library type, named like the library's own (`JSONDecoder`'s `decode(_:from:)`), is
+    listed rather than linked: the library's overloads take other argument types.
+  - A free function named like a C library function (a platform shim such as `unlink` for Windows) is listed rather
+    than linked: the platform's own function is the one called on other platforms.
 
 ## 0.6.1 (2026-10-28)
 

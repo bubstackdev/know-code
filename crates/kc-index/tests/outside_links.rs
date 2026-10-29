@@ -165,3 +165,54 @@ fn a_swift_async_function_is_called_only_under_await() {
     assert!(retry.iter().any(|g| g.0 == 6 && linked(g.1)), "{retry:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_swift_type_a_module_imports_by_name_from_a_package_is_the_packages() {
+    let (root, store) = repo(
+        "swift-scoped-import",
+        &[
+            ("Sources/Core/Handle.swift", "public protocol Handle {\n    func close() throws\n}\n"),
+            ("Sources/Files/Exports.swift", "@_exported import struct SystemKit.Handle\n"),
+            (
+                "Sources/Files/Open.swift",
+                "import Core\nimport SystemKit\n\nfunc shut(_ handle: Handle) throws {\n    try handle.close()\n}\n",
+            ),
+            ("Sources/Other/Use.swift", "import Core\n\nfunc shut(_ handle: Handle) throws {\n    try handle.close()\n}\n"),
+        ],
+    );
+    // In `Files`, `Handle` is SystemKit's, and so is its `close()`.
+    let ty = refs(&store, "Handle", &["type_ref"], "Sources/Files/Open.swift");
+    assert!(!ty.is_empty() && ty.iter().all(|g| !linked(g.1)), "{ty:?}");
+    let close = refs(&store, "close", &["call"], "Sources/Files/Open.swift");
+    assert!(!close.is_empty() && close.iter().all(|g| !linked(g.1)), "{close:?}");
+    // Elsewhere it is the repo's.
+    let other = refs(&store, "Handle", &["type_ref"], "Sources/Other/Use.swift");
+    assert!(other.iter().any(|g| linked(g.1) && g.2 == ["Sources/Core/Handle.swift:1"]), "{other:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_swift_platform_shim_test_extension_or_library_overload_is_listed_not_linked() {
+    let (root, store) = repo(
+        "swift-shims",
+        &[
+            ("Sources/Sys/Windows.swift", "#if os(Windows)\nfunc unlink(_ path: UnsafePointer<CChar>) -> CInt {\n    0\n}\n#endif\n"),
+            ("Sources/Sys/Remove.swift", "import Glibc\n\nfunc remove(_ path: UnsafePointer<CChar>) -> CInt {\n    unlink(path)\n}\n"),
+            ("Tests/SysTests/Deque+Append.swift", "import DequeModule\n\nextension Deque {\n    mutating func pushAll(contentsOf s: [Element]) {}\n}\n"),
+            ("Sources/Sys/Queue.swift", "import DequeModule\n\nfunc fill(_ q: inout Deque<Int>) {\n    q.pushAll(contentsOf: [1])\n}\n"),
+            ("Tests/SysTests/Fill.swift", "import DequeModule\n\nfunc refill(_ q: inout Deque<Int>) {\n    q.pushAll(contentsOf: [1])\n}\n"),
+            ("Sources/Sys/Decoder+Buffer.swift", "import Foundation\n\nextension JSONDecoder {\n    func decode<T: Decodable>(_ t: T.Type, from buffer: [UInt8]) throws -> T { fatalError() }\n}\n"),
+            ("Sources/Sys/Load.swift", "import Foundation\n\nfunc load(_ data: Data) throws -> Int {\n    try JSONDecoder().decode(Int.self, from: data)\n}\n"),
+        ],
+    );
+    let unlink = refs(&store, "unlink", &["call"], "Sources/Sys/Remove.swift");
+    assert!(!unlink.is_empty() && unlink.iter().all(|g| !linked(g.1)), "{unlink:?}");
+    // A test target's extension: not from `Sources/`, still from its own target.
+    let from_sources = refs(&store, "pushAll", &["call"], "Sources/Sys/Queue.swift");
+    assert!(!from_sources.is_empty() && from_sources.iter().all(|g| !linked(g.1)), "{from_sources:?}");
+    let from_tests = refs(&store, "pushAll", &["call"], "Tests/SysTests/Fill.swift");
+    assert!(from_tests.iter().any(|g| linked(g.1)), "{from_tests:?}");
+    let decode = refs(&store, "decode", &["call"], "Sources/Sys/Load.swift");
+    assert!(!decode.is_empty() && decode.iter().all(|g| !linked(g.1)), "{decode:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -781,6 +781,16 @@ const STDLIB_TYPES: &[&str] = &[
     "UInt8", "UInt16", "UInt32", "UInt64", "URL", "UUID",
 ];
 
+/// C library functions a Swift repo may wrap under its own name for one platform (`ioctl`, `unlink`): libc, POSIX and
+/// the Windows CRT.
+const C_LIBRARY_FUNCTIONS: &[&str] = &[
+    "accept", "access", "bind", "chdir", "chmod", "chown", "close", "closedir", "connect", "dup", "dup2", "fchmod", "fchown",
+    "fcntl", "flock", "fstat", "fstatat", "fsync", "ftruncate", "getcwd", "getenv", "getpid", "ioctl", "isatty", "kill",
+    "link", "listen", "lseek", "lstat", "mkdir", "mkdirat", "mmap", "munmap", "open", "openat", "opendir", "pipe", "poll",
+    "pread", "pwrite", "read", "readdir", "readlink", "realpath", "recv", "remove", "rename", "renameat", "rmdir", "send",
+    "setenv", "socket", "stat", "symlink", "sysconf", "truncate", "umask", "unlink", "unlinkat", "unsetenv", "write",
+];
+
 /// Whether `d` is a member the repo adds to a standard-library type (`extension Int32 { var isFinite … }`). These are
 /// concrete types: no other type conforms to one, so its members are never another type's, and the library declares
 /// same-named members on its other types (`Float.isFinite`).
@@ -2482,6 +2492,17 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         {
             return ("external_likely", found.iter().map(|d| d.id).collect());
         }
+        // A member the repo adds to a library type in an extension, named like the library's own (`JSONDecoder`'s
+        // `decode(_:from:)`): the library's overloads take other argument types, which a Swift call's arguments aren't
+        // read for, so either may be the one called. Listed, not linked.
+        if hit.kind == "call"
+            && hit.file.ends_with(".swift")
+            && !found.is_empty()
+            && found.iter().all(|d| d.external_container && !on_stdlib_type(d))
+            && STDLIB_MEMBERS.contains(&hit.name.as_str())
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
@@ -2539,6 +2560,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 // A script's globals and free functions are visible only inside that script.
                 let free: Vec<&Def> =
                     cands.iter().copied().filter(|d| d.container.is_none() && (!d.in_script || d.file == hit.file)).collect();
+                // A Swift free function named like a C library function (a platform shim, `func unlink(_:)` for
+                // Windows) has the platform's own function beside it, which a call on another platform binds: listed,
+                // not linked.
+                if hit.file.ends_with(".swift") && !free.is_empty() && C_LIBRARY_FUNCTIONS.contains(&hit.name.as_str()) {
+                    return ("external_likely", free.iter().map(|d| d.id).collect());
+                }
                 if free.len() > 1 {
                     // Several free functions share the name (common across standalone scripts): one in the
                     // caller's own file wins, then one in the caller's module.
@@ -4948,6 +4975,61 @@ fn refines(conn: &Connection, name: &str, protocols: &[String]) -> Result<bool> 
 }
 
 /// The SwiftPM target a file is in: `<Name>` of `Sources/<Name>/…` or `Tests/<Name>/…`; `None` outside those layouts.
+/// Swift declarations a module imports by name from outside the repo (`@_exported import struct
+/// SystemPackage.FileDescriptor`), per SwiftPM target. Swift prefers a declaration imported by name over one of the
+/// same name from a module imported whole, so a type the repo declares in another module isn't what such a name
+/// means there.
+#[derive(Default)]
+struct SwiftScoped {
+    /// Per target directory, the names it imports by name from a module that isn't one of the repo's, with that module.
+    by_target: HashMap<String, HashMap<String, String>>,
+}
+
+impl SwiftScoped {
+    /// The module outside the repo that `file`'s target imports `name` from by name, if it does.
+    fn imported_from(&mut self, conn: &Connection, file: &str, name: &str) -> Result<Option<String>> {
+        let Some(target) = swiftpm_target(file) else { return Ok(None) };
+        // The target's directory, `…/Sources/<target>/`.
+        let end = target.as_ptr() as usize - file.as_ptr() as usize + target.len() + 1;
+        let prefix = &file[..end];
+        let target = prefix.to_string();
+        if !self.by_target.contains_key(&target) {
+            let rows: Vec<String> = conn
+                .prepare_cached(
+                    "SELECT DISTINCT i.module FROM imports i JOIN files f ON f.id = i.file_id
+                     WHERE f.lang = 'swift' AND substr(f.path, 1, length(?1)) = ?1 AND i.module LIKE '%.%'",
+                )?
+                .query_map([prefix], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut names = HashMap::new();
+            for m in rows {
+                let Some((module, n)) = m.rsplit_once('.') else { continue };
+                let module = module.split('.').next().unwrap_or(module);
+                let repo_module: bool = conn
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM files WHERE lang = 'swift' AND (path LIKE 'Sources/' || ?1 || '/%' OR path LIKE '%/Sources/' || ?1 || '/%'))",
+                    )?
+                    .query_row([module], |r| r.get(0))?;
+                if !repo_module {
+                    names.insert(n.to_string(), module.to_string());
+                }
+            }
+            self.by_target.insert(target.clone(), names);
+        }
+        Ok(self.by_target[&target].get(name).cloned())
+    }
+}
+
+/// Whether a path is under a SwiftPM `Tests/` directory.
+fn in_tests(path: &str) -> bool {
+    path.starts_with("Tests/") || path.contains("/Tests/")
+}
+
+/// Whether a path is under a SwiftPM `Sources/` directory.
+fn in_sources(path: &str) -> bool {
+    path.starts_with("Sources/") || path.contains("/Sources/")
+}
+
 fn swiftpm_target(path: &str) -> Option<&str> {
     ["Sources/", "Tests/"].iter().find_map(|root| {
         let rest = &path[path.find(root)? + root.len()..];
@@ -5214,6 +5296,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let py_modules = &mut shared.py_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
+    let mut swift_scoped = SwiftScoped::default();
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -5316,6 +5399,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             if ts {
                 recv = ts_receiver(conn, hit, recv, &mut oracle, modules)?;
+            }
+            // A Swift receiver typed by a name its module imports from a package by name: the package's type.
+            if let Receiver::Known(chain) = &recv
+                && hit.file.ends_with(".swift")
+                && let Some(ty) = chain.first().cloned()
+                && let Some(module) = swift_scoped.imported_from(conn, &hit.file, last_segment(&ty))?
+            {
+                // Named by its module, so the repo's same-named type's members aren't looked up for it.
+                recv = Receiver::Foreign(vec![format!("{module}.{}", last_segment(&ty))]);
             }
             hit.receiver_type = match &recv {
                 Receiver::Known(c) | Receiver::Foreign(c) => c.first().cloned(),
@@ -5425,6 +5517,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
             let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
                 swift_seen(conn, &hit.file, usable)?
+            } else if matches!(hit.kind.as_str(), "type_ref" | "instantiate")
+                && hit.receiver.is_none()
+                && hit.file.ends_with(".swift")
+                && swift_scoped.imported_from(conn, &hit.file, &hit.name)?.is_some()
+            {
+                // Imported by name from a package (`import struct SystemPackage.FileDescriptor`): that declaration wins
+                // over a same-named type of a module imported whole, so only a type nested where the code is remains.
+                usable.into_iter().filter(|d| d.container.is_some()).collect()
             } else {
                 usable
             };
@@ -5443,8 +5543,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             dropped_by(&mut dropped, explain, &before, &usable, "receiver_type");
             let before = if explain { usable.clone() } else { Vec::new() };
-            // A Swift `private` or `fileprivate` declaration is named only in its own file.
-            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
+            // A Swift `private` or `fileprivate` declaration is named only in its own file. A member a test target adds
+            // to a library type in an extension (`extension Deque { mutating func append(contentsOf:) }`) is never
+            // what code under `Sources/` calls: no product target depends on anything under `Tests/`.
+            let usable: Vec<&Def> = usable
+                .into_iter()
+                .filter(|d| !d.file_private || d.file == hit.file)
+                .filter(|d| !(d.lang == "swift" && d.external_container && in_tests(&d.file) && in_sources(&hit.file)))
+                .collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
             // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
