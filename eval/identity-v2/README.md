@@ -16,7 +16,10 @@ doesn't change to fit them. A change to the rule is a new set.
 
 Each language keeps its labels in its own directory: `labels.jsonl`, `strata.json` (per stratum, how many references
 there were and how many were drawn), `exclusions.json` (per reason, how many references the toolchain binds the rule
-leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in).
+leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in). A digest
+covers an enumeration's rows, not its bytes ([digest.py](../../scripts/eval/identity/digest.py)): each row with its keys
+sorted, the lines sorted. Two labelling runs of one pinned repository give the same rows, but scip-java writes its
+documents in an order that varies from build to build, and gzip's bytes vary from one compressor to another.
 
 ## Java and Kotlin
 
