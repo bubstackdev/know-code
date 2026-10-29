@@ -40,4 +40,7 @@
 # fde5357, whose Rust code is the change's base.
 # 0.7's Go: the tree-sitter-go grammar (231,248 bytes, eval/size/grammars.md, both passes) and the Go extractor,
 # go.mod reading and resolver (132,256): 38826672, up 363504 from integration/0.7 bb0bb3c's dist build (38463168).
-38826672
+# 0.8's rules: the vendored ast-grep-config (rule YAML read by yaml-rust2, globset), the rules op with monitors and
+# SARIF, and its CLI and kc wiring: up 992688, measured as w4/b-rules-op's dist build (39951584) against
+# integration/0.8 at 53ee90d (38958896), each in its own target dir.
+39951584
