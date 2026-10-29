@@ -75,6 +75,13 @@ that doesn't parse alone goes in context with `--selector`:
 sql, …) and evidence with `--evidence` ([evidence policy](answers.md#evidence-policy)). `trace` and `impact` filter
 listed symbols with `--kinds` and walk through the rest.
 
+`path`, `flow` and `areas` draw their answer as a [Mermaid](https://mermaid.js.org) diagram with `--format mermaid`
+(`format: mermaid` on MCP): the answer's nodes and edges and no others, each walk edge labelled with its kind and its
+confidence in brackets, ambiguous edges dashed, and an area's edges with their file edges. What the answer says about
+itself (its repo, what it left out, why it is incomplete) comes as `%%` comments, so the output stays a valid
+diagram. A test parses each golden diagram's edges back and checks them against its answer's, and every `file:line`
+it shows against the files.
+
 ## Before and after a change
 
 | Task | CLI | MCP |
@@ -339,8 +346,8 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `refs` | `-k/--kind` (alias `--edges`), `-n/--limit`, `--cite brief\|lines\|check\|none` |
 | `context` | `--budget`, `--source full\|skeleton\|none\|auto`, `--limit` (rows per list of a repo's deploy answer), `--cite brief\|lines\|check\|none` |
 | `trace` | `-d/--direction in\|out\|both`, `--depth`, `-n/--limit`, `--edges`, `--kinds`, `--evidence`, `--cite brief\|lines\|check\|none` |
-| `path` | `--to-repo`, `--max-hops`, `-n/--paths`, `--max-nodes`, `--max-repos`, `--allow-ambiguous`, `--edges`, `--evidence`, `--cite brief\|lines\|check\|none` |
-| `flow` | `--depth`, `-n/--limit`, `--max-repos`, `--edges`, `--children`, `--evidence`, `--cite brief\|lines\|check\|none` |
+| `path` | `--to-repo`, `--max-hops`, `-n/--paths`, `--max-nodes`, `--max-repos`, `--allow-ambiguous`, `--edges`, `--evidence`, `--cite brief\|lines\|check\|none`, `--format text\|mermaid` |
+| `flow` | `--depth`, `-n/--limit`, `--max-repos`, `--edges`, `--children`, `--evidence`, `--cite brief\|lines\|check\|none`, `--format text\|mermaid` |
 | `impact` | `--file`, `--diff`, `--depth`, `-n/--limit`, `--order rank\|hop`, `--as-of`, `--since`, `--edges`, `--kinds`, `--evidence`, `--cite brief\|lines\|check\|none` |
 | `unused` | `-k/--kind`, `--tier unused\|possibly\|all`, `-n/--limit` |
 | `rename` | `--allow-ambiguous` |
@@ -350,7 +357,7 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `ownership` | `--without`, `--depth`, `-n/--top`, `--as-of` |
 | `reviewers` | `--diff`, `-n/--limit`, `--as-of` |
 | `overview` | `--focus`, `--map-budget` |
-| `areas` | `--area` |
+| `areas` | `--area`, `--format` |
 | `docs` | `--map-budget` |
 | `search` | `-e/--regex`, `-i/--ignore-case`, `-S/--smart-case`, `-w/--word`, `-l/--lang`, `-g/--glob`, `-C/--context`, `-n/--limit`, `--offset`, `--files`, `-a/--all` |
 | `grep-ast` | `-l/--lang`, `--selector`, `--inside`, `--has`, `--not-inside`, `--not-has`, `--text`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |

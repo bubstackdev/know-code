@@ -383,8 +383,8 @@ between a type and its member. Found by bidirectional search from both ends with
 `paths` is empty, meaning no confident path within `max_hops` unless `allow_ambiguous`, and `next` is the call
 looking further (more hops, or ambiguous edges too); `truncated` says a node or repo budget stopped the search first,
 with a `capped` entry whose hint is the call raising it. Answers as indented text by default (each step under the one before, with the
-relation reaching it); `format: json` for the envelope. `edges` limits the edge kinds a path may use; `evidence` as in
-`evidence`."#,
+relation reaching it); `format: json` for the envelope; `format: mermaid` for a Mermaid diagram of the same answer (each edge with its confidence in brackets, ambiguous ones dashed, what the answer left out as `%%` comments), whole whatever `max_chars` says. `edges` limits the edge kinds a path may use;
+`evidence` as in `evidence`."#,
     },
     Topic {
         name: "kc_flow",
@@ -419,7 +419,7 @@ confidence and site; each symbol appears once, unless the depth limit (`depth`, 
 reached and it is reached again nearer the entry, where it is grown. A step at the depth limit that leads on has `stop`
 ({reason, beyond, next}: `next` the exact kc_flow call going on from it), and the answer an `incomplete` entry (reason
 `depth`). `limit` caps the steps (default 40), `max_repos` the repos opened (default 16); a flow they cut has a
-`capped` entry whose hint is the call raising them. Answers as an indented tree of text by default; `format: json` for the envelope. `edges`
+`capped` entry whose hint is the call raising them. Answers as an indented tree of text by default; `format: json` for the envelope; `format: mermaid` for a Mermaid diagram of the same answer (each edge with its confidence in brackets, ambiguous ones dashed, what the answer left out as `%%` comments), whole whatever `max_chars` says. `edges`
 limits the edge kinds followed (calls, reads, writes, uses, http, bus, sql, ngrx, dialog, child); `evidence` as in
 `evidence`."#,
     },
@@ -686,7 +686,8 @@ Where the repo's manifests declare modules (SwiftPM targets, .NET projects, npm 
 crates), both views are given: `modules` lists them (name, kind, dir, manifest, files, and the areas holding them), and
 each area its files by module (`modules`), `spans_modules` when they are in more than one, and `outside_modules` for
 files in none. Declared boundaries say what the build keeps apart; areas say what references and co-change tie
-together, so an area spanning modules is a feature cut across them."#,
+together, so an area spanning modules is a feature cut across them. `format: mermaid` answers with a Mermaid diagram of
+the areas and the `depends_on` edges the answer lists (each with its file edges)."#,
     },
     Topic {
         name: "kc_notes",

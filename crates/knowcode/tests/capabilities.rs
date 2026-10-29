@@ -188,6 +188,7 @@ fn check_answer(op: &str, entry: &Value, args: &Value, text: &str) {
     match format {
         "tree" => assert!(text.starts_with("repo "), "{op} {args}: a tree starts with its header: {text}"),
         "text" => assert!(!text.is_empty(), "{op}"),
+        "mermaid" => assert!(text.starts_with("flowchart "), "{op} {args}: a Mermaid flowchart: {text}"),
         _ => {
             let v: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("{op} {args}: {e}: {text}"));
             for k in out["keys"].as_array().unwrap() {
