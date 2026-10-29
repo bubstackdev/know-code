@@ -269,10 +269,16 @@ const READING_ORDER: &[&str] = &["goal", "items", "tests", "dependents", "unsett
 /// The compact answer `text` with its top-level keys in [`READING_ORDER`], the rest after them in name order: the same
 /// bytes, ordered. Anything but a JSON object is returned as it is.
 pub fn reading_order(text: &str) -> String {
+    order_keys(text, READING_ORDER)
+}
+
+/// The compact answer `text` with its top-level keys in `order`, the rest after them in name order: the same bytes,
+/// ordered. Anything but a JSON object is returned as it is.
+pub fn order_keys(text: &str, order: &[&str]) -> String {
     let Ok(Value::Object(mut obj)) = serde_json::from_str::<Value>(text) else { return text.to_string() };
     let mut parts: Vec<String> = Vec::with_capacity(obj.len());
     let mut put = |k: &str, v: Value| parts.push(format!("{}:{v}", Value::from(k)));
-    for k in READING_ORDER {
+    for k in order {
         if let Some(v) = obj.remove(*k) {
             put(k, v);
         }

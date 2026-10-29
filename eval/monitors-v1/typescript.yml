@@ -1,0 +1,38 @@
+id: console-log
+language: TypeScript
+severity: warning
+message: console.log
+rule:
+  pattern: console.log($$$)
+---
+id: as-any
+language: TypeScript
+severity: hint
+message: cast to any
+rule:
+  kind: as_expression
+  has:
+    kind: predefined_type
+    regex: ^any$
+---
+id: ts-suppression
+language: TypeScript
+severity: info
+message: a TypeScript error suppressed
+rule:
+  kind: comment
+  regex: "@ts-(ignore|expect-error|nocheck)"
+---
+id: non-null-assertion
+language: TypeScript
+severity: hint
+message: non-null assertion on $X
+rule:
+  pattern: $X!
+---
+id: tsx-console-log
+language: Tsx
+severity: warning
+message: console.log
+rule:
+  pattern: console.log($$$)

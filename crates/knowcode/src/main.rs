@@ -6,6 +6,7 @@ mod cite;
 mod contract;
 mod compact;
 mod cursor;
+mod sarif;
 mod diagram;
 #[cfg(test)]
 mod completeness;
@@ -26,7 +27,9 @@ mod removed;
 mod render;
 #[cfg(test)]
 mod repo_walks;
+mod rules;
 mod restricted;
+mod review;
 mod session_hook;
 mod settings;
 mod summary;
@@ -619,6 +622,39 @@ enum Cmd {
         /// compact form (the MCP server's `max_chars`).
         #[arg(long, hide = true)]
         fit: Option<usize>,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
+    /// Run ast-grep rules (rule YAML files; `fix` is refused) over the repo and print their matches; with
+    /// --new-since, as a monitor: only the matches that ref didn't have.
+    Rules {
+        /// Rule file or directory of them (repeatable); relative to the repo's root. Default: `[rules] paths`.
+        #[arg(long = "rules")]
+        paths: Vec<PathBuf>,
+        /// Report only the matches this commit (branch, tag, sha) didn't have.
+        #[arg(long)]
+        new_since: Option<String>,
+        /// A line regex instead of rules: each line it matches is a match (a text monitor with --new-since).
+        #[arg(long, conflicts_with = "paths")]
+        regex: Option<String>,
+        /// Path glob (repeatable); `!` excludes.
+        #[arg(long, short = 'g')]
+        glob: Vec<String>,
+        /// Matches listed at most (default 50; every match for --format sarif).
+        #[arg(long, short = 'n')]
+        limit: Option<usize>,
+        /// Skip this many results (for paging; see next_offset).
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Run over every indexed repo in the workspace.
+        #[arg(long, short = 'a', conflicts_with = "repos")]
+        all: bool,
+        /// Stop after this many matches.
+        #[arg(long, default_value_t = 50_000, hide = true)]
+        max_matches: usize,
+        /// `text` (default), or `sarif` (a SARIF 2.1.0 log; --json gives the answer itself).
+        #[arg(long, default_value = "text")]
+        format: String,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -1302,6 +1338,22 @@ fn run(cli: Cli) -> Result<()> {
             };
             let out = ops::grep_ast(&ops::AstParams { opts, limit, offset }, &repo.scope())?;
             emit(&repo, &out.env, || render::grep_ast(&out.data))
+        }
+        Cmd::Rules { paths, new_since, regex, glob, limit, offset, all, max_matches, format, mut repo } => {
+            if all {
+                repo.repos = kc_index::indexed_roots()?;
+            }
+            let limit = limit.unwrap_or(if format == "sarif" { usize::MAX } else { 50 });
+            let p = rules::RulesParams { paths, inline: None, regex, new_since, globs: glob, limit, offset, max_matches };
+            let out = rules::rules(&p, &repo.scope())?;
+            match format.as_str() {
+                "text" => emit(&repo, &out.env, || rules::render(&out.data)),
+                "sarif" => {
+                    println!("{}", serde_json::to_string_pretty(&sarif::rules(&out.data, &out.env))?);
+                    Ok(())
+                }
+                other => anyhow::bail!("--format is text or sarif, not {other}"),
+            }
         }
         Cmd::Files { repo } => {
             for (root, files) in ops::content_files(&repo.scope())? {
