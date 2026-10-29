@@ -396,4 +396,60 @@ mod tests {
             assert_eq!(got_tests, tests, "tests, tests first: {tests_first}");
         }
     }
+
+    /// A walk past the library-crossing budget and a walk within it, on one shared graph in either order, each give
+    /// the answer a graph of its own does: the budget is a walk's own, and what the graph caches (the references read
+    /// across the boundary) doesn't depend on it. A chain of five library methods, each called from an app depending on
+    /// the library: one hop looks up fewer crossings than the budget, five hops more.
+    #[test]
+    fn the_library_crossing_budget_is_each_walks_own_on_a_shared_graph() {
+        let cache = test_cache();
+        let base = cache.dir("task-shared-budget");
+        let lib = repo(
+            &base,
+            "ledger",
+            &[
+                ("src/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Ledger</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/A.cs", "namespace Ledger;\npublic static class A\n{\n    public static void Post() { }\n}\n"),
+                ("src/B.cs", "namespace Ledger;\npublic static class B\n{\n    public static void Post() { A.Post(); }\n}\n"),
+                ("src/C.cs", "namespace Ledger;\npublic static class C\n{\n    public static void Post() { B.Post(); }\n}\n"),
+                ("src/D.cs", "namespace Ledger;\npublic static class D\n{\n    public static void Post() { C.Post(); }\n}\n"),
+                ("src/E.cs", "namespace Ledger;\npublic static class E\n{\n    public static void Post() { D.Post(); }\n}\n"),
+                ("tests/ETests.cs", "namespace Ledger.Tests;\npublic class ETests\n{\n    public void Posts() { Ledger.E.Post(); }\n}\n"),
+            ],
+        );
+        let _app = repo(
+            &base,
+            "ledger-app",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Ledger\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Books.cs", "using Ledger;\nnamespace App;\npublic class Books\n{\n    public void Close() { A.Post(); B.Post(); C.Post(); D.Post(); E.Post(); }\n}\n"),
+            ],
+        );
+        let s = Scope { repos: vec![lib.clone()], no_sync: false };
+        let near = ops::ImpactParams { file: Some("src/A.cs".into()), depth: 1, limit: 30, ..Default::default() };
+        let far = ops::ImpactParams { file: Some("src/A.cs".into()), depth: 5, limit: 30, ..Default::default() };
+        let tp = ops::TestsParams { targets: vec!["src/A.cs".into()], diff: None, limit: 4, evidence: String::new() };
+        let text = |mut env: Value| {
+            env.as_object_mut().unwrap().remove("freshness");
+            env.to_string()
+        };
+        let fresh = [text(ops::impact(&near, &s).unwrap().env), text(ops::impact(&far, &s).unwrap().env), text(ops::tests(&tp, &s).unwrap().env)];
+        // The budget cuts the five-hop walk and not the one-hop walk: the case the test is for.
+        let cut = |t: &str| t.contains("uses across a library boundary looked up for");
+        assert!(!cut(&fresh[0]) && cut(&fresh[1]), "{}\n{}", fresh[0], fresh[1]);
+        for order in [[0, 1, 2], [1, 0, 2], [2, 1, 0], [2, 0, 1]] {
+            let o = ops::open_member(std::slice::from_ref(&lib), &lib, false).unwrap().unwrap();
+            let mut g = crate::walk::Graph::new(&o, &[], false, usize::MAX);
+            let mut got = [String::new(), String::new(), String::new()];
+            for i in order {
+                got[i] = match i {
+                    0 => text(ops::impact_on(&near, &s, &o, &mut g).unwrap().env),
+                    1 => text(ops::impact_on(&far, &s, &o, &mut g).unwrap().env),
+                    _ => text(ops::tests_on(&tp, &o, &mut g).unwrap().env),
+                };
+            }
+            assert_eq!(got, fresh, "order {order:?}");
+        }
+    }
 }
