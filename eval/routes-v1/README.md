@@ -129,8 +129,8 @@ Two things are left out of both sides, labels and KnowCode's routes alike, and t
    library when the framework adds the route (the labeller records it, as it records net/http's patterns now); on
    KnowCode's side, the file and line of its server route row. A registration site is configuration-dependent when,
    by the Go type checker over the packages the repository's listed programs compile:
-   - its call statement lies, within its function, inside the body or `else` of an `if`, a `case` of a `switch` or
-     `select`, or a `for` or `range` loop's body; or
+   - its call statement lies, within its function, inside the body or `else` of an `if`, or a `case` of a `switch`
+     or `select` (a loop is not a condition: a route registered for each item of a list is served); or
    - every reference to the function (or function literal) containing it, from those packages, is itself at a
      configuration-dependent site, recursively; or nothing in those packages refers to that function at all, or its
      package isn't one of them.
