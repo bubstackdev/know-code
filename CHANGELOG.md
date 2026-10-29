@@ -14,7 +14,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - Two indexes of one tree give the same `tests`, `task` and `impact` answers. A reverse walk cut at its limit kept
   the dependents it reached first, in the order the index happened to store files (which parallel indexing varies),
   so two cold indexes of swift-nio could select 127 or 136 candidate tests for the same change. The walk now takes
-  each step's symbols in file, line and name order.
+  each step's symbols in file, line and name order. A text or structural search cut at its line limit likewise reads
+  files in path order, so an index updated with new files keeps the same files as one built cold.
 
 - The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
   0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now

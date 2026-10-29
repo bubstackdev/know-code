@@ -171,3 +171,13 @@ id = "flask-status"
 repo = "flask"
 cmd = "status"
 drop = ["/index/bytes"]        # the index's own size isn't an answer
+
+# 0.7: queries the releases since 0.6 added.
+
+# A `tests` walk its limit cuts (3,000 dependents), from two files: which tests it keeps once followed the order the
+# index stored files in, so two indexes of one tree answered differently (#230).
+[[query]]
+id = "swiftnio-tests-capped"
+repo = "swift-nio"
+cmd = "tests"
+args = ["Sources/NIOCore/ChannelPipeline.swift", "Sources/NIOCore/ByteBuffer-core.swift"]

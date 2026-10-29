@@ -471,3 +471,47 @@ fn invariant_a_walk_cut_at_its_limit_doesnt_depend_on_the_order_of_its_start() {
     drop(g);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The same tree indexed with its files stored in path order and in reverse: a `tests` answer whose walk is cut at
+/// its limit (3,000 dependents), started from two files, is the same (#230, where two cold indexes of swift-nio
+/// selected 127 and 136 tests).
+#[test]
+fn invariant_capped_tests_dont_depend_on_the_order_files_were_stored_in() {
+    let cache = test_cache();
+    let base = cache.dir("c-capped-storage-order");
+    let indexed = |name: &str, insert_reversed: bool| -> PathBuf {
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(std::process::Command::new("git").arg("init").arg("-q").arg(&dir).status().unwrap().success());
+        let mut files: Vec<(String, String)> =
+            vec![("lib/alpha.py".into(), "def alpha():\n    pass\n".into()), ("lib/beta.py".into(), "def beta():\n    pass\n".into())];
+        // 64 test files of 100 tests each, half reaching `alpha` and half `beta`: more dependents than the walk keeps.
+        for f in 0..32 {
+            for (lib, name) in [("alpha", "a"), ("beta", "b")] {
+                let mut text = format!("from lib.{lib} import {lib}\n");
+                for t in 0..100 {
+                    text.push_str(&format!("def test_{name}{f}_{t}():\n    {lib}()\n"));
+                }
+                files.push((format!("tests/test_{name}{f:02}.py"), text));
+            }
+        }
+        for (path, text) in &files {
+            std::fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(path), text).unwrap();
+        }
+        let root = kc_index::repo_root(&dir).unwrap();
+        let opts = kc_index::SyncOptions { threads: 1, insert_reversed, ..Default::default() };
+        kc_index::sync(&root, &mut kc_index::open(&root).unwrap(), &opts).unwrap();
+        root
+    };
+    // Each test file listed, in order, with its reasons and how many of its methods reach the change.
+    let selected = |root: &Path| -> Vec<(String, Vec<String>, usize)> {
+        let t = ops::TestsParams { targets: vec!["lib/alpha.py".into(), "lib/beta.py".into()], diff: None, limit: 3, evidence: String::new() };
+        let out = ops::tests(&t, &scope(root)).unwrap();
+        let s = &out.data[0].selection;
+        assert!(s.truncated, "the limit cuts the walk");
+        s.selected.iter().chain(&s.left_out).map(|p| (p.file.clone(), p.reasons.clone(), p.signals.reached)).collect()
+    };
+    assert_eq!(selected(&indexed("forward", false)), selected(&indexed("reversed", true)));
+    let _ = std::fs::remove_dir_all(&base);
+}
