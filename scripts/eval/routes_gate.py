@@ -80,13 +80,19 @@ def env_for(base):
 
 
 def covered(programs):
-    """The repository directories the listed programs compile."""
-    return {d for p in programs if p['status'] == 'listed' for d in p['dirs']}
+    """The repository directories the listed programs compile, and those whose test files they compile too (a harness
+    test's own package): a program never compiles its packages' `_test.go` files."""
+    dirs = {d for p in programs if p['status'] == 'listed' for d in p['dirs']}
+    tests = {p['package'][len('test:'):] for p in programs if p['status'] == 'listed' and p['package'].startswith('test:')}
+    return dirs, tests
 
 
 def in_dirs(file, dirs):
+    dirs, tests = dirs
     d = file.rsplit('/', 1)[0] if '/' in file else '.'
-    return d in dirs or (d == '.' and '.' in dirs) or (d == '.' and '' in dirs)
+    if file.endswith('_test.go') and d not in tests:
+        return False
+    return d in dirs or (d == '.' and ('.' in dirs or '' in dirs))
 
 
 def attribute(row, labels):
