@@ -16,6 +16,7 @@ mod history;
 mod hook;
 mod mcp;
 mod ops;
+mod pending;
 mod record;
 mod refactor;
 mod refresh;

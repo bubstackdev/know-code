@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
+  added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
+  indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.
+
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
   member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
