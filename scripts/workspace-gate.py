@@ -35,6 +35,9 @@ import sys
 import threading
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LIST = ROOT / "scripts" / "workspace-gate" / "repos.txt"
@@ -220,12 +223,11 @@ def main():
     if a.clone_only:
         return
 
-    for d in ("cache", "config", "data"):
+    for d in ("cache", "config", "data", "home"):
         shutil.rmtree(work / d, ignore_errors=True)
     (work / "config").mkdir(parents=True)
     (work / "config" / "config.toml").write_text(f'[workspace]\nroots = [{json.dumps(str(workspace))}]\n\n[cache]\nmax_size = 0\n')
-    env = dict(os.environ, KNOWCODE_CACHE_DIR=str(work / "cache"), KNOWCODE_CONFIG_DIR=str(work / "config"), KNOWCODE_DATA_DIR=str(work / "data"))
-    env["KNOWCODE_UPDATE_CHECK"] = "0"
+    env = kc_env.knowcode_env(work)
     env.pop("KNOWCODE_VERIFY", None)
     outside = work / "outside"
     outside.mkdir(exist_ok=True)

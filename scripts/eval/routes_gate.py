@@ -34,6 +34,8 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/: kc_env
+import kc_env  # noqa: E402
 from common import wilson  # noqa: E402
 
 GATE = 0.95
@@ -75,8 +77,7 @@ def binary_hash(path):
 
 
 def env_for(base):
-    return dict(os.environ, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'),
-                KNOWCODE_CONFIG_DIR=str(base/'config'), KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
+    return kc_env.knowcode_env(base)
 
 
 def covered(programs):
