@@ -32,13 +32,20 @@ Go program's API directly with `net/http`.
 
 ## Power
 
-The set is small: about 34 TypeScript and JavaScript sites and about 44 Go sites by a first search of the request
-APIs, before labelling. Its figures are reported with their counts and Wilson 95% intervals, per client language and
-per group, and called under-powered where a language has fewer than 50 sites. Go client links don't gate 0.7 on their
-own.
+The set is small: 105 sites after the exclusions below, 71 Go and 34 TypeScript and JavaScript, many of them
+requests to services outside the corpus. Its figures are reported with their counts and Wilson 95% intervals, per
+client language and per group, and called under-powered where a language has fewer than 50 sites with a required
+item. Go client links don't gate 0.7 on their own.
 
 Not included: go-gitea/gitea, whose routes go through its own router (a separate step, not 0.7), and whose web
 client's requests go through a few wrappers, so the wrapper rule leaves few sites.
+
+## The site search
+
+`route_links.py sites` searched only TypeScript, JavaScript and JVM request APIs when this file was frozen. Its search
+was then extended, before any site was labelled, to Go's request APIs as route-links-v1's rule names them (net/http's
+`Get`, `Post`, `PostForm`, `Head`, `NewRequest`, `NewRequestWithContext`, and `Client.Do`), with a unit test. The tool
+changed; the rule didn't.
 
 ## Left out
 
@@ -51,3 +58,12 @@ generated and the repository commits; test code):
   such as flipt's `protoc-gen-go-flipt-sdk`) is not a call either.
 - drakkan/sftpgo's bundled third-party scripts (`openapi/swagger-ui/`, `static/assets/js/scripts.bundle.js`) and its
   API test helpers (`internal/httpdtest/`, which only its tests import).
+- Two matches of the search that aren't net/http's request API: drakkan/sftpgo's `internal/httpclient/httpclient.go`
+  lines 243 and 257 call go-retryablehttp's `Client.Do`, a request method only named like net/http's.
+
+## Labelling
+
+105 sites remain. The first pass labels all of them; the second labels the seeded 20%
+([second-ids.txt](second-ids.txt), `route_links.py seeded`, 21 sites). Each pass is made by its own agent, given
+only this file, route-links-v1's rule, the site list and the pinned clones: neither runs KnowCode or sees KnowCode's
+output, and the second never sees the first. Their instructions are committed in [prompts](prompts/).
