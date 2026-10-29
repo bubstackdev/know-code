@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- TypeScript: a member a repo adds to a package's module by augmenting it (`declare module 'pkg' { interface … }`) and
+  reaches through that package's values stays linked; members reached through other packages' values are still the
+  package's. The index records each module a file augments (index schema 24; TypeScript files are read again once).
+
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
   member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
