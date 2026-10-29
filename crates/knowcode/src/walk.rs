@@ -125,6 +125,15 @@ impl<'a> Graph<'a> {
         self
     }
 
+    /// Starts another walk on this graph, following `filter`: the edges read so far stay cached as they were read, before
+    /// any gate, and every edge the new walk reads passes its own gate; what a walk reports of itself starts again (see
+    /// [`HttpCrossing::begin_walk`]). `task` and `review` walk one change's dependents and its tests this way.
+    pub fn begin_walk(&mut self, filter: trace::EdgeFilter) {
+        self.crossing.begin_walk(&filter);
+        self.gate = Gate::new(filter);
+        self.expanded = 0;
+    }
+
     /// The walk's gate: its edges, evidence policy and query.
     pub fn gate(&self) -> &Gate {
         &self.gate
