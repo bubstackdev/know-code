@@ -14,8 +14,8 @@
 //!
 //! The structure is version 1 (`version`), frozen for the renderers built on it (markdown, SARIF, the CI action):
 //! every row has a stable `id` and a `file`, with 1-based lines where there are any, and `repo` only when it isn't the
-//! reviewed repo (a contract's consumer always has it). An `id` is FNV-1a 64 of the row's kind, repo, file, symbol and
-//! contract ([`row_id`]): never its line, order or page, so a comment a CI job posted can be found again. The dependents and the tests are walked on one symbol graph (see
+//! reviewed repo (a contract's consumer always has it). An `id` is a hash of the row's kind and fields, per kind
+//! ([`row_id`]): never its line, order or page, so a comment a CI job posted can be found again. The dependents and the tests are walked on one symbol graph (see
 //! [`crate::walk::Graph::begin_walk`]), as `task` walks them.
 
 use std::collections::{HashMap, HashSet};
@@ -52,15 +52,33 @@ const WALK_LIMIT: usize = 60;
 /// The answer's structure, for the renderers built on it: a change to it is a new version.
 pub const VERSION: u32 = 1;
 
-/// A row's stable id: FNV-1a 64 of `kind\0repo\0file\0symbol\0contract`, as 16 hex digits. None of them moves
-/// when a line is added above the row, or the rows are paged.
-pub fn row_id(kind: &str, repo: &str, file: &str, symbol: &str, contract: &str) -> String {
-    let key = [kind, repo, file, symbol, contract].join("\0");
+/// A row's stable id: FNV-1a 64 of its kind and fields joined by `\0`, as 16 hex digits. No line, order or page
+/// is part of it, so it doesn't move when a line is added above the row or the rows are paged. Per kind (an empty field
+/// stays empty; `repo` is empty for the reviewed repo):
+///
+/// - `change`, `test`, `missed`: kind, repo, file;
+/// - `dependent`: kind, repo, file;
+/// - `contract`: kind, repo, file, "", the contract (`GET /api/items/{id}`);
+/// - `consumer`: kind, repo, file, symbol, the contract, the link (two consumers in one symbol differ by it);
+/// - `rule`: kind, repo, file, the rule's id, the matched text, and the match's index among the same rule's matches of
+///   the same text in that file: two matches of one rule in one file differ, and neither moves when the file changes
+///   elsewhere.
+pub fn row_id(kind: &str, fields: &[&str]) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in key.bytes() {
-        h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+    for (i, part) in std::iter::once(kind).chain(fields.iter().copied()).enumerate() {
+        if i > 0 {
+            h = h.wrapping_mul(0x100_0000_01b3); // the `\0` between fields
+        }
+        for b in part.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+        }
     }
     format!("{h:016x}")
+}
+
+/// [`row_id`] of a rule match: `n` is its index among the matches of rule `rule` with the text `matched` in `file`.
+pub fn rule_id(repo: &str, file: &str, rule: &str, matched: &str, n: usize) -> String {
+    row_id("rule", &[repo, file, rule, matched, &n.to_string()])
 }
 
 /// The reasons a sub-answer gives that the review can't settle: they go to `unsettled`, said once each.
@@ -115,7 +133,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         } else {
             "modified"
         };
-        let mut row = json!({ "id": row_id("change", "", &c.file, "", ""), "file": c.file, "change": change });
+        let mut row = json!({ "id": row_id("change", &["", &c.file]), "file": c.file, "change": change });
         if let Some(from) = &c.renamed_from {
             row["renamed_from"] = json!(from);
         }
@@ -163,7 +181,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
             for t in out.data.iter() {
                 tests_total += t.selection.selected.len() + t.selection.left_out.len();
                 for pick in t.selection.selected.iter().take(p.tests) {
-                    let mut row = json!({ "id": row_id("test", "", &pick.file, "", ""), "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 });
+                    let mut row = json!({ "id": row_id("test", &["", &pick.file]), "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 });
                     if let Some(run) = run_of(&pick.file) {
                         row["run"] = json!(run);
                     }
@@ -183,12 +201,12 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     let mut missed_seen: HashSet<&str> = HashSet::new();
     for m in &r.missed_partners {
         if missed_seen.insert(&m.file) {
-            missed.push(json!({ "id": row_id("missed", "", &m.file, "", ""), "file": m.file, "with": m.with, "support": m.support, "commits": m.commits }));
+            missed.push(json!({ "id": row_id("missed", &["", &m.file]), "file": m.file, "with": m.with, "support": m.support, "commits": m.commits }));
         }
     }
     for c in r.coupled.iter().filter(|c| !changed.contains(&c.file)) {
         if missed_seen.insert(&c.file) {
-            missed.push(json!({ "id": row_id("missed", "", &c.file, "", ""), "file": c.file, "with": c.with, "support": c.support, "commits": c.commits }));
+            missed.push(json!({ "id": row_id("missed", &["", &c.file]), "file": c.file, "with": c.with, "support": c.support, "commits": c.commits }));
         }
     }
     let missed_total = missed.len();
@@ -232,7 +250,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         .into_iter()
         .take(p.dependents)
         .map(|(repo, file, rows, n)| {
-            let mut v = json!({ "id": row_id("dependent", repo.as_deref().unwrap_or(""), &file, "", ""), "file": file, "rows": rows });
+            let mut v = json!({ "id": row_id("dependent", &[repo.as_deref().unwrap_or(""), &file]), "file": file, "rows": rows });
             if let Some(repo) = repo {
                 v["repo"] = json!(repo);
             }
@@ -333,6 +351,20 @@ mod tests {
         }
     }
 
+    /// Ids are the hash of their kind's fields: the same fields give the same id, and two matches of one rule in one
+    /// file, or two consumers in one symbol reached by different links, differ.
+    #[test]
+    fn row_ids_differ_where_rows_do() {
+        assert_eq!(row_id("change", &["", "src/A.cs"]), row_id("change", &["", "src/A.cs"]));
+        assert_ne!(row_id("change", &["", "src/A.cs"]), row_id("test", &["", "src/A.cs"]));
+        // Fields are kept apart: "ab" + "c" is not "a" + "bc".
+        assert_ne!(row_id("dependent", &["ab", "c"]), row_id("dependent", &["a", "bc"]));
+        assert_ne!(rule_id("", "src/A.cs", "no-sleep", "Thread.Sleep(1)", 0), rule_id("", "src/A.cs", "no-sleep", "Thread.Sleep(1)", 1));
+        let consumer = |link: &str| row_id("consumer", &["web", "src/api.ts", "loadItems", "GET /api/items/{id}", link]);
+        assert_ne!(consumer("http_route"), consumer("unique_name"));
+        assert_eq!(row_id("change", &["", "src/A.cs"]).len(), 16);
+    }
+
     /// A diff gets its changed files with their symbols, the tests reaching them, what depends on them by file, and
     /// each section saying whether it is whole and how to go on; tests are advice, and contracts aren't read yet.
     #[test]
@@ -358,7 +390,7 @@ mod tests {
         assert_eq!(env["version"], 1, "{env}");
         assert_eq!(env["changes"][0]["file"], "src/Ledger.cs", "{env}");
         // Ids: stable, and the same for the same row whatever its line.
-        assert_eq!(env["changes"][0]["id"], row_id("change", "", "src/Ledger.cs", "", ""), "{env}");
+        assert_eq!(env["changes"][0]["id"], row_id("change", &["", "src/Ledger.cs"]), "{env}");
         assert_eq!(env["dependents"][0]["rows"][0]["class"], "direct", "{env}");
         assert!(env["rules"].as_array().is_some_and(Vec::is_empty) && env["walkthrough"].is_null(), "{env}");
         assert_eq!(env["sections"]["contracts"]["incomplete"], json!(["unsupported"]), "{env}");
