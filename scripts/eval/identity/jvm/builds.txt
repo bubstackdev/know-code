@@ -1,0 +1,16 @@
+# How run.sh builds each JVM repository of repos.txt for labelling: NAME JVM TOOL [VAR=VALUE ...] -- BUILD ARGUMENTS.
+# JVM is the JDK scip-java runs the build with; the arguments follow scip-java's own defaults (Maven: clean verify
+# without running tests; Gradle: its scipCompileAll task), which compile main and test sources. run.sh adds -o or
+# --offline for the labelling build.
+#
+# gson: the proto module needs Maven 3.9.6 and the image has 3.9.1, so it's left out.
+# commons-lang: commons-parent compiles in-process unless commons.compiler.fork is set, and then with its own
+#   commons.compiler.javac; both are pointed at scip-java's javac, as its own Maven properties are.
+# moshi: the scip-java 0.13.2 Kotlin plugin needs Kotlin 2.4, and moshi pins 2.3.21 but takes MOSHI_KOTLIN_VERSION.
+#   Under 2.4 one Java test calls an internal Kotlin member by its 2.3 mangled name, so moshi's Java tests are left out.
+gson 17 maven -- --batch-mode clean verify -DskipTests -pl !proto
+commons-lang 17 maven -- --batch-mode clean verify -DskipTests -Dcommons.compiler.fork=true '-Dcommons.compiler.javac=${maven.compiler.executable}'
+spring-petclinic 17 maven -- --batch-mode clean verify -DskipTests
+moshi 21 gradle MOSHI_KOTLIN_VERSION=2.4.21 -- clean scipPrintDependencies scipCompileAll -x :moshi:compileTestJava
+kotlinpoet 21 gradle -- clean scipPrintDependencies scipCompileAll
+spring-petclinic-kotlin 21 gradle -- clean scipPrintDependencies scipCompileAll
