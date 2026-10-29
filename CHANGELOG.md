@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `docs` fences each file in its Map in that file's language. A file in a language the Map didn't name was fenced as
+  Swift (a Java file came out as ```` ```swift ````); Java, Kotlin, Go, JavaScript and Swift are now named, and a file
+  of any other language is fenced bare.
+
 - `rules` covers Java and Go too, with the grammars ast-grep 0.50 ships, so their rules match what `ast-grep scan`
   matches (rules-v1: 105 of 105 matches over eight languages). A Kotlin rule is refused, with the reason: KnowCode's
   Kotlin grammar isn't ast-grep's.
