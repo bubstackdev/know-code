@@ -4,6 +4,22 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Fewer links to a repo declaration where the compiler binds a library's. On identity-v1, outside labels linked drop
+  from 6 to 2 in C#, 22 to 19 in Swift and 37 to 7 in TypeScript, with no label newly wrong:
+  - TypeScript: a member reached through a value a package gives (`getLibraryApi(api).getItems(…)`, `(await
+    getLibraryApi(api).getItems(…)).data`) is the package's, not a same-named member of the repo's declaration files.
+  - TypeScript: a bare import that no config maps (`import { createHash } from 'crypto'`) is never placed at a repo
+    file named like it when a tsconfig is in force, nor ever for Node's own modules.
+  - TypeScript: a module that exports but imports nothing names the platform's global types (`Response`), not a
+    repo module's export of the name.
+  - C#: an extension method is linked only where C# can call it. A property read (`results.Count`) is never one; a
+    sealed library type (`ReadOnlySpan<T>`, `string`) calls only extensions on itself and its interfaces; and a
+    sequence's call that a `List<T>` or `HashSet<T>` instance method takes (`list.AddRange(xs)`) lists the extension
+    without linking it.
+  - Swift: a call no `await` covers never links to an `async` function (XCTest's synchronous `XCTAssertThrowsError`,
+    not a repo's `async` overload). `await` covers every call to its right in its statement (`try await a.f().g()`).
+  - Swift: a declaration whose attributes push its signature past the length cap shows the signature from after the
+    attributes, so its parameters and effects aren't cut off.
 - A new worktree started from a shared base hashes only the files that may differ from the base on its first sync:
   those changed since the base's commit, modified in the worktree, or untracked. Every other file git reports clean and
   unchanged since that commit keeps the worktree's own stat when the base is cloned, so it isn't read. `--verify` still

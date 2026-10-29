@@ -9,9 +9,10 @@
 //! `package.json` declares it, and left to the name-based rules when the repo itself provides it (a workspace
 //! library). One a config maps to no indexed file is unplaced: it is never guessed.
 //!
-//! Only when no config maps a module (there is none, or a bundler's alias the compiler never sees) is it placed by
-//! guesswork: a path from a directory above the file (`src/app/…`), or an alias's tail (`@app/core/x`) naming one
-//! repo file. A name resolved through a guess is at most `unique_name`, never `exact`.
+//! A bare module no config maps is outside the repo when a config is in force (the compiler would look for it only in
+//! `node_modules`), as is Node's own (`crypto`) anywhere. Only where no config is in force at all (a bundler's alias the
+//! compiler never sees) is it placed by guesswork: a path from a directory above the file (`src/app/…`), or an alias's
+//! tail (`@app/core/x`) naming one repo file. A name resolved through a guess is at most `unique_name`, never `exact`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,6 +24,14 @@ use rusqlite::Connection;
 const GLOBAL_OBJECTS: &[&str] = &[
     "console", "document", "globalThis", "history", "localStorage", "location", "navigator", "performance", "process",
     "screen", "sessionStorage", "window",
+];
+
+/// Node's built-in modules, imported by their bare names (`crypto`, `fs/promises`).
+const NODE_MODULES: &[&str] = &[
+    "assert", "async_hooks", "buffer", "child_process", "cluster", "console", "crypto", "dgram", "diagnostics_channel",
+    "dns", "events", "fs", "http", "http2", "https", "inspector", "module", "net", "os", "path", "perf_hooks", "process",
+    "punycode", "querystring", "readline", "repl", "stream", "string_decoder", "timers", "tls", "tty", "url", "util", "v8",
+    "vm", "worker_threads", "zlib",
 ];
 
 /// What the module a name comes from is.
@@ -232,7 +241,12 @@ impl Modules {
         if missing {
             return Ok(Origin::Missing);
         }
-        // No config places it: guesswork. A path from a base directory: the repo root, or a directory above the
+        // Node's own modules, and any bare module under a config: the compiler finds those only in `node_modules` (or
+        // the platform), never as a repo file named like them (`crypto` beside `src/utils/crypto.ts`).
+        if module.starts_with("node:") || NODE_MODULES.contains(&package) || self.configured(conn, dir)? {
+            return Ok(Origin::External);
+        }
+        // No config is in force at all: guesswork. A path from a base directory: the repo root, or a directory above the
         // importing file (`src/app/x` from `web/src/app/y`).
         let mut base = Some(dir);
         while let Some(b) = base {
@@ -247,6 +261,20 @@ impl Modules {
             return self.by_tail(conn, tail);
         }
         Ok(Origin::External)
+    }
+
+    /// Whether a `tsconfig.json` or `jsconfig.json` above `dir` is in force there, whatever it sets.
+    fn configured(&mut self, conn: &Connection, dir: &str) -> Result<bool> {
+        let mut at = Some(dir);
+        while let Some(d) = at {
+            let configs = self.configs(conn)?;
+            let join = |f: &str| if d.is_empty() { f.to_string() } else { format!("{d}/{f}") };
+            if configs.contains_key(&join("tsconfig.json")) || configs.contains_key(&join("jsconfig.json")) {
+                return Ok(true);
+            }
+            at = if d.is_empty() { None } else { Some(dir_of(d)) };
+        }
+        Ok(false)
     }
 
     fn configs(&mut self, conn: &Connection) -> Result<&HashMap<String, kc_extract::TsConfig>> {
@@ -442,7 +470,7 @@ impl Modules {
                 // (`Validators.required`, `TestBed.inject`), or of a built-in object (`console.log`).
                 let root = r.split('.').next().unwrap_or(r);
                 if !root.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') || r.contains(['(', '[', '<', '!', '?']) {
-                    return Ok(None);
+                    return self.package_rooted(conn, file, r);
                 }
                 let Some(b) = self.imported(conn, file, root)? else {
                     return Ok((!receiver_typed && GLOBAL_OBJECTS.contains(&root)).then_some(Scope::External));
@@ -470,6 +498,22 @@ impl Modules {
                 })
             }
         }
+    }
+
+    /// A receiver that is an expression on a value imported from a package (`getLibraryApi(api)`, `(await
+    /// getLibraryApi(api).getItems(…)).data`, `new Client().items`): the value it gives is the package's, and so are its
+    /// members. `None` when the expression's first name isn't imported from a package.
+    fn package_rooted(&mut self, conn: &Connection, file: &str, receiver: &str) -> Result<Option<Scope>> {
+        let mut rest = receiver.trim_start_matches(|c: char| c == '(' || c.is_whitespace());
+        for word in ["await ", "new "] {
+            rest = rest.strip_prefix(word).unwrap_or(rest).trim_start_matches(|c: char| c == '(' || c.is_whitespace());
+        }
+        let head: &str = &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(rest.len())];
+        if head.is_empty() {
+            return Ok(None);
+        }
+        let Some(b) = self.imported(conn, file, head)? else { return Ok(None) };
+        Ok((self.origin(conn, file, &b.module)? == Origin::External).then_some(Scope::External))
     }
 
     /// What `export * as name from 'module'` in `file` names, if `file` re-exports a namespace as `name`.
@@ -511,14 +555,21 @@ impl Modules {
     /// `Event`), even when one of the repo's modules exports a declaration of that name. A file importing nothing is
     /// read as before: it sees every declaration.
     pub(crate) fn sees(&mut self, conn: &Connection, file: &str, name: &str) -> Result<bool> {
+        self.sees_as(conn, file, name, false)
+    }
+
+    /// [`Modules::sees`] for an interface or type alias named in `file` when `as_type`. A file importing nothing may
+    /// get its names from what the index doesn't read (triple-slash references, a bundler's globals), so any of the
+    /// repo's declarations may be what it names; but no bundler provides a type, so a module (a file that exports)
+    /// naming one without importing it names its own or a global one (`Response`), as the compiler reads it. Only a
+    /// script (no import or export) sees every type.
+    pub(crate) fn sees_as(&mut self, conn: &Connection, file: &str, name: &str, as_type: bool) -> Result<bool> {
         let bindings = self.file_bindings(conn, file)?;
-        // A file importing nothing at all: its imports may be ones the index doesn't read (triple-slash references,
-        // a bundler's globals), so any of the repo's declarations may be what it names.
-        if !bindings.iter().any(|b| !b.export) {
+        if !bindings.iter().any(|b| !b.export) && (!as_type || self.script(conn, file)?) {
             return Ok(true);
         }
         // Imported, or re-exported (`export { X } from './x'` names the module's `X`).
-        if bindings.iter().any(|b| b.local == name) {
+        if self.file_bindings(conn, file)?.iter().any(|b| b.local == name) {
             return Ok(true);
         }
         let files: Vec<String> = conn

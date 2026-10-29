@@ -538,6 +538,8 @@ struct Def {
     swift_params: Option<Vec<SwiftParam>>,
     /// A Swift function declared `async` (or `reasync`).
     is_async: bool,
+    /// A Swift function declared `async` (not `reasync`): every call of it is awaited.
+    must_await: bool,
     /// Declared `export` (TypeScript): at a module's top level.
     exported: bool,
     /// Declared `private` or `fileprivate` (Swift): named only in its own file.
@@ -790,6 +792,32 @@ fn on_stdlib_type(d: &Def) -> bool {
 const DOTNET_SEQUENCES: &[&str] = &[
     "List", "IList", "ICollection", "IEnumerable", "IReadOnlyList", "IReadOnlyCollection", "IQueryable", "HashSet",
     "ISet",
+];
+
+/// Instance methods of the concrete .NET collections a sequence may be (`List<T>`, `HashSet<T>`, arrays), with the
+/// fewest and most arguments each takes: C# calls one of these before any extension method of the name that the
+/// arguments fit too.
+const DOTNET_COLLECTION_MEMBERS: &[(&str, u32, u32)] = &[
+    ("Add", 1, 1), ("AddRange", 1, 1), ("AsReadOnly", 0, 0), ("BinarySearch", 1, 4), ("Clear", 0, 0), ("Contains", 1, 1),
+    ("ConvertAll", 1, 1), ("CopyTo", 1, 4), ("ExceptWith", 1, 1), ("Exists", 1, 1), ("Find", 1, 1), ("FindAll", 1, 1),
+    ("FindIndex", 1, 3), ("FindLast", 1, 1), ("FindLastIndex", 1, 3), ("ForEach", 1, 1), ("GetRange", 2, 2),
+    ("IndexOf", 1, 3), ("Insert", 2, 2), ("InsertRange", 2, 2), ("IntersectWith", 1, 1), ("IsSubsetOf", 1, 1),
+    ("IsSupersetOf", 1, 1), ("LastIndexOf", 1, 3), ("Overlaps", 1, 1), ("Remove", 1, 1), ("RemoveAll", 1, 1),
+    ("RemoveAt", 1, 1), ("RemoveRange", 2, 2), ("RemoveWhere", 1, 1), ("Reverse", 0, 2), ("SetEquals", 1, 1),
+    ("Slice", 2, 2), ("Sort", 0, 3), ("SymmetricExceptWith", 1, 1), ("ToArray", 0, 0), ("TrimExcess", 0, 0),
+    ("TrueForAll", 1, 1), ("TryGetValue", 2, 2), ("UnionWith", 1, 1),
+];
+
+
+/// Sealed .NET types, with the interfaces each implements that a repo's extension methods may extend: an extension
+/// method declared on any other type never applies to a value of one of them.
+const CS_SEALED_INTERFACES: &[(&str, &[&str])] = &[
+    ("string", &["IEnumerable", "IComparable", "IConvertible", "IEquatable", "ICloneable", "IParsable", "ISpanParsable"]),
+    ("String", &["IEnumerable", "IComparable", "IConvertible", "IEquatable", "ICloneable", "IParsable", "ISpanParsable"]),
+    ("ReadOnlySpan", &[]),
+    ("Span", &[]),
+    ("ReadOnlyMemory", &["IEquatable"]),
+    ("Memory", &["IEquatable"]),
 ];
 
 /// LINQ, Entity Framework and `List<T>` methods returning a sequence of the same elements.
@@ -2356,6 +2384,8 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     // (`\.member`) only properties.
     let implicit = hit.receiver.as_deref() == Some(".");
     let key_path = hit.receiver.as_deref() == Some("\\");
+    let cs_member = hit.kind == "member" && hit.file.ends_with(".cs");
+    let unawaited = matches!(hit.kind.as_str(), "call" | "instantiate") && hit.file.ends_with(".swift") && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| !c.a);
     let cands: Vec<&Def> = defs
         .iter()
         .copied()
@@ -2369,6 +2399,11 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         .filter(|d| !d.in_script || d.file == hit.file)
         // Through a receiver (`x.f()`, `T.f()`) only members are reachable, never free functions or globals.
         .filter(|d| hit.receiver.is_none() || d.container.is_some() || matches!(hit.kind.as_str(), "instantiate" | "type_ref"))
+        // A C# member read without a call (`results.Count`) is a property or field: an extension method is only called.
+        .filter(|d| !(cs_member && d.extension))
+        // A Swift call no `await` covers can't call an `async` function (it can a `reasync` one): it calls a
+        // synchronous one of the name, the repo's or a library's (`XCTAssertThrowsError`).
+        .filter(|d| !(unawaited && d.must_await))
         .collect();
     // A member used without a call is a property or case; a method only when nothing else has the name, or when the
     // receiver's type has the method (passed or spied on: `service.load.mockReturnValue(…)`).
@@ -2435,6 +2470,18 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 found = later;
             }
         }
+        // A C# sequence's type is one type here (`List<T>`, `T[]` and `IEnumerable<T>` are each a sequence). Called as
+        // a concrete collection's instance method can be (`List<T>.AddRange(xs)`), which C# picks before any extension
+        // method, the repo's extension method is the target only when the sequence is an interface: it is listed, not
+        // linked.
+        if hit.file.ends_with(".cs")
+            && chain.first().is_some_and(|t| t == "Array")
+            && !found.is_empty()
+            && found.iter().all(|d| d.extension)
+            && DOTNET_COLLECTION_MEMBERS.iter().any(|(n, min, max)| *n == hit.name && hit.args.is_none_or(|a| (*min..=*max).contains(&a)))
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
@@ -2445,7 +2492,15 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
             if matches!(recv, Receiver::Foreign(_)) && !on_type {
                 // A framework type may conform to a framework protocol the repo extends, never be a library struct.
-                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
+                let mut ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
+                // A C# extension method applies through the receiver's own type, its base types and its interfaces.
+                // Those of a sealed library type are known (`ReadOnlySpan<T>` has none), so one declared on any other
+                // type (`this IReadOnlyList<T>`) is never what it calls.
+                if hit.file.ends_with(".cs")
+                    && let Some((_, interfaces)) = chain.first().and_then(|t| CS_SEALED_INTERFACES.iter().find(|(s, _)| s == t))
+                {
+                    ext.retain(|d| !d.extension || d.container.as_deref().is_some_and(|c| interfaces.contains(&last_segment(c))));
+                }
                 return group_confidence(&ext);
             }
             // The receiver's type is known and nothing on it or its supertypes has this name: the member lives
@@ -2937,6 +2992,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         partial: r.get(15)?,
         swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
         is_async: r.get::<_, Option<String>>(16)?.as_deref().is_some_and(swift_async),
+        must_await: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_effects).is_some_and(|e| e.split_whitespace().any(|w| w == "async")),
         exported: r.get(17)?,
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
@@ -2946,10 +3002,15 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
 /// Whether a Swift function's signature declares it `async` (or `reasync`): the effects after its parameter list,
 /// not a closure parameter's (`_ body: () async -> Void`).
 fn swift_async(signature: &str) -> bool {
-    let Some(at) = signature.find("func ") else { return false };
+    swift_effects(signature).is_some_and(|e| e.split_whitespace().any(|w| w == "async" || w == "reasync"))
+}
+
+/// The effects a Swift function's signature declares after its parameter list (`async throws`), before its result.
+fn swift_effects(signature: &str) -> Option<&str> {
+    let at = signature.find("func ")?;
     let after = &signature[at + 5..];
     let mut depth = 0i32;
-    let Some(open) = after.char_indices().find_map(|(i, c)| {
+    let open = after.char_indices().find_map(|(i, c)| {
         match c {
             '<' => depth += 1,
             '>' => depth -= 1,
@@ -2957,22 +3018,17 @@ fn swift_async(signature: &str) -> bool {
             _ => {}
         }
         None
-    }) else {
-        return false;
-    };
+    })?;
     let mut depth = 0i32;
-    let Some(close) = after[open..].char_indices().find_map(|(i, c)| {
+    let close = after[open..].char_indices().find_map(|(i, c)| {
         match c {
             '(' | '[' => depth += 1,
             ')' | ']' => depth -= 1,
             _ => {}
         }
         (depth == 0).then_some(open + i)
-    }) else {
-        return false;
-    };
-    let effects = after[close + 1..].split("->").next().unwrap_or("");
-    effects.split_whitespace().any(|w| w == "async" || w == "reasync")
+    })?;
+    after[close + 1..].split("->").next()
 }
 
 /// A Swift function's parameter, as its signature declares it: what a call has to write for it.
@@ -5893,7 +5949,13 @@ fn ts_scoped(
                 return Ok(Some(("exact", own)));
             }
             // Neither declared here nor imported: a global, the repo's only when a script of its declares it.
-            if !is_js(&hit.file) && !modules.sees(conn, &hit.file, &hit.name)? {
+            // An interface or type alias comes only through an import or a global declaration, never a bundler's
+            // globals: a module naming one it doesn't import names the platform's (`Response`).
+            let type_only = hit.kind == "type_ref" && {
+                let mut decls = defs[&hit.name].iter().filter(|d| top(d, &hit.kind)).peekable();
+                decls.peek().is_some() && decls.all(|d| matches!(d.kind.as_str(), "protocol" | "typealias"))
+            };
+            if !is_js(&hit.file) && !modules.sees_as(conn, &hit.file, &hit.name, type_only)? {
                 return Ok(Some(("unresolved", Vec::new())));
             }
             Ok(None)
