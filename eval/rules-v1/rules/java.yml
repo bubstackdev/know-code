@@ -1,0 +1,68 @@
+id: java-println
+language: Java
+severity: warning
+message: System.out.println($$$ARGS)
+rule:
+  pattern: System.out.println($$$ARGS)
+---
+id: java-optional-get
+language: java
+severity: error
+message: Optional.get on $O
+rule:
+  pattern: $O.get()
+  inside:
+    kind: method_declaration
+    stopBy: end
+    has:
+      field: name
+      regex: ^first$
+---
+id: java-empty-catch
+language: Java
+message: empty catch
+rule:
+  kind: catch_clause
+  has:
+    field: body
+    kind: block
+    not:
+      has:
+        kind: expression_statement
+---
+id: java-thread-sleep
+language: Java
+severity: hint
+message: Thread.sleep in $M
+rule:
+  pattern: Thread.sleep($$$)
+  inside:
+    kind: method_declaration
+    stopBy: end
+    has:
+      field: name
+      pattern: $M
+---
+id: java-synchronized-method
+language: Java
+message: synchronized method
+rule:
+  kind: method_declaration
+  has:
+    kind: modifiers
+    regex: synchronized
+---
+id: java-throw-iae
+language: Java
+message: argument check
+rule:
+  pattern: throw new IllegalArgumentException($$$)
+---
+id: java-cast
+language: Java
+message: cast to $T
+rule:
+  kind: cast_expression
+  has:
+    field: type
+    pattern: $T

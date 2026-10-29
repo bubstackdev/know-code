@@ -61,8 +61,9 @@ never edits, so a rule with `fix` is refused. A rule matches what the ast-grep c
 files: KnowCode reads rule files with the same library, including `inside`/`has`/`precedes`/`follows` with their
 `stopBy`, `all`/`any`/`not`, `matches` with `utils`, `constraints`, `transform` in messages, `files` and `ignores`, and
 `ast-grep-ignore` comments ([eval/rules-v1](../eval/rules-v1/README.md)). Rule languages are `CSharp`, `TypeScript`,
-`Tsx`, `Python`, `Rust` and `Swift`; JavaScript is refused, since KnowCode parses it with another grammar than
-ast-grep's. `--rules` names rule files or directories of them (relative paths from the repo's root); without it the
+`Tsx`, `Python`, `Rust`, `Swift`, `Java` and `Go`; JavaScript and Kotlin are refused, since KnowCode parses them
+with other grammars than ast-grep's. A Go call doesn't parse alone as a pattern: give it in context
+(`pattern: {context: "func f() { fmt.Println($$$) }", selector: call_expression}`). `--rules` names rule files or directories of them (relative paths from the repo's root); without it the
 config's `rules.paths` are read. Every file KnowCode lists in the language is read, generated and large ones too.
 Rule files are hostile input when they come with the repo under review: one over 2 MiB, or whose YAML aliases stand
 for over 100,000 nodes, is refused unread, as is one in a part of the repo its privacy file blocks, and the MCP op
