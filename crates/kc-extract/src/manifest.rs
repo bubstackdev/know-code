@@ -1,5 +1,5 @@
-//! Package manifests: SwiftPM `Package.swift`, XcodeGen `project.yml` and Cargo `Cargo.toml`, parsed into packages,
-//! targets and products, and the dependencies between them.
+//! Package manifests: SwiftPM `Package.swift`, XcodeGen `project.yml`, Cargo `Cargo.toml` and Go `go.mod`, parsed
+//! into packages, targets and products, and the dependencies between them.
 //!
 //! Only literal manifest content is understood. A `Package.swift` that builds its arrays in variables or loops
 //! yields what is written inline.
@@ -501,6 +501,81 @@ fn line_of(src: &str, byte: usize) -> u32 {
     src[..byte.min(src.len())].matches('\n').count() as u32 + 1
 }
 
+/// A Go module's `go.mod`: the module path as the package's name, and as dependencies each `require` (`Registry`,
+/// its version the requirement) and each `replace` (its old module path as the name, the replacement as the location:
+/// `Path` for a directory, `./x` or `../x`, which is where the module's code is read from; `Registry` for another
+/// module). Resolution reads a directory replace to keep an import of the repo's other module inside the repo.
+pub fn gomod(source: &str) -> FileFacts {
+    let mut facts = FileFacts::default();
+    let mut pkg = PackageFact { kind: "gomod", name: String::new(), line: 1, targets: Vec::new(), deps: Vec::new() };
+    // The directive a parenthesized block belongs to, while inside one.
+    let mut block: Option<String> = None;
+    for (i, raw) in source.lines().enumerate() {
+        let line = i as u32 + 1;
+        let text = raw.split("//").next().unwrap_or("").trim();
+        if text.is_empty() {
+            continue;
+        }
+        if block.is_some() && text == ")" {
+            block = None;
+            continue;
+        }
+        let (directive, rest) = match &block {
+            Some(d) => (d.clone(), text),
+            None => match text.split_once(char::is_whitespace) {
+                Some((d, r)) => (d.to_string(), r.trim()),
+                None => continue,
+            },
+        };
+        if block.is_none() && rest == "(" {
+            block = Some(directive);
+            continue;
+        }
+        let unquote = |s: &str| s.trim_matches('"').to_string();
+        match directive.as_str() {
+            "module" => {
+                pkg.name = unquote(rest);
+                pkg.line = line;
+            }
+            "require" => {
+                let mut parts = rest.split_whitespace();
+                if let Some(name) = parts.next() {
+                    let name = unquote(name);
+                    pkg.deps.push(PackageDep {
+                        location: name.clone(),
+                        name,
+                        source: DepSource::Registry,
+                        requirement: parts.next().map(str::to_string),
+                        line,
+                        resolved_repo: None,
+                    });
+                }
+            }
+            "replace" => {
+                let Some((old, new)) = rest.split_once("=>") else { continue };
+                let (Some(old), mut new) = (old.split_whitespace().next(), new.split_whitespace()) else { continue };
+                let Some(target) = new.next() else { continue };
+                let local = target.starts_with("./") || target.starts_with("../") || target.starts_with('/');
+                pkg.deps.push(PackageDep {
+                    name: unquote(old),
+                    source: if local { DepSource::Path } else { DepSource::Registry },
+                    location: unquote(target),
+                    requirement: new.next().map(str::to_string),
+                    line,
+                    resolved_repo: None,
+                });
+            }
+            _ => {}
+        }
+    }
+    if pkg.name.is_empty() {
+        facts.parse_errors = 1;
+    } else {
+        facts.packages.push(pkg);
+    }
+    facts
+}
+
 /// Finds 1-based lines of YAML keys and TOML sections by text, since the parsers drop positions.
 struct LineFinder<'a> {
     lines: Vec<&'a str>,
@@ -879,5 +954,27 @@ let package = Package(
         assert_eq!(project("Aspire.AppHost.Sdk/13.6.0", ""), (vec![s("Aspire.AppHost.Sdk/13.6.0", "implicit")], 0));
         // Unknown: the files' imports can't be read, and that is said.
         assert_eq!(project("Some.Other.Sdk/1.0.0", ""), (vec![s("Some.Other.Sdk/1.0.0", "unknown")], 1));
+    }
+
+    #[test]
+    fn gomod_module_requires_and_replaces() {
+        let src = "module github.com/example/shop/v2 // the shop\n\ngo 1.22\n\nrequire (\n\tgithub.com/go-chi/chi/v5 v5.2.4\n\tgolang.org/x/sync v0.7.0 // indirect\n)\n\nrequire github.com/example/kit v1.0.0\n\nreplace github.com/example/kit => ../kit\nreplace golang.org/x/sync v0.7.0 => golang.org/x/sync v0.8.0\n";
+        let f = gomod(src);
+        assert_eq!(f.parse_errors, 0);
+        let p = &f.packages[0];
+        assert_eq!((p.kind, p.name.as_str(), p.line), ("gomod", "github.com/example/shop/v2", 1));
+        let deps: Vec<(&str, DepSource, &str, Option<&str>)> =
+            p.deps.iter().map(|d| (d.name.as_str(), d.source, d.location.as_str(), d.requirement.as_deref())).collect();
+        assert_eq!(
+            deps,
+            [
+                ("github.com/go-chi/chi/v5", DepSource::Registry, "github.com/go-chi/chi/v5", Some("v5.2.4")),
+                ("golang.org/x/sync", DepSource::Registry, "golang.org/x/sync", Some("v0.7.0")),
+                ("github.com/example/kit", DepSource::Registry, "github.com/example/kit", Some("v1.0.0")),
+                ("github.com/example/kit", DepSource::Path, "../kit", None),
+                ("golang.org/x/sync", DepSource::Registry, "golang.org/x/sync", Some("v0.8.0")),
+            ]
+        );
+        assert_eq!(gomod("go 1.22\n").parse_errors, 1);
     }
 }

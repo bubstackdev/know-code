@@ -112,6 +112,8 @@ pub(crate) struct Modules {
     packages: Option<(HashSet<String>, HashSet<String>)>,
     /// Per file, whether it is a script (no import or export): its top-level declarations are global.
     scripts: HashMap<String, bool>,
+    /// The packages the repo augments (`declare module 'pkg' { … }`), by package name.
+    augmented: Option<HashSet<String>>,
 }
 
 /// A TypeScript or JavaScript module's path, by its extension: its imports resolve through [`Modules`].
@@ -502,7 +504,8 @@ impl Modules {
 
     /// A receiver that is an expression on a value imported from a package (`getLibraryApi(api)`, `(await
     /// getLibraryApi(api).getItems(…)).data`, `new Client().items`): the value it gives is the package's, and so are its
-    /// members. `None` when the expression's first name isn't imported from a package.
+    /// members. `None` when the expression's first name isn't imported from a package, or the repo augments that
+    /// package (`declare module 'pkg'`), whose module then holds repo declarations too.
     fn package_rooted(&mut self, conn: &Connection, file: &str, receiver: &str) -> Result<Option<Scope>> {
         let mut rest = receiver.trim_start_matches(|c: char| c == '(' || c.is_whitespace());
         for word in ["await ", "new "] {
@@ -513,7 +516,21 @@ impl Modules {
             return Ok(None);
         }
         let Some(b) = self.imported(conn, file, head)? else { return Ok(None) };
+        // A package the repo augments has repo declarations among its module's: left to the name rules.
+        if self.augments(conn, &b.module)? {
+            return Ok(None);
+        }
         Ok((self.origin(conn, file, &b.module)? == Origin::External).then_some(Scope::External))
+    }
+
+    /// Whether the repo augments `module`'s package (`declare module '@scope/pkg/…'` or the package itself).
+    fn augments(&mut self, conn: &Connection, module: &str) -> Result<bool> {
+        if self.augmented.is_none() {
+            let rows: Vec<String> =
+                conn.prepare("SELECT DISTINCT module FROM module_augments")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            self.augmented = Some(rows.iter().filter(|m| !m.starts_with('.')).map(|m| package_name(m).to_string()).collect());
+        }
+        Ok(self.augmented.as_ref().expect("loaded").contains(package_name(module)))
     }
 
     /// What `export * as name from 'module'` in `file` names, if `file` re-exports a namespace as `name`.

@@ -1,5 +1,5 @@
-//! Declared test targets: SwiftPM test targets, .NET test projects and package.json test scripts, with their tests and
-//! the commands to run them.
+//! Declared test targets: SwiftPM test targets, .NET test projects, package.json test scripts and Go modules, with their
+//! tests and the commands to run them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,6 +51,13 @@ let package = Package(
 "#);
     write(&repo, "dotnet/Ledger.Tests/BalanceTests.cs", "using Xunit;\nnamespace Ledger.Tests;\npublic class BalanceTests\n{\n    [Fact]\n    public void Adds() { }\n    public void Helper() { }\n}\n");
     write(&repo, "dotnet/Ledger/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+    // A Go module with a nested module: each module's tests are its own.
+    write(&repo, "goapp/go.mod", "module example.com/orchard\n\ngo 1.22\n");
+    write(&repo, "goapp/crate.go", "package orchard\n\nfunc Count() int { return 1 }\n");
+    write(&repo, "goapp/crate_test.go", "package orchard\n\nimport \"testing\"\n\nfunc TestCount(t *testing.T) {}\n\nfunc BenchmarkCount(b *testing.B) {}\n\nfunc helper() {}\n");
+    write(&repo, "goapp/press/press_test.go", "package press\n\nimport \"testing\"\n\nfunc TestJuice(t *testing.T) {}\n");
+    write(&repo, "goapp/tools/go.mod", "module example.com/orchard/tools\n\ngo 1.22\n");
+    write(&repo, "goapp/tools/gen_test.go", "package tools\n\nimport \"testing\"\n\nfunc TestGen(t *testing.T) {}\n");
     write(&repo, "web/package.json", "{\n  \"name\": \"web\",\n  \"keywords\": [\"test\"],\n  \"scripts\": { \"build\": \"tsc\", \"test\": \"vitest run\", \"test:unit\": \"vitest run unit\" }\n}\n");
     write(&repo, "web/yarn.lock", "\n");
     write(&repo, "web/src/cart.ts", "export class Cart {}\n");
@@ -70,6 +77,8 @@ let package = Package(
         [
             ("swiftpm", "KitTests", r"swift test --filter '^KitTests\.'", vec!["KitTests.testMakes"]),
             ("dotnet", "Ledger.Tests", "dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj", vec!["BalanceTests.Adds"]),
+            ("go", "example.com/orchard", "cd goapp && go test ./...", vec!["TestCount", "BenchmarkCount", "TestJuice"]),
+            ("go", "example.com/orchard/tools", "cd goapp/tools && go test ./...", vec!["TestGen"]),
             ("npm", "test", "cd web && yarn test", vec!["web/src/cart.test.ts"]),
             ("npm", "test:unit", "cd web && yarn test:unit", vec!["web/src/cart.test.ts"]),
             ("npm", "test", "cd web/packages/ui && yarn test", vec!["web/packages/ui/button.test.ts"]),
@@ -84,8 +93,15 @@ let package = Package(
         targets[1].tests[0].command,
         r"dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj --filter 'FullyQualifiedName=Ledger.Tests.BalanceTests.Adds|FullyQualifiedName~Ledger.Tests.BalanceTests.Adds\('"
     );
+    // One Go test, from its package's directory; a benchmark alone.
+    let go: Vec<&str> = targets[2].tests.iter().map(|c| c.command.as_str()).collect();
+    assert_eq!(
+        go,
+        ["cd goapp && go test . -run '^TestCount$'", "cd goapp && go test . -run '^$' -bench '^BenchmarkCount$'", "cd goapp && go test ./press -run '^TestJuice$'"]
+    );
+    assert_eq!((targets[2].manifest.as_str(), targets[2].line), ("goapp/go.mod", 1));
     // A script's line is its key under `scripts`, not an earlier `"test"`.
-    assert_eq!((targets[2].manifest.as_str(), targets[2].line), ("web/package.json", 4));
-    assert_eq!(targets[2].tests[0].command, "cd web && yarn test -- src/cart.test.ts");
+    assert_eq!((targets[4].manifest.as_str(), targets[4].line), ("web/package.json", 4));
+    assert_eq!(targets[4].tests[0].command, "cd web && yarn test -- src/cart.test.ts");
     let _ = std::fs::remove_dir_all(&base);
 }

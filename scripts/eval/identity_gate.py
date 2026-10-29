@@ -48,6 +48,8 @@ REPOS = HERE/'identity/repos.txt'
 LABELS = ROOT/'eval/identity-v1/labels.jsonl'
 EXACT_PRECISION = 0.99
 NAME_WINDOW = 10
+# The most lines one attribute or annotation is read over, when skipping a declaration's leading block.
+ATTRIBUTE_LINES = 60
 LINKS = ('exact', 'unique_name')
 # What went wrong in a wrong `exact` row, so a fix can show which it moves (cause()).
 CAUSES = {
@@ -109,16 +111,54 @@ def word(name):
 
 def name_line(lines, line, name, comment=None):
     """The line of a declaration's name: the first of `line` and the next NAME_WINDOW lines that has the name as a
-    word outside comments, attributes and decorators (a declaration that starts at one); `line` when none does.
-    `comment` is the file's comment syntax (comment_pattern)."""
+    word outside comments, attributes and decorators (a declaration that starts at one); `line` when none does. A
+    declaration's leading block of attributes or annotations, of any length, comes before the window: a
+    `@Annotation(…)` spanning a dozen lines doesn't push the name out of it. `comment` is the file's comment syntax
+    (comment_pattern)."""
     pattern = word(name)
     comment = comment or COMMENT
-    for n in range(line, min(line + NAME_WINDOW, len(lines)) + 1):
+    start = after_attributes(lines, line)
+    for n in [line] + list(range(start, min(start + NAME_WINDOW, len(lines)) + 1)):
         if n < 1 or comment.match(lines[n - 1]):
             continue
         if pattern.search(ATTRIBUTES.sub('', lines[n - 1], count=1)):
             return n
     return line
+
+
+def after_attributes(lines, line):
+    """The first line of a declaration whose attribute or annotation block starts at `line`: lines holding only
+    attributes (`[Fact]`, `@Override`, `[InlineData(1, "1")]`) are skipped, and so is an attribute written over several
+    lines (`@Suite(` … `)`) up to its closing line, which is the declaration's when more follows the attribute there
+    (`) struct Tests {`). A line with the declaration after its attributes (`@discardableResult public func f()`,
+    `@interface Marker {}`) ends the block. `line` when no block starts there."""
+    n = line
+    while 1 <= n <= len(lines):
+        text = lines[n - 1]
+        if not text.lstrip().startswith(('@', '[')):
+            return n
+        if not ATTRIBUTES.sub('', text, count=1).strip():
+            n += 1
+            continue
+        depth = text.count('(') + text.count('[') - text.count(')') - text.count(']')
+        if depth <= 0:
+            # The declaration follows its attributes on this line.
+            return n
+        m = n + 1
+        while m <= len(lines) and m - n < ATTRIBUTE_LINES:
+            close = lines[m - 1]
+            depth += close.count('(') + close.count('[') - close.count(')') - close.count(']')
+            if depth <= 0:
+                break
+            m += 1
+        if depth > 0 or m > len(lines):
+            return line
+        close = lines[m - 1]
+        tail = close[max(close.rfind(')'), close.rfind(']')) + 1:]
+        if ATTRIBUTES.sub('', tail, count=1).strip():
+            return m
+        n = m + 1
+    return n
 
 
 def find_row(rows, label, line_text):

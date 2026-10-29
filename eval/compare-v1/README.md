@@ -227,7 +227,23 @@ gives the size of what it touches instead.
 | KnowCode | The index phase sent `kc_status`, which doesn't index. KnowCode then indexed during the first query, with the network cut. Its documented way to index now is `knowcode index`. ("Indexing": each tool indexes as its documentation says, with the network up.) | Not re-parseable. KnowCode's index was built in the ask phase, and its index phase took 0.0 s in every repository. 1 to 2 answers per repetition on jellyfin-server read a stale snapshot. |
 | Serena | A generic declaration's name-path segment carries its type parameters (`Write<T0, T1, T2>`), which neither find_symbol's plain-name match nor the adapter's name comparison accepted. The lookup now uses find_symbol's documented `substring_matching`, and every adapter compares names without type parameters, overload indexes or parameter lists. ("Lookup": the most precise handle the documentation offers.) | 11 of Serena's 16 refs `not_found` results are generic C# declarations. The plain-name lookup never returned them, so re-parsing recovers none, and only the rerun measures this fix. |
 
-Checked and left as they were:
+### After the rerun
+
+**One more fix, which favours KnowCode.**
+- **When and how it was found.** On 2026-10-29, after the rerun's results were published, KnowCode's maintainers diagnosed it from the rerun's stored answers.
+- **The deviation.** KnowCode's impact answers (and callers, which uses the same call) return their first page as text and each `kc_more` page as JSON. The adapter parsed text only. So it took no rows from a continuation page, and it read no cursor from one: that page's only mention of `kc_more` is a placeholder hint. Every answer was scored on its first 30 rows at most. ("Asking": follow up to 10 pages.)
+- **The fix.** The impact parser reads a JSON page's `items` (each row's `file` and declaration `line`) and its `cursor`.
+- **Effect on the rerun's stored answers.** Re-parsing them (re-parsed, not rerun) adds 359 rows to 24 answers, and moves KnowCode's impact recall on the questions it answered from 0.371 (762 of 2,055 labels) to 0.456. Only the stored second pages can be re-parsed, since later pages were never fetched.
+- **Effect measured by the third run** (same build, every page followed up to 10): KnowCode's impact recall on the questions it answered is 0.695 (1,429 of 2,055), and its precision is 0.696, against 0.716. No other tool's figures move.
+
+**The second audit.** All three adapters were audited again for continuations, in every format and for every question type.
+- **KnowCode:**
+  - refs and find pages are JSON with `items` and `cursor`, and were already read.
+  - locate and task (0.8) follow the JSON `cursor` or the text `kc_more {cursor: "…"}`.
+- **codebase-memory-mcp:** every `trace_path` `next_cursor` was followed. No answer was truncated without a continuation, and no `search_graph` lookup or read-back had more rows unread.
+- **Serena:** it offers no continuation. Two answers were past its default size limit: one refs answer in the rerun, and one find answer in a development run of 0.8's questions. Serena returns a shortened message for these, which names nothing.
+
+Checked and left as they were after the first run:
 - **codebase-memory-mcp:** its continuations (`next_cursor`) were followed in every answer, up to its stated totals. Its lookup misses are the tool's: it keeps one declaration per name and file, so the other overloads aren't there to find.
 - **Serena's readiness:** Serena documents no readiness wait for its Swift or C# language servers. Its sourcekit-lsp integration sleeps a fixed 5 seconds before the first references request. No wait is added, because a sleep tuned to the results is not a documented mechanism. Serena's empty answers on some swift-nio references, in one repetition but not the other, are its own and are reported as they come.
 - **Serena's size limit:** one answer was past Serena's default size limit. Serena offers no continuation, so that answer names nothing.
