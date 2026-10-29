@@ -17,7 +17,7 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 4;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -390,7 +390,14 @@ impl<'a> Cx<'a> {
                 let ty = children(v)
                     .find(|c| is_type_node(c.kind()))
                     .and_then(|t| self.declared_type(t))
-                    .or_else(|| children(node).find(|c| c.kind() == "call_expression").and_then(|e| self.constructed(e)));
+                    .or_else(|| children(node).find(|c| c.kind() == "call_expression").and_then(|e| self.constructed(e)))
+                    // `val x = store.items()`: the initializer's type, as a path the query follows.
+                    .or_else(|| {
+                        children(node)
+                            .find(|c| matches!(c.kind(), "call_expression" | "navigation_expression" | "as_expression"))
+                            .and_then(|e| self.expr_type(e))
+                            .map(|t| t.encode())
+                    });
                 if let Some(n) = children(v).find(|c| c.kind() == "identifier") {
                     let name = self.text(n).to_string();
                     self.declare_local(&name, ty);
@@ -445,12 +452,11 @@ impl<'a> Cx<'a> {
         let args = args.map(|a| a + u32::from(lambda)).or(lambda.then_some(1));
         match callee.kind() {
             "identifier" => {
+                // A local is called only through `invoke`, so `value(x)` with a local `value` in scope still calls a
+                // function named `value`. `Cart(…)`: a constructor call names its type.
                 let name = self.text(callee).to_string();
-                if self.local(&name).is_none() {
-                    // `Cart(…)`: a constructor call names its type.
-                    let kind = if type_like(&name) { RefKind::Instantiate } else { RefKind::Call };
-                    self.record(callee, name, None, None, kind, args);
-                }
+                let kind = if type_like(&name) { RefKind::Instantiate } else { RefKind::Call };
+                self.record(callee, name, None, None, kind, args);
             }
             "navigation_expression" => {
                 let parts: Vec<Node> = children(callee).filter(|c| c.is_named()).collect();
@@ -462,7 +468,7 @@ impl<'a> Cx<'a> {
                     let (receiver, receiver_type) = self.receiver_of(*object);
                     let kind = if type_like(&name) && is_qualifier(self.text(*object)) { RefKind::Instantiate } else { RefKind::Call };
                     self.record(*last, name, receiver, receiver_type, kind, args);
-                    self.visit(*object);
+                    self.receiver_object(*object);
                 }
             }
             _ => self.visit(callee),
@@ -481,12 +487,31 @@ impl<'a> Cx<'a> {
             return self.visit_children(node);
         }
         let name = self.text(*last).to_string();
+        let reference = self.src[object.end_byte()..last.start_byte()].contains("::");
+        if reference && name == "class" {
+            // `Order::class`: the type, named.
+            self.receiver_object(*object);
+            return;
+        }
         let (receiver, receiver_type) = self.receiver_of(*object);
         // `Item::price`, a member reference, is read as navigation with `::`: it names a function to call.
-        let reference = self.src[object.end_byte()..last.start_byte()].contains("::");
         let kind = if reference { RefKind::Call } else { RefKind::Member };
         self.record(*last, name, receiver, receiver_type, kind, None);
-        self.visit(*object);
+        self.receiver_object(*object);
+    }
+
+    /// The object of a member use or call: written as a type (`JsonScope.EMPTY`), a type reference; a field or
+    /// property of the caller's (`body.add`), a member use; anything else, visited.
+    fn receiver_object(&mut self, object: Node) {
+        if object.kind() != "identifier" {
+            return self.visit(object);
+        }
+        let name = self.text(object).to_string();
+        if self.local(&name).is_some() || matches!(name.as_str(), "it" | "field") {
+            return;
+        }
+        let kind = if type_like(&name) { RefKind::TypeRef } else { RefKind::Member };
+        self.record(object, name, None, None, kind, None);
     }
 
     fn callable_reference(&mut self, node: Node) {
@@ -508,16 +533,17 @@ impl<'a> Cx<'a> {
 
     fn bare_identifier(&mut self, node: Node) {
         let Some(parent) = node.parent() else { return };
-        if !matches!(
+        // An identifier that names what is declared, a label, a part of a qualified or written type, or a named
+        // argument's parameter isn't a use.
+        if matches!(
             parent.kind(),
-            "statement" | "value_argument" | "binary_expression" | "comparison_expression" | "equality_expression"
-                | "conjunction_expression" | "disjunction_expression" | "additive_expression" | "multiplicative_expression"
-                | "return_expression" | "assignment" | "if_expression" | "when_subject" | "when_condition"
-                | "string_template" | "interpolated_expression" | "parenthesized_expression" | "prefix_expression"
-                | "postfix_expression" | "function_body" | "property_declaration" | "elvis_expression"
-                | "range_expression" | "index_expression" | "as_expression" | "check_expression" | "spread_expression"
-                | "statements" | "block" | "control_structure_body" | "jump_expression" | "in_expression"
-        ) {
+            "variable_declaration" | "parameter" | "class_parameter" | "lambda_parameter" | "function_declaration"
+                | "class_declaration" | "object_declaration" | "companion_object" | "type_alias" | "import"
+                | "package_header" | "qualified_identifier" | "user_type" | "navigation_expression" | "call_expression"
+                | "callable_reference" | "enum_entry" | "type_parameter" | "label" | "annotation" | "setter" | "getter"
+                | "multi_variable_declaration" | "this_expression" | "super_expression" | "jump_expression"
+        ) || (parent.kind() == "value_argument" && self.text(parent).trim_start().starts_with(&format!("{} =", self.text(node))))
+        {
             return;
         }
         let name = self.text(node).to_string();
@@ -531,7 +557,7 @@ impl<'a> Cx<'a> {
         let text = collapse(self.text(object), RECEIVER_CAP);
         let ty = match object.kind() {
             "identifier" => self.local(self.text(object)).flatten(),
-            "this_expression" => self.enclosing_type(),
+            "this_expression" => self.this_type(object),
             _ => None,
         };
         (Some(text), ty.or_else(|| self.expr_type(object).map(|t| t.encode())))
@@ -539,6 +565,8 @@ impl<'a> Cx<'a> {
 
     fn expr_type(&self, e: Node) -> Option<TypeExpr> {
         match e.kind() {
+            // `this@Outer` is the labelled outer type's instance, not the innermost one.
+            "this_expression" if self.text(e).contains('@') => self.this_type(e).map(TypeExpr::Named),
             "this_expression" => Some(TypeExpr::root(PathRoot::SelfType)),
             "identifier" => {
                 let name = self.text(e);
@@ -586,6 +614,14 @@ impl<'a> Cx<'a> {
             }
             None => None,
         }
+    }
+
+    /// The type `this` means: the innermost type, or for `this@Label` the enclosing type of that name.
+    fn this_type(&self, this: Node) -> Option<String> {
+        let inner = self.enclosing_type()?;
+        let Some((_, label)) = self.text(this).split_once('@') else { return Some(inner) };
+        let parts: Vec<&str> = inner.split('.').collect();
+        (1..=parts.len()).rev().map(|k| parts[..k].join(".")).find(|t| t.rsplit('.').next() == Some(label))
     }
 
     /// `Cart(…)` (a capitalised call): the type it constructs.
@@ -856,6 +892,9 @@ mod tests {
         assert!(calls.contains(&("log".into(), Some("Helpers".into()))));
         assert!(calls.contains(&("price".into(), Some("Item".into()))));
         assert_eq!(f.refs.iter().find(|r| r.name == "add").unwrap().receiver_type.as_deref(), Some("Cart"));
+        let g = extract("class Map {\n  fun clear() {}\n  inner class Keys {\n    fun clear() {\n      this@Map.clear()\n    }\n  }\n}\n");
+        let inner = g.refs.iter().find(|r| r.name == "clear" && r.line == 5).unwrap();
+        assert_eq!(inner.receiver_type.as_deref(), Some("Map"), "a labelled this is the outer type");
         assert_eq!(f.refs.iter().find(|r| r.name == "total").unwrap().receiver_type.as_deref(), Some("Order"));
         let made = refs(&f, RefKind::Instantiate);
         assert!(made.contains(&("Cart".into(), None)));
