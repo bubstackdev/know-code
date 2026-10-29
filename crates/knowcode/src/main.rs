@@ -24,6 +24,7 @@ mod render;
 #[cfg(test)]
 mod repo_walks;
 mod restricted;
+mod review;
 mod session_hook;
 mod settings;
 mod summary;
