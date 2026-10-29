@@ -548,6 +548,49 @@ mod tests {
         assert!(!env.to_string().contains("POST api/items\""), "{env}");
     }
 
+    /// A route whose path changes breaks the request for its old path, unless another route the repo serves now still
+    /// answers it; under a base class's prefix (`{^Action}`), the old path is placed by a route the class still serves.
+    #[test]
+    fn a_changed_route_breaks_only_requests_nothing_serves_now() {
+        let cache = test_cache();
+        let base = cache.dir("review-contract-changed");
+        let controller = |get: &str, extra: &str| {
+            format!(
+                "using Microsoft.AspNetCore.Mvc;\nnamespace Shop;\n[Route(\"api/[controller]\")]\npublic class ApiBase : ControllerBase {{ }}\npublic class OrdersController : ApiBase\n{{\n    [HttpGet(\"{get}\")]\n    public IActionResult Get(int id) => Ok();\n    [HttpGet(\"open\")]\n    public IActionResult Open() => Ok();\n{extra}}}\n"
+            )
+        };
+        let api = repo(
+            &base,
+            "shop-api",
+            &[("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n"), ("src/OrdersController.cs", &controller("{id}", ""))],
+        );
+        let _web = repo(
+            &base,
+            "shop-web",
+            &[
+                ("package.json", "{ \"name\": \"shop-web\" }\n"),
+                ("src/orders.ts", "export function order(id: number) {\n  return fetch(`/api/Orders/${id}`);\n}\nexport function open() {\n  return fetch(`/api/Orders/open`);\n}\n"),
+            ],
+        );
+        commit(&api);
+        // `{id}` moves to `byId/{id}`: the request for the old path breaks.
+        std::fs::write(api.join("src/OrdersController.cs"), controller("byId/{id}", "")).unwrap();
+        let env = review(&ReviewParams::new("working".into()), &Scope { repos: vec![api.clone()], no_sync: false }).unwrap().env;
+        let c = &env["contracts"];
+        assert_eq!(c.as_array().map(Vec::len), Some(1), "{env}");
+        assert_eq!(c[0]["contract"], "GET api/Orders/{id}", "{env}");
+        assert_eq!(c[0]["change"], "changed", "{env}");
+        assert_eq!(c[0]["consumers"][0]["symbol"], "order", "{env}");
+        // Moved, with another action now serving the old path: nothing is broken.
+        std::fs::write(
+            api.join("src/OrdersController.cs"),
+            controller("byId/{id}", "    [HttpGet(\"{id}\")]\n    public IActionResult Legacy(int id) => Ok();\n"),
+        )
+        .unwrap();
+        let env = review(&ReviewParams::new("working".into()), &Scope { repos: vec![api.clone()], no_sync: false }).unwrap().env;
+        assert!(env["contracts"].as_array().is_some_and(|c| c.iter().all(|r| r["consumers"].as_array().is_some_and(Vec::is_empty))), "{env}");
+    }
+
     /// A diff gets its changed files with their symbols, the tests reaching them, what depends on them by file, and
     /// each section saying whether it is whole and how to go on; tests are advice, and contracts aren't read yet.
     #[test]
