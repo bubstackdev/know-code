@@ -196,6 +196,16 @@ SQL table links. compare-v1 asks no such question of any tool. The results list 
 them as KnowCode wins. A question the set does ask, but one tool has no call for, is that tool's `no_counterpart`
 row.
 
+## 0.8's additions
+
+Each addition is committed before any run asks it, and each is its own pull request.
+
+1. **Callers and find**, on the questions already drawn ([questions.jsonl](questions.jsonl)).
+   - Every impact question also stands as a callers question on the same target, with its hop-1 labels (`callers` in the impact row). That makes 96 callers questions.
+   - The 96 find questions were drawn with the rest.
+   - The calls are mapping.toml's.
+   - Serena's find uses find_symbol's documented `substring_matching`, as its lookup does since the first run's audit. A generic declaration's name carries its type parameters, and names are compared without them.
+
 ## Changes after the first run
 
 The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An

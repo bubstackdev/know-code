@@ -255,10 +255,12 @@ def ask_serena(session, qtype, q):
     raw = []
     try:
         if qtype == 'find':
-            text, _ = session.call('find_symbol', {'name_path_pattern': q['name']}, CALL_TIMEOUT)
+            # substring_matching, as in the lookup: a generic declaration's name carries its type parameters.
+            text, _ = session.call('find_symbol', {'name_path_pattern': q['name'], 'substring_matching': True},
+                                   CALL_TIMEOUT)
             raw.append(text)
             return 'judged', [('decl', s['file'], s['first']) for s in _symbols(text)
-                              if serena_last(s['name_path']) == q['name']], raw
+                              if serena_last(s['name_path']) == plain(q['name'])], raw
         if qtype == 'impact':
             return 'no_counterpart', [], raw
         file, line, name = q['target']
