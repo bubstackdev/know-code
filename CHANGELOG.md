@@ -4,6 +4,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
+  0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
+  checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.
 - Fewer links to a repo declaration where the compiler binds a library's. On identity-v1, outside labels linked drop
   from 6 to 2 in C#, 22 to 19 in Swift and 37 to 7 in TypeScript, with no label newly wrong:
   - TypeScript: a member reached through a value a package gives (`getLibraryApi(api).getItems(…)`, `(await
