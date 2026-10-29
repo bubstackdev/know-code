@@ -21,3 +21,4 @@ jsoup 17 maven -- --batch-mode clean verify -DskipTests
 jackson-core 17 maven -- --batch-mode clean verify -DskipTests
 ktlint 26 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
 exposed 21 gradle KOTLIN_CATALOG=2.4.21 SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+http4k 21 gradle -- clean scipPrintDependencies scipCompileAll
