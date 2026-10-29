@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
+  shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
+  answer left out as comments.
+
 ## 0.6.1 (2026-10-28)
 
 0.6.0 was tagged but never published: its release build couldn't get a macOS runner. 0.6.1 is the first published 0.6
