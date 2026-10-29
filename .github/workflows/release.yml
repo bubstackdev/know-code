@@ -329,6 +329,7 @@ jobs:
       - plan
       - host
     runs-on: "ubuntu-24.04"
+    environment: release
     permissions:
       "contents": "read"
     env:
