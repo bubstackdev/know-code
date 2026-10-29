@@ -1,0 +1,199 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "toolExecutionNotifications": [
+            {
+              "descriptor": {
+                "id": "unsettled"
+              },
+              "level": "warning",
+              "message": {
+                "text": "policy: which of several implementations calls reach: edges left as ambiguous weren't walked past"
+              }
+            },
+            {
+              "descriptor": {
+                "id": "section-cut"
+              },
+              "level": "warning",
+              "message": {
+                "text": "dependents: not whole (capped)"
+              }
+            },
+            {
+              "descriptor": {
+                "id": "section-cut"
+              },
+              "level": "warning",
+              "message": {
+                "text": "contracts: not whole (unsupported)"
+              }
+            },
+            {
+              "descriptor": {
+                "id": "withheld"
+              },
+              "level": "warning",
+              "message": {
+                "text": "withheld: shop-api: its privacy file blocks some paths; KnowCode never reads or answers from blocked content"
+              }
+            }
+          ]
+        }
+      ],
+      "originalUriBaseIds": {
+        "REPO_shop_admin": {
+          "description": {
+            "text": "the root of repo shop_admin"
+          }
+        },
+        "REPO_shop_web": {
+          "description": {
+            "text": "the root of repo shop_web"
+          }
+        }
+      },
+      "results": [
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/BasketController.cs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 29
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "http DELETE /baskets/{id} removed: breaks BasketClient.cancel in shop-web (src/api/basket.ts:21, exact)"
+          },
+          "partialFingerprints": {
+            "knowcodeId/v1": "8888888888888888"
+          },
+          "relatedLocations": [
+            {
+              "id": 0,
+              "message": {
+                "text": "BasketClient.cancel in shop-web"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/api/basket.ts",
+                  "uriBaseId": "REPO_shop_web"
+                },
+                "region": {
+                  "startLine": 21
+                }
+              }
+            }
+          ],
+          "ruleId": "knowcode/contract-break",
+          "ruleIndex": 0
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/BasketController.cs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 29
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "http DELETE /baskets/{id} removed: may break BasketService.drop in shop-admin (src/basket.service.ts:7, unique_name)"
+          },
+          "partialFingerprints": {
+            "knowcodeId/v1": "9999999999999999"
+          },
+          "relatedLocations": [
+            {
+              "id": 0,
+              "message": {
+                "text": "BasketService.drop in shop-admin"
+              },
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/basket.service.ts",
+                  "uriBaseId": "REPO_shop_admin"
+                },
+                "region": {
+                  "startLine": 7
+                }
+              }
+            }
+          ],
+          "ruleId": "knowcode/contract-possible-break",
+          "ruleIndex": 1
+        },
+        {
+          "level": "warning",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/Checkout.cs",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "endLine": 42,
+                  "startLine": 41
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "blocking on <Task>.Result"
+          },
+          "partialFingerprints": {
+            "knowcodeId/v1": "aaaaaaaaaaaaaaaa"
+          },
+          "ruleId": "no-result",
+          "ruleIndex": 2
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://github.com/bubstackdev/know-code",
+          "name": "KnowCode",
+          "rules": [
+            {
+              "id": "knowcode/contract-break",
+              "shortDescription": {
+                "text": "A contract change breaks a consumer in another repo"
+              }
+            },
+            {
+              "id": "knowcode/contract-possible-break",
+              "shortDescription": {
+                "text": "A contract change may break a consumer in another repo"
+              }
+            },
+            {
+              "id": "no-result",
+              "shortDescription": {
+                "text": "blocking on <Task>.Result"
+              }
+            }
+          ],
+          "version": "0.6.1"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

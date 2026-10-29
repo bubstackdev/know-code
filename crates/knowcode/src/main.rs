@@ -28,6 +28,9 @@ mod render;
 #[cfg(test)]
 mod repo_walks;
 mod rules;
+// The `review` answer's markdown and SARIF: called by review's `format`, which its wiring adds.
+#[allow(dead_code)]
+mod review_format;
 mod restricted;
 mod review;
 mod session_hook;
