@@ -15,3 +15,4 @@ moshi 21 gradle MOSHI_KOTLIN_VERSION=2.4.21 -- clean scipPrintDependencies scipC
 kotlinpoet 21 gradle -- clean scipPrintDependencies scipCompileAll
 spring-petclinic-kotlin 21 gradle -- clean scipPrintDependencies scipCompileAll
 jsoup 17 maven -- --batch-mode clean verify -DskipTests
+jackson-core 17 maven -- --batch-mode clean verify -DskipTests

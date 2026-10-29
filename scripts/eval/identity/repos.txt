@@ -18,3 +18,6 @@ spring-petclinic-kotlin jvm https://github.com/spring-petclinic/spring-petclinic
 # identity-v2, Java held out (eval/identity-v2/jvm-holdout): labelled after the Java resolver was tuned on the set
 # above, and scored once against it. Pinned at its head on 2026-10-29.
 jsoup jvm https://github.com/jhy/jsoup 0c508f17a52d294aa846f4cbca312b2e65e9f94f
+# A second held-out Java set (eval/identity-v2/jvm-holdout-2): labelled after a rule found through jsoup changed the
+# resolver, and scored once against it. Pinned at its head (the 3.x branch) on 2026-10-29.
+jackson-core jvm https://github.com/FasterXML/jackson-core 73d9f696d752ced4b4881968cc462df4802b8aa4
