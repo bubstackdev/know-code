@@ -815,6 +815,12 @@ impl Tracer<'_> {
         };
         let hits = self.refs_named(&name, kinds.clone())?;
         push_callers(self, hits, target_id, "")?;
+        // A TypeScript class component is rendered by its JSX tag, which the extractor records as a call: rendering
+        // it creates it.
+        if sym.kind == "class" && crate::ts::is_ts_path(&sym.file) {
+            let hits = self.refs_named(&name, vec!["call"])?;
+            push_callers(self, hits, target_id, "instantiates")?;
+        }
         // A constructor chaining to it: `: base(…)`, `: this(…)`, Swift's `super.init(…)`.
         if sym.kind == "init" {
             let hits = self.refs_named("init", vec!["call"])?;
