@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Go HTTP routes and clients. Routes registered with `net/http` (including method patterns such as
+  `"GET /items/{id}"`), gin, echo and chi are listed with their groups and mounts, and the requests Go code sends
+  with `net/http` link to the routes that serve them, across repos as other languages' do. Go files are read again
+  once.
 - A React component used only through JSX has dependents. A tag (`<Page …>`, `</Page>`) was recorded as a type
   reference, which `impact`, `trace` and `tests` don't follow from a function, so a component rendered only that way
   answered "nothing affected". A tag is now a call of its component, as the TypeScript compiler binds it (`<Ns.Comp>`

@@ -64,6 +64,7 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         frameworks: Vec::new(),
         pending_router: None,
         package_routers: HashMap::new(),
+        handlers: Vec::new(),
         seen: HashSet::new(),
     };
     cx.header(tree.root_node());
@@ -73,6 +74,7 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         cx.facts.unsupported.push(Unsupported { area: "build", construct: constraint, line });
     }
     cx.visit(tree.root_node());
+    cx.anchor_handlers();
     cx.facts
 }
 
@@ -262,6 +264,8 @@ struct Cx<'a> {
     frameworks: Vec<(String, http::Fw)>,
     /// The router a chi `Route` or `Group` call hands the closure it passes, until the closure is read.
     pending_router: Option<http::Router>,
+    /// Server routes (indexes into `facts.http_routes`) and the handler each names, anchored once the file is read.
+    handlers: Vec<(usize, (String, Option<String>))>,
     /// Package-level router variables (`var router = gin.Default()`).
     package_routers: HashMap<String, http::Router>,
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,

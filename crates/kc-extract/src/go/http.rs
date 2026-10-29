@@ -239,6 +239,72 @@ impl<'a> Cx<'a> {
     /// Doesn't visit the call; the caller does, as for any call.
     pub(super) fn route_call(&mut self, call: Node, f: Node) {
         let args: Vec<Node> = call.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named()).collect()).unwrap_or_default();
+        let before = self.facts.http_routes.len();
+        self.registration(call, f, &args);
+        // A route served by a named function belongs to it, not to the function registering it: the handler is the
+        // last argument (middleware comes before it).
+        if let Some(h) = args.get(1..).and_then(|a| a.last()).and_then(|h| self.handler_name(*h)) {
+            for i in before..self.facts.http_routes.len() {
+                if self.facts.http_routes[i].side == "server" {
+                    self.handlers.push((i, h.clone()));
+                }
+            }
+        }
+    }
+
+    /// The function or method a handler argument names: `getTree`, `h.Health` (with `h`'s type when known), through
+    /// `http.HandlerFunc(f)`. A closure, or a function of another package, has none.
+    fn handler_name(&self, h: Node) -> Option<(String, Option<String>)> {
+        match h.kind() {
+            "identifier" if self.local(self.text(h)).is_none() => Some((self.text(h).to_string(), None)),
+            "selector_expression" => {
+                let operand = h.child_by_field_name("operand")?;
+                if operand.kind() == "identifier" && self.is_import(self.text(operand)) {
+                    return None;
+                }
+                let ty = match self.expr_type(operand) {
+                    Some(crate::types::TypeExpr::Named(t)) if !t.contains('.') => Some(t),
+                    _ => None,
+                };
+                Some((self.text(h.child_by_field_name("field")?).to_string(), ty))
+            }
+            "call_expression" => {
+                let f = h.child_by_field_name("function")?;
+                let args: Vec<Node> = h.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named()).collect())?;
+                let conversion = f.kind() == "selector_expression"
+                    && f.child_by_field_name("operand").is_some_and(|o| self.fw_of(self.text(o)) == Some(Fw::NetHttp))
+                    && f.child_by_field_name("field").is_some_and(|m| self.text(m) == "HandlerFunc");
+                match args.as_slice() {
+                    [one] if conversion => self.handler_name(*one),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Gives each route registered with a named handler to that handler, when the file declares exactly one function
+    /// or method of the name (of the receiver's type, when known). A handler declared in another file leaves the route
+    /// with the function registering it.
+    pub(super) fn anchor_handlers(&mut self) {
+        for (route, (name, ty)) in std::mem::take(&mut self.handlers) {
+            let found: Vec<usize> = (0..self.facts.symbols.len())
+                .filter(|&i| {
+                    let s = &self.facts.symbols[i];
+                    s.name == name
+                        && match ty.as_deref() {
+                            Some(t) => s.kind == crate::SymbolKind::Method && s.container.as_deref() == Some(t),
+                            None => matches!(s.kind, crate::SymbolKind::Function | crate::SymbolKind::Method),
+                        }
+                })
+                .collect();
+            if let [i] = found.as_slice() {
+                self.facts.http_routes[route].sym = Some(*i);
+            }
+        }
+    }
+
+    fn registration(&mut self, call: Node, f: Node, args: &[Node]) {
         // A router passed to a helper: the helper's parameter gets this router's prefix.
         if let Some(key) = self.callee_key(f) {
             for (i, a) in args.iter().enumerate() {
@@ -252,7 +318,7 @@ impl<'a> Cx<'a> {
         }
         let (Some(operand), Some(field)) = (f.child_by_field_name("operand"), f.child_by_field_name("field")) else { return };
         let method = self.text(field);
-        if self.client_call(call, operand, method, &args) {
+        if self.client_call(call, operand, method, args) {
             return;
         }
         // `http.HandleFunc(…)`: the default ServeMux.
@@ -462,6 +528,40 @@ mod tests {
                 row("server", "GET", "{@orchard.adminRouter#ret}accounts"),
             ]
         );
+    }
+
+    #[test]
+    fn routes_belong_to_their_named_handlers() {
+        let facts = crate::go::extract(
+            "orchard/routes.go",
+            r#"package orchard
+
+import "net/http"
+
+type Trees struct{}
+
+func (t *Trees) List(w http.ResponseWriter, r *http.Request) {}
+
+func health(w http.ResponseWriter, r *http.Request) {}
+
+func Register(mux *http.ServeMux) {
+	t := &Trees{}
+	mux.HandleFunc("GET /trees", t.List)
+	mux.Handle("GET /health", http.HandlerFunc(health))
+	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {})
+	mux.HandleFunc("GET /far", other.Handler)
+}
+"#,
+        );
+        let owners: Vec<(String, Option<String>)> = facts
+            .http_routes
+            .iter()
+            .filter(|r| r.side == "server")
+            .map(|r| (r.path.clone(), r.sym.map(|i| facts.symbols[i].name.clone())))
+            .collect();
+        let o = |p: &str, s: &str| (format!("{{@orchard.Register#0}}{p}"), Some(s.to_string()));
+        // A closure's route, and one whose handler is declared elsewhere, stay with the function registering them.
+        assert_eq!(owners, [o("trees", "List"), o("health", "health"), o("ping", "Register"), o("far", "Register")]);
     }
 
     #[test]
