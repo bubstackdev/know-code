@@ -105,6 +105,10 @@ case $LANGUAGE in
     PINNED=${PINNED:-gradle/libs.versions.toml}
     [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^([[:space:]]*(const val )?(kotlin|KOTLIN_VERSION) = )\"[^\"]*\"/\\1\"$CATALOG\"/' $PINNED
          grep -qE '(kotlin|KOTLIN_VERSION) = \"$CATALOG\"' $PINNED"
+    # GIT_TAG=T makes the container's copy a git checkout of one commit tagged T, for a build whose release plugin reads
+    # its version from git (the copy holds the tracked files only).
+    TAG=$(sed -nE 's/.*(^| )GIT_TAG=([^ ]+).*/\2/p' <<<"$ENVS")
+    [ -z "$TAG" ] || run "cd /work/src && git init -q && git add -A && git -c user.name=label -c user.email=label@invalid commit -qm label && git tag $TAG"
     run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /work/tools/skip-buildsrc.gradle /root/.gradle/init.d/
          JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk
          echo org.gradle.java.installations.paths=\$JDKS > /root/.gradle/gradle.properties
