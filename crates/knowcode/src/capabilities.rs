@@ -41,7 +41,9 @@ const TREE: Shape = Shape { format: "tree", formats: &["tree", "json"], keys: &[
 /// Each op's answer, where it isn't [`LIST`].
 fn shape(tool: &str) -> Shape {
     match tool {
-        "kc_trace" | "kc_impact" | "kc_path" | "kc_flow" => TREE,
+        "kc_path" | "kc_flow" => Shape { formats: &["tree", "json", "mermaid"], ..TREE },
+        "kc_areas" => Shape { formats: &["json", "mermaid"], ..LIST },
+        "kc_trace" | "kc_impact" => TREE,
         "kc_status" => Shape { format: "json", formats: &["json"], keys: &["complete", "schema", "coverage", "freshness"], list: None },
         "kc_rename_preview" => Shape { keys: &["complete", "items", "total", "symbol", "new_name", "refused"], ..LIST },
         "kc_task" => Shape { keys: &["complete", "items", "total", "dependents", "tests", "unsettled", "sections"], ..LIST },

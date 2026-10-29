@@ -1,0 +1,217 @@
+=== flow OrderPage []
+flowchart TD
+  subgraph r0["web"]
+    n0["class OrderPage<br/>src/order.page.ts:1"]
+    n1["property OrderEffects.place$<br/>src/order.effects.ts:3"]
+    n2["method OrderService.place<br/>src/order.service.ts:3"]
+  end
+  subgraph r1["api"]
+    n3["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n4["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n5["property ShopContext.Orders<br/>src/Shop.cs:6"]
+    n7["method OrderPlacedConsumer.Consume<br/>src/OrderPlacedConsumer.cs:4"]
+  end
+  subgraph r2["schema"]
+    n6["table shop.orders_dg<br/>src/shop.sql:2"]
+  end
+  n0 -->|"ngrx PlaceOrder [unique_name]"| n1
+  n1 -->|"calls [exact]"| n2
+  n2 -->|"http POST /Ordersdg [exact]"| n3
+  n3 -->|"via_di [unique_name]"| n4
+  n4 -->|"writes [unique_name]"| n5
+  n5 -->|"sql [unique_name]"| n6
+  n4 -->|"bus Shop.Apidg.OrderPlaced [exact]"| n7
+
+=== flow OrderService.place []
+flowchart TD
+  subgraph r0["web"]
+    n0["method OrderService.place<br/>src/order.service.ts:3"]
+  end
+  subgraph r1["api"]
+    n1["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n2["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n3["property ShopContext.Orders<br/>src/Shop.cs:6"]
+    n5["method OrderPlacedConsumer.Consume<br/>src/OrderPlacedConsumer.cs:4"]
+  end
+  subgraph r2["schema"]
+    n4["table shop.orders_dg<br/>src/shop.sql:2"]
+  end
+  n0 -->|"http POST /Ordersdg [exact]"| n1
+  n1 -->|"via_di [unique_name]"| n2
+  n2 -->|"writes [unique_name]"| n3
+  n3 -->|"sql [unique_name]"| n4
+  n2 -->|"bus Shop.Apidg.OrderPlaced [exact]"| n5
+
+=== flow go []
+flowchart TD
+  %% left out: 2 ambiguous edges
+  n0["function go<br/>main.py:1"]
+
+=== path OrderPage.submit -> orders_dg []
+flowchart LR
+  subgraph r0["web"]
+    n0["method OrderPage.submit<br/>src/order.page.ts:4"]
+    n1["method OrderPage.check<br/>src/order.page.ts:7"]
+    n2["property OrderEffects.place$<br/>src/order.effects.ts:3"]
+    n3["method OrderService.place<br/>src/order.service.ts:3"]
+  end
+  subgraph r1["api"]
+    n4["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n5["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n6["property ShopContext.Orders<br/>src/Shop.cs:6"]
+  end
+  subgraph r2["schema"]
+    n7["table shop.orders_dg<br/>src/shop.sql:2"]
+  end
+  n0 -->|"calls [exact]"| n1
+  n1 -->|"ngrx PlaceOrder [unique_name]"| n2
+  n2 -->|"calls [exact]"| n3
+  n3 -->|"http POST /Ordersdg [exact]"| n4
+  n4 -->|"via_di [unique_name]"| n5
+  n5 -->|"writes [unique_name]"| n6
+  n6 -->|"sql [unique_name]"| n7
+
+=== path OrderPage -> OrderPlacedConsumer.Consume []
+flowchart LR
+  subgraph r0["web"]
+    n0["class OrderPage<br/>src/order.page.ts:1"]
+    n1["method OrderPage.check<br/>src/order.page.ts:7"]
+    n2["property OrderEffects.place$<br/>src/order.effects.ts:3"]
+    n3["method OrderService.place<br/>src/order.service.ts:3"]
+    n7["method OrderPage.submit<br/>src/order.page.ts:4"]
+  end
+  subgraph r1["api"]
+    n4["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n5["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n6["method OrderPlacedConsumer.Consume<br/>src/OrderPlacedConsumer.cs:4"]
+  end
+  n0 -->|"member [exact]"| n1
+  n1 -->|"ngrx PlaceOrder [unique_name]"| n2
+  n2 -->|"calls [exact]"| n3
+  n3 -->|"http POST /Ordersdg [unique_name]"| n4
+  n4 -->|"via_di [unique_name]"| n5
+  n5 -->|"bus Shop.Apidg.OrderPlaced [exact]"| n6
+  n0 -->|"member [exact]"| n7
+  n7 -->|"calls [exact]"| n1
+
+=== path go -> run []
+flowchart LR
+  n0["function go<br/>main.py:1"]
+  n1["function run<br/>mail.py:1"]
+  n2["function run<br/>print.py:1"]
+  n0 -.->|"calls [ambiguous]"| n1
+  n0 -.->|"calls [ambiguous]"| n2
+
+=== flow OrderPage [all]
+flowchart TD
+  subgraph r0["web"]
+    n0["class OrderPage<br/>src/order.page.ts:1"]
+    n1["property OrderEffects.place$<br/>src/order.effects.ts:3"]
+    n2["method OrderService.place<br/>src/order.service.ts:3"]
+  end
+  subgraph r1["api"]
+    n3["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n4["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n5["property ShopContext.Orders<br/>src/Shop.cs:6"]
+    n7["method OrderPlacedConsumer.Consume<br/>src/OrderPlacedConsumer.cs:4"]
+  end
+  subgraph r2["schema"]
+    n6["table shop.orders_dg<br/>src/shop.sql:2"]
+  end
+  n0 -->|"ngrx PlaceOrder [unique_name]"| n1
+  n1 -->|"calls [exact]"| n2
+  n2 -->|"http POST /Ordersdg [exact]"| n3
+  n3 -->|"via_di [unique_name]"| n4
+  n4 -->|"writes [unique_name]"| n5
+  n5 -->|"sql [unique_name]"| n6
+  n4 -->|"bus Shop.Apidg.OrderPlaced [exact]"| n7
+
+=== flow OrderService.place [all]
+flowchart TD
+  subgraph r0["web"]
+    n0["method OrderService.place<br/>src/order.service.ts:3"]
+  end
+  subgraph r1["api"]
+    n1["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n2["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n3["property ShopContext.Orders<br/>src/Shop.cs:6"]
+    n5["method OrderPlacedConsumer.Consume<br/>src/OrderPlacedConsumer.cs:4"]
+  end
+  subgraph r2["schema"]
+    n4["table shop.orders_dg<br/>src/shop.sql:2"]
+  end
+  n0 -->|"http POST /Ordersdg [exact]"| n1
+  n1 -->|"via_di [unique_name]"| n2
+  n2 -->|"writes [unique_name]"| n3
+  n3 -->|"sql [unique_name]"| n4
+  n2 -->|"bus Shop.Apidg.OrderPlaced [exact]"| n5
+
+=== flow go [all]
+flowchart TD
+  n0["function go<br/>main.py:1"]
+
+=== path OrderPage.submit -> orders_dg [all]
+flowchart LR
+  subgraph r0["web"]
+    n0["method OrderPage.submit<br/>src/order.page.ts:4"]
+    n1["method OrderPage.check<br/>src/order.page.ts:7"]
+    n2["property OrderEffects.place$<br/>src/order.effects.ts:3"]
+    n3["method OrderService.place<br/>src/order.service.ts:3"]
+  end
+  subgraph r1["api"]
+    n4["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n5["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n6["property ShopContext.Orders<br/>src/Shop.cs:6"]
+  end
+  subgraph r2["schema"]
+    n7["table shop.orders_dg<br/>src/shop.sql:2"]
+  end
+  n0 -->|"calls [exact]"| n1
+  n1 -->|"ngrx PlaceOrder [unique_name]"| n2
+  n2 -->|"calls [exact]"| n3
+  n3 -->|"http POST /Ordersdg [exact]"| n4
+  n4 -->|"via_di [unique_name]"| n5
+  n5 -->|"writes [unique_name]"| n6
+  n6 -->|"sql [unique_name]"| n7
+
+=== path OrderPage -> OrderPlacedConsumer.Consume [all]
+flowchart LR
+  subgraph r0["web"]
+    n0["class OrderPage<br/>src/order.page.ts:1"]
+    n1["method OrderPage.check<br/>src/order.page.ts:7"]
+    n2["property OrderEffects.place$<br/>src/order.effects.ts:3"]
+    n3["method OrderService.place<br/>src/order.service.ts:3"]
+    n7["method OrderPage.submit<br/>src/order.page.ts:4"]
+  end
+  subgraph r1["api"]
+    n4["method OrdersController.Orders<br/>src/OrdersController.cs:4"]
+    n5["method CheckoutService.Place<br/>src/CheckoutService.cs:7"]
+    n6["method OrderPlacedConsumer.Consume<br/>src/OrderPlacedConsumer.cs:4"]
+  end
+  n0 -->|"member [exact]"| n1
+  n1 -->|"ngrx PlaceOrder [unique_name]"| n2
+  n2 -->|"calls [exact]"| n3
+  n3 -->|"http POST /Ordersdg [unique_name]"| n4
+  n4 -->|"via_di [unique_name]"| n5
+  n5 -->|"bus Shop.Apidg.OrderPlaced [exact]"| n6
+  n0 -->|"member [exact]"| n7
+  n7 -->|"calls [exact]"| n1
+
+=== path go -> run [all]
+flowchart LR
+  n0["function go<br/>main.py:1"]
+  n1["function run<br/>mail.py:1"]
+  n2["function run<br/>print.py:1"]
+  n0 -.->|"calls [ambiguous]"| n1
+  n0 -.->|"calls [ambiguous]"| n2
+
+=== areas web
+flowchart LR
+  n0["#35;1 order<br/>6 files"]
+  n1["#35;2 order #35;2<br/>3 files"]
+  n1 -->|"1 file edges"| n0
+
+=== areas api
+flowchart LR
+  n0["#35;1 order<br/>6 files"]
+
