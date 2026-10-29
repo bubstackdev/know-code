@@ -509,6 +509,29 @@ impl Resolver {
                 return Ok(Some(("exact", vec![*one])));
             }
         }
+        // In a Kotlin extension's body a bare name is first the receiver's member (`fun KmClass.isEnum() = kind == …`
+        // reads `KmClass.kind`). On the repository's type its own member decides; a library type's members aren't known,
+        // so any declaration of the name is a candidate, never a link.
+        if hit.file.ends_with(".kt")
+            && hit.receiver.is_none()
+            && matches!(hit.kind.as_str(), "call" | "member")
+            && let Some(from) = &hit.from
+            && let Some(receiver) = extension_receiver(&signature_of(conn, from.id)?, &from.name)
+        {
+            match self.find_type(file, at, &nest, &receiver) {
+                Found::Inside(ids) if ids.len() == 1 => {
+                    let members = members_of(conn, hit, ids[0])?;
+                    if let [one] = members.as_slice() {
+                        return Ok(Some(("exact", vec![*one])));
+                    }
+                }
+                Found::Inside(_) => {}
+                Found::Outside | Found::Unreached(_) => {
+                    let named = named_in_family(conn, hit)?;
+                    return Ok(Some(if named.is_empty() { ("unresolved", named) } else { ("ambiguous", named) }));
+                }
+            }
+        }
         // A bare name a static import brings: from the imported type, unless the caller's own types declare or
         // inherit a member of that name (they shadow it).
         if hit.receiver.is_none() && matches!(hit.kind.as_str(), "call" | "member") {
@@ -689,6 +712,20 @@ fn fits(args: Option<u32>, min: Option<u32>, max: Option<u32>) -> bool {
         (Some(n), Some(min)) => n >= min && max.is_none_or(|max| n <= max),
         _ => true,
     }
+}
+
+fn signature_of(conn: &Connection, id: i64) -> rusqlite::Result<String> {
+    conn.query_row("SELECT signature FROM symbols WHERE id = ?1", params![id], |r| r.get(0)).optional().map(Option::unwrap_or_default)
+}
+
+/// Every Java and Kotlin declaration of the reference's name and namespace: the candidates when nothing narrows them.
+fn named_in_family(conn: &Connection, hit: &RefHit) -> rusqlite::Result<Vec<i64>> {
+    let kinds = if hit.kind == "call" { "('function', 'method')" } else { "('property', 'case')" };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE f.lang IN ('java', 'kotlin') AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN {kinds} ORDER BY s.id"
+    ))?;
+    stmt.query_map(params![hit.name], |r| r.get(0))?.collect()
 }
 
 /// The repository's Kotlin extensions named like the reference (a function for a call, a property for a member use),
