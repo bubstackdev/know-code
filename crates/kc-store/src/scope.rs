@@ -32,6 +32,8 @@ pub(crate) enum Sight {
 pub(crate) fn family(lang: &str) -> &str {
     match lang {
         "typescript" | "tsx" | "javascript" => "js",
+        // Java and Kotlin call each other within a module, as one JVM family.
+        "java" | "kotlin" => "jvm",
         l => l,
     }
 }

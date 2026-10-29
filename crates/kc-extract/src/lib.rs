@@ -12,6 +12,7 @@ pub mod gitlabci;
 pub mod hosts;
 pub mod html;
 mod java;
+mod kotlin;
 mod manifest;
 mod python;
 mod rust;
@@ -44,6 +45,8 @@ pub enum Lang {
     Tsx,
     /// Java (`.java`).
     Java,
+    /// Kotlin (`.kt`); read with Java as one JVM family.
+    Kotlin,
     /// Plain JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`), read by the TypeScript extractor with the TSX grammar.
     /// Minified and bundled files are left out (see [`Lang::from_path`] and [`typescript::is_minified`]).
     JavaScript,
@@ -78,7 +81,7 @@ pub enum Lang {
 
 impl Lang {
     /// Every language this build indexes.
-    pub const ALL: [Lang; 21] = [
+    pub const ALL: [Lang; 22] = [
         Lang::Swift,
         Lang::Python,
         Lang::Rust,
@@ -87,6 +90,7 @@ impl Lang {
         Lang::Tsx,
         Lang::JavaScript,
         Lang::Java,
+        Lang::Kotlin,
         Lang::SwiftPackage,
         Lang::XcodeGen,
         Lang::Cargo,
@@ -103,8 +107,9 @@ impl Lang {
     ];
 
     /// `as_str` of the languages with symbols (not manifests).
-    pub const SOURCE: [&str; 12] = [
-        "swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "java", "cfml", "sql", "ansible", "terraform",
+    pub const SOURCE: [&str; 13] = [
+        "swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "java", "kotlin", "cfml", "sql", "ansible",
+        "terraform",
     ];
 
     pub fn from_path(path: &str) -> Option<Lang> {
@@ -123,6 +128,7 @@ impl Lang {
                 Some("rs") => Some(Lang::Rust),
                 Some("cs") => Some(Lang::CSharp),
                 Some("java") => Some(Lang::Java),
+                Some("kt") => Some(Lang::Kotlin),
                 Some("csproj") => Some(Lang::CsProj),
                 Some("html") => Some(Lang::Html),
                 Some("ts" | "mts" | "cts") => Some(Lang::TypeScript),
@@ -148,6 +154,7 @@ impl Lang {
             Lang::Tsx => "tsx",
             Lang::JavaScript => "javascript",
             Lang::Java => "java",
+            Lang::Kotlin => "kotlin",
             Lang::SwiftPackage => "swiftpm",
             Lang::XcodeGen => "xcodegen",
             Lang::Cargo => "cargo",
@@ -182,6 +189,7 @@ impl Lang {
             Lang::Rust => rust::VERSION,
             Lang::CSharp => csharp::VERSION,
             Lang::Java => java::VERSION,
+            Lang::Kotlin => kotlin::VERSION,
             Lang::Html => html::VERSION,
             Lang::Cfml => cfml::VERSION,
             Lang::Sql => sql::VERSION,
@@ -936,6 +944,7 @@ pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
         Lang::Rust => rust::extract(source),
         Lang::CSharp => csharp::extract(source),
         Lang::Java => java::extract(source),
+        Lang::Kotlin => kotlin::extract(source),
         Lang::TypeScript => typescript::extract(source, false),
         Lang::Tsx => typescript::extract(source, true),
         Lang::JavaScript if typescript::is_minified(source) || typescript::is_library(source) => FileFacts::default(),
@@ -1030,6 +1039,7 @@ pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
         Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Lang::Tsx | Lang::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Lang::Java => tree_sitter_java::LANGUAGE.into(),
+        Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         _ => return None,
     })
 }

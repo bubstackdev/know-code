@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" | "java" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" | "kt" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -3027,7 +3027,7 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang IN ('csharp', 'java') THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java', 'kotlin') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
@@ -5251,12 +5251,16 @@ fn dropped_by(dropped: &mut HashMap<i64, &'static str>, on: bool, before: &[&Def
 
 /// Whether a declaration in `lang` is one code in `file` can name: TypeScript, TSX and JavaScript count as one.
 fn same_language(file: &str, lang: &str) -> bool {
-    let family = if matches!(lang, "typescript" | "tsx" | "javascript") { "ts" } else { lang };
+    let family = match lang {
+        "typescript" | "tsx" | "javascript" => "ts",
+        "java" | "kotlin" => "jvm",
+        l => l,
+    };
     let ext = file.rsplit_once('.').map_or("", |(_, e)| e);
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
-        "java" => Some("java"),
+        "java" | "kt" => Some("jvm"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),

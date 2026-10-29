@@ -20,7 +20,7 @@ use kc_extract::{PathRoot, Seg};
 
 /// Whether a reference in this file resolves by Java's rules.
 pub fn handles(file: &str) -> bool {
-    file.ends_with(".java")
+    file.ends_with(".java") || file.ends_with(".kt")
 }
 
 /// A type the repository declares in Java.
@@ -105,7 +105,7 @@ impl Resolver {
                     CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
                     CASE WHEN p.kind IN ('method', 'init', 'property', 'case') THEN f.path END, p.start_line, p.end_line
              FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id
-             WHERE f.lang = 'java' AND s.kind IN ('class', 'protocol', 'enum', 'struct', 'typealias')",
+             WHERE f.lang IN ('java', 'kotlin') AND s.kind IN ('class', 'protocol', 'enum', 'struct', 'typealias')",
         )?;
         let rows = stmt.query_map([], |r| {
             let local = match r.get::<_, Option<String>>(4)? {
@@ -128,7 +128,7 @@ impl Resolver {
         }
         let mut stmt = conn.prepare(
             "SELECT r.from_id, r.target_name FROM relations r JOIN files f ON f.id = r.file_id
-             WHERE f.lang = 'java' AND r.kind = 'inherits'",
+             WHERE f.lang IN ('java', 'kotlin') AND r.kind = 'inherits'",
         )?;
         for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
             let (from, target) = row?;
@@ -159,7 +159,12 @@ impl Resolver {
                 match (is_static, q.strip_suffix(".*")) {
                     (false, Some(p)) => s.on_demand.push(p.to_string()),
                     (false, None) => {
-                        let simple = q.rsplit('.').next().unwrap_or(&q).to_string();
+                        // Kotlin's `import a.b.C as D` names `a.b.C` as `D` in the file.
+                        let (q, alias) = match q.split_once(" as ") {
+                            Some((q, a)) => (q.to_string(), Some(a.to_string())),
+                            None => (q.clone(), None),
+                        };
+                        let simple = alias.unwrap_or_else(|| q.rsplit('.').next().unwrap_or(&q).to_string());
                         s.single.insert(simple, q);
                     }
                     (true, Some(t)) => s.static_on_demand.push(t.to_string()),
@@ -463,6 +468,33 @@ impl Resolver {
             }
             _ => None,
         };
+        // A Kotlin extension declared in the repository applies to a receiver of the type it names, the repository's or
+        // a library's (`Int::class.asTypeName()`): only where that type fits, never by its name alone.
+        if hit.file.ends_with(".kt")
+            && hit.receiver.as_deref().is_some_and(|r| r != "this" && r != "super")
+            && matches!(hit.kind.as_str(), "call" | "member")
+        {
+            let extensions = extensions_named(conn, hit)?;
+            if !extensions.is_empty() {
+                let receiver_name = receiver_type
+                    .clone()
+                    .or_else(|| path_type.and_then(|t| self.names.get(&t).cloned()))
+                    .or_else(|| hit.receiver.as_deref().filter(|r| is_type_name(r)).map(str::to_string));
+                let Some(want) = receiver_name else {
+                    return Ok(Some(("ambiguous", extensions.into_iter().map(|(id, _)| id).collect())));
+                };
+                let want = want.rsplit('.').next().unwrap_or(&want).to_string();
+                let fitting: Vec<i64> = extensions.iter().filter(|(_, r)| *r == want).map(|(id, _)| *id).collect();
+                // A member always wins over an extension. Only a repository type's members are known, so an extension
+                // is linked only on one; on a library type it is a candidate (the library type may declare the name).
+                let own_receiver = matches!(written, Some(Found::Inside(_))) || path_type.is_some();
+                match fitting.len() {
+                    1 if own_receiver => return Ok(Some(("exact", fitting))),
+                    0 => {}
+                    _ => return Ok(Some(("ambiguous", fitting))),
+                }
+            }
+        }
         if written == Some(Found::Outside) {
             return Ok(Some(("unresolved", Vec::new())));
         }
@@ -637,7 +669,7 @@ fn own_members(conn: &Connection, hit: &RefHit, container: &str) -> rusqlite::Re
     let kinds = if hit.kind == "call" { "('method')" } else { "('property', 'case')" };
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT s.id, s.min_args, s.max_args FROM symbols s JOIN files f ON f.id = s.file_id
-         WHERE f.lang = 'java' AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container = ?2 AND s.kind IN {kinds}"
+         WHERE f.lang IN ('java', 'kotlin') AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container = ?2 AND s.kind IN {kinds}"
     ))?;
     let rows = stmt.query_map(params![hit.name, container], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, Option<u32>>(1)?, r.get::<_, Option<u32>>(2)?))
@@ -659,6 +691,50 @@ fn fits(args: Option<u32>, min: Option<u32>, max: Option<u32>) -> bool {
     }
 }
 
+/// The repository's Kotlin extensions named like the reference (a function for a call, a property for a member use),
+/// with the simple name of the receiver type each declares (`fun Iterable<T>.joinToCode()` gives `Iterable`).
+fn extensions_named(conn: &Connection, hit: &RefHit) -> rusqlite::Result<Vec<(i64, String)>> {
+    let kinds = if hit.kind == "call" { "('function', 'method')" } else { "('property')" };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT s.id, s.signature FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE f.lang = 'kotlin' AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN {kinds}"
+    ))?;
+    let rows = stmt.query_map(params![hit.name], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, signature) = row?;
+        if let Some(receiver) = extension_receiver(&signature, &hit.name) {
+            out.push((id, receiver));
+        }
+    }
+    Ok(out)
+}
+
+/// The receiver type's simple name in an extension's signature: `fun <T> Iterable<T>.joinToCode()`,
+/// `val KClass<*>.isData`, `fun Foo.Bar?.x()`; `None` for a declaration that isn't an extension.
+fn extension_receiver(signature: &str, name: &str) -> Option<String> {
+    let at = signature.find(&format!(".{name}"))?;
+    let head = &signature[..at];
+    let keyword = head.rfind("fun ").or_else(|| head.rfind("val ")).or_else(|| head.rfind("var "))?;
+    let mut ty = head[keyword + 4..].trim();
+    if ty.starts_with('<') {
+        // The declaration's own type parameters.
+        let mut depth = 0;
+        let end = ty.char_indices().find(|(_, c)| {
+            match c {
+                '<' => depth += 1,
+                '>' => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+        })?;
+        ty = ty[end.0 + 1..].trim();
+    }
+    let base = ty.split('<').next()?.trim_end_matches('?').trim();
+    let simple = base.rsplit('.').next()?;
+    (!simple.is_empty() && simple.chars().next().is_some_and(char::is_uppercase)).then(|| simple.to_string())
+}
+
 /// Members named `name` whose type's simple name is one of `types`.
 fn members_in(conn: &Connection, name: &str, types: &HashSet<String>) -> rusqlite::Result<Vec<i64>> {
     if types.is_empty() {
@@ -666,7 +742,7 @@ fn members_in(conn: &Connection, name: &str, types: &HashSet<String>) -> rusqlit
     }
     let mut stmt = conn.prepare(
         "SELECT s.id, s.container FROM symbols s JOIN files f ON f.id = s.file_id
-         WHERE f.lang = 'java' AND s.name = ?1 AND s.container IS NOT NULL AND s.kind IN ('method', 'property', 'case')",
+         WHERE f.lang IN ('java', 'kotlin') AND s.name = ?1 AND s.container IS NOT NULL AND s.kind IN ('method', 'property', 'case')",
     )?;
     let rows = stmt.query_map(params![name], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
     let mut out = Vec::new();
@@ -689,5 +765,8 @@ mod tests {
         assert!(!is_type_name("MAX_VALUE"));
         assert!(!is_type_name("store"));
         assert_eq!(base_type("List").as_deref(), Some("List"));
+        assert_eq!(extension_receiver("public fun <T> Iterable<T>.joinToCode(): CodeBlock", "joinToCode").as_deref(), Some("Iterable"));
+        assert_eq!(extension_receiver("val KClass<*>.isData: Boolean", "isData").as_deref(), Some("KClass"));
+        assert_eq!(extension_receiver("public fun asTypeName(): TypeName", "asTypeName"), None);
     }
 }
