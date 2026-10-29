@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 35;
+pub const VERSION: u32 = 36;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -1013,6 +1013,12 @@ impl<'a> Cx<'a> {
                         locals.insert(self.text(pn).to_string(), te);
                     }
                 }
+            }
+            // `params object[] values`: the grammar's parameter array isn't a `parameter` node.
+            if let Some((pn, t)) = params_array(params)
+                && let Some(te) = type_expr(self.src, t)
+            {
+                locals.insert(self.text(pn).to_string(), te);
             }
         }
         self.in_scope(sym, None, true, locals, |cx| {
@@ -2913,7 +2919,16 @@ impl<'a> Cx<'a> {
                 named("string")
             }
             "null_literal" | "default_expression" | "lambda_expression" | "anonymous_method_expression" => None,
+            // `[a, b]` (C# 12) has no type of its own: it takes the parameter's, and no type parameter is inferred
+            // from it.
+            "collection_expression" => named("@collection"),
             "object_creation_expression" => e.child_by_field_name("type").and_then(|t| type_expr(self.src, t)),
+            // A capitalised name passed as a value isn't a type (a type isn't an argument): a field or property of
+            // the caller's type, as a lower-case one is, unless it's a local.
+            "identifier" => {
+                let name = self.text(e);
+                self.local(name).or_else(|| Some(TypeExpr::root(PathRoot::Prop(name.to_string()))))
+            }
             "prefix_unary_expression" if children(e).any(|c| self.text(c) == "-") => {
                 children(e).find(|c| c.is_named()).and_then(|c| self.argument_type(c))
             }
@@ -4941,14 +4956,32 @@ fn parameters(src: &str, decl: Node, list: Node) -> ((u32, Option<u32>), Option<
     ((min, max), lambda_types)
 }
 
+/// A parameter list's `params` array, as its name and type nodes: the grammar inlines it (`params`, a type, a name)
+/// rather than making it a `parameter`.
+fn params_array(list: Node) -> Option<(Node, Node)> {
+    let mut after = false;
+    let mut ty = None;
+    for c in children(list) {
+        match c.kind() {
+            "params" => after = true,
+            "identifier" if after && ty.is_some() => return ty.map(|t| (c, t)),
+            k if after && c.is_named() && k != "attribute_list" => ty = Some(c),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A method's parameters' declared types (see [`FileFacts::param_types`]), as JSON; `None` without parameters. A type
-/// parameter of the method or of an enclosing type is `null`, and so is any type built on one.
+/// parameter of the method or of an enclosing type is `null`, and so is any type built on one. A `params` array isn't
+/// among them: its type, when it is no type parameter's, is `rest`.
 fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
     let mut ps: Vec<Node> = children(list).filter(|c| c.kind() == "parameter").collect();
     if ps.first().is_some_and(|p| has_modifier(src, *p, "this")) {
         ps.remove(0);
     }
-    if ps.is_empty() {
+    let rest = params_array(list).map(|(_, t)| t);
+    if ps.is_empty() && rest.is_none() {
         return None;
     }
     let mut generic = type_params_of(src, decl);
@@ -4971,7 +5004,10 @@ fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
         })
         .collect();
     let names: Vec<&str> = ps.iter().map(|p| p.child_by_field_name("name").map_or("", |n| &src[n.byte_range()])).collect();
-    Some(serde_json::json!({ "types": types, "names": names }).to_string())
+    match rest.and_then(|t| type_expr(src, t)).filter(|t| !mentions_generic(t)) {
+        Some(rest) => Some(serde_json::json!({ "types": types, "names": names, "rest": rest.encode() }).to_string()),
+        None => Some(serde_json::json!({ "types": types, "names": names }).to_string()),
+    }
 }
 
 /// The input types of a delegate type, encoded: `Func<A, B, R>` → A, B; `Action<A>` and `Predicate<A>` → A;
