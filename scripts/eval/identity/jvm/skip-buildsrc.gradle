@@ -1,0 +1,23 @@
+// A Gradle init script for labelling (eval/identity-v2/README.md), on only where builds.txt sets SCIP_SKIP_BUILDSRC=1.
+// scip-java attaches its Kotlin compiler plugin to every Kotlin compile, buildSrc's too, and buildSrc is compiled by the
+// Kotlin that Gradle embeds, which an older Gradle's is too old to load the plugin into. buildSrc is the build's own
+// logic, never labelled, so its compile goes without the plugin.
+if (System.getenv('SCIP_SKIP_BUILDSRC') == '1') {
+    gradle.projectsEvaluated { g ->
+        if (g.rootProject.projectDir.name != 'buildSrc') return
+        g.rootProject.allprojects { p ->
+            p.tasks.matching { it.name.startsWith('compile') && it.name.endsWith('Kotlin') }.all { task ->
+                def args = task.compilerOptions.freeCompilerArgs
+                def kept = []
+                def all = args.get()
+                for (int i = 0; i < all.size(); i++) {
+                    def a = all[i]
+                    if (a.contains('scip')) continue
+                    if (a == '-P' && i + 1 < all.size() && all[i + 1].contains('scip')) { i++; continue }
+                    kept << a
+                }
+                args.set(kept)
+            }
+        }
+    }
+}

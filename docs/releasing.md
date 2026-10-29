@@ -110,10 +110,12 @@ A release publishes the formula `knowcode.rb` to the public tap repository
 [bubstackdev/homebrew-tap](https://github.com/bubstackdev/homebrew-tap). Before tagging:
 
 - The tap repository exists and is public.
-- The repository secret `HOMEBREW_TAP_TOKEN` holds a fine-grained personal access token with resource owner
-  `bubstackdev`, repository access to `bubstackdev/homebrew-tap` only, and the repository permission
-  **Contents: Read and write** (Metadata read-only follows automatically); nothing else. Store it with
-  `gh secret set HOMEBREW_TAP_TOKEN -R bubstackdev/know-code`, which prompts for the value.
+- The secret `HOMEBREW_TAP_TOKEN` of the repository's `release` environment holds a fine-grained personal access
+  token with resource owner `bubstackdev`, repository access to `bubstackdev/homebrew-tap` only, and the repository
+  permission **Contents: Read and write** (Metadata read-only follows automatically); nothing else. Store it with
+  `gh secret set HOMEBREW_TAP_TOKEN --env release -R bubstackdev/know-code`, which prompts for the value. Only jobs
+  that name the environment can read it (the tap check in `release-gate.yml` and the formula push in `release.yml`),
+  and the environment accepts only `v*.*.*` tags, so a workflow run from a branch never sees the token.
 - The token has an expiry (90 days). Renew it before it lapses: create a new token with the same settings, set the
   secret again, and revoke the old token.
 

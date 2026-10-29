@@ -1,0 +1,883 @@
+{
+ "chi": [
+  {
+   "dirs": [
+    "_examples/custom-handler"
+   ],
+   "module": ".",
+   "package": "_examples/custom-handler",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/custom-method",
+    "middleware"
+   ],
+   "module": ".",
+   "package": "_examples/custom-method",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/fileserver",
+    "middleware"
+   ],
+   "module": ".",
+   "package": "_examples/fileserver",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/graceful",
+    "middleware"
+   ],
+   "module": ".",
+   "package": "_examples/graceful",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/hello-world",
+    "middleware"
+   ],
+   "module": ".",
+   "package": "_examples/hello-world",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/limits",
+    "middleware"
+   ],
+   "module": ".",
+   "package": "_examples/limits",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/logging"
+   ],
+   "module": ".",
+   "package": "_examples/logging",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "_examples/pathvalue"
+   ],
+   "module": ".",
+   "package": "_examples/pathvalue",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/router-walk"
+   ],
+   "module": ".",
+   "package": "_examples/router-walk",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "_examples/todos-resource",
+    "middleware"
+   ],
+   "module": ".",
+   "package": "_examples/todos-resource",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/rest"
+   ],
+   "module": "_examples/rest",
+   "package": ".",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "_examples/versions"
+   ],
+   "module": "_examples/versions",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "code-for-blog": [
+  {
+   "dirs": [
+    "2021/go-rest-servers/stdlib-newmux",
+    "2021/go-rest-servers/stdlib-newmux/internal/taskstore"
+   ],
+   "module": "2021/go-rest-servers/stdlib-newmux",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "echox": [
+  {
+   "dirs": [
+    "cookbook/auto-tls"
+   ],
+   "module": ".",
+   "package": "cookbook/auto-tls",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/auto-tls/custom-server"
+   ],
+   "module": ".",
+   "package": "cookbook/auto-tls/custom-server",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/casbin"
+   ],
+   "module": ".",
+   "package": "cookbook/casbin",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/cors/origin-func"
+   ],
+   "module": ".",
+   "package": "cookbook/cors/origin-func",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/cors/origin-list"
+   ],
+   "module": ".",
+   "package": "cookbook/cors/origin-list",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/crud"
+   ],
+   "module": ".",
+   "package": "cookbook/crud",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/csrf"
+   ],
+   "module": ".",
+   "package": "cookbook/csrf",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/embed"
+   ],
+   "module": ".",
+   "package": "cookbook/embed",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/file-download"
+   ],
+   "module": ".",
+   "package": "cookbook/file-download",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/file-download/attachment"
+   ],
+   "module": ".",
+   "package": "cookbook/file-download/attachment",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/file-download/inline"
+   ],
+   "module": ".",
+   "package": "cookbook/file-download/inline",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/file-upload/multiple"
+   ],
+   "module": ".",
+   "package": "cookbook/file-upload/multiple",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/file-upload/single"
+   ],
+   "module": ".",
+   "package": "cookbook/file-upload/single",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/graceful-shutdown"
+   ],
+   "module": ".",
+   "package": "cookbook/graceful-shutdown",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/graceful-shutdown/custom-server"
+   ],
+   "module": ".",
+   "package": "cookbook/graceful-shutdown/custom-server",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/hello-world"
+   ],
+   "module": ".",
+   "package": "cookbook/hello-world",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/http2"
+   ],
+   "module": ".",
+   "package": "cookbook/http2",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/jwt/custom-claims"
+   ],
+   "module": ".",
+   "package": "cookbook/jwt/custom-claims",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/jwt/user-defined-keyfunc"
+   ],
+   "module": ".",
+   "package": "cookbook/jwt/user-defined-keyfunc",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/middleware"
+   ],
+   "module": ".",
+   "package": "cookbook/middleware",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/prometheus"
+   ],
+   "module": ".",
+   "package": "cookbook/prometheus",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/reverse-proxy"
+   ],
+   "module": ".",
+   "package": "cookbook/reverse-proxy",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "cookbook/reverse-proxy/upstream"
+   ],
+   "module": ".",
+   "package": "cookbook/reverse-proxy/upstream",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "cookbook/reverse-proxy/upstream"
+   ],
+   "module": ".",
+   "package": "cookbook/reverse-proxy/upstream",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/sse/broadcast"
+   ],
+   "module": ".",
+   "package": "cookbook/sse/broadcast",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/sse/simple"
+   ],
+   "module": ".",
+   "package": "cookbook/sse/simple",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/streaming-response"
+   ],
+   "module": ".",
+   "package": "cookbook/streaming-response",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/subdomain"
+   ],
+   "module": ".",
+   "package": "cookbook/subdomain",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "cookbook/timeout"
+   ],
+   "module": ".",
+   "package": "cookbook/timeout",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/websocket/gorilla"
+   ],
+   "module": ".",
+   "package": "cookbook/websocket/gorilla",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookbook/websocket/net"
+   ],
+   "module": ".",
+   "package": "cookbook/websocket/net",
+   "status": "listed"
+  }
+ ],
+ "flipt": [
+  {
+   "dirs": [
+    "cmd/flipt",
+    "core/validation",
+    "errors",
+    "internal/cmd",
+    "internal/cmd/util",
+    "internal/common",
+    "internal/config",
+    "internal/containers",
+    "internal/coss/license",
+    "internal/coss/secrets/aws",
+    "internal/coss/secrets/azure",
+    "internal/coss/secrets/gcp",
+    "internal/coss/secrets/vault",
+    "internal/coss/signing",
+    "internal/coss/storage/environments/git",
+    "internal/coss/storage/environments/git/azure",
+    "internal/coss/storage/environments/git/bitbucket",
+    "internal/coss/storage/environments/git/gitea",
+    "internal/coss/storage/environments/git/github",
+    "internal/coss/storage/environments/git/gitlab",
+    "internal/coss/webhook",
+    "internal/credentials",
+    "internal/ext",
+    "internal/gateway",
+    "internal/info",
+    "internal/migrations",
+    "internal/names",
+    "internal/otel",
+    "internal/otel/logs",
+    "internal/otel/metrics",
+    "internal/otel/traces",
+    "internal/product",
+    "internal/release",
+    "internal/secrets",
+    "internal/secrets/file",
+    "internal/server",
+    "internal/server/analytics",
+    "internal/server/analytics/clickhouse",
+    "internal/server/analytics/prometheus",
+    "internal/server/authn",
+    "internal/server/authn/method",
+    "internal/server/authn/method/github",
+    "internal/server/authn/method/jwt",
+    "internal/server/authn/method/kubernetes",
+    "internal/server/authn/method/oidc",
+    "internal/server/authn/middleware/common",
+    "internal/server/authn/middleware/grpc",
+    "internal/server/authn/middleware/http",
+    "internal/server/authn/public",
+    "internal/server/authz",
+    "internal/server/authz/engine/ext",
+    "internal/server/authz/engine/rego",
+    "internal/server/authz/engine/rego/source",
+    "internal/server/authz/engine/rego/source/filesystem",
+    "internal/server/authz/middleware/grpc",
+    "internal/server/common",
+    "internal/server/environments",
+    "internal/server/evaluation",
+    "internal/server/evaluation/client",
+    "internal/server/evaluation/ofrep",
+    "internal/server/metadata",
+    "internal/server/metrics",
+    "internal/server/middleware/grpc",
+    "internal/server/middleware/http",
+    "internal/server/tracing",
+    "internal/storage",
+    "internal/storage/analytics",
+    "internal/storage/authn",
+    "internal/storage/authn/memory",
+    "internal/storage/authn/redis",
+    "internal/storage/authn/static",
+    "internal/storage/environments",
+    "internal/storage/environments/evaluation",
+    "internal/storage/environments/fs",
+    "internal/storage/environments/fs/flipt",
+    "internal/storage/environments/git",
+    "internal/storage/fs",
+    "internal/storage/fs/object",
+    "internal/storage/git",
+    "internal/storage/git/signing",
+    "internal/telemetry",
+    "rpc/flipt",
+    "rpc/flipt/audit",
+    "rpc/flipt/auth",
+    "rpc/flipt/core",
+    "rpc/flipt/evaluation",
+    "rpc/flipt/meta",
+    "rpc/flipt/ofrep",
+    "rpc/flipt/options",
+    "rpc/v2/analytics",
+    "rpc/v2/environments",
+    "rpc/v2/evaluation",
+    "sdk/go",
+    "sdk/go/grpc",
+    "sdk/go/http",
+    "ui"
+   ],
+   "module": ".",
+   "package": "cmd/flipt",
+   "status": "listed"
+  }
+ ],
+ "gin-examples": [
+  {
+   "dirs": [
+    "ace-template"
+   ],
+   "module": ".",
+   "package": "ace-template",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "app-engine/go11x"
+   ],
+   "module": ".",
+   "package": "app-engine/go11x",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "assets-in-binary"
+   ],
+   "module": ".",
+   "package": "assets-in-binary",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "auto-tls/example1"
+   ],
+   "module": ".",
+   "package": "auto-tls/example1",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "auto-tls/example2"
+   ],
+   "module": ".",
+   "package": "auto-tls/example2",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "auto-tls/example3"
+   ],
+   "module": ".",
+   "package": "auto-tls/example3",
+   "status": "no listing"
+  },
+  {
+   "dirs": [
+    "basic"
+   ],
+   "module": ".",
+   "package": "basic",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cookie"
+   ],
+   "module": ".",
+   "package": "cookie",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "cors-middleware"
+   ],
+   "module": ".",
+   "package": "cors-middleware",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "custom-validation"
+   ],
+   "module": ".",
+   "package": "custom-validation",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "file-binding"
+   ],
+   "module": ".",
+   "package": "file-binding",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "form-binding"
+   ],
+   "module": ".",
+   "package": "form-binding",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "forward-proxy"
+   ],
+   "module": ".",
+   "package": "forward-proxy",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "graceful-shutdown/close"
+   ],
+   "module": ".",
+   "package": "graceful-shutdown/close",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "graceful-shutdown/graceful-shutdown/notify-with-context"
+   ],
+   "module": ".",
+   "package": "graceful-shutdown/graceful-shutdown/notify-with-context",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "graceful-shutdown/graceful-shutdown/notify-without-context"
+   ],
+   "module": ".",
+   "package": "graceful-shutdown/graceful-shutdown/notify-without-context",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "group-routes",
+    "group-routes/routes"
+   ],
+   "module": ".",
+   "package": "group-routes",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "http-pusher"
+   ],
+   "module": ".",
+   "package": "http-pusher",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "http2"
+   ],
+   "module": ".",
+   "package": "http2",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "multiple-service"
+   ],
+   "module": ".",
+   "package": "multiple-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "ratelimiter"
+   ],
+   "module": ".",
+   "package": "ratelimiter",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "reverse-proxy/realServer"
+   ],
+   "module": ".",
+   "package": "reverse-proxy/realServer",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "reverse-proxy/reverseServer"
+   ],
+   "module": ".",
+   "package": "reverse-proxy/reverseServer",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "secure-web-app"
+   ],
+   "module": ".",
+   "package": "secure-web-app",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "send_chunked_data"
+   ],
+   "module": ".",
+   "package": "send_chunked_data",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "server-sent-event"
+   ],
+   "module": ".",
+   "package": "server-sent-event",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "struct-lvl-validations"
+   ],
+   "module": ".",
+   "package": "struct-lvl-validations",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "template"
+   ],
+   "module": ".",
+   "package": "template",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "upload-file/limit-bytes"
+   ],
+   "module": ".",
+   "package": "upload-file/limit-bytes",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "upload-file/multiple"
+   ],
+   "module": ".",
+   "package": "upload-file/multiple",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "upload-file/single"
+   ],
+   "module": ".",
+   "package": "upload-file/single",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "versioning"
+   ],
+   "module": ".",
+   "package": "versioning",
+   "status": "listed"
+  }
+ ],
+ "go-routing": [
+  {
+   "dirs": [
+    "chi",
+    "gorilla",
+    "match",
+    "pat",
+    "reswitch",
+    "retable",
+    "shiftpath",
+    "split",
+    "stdlib"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "chi",
+    "gorilla",
+    "match",
+    "pat",
+    "reswitch",
+    "retable",
+    "shiftpath",
+    "split",
+    "stdlib"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "gotify": [
+  {
+   "dirs": [
+    "api",
+    "api/stream",
+    "auth",
+    "auth/password",
+    "config",
+    "config/migrate",
+    "database",
+    "decaymap",
+    "docs",
+    "error",
+    "fracdex",
+    "mode",
+    "model",
+    "plugin",
+    "plugin/compat",
+    "router",
+    "runner",
+    "ui"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "opengist": [
+  {
+   "dirs": [
+    "internal/actions",
+    "internal/auth",
+    "internal/auth/ldap",
+    "internal/auth/oauth",
+    "internal/auth/password",
+    "internal/auth/totp",
+    "internal/auth/webauthn",
+    "internal/cli",
+    "internal/config",
+    "internal/db",
+    "internal/git",
+    "internal/hooks",
+    "internal/i18n",
+    "internal/i18n/locales",
+    "internal/index",
+    "internal/ipc",
+    "internal/render",
+    "internal/render/lang",
+    "internal/session",
+    "internal/ssh",
+    "internal/validator",
+    "internal/web/context",
+    "internal/web/handlers",
+    "internal/web/handlers/admin",
+    "internal/web/handlers/api",
+    "internal/web/handlers/api/v1",
+    "internal/web/handlers/api/v1/types",
+    "internal/web/handlers/auth",
+    "internal/web/handlers/gist",
+    "internal/web/handlers/git",
+    "internal/web/handlers/health",
+    "internal/web/handlers/ipc",
+    "internal/web/handlers/metrics",
+    "internal/web/handlers/settings",
+    "internal/web/server",
+    "public",
+    "templates"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "urgentry": [
+  {
+   "dirs": [
+    "internal/alert",
+    "internal/analyticsservice",
+    "internal/api",
+    "internal/attachment",
+    "internal/auth",
+    "internal/blob",
+    "internal/controlplane",
+    "internal/discover",
+    "internal/discoverharness",
+    "internal/discovershared",
+    "internal/domain",
+    "internal/grouping",
+    "internal/httputil",
+    "internal/integration",
+    "internal/issue",
+    "internal/metrics",
+    "internal/migration",
+    "internal/minidump",
+    "internal/nativesym",
+    "internal/normalize",
+    "internal/notify",
+    "internal/outboundhttp",
+    "internal/profilequery",
+    "internal/proguard",
+    "internal/requestmeta",
+    "internal/runtimeasync",
+    "internal/scim",
+    "internal/search",
+    "internal/sourcemap",
+    "internal/sqlite",
+    "internal/sqlutil",
+    "internal/store",
+    "internal/telemetrybridge",
+    "internal/telemetryquery",
+    "pkg/dsn",
+    "pkg/id"
+   ],
+   "module": ".",
+   "package": "test:internal/api",
+   "status": "listed"
+  }
+ ]
+}
