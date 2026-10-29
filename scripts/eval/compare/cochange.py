@@ -25,6 +25,9 @@ SOURCE = ('.cs', '.ts', '.tsx', '.js', '.jsx', '.swift')
 BUCKETS = (('5-19', 5, 19), ('20-99', 20, 99), ('100+', 100, None))
 QUOTA = 4
 MIN_SHARED = 2  # history-v1's file-cochange threshold: a label shares at least two commits with F
+# KnowCode's default co-change window (kc_coupled: "365 days before HEAD"): the labels are also given limited to it, so
+# the default-window difference is visible, not folded into one number.
+WINDOW_DAYS = 365
 
 
 def bucket(n):
@@ -38,15 +41,25 @@ def order(repo, path):
     return hashlib.sha256(f'compare-v1:cochange:{repo}:{path}'.encode()).hexdigest()
 
 
-def commits(clone, path):
-    return history_labels.git(clone, 'log', '--follow', '--no-merges', '--format=%H', '--', path).split()
+def commits(clone, path, since=None):
+    args = ['log', '--follow', '--no-merges', '--format=%H']
+    if since:
+        args.append(f'--since={since}')
+    return history_labels.git(clone, *args, '--', path).split()
 
 
-def label(clone, path, now, names):
+def window_start(clone):
+    """WINDOW_DAYS before the pin's commit date, as git's --since takes it."""
+    import datetime
+    head = datetime.datetime.fromisoformat(history_labels.git(clone, 'log', '-1', '--format=%cI').strip())
+    return (head - datetime.timedelta(days=WINDOW_DAYS)).isoformat()
+
+
+def label(clone, path, now, names, since=None):
     """F's co-changed files by history-v1's rule: every file at HEAD sharing at least MIN_SHARED of F's non-merge
     commits of at most MAX_FILES files, under its current name, most shared first. Also the files sharing exactly one,
-    which the scorer leaves unjudged."""
-    ranked, used = history_labels.cochange(clone, commits(clone, path), {path}, now, names)
+    which the scorer leaves unjudged. With `since`, only F's commits from then on count."""
+    ranked, used = history_labels.cochange(clone, commits(clone, path, since), {path}, now, names)
     return ([[r['file'], r['shared']] for r in ranked if r['shared'] >= MIN_SHARED],
             sorted(r['file'] for r in ranked if r['shared'] < MIN_SHARED), used)
 
@@ -57,6 +70,7 @@ def draw(clones):
         clone = Path(clones)/repo
         now = set(history_labels.git(clone, 'ls-files').splitlines())
         names = history_labels.current_names(clone)
+        since = window_start(clone)
         counts = defaultdict(int)
         for line in history_labels.git(clone, 'log', '--no-merges', '--format=', '--name-only').splitlines():
             if line:
@@ -73,9 +87,11 @@ def draw(clones):
                 labels, single, used = label(clone, path, now, names)
                 if labels:  # a file nothing shares two commits with has no question to ask
                     chosen.append(path)
+                    window, window_single, _ = label(clone, path, now, names, since)
                     questions.append({'id': f'{repo}:cochange:{path}', 'repo': repo, 'type': 'cochange',
                                       'stratum': stratum, 'file': path, 'labels': labels, 'single': single,
-                                      'commits_counted': used})
+                                      'commits_counted': used, 'window_since': since, 'labels_window': window,
+                                      'single_window': window_single})
             strata[f'{repo}/cochange/{stratum}'] = [len(pool[stratum]), len(chosen)]
     return questions, strata
 

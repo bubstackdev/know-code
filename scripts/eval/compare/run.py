@@ -115,7 +115,7 @@ def judge(q, answer, decls, bound, source):
     if q['type'] == 'refs':
         labels = {tuple(s) for s in q['labels']}
         return score.judge_refs(items, labels, bound[q['repo']].get(q['target'][2], {}))
-    if q['type'] == 'cochange':
+    if q['type'] in ('cochange', 'cochange_window'):
         return score.judge_files(items, [f for f, _ in q['labels']], q['single'])
     labels = {tuple(d) for d in q['labels']}
     return score.judge_decls(items, labels, decls[q['repo']], source)
@@ -151,6 +151,21 @@ def summarise(questions, answers, decls, bound, clones):
     out = [{'tool': tool, 'type': qtype, 'language': lang, 'outcomes': score.tally(g['outcomes']),
             **score.pool(g['judged'])} for (tool, qtype, lang), g in sorted(groups.items())]
     return out, misses
+
+
+def windowed(questions, answers):
+    """Each co-change question and answer again, judged against the labels limited to KnowCode's default window
+    (README, "0.8's additions" 3), as type `cochange_window`, beside the all-history score."""
+    qs, ans = [], []
+    for q in questions:
+        if q['type'] == 'cochange' and 'labels_window' in q:
+            qs.append(dict(q, type='cochange_window', id=q['id'] + ':window', labels=q['labels_window'],
+                           single=q['single_window']))
+    ids = {q['id'][:-len(':window')] for q in qs}
+    for a in answers:
+        if a['type'] == 'cochange' and a['id'] in ids:
+            ans.append(dict(a, type='cochange_window', id=a['id'] + ':window'))
+    return questions + qs, answers + ans
 
 
 def language(q):
@@ -201,6 +216,7 @@ def score_command(args):
     answers = []
     for d in args.outs:
         answers += [json.loads(l) for l in (Path(d)/'answers.jsonl').read_text().splitlines() if l.strip()]
+    questions, answers = windowed(questions, answers)
     decls, bound = enumeration_view(sorted(Path(args.enumerations).glob('enumeration-*.jsonl.gz')))
     symbol = [a for a in answers if a['type'] not in ('locate', 'task')]
     summary, misses = summarise(questions, symbol, decls, bound, args.clones)

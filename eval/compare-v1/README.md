@@ -223,6 +223,7 @@ Each addition is committed before any run asks it, and each is its own pull requ
    - **Calls** (mapping.toml's): KnowCode `kc_coupled` with the file; codebase-memory-mcp `query_graph` over `FILE_CHANGES_WITH`. Serena has no counterpart and isn't started.
    - **Trees:** these trees keep their git history. The clone is copied in whole (HISTORY=1 in container.sh), not committed once.
    - **Windows:** each tool answers with its own default history window. KnowCode's is 365 days before HEAD, and codebase-memory-mcp applies its own threshold. The labels cover the whole history. A file that changed with F only long ago is a label that a windowed answer can miss by design. Scores are recall and precision over the files named, with no rank cutoff, since codebase-memory-mcp's rows aren't ranked.
+   - **The window, scored apart.** Each question also carries its labels limited to KnowCode's default window: the same rule, over F's commits in the 365 days before the pin's commit date (`labels_window`, `single_window`, `window_since`). Every answer is scored a second time against them (`cochange_window`), beside the all-history score, so the window's effect is visible rather than folded into one number. Over the 84 questions, 352 of the 4,792 labels fall in the window, and 54 questions have no window label at all, so their window recall is undefined and they count only towards precision.
 
 ## Changes after the first run
 

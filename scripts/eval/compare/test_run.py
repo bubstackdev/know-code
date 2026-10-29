@@ -62,6 +62,18 @@ class ScoreTest(unittest.TestCase):
                              [[['site', 'b.cs', 6]]])
 
 
+class WindowTest(unittest.TestCase):
+    def test_cochange_is_also_judged_against_the_window(self):
+        q = {'id': 'r:cochange:a.cs', 'repo': 'serilog', 'type': 'cochange', 'file': 'a.cs', 'labels': [['b.cs', 3], ['c.cs', 2]],
+             'single': [], 'labels_window': [['b.cs', 2]], 'single_window': ['c.cs']}
+        a = {'id': 'r:cochange:a.cs', 'tool': 'knowcode', 'type': 'cochange', 'outcome': 'judged',
+             'items': [['path', 'b.cs'], ['path', 'c.cs']], 'raw': []}
+        qs, ans = run.windowed([q], [a])
+        w = next(x for x in qs if x['type'] == 'cochange_window')
+        j = run.judge(w, next(x for x in ans if x['type'] == 'cochange_window'), {}, {}, None)
+        self.assertEqual(j.counts(), {'hits': 1, 'misses': 0, 'right': 1, 'wrong': 0, 'unjudged': 1})
+
+
 class PathsTest(unittest.TestCase):
     def test_locate_recall_within_budgets_and_no_counterpart(self):
         q = {'id': 't1:locate', 'repo': 't1', 'lang': 'csharp', 'type': 'locate', 'text': 'x',
