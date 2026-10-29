@@ -71,10 +71,15 @@ if [ "$REPO" = probe ]; then
   exit 0
 fi
 
-# 1. With the network up: restore, then every tool indexes.
+# 1. With the network up: restore, then every tool indexes. The restore is for Serena's language servers, which
+# resolve through the dependencies; KnowCode and codebase-memory-mcp ignore them. A run that doesn't start Serena
+# (--tools without it, as on locate and task trees) indexes the tree as checked out.
 run "tar -xf /in/src.tar -C /work/src"
 snapshot /work/src
-restore /work/src
+case " $* " in
+  *" --tools "*) case "$*" in *serena*) restore /work/src ;; esac ;;
+  *) restore /work/src ;;
+esac
 run "cd /work/harness && compare-python -m compare.run index --language $LANGUAGE --repo $REPO --src /work/src --out /out $* >>$LOG 2>&1"
 
 # 2. Off the network: ask.

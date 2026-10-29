@@ -196,6 +196,26 @@ SQL table links. compare-v1 asks no such question of any tool. The results list 
 them as KnowCode wins. A question the set does ask, but one tool has no call for, is that tool's `no_counterpart`
 row.
 
+## 0.8's additions
+
+Each addition is committed before any run asks it, and each is its own pull request.
+
+1. **Callers and find**, on the questions already drawn ([questions.jsonl](questions.jsonl)).
+   - Every impact question also stands as a callers question on the same target, with its hop-1 labels (`callers` in the impact row). That makes 96 callers questions.
+   - The 96 find questions were drawn with the rest.
+   - The calls are mapping.toml's.
+   - Serena's find uses find_symbol's documented `substring_matching`, as its lookup does since the first run's audit. A generic declaration's name carries its type parameters, and names are compared without them.
+
+2. **Locate and task**, on tasks-v1's 54 tasks ([eval/tasks-v1](../tasks-v1/README.md)), unchanged.
+   - Each task is its own tree: the tracked files of its repository at the fix commit's parent, checked out as in tasks-v1 and committed once, as every tree is.
+   - The task's text is the question. A locate question and a task question are asked on each tree.
+   - KnowCode answers with `kc_locate` and `kc_task`, and codebase-memory-mcp with `search_graph`'s `semantic_query`. These are mapping.toml's calls.
+   - codebase-memory-mcp has no counterpart for `task`, and Serena none for either type. Serena isn't started on these trees, because it would only answer `no_counterpart`.
+   - Continuations are followed as for every question: KnowCode's cursor, and codebase-memory-mcp's `semantic_has_more` with `semantic_offset`.
+   - Scoring is tasks-v1's. A changed file or test is named when its repository-relative path appears in the answer's text, with the pages joined in order. It counts within a budget of B bytes when its first mention ends within the first B bytes. Recall of the changed files, and separately of the changed tests, is given over the whole answer and within 2,000, 4,000 and 8,000 bytes, with counts and Wilson intervals.
+   - Every changed file or test an answer doesn't name is listed with the misses.
+   - These trees aren't restored. The restore exists only for Serena's language servers, and Serena isn't started here; KnowCode and codebase-memory-mcp ignore restored dependencies. The procedure changed before any answer was read: the first attempt stopped on 10 C# trees, whose parents pin a .NET 5 SDK the image doesn't have. Every tree is indexed as checked out, and the trees that had finished were run again under the same rule.
+
 ## Changes after the first run
 
 The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An

@@ -134,6 +134,28 @@ def draw(rows):
     return questions, strata
 
 
+def expand(questions):
+    """The questions as asked: each impact question also stands as a callers question on the same target, with its
+    hop-1 labels (README, "The draw": callers and impact share their targets)."""
+    out = list(questions)
+    for q in questions:
+        if q['type'] == 'impact' and 'callers' in q:
+            out.append({'type': 'callers', 'repo': q['repo'], 'stratum': q['stratum'], 'key': q['key'],
+                        'target': q['target'], 'labels': q['callers'], 'id': q['id'].replace(':impact:', ':callers:', 1)})
+    return out
+
+
+def task_questions(tasks):
+    """tasks-v1's tasks as compare-v1's locate and task questions: the task's text, its changed files and tests, at its
+    parent commit. Each task is its own tree, so `repo` is the task's id."""
+    out = []
+    for t in tasks:
+        for qtype in ('locate', 'task'):
+            out.append({'id': f"{t['id']}:{qtype}", 'repo': t['id'], 'source_repo': t['repo'], 'lang': t['lang'],
+                        'type': qtype, 'text': t['task'], 'parent': t['parent'], 'files': t['files'], 'tests': t['tests']})
+    return out
+
+
 def bound_lines(rows, name):
     """Per (file, line), the keys a reference row named `name` is bound to: the scorer's view of a refs answer."""
     out = defaultdict(set)
@@ -173,6 +195,14 @@ def check(enumerations, committed=IDENTITY_LABELS):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ['tasks']:
+        ap = argparse.ArgumentParser(prog='questions.py tasks')
+        ap.add_argument('tasks', type=Path)
+        ap.add_argument('--out', type=Path, required=True)
+        args = ap.parse_args(argv[1:])
+        tasks = [json.loads(l) for l in args.tasks.read_text().splitlines() if l.strip()]
+        args.out.write_text(''.join(json.dumps(q, sort_keys=True) + '\n' for q in task_questions(tasks)))
+        return 0
     if argv[:1] == ['check']:
         ap = argparse.ArgumentParser(prog='questions.py check')
         ap.add_argument('enumerations', nargs='+', type=Path)
