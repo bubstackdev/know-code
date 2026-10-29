@@ -196,6 +196,35 @@ SQL table links. compare-v1 asks no such question of any tool. The results list 
 them as KnowCode wins. A question the set does ask, but one tool has no call for, is that tool's `no_counterpart`
 row.
 
+## 0.8's additions
+
+Each addition is committed before any run asks it, and each is its own pull request.
+
+1. **Callers and find**, on the questions already drawn ([questions.jsonl](questions.jsonl)).
+   - Every impact question also stands as a callers question on the same target, with its hop-1 labels (`callers` in the impact row). That makes 96 callers questions.
+   - The 96 find questions were drawn with the rest.
+   - The calls are mapping.toml's.
+   - Serena's find uses find_symbol's documented `substring_matching`, as its lookup does since the first run's audit. A generic declaration's name carries its type parameters, and names are compared without them.
+
+2. **Locate and task**, on tasks-v1's 54 tasks ([eval/tasks-v1](../tasks-v1/README.md)), unchanged.
+   - Each task is its own tree: the tracked files of its repository at the fix commit's parent, checked out as in tasks-v1 and committed once, as every tree is.
+   - The task's text is the question. A locate question and a task question are asked on each tree.
+   - KnowCode answers with `kc_locate` and `kc_task`, and codebase-memory-mcp with `search_graph`'s `semantic_query`. These are mapping.toml's calls.
+   - codebase-memory-mcp has no counterpart for `task`, and Serena none for either type. Serena isn't started on these trees, because it would only answer `no_counterpart`.
+   - Continuations are followed as for every question: KnowCode's cursor, and codebase-memory-mcp's `semantic_has_more` with `semantic_offset`.
+   - Scoring is tasks-v1's. A changed file or test is named when its repository-relative path appears in the answer's text, with the pages joined in order. It counts within a budget of B bytes when its first mention ends within the first B bytes. Recall of the changed files, and separately of the changed tests, is given over the whole answer and within 2,000, 4,000 and 8,000 bytes, with counts and Wilson intervals.
+   - Every changed file or test an answer doesn't name is listed with the misses.
+   - These trees aren't restored. The restore exists only for Serena's language servers, and Serena isn't started here; KnowCode and codebase-memory-mcp ignore restored dependencies. The procedure changed before any answer was read: the first attempt stopped on 10 C# trees, whose parents pin a .NET 5 SDK the image doesn't have. Every tree is indexed as checked out, and the trees that had finished were run again under the same rule.
+
+3. **Co-change**, labelled by git ([cochange.jsonl](cochange.jsonl), drawn by [cochange.py](../../scripts/eval/compare/cochange.py)).
+   - **The question:** which files usually change with file F? It is asked on identity-v1's eight repositories at their pins, with their full history.
+   - **The draw:** F is drawn per repository among source files at the pin with at least 5 non-merge commits, renames followed. The strata are 5–19, 20–99 and 100+ commits, up to 4 files each, taken in SHA-256 order of `compare-v1:cochange:repo:path`. A file nothing shares two commits with is passed over. That gives 84 questions. [cochange-strata.json](cochange-strata.json) gives each stratum's counts.
+   - **Labels**, by history-v1's `file-cochange` rule: every file at the pin that shares at least two of F's non-merge commits of at most 50 files, under its current name. Files sharing exactly one commit are recorded apart (`single`), and an answer naming one is left unjudged. Any other file named is wrong.
+   - **Calls** (mapping.toml's): KnowCode `kc_coupled` with the file; codebase-memory-mcp `query_graph` over `FILE_CHANGES_WITH`. Serena has no counterpart and isn't started.
+   - **Trees:** these trees keep their git history. The clone is copied in whole (HISTORY=1 in container.sh), not committed once.
+   - **Windows:** each tool answers with its own default history window. KnowCode's is 365 days before HEAD, and codebase-memory-mcp applies its own threshold. The labels cover the whole history. A file that changed with F only long ago is a label that a windowed answer can miss by design. Scores are recall and precision over the files named, with no rank cutoff, since codebase-memory-mcp's rows aren't ranked.
+   - **The window, scored apart.** Each question also carries its labels limited to KnowCode's default window: the same rule, over F's commits in the 365 days before the pin's commit date (`labels_window`, `single_window`, `window_since`). Every answer is scored a second time against them (`cochange_window`), beside the all-history score, so the window's effect is visible rather than folded into one number. Over the 84 questions, 352 of the 4,792 labels fall in the window, and 54 questions have no window label at all, so their window recall is undefined and they count only towards precision.
+
 ## Changes after the first run
 
 The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An

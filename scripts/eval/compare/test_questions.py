@@ -44,6 +44,21 @@ class DrawTest(unittest.TestCase):
         impact = [q for q in a if q['type'] == 'impact']
         self.assertEqual([q['key'] for q in impact], ['M:Load', 'M:Save'])
 
+    def test_each_impact_question_also_asks_callers(self):
+        qs, _ = questions.draw(ROWS)
+        asked = questions.expand(qs)
+        callers = [q for q in asked if q['type'] == 'callers']
+        self.assertEqual(len(callers), len([q for q in qs if q['type'] == 'impact']))
+        save = next(q for q in callers if q['key'] == 'M:Save')
+        self.assertEqual((save['id'], save['labels']), ('demo:callers:M:Save', [['a.cs', 9, 'Load'], ['a.cs', 15, 'Run']]))
+
+    def test_each_task_is_a_locate_and_a_task_question_on_its_own_tree(self):
+        task = {'id': 'serilog-abc', 'repo': 'serilog', 'lang': 'csharp', 'task': 'Fix it', 'parent': 'p1',
+                'files': ['a.cs'], 'tests': ['t.cs']}
+        qs = questions.task_questions([task])
+        self.assertEqual([(q['id'], q['type'], q['repo']) for q in qs],
+                         [('serilog-abc:locate', 'locate', 'serilog-abc'), ('serilog-abc:task', 'task', 'serilog-abc')])
+
     def test_bound_lines_names_every_binding_of_the_name(self):
         self.assertEqual(questions.bound_lines(ROWS, 'Save')[('b.cs', 40)], {'X:Out'})
 

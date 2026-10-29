@@ -94,10 +94,68 @@ def kc_not_found(message):
     return bool(re.search(r'no (definition|symbol|declaration)|names no definition|not_found|unknown symbol', message, re.I))
 
 
+def kc_cursor(text):
+    """An answer's continuation: the JSON `cursor`, or `kc_more {cursor: …}` in text."""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and data.get('cursor'):
+            return data['cursor']
+    except ValueError:
+        pass
+    m = KC_MORE.search(text)
+    return m[1] if m else None
+
+
+def kc_partners(text):
+    """kc_coupled's partners of the asked file, in the answer's order, as ('path', file)."""
+    data = json.loads(text)
+    out = []
+    for item in data.get('items', []):
+        out += [('path', p['file']) for p in item.get('partners', []) if 'file' in p]
+        if 'file' in item and 'partners' not in item:  # a continuation page lists partners as its items
+            out.append(('path', item['file']))
+    return out
+
+
+def cbm_paths(text):
+    """query_graph's rows of one path column, as ('path', file), and its continuation cursor."""
+    data = json.loads(text)
+    return [('path', r[0]) for r in data.get('rows', []) if r and isinstance(r[0], str)], data.get('next_cursor')
+
+
+def ask_text(session, first, more, raw):
+    """locate and task (README, "Asking"): the answer's text in order, continuations followed up to PAGES pages.
+    `first` makes the first call; `more(text)` the next page's call, or None."""
+    text = first()
+    raw.append(text)
+    for _ in range(PAGES - 1):
+        call = more(text)
+        if not call:
+            break
+        text, _ = session.call(*call, CALL_TIMEOUT)
+        raw.append(text)
+    return 'judged', [], raw
+
+
 def ask_knowcode(session, qtype, q):
     raw = []
     target = q.get('target')
     try:
+        if qtype == 'cochange':
+            items, cursor = [], None
+            for _ in range(PAGES):
+                text, _ = session.call(*(('kc_more', {'cursor': cursor}) if cursor else ('kc_coupled', {'file': q['file']})),
+                                       CALL_TIMEOUT)
+                raw.append(text)
+                items += kc_partners(text)
+                cursor = kc_cursor(text)
+                if not cursor:
+                    break
+            return 'judged', items, raw
+        if qtype in ('locate', 'task'):
+            tool, arg = ('kc_locate', 'query') if qtype == 'locate' else ('kc_task', 'goal')
+            more = lambda t: ('kc_more', {'cursor': kc_cursor(t)}) if kc_cursor(t) else None
+            return ask_text(session, lambda: session.call(tool, {arg: q['text']}, CALL_TIMEOUT)[0], more, raw)
         if qtype == 'refs':
             text, _ = session.call('kc_refs', {'name': f'{target[0]}:{target[1]}'}, CALL_TIMEOUT)
             parse = kc_refs_sites
@@ -172,6 +230,33 @@ def ask_cbm(session, qtype, q):
     raw = []
     p = session.project
     try:
+        if qtype == 'cochange':
+            query = ("MATCH (a:File)-[r:FILE_CHANGES_WITH]-(b:File) WHERE a.file_path = '%s' RETURN b.file_path"
+                     % q['file'].replace("'", "\\'"))
+            args = {'project': p, 'query': query, 'format': 'json'}
+            items, cursor = [], None
+            for _ in range(PAGES):
+                text, _ = session.call('query_graph', dict(args, cursor=cursor) if cursor else args, CALL_TIMEOUT)
+                raw.append(text)
+                page, cursor = cbm_paths(text)
+                items += page
+                if not cursor:
+                    break
+            return 'judged', items, raw
+        if qtype == 'task':
+            return 'no_counterpart', [], raw
+        if qtype == 'locate':
+            args = {'project': p, 'semantic_query': [q['text']], 'format': 'json'}
+
+            seen = [0]
+
+            def more(text):
+                data = json.loads(text)
+                seen[0] += data.get('semantic_returned') or 0
+                if not data.get('semantic_has_more'):
+                    return None
+                return ('search_graph', dict(args, semantic_offset=seen[0]))
+            return ask_text(session, lambda: session.call('search_graph', args, CALL_TIMEOUT)[0], more, raw)
         if qtype == 'find':
             items, offset = [], 0
             for _ in range(PAGES):
@@ -266,11 +351,13 @@ def ask_serena(session, qtype, q):
     raw = []
     try:
         if qtype == 'find':
-            text, _ = session.call('find_symbol', {'name_path_pattern': q['name']}, CALL_TIMEOUT)
+            # substring_matching, as in the lookup: a generic declaration's name carries its type parameters.
+            text, _ = session.call('find_symbol', {'name_path_pattern': q['name'], 'substring_matching': True},
+                                   CALL_TIMEOUT)
             raw.append(text)
             return 'judged', [('decl', s['file'], s['first']) for s in _symbols(text)
-                              if serena_last(s['name_path']) == q['name']], raw
-        if qtype == 'impact':
+                              if serena_last(s['name_path']) == plain(q['name'])], raw
+        if qtype in ('impact', 'locate', 'task', 'cochange'):
             return 'no_counterpart', [], raw
         file, line, name = q['target']
         # substring_matching (find_symbol's documented option): a generic declaration's name path segment carries its

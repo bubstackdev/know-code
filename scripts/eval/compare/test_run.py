@@ -62,5 +62,35 @@ class ScoreTest(unittest.TestCase):
                              [[['site', 'b.cs', 6]]])
 
 
+class WindowTest(unittest.TestCase):
+    def test_cochange_is_also_judged_against_the_window(self):
+        q = {'id': 'r:cochange:a.cs', 'repo': 'serilog', 'type': 'cochange', 'file': 'a.cs', 'labels': [['b.cs', 3], ['c.cs', 2]],
+             'single': [], 'labels_window': [['b.cs', 2]], 'single_window': ['c.cs']}
+        a = {'id': 'r:cochange:a.cs', 'tool': 'knowcode', 'type': 'cochange', 'outcome': 'judged',
+             'items': [['path', 'b.cs'], ['path', 'c.cs']], 'raw': []}
+        qs, ans = run.windowed([q], [a])
+        w = next(x for x in qs if x['type'] == 'cochange_window')
+        j = run.judge(w, next(x for x in ans if x['type'] == 'cochange_window'), {}, {}, None)
+        self.assertEqual(j.counts(), {'hits': 1, 'misses': 0, 'right': 1, 'wrong': 0, 'unjudged': 1})
+
+
+class PathsTest(unittest.TestCase):
+    def test_locate_recall_within_budgets_and_no_counterpart(self):
+        q = {'id': 't1:locate', 'repo': 't1', 'lang': 'csharp', 'type': 'locate', 'text': 'x',
+             'files': ['src/a.cs', 'src/b.cs'], 'tests': ['test/a_test.cs']}
+        far = 'x' * 3000
+        answers = [{'id': 't1:locate', 'tool': 'knowcode', 'type': 'locate', 'outcome': 'judged', 'items': [],
+                    'raw': ['src/a.cs ' + far, 'src/b.cs']},
+                   {'id': 't1:locate', 'tool': 'serena', 'type': 'locate', 'outcome': 'no_counterpart', 'items': [], 'raw': []}]
+        misses = []
+        rows = {(r['tool'], r['language']): r for r in run.summarise_paths([q], answers, misses=misses)}
+        kc = rows[('knowcode', 'csharp')]
+        self.assertEqual((kc['files']['all']['k'], kc['files']['2000']['k'], kc['files']['all']['n']), (2, 1, 2))
+        self.assertEqual(kc['tests']['all']['k'], 0)
+        self.assertEqual(rows[('serena', 'all')]['outcomes']['no_counterpart'], 1)
+        self.assertEqual(misses, [{'id': 't1:locate', 'tool': 'knowcode', 'missed': [['test/a_test.cs', '', 'tests']],
+                                   'wrong': [], 'unjudged': 0}])
+
+
 if __name__ == '__main__':
     unittest.main()
