@@ -546,6 +546,8 @@ struct Def {
     file_private: bool,
     /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
     on_actor: bool,
+    /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
+    alias_member: bool,
 }
 
 impl Def {
@@ -2622,6 +2624,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
     }
+    // A property of a type alias's object type is reached through a value known to be of that type, never by its
+    // name alone: such shapes (`type Item = { Id: string; Name: string }`) restate a package's types' fields.
+    let cands: Vec<&Def> = if matches!(recv, Receiver::Unknown) { cands.into_iter().filter(|d| !d.alias_member).collect() } else { cands };
+    if cands.is_empty() {
+        return ("unresolved", Vec::new());
+    }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
     groups.sort();
     groups.dedup();
@@ -3024,7 +3032,8 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
-     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
+     p.kind IS 'typealias'";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -3051,6 +3060,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         exported: r.get(17)?,
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
+        alias_member: r.get(20)?,
     })
 }
 

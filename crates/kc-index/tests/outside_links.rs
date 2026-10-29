@@ -256,3 +256,35 @@ fn a_swift_platform_shim_test_extension_or_library_overload_is_listed_not_linked
     assert!(!decode.is_empty() && decode.iter().all(|g| !linked(g.1)), "{decode:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_destructured_prop_of_a_package_type_is_the_packages() {
+    let (root, store) = repo(
+        "ts-destructured-props",
+        &[
+            ("package.json", PACKAGE_JSON),
+            ("tsconfig.json", TSCONFIG),
+            ("src/filters.ts", "export interface Filters {\n    Status?: string;\n}\n"),
+            (
+                "src/props.ts",
+                "import type { JobInfo } from '@acme/sdk/models';\nimport type { Shelf } from './shelf';\n\nexport type JobProps = {\n    job: JobInfo;\n    shelf: Shelf;\n};\n",
+            ),
+            ("src/shelf.ts", "export interface Shelf {\n    label: string;\n}\n"),
+            (
+                "src/JobRow.tsx",
+                "import { JobProps } from './props';\n\nexport const JobRow = ({ job, shelf: s }: JobProps) => {\n    const status = job.LastResult.Status;\n    return s.label + status;\n};\n",
+            ),
+            ("src/loose.ts", "export function show(x: any) {\n    return x.job;\n}\n"),
+        ],
+    );
+    // Through the package's `JobInfo`: not the repo's `Filters.Status`.
+    let status = refs(&store, "Status", &["member"], "src/JobRow.tsx");
+    assert!(!status.is_empty() && status.iter().all(|g| !linked(g.1)), "{status:?}");
+    // Through the repo's `Shelf`, renamed in the pattern: its own member.
+    let label = refs(&store, "label", &["member"], "src/JobRow.tsx");
+    assert!(label.iter().any(|g| g.1 == "exact" && g.2 == ["src/shelf.ts:2"]), "{label:?}");
+    // A type alias's property is reached through its type only, never by name from an untyped value.
+    let job = refs(&store, "job", &["member"], "src/loose.ts");
+    assert!(job.iter().all(|g| !linked(g.1)), "{job:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
