@@ -540,7 +540,8 @@ pub struct CandidateStats {
     pub candidates: usize,
 }
 
-/// Searchable files of one repo that can match: the trigram formula's picks plus every pending file, filtered.
+/// Searchable files of one repo that can match, in path order: the trigram formula's picks plus every pending file,
+/// filtered.
 pub fn candidates(store: &Store, files: Vec<CFile>, m: &Matcher, repo: usize) -> Result<(Vec<ScanFile>, CandidateStats)> {
     let ids = eval(store, &m.plan)?;
     let mut stats = CandidateStats::default();
@@ -556,6 +557,9 @@ pub fn candidates(store: &Store, files: Vec<CFile>, m: &Matcher, repo: usize) ->
         }
     }
     stats.candidates = out.len();
+    // In path order, never the content index's row order: a scan cut at its limit keeps a prefix of this list, and the
+    // rows follow the order files were first indexed in, which differs between an index built cold and one updated.
+    out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok((out, stats))
 }
 

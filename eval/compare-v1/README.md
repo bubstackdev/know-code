@@ -237,10 +237,11 @@ no claim about speed.
 | [tools.toml](tools.toml) | The pinned versions, release assets and digests, and the latest-release rule |
 | [Dockerfile](Dockerfile) | The container, with every base image pinned by digest |
 | questions.jsonl, strata.json | The drawn questions and their labels (written by the draw, before any run) |
-| results.md | The published figures and every miss (after the runs) |
+| results.md, results/*.misses.tsv | The published figures, and every miss of every tool per run |
 
-The scripts are in [scripts/eval/compare](../../scripts/eval/compare): one adapter per tool, the draw, the runner and
-the scorer, using the standard library only, with tests.
+The scripts are in [scripts/eval/compare](../../scripts/eval/compare): one adapter per tool, the draw, the runner,
+the scorer and the report (report.py, which writes results.md's figures), using the standard library only, with
+tests.
 
 ## Running it
 

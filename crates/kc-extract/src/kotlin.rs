@@ -17,7 +17,7 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -103,6 +103,9 @@ impl<'a> Cx<'a> {
             "package_header" => {
                 if let Some(q) = children(node).find(|c| c.kind() == "qualified_identifier" || c.kind() == "identifier") {
                     self.package = Some(self.text(q).split_whitespace().collect());
+                    // The file's package: its top-level functions and properties belong to it, though they carry no
+                    // type's namespace.
+                    self.facts.package = self.package.clone();
                 }
             }
             "import" => self.import(node),
@@ -863,6 +866,7 @@ mod tests {
         assert_eq!(TypeDecl::decode(f.symbols.iter().find(|s| s.name == "Cart").unwrap().type_name.as_deref()).ns.as_deref(), Some("shop.cart"));
         let imports: Vec<_> = f.imports.iter().map(|i| i.module.as_str()).collect();
         assert_eq!(imports, vec!["shop.model.Item as It", "shop.util.*"]);
+        assert_eq!(f.package.as_deref(), Some("shop.cart"));
         let supers: Vec<_> = f.relations.iter().map(|r| r.target.as_str()).collect();
         assert_eq!(supers, vec!["Base", "Sized"]);
         assert!(f.symbols.iter().find(|s| s.name == "shout").unwrap().signature.contains("String.shout"));

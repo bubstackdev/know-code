@@ -9,6 +9,7 @@ pub mod cfml;
 pub mod conventions;
 mod csharp;
 pub mod gitlabci;
+mod go;
 pub mod hosts;
 pub mod html;
 mod java;
@@ -22,6 +23,7 @@ pub mod terraform;
 mod tsconfig;
 mod typescript;
 
+pub use go::package_name_guess as go_package_name_guess;
 pub use manifest::implicit_usings;
 pub use yaml::{MAX_BYTES as YAML_MAX_BYTES, check as check_yaml};
 pub use typescript::{action_name, api_tag, is_minified};
@@ -77,11 +79,15 @@ pub enum Lang {
     /// Configuration naming hosts: ASP.NET settings and launch profiles, .NET `*.config`, Docker Compose, ingress
     /// manifests, HAProxy and nginx configs (see [`hosts`]).
     HostConfig,
+    /// Go (`.go`).
+    Go,
+    /// Go `go.mod`.
+    GoMod,
 }
 
 impl Lang {
     /// Every language this build indexes.
-    pub const ALL: [Lang; 22] = [
+    pub const ALL: [Lang; 24] = [
         Lang::Swift,
         Lang::Python,
         Lang::Rust,
@@ -104,12 +110,14 @@ impl Lang {
         Lang::Terraform,
         Lang::TsConfig,
         Lang::HostConfig,
+        Lang::Go,
+        Lang::GoMod,
     ];
 
     /// `as_str` of the languages with symbols (not manifests).
-    pub const SOURCE: [&str; 13] = [
+    pub const SOURCE: [&str; 14] = [
         "swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "java", "kotlin", "cfml", "sql", "ansible",
-        "terraform",
+        "terraform", "go",
     ];
 
     pub fn from_path(path: &str) -> Option<Lang> {
@@ -119,6 +127,7 @@ impl Lang {
             "project.yml" => Some(Lang::XcodeGen),
             "Cargo.toml" => Some(Lang::Cargo),
             "package.json" => Some(Lang::PackageJson),
+            "go.mod" => Some(Lang::GoMod),
             "jsconfig.json" => Some(Lang::TsConfig),
             f if f.starts_with("tsconfig") && f.ends_with(".json") => Some(Lang::TsConfig),
             _ if hosts::is_host_config(path) => Some(Lang::HostConfig),
@@ -136,6 +145,7 @@ impl Lang {
                 Some("js" | "mjs" | "cjs" | "jsx") if !is_built_js(path) => Some(Lang::JavaScript),
                 Some("sql" | "SQL") => Some(Lang::Sql),
                 Some("tf") => Some(Lang::Terraform),
+                Some("go") => Some(Lang::Go),
                 _ if cfml::is_cfml_path(path) => Some(Lang::Cfml),
                 _ if ansible::place(path).is_some() => Some(Lang::Ansible),
                 _ if gitlabci::is_ci_path(path) => Some(Lang::GitlabCi),
@@ -168,11 +178,13 @@ impl Lang {
             Lang::Terraform => "terraform",
             Lang::TsConfig => "tsconfig",
             Lang::HostConfig => "hostconfig",
+            Lang::Go => "go",
+            Lang::GoMod => "gomod",
         }
     }
 
     pub fn is_manifest(self) -> bool {
-        matches!(self, Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson)
+        matches!(self, Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson | Lang::GoMod)
     }
 
     /// Bumped whenever the extractor's output changes, so indexed files of this language get re-extracted. The
@@ -198,8 +210,11 @@ impl Lang {
             Lang::Terraform => terraform::VERSION,
             Lang::TsConfig => tsconfig::VERSION,
             Lang::HostConfig => hosts::VERSION,
+            Lang::Go => go::VERSION,
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => typescript::VERSION,
-            Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson => manifest::VERSION,
+            Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson | Lang::GoMod => {
+                manifest::VERSION
+            }
         }
     }
 }
@@ -561,10 +576,10 @@ pub struct TargetFact {
     pub deps: Vec<TargetDep>,
 }
 
-/// A package (SwiftPM package, XcodeGen project or Cargo package/workspace) declared by a manifest.
+/// A package (SwiftPM package, XcodeGen project, Cargo package/workspace or Go module) declared by a manifest.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageFact {
-    /// `swiftpm`, `xcodegen` or `cargo`.
+    /// `swiftpm`, `xcodegen`, `cargo` or `gomod`.
     pub kind: &'static str,
     pub name: String,
     pub line: u32,
@@ -741,7 +756,8 @@ pub struct AnsibleFact {
 /// of complete. Stored in the index's `unsupported` table (see `kc_store::unsupported`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Unsupported {
-    /// `di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular` or `imports` (a C# project whose usings can't be read).
+    /// `di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular`, `imports` (a C# project whose usings can't be read),
+    /// `build` (a Go file the default build leaves out) or `cgo`.
     pub area: &'static str,
     /// What was met, in words: `assembly scan RegisterAssemblyTypes(…)`.
     pub construct: String,
@@ -798,6 +814,10 @@ pub struct FileFacts {
     /// The file runs top-level statements (a script or `main.swift`): its globals and free functions serve that
     /// file, not the rest of the repo.
     pub script: bool,
+    /// The package the file declares into, as written: Go's package clause (`chi`, `main`, `chi_test`). Resolution
+    /// joins it with the file's directory, since a Go package is the files of one directory sharing a clause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 
 /// Depth of the control-flow block `node` within the callable spanning bytes `outer` (`node` itself is level 1):
@@ -965,6 +985,8 @@ pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
         Lang::Terraform => terraform::extract(source),
         Lang::TsConfig => tsconfig::extract(source),
         Lang::HostConfig => hosts::extract(path, source),
+        Lang::Go => go::extract(path, source),
+        Lang::GoMod => manifest::gomod(source),
     }
 }
 
@@ -1038,6 +1060,7 @@ pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
         Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Lang::Tsx | Lang::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        Lang::Go => tree_sitter_go::LANGUAGE.into(),
         Lang::Java => tree_sitter_java::LANGUAGE.into(),
         Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         _ => return None,

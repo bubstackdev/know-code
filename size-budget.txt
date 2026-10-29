@@ -38,4 +38,6 @@
 # 0.7's Java: tree-sitter-java linked (412880 bytes, eval/size/grammars.md at 0fd522a) plus the Java extractor and
 # resolver (82624 bytes): the dist build of this change measured 38430096 against 37934592 for integration/0.7 at
 # fde5357, whose Rust code is the change's base.
-38430096
+# 0.7's Go: the tree-sitter-go grammar (231,248 bytes, eval/size/grammars.md, both passes) and the Go extractor,
+# go.mod reading and resolver (132,256): 38826672, up 363504 from integration/0.7 bb0bb3c's dist build (38463168).
+38826672
