@@ -128,6 +128,9 @@ pub const CHOICES: &[(&str, &str, &[&str])] = &[
     ("kc_grep_ast", "lang", &["csharp", "typescript", "javascript", "python", "rust", "swift"]),
     ("kc_note_add", "tag", &["decision", "gotcha", "todo"]),
     ("kc_rules", "format", &["json", "sarif"]),
+    ("kc_path", "format", &["tree", "json", "mermaid"]),
+    ("kc_flow", "format", &["tree", "json", "mermaid"]),
+    ("kc_areas", "format", &["json", "mermaid"]),
     ("*", "format", &["tree", "json"]),
     ("*", "cite", &["brief", "lines", "check", "none"]),
 ];
@@ -501,7 +504,7 @@ pub struct PathParams {
     /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
-    /// `tree` (default) or `json`.
+    /// `tree` (default), `json`, or `mermaid` (a diagram of the paths).
     #[serde(default)]
     pub format: Option<String>,
     #[serde(flatten)]
@@ -533,7 +536,7 @@ pub struct FlowParams {
     /// `brief` (default): first 12 rows quote a line, all checked vs the index; `lines`: every row; `check`; `none`.
     #[serde(default)]
     pub cite: Option<String>,
-    /// `tree` (default) or `json`.
+    /// `tree` (default), `json`, or `mermaid` (a diagram of the steps).
     #[serde(default)]
     pub format: Option<String>,
     #[serde(flatten)]
@@ -819,6 +822,9 @@ pub struct AreasParams {
     /// One area (id, name or directory): it and its files.
     #[serde(default)]
     pub area: Option<String>,
+    /// `json` (default), or `mermaid`: a diagram of the areas and their dependencies.
+    #[serde(default)]
+    pub format: Option<String>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -1724,6 +1730,23 @@ fn header(env: &Value, complete: bool) -> String {
     // Why the answer is incomplete (files that could not be read, lists cut), and the other repos it consulted.
     let notes = crate::ops::freshness_notes(env).into_iter().filter(|n| !(clean && n.starts_with("also consulted: ")));
     notes.fold(head, |h, n| format!("{h}{n}\n"))
+}
+
+/// Runs a walk or areas operation and answers with its Mermaid diagram (see [`crate::diagram`]): whole, whatever
+/// `max_chars` says, since a cut diagram doesn't parse; the walk's own limits bound it. What the answer says about
+/// itself (its repo, whether it is complete and why not) comes as comments in the diagram.
+async fn run_mermaid(op: &'static str, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
+    let env = blocking(false, move || {
+        let mut env = f()?;
+        ops::add_cuts(&mut env);
+        crate::contract::finish(&mut env);
+        Ok(env)
+    })
+    .await?;
+    note(&recording(), &env);
+    let complete = env["complete"].as_bool() != Some(false);
+    let lines: Vec<String> = header(&env, complete).lines().map(str::to_string).collect();
+    Ok(crate::diagram::commented(&crate::diagram::mermaid(op, &env).unwrap_or_default(), &lines))
 }
 
 /// `text` within `max` characters, cut on a line boundary, ending with what was cut and how to get it.
@@ -2649,7 +2672,8 @@ impl KnowcodeServer {
             Some(r) => self.scope(&Common { repo: Some(r.clone()), max_chars: None }, false)?.repos.into_iter().next(),
             None => None,
         };
-        let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
+        let mermaid = p.format.as_deref() == Some("mermaid");
+        let tree = mermaid || WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
         let mode = cite_mode(p.cite.as_deref())?;
         let path = move || {
             cite(mode);
@@ -2666,7 +2690,9 @@ impl KnowcodeServer {
             };
             crate::walk::path(&p.from, &p.to, to_repo.as_deref(), &opts, &scope)
         };
-        if tree {
+        if mermaid {
+            run_mermaid("path", move || Ok(path()?.env)).await
+        } else if tree {
             run_text(p.common.max_chars, move || {
                 let out = path()?;
                 Ok((out.env, crate::render::path_text(&out.data)))
@@ -2696,7 +2722,8 @@ impl KnowcodeServer {
     #[tool(description = "What runs end to end from an entry point (route, component, action, method), step by step across repos.")]
     async fn kc_flow(&self, Parameters(p): Parameters<FlowParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
-        let tree = WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
+        let mermaid = p.format.as_deref() == Some("mermaid");
+        let tree = mermaid || WalkParams { format: p.format.clone(), ..Default::default() }.tree()?;
         let entry = p.entry.clone();
         let mode = cite_mode(p.cite.as_deref())?;
         let flow = move || {
@@ -2710,7 +2737,9 @@ impl KnowcodeServer {
             };
             crate::flow::flow(&p.entry, &opts, &scope)
         };
-        if tree {
+        if mermaid {
+            run_mermaid("flow", move || Ok(flow()?.env)).await
+        } else if tree {
             run_text(p.common.max_chars, move || {
                 let out = flow()?;
                 Ok((out.env, crate::render::flow_text(&entry, out.data.as_ref())))
@@ -2909,7 +2938,11 @@ impl KnowcodeServer {
     #[tool(description = "A repo's functional areas: files clustered by references, co-change and directory.")]
     async fn kc_areas(&self, Parameters(p): Parameters<AreasParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
-        run(p.common.max_chars, move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await
+        match p.format.as_deref() {
+            None | Some("json") => run(p.common.max_chars, move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await,
+            Some("mermaid") => run_mermaid("areas", move || Ok(ops::areas(p.area.as_deref(), &scope)?.env)).await,
+            Some(other) => Err(ToolError::new(Code::InvalidArgument, format!("format must be json or mermaid, not {other}"))),
+        }
     }
 
     #[tool(description = "Notes on symbols, each current, stale or orphaned.")]

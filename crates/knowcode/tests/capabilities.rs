@@ -193,6 +193,7 @@ fn check_answer(op: &str, entry: &Value, args: &Value, text: &str) {
             let v: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("{op} {args}: {e}: {text}"));
             assert_eq!(v["version"], "2.1.0", "{op} {args}: a SARIF log: {text}");
         }
+        "mermaid" => assert!(text.starts_with("flowchart "), "{op} {args}: a Mermaid flowchart: {text}"),
         _ => {
             let v: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("{op} {args}: {e}: {text}"));
             for k in out["keys"].as_array().unwrap() {

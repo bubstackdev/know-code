@@ -7,6 +7,7 @@ mod contract;
 mod compact;
 mod cursor;
 mod sarif;
+mod diagram;
 #[cfg(test)]
 mod completeness;
 mod fetch;
@@ -327,6 +328,9 @@ enum Cmd {
         evidence: String,
         #[command(flatten)]
         cite: CiteArgs,
+        /// `text` (default), or `mermaid`: a Mermaid diagram of the paths, each edge with its confidence.
+        #[arg(long, default_value = "text")]
+        format: String,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -361,6 +365,9 @@ enum Cmd {
         evidence: String,
         #[command(flatten)]
         cite: CiteArgs,
+        /// `text` (default), or `mermaid`: a Mermaid diagram of the steps, each edge with its confidence.
+        #[arg(long, default_value = "text")]
+        format: String,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -546,6 +553,9 @@ enum Cmd {
         /// One area: its id, name or directory (or a fragment of one name).
         #[arg(long)]
         area: Option<String>,
+        /// `text` (default), or `mermaid`: a Mermaid diagram of the areas and what each depends on.
+        #[arg(long, default_value = "text")]
+        format: String,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -1132,17 +1142,23 @@ fn run(cli: Cli) -> Result<()> {
                 }
             })
         }
-        Cmd::Path { from, to, to_repo, max_hops, paths, max_nodes, max_repos, one_way, allow_ambiguous, edges, evidence, cite, repo } => {
+        Cmd::Path { from, to, to_repo, max_hops, paths, max_nodes, max_repos, one_way, allow_ambiguous, edges, evidence, cite, format, repo } => {
             cite.enter();
             let edges = ops::edge_filter(&edges, &evidence)?;
             let opts = walk::PathOptions { max_hops, max_nodes, max_repos, paths, one_way, allow_ambiguous, edges, from_skip: 0, to_skip: 0 };
             let out = walk::path(&from, &to, to_repo.as_deref(), &opts, &repo.scope())?;
+            if wants_mermaid(&format)? {
+                return emit_mermaid("path", &out.env);
+            }
             emit(&repo, &out.env, || render::path(&out.data))
         }
-        Cmd::Flow { entry, depth, limit, max_repos, edges, children, evidence, cite, repo } => {
+        Cmd::Flow { entry, depth, limit, max_repos, edges, children, evidence, cite, format, repo } => {
             cite.enter();
             let opts = flow::FlowOptions { depth: depth.clamp(1, flow::MAX_DEPTH), max_steps: limit, max_repos, edges: ops::edge_filter(&edges, &evidence)?, children };
             let out = flow::flow(&entry, &opts, &repo.scope())?;
+            if wants_mermaid(&format)? {
+                return emit_mermaid("flow", &out.env);
+            }
             emit(&repo, &out.env, || render::flow(&entry, out.data.as_ref()))
         }
         Cmd::Impact { symbol, file, diff, depth, limit, order, as_of, since, filter, cite, repo } => {
@@ -1197,8 +1213,11 @@ fn run(cli: Cli) -> Result<()> {
             let out = ops::overview(&repo.scope(), focus.as_deref(), map_budget)?;
             emit(&repo, &out.env, || render::overview(&out.env))
         }
-        Cmd::Areas { area, repo } => {
+        Cmd::Areas { area, format, repo } => {
             let out = ops::areas(area.as_deref(), &repo.scope())?;
+            if wants_mermaid(&format)? {
+                return emit_mermaid("areas", &out.env);
+            }
             emit(&repo, &out.env, || render::areas(&out.data, area.as_deref(), &out.env))
         }
         Cmd::Note { action: NoteCmd::Add { symbol, text, tag, repo } } => {
@@ -1472,6 +1491,33 @@ impl RepoArgs {
 
 /// Prints the JSON envelope with `--json`, else the text rendering, followed by what the envelope says is stale or
 /// missing (files that could not be read).
+/// Whether `--format` asks for a Mermaid diagram (`mermaid`) rather than text (`text`).
+fn wants_mermaid(format: &str) -> Result<bool> {
+    match format {
+        "text" => Ok(false),
+        "mermaid" => Ok(true),
+        other => anyhow::bail!("--format is text or mermaid, not {other}"),
+    }
+}
+
+/// Prints an answer as its Mermaid diagram, with what the answer says about itself (freshness, what it left out) as
+/// comments, so the output stays a valid diagram.
+fn emit_mermaid(op: &str, env: &serde_json::Value) -> Result<()> {
+    let mut env = env.clone();
+    ops::add_cuts(&mut env);
+    contract::finish(&mut env);
+    let mut lines: Vec<String> = ops::freshness_notes(&env);
+    if env["complete"].as_bool() == Some(false) {
+        for i in contract::incomplete_of(&env) {
+            if !lines.iter().any(|l| l.contains(&i.detail)) {
+                lines.push(format!("incomplete ({}): {}", i.reason.as_str(), i.detail));
+            }
+        }
+    }
+    print!("{}", diagram::commented(&diagram::mermaid(op, &env).unwrap_or_default(), &lines));
+    Ok(())
+}
+
 fn emit(args: &RepoArgs, env: &serde_json::Value, text: impl FnOnce()) -> Result<()> {
     let mut env = env.clone();
     ops::add_cuts(&mut env);

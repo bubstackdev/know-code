@@ -17,6 +17,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   labels, with the same count of new matches at every commit.
 - The `kc` op `rules` (`kc_rules`, served on request) answers the same, with `format: sarif` for a SARIF log. It reads
   rule files only from inside the repo.
+- `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
+  shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
+  answer left out as comments.
 
 ## 0.6.1 (2026-10-28)
 
