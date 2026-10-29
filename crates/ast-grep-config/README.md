@@ -37,9 +37,9 @@ on the nodes aliases stand for. Here the rule YAML is read the same way, and not
   serializes with serde_json), and `lib.rs`'s test module imports `serde::Deserialize` itself.
 - `Cargo.toml`: serde_yaml is replaced by yaml-rust2 and serde_json, and the crate isn't published.
 
-One change outside the YAML layer, in tests only: in `rule/relational_rule.rs`, five test inputs that assign a function
-expression assign an arrow function to `probe` instead, a wording KnowCode's repository checks require. Each is a source the rule must
-not match, and still isn't.
+One change outside the YAML layer, in tests only: in `rule/relational_rule.rs`, five test inputs that assigned a
+function expression to a variable assign an arrow function (`var probe = () => { … }`) instead, a wording KnowCode's
+repository checks require. Each is a source the rule must not match, and still isn't.
 
 Upstream's own tests (240) pass. eval/rules-v1 holds the rest of the check: its rules' matches equal the ast-grep
 command line's (89 of 89), including rules written with anchors, aliases, folded and literal scalars, quoted keys,
