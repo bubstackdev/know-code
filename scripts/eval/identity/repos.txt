@@ -12,3 +12,10 @@ hono typescript https://github.com/honojs/hono 5ca49b0720755c585c9a9835f0a479cee
 cobra go https://github.com/spf13/cobra adbc8813901bba65827259daa8e22ff94ec1f30e
 chi go https://github.com/go-chi/chi 9f8adb1aabaa8a91180a821111d3f8e668d1c0bf
 gin go https://github.com/gin-gonic/gin 0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646
+# identity-v2, Java and Kotlin (eval/identity-v2): pinned at their heads on 2026-10-29. moshi mixes the two languages.
+gson jvm https://github.com/google/gson 57731049da3e415be3d5d34db1ca3b80f3c73810
+commons-lang jvm https://github.com/apache/commons-lang 5ebe419f3bffd4e451bcdf737dfe3d56871af821
+spring-petclinic jvm https://github.com/spring-projects/spring-petclinic 500158f732419217507c7656904b8e6aa1bcc0d6
+moshi jvm https://github.com/square/moshi 889013ec2edb8d8034902662a1dc8c4f3b3f8111
+kotlinpoet jvm https://github.com/square/kotlinpoet 38990a0bfb9ee00061ff3e4bc3a7f8c58d8c264f
+spring-petclinic-kotlin jvm https://github.com/spring-petclinic/spring-petclinic-kotlin 817dba3b02261e4291f138d5d8bb8c85c7d49758
