@@ -25,6 +25,7 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, ImportBinding, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind, Unsupported};
 
+mod client;
 mod http;
 
 pub const VERSION: u32 = 2;

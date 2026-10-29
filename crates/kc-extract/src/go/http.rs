@@ -74,7 +74,7 @@ fn pattern(p: &str) -> (String, String) {
 
 impl<'a> Cx<'a> {
     /// The framework an import qualifier (`gin`, `chi`, an alias) names in this file.
-    fn fw_of(&self, q: &str) -> Option<Fw> {
+    pub(super) fn fw_of(&self, q: &str) -> Option<Fw> {
         self.frameworks.iter().find(|(name, _)| name == q).map(|(_, fw)| *fw)
     }
 
@@ -193,7 +193,7 @@ impl<'a> Cx<'a> {
         });
     }
 
-    fn unsupported_route(&mut self, style: &str, why: &str, at: Node) {
+    pub(super) fn unsupported_route(&mut self, style: &str, why: &str, at: Node) {
         self.facts.unsupported.push(Unsupported { area: "http", construct: format!("{style}: {why}"), line: line(at) });
     }
 
@@ -252,6 +252,9 @@ impl<'a> Cx<'a> {
         }
         let (Some(operand), Some(field)) = (f.child_by_field_name("operand"), f.child_by_field_name("field")) else { return };
         let method = self.text(field);
+        if self.client_call(call, operand, method, &args) {
+            return;
+        }
         // `http.HandleFunc(…)`: the default ServeMux.
         let router = if operand.kind() == "identifier"
             && self.local(self.text(operand)).is_none()
@@ -371,7 +374,7 @@ impl<'a> Cx<'a> {
     }
 
     /// The method a `net/http` constant names: `http.MethodGet` is `GET`.
-    fn method_constant(&self, n: Node) -> Option<String> {
+    pub(super) fn method_constant(&self, n: Node) -> Option<String> {
         let operand = n.child_by_field_name("operand")?;
         let field = self.text(n.child_by_field_name("field")?);
         (self.fw_of(self.text(operand)) == Some(Fw::NetHttp)).then(|| field.strip_prefix("Method").map(str::to_uppercase)).flatten()
