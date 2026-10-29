@@ -1,0 +1,89 @@
+{"end": 160, "file": "python/billing.py", "message": "numeric-looking id, a \"quoted\" message, and a\ttab", "rule": "123", "severity": "hint", "start": 136}
+{"end": 466, "file": "python/billing.py", "message": "numeric-looking id, a \"quoted\" message, and a\ttab", "rule": "123", "severity": "hint", "start": 458}
+{"end": 104, "file": "python/report.py", "message": "numeric-looking id, a \"quoted\" message, and a\ttab", "rule": "123", "severity": "hint", "start": 96}
+{"end": 186, "file": "python/report.py", "message": "numeric-looking id, a \"quoted\" message, and a\ttab", "rule": "123", "severity": "hint", "start": 172}
+{"end": 333, "file": "csharp/OrderService.cs", "message": "async void method Refresh", "rule": "cs-async-void", "severity": "error", "start": 204}
+{"end": 442, "file": "csharp/OrderService.cs", "message": "async void method OnTick", "rule": "cs-async-void", "severity": "error", "start": 343}
+{"end": 742, "file": "csharp/Ledger.cs", "message": "Blocking on CountAsync().Result", "rule": "cs-blocking-result", "severity": "warning", "start": 723}
+{"end": 284, "file": "csharp/OrderService.cs", "message": "Blocking on LoadAsync().Result", "rule": "cs-blocking-result", "severity": "warning", "start": 266}
+{"end": 961, "file": "csharp/OrderService.cs", "message": "catch with a typed exception", "rule": "cs-catch-context", "severity": "hint", "start": 834}
+{"end": 890, "file": "csharp/Ledger.cs", "message": "Console call", "rule": "cs-console-in-loop-free-method", "severity": "info", "start": 864}
+{"end": 936, "file": "csharp/Ledger.cs", "message": "Console call", "rule": "cs-console-in-loop-free-method", "severity": "info", "start": 904}
+{"end": 322, "file": "csharp/OrderService.cs", "message": "Console call", "rule": "cs-console-in-loop-free-method", "severity": "info", "start": 298}
+{"end": 923, "file": "csharp/OrderService.cs", "message": "Console call", "rule": "cs-console-in-loop-free-method", "severity": "info", "start": 895}
+{"end": 688, "file": "csharp/OrderService.cs", "message": "Empty catch block", "rule": "cs-empty-catch", "severity": "hint", "start": 643}
+{"end": 961, "file": "csharp/OrderService.cs", "message": "Empty catch block", "rule": "cs-empty-catch", "severity": "hint", "start": 834}
+{"end": 253, "file": "csharp/Ledger.cs", "message": "first parameter", "rule": "cs-first-param", "severity": "hint", "start": 239}
+{"end": 840, "file": "csharp/Ledger.cs", "message": "first parameter", "rule": "cs-first-param", "severity": "hint", "start": 826}
+{"end": 374, "file": "csharp/OrderService.cs", "message": "first parameter", "rule": "cs-first-param", "severity": "hint", "start": 361}
+{"end": 1039, "file": "csharp/OrderService.cs", "message": "first parameter", "rule": "cs-first-param", "severity": "hint", "start": 1033}
+{"end": 347, "file": "csharp/Ledger.cs", "message": "if without braces", "rule": "cs-if-without-braces", "severity": "hint", "start": 277}
+{"end": 1300, "file": "csharp/OrderService.cs", "message": "if without braces", "rule": "cs-if-without-braces", "severity": "hint", "start": 1274}
+{"end": 1121, "file": "csharp/OrderService.cs", "message": "new HttpClient in method Name", "rule": "cs-no-new-httpclient", "severity": "warning", "start": 1076}
+{"end": 742, "file": "csharp/Ledger.cs", "message": "sync over async (CountAsync())", "rule": "cs-result-or-getresult", "severity": "warning", "start": 723}
+{"end": 782, "file": "csharp/Ledger.cs", "message": "sync over async (CountAsync())", "rule": "cs-result-or-getresult", "severity": "warning", "start": 745}
+{"end": 947, "file": "csharp/OrderService.cs", "message": "throw follows a log line", "rule": "cs-throw-after-log", "severity": "hint", "start": 941}
+{"end": 366, "file": "python/billing.py", "message": "bare except", "rule": "py-bare-except", "severity": "error", "start": 342}
+{"end": 466, "file": "python/billing.py", "message": "bare except", "rule": "py-bare-except", "severity": "error", "start": 425}
+{"end": 597, "file": "python/billing.py", "message": "comparison to None with ==", "rule": "py-eq-none", "severity": "hint", "start": 588}
+{"end": 557, "file": "python/billing.py", "message": "eval call", "rule": "py-eval", "severity": "error", "start": 548}
+{"end": 249, "file": "python/report.py", "message": "compare len to zero", "rule": "py-len-zero", "severity": "hint", "start": 235}
+{"end": 76, "file": "python/billing.py", "message": "mutable default for lines", "rule": "py-mutable-default", "severity": "warning", "start": 68}
+{"end": 578, "file": "python/billing.py", "message": "mutable default for y", "rule": "py-mutable-default", "severity": "warning", "start": 574}
+{"end": 160, "file": "python/billing.py", "message": "print call", "rule": "py-no-print", "severity": "hint", "start": 136}
+{"end": 466, "file": "python/billing.py", "message": "print call", "rule": "py-no-print", "severity": "hint", "start": 458}
+{"end": 104, "file": "python/report.py", "message": "print call", "rule": "py-no-print", "severity": "hint", "start": 96}
+{"end": 104, "file": "python/report.py", "message": "print inside a for loop", "rule": "py-print-in-loop", "severity": "hint", "start": 96}
+{"end": 532, "file": "python/billing.py", "message": "shell=True", "rule": "py-shell-true", "severity": "error", "start": 500}
+{"end": 514, "file": "rust/ledger.rs", "message": "expect", "rule": "rs-expect", "severity": "hint", "start": 476}
+{"end": 713, "file": "rust/ledger.rs", "message": "panic! left in", "rule": "rs-macros", "severity": "error", "start": 695}
+{"end": 207, "file": "rust/main.rs", "message": "dbg! left in", "rule": "rs-macros", "severity": "error", "start": 196}
+{"end": 220, "file": "rust/main.rs", "message": "todo! left in", "rule": "rs-macros", "severity": "error", "start": 213}
+{"end": 409, "file": "rust/ledger.rs", "message": "unwrap on self.entries.get(key)", "rule": "rs-no-unwrap", "severity": "warning", "start": 379}
+{"end": 661, "file": "rust/ledger.rs", "message": "unwrap on self.entries.values().next()", "rule": "rs-no-unwrap", "severity": "warning", "start": 624}
+{"end": 117, "file": "rust/main.rs", "message": "unwrap on args.get(1)", "rule": "rs-no-unwrap", "severity": "warning", "start": 97}
+{"end": 548, "file": "rust/ledger.rs", "message": "println", "rule": "rs-println", "severity": "hint", "start": 524}
+{"end": 190, "file": "rust/main.rs", "message": "println", "rule": "rs-println", "severity": "hint", "start": 169}
+{"end": 415, "file": "rust/ledger.rs", "message": "public fn returns i64", "rule": "rs-pub-fn-returning-i64", "severity": "hint", "start": 332}
+{"end": 565, "file": "rust/ledger.rs", "message": "public fn returns i64", "rule": "rs-pub-fn-returning-i64", "severity": "hint", "start": 421}
+{"end": 973, "file": "rust/ledger.rs", "message": "unwrap_or in tests module", "rule": "rs-unwrap-in-test-mod", "severity": "hint", "start": 959}
+{"end": 694, "file": "swift/Account.swift", "message": "empty catch", "rule": "swift-empty-catch", "severity": "hint", "start": 677}
+{"end": 237, "file": "swift/Report.swift", "message": "force cast", "rule": "swift-force-cast", "severity": "hint", "start": 216}
+{"end": 346, "file": "swift/Account.swift", "message": "force try", "rule": "swift-force-try", "severity": "error", "start": 320}
+{"end": 471, "file": "swift/Account.swift", "message": "force unwrap", "rule": "swift-force-unwrap", "severity": "warning", "start": 459}
+{"end": 582, "file": "swift/Account.swift", "message": "main queue async", "rule": "swift-main-async", "severity": "hint", "start": 505}
+{"end": 228, "file": "swift/Account.swift", "message": "print call", "rule": "swift-print", "severity": "hint", "start": 202}
+{"end": 115, "file": "swift/Report.swift", "message": "print call", "rule": "swift-print", "severity": "hint", "start": 97}
+{"end": 767, "file": "ts/cart.ts", "message": "any type", "rule": "ts-any-type", "severity": "hint", "start": 764}
+{"end": 713, "file": "ts/cart.ts", "message": "arrow passed to items.find", "rule": "ts-arrow-in-call", "severity": "hint", "start": 694}
+{"end": 307, "file": "ts/store.ts", "message": "arrow passed to this.listeners.filter", "rule": "ts-arrow-in-call", "severity": "hint", "start": 292}
+{"end": 415, "file": "ts/store.ts", "message": "arrow passed to this.listeners.forEach", "rule": "ts-arrow-in-call", "severity": "hint", "start": 395}
+{"end": 458, "file": "ts/store.ts", "message": "arrow passed to setTimeout", "rule": "ts-arrow-in-call", "severity": "hint", "start": 433}
+{"end": 497, "file": "ts/cart.ts", "message": "await in async method", "rule": "ts-await-in-method", "severity": "hint", "start": 449}
+{"end": 221, "file": "ts/cart.ts", "message": "console call in method add", "rule": "ts-console-in-method", "severity": "hint", "start": 190}
+{"end": 374, "file": "ts/cart.ts", "message": "console call in method total", "rule": "ts-console-in-method", "severity": "hint", "start": 358}
+{"end": 458, "file": "ts/store.ts", "message": "console call in method set", "rule": "ts-console-in-method", "severity": "hint", "start": 439}
+{"end": 524, "file": "ts/cart.ts", "message": "Use === instead of ==", "rule": "ts-loose-equality", "severity": "error", "start": 507}
+{"end": 713, "file": "ts/cart.ts", "message": "Use === instead of ==", "rule": "ts-loose-equality", "severity": "error", "start": 701}
+{"end": 221, "file": "ts/cart.ts", "message": "console.log(\"adding\", item.sku)", "rule": "ts-no-console-log", "severity": "warning", "start": 190}
+{"end": 374, "file": "ts/cart.ts", "message": "console.log(sum)", "rule": "ts-no-console-log", "severity": "warning", "start": 358}
+{"end": 543, "file": "ts/cart.ts", "message": "debugger statement", "rule": "ts-no-debugger", "severity": "error", "start": 534}
+{"end": 809, "file": "ts/cart.ts", "message": "var declaration", "rule": "ts-no-var", "severity": "hint", "start": 794}
+{"end": 227, "file": "ts/store.ts", "message": "push before return", "rule": "ts-push-then-return", "severity": "hint", "start": 203}
+{"end": 462, "file": "ts/store.ts", "message": "setTimeout with ${{ DELAY }}", "rule": "ts-template-message", "severity": "hint", "start": 422}
+{"end": 113, "file": "ts/view.tsx", "message": "console call in component Badge", "rule": "tsx-console-in-component", "severity": "hint", "start": 86}
+{"end": 366, "file": "ts/view.tsx", "message": "generic construction", "rule": "tsx-generic-new", "severity": "hint", "start": 346}
+{"end": 296, "file": "ts/view.tsx", "message": "element in map without key", "rule": "tsx-map-without-key", "severity": "warning", "start": 284}
+{"end": 221, "file": "ts/cart.ts", "message": "console call in a method", "rule": "yaml-anchor-console", "severity": "warning", "start": 190}
+{"end": 374, "file": "ts/cart.ts", "message": "console call in a method", "rule": "yaml-anchor-console", "severity": "warning", "start": 358}
+{"end": 458, "file": "ts/store.ts", "message": "console call in a method", "rule": "yaml-anchor-console", "severity": "warning", "start": 439}
+{"end": 207, "file": "rust/main.rs", "message": "42", "rule": "yaml-flow", "severity": "hint", "start": 196}
+{"end": 220, "file": "rust/main.rs", "message": "42", "rule": "yaml-flow", "severity": "hint", "start": 213}
+{"end": 890, "file": "csharp/Ledger.cs", "message": "Console call, any form", "rule": "yaml-flow-seq", "severity": "hint", "start": 864}
+{"end": 936, "file": "csharp/Ledger.cs", "message": "Console call, any form", "rule": "yaml-flow-seq", "severity": "hint", "start": 904}
+{"end": 322, "file": "csharp/OrderService.cs", "message": "Console call, any form", "rule": "yaml-flow-seq", "severity": "hint", "start": 298}
+{"end": 923, "file": "csharp/OrderService.cs", "message": "Console call, any form", "rule": "yaml-flow-seq", "severity": "hint", "start": 895}
+{"end": 228, "file": "swift/Account.swift", "message": "first statement", "rule": "yaml-nthchild-number", "severity": "hint", "start": 202}
+{"end": 582, "file": "swift/Account.swift", "message": "first statement", "rule": "yaml-nthchild-number", "severity": "hint", "start": 505}
+{"end": 572, "file": "swift/Account.swift", "message": "first statement", "rule": "yaml-nthchild-number", "severity": "hint", "start": 544}
+{"end": 115, "file": "swift/Report.swift", "message": "first statement", "rule": "yaml-nthchild-number", "severity": "hint", "start": 97}

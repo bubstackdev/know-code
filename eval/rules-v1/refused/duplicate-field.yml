@@ -1,0 +1,5 @@
+id: dup
+language: TypeScript
+rule:
+  kind: debugger_statement
+  kind: return_statement

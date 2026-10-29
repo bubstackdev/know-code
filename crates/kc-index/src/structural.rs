@@ -24,14 +24,14 @@ use crate::search::{self, CandidateStats, ScanFile, content_lang, path_glob};
 
 /// A tree-sitter grammar as an ast-grep language.
 #[derive(Clone)]
-struct Grammar {
+pub(crate) struct Grammar {
     ts: TSLanguage,
     /// What `$` becomes before the pattern is parsed: grammars where `$` can't start an identifier get `µ`.
     expando: char,
 }
 
 impl Grammar {
-    fn new(lang: Lang) -> Option<Grammar> {
+    pub(crate) fn new(lang: Lang) -> Option<Grammar> {
         let ts = kc_extract::grammar(lang)?;
         let expando = if matches!(lang, Lang::TypeScript | Lang::Tsx | Lang::JavaScript) { '$' } else { 'µ' };
         Some(Grammar { ts, expando })

@@ -1,0 +1,115 @@
+id: cs-blocking-result
+language: CSharp
+severity: warning
+message: Blocking on $T.Result
+rule:
+  pattern: $T.Result
+---
+id: cs-async-void
+language: csharp
+severity: error
+message: async void method $M
+rule:
+  kind: method_declaration
+  has:
+    kind: modifier
+    regex: ^async$
+  all:
+    - has:
+        field: returns
+        regex: ^void$
+    - has:
+        field: name
+        pattern: $M
+---
+id: cs-empty-catch
+language: cs
+message: Empty catch block
+rule:
+  kind: catch_clause
+  has:
+    field: body
+    kind: block
+    not:
+      has:
+        kind: statement
+        stopBy: neighbor
+---
+id: cs-no-new-httpclient
+language: CSharp
+severity: warning
+message: new HttpClient in method $NAME
+rule:
+  pattern: new HttpClient($$$)
+  inside:
+    kind: method_declaration
+    stopBy: end
+    has:
+      field: name
+      pattern: $NAME
+---
+id: cs-console-in-loop-free-method
+language: CSharp
+severity: info
+message: Console call
+rule:
+  any:
+    - pattern: Console.WriteLine($$$)
+    - pattern: Console.Error.WriteLine($$$)
+  not:
+    inside:
+      kind: foreach_statement
+      stopBy: end
+---
+id: cs-if-without-braces
+language: CSharp
+message: if without braces
+rule:
+  kind: if_statement
+  has:
+    field: consequence
+    not:
+      kind: block
+---
+id: cs-throw-after-log
+language: CSharp
+message: throw follows a log line
+rule:
+  kind: throw_statement
+  follows:
+    kind: expression_statement
+    has:
+      pattern: Console.WriteLine($$$)
+      stopBy: end
+---
+id: cs-result-or-getresult
+language: CSharp
+severity: warning
+message: sync over async ($A)
+utils:
+  sync-wait:
+    any:
+      - pattern: $A.Result
+      - pattern: $A.GetAwaiter().GetResult()
+rule:
+  matches: sync-wait
+  inside:
+    kind: method_declaration
+    stopBy: end
+files:
+  - "**/Ledger.cs"
+---
+id: cs-first-param
+language: CSharp
+message: first parameter
+rule:
+  kind: parameter
+  nthChild: 1
+---
+id: cs-catch-context
+language: CSharp
+message: catch with a typed exception
+rule:
+  pattern:
+    context: try { } catch ($T $E) { $$$ }
+    selector: catch_clause

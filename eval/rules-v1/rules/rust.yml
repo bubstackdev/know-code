@@ -1,0 +1,60 @@
+id: rs-no-unwrap
+language: Rust
+severity: warning
+message: unwrap on $X
+rule:
+  pattern: $X.unwrap()
+  not:
+    inside:
+      kind: function_item
+      stopBy: end
+      follows:
+        pattern: "#[test]"
+        stopBy: neighbor
+---
+id: rs-expect
+language: rs
+message: expect
+rule:
+  pattern: $X.expect($MSG)
+---
+id: rs-macros
+language: Rust
+severity: error
+message: $M! left in
+rule:
+  kind: macro_invocation
+  has:
+    field: macro
+    regex: ^(dbg|todo|panic)$
+    pattern: $M
+---
+id: rs-println
+language: Rust
+message: println
+rule:
+  pattern: println!($$$)
+---
+id: rs-unwrap-in-test-mod
+language: Rust
+message: unwrap_or in tests module
+rule:
+  pattern: $X.unwrap_or($Y)
+  inside:
+    kind: mod_item
+    stopBy: end
+    has:
+      field: name
+      regex: ^tests$
+---
+id: rs-pub-fn-returning-i64
+language: Rust
+message: public fn returns i64
+rule:
+  kind: function_item
+  all:
+    - has:
+        kind: visibility_modifier
+    - has:
+        field: return_type
+        regex: ^i64$

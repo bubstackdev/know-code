@@ -1,0 +1,3 @@
+id: tagged
+language: TypeScript
+rule: !Pattern console.log($$$)

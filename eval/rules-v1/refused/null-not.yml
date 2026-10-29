@@ -1,0 +1,5 @@
+id: null-not
+language: TypeScript
+rule:
+  kind: debugger_statement
+  not:

@@ -1,0 +1,9 @@
+# An alias names an anchor of its own document only.
+id: first
+language: TypeScript
+rule: &r
+  kind: debugger_statement
+---
+id: second
+language: Tsx
+rule: *r
