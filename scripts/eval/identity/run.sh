@@ -10,6 +10,8 @@
 # there, as IO/out/enumeration-REPO.jsonl.gz and IO/out/REPO.log. The container is removed afterwards.
 #
 # Images are pinned by digest (IMAGES below); CPUS (default 4) and MEMORY (default 12g) limit the container.
+# LABEL_ENCLOSING=1 adds compare-v1's `in` field to each reference row (eval/compare-v1/README.md); without it the
+# enumeration is identity-v1's.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -49,6 +51,7 @@ docker create --name "$NAME" --cpus "$CPUS" --memory "$MEMORY" --network bridge 
   -v "$(cd "$IO/in" && pwd):/in:ro" -v "$(cd "$IO/out" && pwd):/out" \
   -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 -e NUGET_XMLDOC_MODE=skip -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e npm_config_ignore_scripts=true -e npm_config_audit=false -e npm_config_fund=false \
+  -e LABEL_ENCLOSING="${LABEL_ENCLOSING:-0}" \
   --entrypoint sleep "$IMAGE" infinity >/dev/null
 docker start "$NAME" >/dev/null
 run() { docker exec "$NAME" bash -euo pipefail -c "$1"; }

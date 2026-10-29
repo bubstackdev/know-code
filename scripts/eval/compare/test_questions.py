@@ -52,5 +52,27 @@ class DrawTest(unittest.TestCase):
         self.assertIsNone(questions.bucket(201, questions.REFS_BUCKETS))
 
 
+class CheckTest(unittest.TestCase):
+    def test_identity_labels_drawn_again_ignore_the_new_field(self):
+        import gzip, json, tempfile
+        from pathlib import Path
+        # Two autofac references, one of them drawn; the committed set is the draw of the same rows without `in`.
+        rows = [dict(ref('M:Save', 'Save', 10, 'M:Load'), repo='autofac', symbol='Save', locs=[['a.cs', 3]], origin=None),
+                dict(decl('M:Save', 'Save', 3), repo='autofac')]
+        with tempfile.TemporaryDirectory() as d:
+            enum = Path(d)/'enumeration-autofac.jsonl.gz'
+            with gzip.open(enum, 'wt') as f:
+                f.write(''.join(json.dumps(r) + '\n' for r in rows))
+            import sys
+            sys.path.insert(0, str(questions.ROOT/'scripts/eval/identity'))
+            import sample
+            labels = sample.draw([{k: v for k, v in r.items() if k != 'in'} for r in rows], sample.languages())[0]
+            committed = Path(d)/'labels.jsonl'
+            committed.write_text(''.join(json.dumps(l) + '\n' for l in labels))
+            self.assertEqual(questions.check([enum], committed), ([], [], []))
+            committed.write_text(committed.read_text().replace('"line": 10', '"line": 11'))
+            self.assertNotEqual(questions.check([enum], committed), ([], [], []))
+
+
 if __name__ == '__main__':
     unittest.main()

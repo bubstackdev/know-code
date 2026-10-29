@@ -2,7 +2,8 @@
 """Draws compare-v1's questions and their labels from the toolchain enumerations (eval/compare-v1/README.md,
 "The draw").
 
-    questions.py ENUMERATION.jsonl.gz [...] --out eval/compare-v1/questions.jsonl --strata eval/compare-v1/strata.json
+    questions.py check ENUMERATION.jsonl.gz [...]        # the stop rule: identity-v1's labels drawn again, unchanged
+    questions.py draw ENUMERATION.jsonl.gz [...] --out eval/compare-v1/questions.jsonl --strata eval/compare-v1/strata.json
 
 Each enumeration is identity-v1's labeller output for one repository, with compare-v1's `in` field on each reference
 row: the key of the innermost enclosing declaration, or null at file level. The draw reads nothing else, so the same
@@ -16,6 +17,10 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[3]
+IDENTITY_LABELS = ROOT/'eval/identity-v1/labels.jsonl'
 
 REFS_MAX = 200
 REFS_QUOTA = 3
@@ -143,8 +148,43 @@ def read(path):
         return [json.loads(line) for line in f if line.strip()]
 
 
+def check(enumerations, committed=IDENTITY_LABELS):
+    """identity-v1's labels drawn again from enumerations that carry `in`: (missing, changed, added) label ids against
+    the committed set. compare-v1 uses the enumerations only when all three are empty."""
+    sys.path.insert(0, str(ROOT/'scripts/eval/identity'))
+    import sample
+    lang = sample.languages()
+    drawn = {}
+    for path in enumerations:
+        for label in sample.draw(read(path), lang)[0]:
+            drawn[label['id']] = label
+    want = {}
+    for line in Path(committed).read_text().splitlines():
+        if line.strip():
+            label = json.loads(line)
+            want[label['id']] = label
+    repos = {d['repo'] for d in drawn.values()}
+    want = {k: v for k, v in want.items() if v['repo'] in repos}
+    missing = sorted(want.keys() - drawn.keys())
+    changed = sorted(k for k in want.keys() & drawn.keys() if json.dumps(want[k], sort_keys=True) != json.dumps(drawn[k], sort_keys=True))
+    added = sorted(drawn.keys() - want.keys())
+    return missing, changed, added
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ['check']:
+        ap = argparse.ArgumentParser(prog='questions.py check')
+        ap.add_argument('enumerations', nargs='+', type=Path)
+        args = ap.parse_args(argv[1:])
+        missing, changed, added = check(args.enumerations)
+        for name, ids in (('missing', missing), ('changed', changed), ('added', added)):
+            for i in ids[:50]:
+                print(f'{name}: {i}')
+        print(f'{len(missing)} missing, {len(changed)} changed, {len(added)} added')
+        return 1 if missing or changed or added else 0
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('command', choices=['draw'])
     ap.add_argument('enumerations', nargs='+', type=Path)
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--strata', type=Path, required=True)
@@ -161,4 +201,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

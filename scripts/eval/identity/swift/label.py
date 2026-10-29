@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -18,6 +19,7 @@ import sys
 # indexstore.h: symbol roles and kinds.
 DECLARATION, DEFINITION, REFERENCE, CALL, IMPLICIT = 1 << 0, 1 << 1, 1 << 2, 1 << 5, 1 << 8
 REL_CHILD_OF = 1 << 9
+REL_CALLED_BY, REL_ACCESSOR_OF, REL_CONTAINED_BY = 1 << 13, 1 << 15, 1 << 16
 ENUM, STRUCT, CLASS, PROTOCOL, EXTENSION, TYPEALIAS = 5, 6, 7, 8, 9, 11
 CALLABLE = {12, 16, 17, 18}  # function, instance/class/static method
 MEMBER = {13, 14, 15, 19, 20, 21}  # variable, field, enum case, instance/class/static property
@@ -27,6 +29,8 @@ IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 STDLIB = {'Swift', '_Concurrency', '_StringProcessing', 'Foundation', 'FoundationEssentials',
           'FoundationInternationalization', 'Dispatch', 'Synchronization', 'XCTest', 'Testing', 'RegexBuilder',
           'Observation', 'Distributed'}
+# compare-v1 (eval/compare-v1/README.md) adds `in` to each reference row; identity-v1's output is unchanged without it.
+ENCLOSING = os.environ.get('LABEL_ENCLOSING') == '1'
 
 
 def base(name):
@@ -90,6 +94,12 @@ def enumerate_repo(repo, src, records):
                 parents = [r for r in o['rels'] if r['roles'] & REL_CHILD_OF]
                 d = defs.setdefault(o['usr'], dict(locs=set(), where=where, parent=None, name=o['name'],
                                                    kind=o['kind'], subkind=o['subkind']))
+                # compare-v1's `in` climbs from an accessor to its property and from a member to its type.
+                for r in o['rels']:
+                    if r['roles'] & REL_ACCESSOR_OF:
+                        d.setdefault('up', r['usr'])
+                    elif r['roles'] & REL_CHILD_OF:
+                        d.setdefault('up', r['usr'])
                 if where == 'inside':
                     d['where'] = 'inside'
                     d['locs'].add((rel, o['line']))
@@ -110,6 +120,7 @@ def enumerate_repo(repo, src, records):
         return m.group(0) if m else None
 
     out = []
+    counted = set()
     for usr, d in sorted(defs.items()):
         name = base(d['name'])
         if d['where'] != 'inside' or not name or d['subkind'] != 0 or not all(f.endswith('.swift') for f, _ in d['locs']):
@@ -119,7 +130,18 @@ def enumerate_repo(repo, src, records):
         if group:
             for f, ln in sorted(d['locs']):
                 out.append(dict(t='decl', repo=repo, name=name, key=usr, file=f, line=ln, decl=group))
+                counted.add(usr)
                 break
+
+    def enclosing(o):
+        """The innermost counted declaration around an occurrence: the symbol containing (or calling from) it, climbed
+        from an accessor to its property and from an initialiser or local to its type; None at file level."""
+        usr = next((r['usr'] for r in o['rels'] if r['roles'] & (REL_CONTAINED_BY | REL_CALLED_BY)), None)
+        steps = 0
+        while usr and usr not in counted and steps < 32:
+            usr = defs.get(usr, {}).get('up')
+            steps += 1
+        return usr if usr in counted else None
     # A member the compiler synthesises for one of the repository's types (an enum's `rawValue`, a memberwise
     # property) has no definition anywhere, but isn't outside: it isn't labelled.
     own_types = {usr for usr, d in defs.items() if d['where'] == 'inside' and d['kind'] in TYPE}
@@ -159,6 +181,8 @@ def enumerate_repo(repo, src, records):
             row.update(inside=False, locs=[], origin='package')
         else:
             row.update(inside=False, locs=[], origin='stdlib' if module_of(o['usr']) in STDLIB else 'sdk')
+        if ENCLOSING:
+            row['in'] = enclosing(o)
         out.append(row)
     return out
 
