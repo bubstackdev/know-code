@@ -9,6 +9,10 @@ bytes.
 This README, the labeller, the scorer and [reviews.jsonl](reviews.jsonl) were committed before any KnowCode answer on
 the set was read. Nothing here changes after a run. A change makes a new version, review-v2.
 
+`review` is tuned on a separate development set ([dev/](dev/README.md)), disjoint from this one by introducing
+commit, fix and file; [dev/commits.txt](dev/commits.txt) lists every commit tuning read. This set's answers are read
+once, for the gate.
+
 ## Reviews
 
 [review_labels.py](../../scripts/eval/review_labels.py) builds [reviews.jsonl](reviews.jsonl) from git, at tasks-v1's

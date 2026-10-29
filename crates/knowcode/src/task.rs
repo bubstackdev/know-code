@@ -107,10 +107,27 @@ pub fn task(p: &TaskParams, scope: &Scope) -> Result<Out<Value>> {
     let mut deps_total = 0;
     let mut deps_whole = true;
     let mut ambiguous = false;
+    // Each repo the walked files are in, opened once, with one symbol graph: the dependents walk of each file and the
+    // tests walk read every edge through it, each under its own evidence policy, so an edge is read once.
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for (root, _) in &walked {
+        if !roots.contains(root) {
+            roots.push(root.clone());
+        }
+    }
+    // A repo that doesn't open is left to `impact` and `tests` themselves, which say why as they always have.
+    let opened: Vec<Option<ops::Opened>> = roots.iter().map(|r| ops::open_member(std::slice::from_ref(r), r, scope.no_sync).ok().flatten()).collect();
+    let mut graphs: Vec<Option<crate::walk::Graph>> = opened.iter().map(|o| o.as_ref().map(|o| crate::walk::Graph::new(o, &[], scope.no_sync, usize::MAX))).collect();
+    let at = |root: &PathBuf| roots.iter().position(|r| r == root).unwrap_or(0);
     for (root, h) in &walked {
         let one = Scope { repos: vec![root.clone()], no_sync: scope.no_sync };
         let ip = ops::ImpactParams { file: Some(h.file.clone()), depth: 1, limit: 30, ..Default::default() };
-        let out = match ops::impact(&ip, &one) {
+        let i = at(root);
+        let got = match (&opened[i], graphs[i].as_mut()) {
+            (Some(o), Some(g)) => ops::impact_on(&ip, &one, o, g),
+            _ => ops::impact(&ip, &one),
+        };
+        let out = match got {
             Ok(out) => out,
             Err(e) => {
                 said(&mut unsettled, format!("{}: dependents not read ({e:#})", place(root, &h.file)));
@@ -167,9 +184,13 @@ pub fn task(p: &TaskParams, scope: &Scope) -> Result<Out<Value>> {
         }
     }
     for (root, targets) in &targets_by_root {
-        let one = Scope { repos: vec![root.clone()], no_sync: scope.no_sync };
         let tp = ops::TestsParams { targets: targets.clone(), diff: None, limit: p.tests, evidence: String::new() };
-        match ops::tests(&tp, &one) {
+        let i = at(root);
+        let got = match (&opened[i], graphs[i].as_mut()) {
+            (Some(o), Some(g)) => ops::tests_on(&tp, o, g),
+            _ => ops::tests(&tp, &Scope { repos: vec![root.clone()], no_sync: scope.no_sync }),
+        };
+        match got {
             Ok(out) => {
                 for r in &out.data {
                     tests_total += r.selection.selected.len() + r.selection.left_out.len();
@@ -183,6 +204,8 @@ pub fn task(p: &TaskParams, scope: &Scope) -> Result<Out<Value>> {
         }
     }
     tests.truncate(p.tests);
+    drop(graphs);
+    drop(opened);
 
     // The envelope `locate` made (repos, provenance, its own entries), with the sections.
     // The calls continuing each section, on the files listed first (said once, not a call per file).
@@ -324,5 +347,150 @@ mod tests {
         for key in ["items", "dependents", "tests"] {
             assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["next"].is_string(), "{key}: {env}");
         }
+    }
+
+    /// One symbol graph shared by the dependents walk (one hop, the default evidence policy) and the tests walk (five
+    /// hops, `all`), in either order, gives each the answer a graph of its own does: the edges cached by one walk carry
+    /// nothing of its gate into the other. The policies `new Disk()` names either of two same-named types both imported, and `all` walks past that ambiguous edge
+    /// to the test while the default doesn't.
+    #[test]
+    fn a_shared_graph_gives_each_walk_what_a_graph_of_its_own_does() {
+        let cache = test_cache();
+        let base = cache.dir("task-shared");
+        let root = repo(
+            &base,
+            "store",
+            &[
+                ("src/Store.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/Disk.cs", "namespace Store.Local;\npublic class Disk\n{\n    public void Save() { }\n}\n"),
+                ("src/Cloud.cs", "namespace Store.Remote;\npublic class Disk\n{\n    public void Save() { }\n}\n"),
+                ("src/Saver.cs", "using Store.Local;\nusing Store.Remote;\nnamespace Store;\npublic class Saver\n{\n    public void Run() { new Disk().Save(); }\n}\n"),
+                ("tests/SaverTests.cs", "namespace Store.Tests;\npublic class SaverTests\n{\n    public void Runs() { new Store.Saver().Run(); }\n}\n"),
+            ],
+        );
+        let s = Scope { repos: vec![root.clone()], no_sync: false };
+        let ip = ops::ImpactParams { file: Some("src/Disk.cs".into()), depth: 1, limit: 30, ..Default::default() };
+        let tp = ops::TestsParams { targets: vec!["src/Disk.cs".into()], diff: None, limit: 4, evidence: String::new() };
+        // The answers less the time their freshness check took.
+        let text = |mut env: Value| {
+            env.as_object_mut().unwrap().remove("freshness");
+            env.to_string()
+        };
+        let impact = text(ops::impact(&ip, &s).unwrap().env);
+        let tests = text(ops::tests(&tp, &s).unwrap().env);
+        assert!(tests.contains("tests/SaverTests.cs"), "{tests}");
+        let default = text(ops::tests(&ops::TestsParams { targets: tp.targets.clone(), diff: None, limit: 4, evidence: "default".into() }, &s).unwrap().env);
+        assert!(!default.contains("\"tests/SaverTests.cs\""), "{default}");
+        for tests_first in [false, true] {
+            let o = ops::open_member(std::slice::from_ref(&root), &root, false).unwrap().unwrap();
+            let mut g = crate::walk::Graph::new(&o, &[], false, usize::MAX);
+            let (mut got_impact, mut got_tests) = (String::new(), String::new());
+            for step in if tests_first { [true, false] } else { [false, true] } {
+                if step {
+                    got_tests = text(ops::tests_on(&tp, &o, &mut g).unwrap().env);
+                } else {
+                    got_impact = text(ops::impact_on(&ip, &s, &o, &mut g).unwrap().env);
+                }
+            }
+            assert_eq!(got_impact, impact, "impact, tests first: {tests_first}");
+            assert_eq!(got_tests, tests, "tests, tests first: {tests_first}");
+        }
+    }
+
+    /// A walk past the library-crossing budget and a walk within it, on one shared graph in either order, each give
+    /// the answer a graph of its own does: the budget is a walk's own, and what the graph caches (the references read
+    /// across the boundary) doesn't depend on it. A chain of five library methods, each called from an app depending on
+    /// the library: one hop looks up fewer crossings than the budget, five hops more.
+    #[test]
+    fn the_library_crossing_budget_is_each_walks_own_on_a_shared_graph() {
+        let cache = test_cache();
+        let base = cache.dir("task-shared-budget");
+        let lib = repo(
+            &base,
+            "ledger",
+            &[
+                ("src/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup><PackageId>Ledger</PackageId></PropertyGroup>\n</Project>\n"),
+                ("src/A.cs", "namespace Ledger;\npublic static class A\n{\n    public static void Post() { }\n}\n"),
+                ("src/B.cs", "namespace Ledger;\npublic static class B\n{\n    public static void Post() { A.Post(); }\n}\n"),
+                ("src/C.cs", "namespace Ledger;\npublic static class C\n{\n    public static void Post() { B.Post(); }\n}\n"),
+                ("src/D.cs", "namespace Ledger;\npublic static class D\n{\n    public static void Post() { C.Post(); }\n}\n"),
+                ("src/E.cs", "namespace Ledger;\npublic static class E\n{\n    public static void Post() { D.Post(); }\n}\n"),
+                ("tests/ETests.cs", "namespace Ledger.Tests;\npublic class ETests\n{\n    public void Posts() { Ledger.E.Post(); }\n}\n"),
+            ],
+        );
+        let _app = repo(
+            &base,
+            "ledger-app",
+            &[
+                ("src/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <ItemGroup><PackageReference Include=\"Ledger\" Version=\"1.*\" /></ItemGroup>\n</Project>\n"),
+                ("src/Books.cs", "using Ledger;\nnamespace App;\npublic class Books\n{\n    public void Close() { A.Post(); B.Post(); C.Post(); D.Post(); E.Post(); }\n}\n"),
+            ],
+        );
+        let s = Scope { repos: vec![lib.clone()], no_sync: false };
+        let near = ops::ImpactParams { file: Some("src/A.cs".into()), depth: 1, limit: 30, ..Default::default() };
+        let far = ops::ImpactParams { file: Some("src/A.cs".into()), depth: 5, limit: 30, ..Default::default() };
+        let tp = ops::TestsParams { targets: vec!["src/A.cs".into()], diff: None, limit: 4, evidence: String::new() };
+        let text = |mut env: Value| {
+            env.as_object_mut().unwrap().remove("freshness");
+            env.to_string()
+        };
+        let fresh = [text(ops::impact(&near, &s).unwrap().env), text(ops::impact(&far, &s).unwrap().env), text(ops::tests(&tp, &s).unwrap().env)];
+        // The budget cuts the five-hop walk and not the one-hop walk: the case the test is for.
+        let cut = |t: &str| t.contains("uses across a library boundary looked up for");
+        assert!(!cut(&fresh[0]) && cut(&fresh[1]), "{}\n{}", fresh[0], fresh[1]);
+        for order in [[0, 1, 2], [1, 0, 2], [2, 1, 0], [2, 0, 1]] {
+            let o = ops::open_member(std::slice::from_ref(&lib), &lib, false).unwrap().unwrap();
+            let mut g = crate::walk::Graph::new(&o, &[], false, usize::MAX);
+            let mut got = [String::new(), String::new(), String::new()];
+            for i in order {
+                got[i] = match i {
+                    0 => text(ops::impact_on(&near, &s, &o, &mut g).unwrap().env),
+                    1 => text(ops::impact_on(&far, &s, &o, &mut g).unwrap().env),
+                    _ => text(ops::tests_on(&tp, &o, &mut g).unwrap().env),
+                };
+            }
+            assert_eq!(got, fresh, "order {order:?}");
+        }
+    }
+
+    /// A repo withheld for one walk on a shared graph is said withheld by every later answer on it, though a graph of
+    /// its own wouldn't say so: what a walk found withheld is kept for the rest of the call (see `Consulted::reset`), so
+    /// an answer may say more than it read, never less. Here the impact walk reads the workspace's summaries, where a
+    /// sibling repo is blocked whole; the tests walk reads none.
+    #[test]
+    fn a_repo_withheld_for_one_walk_is_said_withheld_by_the_next() {
+        let cache = test_cache();
+        let base = cache.dir("task-shared-withheld");
+        let home = repo(
+            &base,
+            "ledger",
+            &[
+                ("src/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/A.cs", "namespace Ledger;\npublic static class A\n{\n    public static void Post() { }\n}\n"),
+                ("tests/ATests.cs", "namespace Ledger.Tests;\npublic class ATests\n{\n    public void Posts() { Ledger.A.Post(); }\n}\n"),
+            ],
+        );
+        let _vault = repo(
+            &base,
+            "vault",
+            &[
+                (".knowcode-privacy.yml", "level: 1\n"),
+                ("src/Vault.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/Keys.cs", "namespace Vault;\npublic class Keys\n{\n    public void Seal() { Ledger.A.Post(); }\n}\n"),
+            ],
+        );
+        let s = Scope { repos: vec![home.clone()], no_sync: false };
+        let ip = ops::ImpactParams { file: Some("src/A.cs".into()), depth: 1, limit: 30, ..Default::default() };
+        let tp = ops::TestsParams { targets: vec!["src/A.cs".into()], diff: None, limit: 4, evidence: String::new() };
+        let withheld = |env: &Value| incomplete_of(env).iter().any(|i| i.reason == Reason::Withheld);
+        assert!(withheld(&ops::impact(&ip, &s).unwrap().env), "the impact walk meets the withheld repo");
+        assert!(!withheld(&ops::tests(&tp, &s).unwrap().env), "the tests walk alone doesn't");
+        let o = ops::open_member(std::slice::from_ref(&home), &home, false).unwrap().unwrap();
+        let mut g = crate::walk::Graph::new(&o, &[], false, usize::MAX);
+        assert!(withheld(&ops::impact_on(&ip, &s, &o, &mut g).unwrap().env));
+        let after = ops::tests_on(&tp, &o, &mut g).unwrap().env;
+        assert!(withheld(&after), "said again after the impact walk: {after}");
+        // Said without a path, as every withheld entry is.
+        assert!(!after.to_string().contains("Keys.cs"), "{after}");
     }
 }

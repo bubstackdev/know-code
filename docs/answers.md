@@ -94,6 +94,7 @@ The English stays, for people.
 - **A rename preview refused:** `refused: true` with `reasons` in English and `codes` beside them, one each.
 - **Privacy:** a `withheld` entry, a call refused for naming a blocked path, and a repo refused whole all carry
   `privacy`: `{repo, file, block_at, blocks}`, where `blocks` is `repo` or `paths`. It never names a blocked path.
+  Within one `task`, a repo withheld for any of its sections is reported in each of them.
 
 | code | meaning |
 | --- | --- |

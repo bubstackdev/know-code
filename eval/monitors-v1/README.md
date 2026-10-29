@@ -41,31 +41,6 @@ The labels are in [labels](labels), one line per commit: whether it fires and ho
 `monitor_gate.py run` replays the monitor with a KnowCode build and lists every commit where it and the labels
 differ. The gate passes with none.
 
-## Results
-
-On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits:
-
-| Repository | Commits | Labelled as firing | Monitor fired | Differ | New matches differ |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| serilog | 200 | 2 | 2 | 0 | 0 |
-| autofac | 200 | 5 | 5 | 0 | 0 |
-| hono | 200 | 20 | 20 | 0 | 0 |
-
-Besides firing, the number of new matches the monitor reports equals the labels' count at every commit.
-
-Text monitors, on the same commits (labels from git, frozen before the runs):
-
-| Repository | Monitor | Commits | Labelled as firing | Monitor fired | Differ | New lines differ |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| serilog | text-1 | 200 | 0 | 0 | 0 | 0 |
-| serilog | text-2 | 200 | 10 | 10 | 0 | 0 |
-| autofac | text-1 | 200 | 0 | 0 | 0 | 0 |
-| autofac | text-2 | 200 | 14 | 14 | 0 | 0 |
-| hono | text-1 | 200 | 4 | 4 | 0 | 0 |
-| hono | text-2 | 200 | 89 | 89 | 0 | 0 | Two hono
-answers are marked incomplete (`unsupported`): a file they read has a parse error, which the answer names; ast-grep
-parses it with the same grammar.
-
 ## Text monitors
 
 A text monitor is a line regex run with a base: `knowcode rules --regex <re> -g <glob> --new-since <base>`. Each line
@@ -91,7 +66,8 @@ monitor's answer is read: [labels](labels), `<repo>-text-1.jsonl` and `<repo>-te
 
 ## Results
 
-On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits:
+On the build of `w4/rules-engine` (KnowCode 0.6.1 plus the rules op), 600 commits, and again, with the same results,
+on `w4/b-rules-op`'s build (the vendored ast-grep-config):
 
 | Repository | Commits | Labelled as firing | Monitor fired | Differ | New matches differ |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -110,11 +86,7 @@ Text monitors, on the same commits (labels from git, frozen before the runs):
 | autofac | text-1 | 200 | 0 | 0 | 0 | 0 |
 | autofac | text-2 | 200 | 14 | 14 | 0 | 0 |
 | hono | text-1 | 200 | 4 | 4 | 0 | 0 |
-| hono | text-2 | 200 | 89 | 89 | 0 | 0 | Two hono
-answers are marked incomplete (`unsupported`): a file they read has a parse error, which the answer names; ast-grep
-parses it with the same grammar.
+| hono | text-2 | 200 | 89 | 89 | 0 | 0 |
 
-## Text monitors
-
-The gate also names monitors with a text pattern, labelled with `git log -G`. They are not in this set yet: an
-ast-grep rule always matches syntax nodes, so a text monitor needs its own form, to be added with its own labels.
+Two hono rule-monitor answers are marked incomplete (`unsupported`): a file they read has a parse error, which the
+answer names; ast-grep parses it with the same grammar.

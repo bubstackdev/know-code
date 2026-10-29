@@ -35,4 +35,7 @@
 # The 0.6 build's task-level answers and checks: task context, test targets, file context, cache lifetime for shared
 # bases, the contract and task gates, and the Swift and TypeScript identity fixes (37752672, up 396816; measured on
 # integration/0.6 with #191).
-37752672
+# 0.8's rules: the vendored ast-grep-config (rule YAML read by yaml-rust2, globset), the rules op with monitors and
+# SARIF, and its CLI and kc wiring (38960192, up 992640 from 37967552, the same tree without rules called; measured on
+# w4/b-rules-op's dist build).
+38960192
