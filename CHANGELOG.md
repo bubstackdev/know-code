@@ -11,6 +11,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
   is 1.000 over 452 links, linked recall 0.504, and no outside label is linked; Java's linked recall rises to 0.871 as
   Java calls into Kotlin resolve. HELDOUT_KOTLIN
+- A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
+  added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
+  indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.
+
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
   member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
@@ -88,6 +92,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   no outside label linked; on 508 held-out labels from echo, scored once: 1.000 over 299 links, recall 0.971, none
   outside linked. A file the default build leaves out (`x_windows.go`, `//go:build nomsgpack`) and cgo
   imports are reported as `unsupported`.
+- Go test targets. `test_targets` lists each `go.mod` as a target, `go test ./...` from its directory, with its
+  `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
+  ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
+  Go test files too (`foo_test.go` for `foo.go`).
 
 ## 0.6.1 (2026-10-28)
 
