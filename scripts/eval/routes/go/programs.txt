@@ -1,0 +1,25 @@
+# The Go programs whose routes are listed: repo, module directory, main package (relative to the module; `auto` for
+# every main package of the module; `test:DIR` for a harness test), and the program's arguments.
+gin-examples . auto
+gotify . .
+echox . auto
+# cookbook/reverse-proxy/upstream takes the upstream's name and port (`auto` runs it without them, and it lists nothing).
+echox . cookbook/reverse-proxy/upstream upstream-1 :8081
+opengist . .
+chi _examples/rest .
+chi _examples/versions .
+chi . _examples/custom-handler
+chi . _examples/custom-method
+chi . _examples/fileserver
+chi . _examples/graceful
+chi . _examples/hello-world
+chi . _examples/limits
+chi . _examples/logging
+chi . _examples/pathvalue
+chi . _examples/router-walk
+chi . _examples/todos-resource
+go-routing . . chi
+go-routing . . stdlib
+urgentry . test:internal/api
+code-for-blog 2021/go-rest-servers/stdlib-newmux .
+flipt . cmd/flipt server
