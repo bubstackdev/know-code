@@ -3,3 +3,6 @@
 serilog TargetFrameworks=net10.0
 autofac TargetFrameworks=net10.0
 jellyfin-server
+# find-dev-v1 (eval/find-dev-v1/README.md), on the same rule.
+mediatr TargetFrameworks=net10.0
+fluentvalidation TargetFrameworks=net10.0

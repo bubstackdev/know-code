@@ -11,6 +11,7 @@
 # enumeration is read from, IO/out/index-REPO.scip). The container is removed afterwards.
 #
 # Images are pinned by digest (IMAGES below); CPUS (default 4) and MEMORY (default 12g) limit the container.
+# REPOS names another repository list in repos.txt's format (find-dev-v1 labels its own repositories this way).
 # LABEL_ENCLOSING=1 adds compare-v1's `in` field to each reference row (eval/compare-v1/README.md); without it the
 # enumeration is identity-v1's.
 set -euo pipefail
@@ -31,7 +32,8 @@ GO_IMAGE=golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6
 # scip-java with its JDKs (17, 21, 25), Maven and Gradle; the multi-platform index's digest.
 JVM_IMAGE=ghcr.io/scip-code/scip-java:0.13.2@sha256:459c2fa0544d3801857428d94590e86bcd5f8af25980a36cb360720c1b3cf802
 
-read -r _ LANGUAGE URL SHA < <(grep -E "^$REPO " "$HERE/repos.txt") || { echo "run.sh: $REPO is not in repos.txt" >&2; exit 2; }
+REPOS=${REPOS:-$HERE/repos.txt}
+read -r _ LANGUAGE URL SHA < <(grep -E "^$REPO " "$REPOS") || { echo "run.sh: $REPO is not in $REPOS" >&2; exit 2; }
 if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
   echo "run.sh: $CLONE is not at $SHA" >&2
   exit 2
