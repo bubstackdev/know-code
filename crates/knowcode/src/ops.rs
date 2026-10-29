@@ -4613,6 +4613,8 @@ pub(crate) struct HttpCrossing<'a> {
     pub(crate) limited: bool,
     /// What the CI limits left out of the pipelines read for deploy chains (`repo: what`), once read.
     pub(crate) ci_cut: Vec<String>,
+    /// What the CI limits left out of the deploy chains read, kept with them for each walk reading them.
+    chains_cut: Vec<String>,
     /// Symbols whose library crossings were looked up (at most [`LIBRARY_CROSSINGS`]), and those past the budget,
     /// whose weren't.
     pub(crate) library_checked: usize,
@@ -4659,6 +4661,7 @@ impl<'a> HttpCrossing<'a> {
             max_repos: usize::MAX,
             limited: false,
             ci_cut: Vec::new(),
+            chains_cut: Vec::new(),
             library_checked: 0,
             library_cut: 0,
             library: true,
@@ -4669,6 +4672,17 @@ impl<'a> HttpCrossing<'a> {
     /// Follows only the edges `filter` allows (see [`crate::graph::Gate`]).
     pub(crate) fn set_filter(&mut self, filter: &trace::EdgeFilter) {
         self.gate = crate::graph::Gate::new(filter.clone());
+    }
+
+    /// Starts another walk on the same crossings, following `filter`: what a walk reports of itself (the library
+    /// crossings it looked up and the budget left, a CI limit's cut, a repo left closed) starts again, and what was read
+    /// (the repos open, deploy chains, library lookups) is kept.
+    pub(crate) fn begin_walk(&mut self, filter: &trace::EdgeFilter) {
+        self.set_filter(filter);
+        self.limited = false;
+        self.library_checked = 0;
+        self.library_cut = 0;
+        self.ci_cut.clear();
     }
 
     /// Opens at most `n` repos, the home repo included.
@@ -5091,7 +5105,11 @@ impl<'a> HttpCrossing<'a> {
         if self.chains.is_none() {
             let (chains, cut) = kc_index::ci::Ci::new(summaries).all_with_cuts();
             self.chains = Some(chains);
+            self.chains_cut = cut.clone();
             self.ci_cut = cut;
+        } else if self.ci_cut.is_empty() {
+            // Read by an earlier walk on this graph: this one crossed a deploy too, and its answer says the same cut.
+            self.ci_cut = self.chains_cut.clone();
         }
         let chains = self.chains.take().unwrap_or_default();
         let dir = kc_extract::ansible::place(&sym.file).and_then(|p| p.role_dir).unwrap_or_default();
@@ -6085,10 +6103,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
     // Each repo checked for changes once, however many symbols ask about its dependents.
     let _memo = kc_index::memo_changes();
     let _rivals = edge_filter(&[], &p.filter.evidence).ok().and_then(|f| f.explain_rivals());
-    let given = [p.symbol.is_some(), p.file.is_some(), p.diff.is_some()].iter().filter(|b| **b).count();
-    if given != 1 {
-        bail!("give exactly one of symbol, file or diff");
-    }
+    impact_asks_one(p)?;
     let mut stale_rank: Vec<Incomplete> = Vec::new();
     let mut cite_notes: Vec<Incomplete> = Vec::new();
     let roots = target_repos(&args.repos)?;
@@ -6097,294 +6112,347 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
     let edges = p.filter.edges()?;
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
-        // The dependents of each symbol in scope are looked up in the same summaries.
-        o.consulted.keep_planned();
-        let conn = o.store.conn();
-        let mut changes = Vec::new();
-        let (mut old_defs, mut base) = (Vec::new(), None);
-        // A file without symbols (a template, say) still has co-change partners.
-        let mut bare_file = None;
-        let mut others = Vec::new();
-        let ids: Vec<i64> = if let Some(s) = &p.symbol {
-            let mut defs = query::definitions(conn, s)?;
-            // Of same-named types (an Entity Framework entity and a DTO of its name), the entity: a change to a model
-            // is most often about the table. The others are named, for `path#Name`.
-            if defs.len() > 1 && defs.iter().all(|d| query::is_type_or_extension(&d.kind)) {
-                let model = o.store.db_model()?;
-                let entity = |d: &query::SymbolRow| model.tables.iter().any(|t| t.entity_id == Some(d.id));
-                if !entity(&defs[0])
-                    && let Some(i) = defs.iter().position(entity)
-                {
-                    let picked = defs.remove(i);
-                    defs.insert(0, picked);
-                }
-                others = defs.iter().skip(1).filter(|d| d.kind != "extension").map(|d| format!("{}#{}", d.file, d.name)).collect();
-            }
-            match defs.first() {
-                // A SQL object dumped in several places: every copy, since each serves the routines dumped beside it.
-                Some(first) if kc_store::sql::is_object(first) => {
-                    let same = |d: &query::SymbolRow| {
-                        d.kind == first.kind && d.container.as_deref().map(str::to_lowercase) == first.container.as_deref().map(str::to_lowercase)
-                    };
-                    defs.iter().filter(|d| same(d)).map(|d| d.id).collect()
-                }
-                _ => defs.into_iter().take(1).map(|d| d.id).collect(),
-            }
-        } else if let Some(f) = &p.file {
-            let rel = Path::new(f).strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| f.clone());
-            let ids = trace::symbols_in_file(conn, &rel)?;
-            if ids.is_empty() && is_repo_file(conn, &rel)? {
-                bare_file = Some(rel);
-            }
-            ids
-        } else {
-            let rev = p.diff.as_deref().filter(|d| *d != "working");
-            let d = kc_index::diff::diff(root, rev)?;
-            old_defs = kc_index::diff::old_definitions(root, &d)?;
-            base = Some(d.base);
-            changes = d.changes;
-            let mut ids = Vec::new();
-            for c in changes.iter().filter(|c| !c.deleted) {
-                for id in trace::symbols_in_ranges(conn, &c.file, &c.ranges)? {
-                    if !ids.contains(&id) {
-                        ids.push(id);
-                    }
-                }
-            }
-            ids
-        };
-        if ids.is_empty() && p.diff.is_none() && bare_file.is_none() {
-            opened.push(o);
-            continue;
-        }
-        // C# used from Razor markup, which isn't read: dependents there aren't listed.
-        // Only when a Razor file names one of them (a constructor by its type's name).
-        let mut names: Vec<String> = Vec::new();
-        for s in ids.iter().filter_map(|&id| trace::symbol(conn, id).ok().flatten()).filter(|s| s.file.ends_with(".cs")) {
-            let name = if s.kind == "init" { s.container.as_deref().map_or(s.name.as_str(), |c| c.rsplit('.').next().unwrap_or(c)) } else { s.name.as_str() };
-            if !names.iter().any(|n| n == name) {
-                names.push(name.to_string());
-            }
-        }
-        if !names.is_empty() {
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            stale_rank.extend(razor_unread(&o, roots.len() > 1, &names)?.0);
-        }
-        // The walk reads every edge through the symbol graph and its gate, as `path` and `flow` do.
         let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
-        let mut impact = crate::tree::impact(&mut g, &ids, p.depth, p.limit)?;
-        // The diff's pre-change side: code still naming a definition the change removed.
-        let gone = crate::removed::removed(conn, &old_defs, &ids)?;
-        let mut removed = Vec::new();
-        if !gone.is_empty() {
-            let mut seen = trace::Reached::default();
-            for s in &impact.scope {
-                seen.root(s.id);
+        let r = impact_repo(p, &o, &mut g, &edges, roots.len() > 1, args.no_sync, &mut stale_rank, &mut cite_notes)?;
+        drop(g);
+        found.extend(r);
+        opened.push(o);
+    }
+    impact_answer(p, args, &opened, found, stale_rank, cite_notes, &edges)
+}
+
+/// [`impact`] of one repo the caller has open, on a symbol graph it holds: `task` and `review` walk the same files
+/// for their dependents and their tests, and the second walk reads the edges the first read from the graph's cache
+/// (each under its own gate, see [`crate::walk::Graph::begin_walk`]). The answer is `impact`'s for that repo.
+pub(crate) fn impact_on(p: &ImpactParams, args: &Scope, o: &Opened, g: &mut crate::walk::Graph) -> Result<Out<Vec<ImpactRepo>>> {
+    let _memo = kc_index::memo_changes();
+    let _rivals = edge_filter(&[], &p.filter.evidence).ok().and_then(|f| f.explain_rivals());
+    impact_asks_one(p)?;
+    let (mut stale_rank, mut cite_notes) = (Vec::new(), Vec::new());
+    let edges = p.filter.edges()?;
+    g.begin_walk(edges.clone());
+    let found = impact_repo(p, o, g, &edges, false, args.no_sync, &mut stale_rank, &mut cite_notes)?;
+    impact_answer(p, args, std::slice::from_ref(o), found.into_iter().collect(), stale_rank, cite_notes, &edges)
+}
+
+fn impact_asks_one(p: &ImpactParams) -> Result<()> {
+    let given = [p.symbol.is_some(), p.file.is_some(), p.diff.is_some()].iter().filter(|b| **b).count();
+    if given != 1 {
+        bail!("give exactly one of symbol, file or diff");
+    }
+    Ok(())
+}
+
+/// One repo's part of [`impact`], walked on `g` (whose home is `o`); none when nothing in it is in scope. `multi`: the
+/// answer spans several repos.
+#[allow(clippy::too_many_arguments)]
+fn impact_repo(
+    p: &ImpactParams,
+    o: &Opened,
+    g: &mut crate::walk::Graph,
+    edges: &trace::EdgeFilter,
+    multi: bool,
+    no_sync: bool,
+    stale_rank: &mut Vec<Incomplete>,
+    cite_notes: &mut Vec<Incomplete>,
+) -> Result<Option<ImpactRepo>> {
+    let root = o.root.as_path();
+
+    // The dependents of each symbol in scope are looked up in the same summaries.
+    o.consulted.keep_planned();
+    let conn = o.store.conn();
+    let mut changes = Vec::new();
+    let (mut old_defs, mut base) = (Vec::new(), None);
+    // A file without symbols (a template, say) still has co-change partners.
+    let mut bare_file = None;
+    let mut others = Vec::new();
+    let ids: Vec<i64> = if let Some(s) = &p.symbol {
+        let mut defs = query::definitions(conn, s)?;
+        // Of same-named types (an Entity Framework entity and a DTO of its name), the entity: a change to a model
+        // is most often about the table. The others are named, for `path#Name`.
+        if defs.len() > 1 && defs.iter().all(|d| query::is_type_or_extension(&d.kind)) {
+            let model = o.store.db_model()?;
+            let entity = |d: &query::SymbolRow| model.tables.iter().any(|t| t.entity_id == Some(d.id));
+            if !entity(&defs[0])
+                && let Some(i) = defs.iter().position(entity)
+            {
+                let picked = defs.remove(i);
+                defs.insert(0, picked);
             }
-            for a in &impact.affected {
-                if let Some(h) = a.nearest_ambiguous_hop {
-                    seen.offer(a.id, h, "ambiguous");
-                }
-                seen.offer(a.id, a.hop, a.confidence);
-            }
-            let room = p.limit.saturating_sub(impact.affected.len());
-            let depth = p.depth.clamp(1, trace::MAX_IMPACT_DEPTH);
-            let mut onward = |from: &[i64], room: usize, seen: &mut trace::Reached| crate::tree::dependents(&mut g, 0, from, 1, depth, room, seen);
-            let (more, list, cut) = crate::removed::dependents(conn, &gone, &mut seen, &edges, depth, room, &mut onward)?;
-            // A better way to a symbol listed already replaces its row; each row's class by its nearest way.
-            let mut at: HashMap<i64, usize> = impact.affected.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
-            for a in more {
-                match at.get(&a.id) {
-                    Some(&i) => impact.affected[i] = a,
-                    None => {
-                        at.insert(a.id, impact.affected.len());
-                        impact.affected.push(a);
-                    }
-                }
-            }
-            for a in &mut impact.affected {
-                seen.settle(a);
-            }
-            impact.stopped.extend(seen.stops(None));
-            impact.stopped.retain(|st| !seen.was_grown(st.id));
-            impact.truncated |= cut;
-            impact.recount();
-            removed = list;
+            others = defs.iter().skip(1).filter(|d| d.kind != "extension").map(|d| format!("{}#{}", d.file, d.name)).collect();
         }
-        crate::tree::cross_impact(&mut g, &mut impact, p.depth, p.limit)?;
-        // Where the walk stopped short: the symbols it listed without walking past that have dependents it doesn't list.
-        let listed: HashSet<(Option<String>, i64)> =
-            impact.affected.iter().map(|a| (a.repo.clone(), a.id)).chain(impact.scope.iter().map(|s| (None, s.id))).collect();
-        // A walk the symbol limit cut already says so, with a cursor: its stops are counted, not checked (checking costs
-        // what one more hop does).
-        let budget = if impact.truncated { 0 } else { FRONTIER_CHECKS };
-        let (mut frontier, frontier_unchecked) =
-            g.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
-        let crossing = g.crossing();
-        let ci_cut = std::mem::take(&mut crossing.ci_cut);
-        let (library_checked, library_cut) = (crossing.library_checked, crossing.library_cut);
-        // Each stop's exact call going on from it.
-        let mut go_on = p.filter.args(&edges);
-        go_on.insert("depth".into(), p.depth.clamp(1, trace::MAX_IMPACT_DEPTH).into());
-        crate::tree::continuations(&mut g, &mut frontier, "kc_impact", &go_on, |_, _| {})?;
-        let registrations = registrations_on_path(conn, &impact)?;
-        if impact.affected.iter().any(|a| kc_store::sql::is_sql_path(&a.file)) {
-            impact.collapse_sql_copies();
+        match defs.first() {
+            // A SQL object dumped in several places: every copy, since each serves the routines dumped beside it.
+            Some(first) if kc_store::sql::is_object(first) => {
+                let same = |d: &query::SymbolRow| {
+                    d.kind == first.kind && d.container.as_deref().map(str::to_lowercase) == first.container.as_deref().map(str::to_lowercase)
+                };
+                defs.iter().filter(|d| same(d)).map(|d| d.id).collect()
+            }
+            _ => defs.into_iter().take(1).map(|d| d.id).collect(),
         }
-        let kinds = p.filter.kinds()?;
-        let before = impact.affected.len();
-        if !kinds.is_empty() {
-            impact.affected.retain(|a| WalkFilter::keeps(&kinds, &a.kind));
-            impact.recount();
+    } else if let Some(f) = &p.file {
+        let rel = Path::new(f).strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| f.clone());
+        let ids = trace::symbols_in_file(conn, &rel)?;
+        if ids.is_empty() && is_repo_file(conn, &rel)? {
+            bare_file = Some(rel);
         }
-        let hidden = before - impact.affected.len();
-        if p.order == ImpactOrder::Rank {
-            let mut seeds: Vec<&str> = impact.scope.iter().map(|s| s.file.as_str()).collect();
-            seeds.extend(changes.iter().filter(|c| !c.deleted).map(|c| c.file.as_str()));
-            seeds.sort();
-            seeds.dedup();
-            let seeds: Vec<String> = seeds.into_iter().map(str::to_string).collect();
-            let seeds: Vec<&str> = seeds.iter().map(String::as_str).collect();
-            if let Some(g) = order_by_rank(&o.store, &mut impact.affected, &seeds)? {
-                stale_rank.push(kc_store::answer::stale_derived(&format!("order of dependents ({}): file ranking", repo_name(&o.root)), &g, &o.generation));
+        ids
+    } else {
+        let rev = p.diff.as_deref().filter(|d| *d != "working");
+        let d = kc_index::diff::diff(root, rev)?;
+        old_defs = kc_index::diff::old_definitions(root, &d)?;
+        base = Some(d.base);
+        changes = d.changes;
+        let mut ids = Vec::new();
+        for c in changes.iter().filter(|c| !c.deleted) {
+            for id in trace::symbols_in_ranges(conn, &c.file, &c.ranges)? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
             }
         }
-        // Dependents in other repos: hop 1 (direct) across the repo boundary.
-        let mut cross_repo = Vec::new();
-        let cross_repo_unchecked = impact.scope.len().saturating_sub(CROSS_REPO_SCOPE);
-        for s in impact.scope.iter().take(CROSS_REPO_SCOPE) {
-            let (name, kinds): (String, Vec<&str>) = match s.kind.as_str() {
-                "class" | "struct" | "enum" | "actor" | "protocol" => {
-                    (s.qualified.rsplit('.').next().unwrap_or(&s.qualified).to_string(), vec!["instantiate", "type_ref"])
+        ids
+    };
+    if ids.is_empty() && p.diff.is_none() && bare_file.is_none() {
+        return Ok(None);
+    }
+    // C# used from Razor markup, which isn't read: dependents there aren't listed.
+    // Only when a Razor file names one of them (a constructor by its type's name).
+    let mut names: Vec<String> = Vec::new();
+    for s in ids.iter().filter_map(|&id| trace::symbol(conn, id).ok().flatten()).filter(|s| s.file.ends_with(".cs")) {
+        let name = if s.kind == "init" { s.container.as_deref().map_or(s.name.as_str(), |c| c.rsplit('.').next().unwrap_or(c)) } else { s.name.as_str() };
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    }
+    if !names.is_empty() {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        stale_rank.extend(razor_unread(o, multi, &names)?.0);
+    }
+    // The walk reads every edge through the symbol graph and its gate, as `path` and `flow` do.
+    let mut impact = crate::tree::impact(g, &ids, p.depth, p.limit)?;
+    // The diff's pre-change side: code still naming a definition the change removed.
+    let gone = crate::removed::removed(conn, &old_defs, &ids)?;
+    let mut removed = Vec::new();
+    if !gone.is_empty() {
+        let mut seen = trace::Reached::default();
+        for s in &impact.scope {
+            seen.root(s.id);
+        }
+        for a in &impact.affected {
+            if let Some(h) = a.nearest_ambiguous_hop {
+                seen.offer(a.id, h, "ambiguous");
+            }
+            seen.offer(a.id, a.hop, a.confidence);
+        }
+        let room = p.limit.saturating_sub(impact.affected.len());
+        let depth = p.depth.clamp(1, trace::MAX_IMPACT_DEPTH);
+        let mut onward = |from: &[i64], room: usize, seen: &mut trace::Reached| crate::tree::dependents(g, 0, from, 1, depth, room, seen);
+        let (more, list, cut) = crate::removed::dependents(conn, &gone, &mut seen, edges, depth, room, &mut onward)?;
+        // A better way to a symbol listed already replaces its row; each row's class by its nearest way.
+        let mut at: HashMap<i64, usize> = impact.affected.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
+        for a in more {
+            match at.get(&a.id) {
+                Some(&i) => impact.affected[i] = a,
+                None => {
+                    at.insert(a.id, impact.affected.len());
+                    impact.affected.push(a);
                 }
-                // A constructor is reached by creating its type, never by a call named `init` (another type's
-                // constructors chaining to theirs).
-                "init" => {
-                    let ty = s.qualified.strip_suffix(".init").unwrap_or(&s.qualified);
-                    (ty.rsplit('.').next().unwrap_or(ty).to_string(), vec!["instantiate"])
+            }
+        }
+        for a in &mut impact.affected {
+            seen.settle(a);
+        }
+        impact.stopped.extend(seen.stops(None));
+        impact.stopped.retain(|st| !seen.was_grown(st.id));
+        impact.truncated |= cut;
+        impact.recount();
+        removed = list;
+    }
+    crate::tree::cross_impact(g, &mut impact, p.depth, p.limit)?;
+    // Where the walk stopped short: the symbols it listed without walking past that have dependents it doesn't list.
+    let listed: HashSet<(Option<String>, i64)> =
+        impact.affected.iter().map(|a| (a.repo.clone(), a.id)).chain(impact.scope.iter().map(|s| (None, s.id))).collect();
+    // A walk the symbol limit cut already says so, with a cursor: its stops are counted, not checked (checking costs
+    // what one more hop does).
+    let budget = if impact.truncated { 0 } else { FRONTIER_CHECKS };
+    let (mut frontier, frontier_unchecked) =
+        g.frontier(&impact.stopped, &|repo, id| listed.contains(&(repo.map(str::to_string), id)), budget)?;
+    let crossing = g.crossing();
+    let ci_cut = std::mem::take(&mut crossing.ci_cut);
+    let (library_checked, library_cut) = (crossing.library_checked, crossing.library_cut);
+    // Each stop's exact call going on from it.
+    let mut go_on = p.filter.args(edges);
+    go_on.insert("depth".into(), p.depth.clamp(1, trace::MAX_IMPACT_DEPTH).into());
+    crate::tree::continuations(g, &mut frontier, "kc_impact", &go_on, |_, _| {})?;
+    let registrations = registrations_on_path(conn, &impact)?;
+    if impact.affected.iter().any(|a| kc_store::sql::is_sql_path(&a.file)) {
+        impact.collapse_sql_copies();
+    }
+    let kinds = p.filter.kinds()?;
+    let before = impact.affected.len();
+    if !kinds.is_empty() {
+        impact.affected.retain(|a| WalkFilter::keeps(&kinds, &a.kind));
+        impact.recount();
+    }
+    let hidden = before - impact.affected.len();
+    if p.order == ImpactOrder::Rank {
+        let mut seeds: Vec<&str> = impact.scope.iter().map(|s| s.file.as_str()).collect();
+        seeds.extend(changes.iter().filter(|c| !c.deleted).map(|c| c.file.as_str()));
+        seeds.sort();
+        seeds.dedup();
+        let seeds: Vec<String> = seeds.into_iter().map(str::to_string).collect();
+        let seeds: Vec<&str> = seeds.iter().map(String::as_str).collect();
+        if let Some(g) = order_by_rank(&o.store, &mut impact.affected, &seeds)? {
+            stale_rank.push(kc_store::answer::stale_derived(&format!("order of dependents ({}): file ranking", repo_name(&o.root)), &g, &o.generation));
+        }
+    }
+    // Dependents in other repos: hop 1 (direct) across the repo boundary.
+    let mut cross_repo = Vec::new();
+    let cross_repo_unchecked = impact.scope.len().saturating_sub(CROSS_REPO_SCOPE);
+    for s in impact.scope.iter().take(CROSS_REPO_SCOPE) {
+        let (name, kinds): (String, Vec<&str>) = match s.kind.as_str() {
+            "class" | "struct" | "enum" | "actor" | "protocol" => {
+                (s.qualified.rsplit('.').next().unwrap_or(&s.qualified).to_string(), vec!["instantiate", "type_ref"])
+            }
+            // A constructor is reached by creating its type, never by a call named `init` (another type's
+            // constructors chaining to theirs).
+            "init" => {
+                let ty = s.qualified.strip_suffix(".init").unwrap_or(&s.qualified);
+                (ty.rsplit('.').next().unwrap_or(ty).to_string(), vec!["instantiate"])
+            }
+            _ => (s.qualified.rsplit('.').next().unwrap_or(&s.qualified).to_string(), vec!["call", "member"]),
+        };
+        // Implementations and subclasses in dependents, of a type or (as their members) of an interface member.
+        if let Some(sym) = trace::symbol(conn, s.id)? {
+            let found = if query::is_type_or_extension(&sym.kind) {
+                dependent_conformers(o, &sym, None, no_sync)?
+            } else {
+                let owner = sym.container.as_deref().map(|c| query::definitions(conn, c)).transpose()?.unwrap_or_default();
+                match owner.into_iter().find(|d| d.kind == "protocol") {
+                    Some(ty) if matches!(sym.kind.as_str(), "method" | "property") => dependent_conformers(o, &ty, Some(&sym), no_sync)?,
+                    _ => Vec::new(),
                 }
-                _ => (s.qualified.rsplit('.').next().unwrap_or(&s.qualified).to_string(), vec!["call", "member"]),
             };
-            // Implementations and subclasses in dependents, of a type or (as their members) of an interface member.
-            if let Some(sym) = trace::symbol(conn, s.id)? {
-                let found = if query::is_type_or_extension(&sym.kind) {
-                    dependent_conformers(&o, &sym, None, args.no_sync)?
-                } else {
-                    let owner = sym.container.as_deref().map(|c| query::definitions(conn, c)).transpose()?.unwrap_or_default();
-                    match owner.into_iter().find(|d| d.kind == "protocol") {
-                        Some(ty) if matches!(sym.kind.as_str(), "method" | "property") => dependent_conformers(&o, &ty, Some(&sym), args.no_sync)?,
-                        _ => Vec::new(),
-                    }
-                };
-                let edge = if query::is_type_or_extension(&sym.kind) { "conformer" } else { "witness" };
-                if edges.allows(edge) {
-                    cross_repo.extend(conformer_hits(&sym, &repo_name(&o.root), found));
-                }
+            let edge = if query::is_type_or_extension(&sym.kind) { "conformer" } else { "witness" };
+            if edges.allows(edge) {
+                cross_repo.extend(conformer_hits(&sym, &repo_name(&o.root), found));
             }
-            for h in dependent_refs(&o, &name, &kinds, args.no_sync)? {
-                let edge = match h.kind.as_str() {
-                    "call" => "calls",
-                    "instantiate" => "instantiates",
-                    _ => "uses",
-                };
-                // A base list's type use is the conformer listed already.
-                let conformer = |c: &RefHit| c.kind == "inherits" && c.repo == h.repo && c.file == h.file && c.line == h.line;
-                if h.kind == "type_ref" && cross_repo.iter().any(conformer) {
-                    continue;
-                }
-                if edges.allows(edge)
-                    && (h.may_target(s.id) || h.targets.iter().any(|t| t.id == s.id))
-                    && edges.judge((&h.repo, &h.file, h.line, s.id, edge), h.confidence, h.evidence.as_ref()) != Verdict::Exclude
-                {
+        }
+        for h in dependent_refs(o, &name, &kinds, no_sync)? {
+            let edge = match h.kind.as_str() {
+                "call" => "calls",
+                "instantiate" => "instantiates",
+                _ => "uses",
+            };
+            // A base list's type use is the conformer listed already.
+            let conformer = |c: &RefHit| c.kind == "inherits" && c.repo == h.repo && c.file == h.file && c.line == h.line;
+            if h.kind == "type_ref" && cross_repo.iter().any(conformer) {
+                continue;
+            }
+            if edges.allows(edge)
+                && (h.may_target(s.id) || h.targets.iter().any(|t| t.id == s.id))
+                && edges.judge((&h.repo, &h.file, h.line, s.id, edge), h.confidence, h.evidence.as_ref()) != Verdict::Exclude
+            {
+                cross_repo.push(h);
+            }
+        }
+        // An implementation of a dependency's interface member (or an override of its base class member): the
+        // calls through that member, in the dependency and the repos using it. One implementation of several may
+        // run, so they are ambiguous: listed, not walked past.
+        if edges.allows("via_protocol")
+            && let Some(sym) = trace::symbol(conn, s.id)?
+        {
+            for h in through_dependencies(o, &sym, no_sync)? {
+                if edges.judge((&h.repo, &h.file, h.line, s.id, "via_protocol"), h.confidence, h.evidence.as_ref()) != Verdict::Exclude {
                     cross_repo.push(h);
                 }
             }
-            // An implementation of a dependency's interface member (or an override of its base class member): the
-            // calls through that member, in the dependency and the repos using it. One implementation of several may
-            // run, so they are ambiguous: listed, not walked past.
-            if edges.allows("via_protocol")
-                && let Some(sym) = trace::symbol(conn, s.id)?
-            {
-                for h in through_dependencies(&o, &sym, args.no_sync)? {
-                    if edges.judge((&h.repo, &h.file, h.line, s.id, "via_protocol"), h.confidence, h.evidence.as_ref()) != Verdict::Exclude {
-                        cross_repo.push(h);
-                    }
-                }
-            }
         }
-        // A use the walk lists already isn't listed again here: one across a library boundary (in `affected`, with its
-        // repo), or one in this repo through a library's interface, which the walk reaches when no indexed repo it
-        // consults resolves the call.
-        let home = repo_name(&o.root);
-        let walked: HashSet<(String, String)> = impact
-            .affected
-            .iter()
-            .filter(|a| a.library.is_some() || a.repo.is_none())
-            .flat_map(|a| {
-                let repo = a.repo.clone().unwrap_or_else(|| home.clone());
-                a.site.iter().chain(&a.also).map(move |s| (repo.clone(), s.clone()))
-            })
-            .collect();
-        cross_repo.retain(|h| !walked.contains(&(h.repo.clone().unwrap_or_else(|| home.clone()), format!("{}:{}", h.file, h.line))));
-        let model = o.store.db_model()?;
-        let tables: Vec<db::Table> = model
-            .tables
-            .iter()
-            .filter(|t| impact.scope.iter().any(|s| t.entity_id == Some(s.id) || t.dbset_id == Some(s.id)))
-            .cloned()
-            .collect();
-        // Co-change: the changed files (a diff's, else the scope's), and the files the walk reached in this repo.
-        let mut changed: Vec<String> = if p.diff.is_some() {
-            changes.iter().filter(|c| !c.deleted).map(|c| c.file.clone()).collect()
-        } else {
-            impact.scope.iter().map(|s| s.file.clone()).chain(bare_file).collect()
-        };
-        changed.sort();
-        changed.dedup();
-        let reached: HashSet<&str> = impact.affected.iter().filter(|a| a.repo.is_none()).map(|a| a.file.as_str()).collect();
-        let coupled_max = p.coupled_max.unwrap_or(IMPACT_COUPLED_MAX).max(IMPACT_COUPLED_MAX);
-        let (coupled, coupled_total, missed_partners) = coupling(root, &o.store, &changed, &reached, p.diff.is_some(), &p.cochange, coupled_max)?;
-        let notes = if kc_index::notes::any(root)? {
-            let names: Vec<String> = impact
-                .scope
-                .iter()
-                .map(|s| s.qualified.clone())
-                .chain(impact.affected.iter().filter(|a| a.repo.is_none()).map(|a| a.qualified.clone()))
-                .collect();
-            kc_index::notes::on(root, &o.store, &names)?
-        } else {
-            Vec::new()
-        };
-        let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
-        citer.impact(&o.root, &mut impact);
-        citer.refs(&o.root, cross_repo.iter_mut());
-        cite_notes.extend(citer.incomplete());
-        drop(citer);
-        drop(g);
-        found.push(ImpactRepo {
-            root: o.root.clone(),
-            impact,
-            cross_repo,
-            cross_repo_unchecked,
-            tables,
-            changes,
-            coupled,
-            coupled_total,
-            missed_partners,
-            hidden,
-            notes,
-            others,
-            base,
-            removed,
-            ci_cut,
-            library_checked,
-            library_cut,
-            frontier,
-            frontier_unchecked,
-            registrations,
-        });
-        opened.push(o);
     }
+    // A use the walk lists already isn't listed again here: one across a library boundary (in `affected`, with its
+    // repo), or one in this repo through a library's interface, which the walk reaches when no indexed repo it
+    // consults resolves the call.
+    let home = repo_name(&o.root);
+    let walked: HashSet<(String, String)> = impact
+        .affected
+        .iter()
+        .filter(|a| a.library.is_some() || a.repo.is_none())
+        .flat_map(|a| {
+            let repo = a.repo.clone().unwrap_or_else(|| home.clone());
+            a.site.iter().chain(&a.also).map(move |s| (repo.clone(), s.clone()))
+        })
+        .collect();
+    cross_repo.retain(|h| !walked.contains(&(h.repo.clone().unwrap_or_else(|| home.clone()), format!("{}:{}", h.file, h.line))));
+    let model = o.store.db_model()?;
+    let tables: Vec<db::Table> = model
+        .tables
+        .iter()
+        .filter(|t| impact.scope.iter().any(|s| t.entity_id == Some(s.id) || t.dbset_id == Some(s.id)))
+        .cloned()
+        .collect();
+    // Co-change: the changed files (a diff's, else the scope's), and the files the walk reached in this repo.
+    let mut changed: Vec<String> = if p.diff.is_some() {
+        changes.iter().filter(|c| !c.deleted).map(|c| c.file.clone()).collect()
+    } else {
+        impact.scope.iter().map(|s| s.file.clone()).chain(bare_file).collect()
+    };
+    changed.sort();
+    changed.dedup();
+    let reached: HashSet<&str> = impact.affected.iter().filter(|a| a.repo.is_none()).map(|a| a.file.as_str()).collect();
+    let coupled_max = p.coupled_max.unwrap_or(IMPACT_COUPLED_MAX).max(IMPACT_COUPLED_MAX);
+    let (coupled, coupled_total, missed_partners) = coupling(root, &o.store, &changed, &reached, p.diff.is_some(), &p.cochange, coupled_max)?;
+    let notes = if kc_index::notes::any(root)? {
+        let names: Vec<String> = impact
+            .scope
+            .iter()
+            .map(|s| s.qualified.clone())
+            .chain(impact.affected.iter().filter(|a| a.repo.is_none()).map(|a| a.qualified.clone()))
+            .collect();
+        kc_index::notes::on(root, &o.store, &names)?
+    } else {
+        Vec::new()
+    };
+    let mut citer = crate::cite::Citer::new([]).with_stores(g.stores());
+    citer.impact(&o.root, &mut impact);
+    citer.refs(&o.root, cross_repo.iter_mut());
+    cite_notes.extend(citer.incomplete());
+    drop(citer);
+    Ok(Some(ImpactRepo {
+        root: o.root.clone(),
+        impact,
+        cross_repo,
+        cross_repo_unchecked,
+        tables,
+        changes,
+        coupled,
+        coupled_total,
+        missed_partners,
+        hidden,
+        notes,
+        others,
+        base,
+        removed,
+        ci_cut,
+        library_checked,
+        library_cut,
+        frontier,
+        frontier_unchecked,
+        registrations,
+    }))
+}
+
+/// The answer of [`impact`] from each repo's part.
+fn impact_answer(
+    p: &ImpactParams,
+    args: &Scope,
+    opened: &[Opened],
+    found: Vec<ImpactRepo>,
+    stale_rank: Vec<Incomplete>,
+    cite_notes: Vec<Incomplete>,
+    edges: &trace::EdgeFilter,
+) -> Result<Out<Vec<ImpactRepo>>> {
     let items: Vec<Value> = found
         .iter()
         .map(|r| {
@@ -6442,7 +6510,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         })
         .collect();
     let n = items.len();
-    let mut env = envelope(&opened, json!(items), n, n);
+    let mut env = envelope(opened, json!(items), n, n);
     if let Some(f) = p.filter.describe() {
         env["filter"] = f;
     }
@@ -6478,7 +6546,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
             .with_hint("impact a symbol nearer the boundary (one listed in another repo, or on the frontier) to look up the rest"),
         );
     }
-    report_policy(&mut env, &edges);
+    report_policy(&mut env, edges);
     // A depth past the deepest the walk goes, and the symbols it stopped at with dependents it didn't list.
     let walked = p.depth.clamp(1, trace::MAX_IMPACT_DEPTH);
     if p.depth > walked {
@@ -6508,7 +6576,7 @@ pub fn impact(p: &ImpactParams, args: &Scope) -> Result<Out<Vec<ImpactRepo>>> {
         order: if p.order == ImpactOrder::Hop { "hop" } else { "rank" }.to_string(),
         as_of: p.cochange.as_of.clone(),
         since: p.cochange.since.clone(),
-        evidence: policy_word(&edges),
+        evidence: policy_word(edges),
     };
     cursor::offer(&mut env, req, args, lists, &[]);
     finish(&mut env);
@@ -6868,59 +6936,87 @@ pub const TESTS_ARE: &str = "most likely relevant: the tests whose signals (reve
 /// first and the rest as left out.
 pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
     let _memo = kc_index::memo_changes();
-    if p.targets.is_empty() == p.diff.is_none() {
-        bail!("give targets (files or symbols) or a diff, not both");
-    }
-    let edges = edge_filter(&[], if p.evidence.is_empty() { TESTS_EVIDENCE } else { &p.evidence })?;
+    let edges = tests_edges(p)?;
     let roots = target_repos(&args.repos)?;
     let mut opened = Vec::new();
     let mut found = Vec::new();
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
-        let conn = o.store.conn();
-        let mut ids: Vec<i64> = Vec::new();
-        let mut changed: Vec<String> = Vec::new();
-        let mut unknown = Vec::new();
-        if let Some(d) = &p.diff {
-            for c in kc_index::diff::changes(root, Some(d.as_str()).filter(|d| *d != "working"))?.into_iter().filter(|c| !c.deleted) {
-                ids.extend(trace::symbols_in_ranges(conn, &c.file, &c.ranges)?);
-                changed.push(c.file);
-            }
-        } else {
-            let mut is_file = conn.prepare_cached("SELECT 1 FROM files WHERE path = ?1")?;
-            for t in &p.targets {
-                let rel = Path::new(t).strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| t.clone());
-                if is_file.exists([&rel])? {
-                    ids.extend(trace::symbols_in_file(conn, &rel)?);
-                    changed.push(rel);
-                } else if let Some(d) = query::definitions(conn, t)?.into_iter().next() {
-                    ids.push(d.id);
-                    changed.push(d.file);
-                } else {
-                    unknown.push(t.clone());
-                }
-            }
-        }
-        changed.sort();
-        changed.dedup();
-        ids.sort_unstable();
-        ids.dedup();
-        if changed.is_empty() && p.diff.is_none() {
-            opened.push(o);
-            continue;
-        }
-        use kc_index::test_select::{DEPTH, MAX_WALK};
-        // Under the evidence policy. A diff's removed definitions aren't walked (as `impact --diff` does): code still
-        // naming them doesn't build, so it is part of the change itself, and parsing the pre-change side cost more
-        // than the rest of the query on a small repo.
-        let walk = crate::tree::impact(&mut crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone()), &ids, DEPTH, MAX_WALK)?;
-        let mut selection = kc_index::test_select::select_from(root, &o.store, &walk, &changed)?;
-        let over_limit = selection.selected.len().saturating_sub(p.limit);
-        let cut: Vec<_> = selection.selected.drain(selection.selected.len() - over_limit..).collect();
-        selection.left_out.splice(0..0, cut);
-        found.push(TestsRepo { root: o.root.clone(), changed, unknown, selection, over_limit });
+        let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
+        let r = tests_repo(p, &o, &mut g)?;
+        drop(g);
+        found.extend(r);
         opened.push(o);
     }
+    tests_answer(p, &opened, found, &edges)
+}
+
+/// [`tests`] of one repo the caller has open, walked on a symbol graph it holds under the tests' own evidence policy
+/// (see [`impact_on`]). The answer is `tests`'s for that repo.
+pub(crate) fn tests_on(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Out<Vec<TestsRepo>>> {
+    let _memo = kc_index::memo_changes();
+    let edges = tests_edges(p)?;
+    g.begin_walk(edges.clone());
+    let found = tests_repo(p, o, g)?;
+    tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges)
+}
+
+/// The edges the tests walk follows, after checking `p` asks one thing.
+fn tests_edges(p: &TestsParams) -> Result<trace::EdgeFilter> {
+    if p.targets.is_empty() == p.diff.is_none() {
+        bail!("give targets (files or symbols) or a diff, not both");
+    }
+    edge_filter(&[], if p.evidence.is_empty() { TESTS_EVIDENCE } else { &p.evidence })
+}
+
+/// One repo's part of [`tests`], walked on `g` (whose home is `o`); none when no target is in it.
+fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Option<TestsRepo>> {
+    let root = o.root.as_path();
+    let conn = o.store.conn();
+    let mut ids: Vec<i64> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
+    let mut unknown = Vec::new();
+    if let Some(d) = &p.diff {
+        for c in kc_index::diff::changes(root, Some(d.as_str()).filter(|d| *d != "working"))?.into_iter().filter(|c| !c.deleted) {
+            ids.extend(trace::symbols_in_ranges(conn, &c.file, &c.ranges)?);
+            changed.push(c.file);
+        }
+    } else {
+        let mut is_file = conn.prepare_cached("SELECT 1 FROM files WHERE path = ?1")?;
+        for t in &p.targets {
+            let rel = Path::new(t).strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| t.clone());
+            if is_file.exists([&rel])? {
+                ids.extend(trace::symbols_in_file(conn, &rel)?);
+                changed.push(rel);
+            } else if let Some(d) = query::definitions(conn, t)?.into_iter().next() {
+                ids.push(d.id);
+                changed.push(d.file);
+            } else {
+                unknown.push(t.clone());
+            }
+        }
+    }
+    changed.sort();
+    changed.dedup();
+    ids.sort_unstable();
+    ids.dedup();
+    if changed.is_empty() && p.diff.is_none() {
+        return Ok(None);
+    }
+    use kc_index::test_select::{DEPTH, MAX_WALK};
+    // Under the evidence policy. A diff's removed definitions aren't walked (as `impact --diff` does): code still
+    // naming them doesn't build, so it is part of the change itself, and parsing the pre-change side cost more
+    // than the rest of the query on a small repo.
+    let walk = crate::tree::impact(g, &ids, DEPTH, MAX_WALK)?;
+    let mut selection = kc_index::test_select::select_from(root, &o.store, &walk, &changed)?;
+    let over_limit = selection.selected.len().saturating_sub(p.limit);
+    let cut: Vec<_> = selection.selected.drain(selection.selected.len() - over_limit..).collect();
+    selection.left_out.splice(0..0, cut);
+    Ok(Some(TestsRepo { root: o.root.clone(), changed, unknown, selection, over_limit }))
+}
+
+/// The answer of [`tests`] from each repo's part.
+fn tests_answer(p: &TestsParams, opened: &[Opened], found: Vec<TestsRepo>, edges: &trace::EdgeFilter) -> Result<Out<Vec<TestsRepo>>> {
     let shown = p.limit.max(LEFT_OUT_SHOWN);
     let items: Vec<Value> = found
         .iter()
@@ -6942,7 +7038,7 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
         })
         .collect();
     let n = items.len();
-    let mut env = envelope(&opened, json!(items), n, n);
+    let mut env = envelope(opened, json!(items), n, n);
     for r in found.iter().filter(|r| r.over_limit > 0) {
         push_incomplete(
             &mut env,
@@ -6953,7 +7049,7 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
             .with_hint("raise the limit (--limit / limit)"),
         );
     }
-    report_policy(&mut env, &edges);
+    report_policy(&mut env, edges);
     finish(&mut env);
     Ok(Out { env, data: found })
 }
