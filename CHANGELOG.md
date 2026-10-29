@@ -37,6 +37,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   - C#: `GetMethod` and `QueryString`, and the standard-library names through a capitalised receiver left unknown (a
     property a library base class may declare, `Request.QueryString`).
   - TypeScript: `success`, `isError` and `left`.
+- Swift: fewer links to a repo declaration where the compiler binds a package's or the platform's. On identity-v1,
+  Swift's outside labels linked drop from 8 to 0, with no label newly wrong:
+  - A type a module imports by name from a package (`@_exported import struct SystemPackage.FileDescriptor`) is the
+    package's in that module, as are its members, never a same-named type of a module imported whole.
+  - A member a test target adds to a library type in an extension isn't what code under `Sources/` calls.
+  - A member the repo adds to a library type, named like the library's own (`JSONDecoder`'s `decode(_:from:)`), is
+    listed rather than linked: the library's overloads take other argument types.
+  - A free function named like a C library function (a platform shim such as `unlink` for Windows) is listed rather
+    than linked: the platform's own function is the one called on other platforms.
 
 ## 0.6.1 (2026-10-28)
 
