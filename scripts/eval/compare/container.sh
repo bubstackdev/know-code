@@ -10,6 +10,7 @@
 # longer resolve, and the questions are asked. The container is removed afterwards, whatever happens.
 #
 # CPUS (default 4) and MEMORY (default 12g) limit the container; the image is kc-compare-v1:LANGUAGE (build.sh).
+# QUESTIONS (default eval/compare-v1/questions.jsonl) is copied in as /in/questions.jsonl.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -24,6 +25,7 @@ MEMORY=${MEMORY:-12g}
 rm -rf "$IO/in" && mkdir -p "$IO/in" "$IO/out"
 IO=$(cd "$IO" && pwd)
 if [ "$REPO" != probe ]; then
+  cp "${QUESTIONS:-$HERE/../../../eval/compare-v1/questions.jsonl}" "$IO/in/questions.jsonl"
   (cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -cf "$IO/in/src.tar" -T -)
 fi
 (cd "$HERE/.." && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude __pycache__ -cf "$IO/in/harness.tar" compare)
@@ -42,6 +44,13 @@ LOG=/out/container.log
 run "mkdir -p /work/harness /work/src && tar -xf /in/harness.tar -C /work/harness && : > $LOG
      { knowcode --version; codebase-memory-mcp --version; serena --version || true; } >>$LOG 2>&1"
 
+# The tree as one commit of its tracked files, before anything is restored into it: KnowCode indexes git repositories,
+# and every tool reads the same tree.
+snapshot() {  # $1: the directory, in the container
+  run "cd $1 && git init -q && git add -A && GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z \
+       git -c user.name=compare-v1 -c user.email=compare-v1@example.invalid commit -q -m snapshot"
+}
+
 restore() {  # $1: the directory to restore, in the container
   case $LANGUAGE in
     csharp) run "cd $1 && dotnet restore -p:NuGetAudit=false \$(ls *.sln *.slnx 2>/dev/null | head -1) >>$LOG 2>&1" ;;
@@ -55,6 +64,7 @@ if [ "$REPO" = probe ]; then
   # Not scored: the network stays up, so each tool behaves as it would on a developer's machine.
   for tool in knowcode codebase-memory-mcp serena; do
     run "mkdir -p /work/probe/$tool && cp -R /work/harness/compare/fixture/$LANGUAGE /work/probe/$tool/$LANGUAGE"
+    snapshot "/work/probe/$tool/$LANGUAGE"
     restore "/work/probe/$tool/$LANGUAGE"
   done
   run "cd /work/harness && compare-python -m compare.probe $LANGUAGE /out >>$LOG 2>&1"
@@ -63,6 +73,7 @@ fi
 
 # 1. With the network up: restore, then every tool indexes.
 run "tar -xf /in/src.tar -C /work/src"
+snapshot /work/src
 restore /work/src
 run "cd /work/harness && compare-python -m compare.run index --language $LANGUAGE --repo $REPO --src /work/src --out /out $* >>$LOG 2>&1"
 

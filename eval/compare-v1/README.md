@@ -21,7 +21,7 @@ set, compare-v2. The commit that adds them is the one the results cite as the ma
 | --- | --- | --- |
 | KnowCode | This repository's binary | `knowcode serve --tools all`, over stdio |
 | codebase-memory-mcp | One binary: tree-sitter extraction, its own type resolution ("Hybrid LSP") for ten languages, a SQLite graph | `codebase-memory-mcp` (its MCP server), over stdio |
-| Serena | An MCP server over each language's language server | `serena start-mcp-server`, over stdio, with the LSP backend |
+| Serena | An MCP server over each language's language server | `serena start-mcp-server --agent-interface tools`, over stdio, with the LSP backend |
 
 Each tool runs twice: at the version pinned in [tools.toml](tools.toml), and at its latest release when the run
 starts. Both are pinned by digest, and both results are published. Only the pinned run is compared across KnowCode
@@ -49,7 +49,9 @@ Each tool indexes each repository as its own documentation says, with its defaul
   restricted networks. A repository's dependencies are restored with the network up, as identity-v1's labeller
   restores them, so that a language server can resolve what the compiler resolves.
 
-No tool reads another's index or any label. Each repository is its own project, as in identity-v1.
+Each repository's tracked files at its pin are committed once, as one commit, into a fresh git repository in the
+container, before its dependencies are restored. KnowCode indexes git repositories, and every tool reads that
+same tree. No tool reads another's index or any label. Each repository is its own project, as in identity-v1.
 
 ## Questions
 
@@ -75,11 +77,13 @@ Each question names its target the way a person reading the code would: by file,
 D, and by name alone for `find`.
 
 **Lookup.** Each tool is given D's file, line and name, and addresses D by the most precise handle its own
-documentation offers. KnowCode takes `file:line` directly. Serena's `find_symbol` is called with the file as
-`relative_path`. codebase-memory-mcp's `search_graph` is called with the file as `file_pattern` and the name, and
-with a `qn_pattern` built from the file's path where its qualified names allow that. In both cases the adapter
-takes the candidate whose range holds D's line, and then uses that candidate's own name path or qualified name.
-A tool that doesn't hand back such a candidate gets `not_found` for that question. Lookup failures are reported
+documentation offers. KnowCode takes `file:line` directly, and answers for the innermost definition spanning that
+line, so its adapter checks that the answer's target has D's name. Serena's `find_symbol` is called with the file as
+`relative_path`. codebase-memory-mcp's `search_graph` is called with the file as `file_pattern` and with the name. In both cases
+the adapter takes the candidate whose range holds D's line, then uses that candidate's own name path (Serena) or
+qualified name (codebase-memory-mcp).
+A tool that doesn't hand back such a candidate, or whose answer is for a declaration of another name, gets
+`not_found` for that question. Lookup failures are reported
 per tool, apart from wrong answers. Each tool is scored twice: on every question, with `not_found` counted
 apart, and on only the questions where its own lookup succeeded. Taking `file:line` directly could favour
 KnowCode, and the second score shows how far it does.
@@ -141,12 +145,19 @@ over stdio, and each question is one or more calls, exactly as [mapping.toml](ma
 normalised as follows:
 
 - **`refs`:** every `file:line` the answer names as a reference site. A tool that names the enclosing symbol
-  instead of the line names that symbol's span, and the span is matched as below.
+  instead of the line names that symbol's span, and the span is matched as below. Serena marks each reference's
+  line in its snippet, and those lines are the sites. codebase-memory-mcp names callers only.
 - **`callers` and `impact`:** every declaration the answer names, as its file and line. A tool's line counts as a
   declaration's name line when it is the first line, from the tool's line through the next 10, that has the
   declaration's name as a word. This is identity-v1's rule.
 - **`find`:** every declaration the answer names, matched the same way.
 - **`locate` and `task`:** every repository-relative path the answer names, in the order it first names them.
+
+codebase-memory-mcp's `trace_path` names each caller by qualified name only. The adapter reads each one back with
+the tool's own `search_graph` to get its file and line range. That step names nothing the answer didn't name.
+
+Serena runs with its classical tool interface, which has one MCP tool per operation, so the mapping's calls are
+the tools themselves. Its v2 default, a Python REPL tool, runs the same operations.
 
 A question has a fixed budget: 60 seconds per call, and the tool's default page of results. A cursor or
 continuation is followed up to 10 pages when the tool offers one. Each answer is stored whole, with its bytes, so

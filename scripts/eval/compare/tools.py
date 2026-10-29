@@ -34,7 +34,9 @@ def environment(tool, state):
 class Session:
     """One tool's MCP session on one repository, after the tool has indexed it as its documentation says."""
 
-    def __init__(self, tool, repo, language, state, logs):
+    def __init__(self, tool, repo, language, state, logs, setup=True, project=None):
+        """With `setup`, the tool indexes the repository (the network may be up); without, the session reopens what an
+        earlier session indexed, as a later session of a user's would."""
         self.tool, self.repo, self.language = tool, str(repo), language
         self.env = environment(tool, state)
         logs = Path(logs)
@@ -42,9 +44,11 @@ class Session:
         stem = f'{Path(repo).name}.{tool}'
         self.stderr = open(logs/f'{stem}.stderr', 'ab')
         self.log = open(logs/f'{stem}.mcp.jsonl', 'a')
-        self.project = None
+        self.project = project  # codebase-memory-mcp's name for the repository, from the indexing session
         self.setup_log = logs/f'{stem}.setup.log'
-        if tool == 'codebase-memory-mcp':
+        if not setup:
+            pass
+        elif tool == 'codebase-memory-mcp':
             # The tree doesn't change during a run, so the watcher has nothing to do (README.md, "Configuration").
             self._run(['codebase-memory-mcp', 'config', 'set', 'watcher_enabled', 'false'])
             self._run(['codebase-memory-mcp', 'config', 'set', 'auto_index', 'false'])
@@ -53,14 +57,19 @@ class Session:
                       timeout=INDEX_TIMEOUT)
         self.client = mcp.Client(self.command(), env=self.env, cwd=self.repo, stderr=self.stderr, log=self.log,
                                  timeout=INDEX_TIMEOUT if tool == 'serena' else 120)
-        self.index()
+        if setup:
+            self.index()
+        elif tool == 'knowcode':
+            self.index()  # a sync that finds nothing changed
 
     def command(self):
         if self.tool == 'knowcode':
             return ['knowcode', 'serve', '--tools', 'all']
         if self.tool == 'codebase-memory-mcp':
             return ['codebase-memory-mcp']
-        return ['serena', 'start-mcp-server', '--project', self.repo]
+        # The classical tool interface (docs/02-usage/050_configuration.md, "Agent Interfaces"): one MCP tool per
+        # operation, the calls the mapping names. The REPL interface, v2's default, runs the same operations (LspApi).
+        return ['serena', 'start-mcp-server', '--project', self.repo, '--agent-interface', 'tools']
 
     def index(self):
         if self.tool == 'knowcode':

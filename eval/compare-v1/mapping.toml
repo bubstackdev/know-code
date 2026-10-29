@@ -25,12 +25,18 @@ handle = "{file}:{line}"
 
 [lookup.codebase-memory-mcp]
 # "trace_path returns 0 results: use search_graph(name_pattern=...) first to find the exact name" (README, Troubleshooting).
-# Qualified names are `<project>.<path_parts>.<name>` (README, "Qualified Names"): qn_pattern narrows to the file's
-# path parts; the probe before the freeze fixes the exact form, recorded here.
-calls = [{ tool = "search_graph", args = { project = "{project}", name_pattern = "^{name_re}$", qn_pattern = "{qn_file_re}", file_pattern = "{file_re}", format = "json", limit = 50 } }]
+# The file (file_pattern, the repository-relative path) and the name narrow it to the declaration; its row's
+# `qn_prefix` and name give the qualified name (`<project>.<path_parts>.<name>`, README "Qualified Names"), which
+# trace_path takes as function_name (checked in the probe).
+calls = [{ tool = "search_graph", args = { project = "{project}", name_pattern = "^{name_re}$", file_pattern = "{file}", format = "json", limit = 50 } }]
 handle = "{qn}"
+# trace_path names callers by qualified name only; each is read back with the tool's own search to get its file and
+# line range (normalisation, not a further answer):
+normalise = [{ tool = "search_graph", args = { project = "{project}", qn_pattern = "^{caller_qn_re}$", format = "json", limit = 5 } }]
 
 [lookup.serena]
+# Serena runs with its classical tool interface (`--agent-interface tools`; docs/02-usage/050_configuration.md, "Agent
+# Interfaces"): one MCP tool per operation. v2's default REPL interface runs the same operations (its LspApi).
 # find_symbol with relative_path set to the file, as its docstring advises when the file is known.
 calls = [{ tool = "find_symbol", args = { name_path_pattern = "{name}", relative_path = "{file}", depth = 0 } }]
 handle = "{name_path}"

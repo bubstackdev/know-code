@@ -44,6 +44,12 @@ def calls(tool, session, language):
         for name, (f, line, n) in t.items():
             out += [('search_graph', {'project': p, 'name_pattern': f'^{n}$', 'format': 'json', 'limit': 50}),
                     ('search_graph', {'project': p, 'name_pattern': f'^{n}$', 'file_pattern': f, 'format': 'json'})]
+        out += [('search_graph', {'project': p, 'qn_pattern': '.*[.]' + t['weigh'][0].rsplit('.', 1)[0].replace('/', '[.]')
+                                  + '[.].*' + t['weigh'][2] + '$', 'format': 'json'}),
+                ('trace_path', {'project': p, 'function_name': f"{p}.{t['gather'][0].rsplit('.', 1)[0].replace('/', '.')}.{t['gather'][2]}",
+                                'direction': 'inbound', 'depth': 1, 'include_tests': True, 'format': 'json'}),
+                ('trace_path', {'project': p, 'function_name': t['gather'][2], 'direction': 'inbound', 'depth': 1,
+                                'include_tests': True, 'format': 'tree', 'include_evidence': True})]
         for n in ('weigh', 'gather', 'Basket'):
             name = t[n][2]
             out += [('trace_path', {'project': p, 'function_name': name, 'direction': 'inbound', 'depth': 1,
