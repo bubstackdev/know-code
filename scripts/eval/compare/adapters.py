@@ -23,9 +23,20 @@ class NotFound(Exception):
 # ---------------------------------------------------------------------------------------------------------------------
 # KnowCode
 
-KC_ROW = re.compile(r'^\s*(?:[a-z]+(?: [a-z]+)*) by \S+ (?P<name>\S+)\s+(?P<file>\S+):(?P<line>\d+)\b(?P<rest>.*)$')
+# Impact rows separate the name, the place and the rest by two spaces; a path may hold single spaces
+# (`Sources/ArgumentParser/Parsable Types/ParsableCommand.swift`).
+KC_ROW = re.compile(r'^\s*(?:[a-z]+(?: [a-z]+)*) by \S+ (?P<name>\S+)  (?P<file>\S(?:.*?\S)?):(?P<line>\d+)(?P<rest>(?:  .*)?)$')
 KC_DECLARED = re.compile(r'\(declared at line (\d+)\)')
-KC_MORE = re.compile(r'kc_more \{"cursor":\s*"([^"]+)"\}')
+# The continuation, as an answer names it: `kc_more {cursor: "kc~1"}` (and, in JSON, `{"cursor": "kc~1"}`).
+KC_MORE = re.compile(r'kc_more \{"?cursor"?:\s*"([^"]+)"\}')
+
+
+def plain(name):
+    """A declaration's simple name as the question gives it: without type parameters (`Write<T0, T1>`), an
+    overload index (`run[1]`) or a parameter list (`pick(_:)`), which tools add to it."""
+    name = re.sub(r'\[\d+\]$', '', name)
+    name = re.sub(r'\(.*\)$', '', name)
+    return re.sub(r'<.*>$', '', name).strip()
 
 
 def kc_refs_sites(text):
@@ -53,7 +64,7 @@ def kc_find_decls(text):
     return [('decl', i['file'], i['line']) for i in data.get('items', []) if 'file' in i and 'line' in i], data.get('cursor')
 
 
-KC_HEAD = re.compile(r'^[a-z]+(?: [a-z]+)* (?P<name>\S+)\s+(?P<file>\S+):(?P<line>\d+)$', re.M)
+KC_HEAD = re.compile(r'^[a-z]+(?: [a-z]+)* (?P<name>\S+)  (?P<file>\S(?:.*?\S)?):(?P<line>\d+)$', re.M)
 
 
 def kc_target_name(qtype, text):
@@ -65,7 +76,7 @@ def kc_target_name(qtype, text):
     else:
         m = KC_HEAD.search(text)
         name = m['name'] if m else ''
-    return name.rsplit('.', 1)[-1]
+    return plain(name.rsplit('.', 1)[-1])
 
 
 def kc_not_found(message):
@@ -89,7 +100,7 @@ def ask_knowcode(session, qtype, q):
         else:
             raise ValueError(qtype)
         raw.append(text)
-        if target and kc_target_name(qtype, text) != target[2]:
+        if target and kc_target_name(qtype, text) != plain(target[2]):
             return 'not_found', [], raw
         items, cursor = parse(text)
         for _ in range(PAGES - 1):
@@ -126,7 +137,7 @@ def cbm_rows(text):
 
 def cbm_pick(rows, file, line, name):
     """The candidate whose range holds `line`, in `file`, named `name`; the narrowest when several do."""
-    hold = [r for r in rows if r['file'] == file and r['name'] == name and r['first'] is not None
+    hold = [r for r in rows if r['file'] == file and plain(r['name']) == plain(name) and r['first'] is not None
             and r['first'] <= line <= r['last']]
     return min(hold, key=lambda r: (r['last'] - r['first'], r['qn']), default=None)
 
@@ -217,11 +228,12 @@ def serena_symbols(text):
 
 
 def serena_last(name_path):
-    return re.sub(r'\[\d+\]$', '', name_path.rsplit('/', 1)[-1])
+    return plain(name_path.rsplit('/', 1)[-1])
 
 
 def serena_pick(symbols, file, line, name):
-    hold = [s for s in symbols if s['file'] == file and serena_last(s['name_path']) == name and s['first'] <= line <= s['last']]
+    hold = [s for s in symbols if s['file'] == file and serena_last(s['name_path']) == plain(name)
+            and s['first'] <= line <= s['last']]
     return min(hold, key=lambda s: (s['last'] - s['first'], s['name_path']), default=None)
 
 
@@ -250,7 +262,10 @@ def ask_serena(session, qtype, q):
         if qtype == 'impact':
             return 'no_counterpart', [], raw
         file, line, name = q['target']
-        text, _ = session.call('find_symbol', {'name_path_pattern': name, 'relative_path': file, 'depth': 0}, CALL_TIMEOUT)
+        # substring_matching (find_symbol's documented option): a generic declaration's name path segment carries its
+        # type parameters (`InboundWebSocketMessage<T>`), which a plain name doesn't match; the pick compares plain names.
+        text, _ = session.call('find_symbol', {'name_path_pattern': name, 'relative_path': file, 'depth': 0,
+                                               'substring_matching': True}, CALL_TIMEOUT)
         raw.append(text)
         picked = serena_pick(_symbols(text), file, line, name)
         if not picked:

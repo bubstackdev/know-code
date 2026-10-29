@@ -196,6 +196,26 @@ SQL table links. compare-v1 asks no such question of any tool. The results list 
 them as KnowCode wins. A question the set does ask, but one tool has no call for, is that tool's `no_counterpart`
 row.
 
+## Changes after the first run
+
+The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An
+audit of the three adapters against this protocol then found the deviations below. They were fixed in one commit
+(`compare-v1: adapters brought to the frozen protocol after the first run`), and both runs were repeated. The
+mapping, the scoring and the questions didn't change. Both the first run and the rerun are published, side by
+side, in results.md.
+
+| Tool | Deviation from the protocol | Effect on the first run |
+| --- | --- | --- |
+| KnowCode | Its continuation, written `kc_more {cursor: "…"}` in impact answers, was never followed. The parser expected `{"cursor": "…"}`. ("Asking": follow up to 10 pages.) | 24 impact answers stopped at their first page. |
+| KnowCode | The impact parsers read a path as one word, so a path with a space (`Parsable Types/`) dropped its rows, and the name check failed on such a target. | 5 impact questions were counted `not_found`, and 92 dependent rows were dropped. |
+| KnowCode | The index phase sent `kc_status`, which doesn't index. KnowCode then indexed during the first query, with the network cut. Its documented way to index now is `knowcode index`. ("Indexing": each tool indexes as its documentation says, with the network up.) | KnowCode's index was built in the ask phase. 1 to 2 answers per run on jellyfin-server read a stale snapshot. |
+| Serena | A generic declaration's name-path segment carries its type parameters (`Write<T0, T1, T2>`), which neither find_symbol's plain-name match nor the adapter's name comparison accepted. The lookup now uses find_symbol's documented `substring_matching`, and every adapter compares names without type parameters, overload indexes or parameter lists. ("Lookup": the most precise handle the documentation offers.) | Some of Serena's 16 `not_found` results on generic C# declarations. |
+
+Checked and left as they were:
+- **codebase-memory-mcp:** its continuations (`next_cursor`) were followed in every answer, up to its stated totals. Its lookup misses are the tool's: it keeps one declaration per name and file, so the other overloads aren't there to find.
+- **Serena's readiness:** Serena documents no readiness wait for its Swift or C# language servers. Its sourcekit-lsp integration sleeps a fixed 5 seconds before the first references request. No wait is added, because a sleep tuned to the results is not a documented mechanism. Serena's empty answers on some swift-nio references, in one repetition but not the other, are its own and are reported as they come.
+- **Serena's size limit:** one answer was past Serena's default size limit. Serena offers no continuation, so that answer names nothing.
+
 ## Repeatability
 
 Each published result is two complete runs in fresh containers, from the same image. The two must give identical

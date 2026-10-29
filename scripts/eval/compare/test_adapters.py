@@ -36,9 +36,17 @@ class KnowCodeTest(unittest.TestCase):
         self.assertEqual(items, [('decl', 'src/harvest.ts', 4), ('decl', 'src/harvest.ts', 10)])
         self.assertIsNone(cursor)
 
-    def test_impact_cursor(self):
+    def test_impact_cursor_as_the_answer_writes_it(self):
+        _, cursor = adapters.kc_impact_decls(KC_IMPACT + 'incomplete (capped): items[]: cut short; kc_more {cursor: "kc~1"}\n')
+        self.assertEqual(cursor, 'kc~1')
         _, cursor = adapters.kc_impact_decls(KC_IMPACT + 'more: kc_more {"cursor": "abc"}\n')
         self.assertEqual(cursor, 'abc')
+
+    def test_impact_rows_in_paths_with_spaces(self):
+        text = ('method ParsableCommand.run  Sources/ArgumentParser/Parsable Types/ParsableCommand.swift:32\n'
+                '  called by method Main.main  Sources/Main Things/main.swift:9  [exact] direct (declared at line 7)\n')
+        self.assertEqual(adapters.kc_impact_decls(text)[0], [('decl', 'Sources/Main Things/main.swift', 7)])
+        self.assertEqual(adapters.kc_target_name('impact', text), 'run')
 
     def test_refs_sites(self):
         text = json.dumps({"items": [{"file": "src/harvest.ts", "line": 7}], "cursor": "c1"})
@@ -72,8 +80,11 @@ class SerenaTest(unittest.TestCase):
         self.assertEqual((s[0]['first'], s[0]['last']), (4, 6))
         self.assertEqual(adapters.serena_pick(s, 'src/basket.ts', 4, 'weigh')['name_path'], 'Basket/weigh')
 
-    def test_overload_index_is_not_part_of_the_name(self):
+    def test_overload_index_and_type_parameters_are_not_part_of_the_name(self):
         self.assertEqual(adapters.serena_last('Basket/weigh[1]'), 'weigh')
+        self.assertEqual(adapters.serena_last('Ns/InboundWebSocketMessage<T>'), 'InboundWebSocketMessage')
+        self.assertEqual(adapters.serena_last('Logger/Write<T0, T1, T2>[3]'), 'Write')
+        self.assertEqual(adapters.plain('pick(_:)'), 'pick')
 
     def test_references_read_the_marked_lines(self):
         refs = adapters.serena_references(SERENA_REFS)

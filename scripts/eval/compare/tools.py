@@ -52,6 +52,10 @@ class Session:
             # The tree doesn't change during a run, so the watcher has nothing to do (README.md, "Configuration").
             self._run(['codebase-memory-mcp', 'config', 'set', 'watcher_enabled', 'false'])
             self._run(['codebase-memory-mcp', 'config', 'set', 'auto_index', 'false'])
+        elif tool == 'knowcode':
+            # `knowcode index` indexes the repository now (docs/usage.md, "Index repos now"). A query alone waits
+            # about two seconds for indexing and leaves the rest to a background worker.
+            self._run(['knowcode', 'index', self.repo], timeout=INDEX_TIMEOUT)
         elif tool == 'serena':
             self._run(['serena', 'project', 'create', '--language', SERENA_LANGUAGE[language], '--index', self.repo],
                       timeout=INDEX_TIMEOUT)
@@ -60,7 +64,7 @@ class Session:
         if setup:
             self.index()
         elif tool == 'knowcode':
-            self.index()  # a sync that finds nothing changed
+            self.index()  # status: a sync that finds nothing changed
 
     def command(self):
         if self.tool == 'knowcode':
@@ -73,7 +77,6 @@ class Session:
 
     def index(self):
         if self.tool == 'knowcode':
-            # KnowCode indexes on its first query; status is the cheapest one.
             self.client.call('kc_status', {}, timeout=INDEX_TIMEOUT)
         elif self.tool == 'codebase-memory-mcp':
             text, structured = self.client.call('index_repository', {'repo_path': self.repo}, timeout=INDEX_TIMEOUT)
