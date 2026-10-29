@@ -17,7 +17,7 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -36,14 +36,115 @@ const COMMON_TYPES: &[&str] = &[
 pub fn extract(source: &str) -> FileFacts {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_kotlin_ng::LANGUAGE.into()).expect("tree-sitter-kotlin-ng ABI matches tree-sitter");
-    let Some(tree) = parser.parse(source, None) else {
+    let Some(mut tree) = parser.parse(source, None) else {
         return FileFacts { parse_errors: 1, ..Default::default() };
     };
+    // tree-sitter-kotlin-ng 1.1.0 can't read one shape kotlinc does: a nested class whose primary constructor starts
+    // on the line after its name (`class Builder` / `internal constructor(…) : Supers {`). In a class body it ends the
+    // class at the newline and reads a secondary constructor, which fails. Only for an error over exactly that shape,
+    // the file is parsed again without those newlines (tree-sitter's included ranges), so every node keeps its place in
+    // the file as written.
+    let joins = constructor_breaks(source, tree.root_node());
+    if !joins.is_empty()
+        && let Some(recovered) = parse_without(&mut parser, source, &joins)
+        && count_errors(recovered.root_node()) < count_errors(tree.root_node())
+    {
+        tree = recovered;
+    }
     let mut nested = HashMap::new();
     member_types(source, tree.root_node(), None, &mut nested);
     let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested };
     cx.visit(tree.root_node());
     cx.facts
+}
+
+/// The newlines that split a class name from its primary constructor (`class Builder` / `internal constructor(`), inside
+/// an ERROR node: the one shape the grammar misreads, and only where it did.
+fn constructor_breaks(src: &str, root: Node) -> Vec<usize> {
+    let mut errors = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.is_error() {
+            errors.push(n.byte_range());
+            continue;
+        }
+        if n.has_error() {
+            stack.extend(children(n));
+        }
+    }
+    let mut out = Vec::new();
+    for range in errors {
+        let text = &src[range.clone()];
+        let mut from = 0;
+        while let Some(at) = text[from..].find("class ") {
+            let start = from + at;
+            from = start + 6;
+            // `class Name<T>` up to the end of its line, nothing else after the name.
+            let line_end = text[start..].find('\n').map_or(text.len(), |e| start + e);
+            let header = text[start + 6..line_end].trim_end();
+            let name_ok = header.split('<').next().is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
+            if !name_ok || line_end >= text.len() {
+                continue;
+            }
+            // The next line: modifiers or annotations, then `constructor(`.
+            let next = text[line_end + 1..].trim_start_matches([' ', '\t']);
+            let mut rest = next;
+            loop {
+                let word: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '@' || *c == '_').collect();
+                if word == "constructor" {
+                    break;
+                }
+                if word.is_empty() || !(word.starts_with('@') || matches!(word.as_str(), "public" | "internal" | "private" | "protected")) {
+                    rest = "";
+                    break;
+                }
+                rest = rest[word.len()..].trim_start_matches([' ', '\t']);
+            }
+            if rest.starts_with("constructor") && rest["constructor".len()..].trim_start().starts_with('(') {
+                out.push(range.start + line_end);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// `src` parsed with the bytes at `skip` left out, positions still the file's.
+fn parse_without(parser: &mut Parser, src: &str, skip: &[usize]) -> Option<tree_sitter::Tree> {
+    let point = |byte: usize| {
+        let before = &src[..byte];
+        let row = before.matches('\n').count();
+        let column = byte - before.rfind('\n').map_or(0, |i| i + 1);
+        tree_sitter::Point { row, column }
+    };
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    for &b in skip {
+        if b > start {
+            ranges.push(tree_sitter::Range { start_byte: start, end_byte: b, start_point: point(start), end_point: point(b) });
+        }
+        start = b + 1;
+    }
+    ranges.push(tree_sitter::Range { start_byte: start, end_byte: src.len(), start_point: point(start), end_point: point(src.len()) });
+    parser.set_included_ranges(&ranges).ok()?;
+    let tree = parser.parse(src, None);
+    parser.set_included_ranges(&[]).ok()?;
+    tree
+}
+
+fn count_errors(root: Node) -> usize {
+    let mut n = 0;
+    let mut stack = vec![root];
+    while let Some(x) = stack.pop() {
+        if x.is_error() || x.is_missing() {
+            n += 1;
+        }
+        if x.has_error() {
+            stack.extend(children(x));
+        }
+    }
+    n
 }
 
 struct Scope {
@@ -871,6 +972,37 @@ mod tests {
         assert_eq!(supers, vec!["Base", "Sized"]);
         assert!(f.symbols.iter().find(|s| s.name == "shout").unwrap().signature.contains("String.shout"));
         assert_eq!(f.parse_errors, 0);
+    }
+
+    #[test]
+    fn a_nested_class_with_its_constructor_on_the_next_line_is_recovered() {
+        let src = "package p\n\
+                   class Spec {\n\
+                   \x20 public class Builder\n\
+                   \x20 internal constructor(internal val name: String) :\n\
+                   \x20   Taggable.Builder<Builder> {\n\
+                   \x20   fun build(): Spec = Spec()\n\
+                   \x20 }\n\
+                   }\n";
+        let f = extract(src);
+        assert_eq!(f.parse_errors, 0, "recovered");
+        let builder = f.symbols.iter().find(|s| s.name == "Builder").unwrap();
+        assert_eq!((builder.start_line, builder.container.as_deref()), (3, Some("Spec")));
+        let name = f.symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!((name.start_line, name.container.as_deref()), (4, Some("Spec.Builder")));
+        let build = f.symbols.iter().find(|s| s.name == "build").unwrap();
+        assert_eq!((build.start_line, build.container.as_deref()), (6, Some("Spec.Builder")));
+        // Columns on both sides of the joined newline are the file's.
+        let taggable = f.refs.iter().find(|r| r.name == "Builder" && r.receiver.as_deref() == Some("Taggable")).unwrap();
+        assert_eq!((taggable.line, taggable.col), (5, 14));
+        let spec = f.refs.iter().find(|r| r.name == "Spec" && r.line == 6).unwrap();
+        assert_eq!(spec.col, 18);
+        // The same class at the top level parses as written; nothing is joined there.
+        assert_eq!(constructor_breaks("class B\ninternal constructor(x: Int)\n", {
+            let mut p = Parser::new();
+            p.set_language(&tree_sitter_kotlin_ng::LANGUAGE.into()).unwrap();
+            Box::leak(Box::new(p.parse("class B\ninternal constructor(x: Int)\n", None).unwrap())).root_node()
+        }), Vec::<usize>::new());
     }
 
     #[test]
