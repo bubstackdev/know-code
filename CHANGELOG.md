@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
+  scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
+  member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
+  `assertThat`) is never linked to the repo's declaration of the same name. On identity-v2's 1,501 Java labels (gson,
+  commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 797 links, linked recall 0.713, and no
+  outside label is linked; on a held-out set nothing was tuned on (jackson-core, 455 labels), 1.000 over 248 links,
+  linked recall 0.719, and none linked.
 - Two indexes of one tree give the same `tests`, `task` and `impact` answers. A reverse walk cut at its limit kept
   the dependents it reached first, in the order the index happened to store files (which parallel indexing varies),
   so two cold indexes of swift-nio could select 127 or 136 candidate tests for the same change. The walk now takes
@@ -51,6 +58,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
     listed rather than linked: the library's overloads take other argument types.
   - A free function named like a C library function (a platform shim such as `unlink` for Windows) is listed rather
     than linked: the platform's own function is the one called on other platforms.
+- TypeScript: a parameter destructured from an annotated type (`({ task }: TaskProps)`) has that type's property's type,
+  and a type alias's object type (`type TaskProps = { task: TaskInfo }`) has its properties indexed as members, as an
+  interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
+  from 0.578 to 0.597 and one more outside label is no longer linked (`task.LastExecutionResult.Status` on a package
+  type), leaving 2. A type alias's property is reached only through a value of that type, never by its name alone.
 
 ## 0.6.1 (2026-10-28)
 

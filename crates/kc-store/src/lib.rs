@@ -13,6 +13,7 @@ pub mod content;
 pub mod db;
 pub mod di;
 pub mod identity;
+mod jvm;
 pub mod limits;
 pub mod locate;
 pub mod manifests;
@@ -40,7 +41,7 @@ use kc_extract::{FileFacts, Lang};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 /// Bumped when query-time resolution changes, so cached derived results (file edges, hotspots, maps) are recomputed.
-pub const RESOLVER_VERSION: u32 = 33;
+pub const RESOLVER_VERSION: u32 = 35;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].

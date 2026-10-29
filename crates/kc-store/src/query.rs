@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -546,6 +546,8 @@ struct Def {
     file_private: bool,
     /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
     on_actor: bool,
+    /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
+    alias_member: bool,
 }
 
 impl Def {
@@ -2622,6 +2624,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
     }
+    // A property of a type alias's object type is reached through a value known to be of that type, never by its
+    // name alone: such shapes (`type Item = { Id: string; Name: string }`) restate a package's types' fields.
+    let cands: Vec<&Def> = if matches!(recv, Receiver::Unknown) { cands.into_iter().filter(|d| !d.alias_member).collect() } else { cands };
+    if cands.is_empty() {
+        return ("unresolved", Vec::new());
+    }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
     groups.sort();
     groups.dedup();
@@ -3019,12 +3027,13 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang = 'csharp' THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
-     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
+     p.kind IS 'typealias'";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -3051,6 +3060,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         exported: r.get(17)?,
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
+        alias_member: r.get(20)?,
     })
 }
 
@@ -5246,6 +5256,7 @@ fn same_language(file: &str, lang: &str) -> bool {
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
+        "java" => Some("java"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),
@@ -5320,6 +5331,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let mut sql = crate::sql::Resolver::default();
     let mut ansible = crate::ansible::Resolver::default();
     let mut terraform = crate::terraform::Resolver::default();
+    let mut jvm = crate::jvm::Resolver::default();
     let modules = &mut shared.modules;
     let py_modules = &mut shared.py_modules;
     // Per C# type, the constructors a creation of it may call.
@@ -5380,12 +5392,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         let ts = crate::ts::is_ts_path(&hit.file);
         let cs = hit.file.ends_with(".cs");
+        let java = crate::jvm::handles(&hit.file);
         // In TypeScript an imported name comes from its module, and a bare one from the file itself; in Python a name
         // `from m import`ed, or a member of an `import`ed module, comes from that module.
         let scoped = if ts {
             ts_scoped(conn, hit, modules, &mut defs)?
         } else if hit.file.ends_with(".py") {
             py_scoped(conn, hit, py_modules, &mut defs)?
+        } else if java {
+            jvm.scoped(conn, hit)?
         } else {
             None
         };
@@ -5644,6 +5659,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 exact_by = Mechanism::Namespace;
             }
         }
+        if java && !by_import {
+            (confidence, ids) = jvm.after(conn, hit, receiver_known, (confidence, ids))?;
+        }
         if cs_type && matches!(confidence, "unique_name" | "ambiguous") && scoped_out_type(&defs[&hit.name], named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
             confidence = "exact";
             exact_by = Mechanism::ProjectScope;
@@ -5701,7 +5719,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
             }
         }
-        if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
+        // A Java call through an interface binds to the interface's method, as javac does; the requirement is the target.
+        if confidence == "exact" && !hit.precise && !java && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
                 // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);

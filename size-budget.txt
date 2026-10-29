@@ -35,4 +35,7 @@
 # The 0.6 build's task-level answers and checks: task context, test targets, file context, cache lifetime for shared
 # bases, the contract and task gates, and the Swift and TypeScript identity fixes (37752672, up 396816; measured on
 # integration/0.6 with #191).
-37752672
+# 0.7's Java: tree-sitter-java linked (412880 bytes, eval/size/grammars.md at 0fd522a) plus the Java extractor and
+# resolver (82624 bytes): the dist build of this change measured 38430096 against 37934592 for integration/0.7 at
+# fde5357, whose Rust code is the change's base.
+38430096
