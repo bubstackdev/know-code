@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 26;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -653,7 +653,9 @@ impl<'a> Cx<'a> {
             signature,
             doc: doc_comment(self.src, node),
             attrs,
-            tags: Vec::new(),
+            // A function or type declared in a function body: its uses belong to that function (see
+            // `kc_store::trace`), as the compiler's index reports them.
+            tags: if self.in_callable() { vec!["local"] } else { Vec::new() },
             start_line: line(node),
             end_line: node.end_position().row as u32 + 1,
             start_byte: node.start_byte() as u32,
@@ -726,7 +728,8 @@ impl<'a> Cx<'a> {
             }
         }
         self.scopes.pop();
-        self.facts.symbols[sym].tags = type_tags(kind, &self.facts.symbols[sym].attrs, &targets);
+        let tags = type_tags(kind, &self.facts.symbols[sym].attrs, &targets);
+        self.facts.symbols[sym].tags.extend(tags);
 
         self.scopes.push(Scope { sym, type_name: Some(qualified), callable: false, locals: HashMap::new(), bound: HashSet::new() });
         if let Some(body) = node.child_by_field_name("body") {
