@@ -204,12 +204,18 @@ audit of the three adapters against this protocol then found the deviations belo
 mapping, the scoring and the questions didn't change. Both the first run and the rerun are published, side by
 side, in results.md.
 
-| Tool | Deviation from the protocol | Effect on the first run |
+**Three of the four fixes favour KnowCode, and one favours Serena.** None changes codebase-memory-mcp's stored
+answers: re-parsing its 116 `not_found` lookups (refs and impact) with the new name comparison finds none.
+The last column of the table shows each fix's effect on the first run's stored answers. These are re-parsed
+figures, not a rerun. A fix that needs calls the first run never made can't be measured that way, and the table
+gives the size of what it touches instead.
+
+| Favours | Deviation from the protocol | Effect on the first run's stored answers |
 | --- | --- | --- |
-| KnowCode | Its continuation, written `kc_more {cursor: "…"}` in impact answers, was never followed. The parser expected `{"cursor": "…"}`. ("Asking": follow up to 10 pages.) | 24 impact answers stopped at their first page. |
-| KnowCode | The impact parsers read a path as one word, so a path with a space (`Parsable Types/`) dropped its rows, and the name check failed on such a target. | 5 impact questions were counted `not_found`, and 92 dependent rows were dropped. |
-| KnowCode | The index phase sent `kc_status`, which doesn't index. KnowCode then indexed during the first query, with the network cut. Its documented way to index now is `knowcode index`. ("Indexing": each tool indexes as its documentation says, with the network up.) | KnowCode's index was built in the ask phase. 1 to 2 answers per run on jellyfin-server read a stale snapshot. |
-| Serena | A generic declaration's name-path segment carries its type parameters (`Write<T0, T1, T2>`), which neither find_symbol's plain-name match nor the adapter's name comparison accepted. The lookup now uses find_symbol's documented `substring_matching`, and every adapter compares names without type parameters, overload indexes or parameter lists. ("Lookup": the most precise handle the documentation offers.) | Some of Serena's 16 `not_found` results on generic C# declarations. |
+| KnowCode | Its continuation, written `kc_more {cursor: "…"}` in impact answers, was never followed. The parser expected `{"cursor": "…"}`. ("Asking": follow up to 10 pages.) | 24 of 96 impact answers stopped at their first page. The pages that weren't fetched can't be re-parsed, so only the rerun measures this fix. |
+| KnowCode | The impact parsers read a path as one word, so a path with a space (`Parsable Types/`) dropped its rows, and the name check failed on such a target. | Re-parsed: 9 impact answers change and 5 `not_found` become answers. KnowCode's impact recall on the questions it answered goes from 0.330 (657/1990) to 0.355 (712/2005), and on every question from 0.316 to 0.342. Precision goes from 0.707 (657/929) to 0.703 (713/1014). Swift recall goes from 0.210 to 0.262. |
+| KnowCode | The index phase sent `kc_status`, which doesn't index. KnowCode then indexed during the first query, with the network cut. Its documented way to index now is `knowcode index`. ("Indexing": each tool indexes as its documentation says, with the network up.) | Not re-parseable. KnowCode's index was built in the ask phase, and its index phase took 0.0 s in every repository. 1 to 2 answers per repetition on jellyfin-server read a stale snapshot. |
+| Serena | A generic declaration's name-path segment carries its type parameters (`Write<T0, T1, T2>`), which neither find_symbol's plain-name match nor the adapter's name comparison accepted. The lookup now uses find_symbol's documented `substring_matching`, and every adapter compares names without type parameters, overload indexes or parameter lists. ("Lookup": the most precise handle the documentation offers.) | 11 of Serena's 16 refs `not_found` results are generic C# declarations. The plain-name lookup never returned them, so re-parsing recovers none, and only the rerun measures this fix. |
 
 Checked and left as they were:
 - **codebase-memory-mcp:** its continuations (`next_cursor`) were followed in every answer, up to its stated totals. Its lookup misses are the tool's: it keeps one declaration per name and file, so the other overloads aren't there to find.
