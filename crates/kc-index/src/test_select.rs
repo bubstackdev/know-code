@@ -200,12 +200,24 @@ fn partition(mut picks: Vec<TestPick>) -> (Vec<TestPick>, Vec<TestPick>) {
     picks.into_iter().partition(|p| selectable(p) && p.confidence >= SELECT_AT)
 }
 
-/// Whether `path` is in a language tests are written in (Swift, Python, Rust, C#, TypeScript, JavaScript, CFML).
+/// Whether `path` is in a language tests are written in (Swift, Python, Rust, C#, TypeScript, JavaScript, Java, CFML,
+/// Go).
 fn holds_code(path: &str) -> bool {
     use kc_extract::Lang;
     matches!(
         Lang::from_path(path),
-        Some(Lang::Swift | Lang::Python | Lang::Rust | Lang::CSharp | Lang::TypeScript | Lang::Tsx | Lang::JavaScript | Lang::Cfml)
+        Some(
+            Lang::Swift
+                | Lang::Python
+                | Lang::Rust
+                | Lang::CSharp
+                | Lang::TypeScript
+                | Lang::Tsx
+                | Lang::JavaScript
+                | Lang::Java
+                | Lang::Cfml
+                | Lang::Go
+        )
     )
 }
 

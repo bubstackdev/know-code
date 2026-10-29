@@ -1,7 +1,7 @@
 # The merge gates from docs/evaluation.md "Gates per change": tests (the invariant suite as a step of its own), clippy with no
 # warnings, the eval harness's own tests, docs naming only files that exist, the dist binary against
-# size-budget.txt (measured on aarch64-apple-darwin, so that job runs on macOS), and the release replay gate's fast subset
-# against the latest release.
+# size-budget.txt (measured on aarch64-apple-darwin, so that job runs on macOS), the Linux binaries' glibc 2.28 floor,
+# and the release replay gate's fast subset against the latest release.
 # Actions are GitHub-owned and pinned to commit SHAs, as the repository's Actions policy requires.
 name: ci
 
@@ -11,6 +11,8 @@ on:
     branches: [main]
 
 # Read-only: no job here publishes. The release workflow grants write access only to the job creating a release.
+# Checkouts don't keep the token in .git/config (persist-credentials: false): no job pushes or fetches after checkout,
+# and the tests run the repository's own code.
 permissions:
   contents: read
 
@@ -30,6 +32,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - name: Install the pinned release generator
         run: bash scripts/install-dist.sh
       - name: Verify compiled source-path privacy
@@ -51,6 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - id: diff
         env:
@@ -76,6 +81,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -112,6 +119,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -122,11 +131,25 @@ jobs:
       # The runner image ships shellcheck.
       - run: shellcheck scripts/acceptance/clean-machine.sh
 
+  # deny.toml: RustSec advisories, banned crates (the no-HTTP privacy guard), licences and sources. The advisory
+  # database is fetched fresh, so a newly published advisory for a locked crate fails every run until it's dealt with.
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install the pinned cargo-deny
+        run: bash scripts/install-cargo-deny.sh
+      - run: cargo deny --locked check advisories bans licenses sources
+
   # README.md and docs/ naming a crate or script file that no longer exists.
   doc-paths:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -139,6 +162,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -158,6 +183,47 @@ jobs:
       - name: Test the isolated shell installer and installed MCP binary
         run: python3 scripts/check-installer.py target/distrib
 
+  # The Linux release binaries' portability, before a tag: a build in the manylinux_2_28 image dist-workspace.toml
+  # pins for the release, checked for glibc symbols newer than 2.28 and run on the oldest supported distributions
+  # (the release's own gate, linux-compat.yml, repeats both on the published archives). A debug build: which glibc
+  # symbols get linked depends on the build image, not the profile. Skipped, like size, when only prose changed.
+  linux-compat:
+    name: linux-compat (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/compat
+          key: compat-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'dist-workspace.toml') }}
+          restore-keys: compat-${{ matrix.target }}-
+      - name: build in the release's pinned manylinux_2_28 image
+        run: |
+          image=$(python3 -c 'import sys, tomllib; print(tomllib.load(open("dist-workspace.toml", "rb"))["dist"]["github-custom-runners"][sys.argv[1]]["container"]["image"])' "$TARGET")
+          mkdir -p "$RUNNER_TEMP/compat"
+          docker run --rm -v "$PWD:/src:ro" -v "$RUNNER_TEMP/compat:/compat" -w /src \
+            -e CARGO_HOME=/compat/cargo -e RUSTUP_HOME=/compat/rustup -e CARGO_TARGET_DIR=/compat/target "$image" \
+            bash -c 'set -e; [ -x /compat/cargo/bin/rustup ] || curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal --no-modify-path; PATH=/compat/cargo/bin:$PATH cargo build --locked -p knowcode'
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/compat"
+      - name: no glibc symbol newer than 2.28
+        run: python3 scripts/check-glibc.py --max 2.28 "$RUNNER_TEMP/compat/target/debug/knowcode"
+      - name: start, index and answer on the oldest supported distributions
+        run: bash scripts/check-linux-compat.sh "$RUNNER_TEMP/compat/target/debug/knowcode"
+
   # The release replay gate on its fast subset (eval/replay-gate/README.md): the recorded KnowCode calls on five small
   # public repositories, replayed against the latest release and against this change's build, with no model calls. It
   # fails on a regression beyond the gate's tolerances, and the comparison goes in the job summary. Linux only, so it
@@ -169,6 +235,8 @@ jobs:
       SUBSET: autofac,autofac-di,serilog,serilog-aspnetcore,serilog-extensions-hosting
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -214,3 +282,22 @@ jobs:
             --out "$RUNNER_TEMP/replay.md" || status=$?
           { echo "## Release replay gate (fast subset)"; echo; cat "$RUNNER_TEMP/replay.md"; } >> "$GITHUB_STEP_SUMMARY"
           exit $status
+
+  # One check that always reports, for the main branch's ruleset to require: it fails if any job above failed or was
+  # cancelled, and passes when the rest passed or were skipped (macOS and size on prose-only changes, replay on pushes).
+  # Requiring the per-job names instead can't cover `test (macos-15)` or the linux-compat matrix, which a prose-only
+  # change never creates. A new job joins `needs` here so the ruleset never has to change.
+  ci-ok:
+    if: always()
+    needs: [release-plan, changes, test, harness, doc-paths, deny, size, linux-compat, replay]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: every job passed or was skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "Job results: $RESULTS"
+          if jq -e 'any(.[]; . != "success" and . != "skipped")' <<<"$RESULTS" >/dev/null; then
+            echo "::error::A required job failed or was cancelled."
+            exit 1
+          fi

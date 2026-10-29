@@ -231,7 +231,7 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
                     add(&t.name, &t.kind, join(&[base, sub, &t.name]));
                 }
             }
-            "csproj" | "npm" | "cargo" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
+            "csproj" | "npm" | "cargo" | "gomod" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
             _ => {}
         }
     }

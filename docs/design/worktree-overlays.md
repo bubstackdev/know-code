@@ -139,6 +139,8 @@ Public repositories at pinned commits, cloned into a scratch directory; worktree
 - **State outside per-file facts** carried from the base (meta keys, SDK and SCIP stamps, history tables, derived
   rows): each needs resetting or a key that the worktree's state invalidates. The gate is what finds a missed one.
 - **Derived data is whole-graph:** any change recomputes the ranking and areas per worktree.
-- **First sync reads every file** to hash it: linear in the repository's bytes, small next to extraction.
+- **First sync reads every file** to hash it: linear in the repository's bytes, small next to extraction. Since 0.7
+  the clone keeps the checkout's stat for every file git says is clean and unchanged since the base's commit, so the
+  first sync reads only the others.
 - **Page churn:** the first sync rewrites every `files` row (new stats), so those pages become private; a large
   change rewrites more than its files' share of the index.
