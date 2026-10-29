@@ -532,6 +532,55 @@ impl Resolver {
                 }
             }
         }
+        // A bare Kotlin name, outside an extension's body: the caller's own (or inherited) members first, then a
+        // top-level declaration an import names, then one of the file's own package, then of a star-imported package.
+        // Anything else is Kotlin's default imports' (`require`, `emptyList`) or another library's: outside.
+        if hit.file.ends_with(".kt") && hit.receiver.is_none() && matches!(hit.kind.as_str(), "call" | "member") {
+            // A class's companion object's members are in scope in its body, before anything top-level.
+            let mut companions = Vec::new();
+            for outer in nest.iter().rev() {
+                companions.extend(members_with_container(conn, hit, &format!("{outer}.Companion"))?);
+                if !companions.is_empty() {
+                    break;
+                }
+            }
+            if let [one] = companions.as_slice() {
+                return Ok(Some(("exact", vec![*one])));
+            }
+            let chain = self.chain_names(file, &nest);
+            if !companions.is_empty() || !members_in(conn, &hit.name, &chain)?.is_empty() {
+                return Ok(None);
+            }
+            if let Some(q) = file.single.get(&hit.name) {
+                let (package, _) = q.rsplit_once('.').unwrap_or(("", q));
+                // `import a.b.C.member`: a type's member (a companion's or a Java static), or a package's top-level.
+                if let Some(t) = self.qualified.get(package) {
+                    let ids = members_of(conn, hit, *t)?;
+                    return Ok(Some(if ids.len() == 1 { ("exact", ids) } else if ids.is_empty() { ("unresolved", ids) } else { ("ambiguous", ids) }));
+                }
+                let ids = top_level(conn, hit, Some(package))?;
+                return Ok(Some(match ids.len() {
+                    0 => ("unresolved", ids),
+                    1 => ("exact", ids),
+                    _ => ("ambiguous", ids),
+                }));
+            }
+            let own = top_level(conn, hit, file.package.as_deref())?;
+            match own.len() {
+                1 => return Ok(Some(("exact", own))),
+                0 => {}
+                _ => return Ok(None),
+            }
+            let mut starred = Vec::new();
+            for p in &file.on_demand {
+                starred.extend(top_level(conn, hit, Some(p))?);
+            }
+            return Ok(Some(match starred.len() {
+                0 => ("unresolved", starred),
+                1 => ("exact", starred),
+                _ => ("ambiguous", starred),
+            }));
+        }
         // A bare name a static import brings: from the imported type, unless the caller's own types declare or
         // inherit a member of that name (they shadow it).
         if hit.receiver.is_none() && matches!(hit.kind.as_str(), "call" | "member") {
@@ -712,6 +761,42 @@ fn fits(args: Option<u32>, min: Option<u32>, max: Option<u32>) -> bool {
         (Some(n), Some(min)) => n >= min && max.is_none_or(|max| n <= max),
         _ => true,
     }
+}
+
+/// Kotlin top-level declarations named like the reference (a function for a call, a property for a member use) in
+/// the files of `package` (the default package for `None`), as each file's `package` header declares it.
+fn top_level(conn: &Connection, hit: &RefHit, package: Option<&str>) -> rusqlite::Result<Vec<i64>> {
+    let kinds = if hit.kind == "call" { "('function')" } else { "('property')" };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT s.id, s.signature, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE f.lang = 'kotlin' AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container IS NULL
+           AND s.kind IN {kinds} AND f.package IS ?2 ORDER BY s.id"
+    ))?;
+    let rows = stmt.query_map(params![hit.name, package], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, signature, path) = row?;
+        // An extension needs a receiver; a bare name never calls one (outside an extension's own body). A top-level
+        // `private` declaration is seen only in its own file.
+        let private = signature.split_whitespace().take_while(|w| !matches!(*w, "fun" | "val" | "var")).any(|w| w == "private");
+        if extension_receiver(&signature, &hit.name).is_none() && (!private || path == hit.file) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// The Kotlin members named like the reference, of its kind, whose container is exactly `container`, in the reference's
+/// own file (a companion object, as the class declaring it sees it).
+fn members_with_container(conn: &Connection, hit: &RefHit, container: &str) -> rusqlite::Result<Vec<i64>> {
+    let kinds = if hit.kind == "call" { "('function', 'method')" } else { "('property', 'case')" };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE f.path = ?3 AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container = ?2 AND s.kind IN {kinds}"
+    ))?;
+    stmt.query_map(params![hit.name, container, hit.file], |r| r.get(0))?.collect()
 }
 
 fn signature_of(conn: &Connection, id: i64) -> rusqlite::Result<String> {
