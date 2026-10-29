@@ -162,11 +162,14 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
             list.extend(symbols.remove(from).unwrap_or_default());
         }
         let total = list.len();
-        list.truncate(SYMBOLS_PER_FILE);
+        // An added file's symbols are all new: its count says as much, and a large diff of new files would otherwise
+        // spend the answer on them before the files it changed.
+        let room = if row["change"] == "added" { 0 } else { SYMBOLS_PER_FILE };
+        list.truncate(room);
         if !list.is_empty() {
             row["symbols"] = json!(list);
         }
-        if total > SYMBOLS_PER_FILE {
+        if total > room {
             row["symbols_total"] = json!(total);
         }
     }
