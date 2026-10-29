@@ -12,7 +12,7 @@
   "drawn": 10
  },
  "chi/call/outside/1+": {
-  "available": 373,
+  "available": 416,
   "drawn": 40
  },
  "chi/dispatch/inside/2-4": {
@@ -28,8 +28,8 @@
   "drawn": 8
  },
  "chi/dispatch/outside/1+": {
-  "available": 413,
-  "drawn": 28
+  "available": 432,
+  "drawn": 40
  },
  "chi/member/inside/1": {
   "available": 901,
@@ -48,8 +48,8 @@
   "drawn": 10
  },
  "chi/member/outside/1+": {
-  "available": 124,
-  "drawn": 27
+  "available": 139,
+  "drawn": 40
  },
  "chi/type/inside/1": {
   "available": 413,
@@ -68,8 +68,8 @@
   "drawn": 10
  },
  "chi/type/outside/1+": {
-  "available": 905,
-  "drawn": 15
+  "available": 920,
+  "drawn": 21
  },
  "cobra/call/inside/1": {
   "available": 1962,

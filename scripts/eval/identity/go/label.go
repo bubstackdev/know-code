@@ -55,6 +55,19 @@ type refRow struct {
 	Called bool     `json:"called"`
 }
 
+// excludedRow is a reference the toolchain binds that the rule leaves out, with why (sample.py counts them).
+type excludedRow struct {
+	T      string `json:"t"`
+	Reason string `json:"reason"`
+	Repo   string `json:"repo"`
+	Lang   string `json:"lang"`
+	File   string `json:"file"`
+	Line   int    `json:"line"`
+	Col    int    `json:"col"`
+	Name   string `json:"name"`
+	Key    string `json:"key"`
+}
+
 func main() {
 	repo := flag.String("repo", "", "repository name (repos.txt)")
 	src := flag.String("src", "", "the repository's checkout")
@@ -67,14 +80,15 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	e := &enumerator{repo: *repo, root: root, decls: map[string]declRow{}, refs: map[string]refRow{}, generated: map[string]bool{}}
+	e := &enumerator{repo: *repo, root: root, decls: map[string]declRow{}, refs: map[string]refRow{}, excluded: map[string]excludedRow{},
+		generated: map[string]bool{}}
 	dirs := modules(root)
 	e.own = modulePaths(dirs)
 	for _, dir := range dirs {
 		e.load(dir)
 	}
 	e.write(os.Stdout)
-	fmt.Fprintf(os.Stderr, "label: %d references to a published copy of the repository's own modules left out\n", e.ownCopies)
+	fmt.Fprintf(os.Stderr, "label: %d references to a published copy of the repository's own modules, labelled outside\n", e.ownCopies)
 }
 
 func fatal(err error) {
@@ -105,6 +119,7 @@ type enumerator struct {
 	repo, root string
 	decls      map[string]declRow // by key
 	refs       map[string]refRow  // by file:line:col:key
+	excluded   map[string]excludedRow
 	generated  map[string]bool
 	fset       *token.FileSet
 	own        []string // module paths the repository's go.mod files declare
@@ -242,13 +257,18 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 		}
 	}
 	for id, obj := range info.Uses {
-		kind := e.refKind(origin(obj))
-		if kind == "" || id.Name != obj.Name() {
-			continue
-		}
 		pos := e.fset.Position(id.Pos())
 		if r, ok := e.rel(pos.Filename); !ok || r != rel {
 			continue // TypesInfo covers the whole package; this pass reads one file
+		}
+		kind := e.refKind(origin(obj))
+		if reason := e.dropped(origin(obj)); reason != "" && id.Name == obj.Name() {
+			k := key(origin(obj), e)
+			e.excluded[fmt.Sprintf("%s:%d:%d:%s", rel, pos.Line, pos.Column, k)] = excludedRow{T: "excluded", Reason: reason,
+				Repo: e.repo, Lang: "go", File: rel, Line: pos.Line, Col: pos.Column, Name: obj.Name(), Key: k}
+		}
+		if kind == "" || id.Name != obj.Name() {
+			continue
 		}
 		obj = origin(obj)
 		k := key(obj, e)
@@ -258,12 +278,12 @@ func (e *enumerator) file(p *packages.Package, f *ast.File, rel string) {
 		if drel, ok := e.rel(dpos.Filename); ok && obj.Pos().IsValid() {
 			r.Inside = true
 			r.Locs = [][2]any{{drel, dpos.Line}}
-		} else if e.ownModule(obj.Pkg().Path()) {
-			// A nested module that requires a released version of the repository's own module, without a replace,
-			// binds to the module cache's copy: the same code at another version, so neither inside nor outside.
-			e.ownCopies++
-			continue
 		} else {
+			if e.ownModule(obj.Pkg().Path()) {
+				// A nested module that requires a released version of the repository's own module, without a
+				// replace, binds to the module cache's copy: outside, though the repository has the same code.
+				e.ownCopies++
+			}
 			o := originOf(obj)
 			r.Origin = &o
 		}
@@ -313,6 +333,18 @@ func (e *enumerator) inBody(obj types.Object) bool {
 		}
 	}
 	return false
+}
+
+// dropped is why the rule leaves out a reference the checker binds to obj, or "": a field of a type declared in a
+// function (a local, as the rule has it) or a cgo name. Locals, parameters, builtins and package names aren't counted.
+func (e *enumerator) dropped(obj types.Object) string {
+	if obj.Pkg() != nil && obj.Pkg().Path() == "C" {
+		return "cgo"
+	}
+	if v, ok := obj.(*types.Var); ok && v.IsField() && e.inBody(v) {
+		return "local_type_field"
+	}
+	return ""
 }
 
 // declGroup is the multiplicity group of a declaration counted by name, or "" for one that isn't counted: locals,
@@ -446,8 +478,22 @@ func (e *enumerator) write(w *os.File) {
 	for _, k := range keys {
 		r := e.refs[k]
 		if e.generated[r.File] {
-			continue // README: generated files are not the repository's source
+			// README: generated files are not the repository's source.
+			enc.Encode(excludedRow{T: "excluded", Reason: "generated", Repo: r.Repo, Lang: "go", File: r.File, Line: r.Line,
+				Col: r.Col, Name: r.Name, Key: r.Key})
+			continue
 		}
 		enc.Encode(r)
+	}
+	keys = keys[:0]
+	for k := range e.excluded {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		x := e.excluded[k]
+		if !e.generated[x.File] {
+			enc.Encode(x)
+		}
 	}
 }
