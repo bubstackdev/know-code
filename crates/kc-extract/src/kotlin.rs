@@ -17,7 +17,10 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
+
+/// How many enclosing lambdas' functions a reference keeps, innermost first.
+const LAMBDAS_KEPT: usize = 4;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -53,7 +56,7 @@ pub fn extract(source: &str) -> FileFacts {
     }
     let mut nested = HashMap::new();
     member_types(source, tree.root_node(), None, &mut nested);
-    let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested };
+    let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested, lambdas: Vec::new() };
     cx.visit(tree.root_node());
     cx.facts
 }
@@ -162,6 +165,8 @@ struct Cx<'a> {
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
     /// The file's member types: per type (dotted, within the package), the simple names declared in it.
     nested: HashMap<String, HashSet<String>>,
+    /// The functions whose lambda argument the code being read is in, outermost first (`apply` in `x.apply { … }`).
+    lambdas: Vec<String>,
 }
 
 impl<'a> Cx<'a> {
@@ -554,6 +559,11 @@ impl<'a> Cx<'a> {
         let args = children(node).find(|c| c.kind() == "value_arguments").map(arg_count);
         let lambda = children(node).any(|c| c.kind() == "annotated_lambda");
         let args = args.map(|a| a + u32::from(lambda)).or(lambda.then_some(1));
+        let callee_name = match callee.kind() {
+            "identifier" => Some(self.text(callee).to_string()),
+            "navigation_expression" => children(callee).filter(|c| c.is_named()).last().filter(|l| l.kind() == "identifier").map(|l| self.text(l).to_string()),
+            _ => None,
+        };
         match callee.kind() {
             "identifier" => {
                 // A local is called only through `invoke`, so `value(x)` with a local `value` in scope still calls a
@@ -578,10 +588,31 @@ impl<'a> Cx<'a> {
             _ => self.visit(callee),
         }
         for c in children(node).filter(|c| c.kind() != callee.kind() || *c != callee) {
-            if c != callee {
-                self.visit(c);
+            if c == callee {
+                continue;
+            }
+            // A lambda argument, trailing or in the parentheses: the code in it is read knowing which function it is
+            // passed to, which may give it a receiver (`apply`, `with`, a `T.() -> R` parameter).
+            match c.kind() {
+                "annotated_lambda" => self.in_lambda(callee_name.as_deref(), c),
+                "value_arguments" => {
+                    for a in children(c) {
+                        if a.kind() == "value_argument" && children(a).any(|l| matches!(l.kind(), "lambda_literal" | "annotated_lambda")) {
+                            self.in_lambda(callee_name.as_deref(), a);
+                        } else {
+                            self.visit(a);
+                        }
+                    }
+                }
+                _ => self.visit(c),
             }
         }
+    }
+
+    fn in_lambda(&mut self, callee: Option<&str>, node: Node) {
+        self.lambdas.push(callee.unwrap_or_default().to_string());
+        self.visit(node);
+        self.lambdas.pop();
     }
 
     fn navigation(&mut self, node: Node) {
@@ -764,6 +795,15 @@ impl<'a> Cx<'a> {
         let from = self.current();
         if !self.seen.insert((from, name.clone(), kind, ln, col)) {
             return;
+        }
+        // A bare name, or one on `this`, in a lambda: the functions it is passed to, innermost first, which resolution
+        // reads for a receiver the lambda may have (stored where Swift keeps its call labels).
+        if matches!(kind, RefKind::Call | RefKind::Member)
+            && receiver.as_deref().is_none_or(|r| r == "this")
+            && !self.lambdas.is_empty()
+        {
+            let inner: Vec<&String> = self.lambdas.iter().rev().filter(|l| !l.is_empty()).take(LAMBDAS_KEPT).collect();
+            self.facts.arg_types.insert(self.facts.refs.len(), serde_json::json!({ "lambdas": inner }).to_string());
         }
         self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: ln, col, args });
     }

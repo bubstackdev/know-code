@@ -173,3 +173,51 @@ fn imports_over_own_name_this_on_library_receivers_and_private_members() {
     assert_eq!(answer(&refs_in(c, "label", "member", "src/rules/Rule.kt")[0]), ("exact", vec!["src/rules/Rule.kt:4".to_string()]), "seen in its own type");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn inherited_members_by_declaration_and_receiver_lambdas() {
+    let root = scratch("kt-exposed-shapes");
+    // Two modules each declare `OrderTests`, on different bases: a bare call reads the caller's own base.
+    write(&root, "a/src/shop/a/BaseA.kt", "package shop.a\n\nopen class BaseA {\n  fun prefix(): String = \"a\"\n}\n");
+    write(&root, "b/src/shop/b/BaseB.kt", "package shop.b\n\nopen class BaseB {\n  fun prefix(): String = \"b\"\n}\n");
+    write(&root, "a/src/shop/a/OrderTests.kt", "package shop.a\n\nclass OrderTests : BaseA() {\n  fun t() = prefix()\n}\n");
+    write(&root, "b/src/shop/b/OrderTests.kt", "package shop.b\n\nclass OrderTests : BaseB() {\n  fun t() = prefix()\n}\n");
+    // A supertype that can't be followed (a library's) may declare the name too: a candidate, not a link.
+    write(
+        &root,
+        "a/src/shop/a/Mixed.kt",
+        "package shop.a\n\nimport org.lib.Remote\n\ninterface Named {\n  fun label(): String = \"\"\n}\n\nclass Mixed : Remote(), Named {\n  fun t() = label()\n}\n",
+    );
+    // In a lambda with a receiver, the receiver's members come first: the enclosing class's are candidates only.
+    write(
+        &root,
+        "a/src/shop/a/Svc.kt",
+        "package shop.a\n\
+         \n\
+         class Conn\n\
+         class Meta\n\
+         \n\
+         fun <T> meta(body: Meta.() -> T): T = TODO()\n\
+         \n\
+         class Svc {\n\
+           val url: String = \"\"\n\
+           fun close() {}\n\
+           fun go(c: Conn) {\n\
+             c.apply { close() }\n\
+             meta { url }\n\
+             listOf(1).forEach { close() }\n\
+           }\n\
+         }\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(answer(&refs_in(c, "prefix", "call", "a/src/shop/a/OrderTests.kt")[0]), ("exact", vec!["a/src/shop/a/BaseA.kt:4".to_string()]));
+    assert_eq!(answer(&refs_in(c, "prefix", "call", "b/src/shop/b/OrderTests.kt")[0]), ("exact", vec!["b/src/shop/b/BaseB.kt:4".to_string()]));
+    assert_eq!(answer(&refs_in(c, "label", "call", "a/src/shop/a/Mixed.kt")[0]).0, "ambiguous", "an unfollowed supertype");
+    let svc = "a/src/shop/a/Svc.kt";
+    let closes = refs_in(c, "close", "call", svc);
+    assert_eq!(answer(&closes[0]).0, "ambiguous", "in `apply`");
+    assert_eq!(answer(&closes[1]), ("exact", vec![format!("{svc}:10")]), "a lambda without a receiver");
+    assert_eq!(answer(&refs_in(c, "url", "member", svc)[0]).0, "ambiguous", "a repo function's `Meta.() -> T`");
+    let _ = std::fs::remove_dir_all(&root);
+}

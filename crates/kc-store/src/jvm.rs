@@ -32,6 +32,8 @@ struct JavaType {
     /// The dotted names of the types it is nested in (`Outer.Inner` for a type in `Inner`).
     container: Option<String>,
     package: Option<String>,
+    /// The file declaring it, whose imports its supertypes are read by.
+    file: String,
 }
 
 impl JavaType {
@@ -92,6 +94,10 @@ pub struct Resolver {
     files: HashMap<String, FileScope>,
     /// Per type id: the simple names of its direct supertypes, as written.
     supers: HashMap<i64, Vec<String>>,
+    /// By id: the type's declaration, for reading its supertypes where it is declared.
+    by_id: HashMap<i64, (String, JavaType)>,
+    /// Per function name: whether a repository declaration of it takes a lambda with a receiver (`T.() -> R`).
+    receiver_lambda_fns: HashMap<String, bool>,
 }
 
 impl Resolver {
@@ -103,7 +109,7 @@ impl Resolver {
         let mut stmt = conn.prepare(
             "SELECT s.id, s.name, s.container,
                     CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
-                    CASE WHEN p.kind IN ('method', 'init', 'property', 'case') THEN f.path END, p.start_line, p.end_line
+                    CASE WHEN p.kind IN ('method', 'init', 'property', 'case') THEN f.path END, p.start_line, p.end_line, f.path
              FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id
              WHERE f.lang IN ('java', 'kotlin') AND s.kind IN ('class', 'protocol', 'enum', 'struct', 'typealias')",
         )?;
@@ -112,11 +118,18 @@ impl Resolver {
                 Some(file) => Some((file, r.get::<_, u32>(5)?, r.get::<_, u32>(6)?)),
                 None => None,
             };
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?, local))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                local,
+                r.get::<_, String>(7)?,
+            ))
         })?;
         for row in rows {
-            let (id, name, container, package, local) = row?;
-            let t = JavaType { id, local, container, package };
+            let (id, name, container, package, local, file) = row?;
+            let t = JavaType { id, local, container, package, file };
             if let Some(p) = &t.package {
                 self.packages.insert(p.clone());
             }
@@ -124,6 +137,7 @@ impl Resolver {
                 self.qualified.insert(t.qualified(&name), id);
             }
             self.names.insert(id, name.clone());
+            self.by_id.insert(id, (name.clone(), t.clone()));
             self.types.entry(name.clone()).or_default().push((name, t));
         }
         let mut stmt = conn.prepare(
@@ -336,6 +350,74 @@ impl Resolver {
         out
     }
 
+    /// A bare Kotlin name as a member of the code's own types, by declaration: each type the code is nested in, innermost
+    /// first, then that type's supertypes, each read where its subtype is declared, nearest first. Types are followed by
+    /// declaration, never by simple name, so two same-named classes in different modules (a test class each test module
+    /// declares) never pool their supertypes. The first type, or level of supertypes, declaring the name decides; when
+    /// a supertype on the way can't be followed (a library's, or a name the imports don't settle), what was found is a
+    /// candidate only, as the unfollowed type may declare the name too.
+    fn chain_members(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
+        let nest = Self::nest(hit);
+        let package = self.files.get(&hit.file).and_then(|f| f.package.clone());
+        for outer in nest.iter().rev() {
+            let q = package.as_ref().map_or_else(|| outer.clone(), |p| format!("{p}.{outer}"));
+            let Some(&own) = self.qualified.get(&q) else { continue };
+            let found = members_of(conn, hit, own)?;
+            match found.len() {
+                0 => {}
+                1 => return Ok(Some(("exact", found))),
+                _ => return Ok(Some(("ambiguous", found))),
+            }
+            let mut seen = HashSet::from([own]);
+            let mut level = vec![own];
+            let mut unsure = false;
+            while !level.is_empty() {
+                let mut next = Vec::new();
+                for id in level {
+                    let (supers, unfollowed) = self.supertypes(conn, id)?;
+                    unsure |= unfollowed;
+                    next.extend(supers.into_iter().filter(|s| seen.insert(*s)));
+                }
+                let mut found = Vec::new();
+                for id in &next {
+                    found.extend(members_of(conn, hit, *id)?);
+                }
+                if !found.is_empty() {
+                    return Ok(Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }));
+                }
+                level = next;
+            }
+        }
+        Ok(None)
+    }
+
+    /// A repository type's direct supertypes the repository declares, read by the imports of the file declaring it, and
+    /// whether any it names couldn't be followed to one declaration.
+    fn supertypes(&mut self, conn: &Connection, id: i64) -> rusqlite::Result<(Vec<i64>, bool)> {
+        let Some((name, t)) = self.by_id.get(&id).cloned() else { return Ok((Vec::new(), true)) };
+        let written = self.supers.get(&id).cloned().unwrap_or_default();
+        if written.is_empty() {
+            return Ok((Vec::new(), false));
+        }
+        self.scope(conn, &t.file)?;
+        let file = &self.files[&t.file];
+        let inner = t.container.as_ref().map_or_else(|| name.clone(), |c| format!("{c}.{name}"));
+        let parts: Vec<&str> = inner.split('.').collect();
+        let nest: Vec<String> = (1..parts.len()).map(|n| parts[..n].join(".")).collect();
+        let (mut out, mut unfollowed) = (Vec::new(), false);
+        for s in &written {
+            let found = match s.rsplit_once('.') {
+                Some((q, n)) => self.find_qualified(file, (t.file.as_str(), 0), &nest, q, n).unwrap_or(Found::Outside),
+                None => self.find_type(file, (t.file.as_str(), 0), &nest, s),
+            };
+            match found {
+                Found::Inside(ids) if ids.len() == 1 => out.push(ids[0]),
+                _ => unfollowed = true,
+            }
+        }
+        Ok((out, unfollowed))
+    }
+
     /// The repository type a path names, step by step: each step is the current type's own member (or one a repository
     /// supertype declares) of that name, and its declared type, read where it is declared. `None` as soon as a step
     /// leaves the repository or isn't one declaration.
@@ -434,7 +516,7 @@ impl Resolver {
         self.scope(conn, &hit.file)?;
         let found = self.scoped_by_rules(conn, hit)?;
         // A reference never reaches a `private` declaration it can't see, whichever rule offered it.
-        Ok(match found {
+        let found = match found {
             Some((confidence, ids)) if !ids.is_empty() => {
                 let before = ids.len();
                 let ids = visible_ids(conn, hit, ids)?;
@@ -445,7 +527,47 @@ impl Resolver {
                 })
             }
             other => other,
+        };
+        Ok(match found {
+            Some((confidence, ids)) => Some(self.in_receiver_lambda(conn, hit, (confidence, ids))?),
+            None => None,
         })
+    }
+
+    /// A bare Kotlin name (or one on `this`) in a lambda that may have a receiver: the lambda passed to one of Kotlin's
+    /// scope functions that give it one (`x.apply { close() }`), or to a repository function taking a `T.() -> R`.
+    /// The receiver's members come before the enclosing code's, and the receiver isn't typed here, so what the rules
+    /// found is a candidate, never a link.
+    fn in_receiver_lambda(
+        &mut self,
+        conn: &Connection,
+        hit: &RefHit,
+        (confidence, ids): (&'static str, Vec<i64>),
+    ) -> rusqlite::Result<(&'static str, Vec<i64>)> {
+        if !matches!(confidence, "exact" | "unique_name") || !hit.file.ends_with(".kt") {
+            return Ok((confidence, ids));
+        }
+        let Some(lambdas) = lambdas_of(hit) else { return Ok((confidence, ids)) };
+        for f in &lambdas {
+            if RECEIVER_SCOPE_FUNCTIONS.contains(&f.as_str()) || self.takes_receiver_lambda(conn, f)? {
+                return Ok(("ambiguous", ids));
+            }
+        }
+        Ok((confidence, ids))
+    }
+
+    fn takes_receiver_lambda(&mut self, conn: &Connection, function: &str) -> rusqlite::Result<bool> {
+        if let Some(known) = self.receiver_lambda_fns.get(function) {
+            return Ok(*known);
+        }
+        let mut stmt = conn.prepare_cached(
+            "SELECT s.signature FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE f.lang = 'kotlin' AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('function', 'method')",
+        )?;
+        let signatures: Vec<String> = stmt.query_map(params![function], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let takes = signatures.iter().any(|s| receiver_function_type(s));
+        self.receiver_lambda_fns.insert(function.to_string(), takes);
+        Ok(takes)
     }
 
     fn scoped_by_rules(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
@@ -472,6 +594,8 @@ impl Resolver {
                 Found::Inside(_) | Found::Unreached(_) => {}
             }
         }
+        let kotlin_bare = hit.file.ends_with(".kt") && hit.receiver.is_none() && matches!(hit.kind.as_str(), "call" | "member");
+        let chain = if kotlin_bare { self.chain_members(conn, hit)? } else { None };
         // A receiver the extractor wrote as a path (`builder().setX(…)`, `this.store`, `Type.FIELD`): its type,
         // followed through the repository's declarations by Java's rules.
         let path_type = match hit.receiver_type.as_deref().and_then(kc_extract::TypeExpr::decode) {
@@ -591,7 +715,11 @@ impl Resolver {
         // top-level declaration an import names, then one of the file's own package, then of a star-imported package.
         // Anything else is Kotlin's default imports' (`require`, `emptyList`) or another library's: outside.
         if hit.file.ends_with(".kt") && hit.receiver.is_none() && matches!(hit.kind.as_str(), "call" | "member") {
-            // A class's companion object's members are in scope in its body, before anything top-level.
+            // The code's own types' members, by declaration, come first; then a class's companion object's members,
+            // in scope in its body, before anything top-level.
+            if let Some(found) = chain {
+                return Ok(Some(found));
+            }
             let mut companions = Vec::new();
             for outer in nest.iter().rev() {
                 companions.extend(members_with_container(conn, hit, &format!("{outer}.Companion"))?);
@@ -602,9 +730,8 @@ impl Resolver {
             if let [one] = companions.as_slice() {
                 return Ok(Some(("exact", vec![*one])));
             }
-            let chain = self.chain_names(file, &nest);
-            if !companions.is_empty() || !members_in(conn, &hit.name, &chain)?.is_empty() {
-                return Ok(None);
+            if !companions.is_empty() {
+                return Ok(Some(("ambiguous", companions)));
             }
             if let Some(q) = file.single.get(&hit.name) {
                 let (package, _) = q.rsplit_once('.').unwrap_or(("", q));
@@ -691,7 +818,7 @@ impl Resolver {
     /// properties and functions apart the same way. And a member of a value whose type isn't known is a candidate,
     /// never a link by its name alone (it may well be a library type's member).
     pub fn after(
-        &self,
+        &mut self,
         conn: &Connection,
         hit: &RefHit,
         receiver_known: bool,
@@ -740,7 +867,7 @@ impl Resolver {
         if confidence == "unique_name" && receiver.is_some() && !self_like && !receiver_known {
             return Ok(("ambiguous", ids));
         }
-        Ok((confidence, ids))
+        self.in_receiver_lambda(conn, hit, (confidence, ids))
     }
 }
 
@@ -858,6 +985,29 @@ fn members_with_container(conn: &Connection, hit: &RefHit, container: &str) -> r
          WHERE f.path = ?3 AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container = ?2 AND s.kind IN {kinds}"
     ))?;
     stmt.query_map(params![hit.name, container, hit.file], |r| r.get(0))?.collect()
+}
+
+/// Kotlin's standard functions whose lambda argument has a receiver: `x.apply { … }`, `with(x) { … }`,
+/// `buildString { append(…) }`.
+const RECEIVER_SCOPE_FUNCTIONS: &[&str] =
+    &["apply", "run", "with", "runCatching", "buildString", "buildList", "buildSet", "buildMap"];
+
+/// The functions whose lambda argument a Kotlin reference is in, innermost first, as the extractor recorded them.
+fn lambdas_of(hit: &RefHit) -> Option<Vec<String>> {
+    if hit.receiver.as_deref().is_some_and(|r| r != "this") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(hit.arg_types.as_deref()?).ok()?;
+    let names: Vec<String> = v.get("lambdas")?.as_array()?.iter().filter_map(|n| n.as_str().map(str::to_string)).collect();
+    (!names.is_empty()).then_some(names)
+}
+
+/// Whether a Kotlin signature declares a function type with a receiver (`body: DatabaseMetaData.() -> T`,
+/// `statement: Transaction.(Db) -> Unit`); an extension's own receiver (`fun Foo.bar()`) isn't one.
+fn receiver_function_type(signature: &str) -> bool {
+    signature.match_indices(".(").any(|(i, _)| {
+        signature[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '>' | '?' | '*'))
+    })
 }
 
 /// The declarations of `ids` the reference can see. A `private` one, or one inside a `private` type, is seen only
@@ -998,6 +1148,10 @@ mod tests {
         assert_eq!(extension_receiver("public fun <T> Iterable<T>.joinToCode(): CodeBlock", "joinToCode").as_deref(), Some("Iterable"));
         assert_eq!(extension_receiver("val KClass<*>.isData: Boolean", "isData").as_deref(), Some("KClass"));
         assert_eq!(extension_receiver("public fun asTypeName(): TypeName", "asTypeName"), None);
+        assert!(receiver_function_type("private fun <T> lazyMetadata(body: DatabaseMetaData.() -> T)"));
+        assert!(receiver_function_type("fun withDb(db: Db? = null, statement: Transaction.(Db) -> Unit)"));
+        assert!(!receiver_function_type("fun Foo.bar(x: Int)"));
+        assert!(!receiver_function_type("fun each(action: (Item) -> Unit)"));
         assert!(is_private("private data class Reference(", "Reference"));
         assert!(is_private("@Deprecated private static final int LIMIT = 3", "LIMIT"));
         assert!(!is_private("val text: String", "text"));
