@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- C# calls tell more overloads apart. An overload with a `params` array had its last other parameter left unchecked,
+  so `Write(level, "x", e)` could still match `Write(LogEventLevel, string, params object[])` with an `Exception`
+  where a `string` goes. A method's own `params` array, a field passed by name and a collection expression (`[a, b]`)
+  now have types at the call; and of a generic overload (`M<T>(…, T)`) and a `params` one, the call picks the one C#
+  does: the `params` one for an array of its type or a collection expression, the generic one for any other value,
+  and with nothing for the array, the overload without one. C# files are read again once. On identity-v1's C# labels,
+  `exact` precision rises from 0.996 to 0.998 and linked recall from 0.730 to 0.754, with none newly wrong; on
+  impact-dev-v1, impact's recall rises from 0.816 to 0.828.
 - `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
   tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
   is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves
