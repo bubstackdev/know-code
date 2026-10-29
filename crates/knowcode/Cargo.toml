@@ -25,3 +25,76 @@ schemars.workspace = true
 semver.workspace = true
 tokio.workspace = true
 toml_edit.workspace = true
+tree-sitter.workspace = true
+probe-go = { package = "tree-sitter-go", version = "=0.25.0", optional = true }
+probe-java = { package = "tree-sitter-java", version = "=0.23.5", optional = true }
+probe-kotlin = { package = "tree-sitter-kotlin-ng", version = "=1.1.0", optional = true }
+probe-php = { package = "tree-sitter-php", version = "=0.25.1", optional = true }
+probe-ruby = { package = "tree-sitter-ruby", version = "=0.23.1", optional = true }
+probe-c = { package = "tree-sitter-c", version = "=0.24.2", optional = true }
+probe-cpp = { package = "tree-sitter-cpp", version = "=0.23.4", optional = true }
+probe-objc = { package = "tree-sitter-objc", version = "=3.0.2", optional = true }
+probe-vue = { package = "tree-sitter-vue-next", version = "=0.1.0", optional = true }
+probe-svelte = { package = "tree-sitter-svelte-ng", version = "=1.0.2", optional = true }
+probe-scala = { package = "tree-sitter-scala", version = "=0.26.3", optional = true }
+probe-dart = { package = "tree-sitter-dart", version = "=0.3.0", optional = true }
+probe-lua = { package = "tree-sitter-lua", version = "=0.5.0", optional = true }
+probe-elixir = { package = "tree-sitter-elixir", version = "=0.3.5", optional = true }
+probe-erlang = { package = "tree-sitter-erlang", version = "=0.21.0", optional = true }
+probe-haskell = { package = "tree-sitter-haskell", version = "=0.24.1", optional = true }
+probe-ocaml = { package = "tree-sitter-ocaml", version = "=0.26.0", optional = true }
+probe-zig = { package = "tree-sitter-zig", version = "=1.1.2", optional = true }
+probe-bash = { package = "tree-sitter-bash", version = "=0.25.1", optional = true }
+probe-r = { package = "tree-sitter-r", version = "=1.3.0", optional = true }
+probe-julia = { package = "tree-sitter-julia", version = "=0.23.1", optional = true }
+probe-perl = { package = "ts-parser-perl", version = "=2.0.3", optional = true }
+probe-clojure = { package = "tree-sitter-clojure-orchard", version = "=0.2.8", optional = true }
+probe-elm = { package = "tree-sitter-elm", version = "=5.9.4", optional = true }
+probe-nix = { package = "tree-sitter-nix", version = "=0.3.0", optional = true }
+probe-groovy = { package = "tree-sitter-groovy", version = "=0.1.2", optional = true }
+probe-powershell = { package = "tree-sitter-powershell", version = "=0.26.6", optional = true }
+probe-fortran = { package = "tree-sitter-fortran", version = "=0.6.0", optional = true }
+probe-solidity = { package = "tree-sitter-solidity", version = "=1.2.13", optional = true }
+probe-fsharp = { package = "tree-sitter-fsharp", version = "=0.3.12", optional = true }
+probe-gleam = { package = "tree-sitter-gleam", version = "=1.0.0", optional = true }
+probe-verilog = { package = "tree-sitter-verilog", version = "=1.0.3", optional = true }
+probe-cuda = { package = "tree-sitter-cuda", version = "=0.21.2", optional = true }
+probe-matlab = { package = "tree-sitter-matlab", version = "=1.3.1", optional = true }
+probe-nim = { package = "tree-sitter-nim", version = "=0.1.0", optional = true }
+
+[features]
+g-go = ["dep:probe-go"]
+g-java = ["dep:probe-java"]
+g-kotlin = ["dep:probe-kotlin"]
+g-php = ["dep:probe-php"]
+g-ruby = ["dep:probe-ruby"]
+g-c = ["dep:probe-c"]
+g-cpp = ["dep:probe-cpp"]
+g-objc = ["dep:probe-objc"]
+g-vue = ["dep:probe-vue"]
+g-svelte = ["dep:probe-svelte"]
+g-scala = ["dep:probe-scala"]
+g-dart = ["dep:probe-dart"]
+g-lua = ["dep:probe-lua"]
+g-elixir = ["dep:probe-elixir"]
+g-erlang = ["dep:probe-erlang"]
+g-haskell = ["dep:probe-haskell"]
+g-ocaml = ["dep:probe-ocaml"]
+g-zig = ["dep:probe-zig"]
+g-bash = ["dep:probe-bash"]
+g-r = ["dep:probe-r"]
+g-julia = ["dep:probe-julia"]
+g-perl = ["dep:probe-perl"]
+g-clojure = ["dep:probe-clojure"]
+g-elm = ["dep:probe-elm"]
+g-nix = ["dep:probe-nix"]
+g-groovy = ["dep:probe-groovy"]
+g-powershell = ["dep:probe-powershell"]
+g-fortran = ["dep:probe-fortran"]
+g-solidity = ["dep:probe-solidity"]
+g-fsharp = ["dep:probe-fsharp"]
+g-gleam = ["dep:probe-gleam"]
+g-verilog = ["dep:probe-verilog"]
+g-cuda = ["dep:probe-cuda"]
+g-matlab = ["dep:probe-matlab"]
+g-nim = ["dep:probe-nim"]

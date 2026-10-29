@@ -2,6 +2,7 @@
 
 mod bench;
 mod capabilities;
+mod grammar_probe;
 mod cite;
 mod contract;
 mod compact;
@@ -896,6 +897,7 @@ fn notes_repo(path: &std::path::Path) -> Result<PathBuf> {
 }
 
 fn main() {
+    if std::env::var_os("KC_GRAMMAR_PROBE").is_some() { grammar_probe::print(); return; }
     let cli = Cli::parse();
     // A command or query that has to build a repo's reference graph is one the user waits for: most of the machine
     // (a server's background builds take their own share, see `refresh`). Read only when one is built.
