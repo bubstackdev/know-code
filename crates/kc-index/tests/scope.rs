@@ -66,6 +66,8 @@ fn a_name_never_resolves_to_another_languages_definition() {
 fn family(path: &str) -> &str {
     match path.rsplit_once('.').map(|(_, e)| e) {
         Some("ts" | "tsx" | "js") => "js",
+        // Java and Kotlin call each other, as one JVM family.
+        Some("java" | "kt") => "jvm",
         Some(e) => e,
         None => "",
     }
@@ -73,7 +75,7 @@ fn family(path: &str) -> &str {
 
 #[test]
 fn invariant_every_edge_resolved_by_name_stays_within_its_language_family() {
-    // The same names defined and called in seven languages.
+    // The same names defined and called in eight languages.
     let root = scratch("families");
     let store = index(
         &root,
@@ -88,6 +90,7 @@ fn invariant_every_edge_resolved_by_name_stays_within_its_language_family() {
             ("e.js", "function shared() {}\nfunction helper() { shared(); lonely(); }\n"),
             ("F.cs", "public class Store { public static void shared() {} public void helper() { new Store(); shared(); } }\n"),
             ("X.java", "class Store { static void shared() {} void helper() { new Store(); shared(); lonely(); } }\n"),
+            ("Y.kt", "fun shared() {}\nfun helper() {\n  shared()\n  lonely()\n}\n"),
         ],
     );
     let hits = query::refs_named(store.conn(), &["shared", "Store", "lonely"]).unwrap();

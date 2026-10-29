@@ -139,15 +139,22 @@ impl Resolver {
 
     fn scope(&mut self, conn: &Connection, file: &str) -> rusqlite::Result<&FileScope> {
         if !self.files.contains_key(file) {
-            let package = conn
-                .query_row(
-                    "SELECT json_extract(s.type_name, '$.ns') FROM symbols s JOIN files f ON f.id = s.file_id
-                     WHERE f.path = ?1 AND s.parent_id IS NULL AND json_valid(s.type_name)
-                       AND json_extract(s.type_name, '$.ns') IS NOT NULL LIMIT 1",
-                    params![file],
-                    |r| r.get::<_, String>(0),
-                )
-                .optional()?;
+            // The package the file declares (a Kotlin file of functions alone declares no type to carry it), else the
+            // namespace of a type it declares.
+            let declared: Option<String> =
+                conn.query_row("SELECT package FROM files WHERE path = ?1", params![file], |r| r.get(0)).optional()?.flatten();
+            let package = match declared {
+                Some(p) => Some(p),
+                None => conn
+                    .query_row(
+                        "SELECT json_extract(s.type_name, '$.ns') FROM symbols s JOIN files f ON f.id = s.file_id
+                         WHERE f.path = ?1 AND s.parent_id IS NULL AND json_valid(s.type_name)
+                           AND json_extract(s.type_name, '$.ns') IS NOT NULL LIMIT 1",
+                        params![file],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .optional()?,
+            };
             let mut s = FileScope { package, ..Default::default() };
             let mut stmt = conn.prepare("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?;
             for m in stmt.query_map(params![file], |r| r.get::<_, String>(0))? {
@@ -184,7 +191,11 @@ impl Resolver {
     /// within the file's package), refers to.
     fn find_type(&self, file: &FileScope, at: (&str, u32), nest: &[String], name: &str) -> Found {
         let Some(all) = self.types.get(name) else {
-            return Found::Outside;
+            // No repository type has the name, but an import may give it to one (Kotlin's `import a.b.C as D`).
+            return match file.single.get(name) {
+                Some(q) => self.qualified.get(q).map_or(Found::Outside, |id| Found::Inside(vec![*id])),
+                None => Found::Outside,
+            };
         };
         // A local class, declared in a method enclosing the reference, comes first; one in another method is never
         // seen.
