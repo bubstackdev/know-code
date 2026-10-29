@@ -36,3 +36,9 @@ name = "axum"
 lang = "rust"
 url = "https://github.com/tokio-rs/axum"
 sha = "e57b547eb95de74b73b34719dd5926254a085634"
+
+[[repo]]
+name = "swift-nio"
+lang = "swift"
+url = "https://github.com/apple/swift-nio"
+sha = "108daca35da6a1b4ed8da29c1dfbd19668b9b8fc"
