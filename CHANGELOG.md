@@ -62,6 +62,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
   from 0.578 to 0.597 and one more outside label is no longer linked (`task.LastExecutionResult.Status` on a package
   type), leaving 2. A type alias's property is reached only through a value of that type, never by its name alone.
+- compare-v1's first results are published ([eval/compare-v1/results.md](eval/compare-v1/results.md)): KnowCode,
+  codebase-memory-mcp and Serena answer the same reference and impact questions on eight public repositories, scored
+  against labels from each language's toolchain, with every miss listed.
 
 ## 0.6.1 (2026-10-28)
 
