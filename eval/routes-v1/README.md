@@ -143,7 +143,9 @@ Two things are left out of both sides, labels and KnowCode's routes alike, and t
 
 A route is left out only when its registration site is configuration-dependent on both sides' own evidence: the
 labels' recorded site, and KnowCode's file and line. Where the two disagree (one side's site is configuration-dependent
-and the other's isn't, or the sites differ), the route stays in, and the disagreement is listed with the results.
+and the other's isn't, or the sites differ), the route stays in, and the disagreement is listed with the results. A
+route only one side has (a label KnowCode doesn't match, or a KnowCode route no label matches) is left out when its one
+site is configuration-dependent: there is no other evidence to disagree.
 
 The exclusions are computed by a script run in the labelling container from the clone alone, with the Go type
 checker. It never reads KnowCode's output: it lists every configuration-dependent registration site in the code, and
