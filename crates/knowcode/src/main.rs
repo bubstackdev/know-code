@@ -15,6 +15,7 @@ mod help;
 mod history;
 mod hook;
 mod mcp;
+mod more_text;
 mod ops;
 mod record;
 mod refactor;

@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `kc_more` continues a text answer as text. The pages after an `impact` or `trace` tree cut at its limit came back
+  as JSON envelopes, so a reader parsing the first page's tree lines missed every row after it; each page now lists
+  its rows in the tree's own format, and a page cut to fit `max_chars` leaves the rows it drops to the next page
+  rather than skipping them. A cursor a JSON answer handed out still gives JSON pages.
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
   member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
