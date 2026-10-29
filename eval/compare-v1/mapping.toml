@@ -3,8 +3,11 @@
 # in order, or `no_counterpart`. `{…}` fields come from the question; `{qn}`, `{name_path}` and `{project}` come from
 # the tool's own lookup call (`lookup`). `source` cites the documentation each row follows, at the pinned version.
 #
-# Lookups: a question names a declaration by file, line and name. The lookup call returns candidates with their file
-# and line range; the adapter takes the one whose range holds the line and whose name is the name. None: `not_found`.
+# Lookups: a question names a declaration by file, line and name, and each tool addresses it by the most precise
+# handle its documentation offers (README, "Lookup"). The lookup call returns candidates with their file and line
+# range; the adapter takes the one whose range holds the line and whose name is the name, and uses that candidate's
+# own name path or qualified name. None: `not_found`, reported apart, with scores also given on the questions whose
+# lookup succeeded.
 
 version = "compare-v1"
 
@@ -22,7 +25,9 @@ handle = "{file}:{line}"
 
 [lookup.codebase-memory-mcp]
 # "trace_path returns 0 results: use search_graph(name_pattern=...) first to find the exact name" (README, Troubleshooting).
-calls = [{ tool = "search_graph", args = { project = "{project}", name_pattern = "^{name_re}$", file_pattern = "{file_re}", format = "json", limit = 50 } }]
+# Qualified names are `<project>.<path_parts>.<name>` (README, "Qualified Names"): qn_pattern narrows to the file's
+# path parts; the probe before the freeze fixes the exact form, recorded here.
+calls = [{ tool = "search_graph", args = { project = "{project}", name_pattern = "^{name_re}$", qn_pattern = "{qn_file_re}", file_pattern = "{file_re}", format = "json", limit = 50 } }]
 handle = "{qn}"
 
 [lookup.serena]
@@ -112,14 +117,39 @@ no_counterpart = true
 no_counterpart = true
 
 # ---------------------------------------------------------------------------------------------------------------------
+# cochange (from 0.8): which files usually change with file F? Normalised to paths, in order. Labels from git.
+
+[cochange.knowcode]
+calls = [{ tool = "kc_coupled", args = { file = "{file}" } }]
+
+[cochange.codebase-memory-mcp]
+# FILE_CHANGES_WITH edges (README, "Edge Types"); query_graph is its documented call for edges by type.
+calls = [{ tool = "query_graph", args = { project = "{project}", query = "MATCH (a:File)-[r:FILE_CHANGES_WITH]-(b:File) WHERE a.file_path = '{file}' RETURN b.file_path", format = "json" } }]
+
+[cochange.serena]
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
+# cross_http (from 0.8): which client call sites in other repositories request route R? Each repository pair is
+# indexed into one workspace (KnowCode) or one store with cross-repo linking run (codebase-memory-mcp,
+# index_repository mode "cross-repo-intelligence"). Normalised to file:line sites.
+
+[cross_http.knowcode]
+calls = [{ tool = "kc_impact", args = { symbol = "{handle}", depth = 1 } }]
+
+[cross_http.codebase-memory-mcp]
+calls = [{ tool = "trace_path", args = { project = "{project}", function_name = "{handle}", direction = "inbound", depth = 1, mode = "cross_service", format = "json" } }]
+
+[cross_http.serena]
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Questions only KnowCode has a call for. Listed so the results can show them as `no_counterpart` rows; they are
 # never scored as KnowCode wins, and compare-v1 asks none of them.
 
+# These rows say only that compare-v1 asks no such question of any tool. A feature another tool documents a
+# counterpart for is asked above instead (cochange, cross_http), whoever answers it better.
 [only_knowcode]
 history = "commits, last change and authors of a symbol (kc_history)"
-cochange = "files that change with a file or symbol (kc_coupled)"
 test_selection = "tests to run for a change (kc_impact tests, kc_task tests)"
 sql_links = "tables and the code that reads and writes them (kc_context topic tables)"
-cross_repo = "HTTP, message bus and SQL links between repositories in one workspace"
-# codebase-memory-mcp documents cross-repo HTTP, gRPC, GraphQL, tRPC and async links and FILE_CHANGES_WITH edges. These
-# rows say only that compare-v1 asks no such question of any tool, not that the tool lacks them.

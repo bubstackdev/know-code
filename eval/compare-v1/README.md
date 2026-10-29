@@ -13,7 +13,7 @@ set, compare-v2. The commit that adds them is the one the results cite as the ma
 | Release | What is published |
 | --- | --- |
 | 0.7 | References and impact on C#, TypeScript and Swift (identity-v1's repositories). Go and Java are included only if identity-v2's Go and Java labels are frozen by 0.7's third week. |
-| 0.8 | The whole mapping: references, callers, impact, find, locate and task, on every language that has labels. |
+| 0.8 | The whole mapping: references, callers, impact, find, locate, task, co-change and cross-repository HTTP, on every language that has labels. |
 
 ## The tools
 
@@ -64,12 +64,25 @@ The question types:
 | `find` | Where is a declaration named N? | Every declaration named N that the toolchain saw |
 | `locate` | Which files does this task touch? | tasks-v1: the files the fix commit changed |
 | `task` | Which files and tests does this task touch? | tasks-v1: the files and tests the fix commit changed |
+| `cochange` | Which files usually change with file F? | git: history-v1's `file-cochange` rule, on full clones |
+| `cross_http` | Which client call sites in other repositories request route R? | 0.7's hand-labelled client-link pairs ([LABELING.md](../../scripts/eval/neutral/LABELING.md)) |
+
+`cochange` and `cross_http` are asked from 0.8. They are in the set because codebase-memory-mcp documents a
+counterpart for each: `FILE_CHANGES_WITH` edges, and cross-repository `CROSS_HTTP_CALLS` edges. KnowCode features
+that no other tool documents are listed in [mapping.toml](mapping.toml) as questions compare-v1 asks of no tool.
 
 Each question names its target the way a person reading the code would: by file, line and name for a declaration
-D, and by name alone for `find`. An adapter then turns that into the tool's own way of naming a symbol, using
-the lookup call that tool's documentation recommends (see [mapping.toml](mapping.toml)). If that lookup finds no
-symbol at the given file and line, the question is counted as `not_found` for that tool. This is reported apart
-from wrong answers.
+D, and by name alone for `find`.
+
+**Lookup.** Each tool is given D's file, line and name, and addresses D by the most precise handle its own
+documentation offers. KnowCode takes `file:line` directly. Serena's `find_symbol` is called with the file as
+`relative_path`. codebase-memory-mcp's `search_graph` is called with the file as `file_pattern` and the name, and
+with a `qn_pattern` built from the file's path where its qualified names allow that. In both cases the adapter
+takes the candidate whose range holds D's line, and then uses that candidate's own name path or qualified name.
+A tool that doesn't hand back such a candidate gets `not_found` for that question. Lookup failures are reported
+per tool, apart from wrong answers. Each tool is scored twice: on every question, with `not_found` counted
+apart, and on only the questions where its own lookup succeeded. Taking `file:line` directly could favour
+KnowCode, and the second score shows how far it does.
 
 ### Labels
 
@@ -165,8 +178,10 @@ pooled proportions. Per-question means are given beside them, because labels wit
 independent. Every miss of every tool, KnowCode's included, is listed in the results: every label not named,
 and every item judged wrong, with the tool's answer.
 
-Questions only KnowCode answers (history, co-change, test selection, SQL and cross-repo links) appear as
-`no_counterpart` rows for the other tools. They are reported as such, never as KnowCode wins.
+Some KnowCode features have no documented counterpart in the other tools: symbol history, test selection and
+SQL table links. compare-v1 asks no such question of any tool. The results list them as such and never count
+them as KnowCode wins. A question the set does ask, but one tool has no call for, is that tool's `no_counterpart`
+row.
 
 ## Repeatability
 
