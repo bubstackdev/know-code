@@ -213,3 +213,23 @@ no claim about speed.
 
 The scripts are in [scripts/eval/compare](../../scripts/eval/compare): one adapter per tool, the draw, the runner and
 the scorer, using the standard library only, with tests.
+
+## Running it
+
+```sh
+# the images (once per KnowCode build under test); records each image's id in WORK/images.txt
+PYTHON=python3.12 scripts/eval/compare/build.sh KNOWCODE_SOURCE WORK typescript csharp swift
+# the pinned clones (identity-v1's), then one container per repository: index with the network up, ask without it
+python3 scripts/eval/identity_gate.py fetch --work WORK
+for REPO in serilog autofac jellyfin-server jellyfin-web hono swift-argument-parser swift-collections swift-nio; do
+  LANGUAGE=$(awk -v r=$REPO '$1 == r {print $2}' scripts/eval/identity/repos.txt)
+  scripts/eval/compare/container.sh $LANGUAGE $REPO WORK/clones/$REPO RUN/$REPO --types refs,impact
+done
+# the scores, on the host; a second run into RUN2 must give an identical summary
+(cd scripts/eval && python3 -m compare.run score --questions ../../eval/compare-v1/questions.jsonl \
+   --enumerations ENUMERATIONS --clones WORK/clones --out RUN/summary.json RUN/*/out)
+```
+
+`ENUMERATIONS` is the directory of the eight enumerations ([enumerations/README.md](enumerations/README.md)).
+`summary.json` holds both scores per tool, question type and language. `summary.misses.jsonl` lists every label
+each tool missed and every item judged wrong. Each repository's `out` keeps every raw answer and every tool's logs.
