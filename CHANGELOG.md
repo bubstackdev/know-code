@@ -11,6 +11,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 797 links, linked recall 0.713, and no
   outside label is linked; on a held-out set nothing was tuned on (jackson-core, 455 labels), 1.000 over 248 links,
   linked recall 0.719, and none linked.
+- Java calls and member uses on a chain (`Report.builder().title(t).build()`, `this.store.items()`, a field of an
+  imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
+  identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
+  outside label linked).
 - The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
   0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
   checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.

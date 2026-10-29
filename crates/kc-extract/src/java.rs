@@ -894,6 +894,32 @@ mod tests {
     }
 
     #[test]
+    fn member_types_and_receiver_paths() {
+        let f = extract(
+            "class Report {\n\
+               static Builder builder() { return null; }\n\
+               static final class Builder { Builder title() { return this; } Report build() { return null; } }\n\
+               Store store;\n\
+               void run() { Report.builder().title().build(); this.store.items().first(); store.save(); }\n\
+             }\n",
+        );
+        let builder = f.symbols.iter().find(|s| s.name == "builder").unwrap();
+        assert_eq!(builder.type_name.as_deref(), Some("Report.Builder"), "a member type's name is qualified");
+        let build = f.refs.iter().find(|r| r.name == "build" && r.kind == RefKind::Call).unwrap();
+        assert_eq!(
+            TypeExpr::decode(build.receiver_type.as_deref().unwrap()),
+            Some(TypeExpr::root(PathRoot::Static("Report".into())).then(Seg::Call("builder".into())).then(Seg::Call("title".into())))
+        );
+        let first = f.refs.iter().find(|r| r.name == "first").unwrap();
+        assert_eq!(
+            TypeExpr::decode(first.receiver_type.as_deref().unwrap()),
+            Some(TypeExpr::root(PathRoot::SelfType).then(Seg::Member("store".into())).then(Seg::Call("items".into())))
+        );
+        let save = f.refs.iter().find(|r| r.name == "save").unwrap();
+        assert_eq!(TypeExpr::decode(save.receiver_type.as_deref().unwrap()), Some(TypeExpr::root(PathRoot::Prop("store".into()))));
+    }
+
+    #[test]
     fn annotations_tests_and_entrypoints() {
         let f = extract(
             "class T {\n\
