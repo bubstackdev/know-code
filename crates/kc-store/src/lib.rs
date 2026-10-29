@@ -13,6 +13,7 @@ pub mod content;
 pub mod db;
 pub mod di;
 pub mod identity;
+mod jvm;
 pub mod limits;
 pub mod locate;
 pub mod manifests;
