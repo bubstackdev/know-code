@@ -42,6 +42,15 @@ class KnowCodeTest(unittest.TestCase):
         _, cursor = adapters.kc_impact_decls(KC_IMPACT + 'more: kc_more {"cursor": "abc"}\n')
         self.assertEqual(cursor, 'abc')
 
+    def test_impact_continuation_pages_are_json(self):
+        page = json.dumps({'cursor': 'kc~2', 'list': 'items[0].affected', 'offset': 30, 'next_offset': 45,
+                           'items': [{'file': 'src/hooks/useFetchItems.ts', 'line': 54, 'site': 'src/hooks/useFetchItems.ts:55',
+                                      'hop': 1, 'kind': 'function', 'qualified': 'useGetItems'}],
+                           'incomplete': [{'hint': 'kc_more {cursor: <`cursor`>}', 'reason': 'capped'}]})
+        self.assertEqual(adapters.kc_impact_decls(page), ([('decl', 'src/hooks/useFetchItems.ts', 54)], 'kc~2'))
+        last = json.dumps({'items': [{'file': 'a.ts', 'line': 3, 'hop': 2}]})
+        self.assertEqual(adapters.kc_impact_decls(last), ([('decl', 'a.ts', 3)], None))
+
     def test_impact_rows_in_paths_with_spaces(self):
         text = ('method ParsableCommand.run  Sources/ArgumentParser/Parsable Types/ParsableCommand.swift:32\n'
                 '  called by method Main.main  Sources/Main Things/main.swift:9  [exact] direct (declared at line 7)\n')

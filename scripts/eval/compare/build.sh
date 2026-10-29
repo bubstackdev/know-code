@@ -4,8 +4,9 @@
 #
 #     build.sh SOURCE WORK LANGUAGE [...]
 #
-# SOURCE is the KnowCode checkout under test; it is built for Linux in the pinned rust image, with its target
-# directory under WORK, and only the binary goes into the image's build context. Images are tagged
+# SOURCE is the KnowCode checkout under test; it is built for Linux in the pinned rust image, with a target directory
+# of its own under WORK (named by the checkout's path, so two checkouts never share one), and only the binary goes into
+# the image's build context. Images are tagged
 # kc-compare-v1:LANGUAGE and stay local; WORK/images.txt records each image's id. Run with PYTHON pointing at
 # Python 3.11 or later (tomllib).
 set -euo pipefail
@@ -16,8 +17,10 @@ SOURCE=$(cd "${1:?usage: build.sh SOURCE WORK LANGUAGE [...]}" && pwd)
 WORK=${2:?usage: build.sh SOURCE WORK LANGUAGE [...]}
 shift 2
 PYTHON=${PYTHON:-python3}
-mkdir -p "$WORK/context" "$WORK/target"
+mkdir -p "$WORK/context"
 WORK=$(cd "$WORK" && pwd)
+TARGET=$WORK/target-$(printf '%s' "$SOURCE" | shasum -a 256 | cut -c1-12)
+mkdir -p "$TARGET"
 
 pin() { "$PYTHON" -c 'import sys, tomllib; d = tomllib.load(open(sys.argv[1], "rb"))
 for k in sys.argv[2].split("."): d = d[k]
@@ -28,10 +31,10 @@ case $(uname -m) in arm64|aarch64) ARCH=arm64 UARCH=aarch64 ;; *) ARCH=amd64 UAR
 PLATFORM=linux/$ARCH
 
 # KnowCode for Linux, in the pinned rust image. The source is mounted read-only; nothing is written into it.
-docker run --rm --platform "$PLATFORM" -v "$SOURCE:/src:ro" -v "$WORK/target:/target" -e CARGO_TARGET_DIR=/target \
+docker run --rm --platform "$PLATFORM" -v "$SOURCE:/src:ro" -v "$TARGET:/target" -e CARGO_TARGET_DIR=/target \
   -e CARGO_HOME=/target/cargo-home "$(pin images.rust)" \
   bash -c 'cd /src && cargo build --release --locked -p knowcode' >"$WORK/knowcode-build.log" 2>&1
-cp "$WORK/target/release/knowcode" "$WORK/context/knowcode"
+cp "$TARGET/release/knowcode" "$WORK/context/knowcode"
 
 for LANGUAGE in "$@"; do
   CBM_URL=$(pin codebase-memory-mcp.pinned.url)

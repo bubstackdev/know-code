@@ -288,3 +288,24 @@ fn a_destructured_prop_of_a_package_type_is_the_packages() {
     assert!(job.iter().all(|g| !linked(g.1)), "{job:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_member_a_repo_adds_to_a_package_by_augmenting_its_module_stays_linked() {
+    let (root, store) = repo(
+        "ts-augmented-package",
+        &[
+            ("package.json", PACKAGE_JSON),
+            ("tsconfig.json", TSCONFIG),
+            ("src/legacy.d.ts", "export interface LegacyClient {\n    getItems(q: string): Promise<string[]>;\n    getExtras(): string[];\n}\n"),
+            ("src/sdk.d.ts", "declare module '@acme/sdk/items' {\n    interface ItemsApi {\n        getExtras(): string[];\n    }\n}\n"),
+            (
+                "src/items.ts",
+                "import { getItemsApi } from '@acme/sdk/items';\n\nexport function load(api: unknown) {\n    return getItemsApi(api).getExtras();\n}\n",
+            ),
+        ],
+    );
+    // The repo adds `getExtras` to the package's module: a call through the package's value may be the repo's.
+    let got = refs(&store, "getExtras", &["call"], "src/items.ts");
+    assert!(got.iter().any(|g| g.0 == 4 && g.1 != "unresolved"), "{got:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
