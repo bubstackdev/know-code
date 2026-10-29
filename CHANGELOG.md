@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Kotlin is read, with Java as one family. Classes, objects, companions, functions, extensions and properties in `.kt`
+  files are indexed, and names resolve as kotlinc scopes them: by package and imports (aliases included), a class's
+  companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
+  Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
+  the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
+  is 1.000 over 452 links, linked recall 0.504, and no outside label is linked; Java's linked recall rises to 0.871 as
+  Java calls into Kotlin resolve. HELDOUT_KOTLIN
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
   member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's

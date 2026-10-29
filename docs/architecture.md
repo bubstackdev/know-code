@@ -7,7 +7,7 @@ brings it up to date with the working tree before answering, and resolves names 
 
 | Crate | Role |
 | --- | --- |
-| `kc-extract` | Per-file extraction with tree-sitter (Swift, Python, Rust, C#, TypeScript/TSX/JavaScript, Java, CFML, Terraform, Angular templates), a SQL statement scanner, Ansible YAML and Jinja, GitLab CI, and manifests (SwiftPM, XcodeGen, Cargo, `.csproj`, `package.json`, `tsconfig.json`). Extraction is context-free: changing one file never forces another to be re-extracted. |
+| `kc-extract` | Per-file extraction with tree-sitter (Swift, Python, Rust, C#, TypeScript/TSX/JavaScript, Java, Kotlin, CFML, Terraform, Angular templates), a SQL statement scanner, Ansible YAML and Jinja, GitLab CI, and manifests (SwiftPM, XcodeGen, Cargo, `.csproj`, `package.json`, `tsconfig.json`). Extraction is context-free: changing one file never forces another to be re-extracted. |
 | `kc-store` | The SQLite schema, FTS5 and trigram search, name resolution and graph queries (`query.rs`, `trace.rs`), the answer contract types (`answer.rs`), and execution limits (`limits.rs`). |
 | `kc-index` | File discovery, ignore rules, freshness, incremental indexing, the content index, git history (hotspots, co-change, ownership, test selection), cross-repo linking (HTTP, bus, SQL, Terraform, Ansible, CI), the workspace summary, configuration, privacy, notes, the writer lock and the cache lifecycle. |
 | `knowcode` | The CLI (`main.rs`), the operations behind each command (`ops.rs`), walks, paths and flows, rendering, the answer contract (`contract.rs`), cursors, the MCP server (`mcp.rs`) and its help topics (`help.rs`), client setup, uninstall and updates. |
