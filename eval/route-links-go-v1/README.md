@@ -39,3 +39,15 @@ own.
 
 Not included: go-gitea/gitea, whose routes go through its own router (a separate step, not 0.7), and whose web
 client's requests go through a few wrappers, so the wrapper rule leaves few sites.
+
+## Left out
+
+Found while listing the sites, before any was labelled, and applied by
+[route_links.py](../../scripts/eval/route_links.py)'s search under route-links-v1's own exclusions (code a tool
+generated and the repository commits; test code):
+
+- Go files that say a tool generated them (`// Code generated … DO NOT EDIT.`, Go's convention): flipt's HTTP SDKs
+  under `sdk/go/`, generated from its protobuf services. Text in a Go string literal (a code generator's template,
+  such as flipt's `protoc-gen-go-flipt-sdk`) is not a call either.
+- drakkan/sftpgo's bundled third-party scripts (`openapi/swagger-ui/`, `static/assets/js/scripts.bundle.js`) and its
+  API test helpers (`internal/httpdtest/`, which only its tests import).

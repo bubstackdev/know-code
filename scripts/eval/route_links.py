@@ -36,7 +36,13 @@ CHAIN_HEAD = re.compile(r'(?<![\w$.])(?:this\.)?(?:http|httpClient)\s*$')
 # A declaration named like a request API (`private fetch(): Observable<…>`), not a call.
 DECLARED = re.compile(r'\b(?:private|public|protected|static|async|function)\s*$')
 # Code a tool generated and the repository commits (eval/route-links-v1/README.md).
-EXCLUDED = {'spring-petclinic-angular': ('docs/',)}
+EXCLUDED = {
+    'spring-petclinic-angular': ('docs/',),
+    # eval/route-links-go-v1/README.md: bundled third-party scripts, and the server's API test helpers.
+    'sftpgo': ('openapi/swagger-ui/', 'static/assets/js/scripts.bundle.js', 'internal/httpdtest/'),
+}
+# A Go file a tool generated says so in its first lines, by Go's convention (`go help generate`).
+GENERATED_GO = re.compile(r'^// Code generated .* DO NOT EDIT\.$')
 # A Spring client's request: the one `uri(…)` of a WebClient or RestClient request, or a RestTemplate request method.
 JVM_REQUEST = re.compile(
     r'\.uri\('
@@ -69,6 +75,20 @@ def comment(text, at):
     return 0 <= start < at and not text[:start].rstrip().endswith(':')
 
 
+def in_string(text, at):
+    """Whether position `at` of a Go line is inside a string literal (generated code's text, not a call)."""
+    quotes = 0
+    i = 0
+    while i < at:
+        if text[i] == '\\':
+            i += 2
+            continue
+        if text[i] == '"':
+            quotes += 1
+        i += 1
+    return quotes % 2 == 1
+
+
 def declarative_sites(rel, text):
     """A site per mapped method of a @FeignClient or @HttpExchange interface: its name's line."""
     out, pending = [], False
@@ -92,13 +112,16 @@ def sites(clone, repo):
                 or rel.startswith(EXCLUDED.get(repo, ())):
             continue
         text = lines(Path(clone)/rel)
+        if rel.endswith(GO) and any(GENERATED_GO.match(t) for t in text[:20]):
+            continue
         if rel.endswith(JVM) and any(DECLARATIVE_CLIENT.search(t) for t in text):
             found = declarative_sites(rel, text)
         else:
             pattern = SCRIPT_REQUEST if rel.endswith(SCRIPTS) else GO_REQUEST if rel.endswith(GO) else JVM_REQUEST
             found = [(n, m.start() + 1, m.group(0), t.strip()) for n, t in enumerate(text, 1)
                      for m in pattern.finditer(t)
-                     if not comment(t, m.start()) and not DECLARED.search(t[:m.start()])]
+                     if not comment(t, m.start()) and not DECLARED.search(t[:m.start()])
+                     and not (rel.endswith(GO) and in_string(t, m.start()))]
             if rel.endswith(SCRIPTS):
                 found += [(n, m.start() + 1, m.group(0).strip(), t.strip()) for n, t in enumerate(text, 1)
                           if n > 1 and CHAIN_HEAD.search(text[n - 2]) for m in [CHAINED.match(t)] if m]
