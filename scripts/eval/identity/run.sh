@@ -97,11 +97,14 @@ case $LANGUAGE in
     ARGS=${LINE#* -- }
     read -r _ JVM TOOL ENVS <<<"${LINE%% -- *}"
     BUILD="env $ENVS JVM_VERSION=$JVM scip-java index --build-tool=$TOOL --"
-    # KOTLIN_CATALOG=V sets the Kotlin version in the container's copy of gradle/libs.versions.toml, for a build that
-    # pins it there rather than reading a variable (scip-java's Kotlin plugin needs Kotlin 2.4).
+    # KOTLIN_CATALOG=V sets the Kotlin version in the container's copy of the file a build pins it in rather than reading
+    # a variable (scip-java's Kotlin plugin needs Kotlin 2.4): gradle/libs.versions.toml's `kotlin = "…"`, or the file
+    # KOTLIN_FILE names, whose `KOTLIN_VERSION = "…"` constant is the pin.
     CATALOG=$(sed -nE 's/(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$ENVS")
-    [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^kotlin = \"[^\"]*\"/kotlin = \"$CATALOG\"/' gradle/libs.versions.toml
-         grep -qx 'kotlin = \"$CATALOG\"' gradle/libs.versions.toml"
+    PINNED=$(sed -nE 's/(^| )KOTLIN_FILE=([^ ]+).*/\2/p' <<<"$ENVS")
+    PINNED=${PINNED:-gradle/libs.versions.toml}
+    [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^([[:space:]]*(const val )?(kotlin|KOTLIN_VERSION) = )\"[^\"]*\"/\\1\"$CATALOG\"/' $PINNED
+         grep -qE '(kotlin|KOTLIN_VERSION) = \"$CATALOG\"' $PINNED"
     run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /work/tools/skip-buildsrc.gradle /root/.gradle/init.d/
          JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk
          echo org.gradle.java.installations.paths=\$JDKS > /root/.gradle/gradle.properties
