@@ -1,0 +1,46 @@
+# YAML forms where two parsers could differ: anchors and aliases, multi-line scalars, quoted keys, tags, numeric-looking
+# strings, flow collections, comments and document markers.
+"id": yaml-anchor-console
+'language': TypeScript
+severity: !!str warning
+message: >-
+  console call
+  in a method
+rule:
+  pattern: console.$F($$$)
+  inside: &in-method
+    kind: method_definition
+    stopBy: end
+constraints:
+  F:
+    regex: ^(log|warn)$
+    inside: *in-method
+...
+---
+id: '123'
+language: python
+message: "numeric-looking id, a \"quoted\" message, and a\ttab"
+rule:
+  pattern: |
+    print($$$)
+---
+id: yaml-flow
+language: Rust
+message: !!str 42
+rule: {kind: macro_invocation, has: {field: macro, regex: '^(dbg|todo)$'}}
+---
+id: yaml-flow-seq
+language: CSharp
+severity: hint
+message: Console call, any form
+rule:
+  any: [{pattern: Console.WriteLine($$$)}, {pattern: Console.Error.WriteLine($$$)}]
+  # A comment between keys.
+  inside: {kind: method_declaration, stopBy: end}
+---
+id: yaml-nthchild-number
+language: Swift
+message: first statement
+rule:
+  kind: call_expression
+  nthChild: 1

@@ -1,0 +1,23 @@
+# ast-grep-config 0.50.0 (MIT), vendored with its YAML layer replaced: see README.md.
+[package]
+name = "ast-grep-config"
+version = "0.50.0"
+edition = "2024"
+license = "MIT"
+description = "ast-grep's rule configuration, vendored by KnowCode with rule YAML read by yaml-rust2"
+publish = false
+
+[dependencies]
+ast-grep-core.workspace = true
+bit-set = "0.11.0"
+globset = "0.4.14"
+regex.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_regex = "1.1.0"
+thiserror = "2.0.0"
+yaml-rust2.workspace = true
+
+[dev-dependencies]
+tree-sitter-typescript.workspace = true

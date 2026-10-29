@@ -1,0 +1,43 @@
+id: swift-force-try
+language: Swift
+severity: error
+message: force try
+rule:
+  pattern: try! $X
+---
+id: swift-print
+language: swift
+message: print call
+rule:
+  pattern: print($$$)
+---
+id: swift-force-unwrap
+language: Swift
+severity: warning
+message: force unwrap
+rule:
+  kind: postfix_expression
+  regex: "!$"
+---
+id: swift-force-cast
+language: Swift
+message: force cast
+rule:
+  kind: as_expression
+  regex: as!
+---
+id: swift-empty-catch
+language: Swift
+message: empty catch
+rule:
+  kind: catch_block
+  not:
+    has:
+      kind: statements
+      stopBy: end
+---
+id: swift-main-async
+language: Swift
+message: main queue async
+rule:
+  pattern: DispatchQueue.main.async { $$$ }

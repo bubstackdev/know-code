@@ -7,6 +7,67 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
   shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
   answer left out as comments.
+- Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
+  scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
+  member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
+  `assertThat`) is never linked to the repo's declaration of the same name. On identity-v2's 1,501 Java labels (gson,
+  commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 797 links, linked recall 0.713, and no
+  outside label is linked; on a held-out set nothing was tuned on (jackson-core, 455 labels), 1.000 over 248 links,
+  linked recall 0.719, and none linked.
+- Java calls and member uses on a chain (`Report.builder().title(t).build()`, `this.store.items()`, a field of an
+  imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
+  identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
+  outside label linked).
+- The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
+  0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
+  checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.
+- Fewer links to a repo declaration where the compiler binds a library's. On identity-v1, outside labels linked drop
+  from 6 to 2 in C#, 22 to 19 in Swift and 37 to 7 in TypeScript, with no label newly wrong:
+  - TypeScript: a member reached through a value a package gives (`getLibraryApi(api).getItems(…)`, `(await
+    getLibraryApi(api).getItems(…)).data`) is the package's, not a same-named member of the repo's declaration files.
+  - TypeScript: a bare import that no config maps (`import { createHash } from 'crypto'`) is never placed at a repo
+    file named like it when a tsconfig is in force, nor ever for Node's own modules.
+  - TypeScript: a module that exports but imports nothing names the platform's global types (`Response`), not a
+    repo module's export of the name.
+  - C#: an extension method is linked only where C# can call it. A property read (`results.Count`) is never one; a
+    sealed library type (`ReadOnlySpan<T>`, `string`) calls only extensions on itself and its interfaces; and a
+    sequence's call that a `List<T>` or `HashSet<T>` instance method takes (`list.AddRange(xs)`) lists the extension
+    without linking it.
+  - Swift: a call no `await` covers never links to an `async` function (XCTest's synchronous `XCTAssertThrowsError`,
+    not a repo's `async` overload). `await` covers every call to its right in its statement (`try await a.f().g()`).
+  - Swift: a declaration whose attributes push its signature past the length cap shows the signature from after the
+    attributes, so its parameters and effects aren't cut off.
+- A new worktree started from a shared base hashes only the files that may differ from the base on its first sync:
+  those changed since the base's commit, modified in the worktree, or untracked. Every other file git reports clean and
+  unchanged since that commit keeps the worktree's own stat when the base is cloned, so it isn't read. `--verify` still
+  hashes every file.
+- More standard-library members through a receiver of unknown type are listed as `external_likely` rather than linked
+  to the repo's one member of the name. On identity-v1, outside labels linked drop from 2 to 0 in C#, 19 to 8 in Swift
+  and 7 to 3 in TypeScript, with no label newly wrong:
+  - Swift: `startIndex`, `endIndex`, `lowerBound`, `upperBound`, `allCases` (also through a generic parameter,
+    `Element.allCases`) and `decodeIfPresent`; and a member of a standard-library generic type written with its
+    arguments (`MemoryLayout<T>.size`, which was read as an implicit member `.size`) is the library's unless the repo
+    extends that type.
+  - C#: `GetMethod` and `QueryString`, and the standard-library names through a capitalised receiver left unknown (a
+    property a library base class may declare, `Request.QueryString`).
+  - TypeScript: `success`, `isError` and `left`.
+- Swift: fewer links to a repo declaration where the compiler binds a package's or the platform's. On identity-v1,
+  Swift's outside labels linked drop from 8 to 0, with no label newly wrong:
+  - A type a module imports by name from a package (`@_exported import struct SystemPackage.FileDescriptor`) is the
+    package's in that module, as are its members, never a same-named type of a module imported whole.
+  - A member a test target adds to a library type in an extension isn't what code under `Sources/` calls.
+  - A member the repo adds to a library type, named like the library's own (`JSONDecoder`'s `decode(_:from:)`), is
+    listed rather than linked: the library's overloads take other argument types.
+  - A free function named like a C library function (a platform shim such as `unlink` for Windows) is listed rather
+    than linked: the platform's own function is the one called on other platforms.
+- TypeScript: a parameter destructured from an annotated type (`({ task }: TaskProps)`) has that type's property's type,
+  and a type alias's object type (`type TaskProps = { task: TaskInfo }`) has its properties indexed as members, as an
+  interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
+  from 0.578 to 0.597 and one more outside label is no longer linked (`task.LastExecutionResult.Status` on a package
+  type), leaving 2. A type alias's property is reached only through a value of that type, never by its name alone.
+- compare-v1's first results are published ([eval/compare-v1/results.md](eval/compare-v1/results.md)): KnowCode,
+  codebase-memory-mcp and Serena answer the same reference and impact questions on eight public repositories, scored
+  against labels from each language's toolchain, with every miss listed.
 
 ## 0.6.1 (2026-10-28)
 

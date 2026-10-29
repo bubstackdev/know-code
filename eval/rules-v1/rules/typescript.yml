@@ -1,0 +1,99 @@
+id: ts-no-console-log
+language: TypeScript
+severity: warning
+message: console.log($$$ARGS)
+rule:
+  pattern: console.log($$$ARGS)
+---
+id: ts-console-in-method
+language: ts
+message: console call in method $M
+rule:
+  pattern: console.$F($$$)
+  inside:
+    kind: method_definition
+    stopBy: end
+    has:
+      field: name
+      pattern: $M
+constraints:
+  F:
+    regex: ^(log|warn)$
+---
+id: ts-loose-equality
+language: TypeScript
+severity: error
+message: Use === instead of ==
+rule:
+  kind: binary_expression
+  has:
+    field: operator
+    regex: ^==$
+---
+id: ts-no-var
+language: TypeScript
+message: var declaration
+rule:
+  kind: variable_declaration
+---
+id: ts-no-debugger
+language: TypeScript
+severity: error
+message: debugger statement
+rule:
+  kind: debugger_statement
+---
+id: ts-any-type
+language: TypeScript
+severity: hint
+message: any type
+rule:
+  kind: predefined_type
+  regex: ^any$
+  not:
+    inside:
+      kind: as_expression
+---
+id: ts-push-then-return
+language: TypeScript
+message: push before return
+rule:
+  kind: expression_statement
+  has:
+    pattern: this.$X.push($$$)
+  precedes:
+    kind: return_statement
+---
+id: ts-await-in-method
+language: TypeScript
+message: await in async method
+rule:
+  kind: await_expression
+  inside:
+    all:
+      - kind: method_definition
+      - regex: ^async
+    stopBy: end
+---
+id: ts-arrow-in-call
+language: TypeScript
+message: arrow passed to $C
+rule:
+  kind: arrow_function
+  inside:
+    kind: arguments
+    inside:
+      kind: call_expression
+      has:
+        field: function
+        pattern: $C
+---
+id: ts-template-message
+language: TypeScript
+message: setTimeout with ${{ DELAY }}
+transform:
+  DELAY:
+    substring:
+      source: $D
+rule:
+  pattern: setTimeout($FN, $D)

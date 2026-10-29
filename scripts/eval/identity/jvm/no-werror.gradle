@@ -1,0 +1,12 @@
+// A Gradle init script for labelling (eval/identity-v2/README.md): the labelling compiler may be newer than the one a
+// repository pins, and its new warnings mustn't fail a build that treats warnings as errors. Warnings don't change
+// what a name binds to.
+allprojects {
+    afterEvaluate {
+        tasks.configureEach { task ->
+            if (task.hasProperty('compilerOptions') && task.compilerOptions.hasProperty('allWarningsAsErrors')) {
+                task.compilerOptions.allWarningsAsErrors.set(false)
+            }
+        }
+    }
+}

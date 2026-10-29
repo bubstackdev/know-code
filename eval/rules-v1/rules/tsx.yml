@@ -1,0 +1,36 @@
+id: tsx-console-in-component
+language: Tsx
+message: console call in component $NAME
+rule:
+  pattern: console.log($$$)
+  inside:
+    kind: function_declaration
+    stopBy: end
+    has:
+      field: name
+      pattern: $NAME
+---
+id: tsx-map-without-key
+language: tsx
+severity: warning
+message: element in map without key
+rule:
+  kind: jsx_element
+  inside:
+    kind: arrow_function
+    stopBy: end
+    inside:
+      pattern: $L.map($$$)
+      stopBy: end
+  not:
+    has:
+      kind: jsx_opening_element
+      has:
+        kind: jsx_attribute
+        regex: ^key=
+---
+id: tsx-generic-new
+language: Tsx
+message: generic construction
+rule:
+  pattern: new $C<$T>($$$)

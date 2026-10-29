@@ -57,6 +57,11 @@ class RowTest(unittest.TestCase):
         # Comments and attributes naming it come before the name.
         self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 6, 'load'), 8)
         self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 9, 'load'), 10)
+
+    def test_a_go_embedded_pointer_field_is_not_a_comment(self):
+        lines = ['type Request struct {', '\t*Base', '\tBase int', '}']
+        self.assertEqual(identity_gate.name_line(lines, 2, 'Base', identity_gate.comment_pattern('shop/request.go')), 2)
+        self.assertEqual(identity_gate.name_line(lines, 2, 'Base', identity_gate.comment_pattern('Shop/Request.swift')), 3)
         self.assertTrue(identity_gate.target_matches(dict(file='b.swift', line=4), label(locs=[['b.swift', 5]]), lines_of))
         self.assertFalse(identity_gate.target_matches(dict(file='b.swift', line=2), label(locs=[['b.swift', 5]]), lines_of))
         self.assertFalse(identity_gate.target_matches(dict(file='c.swift', line=2), label(), lines_of))

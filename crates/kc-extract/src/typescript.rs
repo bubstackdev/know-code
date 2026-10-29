@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 24;
+pub const VERSION: u32 = 25;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -285,10 +285,20 @@ impl<'a> Cx<'a> {
                 let Some(n) = node.child_by_field_name("name") else { return };
                 let name = self.text(n).to_string();
                 let value = node.child_by_field_name("value");
-                let sym = self.push(node, outer, name, SymbolKind::Typealias, self.enclosing_type(), value);
+                let sym = self.push(node, outer, name.clone(), SymbolKind::Typealias, self.enclosing_type(), value);
                 self.facts.symbols[sym].type_name = value.and_then(|v| type_expr(self.src, v)).map(|t| t.encode());
                 if let Some(v) = value {
-                    self.in_scope(sym, None, false, HashMap::new(), |cx| cx.visit(v));
+                    // `type TaskProps = { task: TaskInfo }`: its properties are members of the alias, as an interface's
+                    // are, so a value of the type (`({ task }: TaskProps)`) has a known `task`.
+                    if v.kind() == "object_type" {
+                        self.in_scope(sym, Some(name.clone()), false, HashMap::new(), |cx| {
+                            for m in children(v) {
+                                cx.member(m, &name);
+                            }
+                        });
+                    } else {
+                        self.in_scope(sym, None, false, HashMap::new(), |cx| cx.visit(v));
+                    }
                 }
             }
             "function_declaration" | "generator_function_declaration" | "function_signature" => {
@@ -908,6 +918,15 @@ impl<'a> Cx<'a> {
         let mut untyped = HashSet::new();
         if let Some(params) = f.child_by_field_name("parameters") {
             for p in children(params) {
+                // `({ task, item: it }: TaskProps)`: each name bound is the annotated type's property of its key.
+                if let Some(pattern) = p.child_by_field_name("pattern").filter(|n| n.kind() == "object_pattern")
+                    && let Some(t) = p.child_by_field_name("type").and_then(|t| type_expr(self.src, t))
+                {
+                    for (key, local) in destructured(self.src, pattern) {
+                        locals.insert(local, TypeExpr::root(PathRoot::Expr(Box::new(t.clone()))).then(Seg::Member(key)));
+                    }
+                    continue;
+                }
                 let Some(n) = p.child_by_field_name("pattern").or_else(|| p.child_by_field_name("name")).filter(|n| n.kind() == "identifier")
                 else {
                     continue;
@@ -2252,6 +2271,37 @@ fn base_type_name(src: &str, t: Node) -> String {
         "member_expression" => t.child_by_field_name("property").map_or_else(String::new, |n| src[n.byte_range()].to_string()),
         _ => String::new(),
     }
+}
+
+/// The names an object pattern binds, each with the property it takes (`{ task, item: it }`: `task` from `task`, `it`
+/// from `item`). A nested pattern, a rest element or a computed key binds nothing here.
+fn destructured(src: &str, pattern: Node) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for c in children(pattern) {
+        match c.kind() {
+            "shorthand_property_identifier_pattern" => {
+                let name = src[c.byte_range()].to_string();
+                out.push((name.clone(), name));
+            }
+            // `{ task = fallback }`: the left side names the property.
+            "object_assignment_pattern" => {
+                if let Some(l) = c.child_by_field_name("left").filter(|l| l.kind() == "shorthand_property_identifier_pattern") {
+                    let name = src[l.byte_range()].to_string();
+                    out.push((name.clone(), name));
+                }
+            }
+            "pair_pattern" => {
+                if let (Some(k), Some(v)) = (c.child_by_field_name("key"), c.child_by_field_name("value"))
+                    && k.kind() == "property_identifier"
+                    && v.kind() == "identifier"
+                {
+                    out.push((src[k.byte_range()].to_string(), src[v.byte_range()].to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn type_expr(src: &str, t: Node) -> Option<TypeExpr> {
