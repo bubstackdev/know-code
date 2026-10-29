@@ -115,6 +115,8 @@ def judge(q, answer, decls, bound, source):
     if q['type'] == 'refs':
         labels = {tuple(s) for s in q['labels']}
         return score.judge_refs(items, labels, bound[q['repo']].get(q['target'][2], {}))
+    if q['type'] == 'cochange':
+        return score.judge_files(items, [f for f, _ in q['labels']], q['single'])
     labels = {tuple(d) for d in q['labels']}
     return score.judge_decls(items, labels, decls[q['repo']], source)
 

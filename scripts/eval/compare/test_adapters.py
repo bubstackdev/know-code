@@ -98,6 +98,17 @@ class CodebaseMemoryTest(unittest.TestCase):
         self.assertEqual(adapters.cbm_callers(CBM_TRACE), ([('p.src.harvest.gather', 1), ('p.src.harvest.harvest', 2)], None))
 
 
+class CochangeTest(unittest.TestCase):
+    # Both tools on the made-up fixture with a short history: harvest.ts changed with basket.ts four times, picker.ts once.
+    PAGES = json.loads((Path(__file__).parent/'testdata'/'kc_pages.json').read_text())
+
+    def test_knowcode_partners_in_order(self):
+        self.assertEqual(adapters.kc_partners(self.PAGES['kc_coupled']), [('path', 'src/harvest.ts'), ('path', 'src/picker.ts')])
+
+    def test_codebase_memory_rows(self):
+        self.assertEqual(adapters.cbm_paths(self.PAGES['cbm_cochange']), ([('path', 'src/harvest.ts')], None))
+
+
 class SerenaTest(unittest.TestCase):
     def test_symbols_are_one_based(self):
         text = json.dumps([{"name_path": "Basket/weigh", "kind": "Method", "relative_path": "src/basket.ts",

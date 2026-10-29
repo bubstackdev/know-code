@@ -10,7 +10,8 @@
 # longer resolve, and the questions are asked. The container is removed afterwards, whatever happens.
 #
 # CPUS (default 4) and MEMORY (default 12g) limit the container; the image is kc-compare-v1:LANGUAGE (build.sh).
-# QUESTIONS (default eval/compare-v1/questions.jsonl) is copied in as /in/questions.jsonl.
+# QUESTIONS (default eval/compare-v1/questions.jsonl) is copied in as /in/questions.jsonl. HISTORY=1 copies the clone
+# whole, its .git included, and keeps its history instead of committing the tree once: co-change questions read it.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -26,7 +27,12 @@ rm -rf "$IO/in" && mkdir -p "$IO/in" "$IO/out"
 IO=$(cd "$IO" && pwd)
 if [ "$REPO" != probe ]; then
   cp "${QUESTIONS:-$HERE/../../../eval/compare-v1/questions.jsonl}" "$IO/in/questions.jsonl"
-  (cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -cf "$IO/in/src.tar" -T -)
+  if [ "${HISTORY:-0}" = 1 ]; then
+    [ -z "$(git -C "$CLONE" status --porcelain)" ] || { echo "container.sh: $CLONE has local changes" >&2; exit 2; }
+    (cd "$CLONE" && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -cf "$IO/in/src.tar" .)
+  else
+    (cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -cf "$IO/in/src.tar" -T -)
+  fi
 fi
 (cd "$HERE/.." && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude __pycache__ -cf "$IO/in/harness.tar" compare)
 
@@ -74,8 +80,9 @@ fi
 # 1. With the network up: restore, then every tool indexes. The restore is for Serena's language servers, which
 # resolve through the dependencies; KnowCode and codebase-memory-mcp ignore them. A run that doesn't start Serena
 # (--tools without it, as on locate and task trees) indexes the tree as checked out.
-run "tar -xf /in/src.tar -C /work/src"
-snapshot /work/src
+# Owned by the container's user, so git reads it (a clone's owner would otherwise be refused as dubious).
+run "tar --no-same-owner -xf /in/src.tar -C /work/src"
+[ "${HISTORY:-0}" = 1 ] || snapshot /work/src
 case " $* " in
   *" --tools "*) case "$*" in *serena*) restore /work/src ;; esac ;;
   *) restore /work/src ;;

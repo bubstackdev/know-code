@@ -1,0 +1,90 @@
+{
+ "autofac/cochange/100+": [
+  3,
+  3
+ ],
+ "autofac/cochange/20-99": [
+  157,
+  4
+ ],
+ "autofac/cochange/5-19": [
+  345,
+  4
+ ],
+ "hono/cochange/100+": [
+  5,
+  4
+ ],
+ "hono/cochange/20-99": [
+  77,
+  4
+ ],
+ "hono/cochange/5-19": [
+  159,
+  4
+ ],
+ "jellyfin-server/cochange/100+": [
+  80,
+  4
+ ],
+ "jellyfin-server/cochange/20-99": [
+  447,
+  4
+ ],
+ "jellyfin-server/cochange/5-19": [
+  911,
+  4
+ ],
+ "jellyfin-web/cochange/100+": [
+  57,
+  4
+ ],
+ "jellyfin-web/cochange/20-99": [
+  184,
+  4
+ ],
+ "jellyfin-web/cochange/5-19": [
+  280,
+  4
+ ],
+ "serilog/cochange/100+": [
+  1,
+  1
+ ],
+ "serilog/cochange/20-99": [
+  52,
+  4
+ ],
+ "serilog/cochange/5-19": [
+  112,
+  4
+ ],
+ "swift-argument-parser/cochange/20-99": [
+  29,
+  4
+ ],
+ "swift-argument-parser/cochange/5-19": [
+  84,
+  4
+ ],
+ "swift-collections/cochange/20-99": [
+  117,
+  4
+ ],
+ "swift-collections/cochange/5-19": [
+  547,
+  4
+ ],
+ "swift-nio/cochange/100+": [
+  15,
+  4
+ ],
+ "swift-nio/cochange/20-99": [
+  118,
+  4
+ ],
+ "swift-nio/cochange/5-19": [
+  231,
+  4
+ ]
+}

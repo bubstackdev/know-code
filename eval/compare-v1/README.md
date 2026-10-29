@@ -216,6 +216,14 @@ Each addition is committed before any run asks it, and each is its own pull requ
    - Every changed file or test an answer doesn't name is listed with the misses.
    - These trees aren't restored. The restore exists only for Serena's language servers, and Serena isn't started here; KnowCode and codebase-memory-mcp ignore restored dependencies. The procedure changed before any answer was read: the first attempt stopped on 10 C# trees, whose parents pin a .NET 5 SDK the image doesn't have. Every tree is indexed as checked out, and the trees that had finished were run again under the same rule.
 
+3. **Co-change**, labelled by git ([cochange.jsonl](cochange.jsonl), drawn by [cochange.py](../../scripts/eval/compare/cochange.py)).
+   - **The question:** which files usually change with file F? It is asked on identity-v1's eight repositories at their pins, with their full history.
+   - **The draw:** F is drawn per repository among source files at the pin with at least 5 non-merge commits, renames followed. The strata are 5–19, 20–99 and 100+ commits, up to 4 files each, taken in SHA-256 order of `compare-v1:cochange:repo:path`. A file nothing shares two commits with is passed over. That gives 84 questions. [cochange-strata.json](cochange-strata.json) gives each stratum's counts.
+   - **Labels**, by history-v1's `file-cochange` rule: every file at the pin that shares at least two of F's non-merge commits of at most 50 files, under its current name. Files sharing exactly one commit are recorded apart (`single`), and an answer naming one is left unjudged. Any other file named is wrong.
+   - **Calls** (mapping.toml's): KnowCode `kc_coupled` with the file; codebase-memory-mcp `query_graph` over `FILE_CHANGES_WITH`. Serena has no counterpart and isn't started.
+   - **Trees:** these trees keep their git history. The clone is copied in whole (HISTORY=1 in container.sh), not committed once.
+   - **Windows:** each tool answers with its own default history window. KnowCode's is 365 days before HEAD, and codebase-memory-mcp applies its own threshold. The labels cover the whole history. A file that changed with F only long ago is a label that a windowed answer can miss by design. Scores are recall and precision over the files named, with no rank cutoff, since codebase-memory-mcp's rows aren't ranked.
+
 ## Changes after the first run
 
 The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An
