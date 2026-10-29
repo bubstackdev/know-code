@@ -100,8 +100,8 @@ case $LANGUAGE in
     # KOTLIN_CATALOG=V sets the Kotlin version in the container's copy of the file a build pins it in rather than reading
     # a variable (scip-java's Kotlin plugin needs Kotlin 2.4): gradle/libs.versions.toml's `kotlin = "…"`, or the file
     # KOTLIN_FILE names, whose `KOTLIN_VERSION = "…"` constant is the pin.
-    CATALOG=$(sed -nE 's/(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$ENVS")
-    PINNED=$(sed -nE 's/(^| )KOTLIN_FILE=([^ ]+).*/\2/p' <<<"$ENVS")
+    CATALOG=$(sed -nE 's/.*(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$ENVS")
+    PINNED=$(sed -nE 's/.*(^| )KOTLIN_FILE=([^ ]+).*/\2/p' <<<"$ENVS")
     PINNED=${PINNED:-gradle/libs.versions.toml}
     [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^([[:space:]]*(const val )?(kotlin|KOTLIN_VERSION) = )\"[^\"]*\"/\\1\"$CATALOG\"/' $PINNED
          grep -qE '(kotlin|KOTLIN_VERSION) = \"$CATALOG\"' $PINNED"
