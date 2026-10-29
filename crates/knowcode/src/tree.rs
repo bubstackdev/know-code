@@ -283,6 +283,10 @@ pub fn dependents(g: &mut Graph, repo: usize, from: &[i64], hop: u8, depth: u8, 
         let mut found: Vec<(Affected, Vec<SymbolRow>)> = Vec::new();
         // What the walk continues from for symbols listed at an earlier hop and first reached confidently at this one.
         let mut late: Vec<SymbolRow> = Vec::new();
+        // In an order of what the code says, never of row ids: the walk starts from symbols in id order, which
+        // follows the order files were stored in and differs between two indexes of one tree, and at `max` which
+        // dependents are kept (and which way each is first reached by) follows this order.
+        frontier.sort_by_cached_key(|s| (s.file.clone(), s.line, s.qualified(), s.kind.clone()));
         for sym in &frontier {
             for (h, _) in g.tree_edges((repo, sym.id), sym, "in", true)? {
                 let (dep, edge, confidence, site, evidence) = (h.sym, h.edge, h.confidence, h.site, h.evidence);

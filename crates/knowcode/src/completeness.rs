@@ -440,3 +440,34 @@ fn a_flow_step_cut_at_the_depth_limit_is_grown_where_it_is_reached_nearer() {
     assert!(steps.contains(&("Shared.Go", 2)) && steps.contains(&("Shared.Go", 0)), "{steps:?}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A walk from several symbols, cut at its limit, keeps the same dependents and lists them alike whatever order the
+/// symbols come in. They come in row-id order, which follows the order files were stored in and differs between two
+/// indexes of one tree (#230: two cold indexes of swift-nio selected 127 and 136 tests).
+#[test]
+fn invariant_a_walk_cut_at_its_limit_doesnt_depend_on_the_order_of_its_start() {
+    let cache = test_cache();
+    let base = cache.dir("c-walk-start-order");
+    let mut files: Vec<(String, String)> = vec![
+        ("lib/alpha.py".into(), "def alpha():\n    pass\n".into()),
+        ("lib/beta.py".into(), "def beta():\n    pass\n".into()),
+    ];
+    for i in 0..6 {
+        files.push((format!("app/a{i}.py"), format!("from lib.alpha import alpha\ndef a{i}():\n    alpha()\n")));
+        files.push((format!("app/b{i}.py"), format!("from lib.beta import beta\ndef b{i}():\n    beta()\n")));
+    }
+    let all: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    let root = repo(&base, "app", &all);
+    let o = ops::open_fresh(&root, false).unwrap();
+    let mut g = crate::walk::Graph::new(&o, &[], false, 1);
+    let alpha = g.resolve(0, "alpha").unwrap().unwrap().id;
+    let beta = g.resolve(0, "beta").unwrap().unwrap().id;
+    let mut walk = |start: &[i64]| -> Vec<(String, u8, String)> {
+        let out = crate::tree::impact(&mut g, start, 2, 5).unwrap();
+        assert!(out.truncated, "the limit cuts the walk");
+        out.affected.iter().map(|a| (a.qualified.clone(), a.hop, a.via.clone())).collect()
+    };
+    assert_eq!(walk(&[alpha, beta]), walk(&[beta, alpha]));
+    drop(g);
+    let _ = std::fs::remove_dir_all(&base);
+}
