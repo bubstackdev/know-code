@@ -2,10 +2,11 @@
 //!
 //! Worktrees of one repository (and other checkouts of its origin) share a base made from a checkout that was clean
 //! at the base's commit. A new checkout's index is a copy-on-write clone of the nearest base (`clonefile` on APFS, a
-//! reflink on btrfs and XFS, which [`std::fs::copy`] makes), so its unchanged pages stay the base's on disk. Its first
-//! sync is the ordinary one: every file's stat is reset by the clone, so every listed file is hashed, and only those
-//! whose content differs from the base are extracted. Queries read one index, as for any checkout. See
-//! `docs/design/worktree-overlays.md`.
+//! reflink on btrfs and XFS, which [`std::fs::copy`] makes), so its unchanged pages stay the base's on disk. The clone
+//! takes the checkout's own stat for each file git vouches for (tracked, clean in the checkout, and the same at its HEAD
+//! as at the base's commit) and resets every other file's, so its first sync is the ordinary one over what may differ:
+//! those files are hashed, and only those whose content differs from the base are extracted. Queries read one index,
+//! as for any checkout. See `docs/design/worktree-overlays.md`.
 //!
 //! A base is keyed by the repository's identity (its normalized origin, else its git common directory), the commit,
 //! the build (schema, resolver and extractor versions) and the privacy policy's key. A checkout clones only a base
@@ -223,6 +224,7 @@ pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Bas
         let conn = Connection::open(&tmp)?;
         let dirname = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         conn.execute_batch(&checkout_reset(dirname != base.dirname))?;
+        keep_clean_stats(&conn, root, &base.commit, &commit)?;
         relocate_path_deps(&conn, root)?;
         conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)", [META_FROM, base.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_str()])?;
         conn.execute(&format!("INSERT OR REPLACE INTO meta(key, value) SELECT '{META_GEN}', value FROM meta WHERE key = 'tree_gen'"), [])?;
@@ -237,9 +239,9 @@ pub(crate) fn clone_into(root: &Path, db: &Path, key: &str) -> Result<Option<Bas
     Ok(Some(base))
 }
 
-/// What a clone can't vouch for in the checkout it starts: every file's stat (so the first sync hashes every file), a
-/// repo that is one Ansible role when the checkout's directory has another name (the role is named after it), and the
-/// base's own records.
+/// What a clone can't vouch for in the checkout it starts: every file's stat (until [`keep_clean_stats`] gives back
+/// those git vouches for), a repo that is one Ansible role when the checkout's directory has another name (the role is
+/// named after it), and the base's own records.
 fn checkout_reset(renamed: bool) -> String {
     let mut sql = format!(
         "DELETE FROM meta WHERE {CHECKOUT_META} OR key IN ('{META_COMMIT}', '{META_BUILD}', '{META_DIRNAME}');
@@ -251,6 +253,54 @@ fn checkout_reset(renamed: bool) -> String {
         sql.push_str(&format!("UPDATE files SET extractor_version = 0 WHERE lang = '{}';", Lang::Ansible.as_str()));
     }
     sql
+}
+
+/// Gives the clone the checkout's stat for each file whose content git says is the base's: tracked, clean in the
+/// checkout (`git status`), and not changed between the base's commit and HEAD (`git diff`). The first sync then takes
+/// those as unchanged instead of hashing them. A file whose stat moves while this runs keeps the reset stat, and so
+/// does every file when git can't answer: the sync hashes them, as `--verify` hashes every file.
+fn keep_clean_stats(conn: &Connection, root: &Path, base_commit: &str, head: &str) -> Result<()> {
+    let names = |args: &[&str]| -> Option<HashSet<String>> {
+        let out = git::run(root, args).ok()?;
+        Some(out.split(|b| *b == 0).filter(|p| !p.is_empty()).map(|p| String::from_utf8_lossy(p).into_owned()).collect())
+    };
+    let Some(tracked) = names(&["ls-files", "-z"]) else { return Ok(()) };
+    let changed = if base_commit == head {
+        HashSet::new()
+    } else {
+        let Some(c) = names(&["diff", "--name-only", "-z", "--no-renames", base_commit, head]) else { return Ok(()) };
+        c
+    };
+    let paths: Vec<String> = conn
+        .prepare("SELECT path FROM files UNION SELECT path FROM cfiles")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?
+        .into_iter()
+        .filter(|p| tracked.contains(p) && !changed.contains(p))
+        .collect();
+    let stat = |p: &str| -> Option<(i64, i64)> {
+        let m = fs::symlink_metadata(root.join(p)).ok().filter(|m| m.is_file())?;
+        Some((git::mtime_ns(&m), m.len() as i64))
+    };
+    let before: Vec<Option<(i64, i64)>> = paths.iter().map(|p| stat(p)).collect();
+    // `porcelain=v1 -z`: `XY path`, one entry per file, renames off so each names one path.
+    let Ok(status) = git::run(root, &["status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames"]) else { return Ok(()) };
+    let dirty: HashSet<String> =
+        status.split(|b| *b == 0).filter(|e| e.len() > 3).map(|e| String::from_utf8_lossy(&e[3..]).into_owned()).collect();
+    // One transaction: the clone isn't in WAL mode yet, so each statement on its own would commit (and sync) alone.
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut files = tx.prepare("UPDATE files SET mtime_ns = ?2, size = ?3 WHERE path = ?1")?;
+        let mut cfiles = tx.prepare("UPDATE cfiles SET mtime_ns = ?2, size = ?3 WHERE path = ?1")?;
+        for (p, was) in paths.iter().zip(before) {
+            if let Some((mtime_ns, size)) = was.filter(|w| !dirty.contains(p) && stat(p) == Some(*w)) {
+                files.execute(rusqlite::params![p, mtime_ns, size])?;
+                cfiles.execute(rusqlite::params![p, mtime_ns, size])?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Resolves every path dependency again against the checkout at `root`, as extracting its manifest there does
