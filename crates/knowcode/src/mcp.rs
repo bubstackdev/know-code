@@ -1915,7 +1915,7 @@ fn placed(symbol: Option<&str>, empty: bool, scope: &Scope) -> anyhow::Result<()
         && let Some(s) = symbol
         && let Some(why) = ops::unresolved_place(s, scope)?
     {
-        anyhow::bail!(Refusal::new(Code::NotFound, why));
+        anyhow::bail!(crate::pending::unresolved(s, &ops::target_repos(&scope.repos)?, why));
     }
     Ok(())
 }

@@ -17,6 +17,7 @@ mod hook;
 mod mcp;
 mod more_text;
 mod ops;
+mod pending;
 mod record;
 mod refactor;
 mod refresh;
