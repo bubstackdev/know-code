@@ -333,7 +333,8 @@ mod tests {
     use std::path::Path;
 
     /// A review answer of structure version 1, as `review` answers it, over made-up repos (a shop's API and its web
-    /// client), with every section filled and two of them cut.
+    /// client), with every section filled and two of them cut. Fields with nothing to report are left out, as the
+    /// answer leaves them out: a whole section's `next` and `incomplete`, and a changed symbol's `change`.
     fn answer() -> Value {
         json!({
             "version": 1, "repo": "shop-api", "base": "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "head": "working",
@@ -341,7 +342,7 @@ mod tests {
             "incomplete": [{ "reason": "withheld", "detail": "shop-api: its privacy file blocks some paths; KnowCode never reads or answers from blocked content" }],
             "changes": [
                 { "id": "1111111111111111", "file": "src/BasketController.cs", "change": "modified",
-                  "symbols": [{ "symbol": "BasketController.Submit", "kind": "method", "line": 12, "change": "changed" },
+                  "symbols": [{ "symbol": "BasketController.Submit", "kind": "method", "line": 12 },
                               { "symbol": "BasketController.Withdraw", "kind": "method", "line": 30, "change": "removed" }], "symbols_total": 4 },
                 { "id": "2222222222222222", "file": "src/Ledger|Book.cs", "change": "renamed", "renamed_from": "src/Ledger.cs", "symbols": [] }
             ],
@@ -362,12 +363,12 @@ mod tests {
             "walkthrough": null,
             "unsettled": ["policy: which of several implementations calls reach: edges left as ambiguous weren't walked past"],
             "sections": {
-                "changes": { "complete": true, "shown": 2, "total": 2, "next": "", "incomplete": [] },
-                "tests": { "complete": true, "shown": 1, "total": 1, "next": "", "incomplete": [], "advisory": "Advice: a test not listed may still fail." },
-                "missed": { "complete": true, "shown": 1, "total": 1, "next": "", "incomplete": [] },
+                "changes": { "complete": true, "shown": 2, "total": 2 },
+                "tests": { "complete": true, "shown": 1, "total": 1, "advisory": "Advice: a test not listed may still fail." },
+                "missed": { "complete": true, "shown": 1, "total": 1 },
                 "dependents": { "complete": false, "shown": 2, "total": 5, "next": "kc {op: review, diff: working, dependents: 10}", "incomplete": ["capped"] },
-                "contracts": { "complete": false, "shown": 1, "total": 1, "next": "", "incomplete": ["unsupported"] },
-                "rules": { "complete": true, "shown": 1, "total": 1, "next": "", "incomplete": [] }
+                "contracts": { "complete": false, "shown": 1, "total": 1, "incomplete": ["unsupported"] },
+                "rules": { "complete": true, "shown": 1, "total": 1 }
             }
         })
     }
