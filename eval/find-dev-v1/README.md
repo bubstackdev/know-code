@@ -53,6 +53,12 @@ type. All of them have the same labels, the declarations of the name:
 - `prefix`: its first 60% of characters (at least 3), when shorter than the name;
 - `typo`: the name with its second and third characters swapped, when it has at least 4 characters and they differ.
 
+The draw: 711 questions over 192 names (8 per stratum in each of the 8 repositories): 192 `exact`, 154 `lower`,
+186 `prefix` and 179 `typo`. Neither the questions nor the enumerations are checked in: the questions name the
+repositories' own identifiers, which this repository's private-vocabulary scan can't tell from private names.
+[SHA256SUMS](SHA256SUMS) holds the digests of both. `run.sh` with `REPOS=eval/find-dev-v1/repos.txt` makes the
+enumerations again, and `find_dev.py draw` makes the same questions.jsonl from them.
+
 ## What is measured
 
 KnowCode answers each question with `find NAME --json -n 200` on its own index of the pinned tree. All four of
