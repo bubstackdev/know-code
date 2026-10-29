@@ -20,6 +20,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
   shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
   answer left out as comments.
+- `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
+  tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
+  is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves
+  the rows it drops to the next page rather than skipping them. A cursor a JSON answer handed out still gives JSON
+  pages.
+- TypeScript: a member a repo adds to a package's module by augmenting it (`declare module 'pkg' { interface … }`) and
+  reaches through that package's values stays linked; members reached through other packages' values are still the
+  package's. The index records each module a file augments (index schema 24; TypeScript files are read again once).
+- A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
+  added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
+  indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.
+
 - Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
   scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
   member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
@@ -31,6 +43,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
   identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
   outside label linked).
+- Two indexes of one tree give the same `tests`, `task` and `impact` answers. A reverse walk cut at its limit kept
+  the dependents it reached first, in the order the index happened to store files (which parallel indexing varies),
+  so two cold indexes of swift-nio could select 127 or 136 candidate tests for the same change. The walk now takes
+  each step's symbols in file, line and name order. A text or structural search cut at its line limit likewise reads
+  files in path order, so an index updated with new files keeps the same files as one built cold.
+
 - The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
   0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
   checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.
@@ -81,6 +99,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - compare-v1's first results are published ([eval/compare-v1/results.md](eval/compare-v1/results.md)): KnowCode,
   codebase-memory-mcp and Serena answer the same reference and impact questions on eight public repositories, scored
   against labels from each language's toolchain, with every miss listed.
+- Go is read. Packages, types, functions, methods (merged onto their receiver's type), struct fields, interface
+  methods, imports, calls and type and member uses are extracted from `.go` files, and `go.mod` gives the module, its
+  requires and its replaces. A Go name resolves the way the compiler scopes it: within the caller's package, through
+  an import placed by the repo's `go.mod` files, or on its receiver's type and what that type embeds. A name from the
+  standard library, a dependency or a released copy of the repo's own module stays unresolved, and a receiver of
+  unknown type lists candidates, so a Go reference is never linked by its name alone. On identity-v2's 1,194 Go labels
+  (cobra, chi, gin, labelled by the Go type checker): `exact` precision 1.000 over 691 links, linked recall 0.980, and
+  no outside label linked; on 508 held-out labels from echo, scored once: 1.000 over 299 links, recall 0.971, none
+  outside linked. A file the default build leaves out (`x_windows.go`, `//go:build nomsgpack`) and cgo
+  imports are reported as `unsupported`.
+- Go test targets. `test_targets` lists each `go.mod` as a target, `go test ./...` from its directory, with its
+  `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
+  ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
+  Go test files too (`foo_test.go` for `foo.go`).
 
 ## 0.6.1 (2026-10-28)
 
