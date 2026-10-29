@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
+  scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
+  member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
+  `assertThat`) is never linked to the repo's declaration of the same name. On identity-v2's 1,501 Java labels (gson,
+  commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 796 links, linked recall 0.712, and no
+  outside label is linked.
 - The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
   0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
   checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.

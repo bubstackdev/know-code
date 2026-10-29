@@ -73,7 +73,7 @@ fn family(path: &str) -> &str {
 
 #[test]
 fn invariant_every_edge_resolved_by_name_stays_within_its_language_family() {
-    // The same names defined and called in six languages.
+    // The same names defined and called in seven languages.
     let root = scratch("families");
     let store = index(
         &root,
@@ -87,10 +87,11 @@ fn invariant_every_edge_resolved_by_name_stays_within_its_language_family() {
             ("d.ts", "export class Store {}\nfunction shared() {}\nexport function helper() { new Store(); shared(); }\n"),
             ("e.js", "function shared() {}\nfunction helper() { shared(); lonely(); }\n"),
             ("F.cs", "public class Store { public static void shared() {} public void helper() { new Store(); shared(); } }\n"),
+            ("X.java", "class Store { static void shared() {} void helper() { new Store(); shared(); lonely(); } }\n"),
         ],
     );
     let hits = query::refs_named(store.conn(), &["shared", "Store", "lonely"]).unwrap();
-    assert!(hits.iter().filter(|h| !h.targets.is_empty()).count() >= 8, "{hits:#?}");
+    assert!(hits.iter().filter(|h| !h.targets.is_empty()).count() >= 10, "{hits:#?}");
     for h in &hits {
         for t in &h.targets {
             assert_eq!(family(&h.file), family(&t.file), "{} at {}:{} resolved to {}", h.name, h.file, h.line, t.file);

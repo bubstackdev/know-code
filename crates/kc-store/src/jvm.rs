@@ -138,8 +138,7 @@ impl Resolver {
 
     fn scope(&mut self, conn: &Connection, file: &str) -> rusqlite::Result<&FileScope> {
         if !self.files.contains_key(file) {
-            let mut s = FileScope::default();
-            s.package = conn
+            let package = conn
                 .query_row(
                     "SELECT json_extract(s.type_name, '$.ns') FROM symbols s JOIN files f ON f.id = s.file_id
                      WHERE f.path = ?1 AND s.parent_id IS NULL AND json_valid(s.type_name)
@@ -148,6 +147,7 @@ impl Resolver {
                     |r| r.get::<_, String>(0),
                 )
                 .optional()?;
+            let mut s = FileScope { package, ..Default::default() };
             let mut stmt = conn.prepare("SELECT i.module FROM imports i JOIN files f ON f.id = i.file_id WHERE f.path = ?1")?;
             for m in stmt.query_map(params![file], |r| r.get::<_, String>(0))? {
                 let m = m?;
@@ -381,18 +381,22 @@ impl Resolver {
                 if !own.is_empty() {
                     return Ok(None);
                 }
-                for q in &from_single {
-                    match self.qualified.get(q) {
-                        Some(id) => {
-                            let ids = members_of(conn, hit, *id)?;
-                            return Ok(match ids.len() {
-                                0 => Some(("unresolved", ids)),
-                                1 => Some(("exact", ids)),
-                                _ => None,
-                            });
+                if !from_single.is_empty() {
+                    // Single-static imports of the name: the members the repository's imported types declare. With
+                    // one from outside as well, or several, the shared resolution decides among them.
+                    let mut ids = Vec::new();
+                    let mut outside = false;
+                    for q in &from_single {
+                        match self.qualified.get(q) {
+                            Some(id) => ids.extend(members_of(conn, hit, *id)?),
+                            None => outside = true,
                         }
-                        None => return Ok(Some(("unresolved", Vec::new()))),
                     }
+                    return Ok(match ids.len() {
+                        0 => Some(("unresolved", ids)),
+                        1 if !outside => Some(("exact", ids)),
+                        _ => None,
+                    });
                 }
                 let mut ids = Vec::new();
                 for q in &file.static_on_demand {
