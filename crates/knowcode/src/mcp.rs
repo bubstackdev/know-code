@@ -102,6 +102,7 @@ pub const RANGES: &[(&str, &str, &Range)] = &[
     ("kc_search", "limit", &SEARCH_LIMIT),
     ("kc_search", "context", &SEARCH_CONTEXT),
     ("kc_grep_ast", "limit", &SEARCH_LIMIT),
+    ("kc_rules", "limit", &SEARCH_LIMIT),
     ("kc_task", "files", &TASK_FILES),
     ("kc_task", "dependents", &TASK_DEPENDENTS),
     ("kc_task", "tests", &TASK_TESTS),
@@ -126,6 +127,7 @@ pub const CHOICES: &[(&str, &str, &[&str])] = &[
     ("kc_search", "case", &["sensitive", "insensitive", "smart"]),
     ("kc_grep_ast", "lang", &["csharp", "typescript", "javascript", "python", "rust", "swift"]),
     ("kc_note_add", "tag", &["decision", "gotcha", "todo"]),
+    ("kc_rules", "format", &["json", "sarif"]),
     ("*", "format", &["tree", "json"]),
     ("*", "cite", &["brief", "lines", "check", "none"]),
 ];
@@ -860,6 +862,39 @@ pub struct TestTargetsParams {
     pub common: Common,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RulesParams {
+    /// ast-grep rule files, or directories of them, relative to the repo's root (default: the config's `rules.paths`).
+    #[serde(default)]
+    pub rules: Vec<String>,
+    /// Rules written inline: YAML documents, as in a rule file.
+    #[serde(default)]
+    pub rule: Option<String>,
+    /// A line regex instead of rules: each line it matches is a match.
+    #[serde(default)]
+    pub regex: Option<String>,
+    /// A commit (branch, tag, sha): report only the matches it didn't have (a monitor).
+    #[serde(default)]
+    pub new_since: Option<String>,
+    /// Path globs; a leading `!` excludes.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Results per page (default 20).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Results to skip: the previous `next_offset`.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// Stop after this many matches (default 50000).
+    #[serde(default)]
+    pub max_matches: Option<usize>,
+    /// `json` (default), or `sarif`: a SARIF 2.1.0 log of every match.
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct CapabilitiesParams {
     /// One op (`impact`) or tool (`kc_impact`) to describe; none: every op.
@@ -938,6 +973,7 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("capabilities", "of", ""),
     ("task", "goal", ""),
     ("test_targets", "name", ""),
+    ("rules", "rules", "rules"),
 ];
 
 /// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
@@ -972,7 +1008,7 @@ pub fn one_q_lines() -> String {
 }
 
 /// The parameters that take a list, among those `q` fills.
-const ONE_LISTS: &[&str] = &["targets", "files"];
+const ONE_LISTS: &[&str] = &["targets", "files", "rules"];
 
 /// A `kc` call as the tool it runs and that tool's arguments.
 pub fn one_call(p: OneParams) -> Result<(String, serde_json::Map<String, Value>), String> {
@@ -1160,6 +1196,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_capabilities", &[("of", "")]),
     ("kc_task", &[("goal", "")]),
     ("kc_test_targets", &[("name", "")]),
+    ("kc_rules", &[("rules", "Rule files or directories, from the repo's root."), ("new_since", "A commit: only matches it lacked.")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -1194,7 +1231,7 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
 
 /// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
 /// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
-pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets"];
+pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets", "kc_rules"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -3013,6 +3050,7 @@ impl KnowcodeServer {
             "kc_status" => self.kc_status(a(t, args)?).await,
             "kc_task" => self.kc_task(a(t, args)?).await,
             "kc_test_targets" => self.kc_test_targets(a(t, args)?).await,
+            "kc_rules" => self.kc_rules(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
         out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
@@ -3030,6 +3068,48 @@ impl KnowcodeServer {
         run(p.common.max_chars, move || {
             let what = "no declared test target: no SwiftPM test target, .NET test project or package.json test script".to_string();
             Ok(explain(ops::test_targets(p.name.as_deref(), &scope)?.env, &what, ""))
+        })
+        .await
+    }
+
+    #[tool(description = "A repo's own ast-grep rules (or a line regex) run over its files; with new_since, only new matches. kc_help kc_rules.")]
+    async fn kc_rules(&self, Parameters(p): Parameters<RulesParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        // Rule files are read from inside the repo only: a path is relative to its root and never climbs out of it.
+        for r in &p.rules {
+            let path = Path::new(r);
+            if path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                return Err(ToolError::new(Code::NotAllowed, format!("rule paths are relative to the repo's root, inside it: {r}")));
+            }
+        }
+        let sarif = match p.format.as_deref() {
+            None | Some("json") => false,
+            Some("sarif") => true,
+            Some(other) => return Err(ToolError::new(Code::InvalidArgument, format!("format must be json or sarif, not {other}"))),
+        };
+        let limit = if sarif { usize::MAX } else { SEARCH_LIMIT.clamp(p.limit) };
+        let params = crate::rules::RulesParams {
+            paths: p.rules.iter().map(PathBuf::from).collect(),
+            inline: p.rule,
+            regex: p.regex,
+            new_since: p.new_since,
+            globs: p.paths,
+            limit,
+            offset: p.offset.unwrap_or(0),
+            max_matches: p.max_matches.unwrap_or(50_000),
+        };
+        if sarif {
+            // The log is the answer, whole (a cut log wouldn't be valid SARIF, so `max_chars` doesn't apply); its run's
+            // notifications say what the answer missed.
+            return blocking(false, move || {
+                let out = crate::rules::rules(&params, &scope)?;
+                Ok(serde_json::to_string(&crate::sarif::rules(&out.data, &out.env)).unwrap_or_default())
+            })
+            .await;
+        }
+        run(p.common.max_chars, move || {
+            let what = "no rule matched".to_string();
+            Ok(explain(crate::rules::rules(&params, &scope)?.env, &what, "limit (or offset=next_offset)"))
         })
         .await
     }
@@ -3315,7 +3395,8 @@ mod tests {
 
     #[test]
     fn bounds_are_said_as_answers_apply_them() {
-        let s = server("all");
+        // Every tool with a bounded parameter, those served on request too.
+        let s = server("all,kc_rules");
         let advertised: std::collections::HashMap<String, rmcp::model::Tool> =
             s.tool_router.list_all().into_iter().map(|t| (t.name.to_string(), t)).collect();
         for (tool, param, r) in RANGES.iter().filter(|(t, _, _)| *t != "*") {
@@ -3520,6 +3601,7 @@ mod tests {
             "kc_capabilities" => as_::<CapabilitiesParams>(args),
             "kc_task" => as_::<TaskParams>(args),
             "kc_test_targets" => as_::<TestTargetsParams>(args),
+            "kc_rules" => as_::<RulesParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -3531,7 +3613,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all,kc_capabilities,kc_test_targets");
+        let s = server("all,kc_capabilities,kc_test_targets,kc_rules");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -3574,7 +3656,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all,kc_capabilities,kc_test_targets");
+        let s = server("all,kc_capabilities,kc_test_targets,kc_rules");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
@@ -4362,6 +4444,35 @@ mod tests {
         assert!(refs["items"][0]["cite"].get("at").is_none(), "{refs}");
         assert!(!refs_bare.contains("\"cite\""), "{refs_bare}");
         assert_eq!(bad.unwrap_err(), "cite must be brief, lines, check or none, not all");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// kc_rules reads rule files from inside the repo only, answers its matches, and as SARIF answers the whole log.
+    #[test]
+    fn rules_read_rule_files_inside_the_repo_and_answer_json_or_sarif() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-rules");
+        let rule = "id: no-result\nlanguage: CSharp\nseverity: error\nmessage: blocking\nrule:\n  pattern: $T.Result\n";
+        let root = crate::ops::tests::repo(&base, "shop", &[("lint/r.yml", rule), ("src/A.cs", "class A\n{\n    int F() => G().Result;\n}\n")]);
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("all,kc_rules") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let (json, sarif, up, abs) = rt.block_on(async {
+            (
+                s.kc_rules(p(json!({ "rules": ["lint"] }))).await.unwrap(),
+                s.kc_rules(p(json!({ "rules": ["lint/r.yml"], "format": "sarif" }))).await.unwrap(),
+                s.kc_rules(p(json!({ "rules": ["../elsewhere.yml"] }))).await,
+                s.kc_rules(p(json!({ "rules": ["/etc/elsewhere.yml"] }))).await,
+            )
+        });
+        assert!(json.contains("src/A.cs") && json.contains("blocking"), "{json}");
+        let log: Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(log["runs"][0]["results"][0]["level"], "error", "{sarif}");
+        for r in [up, abs] {
+            assert_eq!(r.unwrap_err().code, Code::NotAllowed);
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

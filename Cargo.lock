@@ -683,6 +683,7 @@ dependencies = [
  "kc-index",
  "kc-store",
  "libc",
+ "regex",
  "rmcp",
  "rusqlite",
  "schemars",

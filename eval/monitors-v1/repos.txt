@@ -1,0 +1,4 @@
+# The monitors gate's public repositories: name, URL, the commit whose history is replayed, and the rule file.
+serilog https://github.com/serilog/serilog 81af75f3a5e28ec9f5be18ef74357a9914a51745 csharp.yml
+autofac https://github.com/autofac/Autofac ae9e1e1129b9c22e7ab111381308dcb02f80a8d2 csharp.yml
+hono https://github.com/honojs/hono 5ca49b0720755c585c9a9835f0a479ceea36fb52 typescript.yml

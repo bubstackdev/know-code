@@ -44,6 +44,7 @@ command, run `knowcode <command> --help`.
 | The symbols enclosing a `file:line` (a stack frame) | `knowcode at src/app/filter.service.ts:419` | `kc_symbol_at` |
 | Text or regex over every file, ranked definitions first | `knowcode search` | `kc_search` |
 | Code patterns over syntax trees ([ast-grep](https://ast-grep.github.io) patterns) | `knowcode grep-ast 'new HttpClient($$$)' -l cs` | `kc_grep_ast` |
+| A repo's own rules ([ast-grep rule files](https://ast-grep.github.io/reference/yaml.html)), and as a monitor, only the matches since a commit | `knowcode rules --rules lint/ [--new-since main]` | `kc_rules` (the `kc` op `rules`) |
 
 `search` matches per line, like `git grep`. Hits are ranked `def` (the match covers a declared name), `decl`
 (elsewhere on a declaration line), `code`, then `test`, `comment` and `doc`. It stops at 50,000 matching lines,
@@ -54,6 +55,25 @@ always at the same file, and says `capped`.
 `kind:<node kind>` matches every node of a kind and `kind:<node kind>~<regex>` those whose text matches. A pattern
 that doesn't parse alone goes in context with `--selector`:
 `'try { $$$ } catch $$$ { }' --selector catch_clause` finds empty catch blocks.
+
+`rules` runs ast-grep rule files over a repo and prints their matches, with each rule's severity and message; it
+never edits, so a rule with `fix` is refused. A rule matches what the ast-grep command line (0.50) matches on the same
+files: KnowCode reads rule files with the same library, including `inside`/`has`/`precedes`/`follows` with their
+`stopBy`, `all`/`any`/`not`, `matches` with `utils`, `constraints`, `transform` in messages, `files` and `ignores`, and
+`ast-grep-ignore` comments ([eval/rules-v1](../eval/rules-v1/README.md)). Rule languages are `CSharp`, `TypeScript`,
+`Tsx`, `Python`, `Rust` and `Swift`; JavaScript is refused, since KnowCode parses it with another grammar than
+ast-grep's. `--rules` names rule files or directories of them (relative paths from the repo's root); without it the
+config's `rules.paths` are read. Every file KnowCode lists in the language is read, generated and large ones too.
+Rule files are hostile input when they come with the repo under review: one over 2 MiB, or whose YAML aliases stand
+for over 100,000 nodes, is refused unread, as is one in a part of the repo its privacy file blocks, and the MCP op
+reads rule files only from inside the repo. `--regex RE` runs a line regex instead of rules: each line it matches is a
+match.
+
+With `--new-since REF`, `rules` (or `--regex`) is a monitor: it reports the matches the working tree has that REF
+didn't. A match is
+known by its rule and its matched text, so one that moved or whose file was renamed isn't new; only the files that
+differ from REF are read, in both versions. The base is the monitor's only state: nothing is stored, and it runs only
+when asked. `--format sarif` prints a SARIF 2.1.0 log (locations and messages, no source text) with every match.
 
 ## Understand a symbol
 
@@ -197,7 +217,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 27 tools (every tool but `kc_capabilities` and `kc_test_targets`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 27 tools (every tool but `kc_capabilities`, `kc_test_targets` and `kc_rules`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
@@ -251,10 +271,13 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_capabilities` | `capabilities` | `kc_capabilities` |
 | `kc_task` | `task` | `kc_task` |
 | `kc_test_targets` | `test-targets` | `kc_test_targets` |
+| `kc_rules` | `rules` | `kc_rules` |
 
 `kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
 and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it. Nor is `kc_test_targets`, read by an
 automated client once per task: it is the `kc` op `test_targets`, and `--tools all,kc_test_targets` advertises it.
+Nor is `kc_rules`, which a pipeline or a client asks for by name: it is the `kc` op `rules`, and `--tools
+all,kc_rules` advertises it.
 
 ## Capabilities
 
@@ -354,6 +377,7 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `docs` | `--map-budget` |
 | `search` | `-e/--regex`, `-i/--ignore-case`, `-S/--smart-case`, `-w/--word`, `-l/--lang`, `-g/--glob`, `-C/--context`, `-n/--limit`, `--offset`, `--files`, `-a/--all` |
 | `grep-ast` | `-l/--lang`, `--selector`, `--inside`, `--has`, `--not-inside`, `--not-has`, `--text`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
+| `rules` | `--rules`, `--regex`, `--new-since`, `--format`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
 | `tables` | `--all-callers` |
 | `routes`, `events`, `deps` | |
 | `fetch-deps` | `--into DIR` (required), `--dry-run`, `--full`, `--add-root`, `--include-blocked` |

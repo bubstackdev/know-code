@@ -828,6 +828,29 @@ Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`na
 needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; the `kc` op is `test_targets`."#,
     },
     Topic {
+        name: "kc_rules",
+        summary: "a repo's own ast-grep rules, and monitors of what is new since a commit",
+        text: r#"Runs a repo's own ast-grep rule files (YAML: `id`, `language`, `rule`, `message`, `severity`, `constraints`,
+`utils`, `transform`, `files`, `ignores`) over its files and reports each match: `rule`, `severity`, `file`, `line`,
+`column`, `end_line`, `end_column`, `message` (metavariables filled in) and `text` (its first line). A rule matches what
+the ast-grep command line (0.50) matches on the same files, `ast-grep-ignore` comments included. Read only: a rule with
+`fix` is refused. Languages: CSharp, TypeScript, Tsx, Python, Rust, Swift; a JavaScript rule is refused, since
+KnowCode parses JavaScript with another grammar than ast-grep's.
+
+`rules` names rule files or directories of them, relative to the repo's root (inside it); none: the config's
+`rules.paths`. `rule` takes rules written inline. A rule file over 2 MiB, or whose YAML aliases stand for over 100,000
+nodes, is refused unread, as is one in a part of the repo its privacy file blocks. `regex` instead of rules makes each
+line it matches a match (rule `regex`).
+
+`new_since` (a commit) makes it a monitor: only the matches that commit didn't have, read from the files that differ
+from it. A match is known by its rule and its matched text, so one that moved or whose file was renamed isn't new.
+Nothing is stored between runs. `paths` globs (a leading `!` excludes); page with `offset` (`next_offset`);
+`max_matches` stops reading files after that many matches (default 50000). `by_rule` counts matches per rule;
+`new_since` gives the commit each repo was compared with. `format` `sarif` answers with a SARIF 2.1.0 log of every
+match (locations and messages, no source text; what the answer missed is in the run's notifications), whole whatever
+`max_chars` says. Served on request: `all` leaves the tool out unless named; the `kc` op is `rules`."#,
+    },
+    Topic {
         name: "kc_capabilities",
         summary: "every op as data, for a client building its tool surface",
         text: r#"Every op as JSON, for a client that builds its own tool surface instead of copying this help: read from the
