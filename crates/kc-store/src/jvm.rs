@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::query::RefHit;
+use kc_extract::{PathRoot, Seg};
 
 /// Whether a reference in this file resolves by Java's rules.
 pub fn handles(file: &str) -> bool {
@@ -315,13 +316,119 @@ impl Resolver {
         out
     }
 
+    /// The repository type a path names, step by step: each step is the current type's own member (or one a repository
+    /// supertype declares) of that name, and its declared type, read where it is declared. `None` as soon as a step
+    /// leaves the repository or isn't one declaration.
+    fn path_type(&mut self, conn: &Connection, hit: &RefHit, root: &PathRoot, segs: &[Seg]) -> rusqlite::Result<Option<i64>> {
+        let nest = Self::nest(hit);
+        let package = self.files[&hit.file].package.clone();
+        let caller = nest.last().and_then(|n| self.qualified.get(&package.as_ref().map_or_else(|| n.clone(), |p| format!("{p}.{n}"))).copied());
+        let mut cur = match root {
+            PathRoot::SelfType => caller,
+            PathRoot::Static(name) => match self.find_type(&self.files[&hit.file], (hit.file.as_str(), hit.line), &nest, name) {
+                Found::Inside(ids) if ids.len() == 1 => Some(ids[0]),
+                _ => None,
+            },
+            PathRoot::Prop(name) => match caller {
+                Some(c) => self.member_type(conn, c, name, false)?,
+                None => None,
+            },
+            PathRoot::Expr(_) => None,
+        };
+        for seg in segs {
+            let Some(t) = cur else { return Ok(None) };
+            cur = match seg {
+                Seg::Member(n) => self.member_type(conn, t, n, false)?,
+                Seg::Call(n) => self.member_type(conn, t, n, true)?,
+                Seg::Index => None,
+            };
+        }
+        Ok(cur)
+    }
+
+    /// The repository type of the one member `name` the type `id` (or, failing that, a repository supertype) declares.
+    fn member_type(&mut self, conn: &Connection, id: i64, name: &str, callable: bool) -> rusqlite::Result<Option<i64>> {
+        let mut queue = vec![id];
+        let mut seen = HashSet::new();
+        while let Some(t) = queue.pop() {
+            if !seen.insert(t) || seen.len() > 16 {
+                continue;
+            }
+            let kinds = if callable { "('method')" } else { "('property', 'case')" };
+            let mut stmt = conn.prepare_cached(&format!(
+                "SELECT s.type_name, s.container, f.path, s.kind FROM symbols s JOIN files f ON f.id = s.file_id
+                 WHERE s.parent_id = ?1 AND s.name = ?2 AND s.name = ?2 COLLATE BINARY AND s.kind IN {kinds}"
+            ))?;
+            let rows: Vec<(Option<String>, Option<String>, String, String)> = stmt
+                .query_map(params![t, name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            match rows.as_slice() {
+                [] => {}
+                // An enum constant's type is its enum.
+                [(_, _, _, kind)] if kind == "case" => return Ok(Some(t)),
+                [(Some(ty), container, file, _)] => return self.declared_in(conn, ty, file, container.as_deref()),
+                // Overloads with different types, or a declaration without one: not settled here.
+                _ => return Ok(None),
+            }
+            let (file, container) = self.type_place(conn, t)?;
+            self.scope(conn, &file)?;
+            let nest = nest_of(container.as_deref(), self.names.get(&t).map(String::as_str));
+            for s in self.supers.get(&t).cloned().unwrap_or_default() {
+                if let Found::Inside(ids) = self.find_type(&self.files[&file], (file.as_str(), 0), &nest, &s)
+                    && let [one] = ids.as_slice()
+                {
+                    queue.push(*one);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The repository type a declared type names, read in the file and type that declare it.
+    fn declared_in(&mut self, conn: &Connection, encoded: &str, file: &str, container: Option<&str>) -> rusqlite::Result<Option<i64>> {
+        let Some(name) = base_type(encoded) else { return Ok(None) };
+        self.load(conn)?;
+        self.scope(conn, file)?;
+        let nest = nest_of(container, None);
+        let found = match name.rsplit_once('.') {
+            Some((q, n)) => self.find_qualified(&self.files[file], (file, 0), &nest, q, n),
+            None => Some(self.find_type(&self.files[file], (file, 0), &nest, &name)),
+        };
+        Ok(match found {
+            Some(Found::Inside(ids)) if ids.len() == 1 => Some(ids[0]),
+            _ => None,
+        })
+    }
+
+    fn type_place(&self, conn: &Connection, id: i64) -> rusqlite::Result<(String, Option<String>)> {
+        conn.query_row(
+            "SELECT f.path, s.container FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
+
     /// Resolves a reference in a Java file when Java's rules decide it; `None` leaves it to the shared resolution.
     pub fn scoped(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
         self.load(conn)?;
         self.scope(conn, &hit.file)?;
+        // A receiver the extractor wrote as a path (`builder().setX(…)`, `this.store`, `Type.FIELD`): its type,
+        // followed through the repository's declarations by Java's rules.
+        let path_type = match hit.receiver_type.as_deref().and_then(kc_extract::TypeExpr::decode) {
+            Some(kc_extract::TypeExpr::Path { root, segs }) if matches!(hit.kind.as_str(), "call" | "member") => {
+                self.path_type(conn, hit, &root, &segs)?
+            }
+            _ => None,
+        };
         let file = &self.files[&hit.file];
         let nest = Self::nest(hit);
         let at = (hit.file.as_str(), hit.line);
+        if let Some(t) = path_type {
+            let members = members_of(conn, hit, t)?;
+            if let [one] = members.as_slice() {
+                return Ok(Some(("exact", vec![*one])));
+            }
+        }
         let typed = |found: Found| -> (&'static str, Vec<i64>) {
             match found {
                 Found::Inside(ids) if ids.len() == 1 => ("exact", ids),
@@ -343,7 +450,7 @@ impl Resolver {
         }
         // A member or call on a type written by name (`Helpers.log()`, `a.b.C.X`) or on a value whose declared type
         // is written: outside when the type is.
-        let receiver_type = hit.receiver_type.as_deref().map(base_type);
+        let receiver_type = hit.receiver_type.as_deref().and_then(base_type);
         let written = match (hit.receiver.as_deref(), receiver_type.as_deref()) {
             (_, Some(t)) => Some(match t.rsplit_once('.') {
                 Some((q, n)) => self.find_qualified(file, at, &nest, q, n).unwrap_or(Found::Unreached(Vec::new())),
@@ -451,6 +558,18 @@ impl Resolver {
                 return Ok(("unresolved", ids));
             }
         }
+        // On a receiver the query typed (`builder().setX(…).build()`), the type's own member wins over a supertype's
+        // of the same name, as javac binds a call to the most specific declaration of the receiver's static type.
+        if receiver_known
+            && hit.receiver.as_deref() != Some("super")
+            && let Some(t) = hit.receiver_type.as_deref()
+            && !ids.is_empty()
+        {
+            let own = own_members(conn, hit, t)?;
+            if let [one] = own.as_slice() {
+                return Ok(("exact", vec![*one]));
+            }
+        }
         let receiver = hit.receiver.as_deref();
         let self_like = matches!(receiver, Some("this" | "super"));
         if confidence == "unique_name" && receiver.is_some() && !self_like && !receiver_known {
@@ -460,13 +579,27 @@ impl Resolver {
     }
 }
 
-/// A declared type's name without generic arguments or array brackets.
-fn base_type(t: &str) -> String {
+/// The dotted names of the types code inside `container` (and, for a type's own body, the type `own`) is nested in,
+/// outermost first.
+fn nest_of(container: Option<&str>, own: Option<&str>) -> Vec<String> {
+    let inner = match (container, own) {
+        (Some(c), Some(o)) => format!("{c}.{o}"),
+        (Some(c), None) => c.to_string(),
+        (None, Some(o)) => o.to_string(),
+        (None, None) => return Vec::new(),
+    };
+    let parts: Vec<&str> = inner.split('.').collect();
+    (1..=parts.len()).map(|n| parts[..n].join(".")).collect()
+}
+
+/// A written type's name without generic arguments or array brackets; `None` for a type the query derives (a path
+/// from a field or a call).
+fn base_type(t: &str) -> Option<String> {
     use kc_extract::TypeExpr;
-    match TypeExpr::decode(t) {
-        Some(TypeExpr::Named(n) | TypeExpr::Generic { name: n, .. }) => n,
-        Some(TypeExpr::Array(e)) => base_type(&e.encode()),
-        _ => t.split(['<', '[']).next().unwrap_or(t).trim().to_string(),
+    match TypeExpr::decode(t)? {
+        TypeExpr::Named(n) | TypeExpr::Generic { name: n, .. } => Some(n),
+        TypeExpr::Array(e) => base_type(&e.encode()),
+        _ => None,
     }
 }
 
@@ -491,15 +624,39 @@ fn members_of(conn: &Connection, hit: &RefHit, id: i64) -> rusqlite::Result<Vec<
     let mut out = Vec::new();
     for row in rows {
         let (id, min, max) = row?;
-        let fits = match (hit.args, min) {
-            (Some(n), Some(min)) => n >= min && max.is_none_or(|max| n <= max),
-            _ => true,
-        };
-        if fits {
+        if fits(hit.args, min, max) {
             out.push(id);
         }
     }
     Ok(out)
+}
+
+/// The Java members named like the reference, of its kind and fitting its argument count, whose type is `container`
+/// exactly (its dotted name within its package, as declarations record it).
+fn own_members(conn: &Connection, hit: &RefHit, container: &str) -> rusqlite::Result<Vec<i64>> {
+    let kinds = if hit.kind == "call" { "('method')" } else { "('property', 'case')" };
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT s.id, s.min_args, s.max_args FROM symbols s JOIN files f ON f.id = s.file_id
+         WHERE f.lang = 'java' AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.container = ?2 AND s.kind IN {kinds}"
+    ))?;
+    let rows = stmt.query_map(params![hit.name, container], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, Option<u32>>(1)?, r.get::<_, Option<u32>>(2)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, min, max) = row?;
+        if fits(hit.args, min, max) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+fn fits(args: Option<u32>, min: Option<u32>, max: Option<u32>) -> bool {
+    match (args, min) {
+        (Some(n), Some(min)) => n >= min && max.is_none_or(|max| n <= max),
+        _ => true,
+    }
 }
 
 /// Members named `name` whose type's simple name is one of `types`.
@@ -531,6 +688,6 @@ mod tests {
         assert!(is_type_name("Collections"));
         assert!(!is_type_name("MAX_VALUE"));
         assert!(!is_type_name("store"));
-        assert_eq!(base_type("List"), "List");
+        assert_eq!(base_type("List").as_deref(), Some("List"));
     }
 }
