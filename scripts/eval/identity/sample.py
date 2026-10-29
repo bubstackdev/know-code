@@ -5,8 +5,9 @@
 
 Each enumeration (run.sh's output, one per repository) lists every reference the toolchain binds in the repository's
 own source and every declaration it saw there. The draw depends on the enumerations alone: strata of kind × bucket per
-repository, each filled in SHA-256 order of `repo:file:line:col`, at most SPREAD references per target. `--strata`
-writes, per stratum, how many references there were and how many were drawn.
+repository (and per language, where an enumeration's rows name their own, as identity-v2's JVM rows do), each filled
+in SHA-256 order of `repo:file:line:col`, at most SPREAD references per target. `--strata` writes, per stratum, how many
+references there were and how many were drawn.
 """
 from __future__ import annotations
 
@@ -64,7 +65,10 @@ def draw(rows, lang=None):
         r = found[0]
         count = len(names.get(r['name'], ()))
         b = bucket(r['inside'], count)
-        strata[(r['repo'], r['kind'], 'inside' if r['inside'] else 'outside', b)].append(dict(r, multiplicity=count, bucket=b))
+        # A row may name its own language (a repository mixing Java and Kotlin); each language is then drawn apart.
+        repo = f"{r['repo']}/{r['lang']}" if r.get('lang') else r['repo']
+        where = 'inside' if r['inside'] else 'outside'
+        strata[(repo, r['kind'], where, b)].append(dict(r, multiplicity=count, bucket=b))
     labels, stats = [], {}
     for key in sorted(strata, key=lambda k: (k[0], KINDS.index(k[1]), k[2], k[3])):
         repo, kind, where, b = key
@@ -80,7 +84,8 @@ def draw(rows, lang=None):
         stats['/'.join(key)] = dict(available=len(strata[key]), drawn=len(taken))
         for r in sorted(taken, key=lambda r: (r['file'], r['line'], r['col'])):
             labels.append(dict(
-                id=f"{r['repo']}:{r['file']}:{r['line']}:{r['col']}", repo=r['repo'], lang=lang.get(r['repo'], ''),
+                id=f"{r['repo']}:{r['file']}:{r['line']}:{r['col']}", repo=r['repo'],
+                lang=r.get('lang') or lang.get(r['repo'], ''),
                 file=r['file'], line=r['line'], col=r['col'], name=r['name'], kind=kind, where=where, bucket=b,
                 multiplicity=r['multiplicity'], locs=r['locs'], origin=r['origin'], symbol=r['symbol']))
     return labels, stats

@@ -1,0 +1,466 @@
+{
+ "commons-lang/java/call/inside/1": {
+  "available": 11587,
+  "drawn": 20
+ },
+ "commons-lang/java/call/inside/2-4": {
+  "available": 10416,
+  "drawn": 40
+ },
+ "commons-lang/java/call/inside/5+": {
+  "available": 17048,
+  "drawn": 40
+ },
+ "commons-lang/java/call/outside/0": {
+  "available": 30822,
+  "drawn": 10
+ },
+ "commons-lang/java/call/outside/1+": {
+  "available": 12141,
+  "drawn": 40
+ },
+ "commons-lang/java/dispatch/inside/1": {
+  "available": 10,
+  "drawn": 9
+ },
+ "commons-lang/java/dispatch/inside/2-4": {
+  "available": 197,
+  "drawn": 40
+ },
+ "commons-lang/java/dispatch/inside/5+": {
+  "available": 1267,
+  "drawn": 40
+ },
+ "commons-lang/java/member/inside/1": {
+  "available": 8919,
+  "drawn": 20
+ },
+ "commons-lang/java/member/inside/2-4": {
+  "available": 3900,
+  "drawn": 40
+ },
+ "commons-lang/java/member/inside/5+": {
+  "available": 3544,
+  "drawn": 40
+ },
+ "commons-lang/java/member/outside/0": {
+  "available": 5981,
+  "drawn": 10
+ },
+ "commons-lang/java/member/outside/1+": {
+  "available": 1696,
+  "drawn": 40
+ },
+ "commons-lang/java/type/inside/1": {
+  "available": 29907,
+  "drawn": 20
+ },
+ "commons-lang/java/type/inside/2-4": {
+  "available": 1560,
+  "drawn": 40
+ },
+ "commons-lang/java/type/inside/5+": {
+  "available": 148,
+  "drawn": 40
+ },
+ "commons-lang/java/type/outside/0": {
+  "available": 35974,
+  "drawn": 10
+ },
+ "commons-lang/java/type/outside/1+": {
+  "available": 1424,
+  "drawn": 25
+ },
+ "gson/java/call/inside/1": {
+  "available": 1852,
+  "drawn": 20
+ },
+ "gson/java/call/inside/2-4": {
+  "available": 3269,
+  "drawn": 40
+ },
+ "gson/java/call/inside/5+": {
+  "available": 2951,
+  "drawn": 40
+ },
+ "gson/java/call/outside/0": {
+  "available": 8271,
+  "drawn": 10
+ },
+ "gson/java/call/outside/1+": {
+  "available": 2230,
+  "drawn": 40
+ },
+ "gson/java/dispatch/inside/1": {
+  "available": 43,
+  "drawn": 13
+ },
+ "gson/java/dispatch/inside/2-4": {
+  "available": 35,
+  "drawn": 22
+ },
+ "gson/java/dispatch/inside/5+": {
+  "available": 133,
+  "drawn": 35
+ },
+ "gson/java/member/inside/1": {
+  "available": 2208,
+  "drawn": 20
+ },
+ "gson/java/member/inside/2-4": {
+  "available": 1196,
+  "drawn": 40
+ },
+ "gson/java/member/inside/5+": {
+  "available": 1502,
+  "drawn": 40
+ },
+ "gson/java/member/outside/0": {
+  "available": 1482,
+  "drawn": 10
+ },
+ "gson/java/member/outside/1+": {
+  "available": 114,
+  "drawn": 24
+ },
+ "gson/java/type/inside/1": {
+  "available": 6175,
+  "drawn": 20
+ },
+ "gson/java/type/inside/2-4": {
+  "available": 699,
+  "drawn": 40
+ },
+ "gson/java/type/inside/5+": {
+  "available": 352,
+  "drawn": 40
+ },
+ "gson/java/type/outside/0": {
+  "available": 11240,
+  "drawn": 10
+ },
+ "gson/java/type/outside/1+": {
+  "available": 169,
+  "drawn": 17
+ },
+ "kotlinpoet/kotlin/call/inside/1": {
+  "available": 772,
+  "drawn": 20
+ },
+ "kotlinpoet/kotlin/call/inside/2-4": {
+  "available": 2106,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/call/inside/5+": {
+  "available": 5397,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/call/outside/0": {
+  "available": 5290,
+  "drawn": 10
+ },
+ "kotlinpoet/kotlin/call/outside/1+": {
+  "available": 693,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/dispatch/inside/1": {
+  "available": 7,
+  "drawn": 7
+ },
+ "kotlinpoet/kotlin/dispatch/inside/2-4": {
+  "available": 22,
+  "drawn": 21
+ },
+ "kotlinpoet/kotlin/dispatch/inside/5+": {
+  "available": 115,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/extension/inside/1": {
+  "available": 338,
+  "drawn": 20
+ },
+ "kotlinpoet/kotlin/extension/inside/2-4": {
+  "available": 487,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/extension/inside/5+": {
+  "available": 494,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/member/inside/1": {
+  "available": 1476,
+  "drawn": 20
+ },
+ "kotlinpoet/kotlin/member/inside/2-4": {
+  "available": 903,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/member/inside/5+": {
+  "available": 730,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/member/outside/0": {
+  "available": 742,
+  "drawn": 10
+ },
+ "kotlinpoet/kotlin/member/outside/1+": {
+  "available": 507,
+  "drawn": 40
+ },
+ "kotlinpoet/kotlin/type/inside/1": {
+  "available": 3705,
+  "drawn": 20
+ },
+ "kotlinpoet/kotlin/type/inside/2-4": {
+  "available": 45,
+  "drawn": 13
+ },
+ "kotlinpoet/kotlin/type/inside/5+": {
+  "available": 258,
+  "drawn": 24
+ },
+ "kotlinpoet/kotlin/type/outside/0": {
+  "available": 3067,
+  "drawn": 10
+ },
+ "kotlinpoet/kotlin/type/outside/1+": {
+  "available": 6,
+  "drawn": 6
+ },
+ "moshi/java/call/inside/1": {
+  "available": 100,
+  "drawn": 20
+ },
+ "moshi/java/call/inside/2-4": {
+  "available": 53,
+  "drawn": 25
+ },
+ "moshi/java/call/inside/5+": {
+  "available": 219,
+  "drawn": 40
+ },
+ "moshi/java/call/outside/0": {
+  "available": 271,
+  "drawn": 10
+ },
+ "moshi/java/call/outside/1+": {
+  "available": 56,
+  "drawn": 40
+ },
+ "moshi/java/member/inside/1": {
+  "available": 87,
+  "drawn": 20
+ },
+ "moshi/java/member/inside/2-4": {
+  "available": 61,
+  "drawn": 40
+ },
+ "moshi/java/member/inside/5+": {
+  "available": 54,
+  "drawn": 23
+ },
+ "moshi/java/member/outside/0": {
+  "available": 37,
+  "drawn": 10
+ },
+ "moshi/java/member/outside/1+": {
+  "available": 15,
+  "drawn": 15
+ },
+ "moshi/java/type/inside/1": {
+  "available": 532,
+  "drawn": 20
+ },
+ "moshi/java/type/inside/2-4": {
+  "available": 21,
+  "drawn": 14
+ },
+ "moshi/java/type/inside/5+": {
+  "available": 8,
+  "drawn": 3
+ },
+ "moshi/java/type/outside/0": {
+  "available": 474,
+  "drawn": 10
+ },
+ "moshi/java/type/outside/1+": {
+  "available": 7,
+  "drawn": 5
+ },
+ "moshi/kotlin/call/inside/1": {
+  "available": 531,
+  "drawn": 20
+ },
+ "moshi/kotlin/call/inside/2-4": {
+  "available": 242,
+  "drawn": 40
+ },
+ "moshi/kotlin/call/inside/5+": {
+  "available": 725,
+  "drawn": 40
+ },
+ "moshi/kotlin/call/outside/0": {
+  "available": 2210,
+  "drawn": 10
+ },
+ "moshi/kotlin/call/outside/1+": {
+  "available": 518,
+  "drawn": 40
+ },
+ "moshi/kotlin/dispatch/inside/2-4": {
+  "available": 9,
+  "drawn": 9
+ },
+ "moshi/kotlin/dispatch/inside/5+": {
+  "available": 9,
+  "drawn": 9
+ },
+ "moshi/kotlin/extension/inside/1": {
+  "available": 167,
+  "drawn": 20
+ },
+ "moshi/kotlin/extension/inside/2-4": {
+  "available": 109,
+  "drawn": 40
+ },
+ "moshi/kotlin/extension/inside/5+": {
+  "available": 11,
+  "drawn": 11
+ },
+ "moshi/kotlin/member/inside/1": {
+  "available": 1251,
+  "drawn": 20
+ },
+ "moshi/kotlin/member/inside/2-4": {
+  "available": 1052,
+  "drawn": 40
+ },
+ "moshi/kotlin/member/inside/5+": {
+  "available": 492,
+  "drawn": 40
+ },
+ "moshi/kotlin/member/outside/0": {
+  "available": 891,
+  "drawn": 10
+ },
+ "moshi/kotlin/member/outside/1+": {
+  "available": 399,
+  "drawn": 40
+ },
+ "moshi/kotlin/type/inside/1": {
+  "available": 832,
+  "drawn": 20
+ },
+ "moshi/kotlin/type/inside/2-4": {
+  "available": 61,
+  "drawn": 15
+ },
+ "moshi/kotlin/type/inside/5+": {
+  "available": 5,
+  "drawn": 3
+ },
+ "moshi/kotlin/type/outside/0": {
+  "available": 2367,
+  "drawn": 10
+ },
+ "moshi/kotlin/type/outside/1+": {
+  "available": 3,
+  "drawn": 3
+ },
+ "spring-petclinic-kotlin/kotlin/call/inside/1": {
+  "available": 25,
+  "drawn": 20
+ },
+ "spring-petclinic-kotlin/kotlin/call/inside/2-4": {
+  "available": 2,
+  "drawn": 2
+ },
+ "spring-petclinic-kotlin/kotlin/call/outside/0": {
+  "available": 440,
+  "drawn": 10
+ },
+ "spring-petclinic-kotlin/kotlin/call/outside/1+": {
+  "available": 37,
+  "drawn": 8
+ },
+ "spring-petclinic-kotlin/kotlin/dispatch/inside/1": {
+  "available": 25,
+  "drawn": 12
+ },
+ "spring-petclinic-kotlin/kotlin/dispatch/inside/2-4": {
+  "available": 31,
+  "drawn": 14
+ },
+ "spring-petclinic-kotlin/kotlin/member/inside/1": {
+  "available": 148,
+  "drawn": 20
+ },
+ "spring-petclinic-kotlin/kotlin/member/inside/2-4": {
+  "available": 18,
+  "drawn": 10
+ },
+ "spring-petclinic-kotlin/kotlin/member/inside/5+": {
+  "available": 82,
+  "drawn": 40
+ },
+ "spring-petclinic-kotlin/kotlin/member/outside/0": {
+  "available": 52,
+  "drawn": 10
+ },
+ "spring-petclinic-kotlin/kotlin/type/inside/1": {
+  "available": 72,
+  "drawn": 20
+ },
+ "spring-petclinic-kotlin/kotlin/type/outside/0": {
+  "available": 146,
+  "drawn": 10
+ },
+ "spring-petclinic/java/call/inside/1": {
+  "available": 242,
+  "drawn": 20
+ },
+ "spring-petclinic/java/call/inside/2-4": {
+  "available": 28,
+  "drawn": 19
+ },
+ "spring-petclinic/java/call/outside/0": {
+  "available": 1265,
+  "drawn": 10
+ },
+ "spring-petclinic/java/call/outside/1+": {
+  "available": 76,
+  "drawn": 32
+ },
+ "spring-petclinic/java/dispatch/inside/1": {
+  "available": 45,
+  "drawn": 9
+ },
+ "spring-petclinic/java/dispatch/inside/5+": {
+  "available": 11,
+  "drawn": 5
+ },
+ "spring-petclinic/java/member/inside/1": {
+  "available": 144,
+  "drawn": 20
+ },
+ "spring-petclinic/java/member/inside/2-4": {
+  "available": 51,
+  "drawn": 21
+ },
+ "spring-petclinic/java/member/inside/5+": {
+  "available": 125,
+  "drawn": 40
+ },
+ "spring-petclinic/java/member/outside/0": {
+  "available": 61,
+  "drawn": 10
+ },
+ "spring-petclinic/java/type/inside/1": {
+  "available": 238,
+  "drawn": 20
+ },
+ "spring-petclinic/java/type/outside/0": {
+  "available": 829,
+  "drawn": 10
+ }
+}
