@@ -206,6 +206,15 @@ Each addition is committed before any run asks it, and each is its own pull requ
    - The calls are mapping.toml's.
    - Serena's find uses find_symbol's documented `substring_matching`, as its lookup does since the first run's audit. A generic declaration's name carries its type parameters, and names are compared without them.
 
+2. **Locate and task**, on tasks-v1's 54 tasks ([eval/tasks-v1](../tasks-v1/README.md)), unchanged.
+   - Each task is its own tree: the tracked files of its repository at the fix commit's parent, checked out as in tasks-v1 and committed once, as every tree is.
+   - The task's text is the question. A locate question and a task question are asked on each tree.
+   - KnowCode answers with `kc_locate` and `kc_task`, and codebase-memory-mcp with `search_graph`'s `semantic_query`. These are mapping.toml's calls.
+   - codebase-memory-mcp has no counterpart for `task`, and Serena none for either type. Serena isn't started on these trees, because it would only answer `no_counterpart`.
+   - Continuations are followed as for every question: KnowCode's cursor, and codebase-memory-mcp's `semantic_has_more` with `semantic_offset`.
+   - Scoring is tasks-v1's. A changed file or test is named when its repository-relative path appears in the answer's text, with the pages joined in order. It counts within a budget of B bytes when its first mention ends within the first B bytes. Recall of the changed files, and separately of the changed tests, is given over the whole answer and within 2,000, 4,000 and 8,000 bytes, with counts and Wilson intervals.
+   - Every changed file or test an answer doesn't name is listed with the misses.
+
 ## Changes after the first run
 
 The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An

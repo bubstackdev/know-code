@@ -83,10 +83,40 @@ def kc_not_found(message):
     return bool(re.search(r'no (definition|symbol|declaration)|names no definition|not_found|unknown symbol', message, re.I))
 
 
+def kc_cursor(text):
+    """An answer's continuation: the JSON `cursor`, or `kc_more {cursor: …}` in text."""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and data.get('cursor'):
+            return data['cursor']
+    except ValueError:
+        pass
+    m = KC_MORE.search(text)
+    return m[1] if m else None
+
+
+def ask_text(session, first, more, raw):
+    """locate and task (README, "Asking"): the answer's text in order, continuations followed up to PAGES pages.
+    `first` makes the first call; `more(text)` the next page's call, or None."""
+    text = first()
+    raw.append(text)
+    for _ in range(PAGES - 1):
+        call = more(text)
+        if not call:
+            break
+        text, _ = session.call(*call, CALL_TIMEOUT)
+        raw.append(text)
+    return 'judged', [], raw
+
+
 def ask_knowcode(session, qtype, q):
     raw = []
     target = q.get('target')
     try:
+        if qtype in ('locate', 'task'):
+            tool, arg = ('kc_locate', 'query') if qtype == 'locate' else ('kc_task', 'goal')
+            more = lambda t: ('kc_more', {'cursor': kc_cursor(t)}) if kc_cursor(t) else None
+            return ask_text(session, lambda: session.call(tool, {arg: q['text']}, CALL_TIMEOUT)[0], more, raw)
         if qtype == 'refs':
             text, _ = session.call('kc_refs', {'name': f'{target[0]}:{target[1]}'}, CALL_TIMEOUT)
             parse = kc_refs_sites
@@ -161,6 +191,20 @@ def ask_cbm(session, qtype, q):
     raw = []
     p = session.project
     try:
+        if qtype == 'task':
+            return 'no_counterpart', [], raw
+        if qtype == 'locate':
+            args = {'project': p, 'semantic_query': [q['text']], 'format': 'json'}
+
+            seen = [0]
+
+            def more(text):
+                data = json.loads(text)
+                seen[0] += data.get('semantic_returned') or 0
+                if not data.get('semantic_has_more'):
+                    return None
+                return ('search_graph', dict(args, semantic_offset=seen[0]))
+            return ask_text(session, lambda: session.call('search_graph', args, CALL_TIMEOUT)[0], more, raw)
         if qtype == 'find':
             items, offset = [], 0
             for _ in range(PAGES):
@@ -261,7 +305,7 @@ def ask_serena(session, qtype, q):
             raw.append(text)
             return 'judged', [('decl', s['file'], s['first']) for s in _symbols(text)
                               if serena_last(s['name_path']) == plain(q['name'])], raw
-        if qtype == 'impact':
+        if qtype in ('impact', 'locate', 'task'):
             return 'no_counterpart', [], raw
         file, line, name = q['target']
         # substring_matching (find_symbol's documented option): a generic declaration's name path segment carries its
