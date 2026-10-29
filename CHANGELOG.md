@@ -11,6 +11,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 797 links, linked recall 0.713, and no
   outside label is linked; on a held-out set nothing was tuned on (jackson-core, 455 labels), 1.000 over 248 links,
   linked recall 0.719, and none linked.
+- Java calls and member uses on a chain (`Report.builder().title(t).build()`, `this.store.items()`, a field of an
+  imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
+  identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
+  outside label linked).
 - Two indexes of one tree give the same `tests`, `task` and `impact` answers. A reverse walk cut at its limit kept
   the dependents it reached first, in the order the index happened to store files (which parallel indexing varies),
   so two cold indexes of swift-nio could select 127 or 136 candidate tests for the same change. The walk now takes
@@ -64,6 +68,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
   from 0.578 to 0.597 and one more outside label is no longer linked (`task.LastExecutionResult.Status` on a package
   type), leaving 2. A type alias's property is reached only through a value of that type, never by its name alone.
+- compare-v1's first results are published ([eval/compare-v1/results.md](eval/compare-v1/results.md)): KnowCode,
+  codebase-memory-mcp and Serena answer the same reference and impact questions on eight public repositories, scored
+  against labels from each language's toolchain, with every miss listed.
 
 ## 0.6.1 (2026-10-28)
 

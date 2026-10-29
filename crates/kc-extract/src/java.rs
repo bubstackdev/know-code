@@ -12,10 +12,10 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::{Node, Parser};
 
 use crate::swift::{children, collapse, line, name_col};
-use crate::types::{TypeDecl, TypeExpr};
+use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 3;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -45,7 +45,10 @@ pub fn extract(source: &str) -> FileFacts {
     let Some(tree) = parser.parse(source, None) else {
         return FileFacts { parse_errors: 1, ..Default::default() };
     };
-    let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new() };
+    let mut nested = HashMap::new();
+    member_types(source, tree.root_node(), None, &mut nested);
+    let mut cx =
+        Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested };
     cx.visit(tree.root_node());
     cx.facts
 }
@@ -65,6 +68,8 @@ struct Cx<'a> {
     package: Option<String>,
     scopes: Vec<Scope>,
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
+    /// The file's member types: per type (dotted, within the package), the simple names of the types declared in it.
+    nested: HashMap<String, HashSet<String>>,
 }
 
 impl<'a> Cx<'a> {
@@ -528,7 +533,12 @@ impl<'a> Cx<'a> {
         if self.local(&name).is_some() {
             return;
         }
-        self.record(node, name, None, None, RefKind::Member, None);
+        // The object of a call or a field access written as a type is (`ObjectUtils.isEmpty(x)`,
+        // `JsonScope.EMPTY_DOCUMENT`): a static member's type, a type reference. A constant (`INSTANCE.run()`) isn't.
+        let receiver = matches!(parent.kind(), "method_invocation" | "field_access" | "method_reference")
+            && parent.child_by_field_name("object").or_else(|| parent.child(0)) == Some(node);
+        let kind = if receiver && type_like(&name) { RefKind::TypeRef } else { RefKind::Member };
+        self.record(node, name, None, None, kind, None);
     }
 
     /// The receiver as written and, for a local or parameter with a declared type, that type.
@@ -540,7 +550,50 @@ impl<'a> Cx<'a> {
             "this" => self.enclosing_type(),
             _ => None,
         };
-        (Some(text), ty)
+        // Otherwise how its type follows from what the repo declares (a field's, a method's return), for the query.
+        (Some(text), ty.or_else(|| self.expr_type(object).map(|t| t.encode())))
+    }
+
+    /// An expression's type as a path the query evaluates against declarations: `this`, a field of the caller's type,
+    /// `Type.member`, and chains of member uses and calls on them (`store.items().first()`).
+    fn expr_type(&self, e: Node) -> Option<TypeExpr> {
+        match e.kind() {
+            "this" => Some(TypeExpr::root(PathRoot::SelfType)),
+            "identifier" => {
+                let name = self.text(e);
+                match self.local(name) {
+                    Some(t) => t.and_then(|t| TypeExpr::decode(&t)),
+                    None if type_like(name) => None,
+                    None => Some(TypeExpr::root(PathRoot::Prop(name.to_string()))),
+                }
+            }
+            "parenthesized_expression" => children(e).find(|c| c.is_named()).and_then(|c| self.expr_type(c)),
+            "cast_expression" | "object_creation_expression" => e.child_by_field_name("type").and_then(|t| type_expr(self.src, t)),
+            "field_access" => {
+                let object = e.child_by_field_name("object")?;
+                let field = self.text(e.child_by_field_name("field")?).to_string();
+                self.member_of(object, Seg::Member(field))
+            }
+            "method_invocation" => {
+                let name = self.text(e.child_by_field_name("name")?).to_string();
+                match e.child_by_field_name("object") {
+                    Some(object) => self.member_of(object, Seg::Call(name)),
+                    None => Some(TypeExpr::Call { owner: None, name }),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// `object.seg`'s type: on the object's type, or on a type written by name (`Type.member`).
+    fn member_of(&self, object: Node, seg: Seg) -> Option<TypeExpr> {
+        match self.expr_type(object) {
+            Some(t) => Some(t.then(seg)),
+            None if object.kind() == "identifier" && type_like(self.text(object)) && self.local(self.text(object)).is_none() => {
+                Some(TypeExpr::root(PathRoot::Static(self.text(object).to_string())).then(seg))
+            }
+            None => None,
+        }
     }
 
     /// A type written somewhere: the name, with a qualifier as its receiver (`Map.Entry` is `Entry` on `Map`), and
@@ -605,7 +658,60 @@ impl<'a> Cx<'a> {
     /// A declared type, as an encoded type expression: the type's name with generic arguments dropped, an array's
     /// element type kept as an array. `None` for primitives and `var`.
     fn declared_type(&self, t: Node) -> Option<String> {
-        type_expr(self.src, t).map(|e| e.encode())
+        type_expr(self.src, t).map(|e| self.qualify(e).encode())
+    }
+
+    /// A simple type name written inside a type that declares (or whose outer types declare) a member type of that
+    /// name means the member type (JLS 6.4.1): `Builder` in `ReflectionDiffBuilder` is `ReflectionDiffBuilder.Builder`,
+    /// never a top-level `Builder` elsewhere. Qualified so the query looks it up there.
+    fn qualify(&self, e: TypeExpr) -> TypeExpr {
+        let inner = |n: String| -> String {
+            if n.contains('.') {
+                return n;
+            }
+            let Some(t) = self.enclosing_type() else { return n };
+            let parts: Vec<&str> = t.split('.').collect();
+            for k in (1..=parts.len()).rev() {
+                let scope = parts[..k].join(".");
+                if self.nested.get(&scope).is_some_and(|names| names.contains(&n)) {
+                    return format!("{scope}.{n}");
+                }
+            }
+            n
+        };
+        match e {
+            TypeExpr::Named(n) => TypeExpr::Named(inner(n)),
+            TypeExpr::Generic { name, args } => TypeExpr::Generic { name: inner(name), args },
+            TypeExpr::Array(e) => TypeExpr::Array(Box::new(self.qualify(*e))),
+            other => other,
+        }
+    }
+}
+
+/// The member types `node`'s type declarations declare, by the dotted name of the declaring type (`outer`).
+fn member_types(src: &str, node: Node, outer: Option<&str>, out: &mut HashMap<String, HashSet<String>>) {
+    for c in children(node) {
+        let is_type = matches!(
+            c.kind(),
+            "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration"
+        );
+        match (is_type, c.child_by_field_name("name")) {
+            (true, Some(n)) => {
+                let name = &src[n.byte_range()];
+                if let Some(o) = outer {
+                    out.entry(o.to_string()).or_default().insert(name.to_string());
+                }
+                let full = outer.map_or_else(|| name.to_string(), |o| format!("{o}.{name}"));
+                if let Some(body) = c.child_by_field_name("body") {
+                    member_types(src, body, Some(&full), out);
+                }
+            }
+            // A body's members, and anything else but a method's body (a local class is no member type).
+            _ if !matches!(c.kind(), "method_declaration" | "constructor_declaration" | "block" | "lambda_expression") => {
+                member_types(src, c, outer, out)
+            }
+            _ => {}
+        }
     }
 }
 
@@ -643,6 +749,11 @@ fn base_name(src: &str, n: Node) -> Option<String> {
             .map(|c| src[c.byte_range()].split_whitespace().collect()),
         _ => Some(src[n.byte_range()].split_whitespace().collect()),
     }
+}
+
+/// `Name`, written as a type is: an upper-case first letter and a lower-case letter (not a constant like `MAX`).
+fn type_like(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase) && name.chars().any(char::is_lowercase)
 }
 
 fn arg_count(list: Node) -> u32 {
@@ -759,6 +870,7 @@ mod tests {
         assert!(calls.contains(&("total".into(), Some("order".into()))));
         assert!(calls.contains(&("save".into(), Some("store".into()))));
         assert!(calls.contains(&("log".into(), Some("Helpers".into()))));
+        assert!(refs(&f, RefKind::TypeRef).contains(&("Helpers".into(), None)), "a static call's type");
         assert!(calls.contains(&("flush".into(), Some("this.store".into()))));
         assert!(calls.contains(&("price".into(), Some("Item".into()))));
         assert!(calls.contains(&("ship".into(), Some("placed".into()))));
@@ -779,6 +891,32 @@ mod tests {
         assert!(members.contains(&("store".into(), Some("this".into()))));
         assert!(members.contains(&("count".into(), None)));
         assert!(!members.iter().any(|(n, _)| n == "cart" || n == "order"), "locals and parameters aren't members");
+    }
+
+    #[test]
+    fn member_types_and_receiver_paths() {
+        let f = extract(
+            "class Report {\n\
+               static Builder builder() { return null; }\n\
+               static final class Builder { Builder title() { return this; } Report build() { return null; } }\n\
+               Store store;\n\
+               void run() { Report.builder().title().build(); this.store.items().first(); store.save(); }\n\
+             }\n",
+        );
+        let builder = f.symbols.iter().find(|s| s.name == "builder").unwrap();
+        assert_eq!(builder.type_name.as_deref(), Some("Report.Builder"), "a member type's name is qualified");
+        let build = f.refs.iter().find(|r| r.name == "build" && r.kind == RefKind::Call).unwrap();
+        assert_eq!(
+            TypeExpr::decode(build.receiver_type.as_deref().unwrap()),
+            Some(TypeExpr::root(PathRoot::Static("Report".into())).then(Seg::Call("builder".into())).then(Seg::Call("title".into())))
+        );
+        let first = f.refs.iter().find(|r| r.name == "first").unwrap();
+        assert_eq!(
+            TypeExpr::decode(first.receiver_type.as_deref().unwrap()),
+            Some(TypeExpr::root(PathRoot::SelfType).then(Seg::Member("store".into())).then(Seg::Call("items".into())))
+        );
+        let save = f.refs.iter().find(|r| r.name == "save").unwrap();
+        assert_eq!(TypeExpr::decode(save.receiver_type.as_deref().unwrap()), Some(TypeExpr::root(PathRoot::Prop("store".into()))));
     }
 
     #[test]

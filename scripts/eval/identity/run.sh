@@ -11,6 +11,8 @@
 # enumeration is read from, IO/out/index-REPO.scip). The container is removed afterwards.
 #
 # Images are pinned by digest (IMAGES below); CPUS (default 4) and MEMORY (default 12g) limit the container.
+# LABEL_ENCLOSING=1 adds compare-v1's `in` field to each reference row (eval/compare-v1/README.md); without it the
+# enumeration is identity-v1's.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -25,6 +27,7 @@ SWIFT_IMAGE=swift:6.3-noble@sha256:1038d54c80063f5cdfabc4560990c30af64b5de8ebf28
 # The .NET SDK comes from Ubuntu's archive (dotnet-sdk-10.0), installed while the network is up.
 DOTNET_IMAGE=ubuntu:26.04@sha256:19fcd1bf268f02b60aca3bd30bd8a6d9a11759a430e32921833e65f16d87348a
 NODE_IMAGE=node:24-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a
+GO_IMAGE=golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9
 # scip-java with its JDKs (17, 21, 25), Maven and Gradle; the multi-platform index's digest.
 JVM_IMAGE=ghcr.io/scip-code/scip-java:0.13.2@sha256:459c2fa0544d3801857428d94590e86bcd5f8af25980a36cb360720c1b3cf802
 
@@ -45,6 +48,7 @@ case $LANGUAGE in
   swift) IMAGE=$SWIFT_IMAGE ;;
   csharp) IMAGE=$DOTNET_IMAGE ;;
   typescript) IMAGE=$NODE_IMAGE ;;
+  go) IMAGE=$GO_IMAGE ;;
   jvm) IMAGE=$JVM_IMAGE ;;
 esac
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
@@ -53,7 +57,9 @@ trap cleanup EXIT
 docker create --name "$NAME" --cpus "$CPUS" --memory "$MEMORY" --network bridge \
   -v "$(cd "$IO/in" && pwd):/in:ro" -v "$(cd "$IO/out" && pwd):/out" \
   -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 -e NUGET_XMLDOC_MODE=skip -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod -e CGO_ENABLED=1 \
   -e npm_config_ignore_scripts=true -e npm_config_audit=false -e npm_config_fund=false \
+  -e LABEL_ENCLOSING="${LABEL_ENCLOSING:-0}" \
   --entrypoint sleep "$IMAGE" infinity >/dev/null
 docker start "$NAME" >/dev/null
 run() { docker exec "$NAME" bash -euo pipefail -c "$1"; }
@@ -75,6 +81,15 @@ case $LANGUAGE in
     run "cd /work/src && node --version >>$LOG
          if [ -f pnpm-lock.yaml ]; then corepack enable >>$LOG 2>&1 && pnpm install --frozen-lockfile --ignore-scripts >>$LOG 2>&1;
          else npm ci --ignore-scripts >>$LOG 2>&1; fi" ;;
+  go)
+    # Every module's dependencies, tests' included, and the labeller's own (x/tools), before the network goes.
+    # scip-go is the labeller's cross-check (eval/identity-v2/README.md, Go): installed here, run offline below.
+    run "go version >>$LOG
+         cd /work/tools && go mod download >>$LOG 2>&1 && go build -o /work/label . >>$LOG 2>&1
+         GOBIN=/work/bin go install github.com/scip-code/scip-go/cmd/scip-go@v0.2.9 >>$LOG 2>&1
+         cd /work/src && for m in \$(find . -name go.mod -not -path '*/vendor/*' -not -path '*/testdata/*' -not -path '*/.*/*'); do
+           (cd \$(dirname \$m) && go mod download >>$LOG 2>&1 && go list -test -deps ./... >/dev/null 2>>$LOG) || echo \"go: restore failed in \$m\" >>$LOG
+         done" ;;
   jvm)
     # builds.txt: NAME JVM TOOL [VAR=VALUE ...] -- BUILD ARGUMENTS. The restore is a whole indexing build with the
     # network up, so that every dependency, plugin and compiler is fetched; its output is thrown away.
@@ -105,6 +120,14 @@ case $LANGUAGE in
   typescript)
     CONFIGS=$(grep -E "^$REPO " "$HERE/typescript/configs.txt" | cut -d' ' -f2-)
     run "cd /work/src && node /work/tools/label.cjs --repo $REPO --src /work/src $CONFIGS 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz" ;;
+  go)
+    run "cd /work/src && GOPROXY=off GOFLAGS=-mod=mod /work/label -repo $REPO -src /work/src 2>>$LOG | gzip -n > /out/enumeration-$REPO.jsonl.gz
+         mkdir -p /out/scip-$REPO && i=0
+         for m in \$(find . -name go.mod -not -path '*/vendor/*' -not -path '*/testdata/*' -not -path '*/.*/*' | sort); do
+           d=\$(dirname \$m); i=\$((i+1))
+           (cd \$d && GOPROXY=off /work/bin/scip-go index --quiet ./... -o /out/scip-$REPO/\$i.scip 2>>$LOG) || echo \"scip-go failed in \$d\" >>$LOG
+           echo \"\$i \${d#./}\" >> /out/scip-$REPO/modules.txt
+         done" ;;
   jvm)
     OFFLINE=$([ "$TOOL" = maven ] && echo -o || echo --offline)
     run "cd /work/src && $BUILD $OFFLINE $ARGS >>$LOG 2>&1
