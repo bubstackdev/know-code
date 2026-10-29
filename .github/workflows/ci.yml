@@ -122,6 +122,18 @@ jobs:
       # The runner image ships shellcheck.
       - run: shellcheck scripts/acceptance/clean-machine.sh
 
+  # deny.toml: RustSec advisories, banned crates (the no-HTTP privacy guard), licences and sources. The advisory
+  # database is fetched fresh, so a newly published advisory for a locked crate fails every run until it's dealt with.
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install the pinned cargo-deny
+        run: bash scripts/install-cargo-deny.sh
+      - run: cargo deny --locked check advisories bans licenses sources
+
   # README.md and docs/ naming a crate or script file that no longer exists.
   doc-paths:
     runs-on: ubuntu-24.04
