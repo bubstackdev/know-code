@@ -44,7 +44,7 @@ the mistake never reached. The labels are what a later fix needed, measured the 
 The set is frozen in parts, and the gate is decided for each part on its own as well as combined, so a part added
 later can't move an earlier part's result. Each row's `part` says which it is in.
 
-- **Part 1:** tasks-v1's eight repositories (C#, TypeScript, Swift), 75 reviews. Frozen in the commit that adds [reviews.jsonl](reviews.jsonl).
+- **Part 1:** tasks-v1's eight repositories (C#, TypeScript, Swift), 75 reviews. Frozen at 1f26e0c, the commit that adds [reviews.jsonl](reviews.jsonl), before any answer on it was read.
 - **Part 2:** the Go and JVM repositories 0.7 pins, frozen on their own before any answer on them is read. Not yet
   built.
 
@@ -101,3 +101,20 @@ python3 scripts/eval/review_gate.py run --knowcode BIN --work WORK --tool kc_imp
 python3 scripts/eval/review_gate.py run --knowcode BIN --work WORK --tool kc_review --out review.json
 python3 scripts/eval/review_gate.py compare impact.json review.json
 ```
+
+## Baseline: `impact --diff`, integration/0.7 at f2e38e3
+
+`kc_impact` with its defaults (`{"diff": <parent>}`), release build of integration/0.7 at f2e38e3 (`knowcode 0.6.1`,
+binary 65963bee5125ab8b), measured after the freeze. Descriptive figures; the gate compares `review` with them.
+`Outside` counts the labels outside the commit's own diff that the first 4,000 bytes name.
+
+| Set | Reviews | Median bytes | Files @2000 | Files @4000 | Files @8000 | Files, all | Tests @2000 | Tests @4000 | Tests @8000 | Tests, all | Outside @4000 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| C# | 25 | 7792 | 0.780 | 0.780 | 0.800 | 0.800 | 0.778 | 0.778 | 0.889 | 0.889 | 4 of 17 |
+| Swift | 25 | 7796 | 0.698 | 0.717 | 0.736 | 0.736 | 0.125 | 0.312 | 0.312 | 0.312 | 3 of 29 |
+| TypeScript | 25 | 5306 | 0.895 | 0.895 | 0.895 | 0.895 | 0.786 | 0.786 | 0.929 | 0.929 | 1 of 8 |
+| Part 1 | 75 | 7461 | 0.780 | 0.787 | 0.801 | 0.801 | 0.513 | 0.590 | 0.667 | 0.667 | 8 of 54 |
+
+Every answer names at least one label, and no call failed. Most file labels the baseline names are files the commit
+itself changed, which `impact --diff` lists as its changes. Of the 54 labels outside the diff, it names 6 within the
+first 2,000 bytes, 8 within 4,000 and 13 anywhere in the answer.
