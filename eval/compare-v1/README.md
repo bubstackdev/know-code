@@ -223,7 +223,8 @@ gives the size of what it touches instead.
 - **When and how it was found.** On 2026-10-29, after the rerun's results were published, KnowCode's maintainers diagnosed it from the rerun's stored answers.
 - **The deviation.** KnowCode's impact answers (and callers, which uses the same call) return their first page as text and each `kc_more` page as JSON. The adapter parsed text only. So it took no rows from a continuation page, and it read no cursor from one: that page's only mention of `kc_more` is a placeholder hint. Every answer was scored on its first 30 rows at most. ("Asking": follow up to 10 pages.)
 - **The fix.** The impact parser reads a JSON page's `items` (each row's `file` and declaration `line`) and its `cursor`.
-- **Effect on the rerun's stored answers.** Re-parsing them (re-parsed, not rerun) adds 359 rows to 24 answers, and moves KnowCode's impact recall on the questions it answered from 0.371 (766 labels matched) to 0.456. Only the stored second pages can be re-parsed, since later pages were never fetched. The third run measures the whole fix.
+- **Effect on the rerun's stored answers.** Re-parsing them (re-parsed, not rerun) adds 359 rows to 24 answers, and moves KnowCode's impact recall on the questions it answered from 0.371 (762 of 2,055 labels) to 0.456. Only the stored second pages can be re-parsed, since later pages were never fetched.
+- **Effect measured by the third run** (same build, every page followed up to 10): KnowCode's impact recall on the questions it answered is 0.695 (1,429 of 2,055), and its precision is 0.696, against 0.716. No other tool's figures move.
 
 **The second audit.** All three adapters were audited again for continuations, in every format and for every question type.
 - **KnowCode:**
