@@ -458,4 +458,45 @@ mod tests {
             assert_eq!(got, fresh, "order {order:?}");
         }
     }
+
+    /// A repo withheld for one walk on a shared graph is said withheld by every later answer on it, though a graph of
+    /// its own wouldn't say so: what a walk found withheld is kept for the rest of the call (see `Consulted::reset`), so
+    /// an answer may say more than it read, never less. Here the impact walk reads the workspace's summaries, where a
+    /// sibling repo is blocked whole; the tests walk reads none.
+    #[test]
+    fn a_repo_withheld_for_one_walk_is_said_withheld_by_the_next() {
+        let cache = test_cache();
+        let base = cache.dir("task-shared-withheld");
+        let home = repo(
+            &base,
+            "ledger",
+            &[
+                ("src/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/A.cs", "namespace Ledger;\npublic static class A\n{\n    public static void Post() { }\n}\n"),
+                ("tests/ATests.cs", "namespace Ledger.Tests;\npublic class ATests\n{\n    public void Posts() { Ledger.A.Post(); }\n}\n"),
+            ],
+        );
+        let _vault = repo(
+            &base,
+            "vault",
+            &[
+                (".knowcode-privacy.yml", "level: 1\n"),
+                ("src/Vault.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+                ("src/Keys.cs", "namespace Vault;\npublic class Keys\n{\n    public void Seal() { Ledger.A.Post(); }\n}\n"),
+            ],
+        );
+        let s = Scope { repos: vec![home.clone()], no_sync: false };
+        let ip = ops::ImpactParams { file: Some("src/A.cs".into()), depth: 1, limit: 30, ..Default::default() };
+        let tp = ops::TestsParams { targets: vec!["src/A.cs".into()], diff: None, limit: 4, evidence: String::new() };
+        let withheld = |env: &Value| incomplete_of(env).iter().any(|i| i.reason == Reason::Withheld);
+        assert!(withheld(&ops::impact(&ip, &s).unwrap().env), "the impact walk meets the withheld repo");
+        assert!(!withheld(&ops::tests(&tp, &s).unwrap().env), "the tests walk alone doesn't");
+        let o = ops::open_member(std::slice::from_ref(&home), &home, false).unwrap().unwrap();
+        let mut g = crate::walk::Graph::new(&o, &[], false, usize::MAX);
+        assert!(withheld(&ops::impact_on(&ip, &s, &o, &mut g).unwrap().env));
+        let after = ops::tests_on(&tp, &o, &mut g).unwrap().env;
+        assert!(withheld(&after), "said again after the impact walk: {after}");
+        // Said without a path, as every withheld entry is.
+        assert!(!after.to_string().contains("Keys.cs"), "{after}");
+    }
 }
