@@ -1,0 +1,189 @@
+# compare-v1: answers from three code tools, scored against a compiler and git
+
+KnowCode, codebase-memory-mcp and Serena are asked the same questions about pinned public repositories, and their
+answers are scored against labels that none of them made: each language's own toolchain for references, callers and
+impact, and git for the task questions. No model is called, and no agent takes part. compare-v1 compares answers,
+not agents, so it supports only the figures it publishes, and it makes no claim about how an agent would do with
+any of the tools.
+
+This file and [mapping.toml](mapping.toml) are the protocol. They were committed before any tool was run on the
+set, and they don't change to fit the results. A change to the questions, the mapping or the scoring makes a new
+set, compare-v2. The commit that adds them is the one the results cite as the mapping's commit.
+
+| Release | What is published |
+| --- | --- |
+| 0.7 | References and impact on C#, TypeScript and Swift (identity-v1's repositories). Go and Java are included only if identity-v2's Go and Java labels are frozen by 0.7's third week. |
+| 0.8 | The whole mapping: references, callers, impact, find, locate and task, on every language that has labels. |
+
+## The tools
+
+| Tool | What it is (from its own documentation) | How it is run |
+| --- | --- | --- |
+| KnowCode | This repository's binary | `knowcode serve --tools all`, over stdio |
+| codebase-memory-mcp | One binary: tree-sitter extraction, its own type resolution ("Hybrid LSP") for ten languages, a SQLite graph | `codebase-memory-mcp` (its MCP server), over stdio |
+| Serena | An MCP server over each language's language server | `serena start-mcp-server`, over stdio, with the LSP backend |
+
+Each tool runs twice: at the version pinned in [tools.toml](tools.toml), and at its latest release when the run
+starts. Both are pinned by digest, and both results are published. Only the pinned run is compared across KnowCode
+releases. If the latest release is still the pinned one, that run is published once and marked as both.
+
+### The container
+
+Every tool, KnowCode included, runs in one throwaway Linux container built from [Dockerfile](Dockerfile), with its
+base images pinned by digest. All three tools see the same files and run under the same CPU and memory limits. The
+container gets the network while the image is built and while each tool indexes, because Serena's language
+servers and codebase-memory-mcp may fetch what they need at that point. The network is cut before the first
+question is asked, and the run checks that names no longer resolve. Third-party code never runs on the host. The
+container and its volumes are removed when the run ends.
+
+### Indexing
+
+Each tool indexes each repository as its own documentation says, with its defaults:
+
+- **KnowCode** indexes on the first query, into its own cache directory in the container.
+- **codebase-memory-mcp:** `index_repository` with the repository's absolute path, which waits for the whole index.
+  Its cache directory is set with `CBM_CACHE_DIR`. Its watcher is turned off (`watcher_enabled false`), because
+  the tree doesn't change during a run.
+- **Serena:** `serena project create --index` on the repository, with the languages it detects. The language
+  servers are downloaded ahead of time (`serena download-ls-dependencies`), as Serena's documentation advises for
+  restricted networks. A repository's dependencies are restored with the network up, as identity-v1's labeller
+  restores them, so that a language server can resolve what the compiler resolves.
+
+No tool reads another's index or any label. Each repository is its own project, as in identity-v1.
+
+## Questions
+
+Every question is drawn from the toolchain enumerations alone, with a recorded seed, before any tool answers it.
+The question types:
+
+| Type | The question | Labels |
+| --- | --- | --- |
+| `refs` | Every reference to declaration D | The toolchain's references bound to D |
+| `callers` | The declarations that call or use D directly | The declarations enclosing those references |
+| `impact` | The declarations that depend on D, up to two hops | The same, joined transitively once more |
+| `find` | Where is a declaration named N? | Every declaration named N that the toolchain saw |
+| `locate` | Which files does this task touch? | tasks-v1: the files the fix commit changed |
+| `task` | Which files and tests does this task touch? | tasks-v1: the files and tests the fix commit changed |
+
+Each question names its target the way a person reading the code would: by file, line and name for a declaration
+D, and by name alone for `find`. An adapter then turns that into the tool's own way of naming a symbol, using
+the lookup call that tool's documentation recommends (see [mapping.toml](mapping.toml)). If that lookup finds no
+symbol at the given file and line, the question is counted as `not_found` for that tool. This is reported apart
+from wrong answers.
+
+### Labels
+
+**References, callers and impact** come from identity-v1's labellers ([eval/identity-v1](../identity-v1/README.md)):
+the Swift index store, Roslyn and the TypeScript compiler. Go and Java come from identity-v2's labellers, once
+they exist. What counts as a reference, what is left out, and how a target is identified are identity-v1's rules,
+unchanged.
+
+identity-v1's enumerations record each reference and its target, but not the declaration the reference sits in.
+Callers and impact need that. compare-v1 adds one field, `in`, to each reference row. It holds the innermost
+enclosing declaration that identity-v1 counts as a declaration: a function, method, property, field, event or
+enum case, or a type for a reference at type level. Initialisers count as their type, and accessors as their
+property. A reference at file level has `in` null. The field is written by the same labeller run, in the same
+container. Every other field of every row must equal identity-v1's: each of identity-v1's 4,943 labels must
+appear unchanged in the new enumerations. The run stops if one doesn't.
+
+- **`refs` labels:** every reference row bound to D, as `file:line`.
+- **`callers` labels:** the `in` declarations of D's reference rows of kind `call`, `member`, `dispatch` or
+  `extension`, as the declaration's file and the line of its name. References of kind `type` (D named in a
+  signature or a type position) aren't callers.
+- **`impact` labels:** hop 1 is D's callers. Hop 2 is the callers of each hop-1 declaration, by the same rule.
+  The label is their union, without D itself. An edge is only what the toolchain binds. A call through an
+  interface binds to the interface member, so it reaches an implementation's callers only when the interface
+  member is the target. This holds for every tool alike.
+- **`find` labels:** every declaration row named N.
+
+**Task and locate labels** are tasks-v1's ([eval/tasks-v1](../tasks-v1/README.md)): the files a fix commit
+changed, and its tests, at the commit's parent.
+
+### The draw
+
+[questions.py](../../scripts/eval/compare/questions.py) draws the questions from the enumerations. For each
+repository:
+
+- **`refs`:** targets are inside declarations with between 1 and 200 reference rows. The bound keeps one widely
+  used type from outweighing the rest of a language. The number of declarations excluded by it is published. Strata
+  are the declaration's kind (`type`; `callable` for a function or method; `member` for a property, field, event
+  or enum case; `dispatch` for a protocol, interface or abstract member), crossed with its reference count
+  (`1-4`, `5-29`, `30-200`). Each stratum takes up to 3 targets, so each repository has at most 36.
+- **`callers` and `impact`:** targets are callables with at least one caller, stratified by the number of
+  hop-1 callers (`1`, `2-9`, `10+`). Each stratum takes up to 4 targets, so each repository has at most 12. The
+  two question types share the same targets.
+- **`find`:** names with between 1 and 20 declarations, stratified by count (`1`, `2-4`, `5-20`). Each stratum
+  takes up to 4 names, so each repository has at most 12.
+- **`locate` and `task`:** every task in tasks-v1.
+
+Within a stratum, targets are taken in SHA-256 order of `compare-v1:repo:key` (or `compare-v1:repo:name` for
+`find`). The draw therefore depends only on the enumerations. [questions.jsonl](questions.jsonl) holds the
+questions and their labels, and `strata.json` holds, per stratum, how many targets were available and how many
+were drawn.
+
+## Asking
+
+[run.py](../../scripts/eval/compare/run.py) runs in the container. Each tool gets one MCP session per repository,
+over stdio, and each question is one or more calls, exactly as [mapping.toml](mapping.toml) lists them. Answers are
+normalised as follows:
+
+- **`refs`:** every `file:line` the answer names as a reference site. A tool that names the enclosing symbol
+  instead of the line names that symbol's span, and the span is matched as below.
+- **`callers` and `impact`:** every declaration the answer names, as its file and line. A tool's line counts as a
+  declaration's name line when it is the first line, from the tool's line through the next 10, that has the
+  declaration's name as a word. This is identity-v1's rule.
+- **`find`:** every declaration the answer names, matched the same way.
+- **`locate` and `task`:** every repository-relative path the answer names, in the order it first names them.
+
+A question has a fixed budget: 60 seconds per call, and the tool's default page of results. A cursor or
+continuation is followed up to 10 pages when the tool offers one. Each answer is stored whole, with its bytes, so
+that every judgement can be checked again.
+
+## Scoring
+
+[score.py](../../scripts/eval/compare/score.py) judges every normalised answer against its labels.
+
+- **Recall:** the share of labels that the answer names, per question and pooled over a stratum's labels.
+- **Precision:** of the items the answer names, the share that are labels. An item the toolchain has no view on is
+  `unjudged`, not wrong. For `refs`, that means a line with no reference row of D's name, such as a comment, an
+  import, a constructor call, or D's own declaration. Such items are counted and published, but they are left out
+  of precision. An item is wrong only when the toolchain binds it elsewhere: a reference row of the same name on
+  that line bound to another declaration, or, for `callers`, `impact` and `find`, a declaration that isn't a
+  label.
+- **Span answers** (an enclosing symbol named instead of a line, as described above): the span counts as one item.
+  It is right when it holds a label, wrong when it holds a reference row of D's name bound elsewhere and no label,
+  and unjudged otherwise. It is credited with every label it holds, for recall.
+- **Can't answer:** a tool that has no call for a question type gets `no_counterpart` for the whole type. A
+  question whose target lookup found nothing gets `not_found`. A call that errors or passes its time limit gets
+  `error`. Each of these is counted apart from wrong answers and never scored as a miss, a hit or a win. Each
+  `error` is kept with its log.
+- **`locate` and `task`:** recall of the changed files and, separately, of the changed tests, over the whole answer
+  and within the first 2,000, 4,000 and 8,000 bytes, as in tasks-v1.
+
+Results are reported per tool, per language and per question type, with counts and 95% Wilson intervals for
+pooled proportions. Per-question means are given beside them, because labels within one question aren't
+independent. Every miss of every tool, KnowCode's included, is listed in the results: every label not named,
+and every item judged wrong, with the tool's answer.
+
+Questions only KnowCode answers (history, co-change, test selection, SQL and cross-repo links) appear as
+`no_counterpart` rows for the other tools. They are reported as such, never as KnowCode wins.
+
+## Repeatability
+
+Each published result is two complete runs in fresh containers, from the same image. The two must give identical
+scores, or nothing is published until the difference is explained. The results give the mapping's commit, the
+image digest, the tool versions and their digests, the run dates, and the host's CPU and memory limits. They make
+no claim about speed.
+
+## Files
+
+| File | What it holds |
+| --- | --- |
+| [mapping.toml](mapping.toml) | Per question type, the call each tool's documentation recommends, or `no_counterpart` |
+| [tools.toml](tools.toml) | The pinned versions, release assets and digests, and the latest-release rule |
+| [Dockerfile](Dockerfile) | The container, with every base image pinned by digest |
+| questions.jsonl, strata.json | The drawn questions and their labels (written by the draw, before any run) |
+| results.md | The published figures and every miss (after the runs) |
+
+The scripts are in [scripts/eval/compare](../../scripts/eval/compare): one adapter per tool, the draw, the runner and
+the scorer, using the standard library only, with tests.
