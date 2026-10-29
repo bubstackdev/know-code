@@ -5,10 +5,12 @@
 [codebase-memory-mcp.pinned]
 version = "0.12.1"
 commit = "a7158ac2f48ca646b4527341b76f930f2aeff87e"
-# Release assets, checked against the release's checksums.txt.
-url = "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.12.1/codebase-memory-mcp-linux-{arch}.tar.gz"
-sha256.arm64 = "8575f126092660b93b170bdc2e06f3ef2dd28d3cc49ad6d0895dc3e4767219cd"
-sha256.amd64 = "8453015145f072c1b9b019cbdd02cea8cc6f18cc5e116036dd20992631c638c7"
+# Release assets, checked against the release's checksums.txt. The `-portable` archives are its fully static builds
+# (its README, "Pre-built Binaries"): the ordinary ones need glibc 2.38, newer than the TypeScript image (Debian
+# bookworm) has, and one build serves every image.
+url = "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.12.1/codebase-memory-mcp-linux-{arch}-portable.tar.gz"
+sha256.arm64 = "ed0f1f548cd79b121c401c2e9f7841c189a001af26d3768368088c24f6a53533"
+sha256.amd64 = "8c3d0341064301e78ecc84cf7348d4e2c6562a0f57448243ea560aaa34de36c1"
 
 [serena.pinned]
 version = "2.1.0"
