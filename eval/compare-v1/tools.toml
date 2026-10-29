@@ -1,0 +1,38 @@
+# compare-v1's tool versions (README.md, "The tools"). `pinned` is the latest release of each tool when the mapping
+# was frozen, and is the run compared across KnowCode releases; `latest` is resolved when each run starts and
+# recorded in its results with the same fields. Every download is checked against the digest here before use.
+
+[codebase-memory-mcp.pinned]
+version = "0.12.1"
+commit = "a7158ac2f48ca646b4527341b76f930f2aeff87e"
+# Release assets, checked against the release's checksums.txt.
+url = "https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.12.1/codebase-memory-mcp-linux-{arch}.tar.gz"
+sha256.arm64 = "8575f126092660b93b170bdc2e06f3ef2dd28d3cc49ad6d0895dc3e4767219cd"
+sha256.amd64 = "8453015145f072c1b9b019cbdd02cea8cc6f18cc5e116036dd20992631c638c7"
+
+[serena.pinned]
+version = "2.1.0"
+commit = "5e4f5cd173c7ff3eed37ee3f1de6c266b937c5dc"
+# The PyPI source distribution; it carries Serena's uv.lock, which pins every dependency by hash.
+url = "https://files.pythonhosted.org/packages/source/s/serena-agent/serena_agent-2.1.0.tar.gz"
+sha256 = "312c8c7cb3fa70e3fa7fe4685e09594e31e9a9d7d090d59136a0faf2fa939a91"
+python = "3.12"
+
+[uv]
+# Installs Serena from its lock file. The release asset, checked against its digest.
+version = "0.13.1"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-{uarch}-unknown-linux-gnu.tar.gz"
+sha256.arm64 = "9041c73c99fdc5892cf128140beb354eca9231d502068cc36e6cb53a8e59ad14"
+sha256.amd64 = "eadd9d27c134ab5ac1ffd4473b97a741407f3ea238288f03121fc4deddf90220"
+
+[knowcode]
+# The build under test: the release candidate's source, built for Linux in the rust image below, outside this image.
+build = "cargo build --release --locked"
+
+# Images, by digest (multi-platform indexes; build.sh names the platform). The toolchain images are identity-v1's
+# (scripts/eval/identity/run.sh), so each language server sees the toolchain that labelled the set.
+[images]
+rust = "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922"
+swift = "swift:6.3-noble@sha256:1038d54c80063f5cdfabc4560990c30af64b5de8ebf28161deb22ca4ad5db866"
+csharp = "ubuntu:26.04@sha256:19fcd1bf268f02b60aca3bd30bd8a6d9a11759a430e32921833e65f16d87348a"
+typescript = "node:24-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a"
