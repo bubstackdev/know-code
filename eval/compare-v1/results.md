@@ -18,18 +18,20 @@ mapping and the scoring rules are in [README.md](README.md). The mapping's freez
 | Where | One throwaway Linux container per repository and repetition (Docker on an Apple-silicon Mac, 4 CPUs and 12 GB each). The network was up while the tools indexed and cut before the first question. No speed or cost is measured or claimed. |
 | `impact` | Two hops. Serena documents no impact or transitive call, so it has `no_counterpart` for every impact question. That is reported as such, never as a miss or a win. |
 
-## Two runs
+## Three runs
 
 - **The first run** is published as it was scored.
-- **The rerun** followed an audit of the three adapters against the frozen protocol. Four deviations were fixed: three favour KnowCode and one favours Serena. The questions, the mapping and the scoring are unchanged. [README.md, "Changes after the first run"](README.md#changes-after-the-first-run) lists each fix, the tool it favours, and its effect on the first run's stored answers.
-- Both runs used the same images and the same KnowCode build, so the adapters are the only difference between them.
+- **The rerun** followed an audit of the three adapters against the frozen protocol. Four deviations were fixed: three favour KnowCode and one favours Serena.
+- **The third run** followed a second audit, after KnowCode's maintainers found that the adapter never read KnowCode's impact continuation pages (see "A correction" below). That fix favours KnowCode.
+- [README.md, "Changes after the first run"](README.md#changes-after-the-first-run) lists each fix, when and how it was found, the tool it favours, and its effect on the stored answers.
+- The questions, the mapping and the scoring are unchanged throughout. All three runs used the same images and the same KnowCode build, so the adapters are the only difference between them.
 
 Each run is two complete repetitions in fresh containers. The protocol asks for identical scores, and neither run
 met it. The differences are explained here, and the figures below are each run's first repetition:
 
 - **The first run's repetitions:** 12 of 1,128 answers differ.
   - 11 are Serena's: references that came back empty in one repetition only, 9 of them on swift-nio.
-  - 1 is KnowCode's: on jellyfin-server, an answer in one repetition became the error "no indexed file has the path". KnowCode was still building its index during the first questions; see the README's index-phase fix. KnowCode answered before its index was built; a fix that answers `indexing` instead of `not_found` in that case is in progress. KnowCode's errors are scored as errors.
+  - 1 is KnowCode's: on jellyfin-server, an answer in one repetition became the error "no indexed file has the path". KnowCode was still building its index during the first questions; see the README's index-phase fix. KnowCode answered before its index was built; a fix that answers `indexing` rather than `not_found` in that case is in progress (it is unrelated to #230). KnowCode's errors are scored as errors.
 - **The rerun's repetitions:** 20 of 1,128 answers differ, all of them Serena's on Swift (18 on swift-nio, 2 on swift-argument-parser).
   - The cause is sourcekit-lsp still indexing in the background when asked.
   - Serena documents no way to wait for it, so none was added.
@@ -61,15 +63,20 @@ Serena starts sourcekit-lsp with background indexing on, and it waits a fixed 5 
 references request. It documents no way to wait for the index, so compare-v1 adds none. Both repetitions are shown
 under each run, in "Figures that differ between the two repetitions".
 
-## A finding about KnowCode: impact stops at its default walk limit
+## A correction: KnowCode's impact pages weren't read
 
-KnowCode's `impact` walk stops at a default limit on how many symbols it visits. An answer cut there says
-`incomplete (depth)`, names the frontier it stopped at, and offers no continuation. The protocol uses each tool's
-defaults and follows only continuations, so these answers are scored as given.
+An earlier version of this page said that KnowCode's impact answers stop at a default walk limit, and gave that as
+the reason for its low impact recall. That cause is wrong. Withdrawn: a claim this page shouldn't have made.
 
-- In the rerun, 43 of KnowCode's 95 impact answers stopped there (41 of 86 in the first run).
-- Following the 24 continuations KnowCode did offer moved its impact recall only from 0.330 to 0.371.
-- The cut is in the walk, not in the paging. The tables under each run count the answers by the incomplete reasons they state.
+- **What was wrong.** The cause was the harness.
+  - A KnowCode impact answer's first page is text, and its continuation pages (`kc_more`) are JSON.
+  - The adapter read only text, so it took no rows from a continuation page and never asked for the page after it.
+  - In the first run and the rerun, every KnowCode impact answer was scored on its first 30 rows at most. The protocol says to follow up to 10 pages.
+- **What `incomplete (depth)` means.** The note says only that there are dependents past hop 2. impact is asked and labelled at exactly two hops, so the note cuts nothing in scope.
+- **How it was found.** KnowCode's maintainers read the rerun's stored answers. On jellyfin-web, for example, page 2 of one answer held 15 rows the score never saw, with 180 more rows past it.
+- **What was done.** The adapters of all three tools were audited again for continuations in every format and every question type. KnowCode's JSON pages were the only deviation found. After the fix, the third run follows every page up to the protocol's 10.
+- **How far the first two runs' figures understate.** Re-parsing the rerun's stored second pages alone adds 359 rows to 24 answers, and moves KnowCode's impact recall on the questions it answered from 0.371 to 0.456. The third run fetches every page.
+- **The figures kept.** The first run's and the rerun's KnowCode impact figures are kept below as they were scored, for the record. They understate what KnowCode's answers held. The tables under each run still count the answers by the incomplete reasons they state.
 
 ## Run: first
 
