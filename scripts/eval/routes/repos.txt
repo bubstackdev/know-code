@@ -1,0 +1,11 @@
+# routes-v1's public repositories (eval/routes-v1/README.md): name, labeller family, URL and the commit labelled,
+# pinned at their default branch's head on 2026-10-29.
+gin-examples go https://github.com/gin-gonic/examples 439005e6e50c4abc65b0fd0a57aa88ce828cc9ee
+gotify go https://github.com/gotify/server dd06dc77190696e93d3297b9a733711516fb17d9
+echox go https://github.com/labstack/echox c188a3fa29ed18e64db7ee6f9a1b21f793ec8581
+opengist go https://github.com/thomiceli/opengist 2acf3dae87f9c3d536e0a870787941bbd06d0b46
+chi go https://github.com/go-chi/chi 9f8adb1aabaa8a91180a821111d3f8e668d1c0bf
+go-routing go https://github.com/benhoyt/go-routing 56dc78ec64824ea94cd7d7a8c45d9d0e4cc088af
+urgentry go https://github.com/urgentry/urgentry ccc0ff815ec8b19d3b7c820b95bc3d539414e145
+code-for-blog go https://github.com/eliben/code-for-blog e994450beb6eda00ce5386db188ca80431359839
+flipt go https://github.com/flipt-io/flipt 4cacb7ca5032952429cb980d08aeaeffa22d97f3

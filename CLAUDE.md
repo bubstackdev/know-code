@@ -40,8 +40,10 @@ replayed against the latest release and this build with no model calls (`scripts
 The Claude Code plugin's source is `integrations/claude-code` (bundled into the binary by `knowcode setup claude`):
 `claude plugin validate integrations/claude-code --strict` and `integrations/claude-code/test-hook.sh REPO SYMBOL`.
 
-Tests commit to throwaway git repos and need a global git identity (`git config --global user.name/user.email`).
-Set `KNOWCODE_UPDATE_CHECK=0` when running the binary in tests or scripts.
+Cargo runs every test binary through `scripts/test-runner` (`.cargo/config.toml`): each gets a throwaway HOME with a
+git identity, no inherited `KNOWCODE_*_DIR` and the update check off, so tests never touch your config or index cache
+(`crates/kc-index/tests/isolation.rs` checks it). The Python checks run git with your real HOME and need a global git
+identity (`git config --global user.name/user.email`). Set `KNOWCODE_UPDATE_CHECK=0` when running the binary in scripts.
 
 Answer diffing (required for changes that can affect answers): snapshot `eval/queries.toml` with the base build and
 the change, each on a fresh cache, then `scripts/eval/run.py diff`; explain every difference in the commit/PR

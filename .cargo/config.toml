@@ -6,3 +6,9 @@
 # user). Each connection keeps its own page cache (its `cache_size`), and allocations aren't counted.
 # `kc_store::tests::sqlite_has_no_process_wide_locks` checks the build.
 LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_DEFAULT_MEMSTATUS=0"
+
+# Every binary cargo runs goes through scripts/test-runner, which gives each test binary (target/<profile>/deps/) a
+# throwaway home and leaves `cargo run` and examples alone. Tests then can't read the developer's config.toml or
+# touch their real index cache and its locks; crates/kc-index/tests/isolation.rs checks it.
+[target.'cfg(unix)']
+runner = "scripts/test-runner"
