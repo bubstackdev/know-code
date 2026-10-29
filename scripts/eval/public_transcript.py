@@ -33,7 +33,7 @@ ONE_OPS = {'impact': ('symbol', ''), 'find': ('query', ''), 'refs': ('name', 'na
            'overview': ('focus', ''),
            'areas': ('area', ''), 'notes': ('symbol', ''), 'note_add': ('symbol', ''), 'grep_ast': ('pattern', ''),
            'status': ('', ''), 'capabilities': ('of', ''), 'task': ('goal', ''), 'test_targets': ('name', ''),
-           'rules': ('rules', 'rules')}
+           'rules': ('rules', 'rules'), 'review': ('diff', '')}
 ONE_LISTS = ('targets', 'files', 'rules')
 
 

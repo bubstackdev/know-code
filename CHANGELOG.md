@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
+  `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
+  target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,
+  by file), and the rule matches it brings. Its `contracts` section (the routes, messages and tables a diff breaks in
+  other repos) is reserved and says `unsupported` until a following change fills it. Each section says whether it is whole and how to continue it.
+  `--format sarif` prints a SARIF 2.1.0 log and the MCP op answers `markdown` too, for a pull request comment. The
+  structure is versioned (1) and its row ids are stable; [answers.md](docs/answers.md#review) describes both.
+
 - `rules` covers Java and Go too, with the grammars ast-grep 0.50 ships, so their rules match what `ast-grep scan`
   matches (rules-v1: 105 of 105 matches over eight languages). A Kotlin rule is refused, with the reason: KnowCode's
   Kotlin grammar isn't ast-grep's.
