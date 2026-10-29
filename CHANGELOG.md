@@ -27,6 +27,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   those changed since the base's commit, modified in the worktree, or untracked. Every other file git reports clean and
   unchanged since that commit keeps the worktree's own stat when the base is cloned, so it isn't read. `--verify` still
   hashes every file.
+- More standard-library members through a receiver of unknown type are listed as `external_likely` rather than linked
+  to the repo's one member of the name. On identity-v1, outside labels linked drop from 2 to 0 in C#, 19 to 8 in Swift
+  and 7 to 3 in TypeScript, with no label newly wrong:
+  - Swift: `startIndex`, `endIndex`, `lowerBound`, `upperBound`, `allCases` (also through a generic parameter,
+    `Element.allCases`) and `decodeIfPresent`; and a member of a standard-library generic type written with its
+    arguments (`MemoryLayout<T>.size`, which was read as an implicit member `.size`) is the library's unless the repo
+    extends that type.
+  - C#: `GetMethod` and `QueryString`, and the standard-library names through a capitalised receiver left unknown (a
+    property a library base class may declare, `Request.QueryString`).
+  - TypeScript: `success`, `isError` and `left`.
 - TypeScript: a parameter destructured from an annotated type (`({ task }: TaskProps)`) has that type's property's type,
   and a type alias's object type (`type TaskProps = { task: TaskInfo }`) has its properties indexed as members, as an
   interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
