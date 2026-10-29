@@ -27,3 +27,8 @@ jsoup jvm https://github.com/jhy/jsoup 0c508f17a52d294aa846f4cbca312b2e65e9f94f
 # A second held-out Java set (eval/identity-v2/jvm-holdout-2): labelled after a rule found through jsoup changed the
 # resolver, and scored once against it. Pinned at its head (the 3.x branch) on 2026-10-29.
 jackson-core jvm https://github.com/FasterXML/jackson-core 73d9f696d752ced4b4881968cc462df4802b8aa4
+# A held-out Kotlin set (eval/identity-v2/kotlin-holdout): labelled after KnowCode's Kotlin resolver was developed on
+# identity-v2's Kotlin labels, and scored once against it. Pinned at its head on 2026-10-29.
+ktlint jvm https://github.com/pinterest/ktlint 5775b58d0f996e84c9c67205342f1c5620de6a4a
+# A second held-out Kotlin set (eval/identity-v2/kotlin-holdout-2), after fixes from the first: tag 1.6.0.
+exposed jvm https://github.com/JetBrains/Exposed ba50abcc256d85af9b0142f4d7474cebdf87c16b

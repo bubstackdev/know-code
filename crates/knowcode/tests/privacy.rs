@@ -191,6 +191,8 @@ const QUESTIONS: &[&[&str]] = &[
     &["search", "seal", "--files"],
     &["grep-ast", "def $F($$$): $$$", "-l", "python"],
     &["grep-ast", "class $C: $$$", "-l", "python"],
+    &["rules", "--regex", "(?i)zqx"],
+    &["rules", "--regex", "(?i)zqx", "--new-since", "HEAD~2"],
     &["deps"],
     &["routes"],
     &["tables"],

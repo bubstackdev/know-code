@@ -1,0 +1,115 @@
+# Server routes against each framework's own listing
+
+The HTTP routes a public repository's code serves, each labelled by the framework that serves it: the route listing
+the framework itself gives for the router the repository builds. Neither KnowCode nor a model labels anything. The set
+is 0.7's gate item "Routes", server routes ([plan](../../docs/plans/0.7.md#gate)):
+
+- **Precision and recall of at least 0.95 per framework**, each reported with its counts and a Wilson interval, both
+  pooled over the framework's repositories and per repository: a large application's idiom shouldn't be a whole
+  framework's verdict.
+- A framework with fewer than 50 labelled routes is reported, not gated.
+
+This file states the labelling rule. It is committed before KnowCode's routes on the set are read, and doesn't change
+to fit them.
+
+## What a route is
+
+A method and a full path the framework would dispatch to a handler, as its listing gives them: groups, mounts and
+sub-routers resolved, the path with its parameters in the framework's syntax (`:id`, `{id}`, `{id:[0-9]+}`, `*`). An
+endpoint answering every method is one route with method `*`: a net/http pattern without a method, and a handler a
+router mounts without being able to list what it serves (chi lists such a `Mount` once per method at `prefix/*`).
+Within a repository a route counts once, however many of its programs list it.
+
+A route matches a KnowCode server route row when the methods are equal (or either is `*`) and the paths are equal by
+the neutral protocol's routes ruling ([LABELING.md](../../scripts/eval/neutral/LABELING.md)): without case, leading and
+trailing slashes trimmed, and every parameter alike whatever its syntax.
+
+## Scoring
+
+Per repository, over the code the listed programs compile (a repository's other programs, such as examples that can't
+start offline, are out of the set, and so are KnowCode's routes in code only they compile):
+
+- **precision**: KnowCode's server routes there that match a label, over all of KnowCode's server routes there;
+- **recall**: labels a KnowCode server route matches, over all labels.
+
+Each label and each KnowCode route counts once, however many programs list it. Every figure is reported with its
+counts and a Wilson interval, three ways per framework: per repository; pooled over the framework's repositories; and
+the macro average of the repositories' figures, so that one large repository can't carry a framework's number. The
+gate is the pooled figure at 0.95 or more, for precision and for recall; the per-repository and macro figures are
+published beside it, and a repository below 0.95 is listed by name with its misses.
+
+**KnowCode's served routes.** No KnowCode answer lists every route a repository serves (`routes` reports the requests
+a repository makes; `context` gives a symbol's served routes). The scorer reads them through a reader that isn't a
+product path ([served_routes.rs](../../crates/kc-index/examples/served_routes.rs), an example program of `kc-index`):
+the served routes of the workspace summary that every HTTP answer reads. Two checks keep it from drifting from the
+answers: a test that its routes equal `context`'s "serves" rows on a C#, a Go and a Java/Spring fixture; and, on the
+real repositories, 50 routes per framework drawn with a fixed seed from its list, each confirmed through `context` on
+the symbol owning it, the agreement rate published beside the gate figures. Results say so.
+
+## Go
+
+| Framework | Repositories |
+| --- | --- |
+| gin | gin-gonic/examples, gotify/server |
+| echo | labstack/echox, thomiceli/opengist |
+| chi | go-chi/chi (`_examples`), benhoyt/go-routing (its chi router), flipt-io/flipt |
+| net/http (Go 1.22 method patterns) | urgentry/urgentry (its API), benhoyt/go-routing (its stdlib router), eliben/code-for-blog (`2021/go-rest-servers/stdlib-newmux`) |
+
+Pinned in [repos.txt](../../scripts/eval/routes/repos.txt) at their default branches' heads on 2026-10-29; the
+programs run are in [programs.txt](../../scripts/eval/routes/go/programs.txt). Chosen before anything was labelled,
+and changed only for repositories whose routers couldn't be listed under the rule, before any KnowCode answer was
+read: umputun/remark42 serves through go-pkgz/routegroup on net/http (not chi, and not one of the frameworks the gate
+names), so flipt-io/flipt took its place; dhax/go-base builds its router only after connecting to PostgreSQL.
+
+### Labelling
+
+[run.sh](../../scripts/eval/routes/run.sh) copies the pinned clone into a throwaway Linux container
+(`golang:1.27-bookworm`, pinned by digest), downloads the modules with the network up, disconnects (and checks that
+the container no longer resolves names), and builds and runs each program there, the urgentry harness included.
+Nothing of the repositories' is built or run on the host. The repository's code is built as it is:
+`go build -overlay` swaps in only
+
+- a copy of the toolchain's `net/http/server.go` ([patch.sh](../../scripts/eval/routes/go/patch.sh)) whose `Serve`,
+  `ListenAndServe` and `ListenAndServeTLS` hand their handler to a hook instead of serving, and whose `ServeMux`
+  reports each pattern it registers, from `(*ServeMux).register`, the code path that parses and validates it;
+- one file added to the program's main package ([dump.go.tmpl](../../scripts/eval/routes/go/dump.go.tmpl)) whose hook
+  prints the router's own listing and exits: gin's `Engine.Routes()`, echo's `Echo.Routes()` (v4) or
+  `Router().Routes()` (v5), chi's `chi.Walk`, or the patterns the served `ServeMux` registered (net/http has no
+  listing of its own; its registrations, kept as it validates them, are its own view).
+
+A served handler the dump doesn't know (a router wrapped in a function or a middleware type) can't be listed: the
+program lists nothing, and is out of the set with the code only it compiles.
+
+Every gin, echo and chi application serves through `net/http`, so one hook reaches all four. A program is run with
+the arguments it needs to start (flipt's `server`) and nothing else: no database, network or service. Two
+applications embed a front-end build that isn't committed and read a file of it when they start; an empty stand-in
+is created in the container's copy before the build (`prepare.sh` in
+[harness/gotify](../../scripts/eval/routes/go/harness/gotify/prepare.sh) and
+[harness/opengist](../../scripts/eval/routes/go/harness/opengist/prepare.sh)). The routes the Go code registers
+don't depend on those files.
+
+One router is built by a test instead: urgentry's API, by a harness test
+([harness/urgentry](../../scripts/eval/routes/go/harness/urgentry/kc_routes_test.go)) that builds it as the package's
+own tests do, over a test SQLite database. A program that can't build or start that way lists nothing, and is out of
+the set with the code only it compiles.
+
+### The set
+
+[go/labels.jsonl](go/labels.jsonl): 679 routes, one row per repository, framework, method and path, with the
+handlers and registration sites the listings give; [go/programs.json](go/programs.json): each program run, whether it
+listed its routes, and the repository directories it compiles.
+
+| Framework | Routes | Per repository |
+| --- | ---: | --- |
+| chi | 76 | go-chi/chi 52, flipt-io/flipt 13, benhoyt/go-routing 11 |
+| echo | 219 | labstack/echox 25, thomiceli/opengist 194 |
+| gin | 99 | gin-gonic/examples 49, gotify/server 50 |
+| net/http | 285 | urgentry/urgentry 267, benhoyt/go-routing 11, eliben/code-for-blog 7 |
+
+Programs listed: gin-gonic/examples 30 of 32, labstack/echox 28 of 31 (its subdomain example serves a virtual-host
+handler the dump can't list; its reverse-proxy example registers no routes, only a proxy), go-chi/chi 10 of 12 (its
+logging and router-walk examples don't serve), every other repository all of its programs.
+
+Two labelling passes, each in a container of its own, build identical labels and program records. The listings
+themselves list a route's methods in the order a map gives (chi, echo), so
+[go/listings.sha256](go/listings.sha256) holds each listing's digest over its sorted lines.
