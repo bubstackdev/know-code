@@ -4,10 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
-- `kc_more` continues a text answer as text. The pages after an `impact` or `trace` tree cut at its limit came back
-  as JSON envelopes, so a reader parsing the first page's tree lines missed every row after it; each page now lists
-  its rows in the tree's own format, and a page cut to fit `max_chars` leaves the rows it drops to the next page
-  rather than skipping them. A cursor a JSON answer handed out still gives JSON pages.
+- `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
+  tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
+  is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves
+  the rows it drops to the next page rather than skipping them. A cursor a JSON answer handed out still gives JSON
+  pages.
 - A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
   added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
   indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.
