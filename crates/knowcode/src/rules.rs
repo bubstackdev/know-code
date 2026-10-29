@@ -191,6 +191,9 @@ struct RepoPart {
     files: usize,
     base: Option<String>,
     stats: rules::RuleScanStats,
+    /// For a monitor: each match's index among the same rule's matches of the same text in its file now, by (file,
+    /// rule, start byte). A review's row id is made from it.
+    nth: std::collections::HashMap<(String, String, usize), usize>,
 }
 
 fn run_repo(root: &Path, p: &RulesParams, args: &Scope, threads: usize) -> Result<RepoPart> {
@@ -215,7 +218,7 @@ fn run_repo(root: &Path, p: &RulesParams, args: &Scope, threads: usize) -> Resul
         let files: Vec<ScanFile> = listed.into_iter().map(|path| ScanFile { repo: 0, path }).collect();
         let (hits, stats) = scan(root, &files, &set, threads, p.max_matches);
         let n = files.len();
-        return Ok(RepoPart { opened: o, hits, files: n, base: None, stats });
+        return Ok(RepoPart { opened: o, hits, files: n, base: None, stats, nth: Default::default() });
     };
     // A monitor reads only the files that differ from the base, in both versions: every other file's matches are
     // the base's too.
@@ -243,13 +246,22 @@ fn run_repo(root: &Path, p: &RulesParams, args: &Scope, threads: usize) -> Resul
     for (old, src) in rules::base_sources(root, &was)? {
         before.extend(set.matches(&old, &src));
     }
+    let mut nth = std::collections::HashMap::new();
+    let mut counted: std::collections::HashMap<(&str, &str, &str), usize> = std::collections::HashMap::new();
+    let mut in_order: Vec<&RuleHit> = now.iter().collect();
+    in_order.sort_by_key(|h| (&h.file, h.start));
+    for h in in_order {
+        let k = counted.entry((h.file.as_str(), h.rule.as_str(), h.matched.as_str())).or_default();
+        nth.insert((h.file.clone(), h.rule.clone(), h.start), *k);
+        *k += 1;
+    }
     let mut hits = rules::new_matches(now, &before);
     if hits.len() > p.max_matches {
         hits.truncate(p.max_matches);
         stats.capped = true;
     }
     hits.sort_by(|a, b| (&a.file, a.start, a.end, &a.rule).cmp(&(&b.file, b.start, b.end, &b.rule)));
-    Ok(RepoPart { opened: o, hits, files: now_files.len(), base: Some(base), stats })
+    Ok(RepoPart { opened: o, hits, files: now_files.len(), base: Some(base), stats, nth })
 }
 
 pub fn rules(p: &RulesParams, args: &Scope) -> Result<Out<RulesData>> {
@@ -328,6 +340,69 @@ pub fn rules(p: &RulesParams, args: &Scope) -> Result<Out<RulesData>> {
     }
     finish(&mut env);
     Ok(Out { env, data: RulesData { hits: page, total, multi, roots, next_offset } })
+}
+
+// `review` calls these to fill its `rules` rows; its wiring comes with kc-w3-review's review op.
+/// A rule match a review lists: what `review`'s `rules` rows hold, and the matched text and occurrence index its row
+/// id is made from (`review::rule_id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub struct ReviewMatch {
+    pub rule: String,
+    pub severity: &'static str,
+    pub message: String,
+    pub file: String,
+    pub line: u32,
+    pub end: u32,
+    /// The whole matched text.
+    pub matched: String,
+    /// The match's index among all the same rule's matches of the same text in its file now (not only the new ones), in
+    /// file order: it doesn't move when the file changes elsewhere.
+    pub n: usize,
+}
+
+/// What a review of the diff against `base` says about the repo's own rules: the matches the change brings, as a
+/// monitor finds them (`rules --new-since base`, over the config's `rules.paths`), and whether the list is whole and
+/// why not. No rule configured is an empty, whole list: a review runs rules only where the repo asks for them.
+#[allow(dead_code)]
+pub struct ReviewRules {
+    pub matches: Vec<ReviewMatch>,
+    pub complete: bool,
+    /// Reason codes (`capped`, `failed`, …) when not whole.
+    pub incomplete: Vec<&'static str>,
+}
+
+/// The rule matches a review of the repo at `root` against `base` lists (see [`ReviewRules`]).
+#[allow(dead_code)]
+pub fn for_review(root: &Path, base: &str, no_sync: bool, max_matches: usize) -> Result<ReviewRules> {
+    if kc_index::config::load()?.config.rules.is_empty() {
+        return Ok(ReviewRules { matches: Vec::new(), complete: true, incomplete: Vec::new() });
+    }
+    let p = RulesParams {
+        paths: Vec::new(),
+        inline: None,
+        regex: None,
+        new_since: Some(base.to_string()),
+        globs: Vec::new(),
+        limit: usize::MAX,
+        offset: 0,
+        max_matches,
+    };
+    let scope = Scope { repos: vec![root.to_path_buf()], no_sync };
+    let part = run_repo(root, &p, &scope, kc_index::SyncOptions::default().threads)?;
+    let mut matches = Vec::new();
+    for h in part.hits {
+        let n = part.nth.get(&(h.file.clone(), h.rule.clone(), h.start)).copied().unwrap_or_default();
+        matches.push(ReviewMatch { rule: h.rule, severity: h.severity, message: h.message, file: h.file, line: h.line, end: h.end_line, matched: h.matched, n });
+    }
+    let mut incomplete = Vec::new();
+    if part.stats.capped {
+        incomplete.push("capped");
+    }
+    if !part.stats.failed.is_empty() {
+        incomplete.push("failed");
+    }
+    Ok(ReviewRules { matches, complete: incomplete.is_empty(), incomplete })
 }
 
 /// The text form: the number of matches, then a line per match.
@@ -412,6 +487,27 @@ mod tests {
         std::fs::write(root.join("src/b.ts"), "// TODO: one\ng();\n// TODO: one\n// TODO: two\n").unwrap();
         let got = rows(&rules(&p(Some("v1")), &scope).unwrap().env);
         assert_eq!(got.iter().map(|r| (r.0.as_str(), r.1)).collect::<Vec<_>>(), [("src/b.ts", 3), ("src/b.ts", 4)]);
+    }
+
+    #[test]
+    fn a_review_lists_the_configured_rules_new_matches_with_their_occurrence() {
+        let cache = test_cache();
+        let base = cache.dir("rules-review");
+        let root = repo(&base, "shop", &[("lint/r.yml", RULE), ("src/A.cs", "class A\n{\n    int F() => G().Result;\n}\n")]);
+        commit_and_tag(&root, "v1");
+        // No rule configured: an empty, whole list.
+        let none = for_review(&root, "v1", false, 1000).unwrap();
+        assert!(none.matches.is_empty() && none.complete);
+        let config = std::env::var("KNOWCODE_CONFIG_DIR").map(PathBuf::from).unwrap().join("config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        std::fs::write(&config, format!("[rules]\npaths = [\"lint\"]\n\n{text}")).unwrap();
+        // A second copy of the same text, after the first: its index is 1.
+        std::fs::write(root.join("src/A.cs"), "class A\n{\n    int F() => G().Result;\n    int H() => G().Result;\n}\n").unwrap();
+        let r = for_review(&root, "v1", false, 1000).unwrap();
+        assert!(r.complete);
+        assert_eq!(r.matches.len(), 1, "{:?}", r.matches);
+        assert_eq!((r.matches[0].line, r.matches[0].n, r.matches[0].matched.as_str()), (4, 1, "G().Result"));
+        std::fs::write(&config, text).unwrap();
     }
 
     #[test]
