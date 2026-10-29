@@ -87,8 +87,9 @@ item's evidence is the controller method the request lands in.
 
 ## Scoring
 
-[route_links.py](../../scripts/eval/route_links.py) scores KnowCode's links from each site to server handlers. A link
-matches an item when its handler is in the item's file within 3 lines of its evidence, or, where an answer gives the
+KnowCode's links from each site to server handlers are scored as below. The scorer joins
+[route_links.py](../../scripts/eval/route_links.py) with the first change that links Spring clients, so the rule here
+fixes it in advance. A link matches an item when its handler is in the item's file within 3 lines of its evidence, or, where an answer gives the
 route, when the routes are equal by LABELING.md's Routes ruling (case ignored, leading and trailing slashes dropped,
 `{param}` and `:param` alike).
 

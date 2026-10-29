@@ -2,16 +2,21 @@
 """route-links-v1: client call sites to label, and KnowCode's links scored against the labels.
 
     route_links.py sites CLONES REPOS.txt > sites.jsonl
+    route_links.py seeded sites.jsonl > second-ids.txt
 
 `sites` lists every client call site in the pinned clones by the search eval/route-links-v1/README.md states: one row
 per request-API call (TypeScript and JavaScript, Java and Kotlin), and one per method of a `@FeignClient` or
 `@HttpExchange` interface. Lines are counted with LF, CR LF or a lone CR ending a line, and two sites on one line are
 told apart as `#2` and on. Test code is left out. A labeller reads each site and writes its label by hand.
+
+`seeded` lists the sites labelled a second time: the SECOND share of them, the lowest by the SHA-256 of their id.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -41,6 +46,7 @@ DECLARATIVE_CLIENT = re.compile(r'@(?:FeignClient|HttpExchange)\b')
 MAPPING = re.compile(r'@(?:RequestMapping|GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|'
                      r'HttpExchange|GetExchange|PostExchange|PutExchange|PatchExchange|DeleteExchange)\b')
 METHOD_NAME = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
+SECOND = 0.2
 SCRIPTS = ('.ts', '.tsx', '.js', '.jsx')
 JVM = ('.java', '.kt')
 TEST = re.compile(r'(^|/)(test|tests|__tests__|e2e|cypress)(/|$)|\.(spec|test)\.[jt]sx?$|Test\.(java|kt)$')
@@ -101,13 +107,25 @@ def sites(clone, repo):
     return out
 
 
+def seeded(ids):
+    """The ids labelled twice: ceil(SECOND × n) of them, lowest by SHA-256, so the choice depends on the ids alone."""
+    ids = sorted(set(ids))
+    return sorted(sorted(ids, key=lambda i: hashlib.sha256(i.encode()).hexdigest())[:math.ceil(SECOND * len(ids))])
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
     s = sub.add_parser('sites')
     s.add_argument('clones')
     s.add_argument('repos')
+    d = sub.add_parser('seeded')
+    d.add_argument('sites')
     args = ap.parse_args()
+    if args.cmd == 'seeded':
+        ids = [json.loads(line)['id'] for line in Path(args.sites).read_text().splitlines() if line.strip()]
+        print('\n'.join(seeded(ids)))
+        return
     if args.cmd == 'sites':
         for line in Path(args.repos).read_text().splitlines():
             if line.strip() and not line.startswith('#'):
