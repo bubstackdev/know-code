@@ -1,0 +1,94 @@
+{
+ "autofac/impact/1": [
+  332,
+  4
+ ],
+ "autofac/impact/10+": [
+  67,
+  4
+ ],
+ "autofac/impact/2-9": [
+  400,
+  4
+ ],
+ "hono/impact/1": [
+  245,
+  4
+ ],
+ "hono/impact/2-9": [
+  154,
+  4
+ ],
+ "jellyfin-server/impact/1": [
+  2398,
+  4
+ ],
+ "jellyfin-server/impact/10+": [
+  195,
+  4
+ ],
+ "jellyfin-server/impact/2-9": [
+  1927,
+  4
+ ],
+ "jellyfin-web/impact/1": [
+  670,
+  4
+ ],
+ "jellyfin-web/impact/10+": [
+  7,
+  4
+ ],
+ "jellyfin-web/impact/2-9": [
+  182,
+  4
+ ],
+ "serilog/impact/1": [
+  128,
+  4
+ ],
+ "serilog/impact/10+": [
+  41,
+  4
+ ],
+ "serilog/impact/2-9": [
+  166,
+  4
+ ],
+ "swift-argument-parser/impact/1": [
+  123,
+  4
+ ],
+ "swift-argument-parser/impact/10+": [
+  18,
+  4
+ ],
+ "swift-argument-parser/impact/2-9": [
+  116,
+  4
+ ],
+ "swift-collections/impact/1": [
+  699,
+  4
+ ],
+ "swift-collections/impact/10+": [
+  122,
+  4
+ ],
+ "swift-collections/impact/2-9": [
+  1059,
+  4
+ ],
+ "swift-nio/impact/1": [
+  1452,
+  4
+ ],
+ "swift-nio/impact/10+": [
+  392,
+  4
+ ],
+ "swift-nio/impact/2-9": [
+  1473,
+  4
+ ]
+}
