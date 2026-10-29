@@ -1,0 +1,5 @@
+# A plain number is a number, not a pattern string, to an untagged field.
+id: number
+language: TypeScript
+rule:
+  pattern: 42

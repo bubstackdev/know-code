@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+ast-grep-config.workspace = true
 ast-grep-core.workspace = true
 blake3.workspace = true
 dirs.workspace = true

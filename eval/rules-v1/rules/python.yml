@@ -1,0 +1,71 @@
+id: py-no-print
+language: Python
+message: print call
+rule:
+  pattern: print($$$)
+---
+id: py-bare-except
+language: python
+severity: error
+message: bare except
+rule:
+  kind: except_clause
+  not:
+    has:
+      kind: identifier
+      stopBy: neighbor
+  has:
+    kind: block
+---
+id: py-mutable-default
+language: py
+severity: warning
+message: mutable default for $P
+rule:
+  kind: default_parameter
+  has:
+    field: name
+    pattern: $P
+  any:
+    - has: { field: value, kind: list }
+    - has: { field: value, kind: dictionary }
+---
+id: py-shell-true
+language: Python
+severity: error
+message: shell=True
+rule:
+  pattern: subprocess.$F($$$, shell=True)
+---
+id: py-eq-none
+language: Python
+message: comparison to None with ==
+rule:
+  pattern: $X == None
+---
+id: py-eval
+language: Python
+severity: error
+message: eval call
+rule:
+  pattern: eval($$$)
+  inside:
+    kind: function_definition
+    stopBy: end
+---
+id: py-print-in-loop
+language: Python
+message: print inside a for loop
+rule:
+  pattern: print($$$)
+  inside:
+    kind: for_statement
+    stopBy: end
+ignores:
+  - "**/billing.py"
+---
+id: py-len-zero
+language: Python
+message: compare len to zero
+rule:
+  pattern: len($X) == 0

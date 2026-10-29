@@ -46,6 +46,7 @@ pub mod sql;
 pub mod test_select;
 pub mod test_targets;
 pub mod textdocs;
+pub mod rules;
 pub mod structural;
 pub mod terraform;
 pub mod vitals;
