@@ -214,6 +214,7 @@ Each addition is committed before any run asks it, and each is its own pull requ
    - Continuations are followed as for every question: KnowCode's cursor, and codebase-memory-mcp's `semantic_has_more` with `semantic_offset`.
    - Scoring is tasks-v1's. A changed file or test is named when its repository-relative path appears in the answer's text, with the pages joined in order. It counts within a budget of B bytes when its first mention ends within the first B bytes. Recall of the changed files, and separately of the changed tests, is given over the whole answer and within 2,000, 4,000 and 8,000 bytes, with counts and Wilson intervals.
    - Every changed file or test an answer doesn't name is listed with the misses.
+   - These trees aren't restored. The restore exists only for Serena's language servers, and Serena isn't started here; KnowCode and codebase-memory-mcp ignore restored dependencies. The procedure changed before any answer was read: the first attempt stopped on 10 C# trees, whose parents pin a .NET 5 SDK the image doesn't have. Every tree is indexed as checked out, and the trees that had finished were run again under the same rule.
 
 ## Changes after the first run
 
