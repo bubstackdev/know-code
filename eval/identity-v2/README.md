@@ -197,6 +197,15 @@ repositories were built twice, by two separate runs of run.sh, and the two build
 references, targets and origins. The committed enumerations' digests are of label.py's output over the second run's
 SCIP indexes.
 
+**Corrected after the first scoring run.** For 7 Java labels, scip-java marks the declared name's occurrence inside
+the declaration's own annotation as its definition (`@JsonAdapter(A.Adapter.class)` above `class A`, a field under
+`@Value("…")`), so their target was the annotation's line, not the name token's that the rule names. The first run
+over the set, with KnowCode's extraction and no Java resolver, judged those 7 rows wrong though KnowCode named the
+declaration the toolchain binds. label.py now takes a definition on a line that starts with an annotation to the next
+line, within 10, with the name as a word outside annotations. Re-run over the same SCIP indexes, it moved exactly
+those 7 labels' targets (gson's `A` ×3, `WithJsonDeserializer` and `DummyClass` ×2, spring-petclinic's `port`), each to
+the following line; the draw and every other label are unchanged.
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:

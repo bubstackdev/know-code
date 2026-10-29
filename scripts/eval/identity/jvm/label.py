@@ -151,7 +151,7 @@ def enumerate_repo(repo, src, index):
                 e = defs.setdefault(o['symbol'], dict(locs=set(), generated=True))
                 if not gen:
                     e['generated'] = False
-                    e['locs'].add((rel, o['range'][0] + 1))
+                    e['locs'].add((rel, name_line(lines_of(rel), o['range'][0] + 1, descriptor_of(o['symbol'])[0])))
         if not gen:
             docs.append((rel, lang, d))
 
@@ -277,6 +277,22 @@ def enumerate_repo(repo, src, index):
                 row.update(inside=False, locs=[], origin=origin(symbol))
             out.append(row)
     return out
+
+
+ANNOTATIONS = re.compile(r'^\s*(?:@\w+(?:\.\w+)*(?:\([^)]*\))?\s*)+')
+
+
+def name_line(lines, line, name):
+    """The line of a declaration's name token. scip-java puts the definition of an annotated declaration at the
+    name's occurrence in its own annotation (`@JsonAdapter(A.Adapter.class)` above `class A`): from a line that starts
+    with an annotation, the next line, within 10, with the name as a word outside annotations."""
+    if not name or line > len(lines) or not lines[line - 1].lstrip().startswith('@'):
+        return line
+    word = re.compile(r'(?<![\w$])' + re.escape(name) + r'(?![\w$])')
+    for n in range(line, min(line + 10, len(lines)) + 1):
+        if word.search(ANNOTATIONS.sub('', lines[n - 1], count=1)):
+            return n
+    return line
 
 
 TYPE_DECLARATION = re.compile(r'\b(?:class|interface|object|enum|record|typealias)\s+([A-Za-z_$][A-Za-z0-9_$]*)')

@@ -76,6 +76,19 @@ installations. It covers daily coordination, opt-out, shell receipt ownership, c
 rollback, and cancellation of an installer's own descendants. A real cross-version update remains a release
 acceptance check once two reviewed public releases exist.
 
+## Linux portability
+
+The Linux archives are built in the manylinux_2_28 image (AlmaLinux 8, glibc 2.28) that `dist-workspace.toml` pins by
+digest for each Linux target, so they need no glibc newer than 2.28. Built on the runner's Ubuntu 24.04 instead, Rust's
+standard library links symbols from glibc 2.39 and the binary won't start on Debian 12, RHEL 8 or Ubuntu 22.04.
+
+Before `host` publishes anything, the release runs `.github/workflows/linux-compat.yml` on each Linux archive, on its
+own architecture: `scripts/check-glibc.py` fails on any symbol version newer than 2.28, and
+`scripts/check-linux-compat.sh` runs the binary on Rocky Linux 8, Debian 10, Ubuntu 20.04 and Debian 12 (its version,
+then a tiny index and two queries). CI's `linux-compat` job does the same with a debug build in the same image on every
+pull request that changes code. To move to a newer manylinux image, update both digests in `dist-workspace.toml`; to
+raise the glibc floor, change it in both scripts and in the install docs.
+
 ## Homebrew prerequisites
 
 A release publishes the formula `knowcode.rb` to the public tap repository

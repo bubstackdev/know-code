@@ -142,7 +142,8 @@ fn a_worktree_starts_from_the_base_and_holds_what_a_cold_index_holds() {
     // Published once: the same commit again is no new base.
     assert!(kc_index::base::publish(&main).unwrap().is_none());
 
-    // A worktree with a file changed, one added and one deleted indexes those only.
+    // A worktree with a file changed, one added and one deleted indexes those only, and hashes no other file: git says
+    // the rest are clean, at the base's commit.
     let wt = worktree(&main, "wt1");
     write(&wt, "src/s3.ts", "export class Store3 { load(): number { return 33; } save(): void {} }\n");
     write(&wt, "src/extra.ts", "export class Extra { run(): void { new Store3().save(); } }\n");
@@ -150,7 +151,7 @@ fn a_worktree_starts_from_the_base_and_holds_what_a_cold_index_holds() {
     let mut store = kc_index::open(&wt).unwrap();
     assert_eq!(store.meta(kc_index::base::META_FROM).unwrap().as_deref(), published.file_name().and_then(|n| n.to_str()));
     let report = sync(&wt, &mut store, &opts()).unwrap();
-    assert_eq!((report.parsed, report.removed, report.touched), (2, 1, 28), "{report:?}");
+    assert_eq!((report.parsed, report.removed, report.touched), (2, 1, 0), "{report:?}");
     assert_eq!(store.meta("root").unwrap().as_deref(), Some(wt.to_string_lossy().as_ref()));
     assert_eq!(facts(&store), facts(&cold(&wt, "wt1")));
     let (hits, _) = query::find(store.conn(), "save", None, 5).unwrap();
@@ -218,6 +219,31 @@ fn a_clone_hashes_every_file_whatever_its_stat() {
     let report = sync(&wt, &mut store, &opts()).unwrap();
     assert_eq!(report.parsed, 1, "{report:?}");
     assert_eq!(facts(&store), facts(&cold(&wt, "cart-wt1")));
+}
+
+#[test]
+fn a_clone_hashes_what_changed_since_the_base_commit_whatever_its_stat() {
+    let _turn = turn();
+    let main = repo("ledger", 12);
+    drop(indexed(&main));
+    kc_index::base::publish(&main).unwrap().expect("published");
+    // A worktree whose HEAD changed a file since the base's commit, the same size and with the mtime the base recorded
+    // for it, and clean: only `git diff` between the commits says it differs.
+    let wt = worktree(&main, "wt1");
+    let recorded = std::fs::metadata(main.join("src/s5.ts")).unwrap().modified().unwrap();
+    write(&wt, "src/s5.ts", &std::fs::read_to_string(main.join("src/s5.ts")).unwrap().replace("Store5", "Store9"));
+    git(&wt, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "rename"]);
+    std::fs::File::options().write(true).open(wt.join("src/s5.ts")).unwrap().set_modified(recorded).unwrap();
+    assert_eq!(std::fs::metadata(wt.join("src/s5.ts")).unwrap().len(), std::fs::metadata(main.join("src/s5.ts")).unwrap().len());
+    let mut store = kc_index::open(&wt).unwrap();
+    assert!(store.meta(kc_index::base::META_FROM).unwrap().is_some());
+    let report = sync(&wt, &mut store, &opts()).unwrap();
+    // That file is hashed and extracted; the other eleven are taken as the base's.
+    assert_eq!((report.parsed, report.touched), (1, 0), "{report:?}");
+    assert_eq!(facts(&store), facts(&cold(&wt, "ledger-wt1")));
+    // `--verify` hashes every file: none differs.
+    let verified = sync(&wt, &mut store, &SyncOptions { verify: true, ..opts() }).unwrap();
+    assert_eq!(verified.parsed, 0, "{verified:?}");
 }
 
 #[test]
