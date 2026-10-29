@@ -246,6 +246,26 @@ KnowCode answer on it was read, and scored once.
 | Java | member | 20 | 40 | 40 | 10 | 40 | 150 |
 | Java | type | 20 | 40 | 0 | 10 | 0 | 70 |
 
+### Held out: ktlint (Kotlin)
+
+KnowCode's Kotlin resolver was developed against the Kotlin labels above, so a held-out set tests it fresh:
+[pinterest/ktlint](https://github.com/pinterest/ktlint), Kotlin only, pinned at its head on 2026-10-29, labelled,
+drawn and committed in [kotlin-holdout/](kotlin-holdout/labels.jsonl) the same way before any KnowCode answer on it was
+read, and scored once. Its build needs a Java 26 runtime and turns on Gradle's configuration cache, which scip-java's
+Gradle plugin doesn't support, so it is built on JDK 26 with `--no-configuration-cache`
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Its `build-logic` sources aren't compiled by the
+build and give no references.
+
+500 references (381 inside, 119 outside), drawn from 39727 Kotlin references by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 0 | 9 | 11 | 0 | 0 | 20 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 1 | 10 | 9 | 80 |
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:

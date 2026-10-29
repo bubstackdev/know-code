@@ -16,3 +16,4 @@ kotlinpoet 21 gradle -- clean scipPrintDependencies scipCompileAll
 spring-petclinic-kotlin 21 gradle -- clean scipPrintDependencies scipCompileAll
 jsoup 17 maven -- --batch-mode clean verify -DskipTests
 jackson-core 17 maven -- --batch-mode clean verify -DskipTests
+ktlint 26 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
