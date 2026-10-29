@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `rules` covers Java and Go too, with the grammars ast-grep 0.50 ships, so their rules match what `ast-grep scan`
+  matches (rules-v1: 105 of 105 matches over eight languages). A Kotlin rule is refused, with the reason: KnowCode's
+  Kotlin grammar isn't ast-grep's.
+
 - `knowcode rules` runs a repo's own ast-grep rule files and prints their matches, each with its rule's severity and
   message. Rules are read with the library the ast-grep command line uses (vendored, its YAML read by yaml-rust2), so
   a rule matches what `ast-grep scan` matches on the same files: on a fixture of 46 rules in six languages, all 89

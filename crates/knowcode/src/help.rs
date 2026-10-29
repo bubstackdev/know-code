@@ -838,8 +838,8 @@ needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; 
 `utils`, `transform`, `files`, `ignores`) over its files and reports each match: `rule`, `severity`, `file`, `line`,
 `column`, `end_line`, `end_column`, `message` (metavariables filled in) and `text` (its first line). A rule matches what
 the ast-grep command line (0.50) matches on the same files, `ast-grep-ignore` comments included. Read only: a rule with
-`fix` is refused. Languages: CSharp, TypeScript, Tsx, Python, Rust, Swift; a JavaScript rule is refused, since
-KnowCode parses JavaScript with another grammar than ast-grep's.
+`fix` is refused. Languages: CSharp, TypeScript, Tsx, Python, Rust, Swift, Java, Go; a JavaScript or Kotlin rule is
+refused, since KnowCode parses those with other grammars than ast-grep's.
 
 `rules` names rule files or directories of them, relative to the repo's root (inside it); none: the config's
 `rules.paths`. `rule` takes rules written inline. A rule file over 2 MiB, or whose YAML aliases stand for over 100,000
