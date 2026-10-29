@@ -20,6 +20,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
     not a repo's `async` overload). `await` covers every call to its right in its statement (`try await a.f().g()`).
   - Swift: a declaration whose attributes push its signature past the length cap shows the signature from after the
     attributes, so its parameters and effects aren't cut off.
+- A new worktree started from a shared base hashes only the files that may differ from the base on its first sync:
+  those changed since the base's commit, modified in the worktree, or untracked. Every other file git reports clean and
+  unchanged since that commit keeps the worktree's own stat when the base is cloned, so it isn't read. `--verify` still
+  hashes every file.
 
 ## 0.6.1 (2026-10-28)
 
