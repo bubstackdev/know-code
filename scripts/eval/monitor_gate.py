@@ -149,7 +149,10 @@ def run(knowcode, clone, rules, work, labels, regex=None, glob=None):
     tree = work / "tree"
     if not tree.exists():
         git(clone, "worktree", "add", "--detach", str(tree), labels[0]["commit"])
-    env = dict(os.environ, KNOWCODE_UPDATE_CHECK="0", KNOWCODE_CACHE_DIR=str(work / "kc/cache"),
+    # Every directory KnowCode reads is the run's own, HOME included: nothing of the user's (config, workspace roots,
+    # notes) reaches the replay.
+    (work / "kc/home").mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, KNOWCODE_UPDATE_CHECK="0", HOME=str(work / "kc/home"), KNOWCODE_CACHE_DIR=str(work / "kc/cache"),
                KNOWCODE_CONFIG_DIR=str(work / "kc/config"), KNOWCODE_DATA_DIR=str(work / "kc/data"))
     results = []
     for lab in labels:
