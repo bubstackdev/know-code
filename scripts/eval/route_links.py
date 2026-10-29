@@ -5,7 +5,7 @@
     route_links.py seeded sites.jsonl > second-ids.txt
 
 `sites` lists every client call site in the pinned clones by the search eval/route-links-v1/README.md states: one row
-per request-API call (TypeScript and JavaScript, Java and Kotlin), and one per method of a `@FeignClient` or
+per request-API call (TypeScript and JavaScript, Java and Kotlin, Go), and one per method of a `@FeignClient` or
 `@HttpExchange` interface. Lines are counted with LF, CR LF or a lone CR ending a line, and two sites on one line are
 told apart as `#2` and on. Test code is left out. A labeller reads each site and writes its label by hand.
 
@@ -42,6 +42,10 @@ JVM_REQUEST = re.compile(
     r'\.uri\('
     r'|\.(?:getForObject|getForEntity|postForObject|postForEntity|postForLocation|patchForObject|exchange)\('
     r'|(?i:resttemplate)\w*\.(?:put|delete|execute)\(')
+# Go: net/http's request functions, and `Do` on an http.Client (a value named for one: `client`, `c.HTTPClient`).
+GO_REQUEST = re.compile(
+    r'(?<![\w.])http\.(?:Get|Post|PostForm|Head|NewRequest|NewRequestWithContext)\('
+    r'|(?<![\w])(?:http\.DefaultClient|\w*(?i:client))\.Do\(')
 DECLARATIVE_CLIENT = re.compile(r'@(?:FeignClient|HttpExchange)\b')
 MAPPING = re.compile(r'@(?:RequestMapping|GetMapping|PostMapping|PutMapping|PatchMapping|DeleteMapping|'
                      r'HttpExchange|GetExchange|PostExchange|PutExchange|PatchExchange|DeleteExchange)\b')
@@ -49,7 +53,8 @@ METHOD_NAME = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
 SECOND = 0.2
 SCRIPTS = ('.ts', '.tsx', '.js', '.jsx')
 JVM = ('.java', '.kt')
-TEST = re.compile(r'(^|/)(test|tests|__tests__|e2e|cypress)(/|$)|\.(spec|test)\.[jt]sx?$|Test\.(java|kt)$')
+GO = ('.go',)
+TEST = re.compile(r'(^|/)(test|tests|__tests__|e2e|cypress)(/|$)|\.(spec|test)\.[jt]sx?$|Test\.(java|kt)$|_test\.go$')
 SKIP = re.compile(r'(^|/)(node_modules|vendor|lib|dist|build|target)(/|$)|\.min\.js$')
 
 
@@ -83,14 +88,14 @@ def sites(clone, repo):
                            text=True).stdout.split('\0')
     out = []
     for rel in sorted(f for f in files if f):
-        if TEST.search(rel) or SKIP.search(rel) or not rel.endswith(SCRIPTS + JVM) \
+        if TEST.search(rel) or SKIP.search(rel) or not rel.endswith(SCRIPTS + JVM + GO) \
                 or rel.startswith(EXCLUDED.get(repo, ())):
             continue
         text = lines(Path(clone)/rel)
         if rel.endswith(JVM) and any(DECLARATIVE_CLIENT.search(t) for t in text):
             found = declarative_sites(rel, text)
         else:
-            pattern = SCRIPT_REQUEST if rel.endswith(SCRIPTS) else JVM_REQUEST
+            pattern = SCRIPT_REQUEST if rel.endswith(SCRIPTS) else GO_REQUEST if rel.endswith(GO) else JVM_REQUEST
             found = [(n, m.start() + 1, m.group(0), t.strip()) for n, t in enumerate(text, 1)
                      for m in pattern.finditer(t)
                      if not comment(t, m.start()) and not DECLARED.search(t[:m.start()])]
