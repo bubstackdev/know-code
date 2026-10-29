@@ -8,9 +8,14 @@
 //! - `contracts`: the routes, messages and tables the diff changes, with the consumers in other repos it breaks;
 //! - `unsettled`: what the index can't settle: edges left as ambiguous, constructs not read, content withheld.
 //!
-//! Each section says whether it is whole and gives the call that continues it (`sections`); a cut section is an
-//! `incomplete` entry too. Rows are objects with a file and a line, so a renderer (markdown, SARIF) places them
-//! without parsing text. The dependents and the tests are walked on one symbol graph (see
+//! Each section says whether it is whole, which reasons cut it, and the call that continues it (`sections`); a cut
+//! section is an `incomplete` entry too. `rules` (W4's rule and monitor matches) and `walkthrough` are reserved: empty
+//! and null until they are filled.
+//!
+//! The structure is version 1 (`version`), frozen for the renderers built on it (markdown, SARIF, the CI action):
+//! every row has a stable `id` and a `file`, with 1-based lines where there are any, and `repo` only when it isn't the
+//! reviewed repo (a contract's consumer always has it). An `id` is FNV-1a 64 of the row's kind, repo, file, symbol and
+//! contract ([`row_id`]): never its line, order or page, so a comment a CI job posted can be found again. The dependents and the tests are walked on one symbol graph (see
 //! [`crate::walk::Graph::begin_walk`]), as `task` walks them.
 
 use std::collections::{HashMap, HashSet};
@@ -44,6 +49,19 @@ const SYMBOLS_PER_FILE: usize = 6;
 const ROWS_PER_FILE: usize = 3;
 /// The dependents walk: one hop, at most this many symbols.
 const WALK_LIMIT: usize = 60;
+/// The answer's structure, for the renderers built on it: a change to it is a new version.
+pub const VERSION: u32 = 1;
+
+/// A row's stable id: FNV-1a 64 of `kind\0repo\0file\0symbol\0contract`, as 16 hex digits. None of them moves
+/// when a line is added above the row, or the rows are paged.
+pub fn row_id(kind: &str, repo: &str, file: &str, symbol: &str, contract: &str) -> String {
+    let key = [kind, repo, file, symbol, contract].join("\0");
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in key.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
 
 /// The reasons a sub-answer gives that the review can't settle: they go to `unsettled`, said once each.
 const UNSETTLED: &[Reason] = &[Reason::Policy, Reason::Unsupported, Reason::Withheld, Reason::MissingRepo, Reason::Failed, Reason::Stale];
@@ -97,7 +115,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         } else {
             "modified"
         };
-        let mut row = json!({ "file": c.file, "change": change });
+        let mut row = json!({ "id": row_id("change", "", &c.file, "", ""), "file": c.file, "change": change });
         if let Some(from) = &c.renamed_from {
             row["renamed_from"] = json!(from);
         }
@@ -136,7 +154,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
             for t in out.data.iter() {
                 tests_total += t.selection.selected.len() + t.selection.left_out.len();
                 for pick in t.selection.selected.iter().take(p.tests) {
-                    test_rows.push(json!({ "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 }));
+                    test_rows.push(json!({ "id": row_id("test", "", &pick.file, "", ""), "file": pick.file, "confidence": (pick.confidence * 100.0).round() / 100.0 }));
                 }
             }
             for i in incomplete_of(&out.env).into_iter().filter(|i| UNSETTLED.contains(&i.reason)) {
@@ -152,12 +170,12 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     let mut missed_seen: HashSet<&str> = HashSet::new();
     for m in &r.missed_partners {
         if missed_seen.insert(&m.file) {
-            missed.push(json!({ "file": m.file, "with": m.with, "support": m.support, "commits": m.commits }));
+            missed.push(json!({ "id": row_id("missed", "", &m.file, "", ""), "file": m.file, "with": m.with, "support": m.support, "commits": m.commits }));
         }
     }
     for c in r.coupled.iter().filter(|c| !changed.contains(&c.file)) {
         if missed_seen.insert(&c.file) {
-            missed.push(json!({ "file": c.file, "with": c.with, "support": c.support, "commits": c.commits }));
+            missed.push(json!({ "id": row_id("missed", "", &c.file, "", ""), "file": c.file, "with": c.with, "support": c.support, "commits": c.commits }));
         }
     }
     let missed_total = missed.len();
@@ -183,7 +201,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         if a.repo.is_none() && changed.contains(&a.file) {
             continue;
         }
-        let mut row = json!({ "line": a.line, "symbol": a.qualified, "via": a.via, "edge": a.edge, "confidence": a.confidence, "hop": a.hop });
+        let mut row = json!({ "line": a.line, "symbol": a.qualified, "via": a.via, "edge": a.edge, "confidence": a.confidence, "hop": a.hop, "class": a.class });
         if !a.also.is_empty() {
             row["also"] = json!(a.also);
         }
@@ -191,7 +209,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     }
     for h in r.cross_repo.iter().filter(|h| !kc_store::is_test_path(&h.file)) {
         let symbol = h.from.as_ref().map(|f| f.container.as_ref().map_or(f.name.clone(), |c| format!("{c}.{}", f.name))).unwrap_or_default();
-        put(h.repo.clone(), &h.file, json!({ "line": h.line, "symbol": symbol, "edge": h.kind, "confidence": h.confidence, "hop": 1 }));
+        put(h.repo.clone(), &h.file, json!({ "line": h.line, "symbol": symbol, "edge": h.kind, "confidence": h.confidence, "hop": 1, "class": "direct" }));
     }
     // This repo's files first, as the walk ranked them; then other repos'.
     dep_files.sort_by_key(|(repo, ..)| repo.is_some());
@@ -201,7 +219,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         .into_iter()
         .take(p.dependents)
         .map(|(repo, file, rows, n)| {
-            let mut v = json!({ "file": file, "rows": rows });
+            let mut v = json!({ "id": row_id("dependent", repo.as_deref().unwrap_or(""), &file, "", ""), "file": file, "rows": rows });
             if let Some(repo) = repo {
                 v["repo"] = json!(repo);
             }
@@ -221,26 +239,38 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     }
     retain_incomplete(&mut env, |i| !matches!(i.reason, Reason::Capped | Reason::Budget | Reason::Policy | Reason::Depth));
     let diff_arg = json!(p.diff);
+    env["version"] = json!(VERSION);
+    env["repo"] = json!(ops::repo_name(root));
     env["base"] = json!(r.base);
+    env["head"] = json!(if p.diff == "working" { "working".to_string() } else { kc_index::head_commit(root).unwrap_or_default() });
     env["changes"] = json!(changes);
     env["tests"] = json!(test_rows);
     env["missed"] = json!(missed);
     env["dependents"] = json!(dependents);
     // Contract changes are read in a later step: until then the section says so, and the answer isn't complete.
     env["contracts"] = json!([]);
+    env["rules"] = json!([]);
+    env["walkthrough"] = Value::Null;
     env["unsettled"] = json!(unsettled);
     let shown = |k: &str| env[k].as_array().map_or(0, Vec::len);
-    let sections = json!({
-        "changes": { "complete": changes_total <= shown("changes"), "shown": shown("changes"), "total": changes_total,
-                     "next": format!("kc_impact {{\"diff\": {diff_arg}}}") },
-        "tests": { "complete": tests_total <= shown("tests"), "shown": shown("tests"), "total": tests_total, "advisory": ADVISORY,
-                   "next": format!("kc_tests {{\"diff\": {diff_arg}, \"limit\": 30}}") },
-        "missed": { "complete": missed_total <= shown("missed"), "shown": shown("missed"), "total": missed_total,
-                    "next": format!("kc_impact {{\"diff\": {diff_arg}}}") },
-        "dependents": { "complete": deps_whole && !deps_cut, "shown": shown("dependents"), "total": deps_total,
-                        "next": format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}") },
-        "contracts": { "complete": false, "shown": 0, "total": 0, "next": "" },
+    // Each section: whether it is whole, the reasons that cut it, and the call continuing it.
+    let section = |shown: usize, total: usize, whole: bool, next: String, reasons: &[&str]| {
+        let mut why: Vec<&str> = reasons.to_vec();
+        if total > shown && !why.contains(&"capped") {
+            why.insert(0, "capped");
+        }
+        json!({ "complete": whole && total <= shown, "shown": shown, "total": total, "next": next, "incomplete": why })
+    };
+    let mut sections = json!({
+        "changes": section(shown("changes"), changes_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
+        "tests": section(shown("tests"), tests_total, true, format!("kc_tests {{\"diff\": {diff_arg}, \"limit\": 30}}"), &[]),
+        "missed": section(shown("missed"), missed_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
+        "dependents": section(shown("dependents"), deps_total, deps_whole && !deps_cut, format!("kc_impact {{\"diff\": {diff_arg}, \"depth\": 2}}"),
+                              if deps_whole { &[] } else { &["depth"] }),
+        "contracts": section(0, 0, false, String::new(), &["unsupported"]),
+        "rules": section(0, 0, true, String::new(), &[]),
     });
+    sections["tests"]["advisory"] = json!(ADVISORY);
     env["sections"] = sections;
     for (key, what) in [("changes", "changed files"), ("tests", "test candidates"), ("missed", "missed partners"), ("dependents", "dependent files")] {
         let s = &env["sections"][key];
@@ -251,7 +281,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         }
     }
     if !deps_whole {
-        push_incomplete(&mut env, Incomplete::new(Reason::Capped, "dependents: one hop, the walk cut or past ambiguous edges").with_hint("sections.dependents.next"));
+        push_incomplete(&mut env, Incomplete::new(Reason::Depth, "dependents: one hop, the walk cut or stopped at ambiguous edges").with_hint("sections.dependents.next"));
     }
     push_incomplete(&mut env, Incomplete::new(Reason::Unsupported, "contracts: contract changes across repos aren't read yet"));
     finish(&mut env);
@@ -261,7 +291,10 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
 
 /// The order a review answer's keys are written in: its sections as they are read, then what the answer says about
 /// itself (see [`crate::task::reading_order`]).
-const READING_ORDER: &[&str] = &["base", "changes", "tests", "missed", "dependents", "contracts", "unsettled", "complete", "incomplete", "completeness", "sections"];
+const READING_ORDER: &[&str] = &[
+    "version", "repo", "base", "head", "changes", "tests", "missed", "dependents", "contracts", "rules", "walkthrough", "unsettled", "complete",
+    "incomplete", "completeness", "sections",
+];
 
 /// The compact answer `text` with its top-level keys in [`READING_ORDER`], the rest after them in name order.
 pub fn reading_order(text: &str) -> String {
@@ -308,15 +341,21 @@ mod tests {
         let s = Scope { repos: vec![root.clone()], no_sync: false };
         let p = ReviewParams { diff: "working".into(), changes: 10, dependents: 10, tests: 4, missed: 4 };
         let env = review(&p, &s).unwrap().env;
+        assert_eq!(env["version"], 1, "{env}");
         assert_eq!(env["changes"][0]["file"], "src/Ledger.cs", "{env}");
+        // Ids: stable, and the same for the same row whatever its line.
+        assert_eq!(env["changes"][0]["id"], row_id("change", "", "src/Ledger.cs", "", ""), "{env}");
+        assert_eq!(env["dependents"][0]["rows"][0]["class"], "direct", "{env}");
+        assert!(env["rules"].as_array().is_some_and(Vec::is_empty) && env["walkthrough"].is_null(), "{env}");
+        assert_eq!(env["sections"]["contracts"]["incomplete"], json!(["unsupported"]), "{env}");
         assert_eq!(env["changes"][0]["change"], "modified", "{env}");
         assert_eq!(env["changes"][0]["symbols"][0]["symbol"], "Ledger.Post", "{env}");
         assert_eq!(env["dependents"][0]["file"], "src/Refunds.cs", "{env}");
         assert_eq!(env["dependents"][0]["rows"][0]["symbol"], "Refunds.Refund", "{env}");
         assert_eq!(env["tests"][0]["file"], "tests/LedgerTests.cs", "{env}");
         assert_eq!(env["sections"]["tests"]["advisory"], ADVISORY);
-        for key in ["changes", "tests", "missed", "dependents", "contracts"] {
-            assert!(env["sections"][key]["complete"].is_boolean(), "{key}: {env}");
+        for key in ["changes", "tests", "missed", "dependents", "contracts", "rules"] {
+            assert!(env["sections"][key]["complete"].is_boolean() && env["sections"][key]["incomplete"].is_array(), "{key}: {env}");
         }
         assert_eq!(env["complete"], false, "{env}");
         // The answer in reading order: the same bytes, the changes first.
