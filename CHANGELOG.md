@@ -17,6 +17,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   and with nothing for the array, the overload without one. C# files are read again once. On identity-v1's C# labels,
   `exact` precision rises from 0.996 to 0.998 and linked recall from 0.730 to 0.754, with none newly wrong; on
   impact-dev-v1, impact's recall rises from 0.816 to 0.828.
+- Go HTTP routes and clients. Routes registered with `net/http` (including method patterns such as
+  `"GET /items/{id}"`), gin, echo and chi are listed with their groups and mounts, and the requests Go code sends
+  with `net/http` link to the routes that serve them, across repos as other languages' do. Go files are read again
+  once.
 - In Swift, a use inside a function or type declared in a function body (a local `func check` in a test, a local
   class's `deinit`) belongs to the enclosing function, as the compiler's index reports it. `impact`, `trace` and `tests`
   reach that function in the same hop, rather than one hop later through the helper and the same-named helpers of

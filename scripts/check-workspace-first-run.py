@@ -15,6 +15,8 @@ import sys
 import tempfile
 import threading
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
 
 
 def check(binary: Path) -> None:
@@ -35,9 +37,8 @@ def check(binary: Path) -> None:
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             for name, text in files.items():
                 (root / name).write_text(text)
-        env = dict(os.environ, KNOWCODE_CACHE_DIR=str(base / "cache"), KNOWCODE_CONFIG_DIR=str(base / "config"), KNOWCODE_DATA_DIR=str(base / "data"), KNOWCODE_TOOLS="core")
+        env = kc_env.knowcode_env(base, KNOWCODE_TOOLS="core")
         env.pop("KNOWCODE_VERIFY", None)
-        env["KNOWCODE_UPDATE_CHECK"] = "0"
         subprocess.run([str(binary), "workspace", "add", str(workspace)], env=env, cwd=base, check=True, capture_output=True)
         with (base / "stderr.log").open("w+") as stderr:
             process = subprocess.Popen([str(binary), "serve"], cwd=web, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
