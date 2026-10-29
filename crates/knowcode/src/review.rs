@@ -40,11 +40,20 @@ pub struct ReviewParams {
     pub missed: usize,
 }
 
+impl ReviewParams {
+    /// The limits a review answers with by default: every changed file of a diff the size of most pull requests (the
+    /// review-v1 set takes introducing commits of at most 30 files), and the first few of each other section.
+    pub fn new(diff: String) -> Self {
+        ReviewParams { diff, changes: 30, dependents: 8, tests: 6, missed: 6 }
+    }
+}
+
 /// What the tests section is: advice, never a list of the only tests to run.
 pub const ADVISORY: &str = crate::task::ADVISORY;
 
-/// Symbols listed per changed file at most; the rest are counted.
-const SYMBOLS_PER_FILE: usize = 6;
+/// Symbols listed per changed file at most; the rest are counted. The file is what a reviewer opens; three of its
+/// symbols say where to look in it.
+const SYMBOLS_PER_FILE: usize = 3;
 /// Rows listed per dependent file at most; the rest are counted.
 const ROWS_PER_FILE: usize = 3;
 /// The dependents walk: one hop, at most this many symbols.
@@ -290,7 +299,9 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         if total > shown && !why.contains(&"capped") {
             why.insert(0, "capped");
         }
-        json!({ "complete": whole && total <= shown, "shown": shown, "total": total, "next": next, "incomplete": why })
+        // The call continuing a section is given only for one that is cut: a whole one has nothing to continue.
+        let complete = whole && total <= shown;
+        json!({ "complete": complete, "shown": shown, "total": total, "next": if complete { String::new() } else { next }, "incomplete": why })
     };
     let mut sections = json!({
         "changes": section(shown("changes"), changes_total, true, format!("kc_impact {{\"diff\": {diff_arg}}}"), &[]),
@@ -307,14 +318,14 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
         let s = &env["sections"][key];
         let (shown, total) = (s["shown"].as_u64().unwrap_or(0), s["total"].as_u64().unwrap_or(0));
         if total > shown {
-            let i = Incomplete::new(Reason::Capped, format!("{key}: {shown} of {total} {what} shown")).with_hint(&format!("sections.{key}.next"));
+            let i = Incomplete::new(Reason::Capped, format!("{key}: {shown} of {total} {what}")).with_hint(format!("sections.{key}.next"));
             push_incomplete(&mut env, i);
         }
     }
     if !deps_whole {
-        push_incomplete(&mut env, Incomplete::new(Reason::Depth, "dependents: one hop, the walk cut or stopped at ambiguous edges").with_hint("sections.dependents.next"));
+        push_incomplete(&mut env, Incomplete::new(Reason::Depth, "dependents: one hop").with_hint("sections.dependents.next"));
     }
-    push_incomplete(&mut env, Incomplete::new(Reason::Unsupported, "contracts: contract changes across repos aren't read yet"));
+    push_incomplete(&mut env, Incomplete::new(Reason::Unsupported, "contracts: not read yet"));
     finish(&mut env);
     let data = env.clone();
     Ok(Out { env, data })
