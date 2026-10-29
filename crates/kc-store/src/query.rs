@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -546,6 +546,8 @@ struct Def {
     file_private: bool,
     /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
     on_actor: bool,
+    /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
+    alias_member: bool,
 }
 
 impl Def {
@@ -779,6 +781,16 @@ const STDLIB_TYPES: &[&str] = &[
     "Array", "Bool", "CGFloat", "Character", "Data", "Date", "Decimal", "Dictionary", "Double", "Float", "Float16",
     "Float32", "Float64", "Float80", "Int", "Int8", "Int16", "Int32", "Int64", "Set", "String", "Substring", "UInt",
     "UInt8", "UInt16", "UInt32", "UInt64", "URL", "UUID",
+];
+
+/// C library functions a Swift repo may wrap under its own name for one platform (`ioctl`, `unlink`): libc, POSIX and
+/// the Windows CRT.
+const C_LIBRARY_FUNCTIONS: &[&str] = &[
+    "accept", "access", "bind", "chdir", "chmod", "chown", "close", "closedir", "connect", "dup", "dup2", "fchmod", "fchown",
+    "fcntl", "flock", "fstat", "fstatat", "fsync", "ftruncate", "getcwd", "getenv", "getpid", "ioctl", "isatty", "kill",
+    "link", "listen", "lseek", "lstat", "mkdir", "mkdirat", "mmap", "munmap", "open", "openat", "opendir", "pipe", "poll",
+    "pread", "pwrite", "read", "readdir", "readlink", "realpath", "recv", "remove", "rename", "renameat", "rmdir", "send",
+    "setenv", "socket", "stat", "symlink", "sysconf", "truncate", "umask", "unlink", "unlinkat", "unsetenv", "write",
 ];
 
 /// Swift standard-library generic types, named with their arguments (`MemoryLayout<T>`, `UnsafePointer<UInt8>`).
@@ -2488,6 +2500,17 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         {
             return ("external_likely", found.iter().map(|d| d.id).collect());
         }
+        // A member the repo adds to a library type in an extension, named like the library's own (`JSONDecoder`'s
+        // `decode(_:from:)`): the library's overloads take other argument types, which a Swift call's arguments aren't
+        // read for, so either may be the one called. Listed, not linked.
+        if hit.kind == "call"
+            && hit.file.ends_with(".swift")
+            && !found.is_empty()
+            && found.iter().all(|d| d.external_container && !on_stdlib_type(d))
+            && STDLIB_MEMBERS.contains(&hit.name.as_str())
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
@@ -2558,6 +2581,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 // A script's globals and free functions are visible only inside that script.
                 let free: Vec<&Def> =
                     cands.iter().copied().filter(|d| d.container.is_none() && (!d.in_script || d.file == hit.file)).collect();
+                // A Swift free function named like a C library function (a platform shim, `func unlink(_:)` for
+                // Windows) has the platform's own function beside it, which a call on another platform binds: listed,
+                // not linked.
+                if hit.file.ends_with(".swift") && !free.is_empty() && C_LIBRARY_FUNCTIONS.contains(&hit.name.as_str()) {
+                    return ("external_likely", free.iter().map(|d| d.id).collect());
+                }
                 if free.len() > 1 {
                     // Several free functions share the name (common across standalone scripts): one in the
                     // caller's own file wins, then one in the caller's module.
@@ -2594,6 +2623,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     });
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
+    }
+    // A property of a type alias's object type is reached through a value known to be of that type, never by its
+    // name alone: such shapes (`type Item = { Id: string; Name: string }`) restate a package's types' fields.
+    let cands: Vec<&Def> = if matches!(recv, Receiver::Unknown) { cands.into_iter().filter(|d| !d.alias_member).collect() } else { cands };
+    if cands.is_empty() {
+        return ("unresolved", Vec::new());
     }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
     groups.sort();
@@ -2992,12 +3027,13 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang = 'csharp' THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
-     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
+     p.kind IS 'typealias'";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -3024,6 +3060,7 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         exported: r.get(17)?,
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
+        alias_member: r.get(20)?,
     })
 }
 
@@ -4976,6 +5013,61 @@ fn refines(conn: &Connection, name: &str, protocols: &[String]) -> Result<bool> 
 }
 
 /// The SwiftPM target a file is in: `<Name>` of `Sources/<Name>/…` or `Tests/<Name>/…`; `None` outside those layouts.
+/// Swift declarations a module imports by name from outside the repo (`@_exported import struct
+/// SystemPackage.FileDescriptor`), per SwiftPM target. Swift prefers a declaration imported by name over one of the
+/// same name from a module imported whole, so a type the repo declares in another module isn't what such a name
+/// means there.
+#[derive(Default)]
+struct SwiftScoped {
+    /// Per target directory, the names it imports by name from a module that isn't one of the repo's, with that module.
+    by_target: HashMap<String, HashMap<String, String>>,
+}
+
+impl SwiftScoped {
+    /// The module outside the repo that `file`'s target imports `name` from by name, if it does.
+    fn imported_from(&mut self, conn: &Connection, file: &str, name: &str) -> Result<Option<String>> {
+        let Some(target) = swiftpm_target(file) else { return Ok(None) };
+        // The target's directory, `…/Sources/<target>/`.
+        let end = target.as_ptr() as usize - file.as_ptr() as usize + target.len() + 1;
+        let prefix = &file[..end];
+        let target = prefix.to_string();
+        if !self.by_target.contains_key(&target) {
+            let rows: Vec<String> = conn
+                .prepare_cached(
+                    "SELECT DISTINCT i.module FROM imports i JOIN files f ON f.id = i.file_id
+                     WHERE f.lang = 'swift' AND substr(f.path, 1, length(?1)) = ?1 AND i.module LIKE '%.%'",
+                )?
+                .query_map([prefix], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut names = HashMap::new();
+            for m in rows {
+                let Some((module, n)) = m.rsplit_once('.') else { continue };
+                let module = module.split('.').next().unwrap_or(module);
+                let repo_module: bool = conn
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM files WHERE lang = 'swift' AND (path LIKE 'Sources/' || ?1 || '/%' OR path LIKE '%/Sources/' || ?1 || '/%'))",
+                    )?
+                    .query_row([module], |r| r.get(0))?;
+                if !repo_module {
+                    names.insert(n.to_string(), module.to_string());
+                }
+            }
+            self.by_target.insert(target.clone(), names);
+        }
+        Ok(self.by_target[&target].get(name).cloned())
+    }
+}
+
+/// Whether a path is under a SwiftPM `Tests/` directory.
+fn in_tests(path: &str) -> bool {
+    path.starts_with("Tests/") || path.contains("/Tests/")
+}
+
+/// Whether a path is under a SwiftPM `Sources/` directory.
+fn in_sources(path: &str) -> bool {
+    path.starts_with("Sources/") || path.contains("/Sources/")
+}
+
 fn swiftpm_target(path: &str) -> Option<&str> {
     ["Sources/", "Tests/"].iter().find_map(|root| {
         let rest = &path[path.find(root)? + root.len()..];
@@ -5164,6 +5256,7 @@ fn same_language(file: &str, lang: &str) -> bool {
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
+        "java" => Some("java"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),
@@ -5238,10 +5331,12 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let mut sql = crate::sql::Resolver::default();
     let mut ansible = crate::ansible::Resolver::default();
     let mut terraform = crate::terraform::Resolver::default();
+    let mut jvm = crate::jvm::Resolver::default();
     let modules = &mut shared.modules;
     let py_modules = &mut shared.py_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
+    let mut swift_scoped = SwiftScoped::default();
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -5297,12 +5392,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         let ts = crate::ts::is_ts_path(&hit.file);
         let cs = hit.file.ends_with(".cs");
+        let java = crate::jvm::handles(&hit.file);
         // In TypeScript an imported name comes from its module, and a bare one from the file itself; in Python a name
         // `from m import`ed, or a member of an `import`ed module, comes from that module.
         let scoped = if ts {
             ts_scoped(conn, hit, modules, &mut defs)?
         } else if hit.file.ends_with(".py") {
             py_scoped(conn, hit, py_modules, &mut defs)?
+        } else if java {
+            jvm.scoped(conn, hit)?
         } else {
             None
         };
@@ -5344,6 +5442,15 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             if ts {
                 recv = ts_receiver(conn, hit, recv, &mut oracle, modules)?;
+            }
+            // A Swift receiver typed by a name its module imports from a package by name: the package's type.
+            if let Receiver::Known(chain) = &recv
+                && hit.file.ends_with(".swift")
+                && let Some(ty) = chain.first().cloned()
+                && let Some(module) = swift_scoped.imported_from(conn, &hit.file, last_segment(&ty))?
+            {
+                // Named by its module, so the repo's same-named type's members aren't looked up for it.
+                recv = Receiver::Foreign(vec![format!("{module}.{}", last_segment(&ty))]);
             }
             hit.receiver_type = match &recv {
                 Receiver::Known(c) | Receiver::Foreign(c) => c.first().cloned(),
@@ -5453,6 +5560,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
             let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
                 swift_seen(conn, &hit.file, usable)?
+            } else if matches!(hit.kind.as_str(), "type_ref" | "instantiate")
+                && hit.receiver.is_none()
+                && hit.file.ends_with(".swift")
+                && swift_scoped.imported_from(conn, &hit.file, &hit.name)?.is_some()
+            {
+                // Imported by name from a package (`import struct SystemPackage.FileDescriptor`): that declaration wins
+                // over a same-named type of a module imported whole, so only a type nested where the code is remains.
+                usable.into_iter().filter(|d| d.container.is_some()).collect()
             } else {
                 usable
             };
@@ -5471,8 +5586,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             dropped_by(&mut dropped, explain, &before, &usable, "receiver_type");
             let before = if explain { usable.clone() } else { Vec::new() };
-            // A Swift `private` or `fileprivate` declaration is named only in its own file.
-            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
+            // A Swift `private` or `fileprivate` declaration is named only in its own file. A member a test target adds
+            // to a library type in an extension (`extension Deque { mutating func append(contentsOf:) }`) is never
+            // what code under `Sources/` calls: no product target depends on anything under `Tests/`.
+            let usable: Vec<&Def> = usable
+                .into_iter()
+                .filter(|d| !d.file_private || d.file == hit.file)
+                .filter(|d| !(d.lang == "swift" && d.external_container && in_tests(&d.file) && in_sources(&hit.file)))
+                .collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
             // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
@@ -5538,6 +5659,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 exact_by = Mechanism::Namespace;
             }
         }
+        if java && !by_import {
+            (confidence, ids) = jvm.after(conn, hit, receiver_known, (confidence, ids))?;
+        }
         if cs_type && matches!(confidence, "unique_name" | "ambiguous") && scoped_out_type(&defs[&hit.name], named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
             confidence = "exact";
             exact_by = Mechanism::ProjectScope;
@@ -5595,7 +5719,8 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
             }
         }
-        if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
+        // A Java call through an interface binds to the interface's method, as javac does; the requirement is the target.
+        if confidence == "exact" && !hit.precise && !java && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
                 // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);

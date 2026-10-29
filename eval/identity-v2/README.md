@@ -206,6 +206,46 @@ line, within 10, with the name as a word outside annotations. Re-run over the sa
 those 7 labels' targets (gson's `A` ×3, `WithJsonDeserializer` and `DummyClass` ×2, spring-petclinic's `port`), each to
 the following line; the draw and every other label are unchanged.
 
+### Held out: jsoup
+
+KnowCode's Java resolver was developed against the labels above, so they no longer test it fresh. A held-out set
+does: [jhy/jsoup](https://github.com/jhy/jsoup), a Java repository nothing was tuned on, pinned at its head on
+2026-10-29 ([repos.txt](../../scripts/eval/identity/repos.txt)), labelled by the same rule, labeller and container,
+drawn by the same sampler, and committed in [jvm-holdout/](jvm-holdout/labels.jsonl) before any KnowCode answer on it
+was read. It is scored once, with the resolver as it stood, and reported beside the set above; a change made after
+reading it can't be measured on it again.
+
+465 references (343 inside, 122 outside), drawn from 66648 Java references by the rule (the exclusions, by reason,
+are in [jvm-holdout/exclusions.json](jvm-holdout/exclusions.json)):
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Java | dispatch | 3 | 40 | 40 | 0 | 0 | 83 |
+| Java | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Java | member | 20 | 40 | 40 | 10 | 20 | 130 |
+| Java | type | 20 | 40 | 0 | 10 | 32 | 102 |
+
+jsoup builds with Maven on JDK 17 by scip-java's defaults ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)).
+
+### Held out, second: jackson-core
+
+jsoup's single scoring found 2 outside labels linked: references to a library class's inherited field
+(`AbstractList.modCount`) linked to a same-named method the repository's subclass declares. The resolver gained a rule
+for it (fields and methods are separate namespaces, JLS 6.5), so jsoup no longer tests it fresh, and its pre-fix
+figure stands as scored. A second held-out set tests the resolver after that rule:
+[FasterXML/jackson-core](https://github.com/FasterXML/jackson-core) on its 3.x branch, pinned at its head on
+2026-10-29, labelled, drawn and committed in [jvm-holdout-2/](jvm-holdout-2/labels.jsonl) the same way before any
+KnowCode answer on it was read, and scored once.
+
+455 references (345 inside, 110 outside), drawn from 83478 Java references by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Java | dispatch | 5 | 40 | 40 | 0 | 0 | 85 |
+| Java | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Java | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Java | type | 20 | 40 | 0 | 10 | 0 | 70 |
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:

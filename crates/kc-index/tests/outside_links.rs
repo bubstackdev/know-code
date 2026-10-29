@@ -205,3 +205,86 @@ fn a_csharp_member_of_a_property_a_library_base_class_may_declare_is_listed_not_
     assert!(!got.is_empty() && got.iter().all(|g| !linked(g.1)), "{got:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_swift_type_a_module_imports_by_name_from_a_package_is_the_packages() {
+    let (root, store) = repo(
+        "swift-scoped-import",
+        &[
+            ("Sources/Core/Handle.swift", "public protocol Handle {\n    func close() throws\n}\n"),
+            ("Sources/Files/Exports.swift", "@_exported import struct SystemKit.Handle\n"),
+            (
+                "Sources/Files/Open.swift",
+                "import Core\nimport SystemKit\n\nfunc shut(_ handle: Handle) throws {\n    try handle.close()\n}\n",
+            ),
+            ("Sources/Other/Use.swift", "import Core\n\nfunc shut(_ handle: Handle) throws {\n    try handle.close()\n}\n"),
+        ],
+    );
+    // In `Files`, `Handle` is SystemKit's, and so is its `close()`.
+    let ty = refs(&store, "Handle", &["type_ref"], "Sources/Files/Open.swift");
+    assert!(!ty.is_empty() && ty.iter().all(|g| !linked(g.1)), "{ty:?}");
+    let close = refs(&store, "close", &["call"], "Sources/Files/Open.swift");
+    assert!(!close.is_empty() && close.iter().all(|g| !linked(g.1)), "{close:?}");
+    // Elsewhere it is the repo's.
+    let other = refs(&store, "Handle", &["type_ref"], "Sources/Other/Use.swift");
+    assert!(other.iter().any(|g| linked(g.1) && g.2 == ["Sources/Core/Handle.swift:1"]), "{other:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_swift_platform_shim_test_extension_or_library_overload_is_listed_not_linked() {
+    let (root, store) = repo(
+        "swift-shims",
+        &[
+            ("Sources/Sys/Windows.swift", "#if os(Windows)\nfunc unlink(_ path: UnsafePointer<CChar>) -> CInt {\n    0\n}\n#endif\n"),
+            ("Sources/Sys/Remove.swift", "import Glibc\n\nfunc remove(_ path: UnsafePointer<CChar>) -> CInt {\n    unlink(path)\n}\n"),
+            ("Tests/SysTests/Deque+Append.swift", "import DequeModule\n\nextension Deque {\n    mutating func pushAll(contentsOf s: [Element]) {}\n}\n"),
+            ("Sources/Sys/Queue.swift", "import DequeModule\n\nfunc fill(_ q: inout Deque<Int>) {\n    q.pushAll(contentsOf: [1])\n}\n"),
+            ("Tests/SysTests/Fill.swift", "import DequeModule\n\nfunc refill(_ q: inout Deque<Int>) {\n    q.pushAll(contentsOf: [1])\n}\n"),
+            ("Sources/Sys/Decoder+Buffer.swift", "import Foundation\n\nextension JSONDecoder {\n    func decode<T: Decodable>(_ t: T.Type, from buffer: [UInt8]) throws -> T { fatalError() }\n}\n"),
+            ("Sources/Sys/Load.swift", "import Foundation\n\nfunc load(_ data: Data) throws -> Int {\n    try JSONDecoder().decode(Int.self, from: data)\n}\n"),
+        ],
+    );
+    let unlink = refs(&store, "unlink", &["call"], "Sources/Sys/Remove.swift");
+    assert!(!unlink.is_empty() && unlink.iter().all(|g| !linked(g.1)), "{unlink:?}");
+    // A test target's extension: not from `Sources/`, still from its own target.
+    let from_sources = refs(&store, "pushAll", &["call"], "Sources/Sys/Queue.swift");
+    assert!(!from_sources.is_empty() && from_sources.iter().all(|g| !linked(g.1)), "{from_sources:?}");
+    let from_tests = refs(&store, "pushAll", &["call"], "Tests/SysTests/Fill.swift");
+    assert!(from_tests.iter().any(|g| linked(g.1)), "{from_tests:?}");
+    let decode = refs(&store, "decode", &["call"], "Sources/Sys/Load.swift");
+    assert!(!decode.is_empty() && decode.iter().all(|g| !linked(g.1)), "{decode:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_destructured_prop_of_a_package_type_is_the_packages() {
+    let (root, store) = repo(
+        "ts-destructured-props",
+        &[
+            ("package.json", PACKAGE_JSON),
+            ("tsconfig.json", TSCONFIG),
+            ("src/filters.ts", "export interface Filters {\n    Status?: string;\n}\n"),
+            (
+                "src/props.ts",
+                "import type { JobInfo } from '@acme/sdk/models';\nimport type { Shelf } from './shelf';\n\nexport type JobProps = {\n    job: JobInfo;\n    shelf: Shelf;\n};\n",
+            ),
+            ("src/shelf.ts", "export interface Shelf {\n    label: string;\n}\n"),
+            (
+                "src/JobRow.tsx",
+                "import { JobProps } from './props';\n\nexport const JobRow = ({ job, shelf: s }: JobProps) => {\n    const status = job.LastResult.Status;\n    return s.label + status;\n};\n",
+            ),
+            ("src/loose.ts", "export function show(x: any) {\n    return x.job;\n}\n"),
+        ],
+    );
+    // Through the package's `JobInfo`: not the repo's `Filters.Status`.
+    let status = refs(&store, "Status", &["member"], "src/JobRow.tsx");
+    assert!(!status.is_empty() && status.iter().all(|g| !linked(g.1)), "{status:?}");
+    // Through the repo's `Shelf`, renamed in the pattern: its own member.
+    let label = refs(&store, "label", &["member"], "src/JobRow.tsx");
+    assert!(label.iter().any(|g| g.1 == "exact" && g.2 == ["src/shelf.ts:2"]), "{label:?}");
+    // A type alias's property is reached through its type only, never by name from an untyped value.
+    let job = refs(&store, "job", &["member"], "src/loose.ts");
+    assert!(job.iter().all(|g| !linked(g.1)), "{job:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
