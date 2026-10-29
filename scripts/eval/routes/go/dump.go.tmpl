@@ -33,6 +33,19 @@ func kcOut(r kcRoute) {
 	fmt.Printf("{\"t\": \"route\", %s\n", b[1:])
 }
 
+// kcOutAt prints a route once per registration site its framework's hook recorded under key (routes-v1.1), or once
+// without one when no hook ran.
+func kcOutAt(r kcRoute, sites map[string][]string, key string) {
+	if len(sites[key]) == 0 {
+		kcOut(r)
+		return
+	}
+	for _, s := range sites[key] {
+		r.Loc = s
+		kcOut(r)
+	}
+}
+
 func kcFuncName(v interface{}) string {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Func {

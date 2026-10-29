@@ -19,17 +19,21 @@ imports="" cases=""
 add() { imports="$imports
 	$1"; cases="$cases
 $2"; }
+# routes-v1.1 (run.sh SITES=1): each route's registration site, from a hook in the framework (sites.sh).
+site() { if [ -f /in/sites ]; then sh /work/tools/sites.sh "$1" "$2" || { printf '{"t": "program", "repo": "%s", "module": "%s", "package": "%s", "status": "site hook", "dirs": ""}\n' "$repo" "$mod" "$pkg"; exit 0; }; fi; }
 if grep -q 'github.com/gin-gonic/gin ' go.mod; then
   add '"github.com/gin-gonic/gin"' '		case *gin.Engine:
 			for _, rt := range r.Routes() {
-				kcOut(kcRoute{Framework: "gin", Method: rt.Method, Path: rt.Path, Handler: rt.Handler})
+				kcOutAt(kcRoute{Framework: "gin", Method: rt.Method, Path: rt.Path, Handler: rt.Handler}, gin.KCSites, rt.Method+" "+rt.Path)
 			}'
+  site gin github.com/gin-gonic/gin
 fi
 if grep -q 'github.com/labstack/echo/v4 ' go.mod; then
   add '"github.com/labstack/echo/v4"' '		case *echo.Echo:
 			for _, rt := range r.Routes() {
-				kcOut(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name})
+				kcOutAt(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name}, echo.KCSites, rt.Method+" "+rt.Path)
 			}'
+  site echo github.com/labstack/echo/v4
 fi
 if grep -q 'github.com/labstack/echo/v5 ' go.mod; then
   add '"github.com/labstack/echo/v5"' '		case *echo.Echo:
@@ -51,12 +55,17 @@ for chi in github.com/go-chi/chi/v5 github.com/go-chi/chi; do
 					kcMounts[route] = true
 					method = "*"
 				}
-				kcOut(kcRoute{Framework: "chi", Method: method, Path: route, Handler: name})
+				kcOutAt(kcRoute{Framework: "chi", Method: method, Path: route, Handler: name}, chi.KCSites, chi.KCHandlerKey(h))
 				return nil
 			})'
+    # chi's own repository builds chi from its source: no module to hook.
+    grep -qE "^module $chi\$" go.mod || site chi "$chi"
     break
   fi
 done
+
+# Without the site hooks, a route is printed as its framework lists it.
+[ -f /in/sites ] || cases=$(printf '%s\n' "$cases" | perl -pe 's/kcOutAt\((kcRoute\{.*\}), \w+\.KCSites, .*\)$/kcOut($1)/')
 
 case $pkg in
   test:*) dir=${pkg#test:}; target_dir=$(cd "$dir" && pwd); dump_pkg=$(go list -f '{{.Name}}' "./$dir") ;;
