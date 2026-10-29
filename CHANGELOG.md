@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# minimal API mapped in top-level statements (`app.MapGet("/health", Health)` in `Program.cs`) has an owner in
+  answers. Such routes were in the workspace summary but in no `context` answer: top-level statements had no symbol,
+  and a local function passed as the handler wasn't taken for one. Top-level statements are now one symbol,
+  `Program.Main`, as the compiler's entry point is, which owns the routes its lambdas serve and the calls it makes;
+  a local function passed as the handler owns its route, as a method does. C# files are read again once.
 - C# calls tell more overloads apart. An overload with a `params` array had its last other parameter left unchecked,
   so `Write(level, "x", e)` could still match `Write(LogEventLevel, string, params object[])` with an `Exception`
   where a `string` goes. A method's own `params` array, a field passed by name and a collection expression (`[a, b]`)
