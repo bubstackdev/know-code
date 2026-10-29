@@ -181,3 +181,40 @@ fn a_field_access_never_means_a_method() {
     assert_eq!(answer(&call[0]), ("exact", vec!["src/app/Rows.java:4".to_string()]));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_chain_is_typed_through_declarations_and_member_types() {
+    let root = scratch("java-chains");
+    write(&root, "src/b/Builder.java", "package b;\npublic interface Builder<T> {\n  T build();\n}\n");
+    write(
+        &root,
+        "src/b/Report.java",
+        "package b;\n\
+         public class Report {\n\
+           public static Builder builder() { return new Builder(); }\n\
+           public static final class Builder {\n\
+             public Builder title(String t) { return this; }\n\
+             public Report build() { return new Report(); }\n\
+           }\n\
+         }\n",
+    );
+    write(&root, "src/a/Store.java", "package a;\npublic class Store { public void save() {} }\n");
+    write(&root, "src/c/Store.java", "package c;\npublic class Store { public void save() {} }\n");
+    write(
+        &root,
+        "src/b/Use.java",
+        "package b;\n\
+         import c.Store;\n\
+         class Use {\n\
+           Store store;\n\
+           Report make() { store.save(); return Report.builder().title(\"x\").build(); }\n\
+         }\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    let build = refs_in(c, "build", "call", "src/b/Use.java");
+    assert_eq!(answer(&build[0]), ("exact", vec!["src/b/Report.java:6".to_string()]), "the nested Builder's, not the interface's");
+    let save = refs_in(c, "save", "call", "src/b/Use.java");
+    assert_eq!(answer(&save[0]), ("exact", vec!["src/c/Store.java:2".to_string()]), "the field's imported type");
+    let _ = std::fs::remove_dir_all(&root);
+}
