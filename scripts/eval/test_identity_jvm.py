@@ -231,6 +231,25 @@ class JvmLabelTest(unittest.TestCase):
                                  ('big', 'member'), ('level', 'callable'), ('shout', 'callable'),
                                  ('side', 'callable'), ('size', 'callable')])
 
+    def test_an_annotated_declarations_definition_is_at_its_name(self):
+        # scip-java marks the name's occurrence in the declaration's own annotation as its definition.
+        src = ['@Wrap(Wrapped.Inner.class)', 'class Wrapped {', '  @Value("x.port")', '  int port;', '}', 'class Use { Wrapped w; }']
+        wrapped, port = PKG + 'a/Wrapped#', PKG + 'a/Wrapped#port.'
+        index = scip.parse_index(document('src/a/Wrapped.java', [
+            occurrence(0, 6, 13, wrapped, roles=scip.DEFINITION),
+            occurrence(2, 15, 19, port, roles=scip.DEFINITION),
+            occurrence(5, 12, 19, wrapped),
+        ], [symbol_info(wrapped, 7, 'class Wrapped')]))
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp)/'src/a').mkdir(parents=True)
+            (Path(temp)/'src/a/Wrapped.java').write_text('\n'.join(src))
+            rows = jvm_label.enumerate_repo('r', Path(temp), index)
+        decls = {r['name']: r['line'] for r in rows if r['t'] == 'decl'}
+        self.assertEqual(decls, {'Wrapped': 2, 'port': 4})
+        ref = next(r for r in rows if r['t'] == 'ref' and r['name'] == 'Wrapped')
+        self.assertEqual(ref['locs'], [['src/a/Wrapped.java', 2]])
+        self.assertEqual(jvm_label.name_line(['@A(B.class)', 'class B {'], 1, 'Missing'), 1)
+
     def test_symbols_split_into_package_and_descriptors(self):
         package, descriptors = jvm_label.split_symbol(PKG + 'a/Outer#`in`.inner(+1).(x)')
         self.assertEqual(package, 'maven maven/org.example/demo 1.0')
