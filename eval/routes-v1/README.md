@@ -151,6 +151,26 @@ The exclusions are computed by a script run in the labelling container from the 
 checker. It never reads KnowCode's output: it lists every configuration-dependent registration site in the code, and
 the scorer applies that list to both sides. Its output is committed beside the labels.
 
+## routes-v1.2: one hop, not transitive
+
+routes-v1.1 is kept above as it was approved; routes-v1.2 replaces its first exclusion's second clause, and nothing
+else. It was made before any held-out repository was labelled, from what the exclusion tool showed on routes-v1's
+(development) repositories: applied transitively, v1.1's clause makes a whole server configuration-dependent whenever
+its program chooses a command with a `switch` (`case "serve":` reaching the router through `serve`), which leaves
+nothing to score. In v1.2, a registration site is configuration-dependent when, by the Go type checker over the
+packages the repository's listed programs compile:
+
+- its call lies inside the body or `else` of an `if`, or a `case` of a `switch` or `select`, within the function (or
+  function literal) containing it (a loop is not a condition); or
+- every reference to that function, from those packages, lies inside such a condition within the function making the
+  reference, or nothing in those packages refers to it. One hop only: what calls the referring function doesn't matter.
+
+The program's `main`, a harness test's test function and `init` functions are exempt from the second clause. A
+reference is a call, or a function or method value; a call through an interface method refers to every method of
+that name in those packages. echo's placeholders, the agreement of both sides, the listing of disagreements, the rule
+for a route only one side has, and the tool's independence from KnowCode's output are as in v1.1. The held-out
+repositories are scored under v1.2.
+
 ### Held-out repositories
 
 One per framework, each serving at least 20 routes by a search of its source for registration calls. Pinned at their
@@ -160,11 +180,18 @@ default branches' heads on 2026-10-29:
 | --- | --- | --- | --- |
 | gin | gothinkster/golang-gin-realworld-example-app | `626c372d` | the module's main package |
 | echo | xesina/golang-echo-realworld-example-app | `e578590b` | the module's main package |
-| chi | arp242/goatcounter | `c031008a` | `cmd/goatcounter serve`, over a new SQLite database |
-| net/http (Go 1.22 method patterns) | miniflux/v2 | `229035a4` | a harness test building its HTTP handler as its own tests do, since the program connects to PostgreSQL before it routes |
+| chi | arp242/goatcounter | `c031008a` | a harness test in `handlers` building `NewBackend`, the router `goatcounter serve` serves for any host, with the program's defaults, as the package's own tests build it |
+| net/http | golang/pkgsite | `fb32d103` | a harness test in `internal/frontend` building the frontend's `ServeMux` as the package's own tests do (`newTestServer`) |
+
+Two were changed under the replacement rule below, before any was labelled and before any KnowCode answer on them
+was read. goatcounter's `serve` serves a host router (`zhttp.HostRoute`) the dump can't list, so its router is listed
+by a harness test, routes-v1's own mechanism. miniflux/v2 can't be listed: its served `ServeMux` holds about six
+patterns and mounts the rest as nested muxes, so the rule's net/http listing (the served mux's own registrations)
+isn't its routes; golang/pkgsite (pinned at its head on 2026-10-29), whose frontend registers its routes on one
+`ServeMux`, took its place.
 
 They are labelled once, with routes-v1's labeller and this rule, and KnowCode is scored on them once, after the Go
 route changes this set was used to develop. Their figures are published beside routes-v1's gate figures, under
-v1.1, and aren't tuned against. A held-out repository that can't be listed under the rule is replaced, before any
+v1.2, and aren't tuned against. A held-out repository that can't be listed under the rule is replaced, before any
 KnowCode answer on it is read, by the next candidate for its framework, and the replacement is named here with the
 reason.
