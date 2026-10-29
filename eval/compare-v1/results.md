@@ -438,6 +438,7 @@ Every miss of every tool: [results/third.misses.tsv](results/third.misses.tsv).
 ## What these results don't show
 
 - **A fresh test of KnowCode.** KnowCode's resolvers were developed against identity-v1's labels on these same eight repositories ([eval/identity-v1](../identity-v1/README.md)). codebase-memory-mcp and Serena weren't. The questions here are drawn from those repositories' toolchain enumerations, so KnowCode's figures are on code its resolution was tuned on, and they may be higher than on code it hasn't seen. 0.8's Go and Java questions come from repositories nobody tuned on.
+- **A fresh test of KnowCode's impact answers from now on.** KnowCode's maintainers read all 96 impact questions' answers here, on the rerun's build, to diagnose the pagination fault above. Any later KnowCode change to impact is justified on a separate development set drawn from identity-v1's enumerations, which leaves out compare-v1's targets. Still, future KnowCode figures on these impact questions come from a team that has seen them.
 - **Agents.** Whether an agent does better with any of these tools; compare-v1 asks no agent.
 - **Speed and cost.** No timing or cost is measured.
 - **Other languages and questions.** Languages other than C#, TypeScript and Swift, and the questions 0.8 adds (callers, find, locate, task, co-change, cross-repository HTTP).
