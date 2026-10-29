@@ -27,7 +27,8 @@ trailing slashes trimmed, and every parameter alike whatever its syntax.
 ## Scoring
 
 Per repository, over the code the listed programs compile (a repository's other programs, such as examples that can't
-start offline, are out of the set, and so are KnowCode's routes in code only they compile):
+start offline, are out of the set, and so are KnowCode's routes in code only they compile; a program never compiles
+its packages' `_test.go` files, which a harness test compiles only for its own package):
 
 - **precision**: KnowCode's server routes there that match a label, over all of KnowCode's server routes there;
 - **recall**: labels a KnowCode server route matches, over all labels.
