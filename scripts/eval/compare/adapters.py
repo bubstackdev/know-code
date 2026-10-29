@@ -48,7 +48,18 @@ def kc_refs_sites(text):
 
 def kc_impact_decls(text):
     """The dependents an impact answer lists, as declarations: each row's file and the line it was declared at
-    (the row's own line when the answer gives no declaration line). The frontier (`stopped at`) repeats a listed row."""
+    (the row's own line when the answer gives no declaration line). The frontier (`stopped at`) repeats a listed row.
+
+    The first page is text. A `kc_more` page is JSON: its `items` are the next rows of the list it continues
+    (`items[0].affected`), each with `file` and `line` (the declaration's) and `site` (the call), and `cursor` names
+    the page after it."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict):
+        rows = [('decl', i['file'], i['line']) for i in data.get('items', []) if 'file' in i and 'line' in i]
+        return rows, data.get('cursor')
     out = []
     for line in text.splitlines():
         m = KC_ROW.match(line)

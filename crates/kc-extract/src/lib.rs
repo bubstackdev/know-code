@@ -772,6 +772,9 @@ pub struct FileFacts {
     pub refs: Vec<Ref>,
     pub relations: Vec<Relation>,
     pub imports: Vec<Import>,
+    /// Modules a TypeScript file augments (`declare module 'pkg' { … }`): declarations it adds to a package's module,
+    /// reached through that package's values.
+    pub augments: Vec<Import>,
     /// C# `global using` directives (see [`GlobalUsing`]).
     pub global_usings: Vec<GlobalUsing>,
     /// The names imports bind and re-exports pass on (TypeScript, Python).

@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 26;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -260,6 +260,10 @@ impl<'a> Cx<'a> {
             // (`Shapes.Circle`) is found among the declarations it spans. Its members keep their own containers: a
             // namespace scopes names, it is no type. `declare module "pkg"` names a module, not a namespace.
             "internal_module" | "module" => {
+                if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() == "string") {
+                    let module = self.text(n).trim_matches(['"', '\'', '`']).to_string();
+                    self.facts.augments.push(Import { module, line: line(node) });
+                }
                 if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() != "string") {
                     let container = namespaces_around(self.src, node);
                     self.push(node, outer, self.text(n).to_string(), SymbolKind::Module, container, None);
