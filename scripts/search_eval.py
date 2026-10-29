@@ -17,16 +17,20 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 from collections import Counter
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target" / "release" / "knowcode"
 spec = importlib.util.spec_from_file_location("corpus", ROOT / "scripts" / "corpus.py")
 corpus = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(corpus)
-ENV = dict(os.environ, KNOWCODE_CACHE_DIR=str(corpus.CORPUS / "index"))
+ENV = kc_env.knowcode_env(tempfile.mkdtemp(prefix="knowcode-search-eval-"), cache=corpus.CORPUS / "index")
 
 
 def kc(args):
