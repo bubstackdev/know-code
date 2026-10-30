@@ -296,8 +296,20 @@ Each addition is committed before any run asks it, and each is its own pull requ
    - **Rebuilds:** a scip-java rebuild can reorder an enumeration's rows. [fresh/enumerations/SHA256SUMS](fresh/enumerations/SHA256SUMS)
      covers the files as labelled. The questions depend on the rows, not their order: shuffling the rows draws the same
      questions.
-   - **The calls:** mapping.toml's, unchanged. Serena's language servers for Go, Java and Kotlin, and those tools'
-     images, are prepared before the run.
+   - **The calls:** mapping.toml's, unchanged.
+   - **The images:** Go's on identity-v2's Go image, and Java's and Kotlin's on its JVM image (scip-java with its JDKs,
+     Maven and Gradle), pinned in [tools.toml](tools.toml).
+     - Serena's Java and Kotlin language servers are downloaded with `serena download-ls-dependencies`, which checks
+       them against Serena's own pinned digests.
+     - Go's is gopls, which Serena expects on the PATH and doesn't install. It is installed with `go install` at a
+       pinned version, which the go command checks against Go's checksum database.
+   - **The restore:** these languages keep what they restore in the home (the module cache, `~/.m2`, `~/.gradle`),
+     and each tool has a home of its own. So the restore runs in Serena's, the only tool whose language servers read
+     it.
+     - Go is restored as identity-v2's labeller restores it: every module's dependencies, tests' included.
+     - Java and Kotlin run the labeller's whole indexing build, with the same opt-ins (builds.txt). Then the
+       labeller's Gradle settings are removed, and the tree is reset to its one commit, which undoes the build's
+       output and kotlin-logging's version setting. Every tool reads the same tree.
 
 ## Changes after the first run
 

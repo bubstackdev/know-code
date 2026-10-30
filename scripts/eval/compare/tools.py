@@ -12,7 +12,8 @@ from compare import mcp
 
 TOOLS = ('knowcode', 'codebase-memory-mcp', 'serena')
 # Serena's language for each of compare-v1's languages (its `--language`; docs/01-about/020_programming-languages.md).
-SERENA_LANGUAGE = {'csharp': 'csharp', 'typescript': 'typescript', 'swift': 'swift'}
+SERENA_LANGUAGE = {'csharp': 'csharp', 'typescript': 'typescript', 'swift': 'swift', 'go': 'go', 'java': 'java',
+                   'kotlin': 'kotlin'}
 INDEX_TIMEOUT = 3600
 
 

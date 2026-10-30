@@ -27,6 +27,13 @@ url = "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-{uarch}-unkno
 sha256.arm64 = "9041c73c99fdc5892cf128140beb354eca9231d502068cc36e6cb53a8e59ad14"
 sha256.amd64 = "eadd9d27c134ab5ac1ffd4473b97a741407f3ea238288f03121fc4deddf90220"
 
+[gopls]
+# Serena's Go language server is gopls, which Serena expects on the PATH and doesn't install. It is installed as its
+# README says (`go install`), and the go command checks the module against Go's checksum database, whose hash for this
+# version is recorded here. The latest release when the Go image was first built.
+version = "v0.24.0"
+h1 = "h1:nPO/LffYa4sP62Ueuema5PPnZPGaZjGl+vZGvbTek4g="
+
 [knowcode]
 # The build under test: the release candidate's source, built for Linux in the rust image below, outside this image.
 build = "cargo build --release --locked"
@@ -38,3 +45,7 @@ rust = "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd8
 swift = "swift:6.3-noble@sha256:1038d54c80063f5cdfabc4560990c30af64b5de8ebf28161deb22ca4ad5db866"
 csharp = "ubuntu:26.04@sha256:19fcd1bf268f02b60aca3bd30bd8a6d9a11759a430e32921833e65f16d87348a"
 typescript = "node:24-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a"
+go = "golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9"
+# Java and Kotlin share identity-v2's JVM image: scip-java with its JDKs (17, 21, 25), Maven and Gradle.
+java = "ghcr.io/scip-code/scip-java:0.13.2@sha256:459c2fa0544d3801857428d94590e86bcd5f8af25980a36cb360720c1b3cf802"
+kotlin = "ghcr.io/scip-code/scip-java:0.13.2@sha256:459c2fa0544d3801857428d94590e86bcd5f8af25980a36cb360720c1b3cf802"

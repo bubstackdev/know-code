@@ -12,6 +12,7 @@
 # CPUS (default 4) and MEMORY (default 12g) limit the container; the image is kc-compare-v1:LANGUAGE (build.sh).
 # QUESTIONS (default eval/compare-v1/questions.jsonl) is copied in as /in/questions.jsonl. HISTORY=1 copies the clone
 # whole, its .git included, and keeps its history instead of committing the tree once: co-change questions read it.
+# For Java and Kotlin, BUILDS (default identity-v2's jvm/builds.txt) gives the repository's restore build.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -35,6 +36,12 @@ if [ "$REPO" != probe ]; then
   fi
 fi
 (cd "$HERE/.." && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude __pycache__ -cf "$IO/in/harness.tar" compare)
+case $LANGUAGE in
+  java|kotlin)
+    BUILDS=${BUILDS:-$HERE/../identity/jvm/builds.txt}
+    mkdir -p "$IO/in/jvm" && cp "$HERE/../identity/jvm/no-werror.gradle" "$HERE/../identity/jvm/skip-buildsrc.gradle" "$IO/in/jvm/"
+    [ "$REPO" = probe ] || LINE=$(grep -E "^$REPO " "$BUILDS") || { echo "container.sh: $REPO is not in $BUILDS" >&2; exit 2; } ;;
+esac
 
 NAME=kc-compare-$LANGUAGE-$$
 cleanup() { docker rm -f -v "$NAME" >/dev/null 2>&1 || true; }
@@ -46,6 +53,7 @@ docker create --name "$NAME" --cpus "$CPUS" --memory "$MEMORY" --network bridge 
 docker start "$NAME" >/dev/null
 run() { docker exec "$NAME" bash -euo pipefail -c "$1"; }
 LOG=/out/container.log
+SERENA_HOME=/work/state/serena  # tools.py's home for Serena under run.py's STATE
 
 run "mkdir -p /work/harness /work/src && tar -xf /in/harness.tar -C /work/harness && : > $LOG
      { knowcode --version; codebase-memory-mcp --version; serena --version || true; } >>$LOG 2>&1"
@@ -63,6 +71,29 @@ restore() {  # $1: the directory to restore, in the container
     typescript) run "cd $1 && if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile --ignore-scripts;
                      elif [ -f package-lock.json ]; then npm ci --ignore-scripts; else npm install --ignore-scripts; fi >>$LOG 2>&1" ;;
     swift) run "cd $1 && swift package resolve >>$LOG 2>&1" ;;
+    # Go, Java and Kotlin keep what they restore in the home (the module cache, ~/.m2, ~/.gradle), and each tool has
+    # a home of its own (tools.py). They are restored into Serena's, the only tool whose language servers read them.
+    go)
+      # As identity-v2's labeller restores: every module's dependencies, tests' included.
+      run "export HOME=$SERENA_HOME GOTOOLCHAIN=local && unset GOPATH && mkdir -p \$HOME && cd $1 && go version >>$LOG
+           for m in \$(find . -name go.mod -not -path '*/vendor/*' -not -path '*/testdata/*' -not -path '*/.*/*'); do
+             (cd \$(dirname \$m) && go mod download >>$LOG 2>&1 && go list -test -deps ./... >/dev/null 2>>$LOG) || echo \"go: restore failed in \$m\" >>$LOG
+           done" ;;
+    java|kotlin)
+      # As identity-v2's labeller restores: its whole indexing build (builds.txt, with the same opt-ins), which fetches
+      # every dependency and plugin. Then the labeller's Gradle settings leave Serena's home, and the tree goes back to
+      # its one commit (the build's output and any version setting it changed), so every tool reads the same tree.
+      local args=${LINE#* -- } jvm tool envs catalog
+      read -r _ jvm tool envs <<<"${LINE%% -- *}"
+      catalog=$(sed -nE 's/(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$envs")
+      run "JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk
+           export COURSIER_CACHE=/root/.cache/coursier HOME=$SERENA_HOME && mkdir -p \$HOME/.gradle/init.d
+           cp /in/jvm/*.gradle \$HOME/.gradle/init.d/ && echo org.gradle.java.installations.paths=\$JDKS > \$HOME/.gradle/gradle.properties
+           cd $1
+           if [ -n '$catalog' ]; then sed -i -E 's/^kotlin = \"[^\"]*\"/kotlin = \"$catalog\"/' gradle/libs.versions.toml; fi
+           env $envs JVM_VERSION=$jvm scip-java index --build-tool=$tool -- $args >>$LOG 2>&1 || echo 'restore build failed' >>$LOG
+           rm -rf \$HOME/.gradle/init.d \$HOME/.gradle/gradle.properties
+           git clean -fdxq && git checkout -q -- . && test -z \"\$(git status --porcelain)\"" ;;
   esac
 }
 

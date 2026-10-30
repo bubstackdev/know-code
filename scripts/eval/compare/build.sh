@@ -48,6 +48,7 @@ for LANGUAGE in "$@"; do
     --build-arg SERENA_URL="$(pin serena.pinned.url)" \
     --build-arg SERENA_SHA256="$(pin serena.pinned.sha256)" \
     --build-arg SERENA_PYTHON="$(pin serena.pinned.python)" \
+    --build-arg GOPLS_VERSION="$(pin gopls.version)" \
     "$WORK/context" >"$WORK/build-$LANGUAGE.log" 2>&1
   echo "$LANGUAGE $(docker image inspect --format '{{.Id}}' "kc-compare-v1:$LANGUAGE")" | tee -a "$WORK/images.txt"
 done

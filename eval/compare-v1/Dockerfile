@@ -14,6 +14,7 @@ ARG CBM_SHA256
 ARG SERENA_URL
 ARG SERENA_SHA256
 ARG SERENA_PYTHON
+ARG GOPLS_VERSION
 ENV DEBIAN_FRONTEND=noninteractive DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 KNOWCODE_UPDATE_CHECK=0 \
     UV_PYTHON_INSTALL_DIR=/opt/python UV_NO_CACHE=1 UV_LINK_MODE=copy
 
@@ -45,10 +46,14 @@ RUN curl -fsSL -o /tmp/serena.tar.gz "$SERENA_URL" \
  && ln -s "$(uv python find "$SERENA_PYTHON")" /usr/local/bin/compare-python
 
 # Serena's language servers, fetched now as its documentation advises for restricted networks. Swift's
-# (sourcekit-lsp) ships with the toolchain image.
+# (sourcekit-lsp) ships with the toolchain image. Go's is gopls, which Serena doesn't download: `go install` checks it
+# against Go's checksum database.
 RUN case "$LANGUAGE" in \
       csharp) serena download-ls-dependencies csharp ;; \
       typescript) serena download-ls-dependencies typescript ;; \
+      java) serena download-ls-dependencies java ;; \
+      kotlin) serena download-ls-dependencies kotlin ;; \
+      go) GOTOOLCHAIN=local GOBIN=/usr/local/bin go install "golang.org/x/tools/gopls@$GOPLS_VERSION" && gopls version ;; \
     esac
 
 COPY knowcode /usr/local/bin/knowcode
