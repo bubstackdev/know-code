@@ -225,6 +225,80 @@ Each addition is committed before any run asks it, and each is its own pull requ
    - **Windows:** each tool answers with its own default history window. KnowCode's is 365 days before HEAD, and codebase-memory-mcp applies its own threshold. The labels cover the whole history. A file that changed with F only long ago is a label that a windowed answer can miss by design. Scores are recall and precision over the files named, with no rank cutoff, since codebase-memory-mcp's rows aren't ranked.
    - **The window, scored apart.** Each question also carries its labels limited to KnowCode's default window: the same rule, over F's commits in the 365 days before the pin's commit date (`labels_window`, `single_window`, `window_since`). Every answer is scored a second time against them (`cochange_window`), beside the all-history score, so the window's effect is visible rather than folded into one number. Over the 84 questions, 352 of the 4,792 labels fall in the window, and 54 questions have no window label at all, so their window recall is undefined and they count only towards precision.
 
+4. **Cross-repository HTTP** is deferred until KnowCode reads Spring server routes, which route-links-v1's servers all
+   are. Its questions and calls will be frozen together then, before any run.
+5. **Go, Java and Kotlin**, on six fresh repositories nobody tuned on: refs, impact, callers and find, drawn exactly as
+   identity-v1's are ([questions-step5.jsonl](questions-step5.jsonl), [strata-step5.json](strata-step5.json)).
+   - **The repositories:** Go's charmbracelet/bubbletea and go-gorm/gorm, Java's binarywang/WxJava and
+     brettwooldridge/HikariCP, and Kotlin's google/ksp and oshai/kotlin-logging. They are chosen by a rule written before
+     any tool was asked about them. [fresh/selection.md](fresh/selection.md) gives the rule and every candidate passed
+     over, with why, and [fresh/repos.txt](fresh/repos.txt) and [fresh/builds.txt](fresh/builds.txt) pin and build them.
+     Their references to their own declarations: bubbletea 5,624, gorm 30,572, WxJava 88,108, HikariCP 5,813, ksp
+     13,384 and kotlin-logging 1,018. kotlin-logging is small, and its count stands beside each of its figures.
+     The committed search files drop GitHub's free-text descriptions. The searches as saved, kept outside the
+     repository, have these SHA-256 digests:
+     - search-go.tsv `d43b557201785042f80278ce76c5dd45f6dfd4da3c2c938b722518199081c54a`
+     - search-java.tsv `80dd47cbb02c4cc5aac0535b9e1a252a8f19651c8b39864f2258b8ce8554c27a`
+     - search-kotlin.tsv `364b1370e3afcaf140d9d1dd04e3d3983564aa0984a121e1008ccf1592b8b941`
+     - search-kotlin-ext.tsv `332d79e138e9825b5d907cec772f55bc1d69115bf45e2d9217a62a89473a2b22`
+   - **The labels:** from identity-v2's labellers (go/types for Go, scip-java for Java and Kotlin), run in their
+     containers by [run.sh](../../scripts/eval/identity/run.sh) with `REPOS` and `BUILDS` pointing at these lists and
+     with `LABEL_ENCLOSING=1`. That opt-in field `in` is compare-v1's own: the innermost counted declaration around each
+     reference. Without the variable, the labellers write identity-v2's enumerations byte for byte. That was checked on
+     every identity-v2 Go repository and on all ten of W2's kept JVM indexes.
+   - **Go's `in`:** from the AST. A top-level function or method encloses everything from `func` to its end. A type
+     spec encloses its extent. In a var or const spec, each value belongs to its own name and the rest of the spec to
+     the first name. Two differences are stated as they are (from kc-w1-go's review):
+     - A spec whose first name is `_` adds no wide span, so its type's references are file level.
+     - A reference inside an interface's method gets the interface's key, since interface methods have no span of their
+       own.
+   - **Java's and Kotlin's `in`:** scip-java records no declaration extents (`enclosing_range`), so each counted
+     declaration's span runs from its name to its end. The scan starts at the name's first use in code on its line
+     and reads outside strings, characters and comments; a Kotlin string template (`${…}`) is code inside its string,
+     even over several lines. The end is whichever comes first of:
+     - a `;` or `,` at depth 0;
+     - the `}` closing a type's or function's body;
+     - a bracket closing one opened before the declaration (a constructor property, a try-with-resources variable);
+     - in Kotlin, a newline at depth 0 when the next line doesn't continue the expression. An accessor line
+       (`get() = …`) continues it, and so does a header ending in `:` or a next line starting with `:` or `where`
+       (a type's supertypes below its header).
+
+     A Kotlin `=` before any body makes it an expression body, whose braces are the expression's. A member the compiler
+     synthesises at another declaration (`componentN`, a property's `get`) encloses nothing. Getter and initializer
+     lambdas and `object : X {}` expressions aren't counted declarations, so they fall inside their property's span.
+   - **The hand check:** 30 declarations per draw, drawn with a fixed seed, each span confirmed by reading the source.
+     - Java: gson twice and disruptor, 0 wrong.
+     - Kotlin, moshi's first draw: 11 wrong (constructor parameters, synthesised members, a comment read as a
+       continuation). The rule was fixed, and that draw and a fresh one then had 0 wrong.
+     - Kotlin, ksp and kotlin-logging: 1 wrong each (a getter on the next line; an expression body's `if`/`else`), each
+       fixed, and each fix moved no other sampled span.
+     - Because those fixes were shaped by their own samples, fresh draws followed, each with a new seed, until every
+       JVM repository's had 0 wrong:
+       - The first: ksp 1 wrong (a string template running onto the next line), kotlin-logging 0.
+       - Comparing every span before and after that fix found a fault no draw had sampled. The scan started at the
+         line's first column, not at the name. A constructor property on its class's header line then spanned the
+         whole class, and a Java try-with-resources variable spanned its try block. The scan now starts at the name.
+       - The second: ksp 1 wrong (a class header ending in `:` above its supertypes, which ended the class at its
+         header), kotlin-logging 0.
+       - The third, with the final labeller: 0 wrong on each of ksp, kotlin-logging, HikariCP and WxJava.
+
+       Spans each fix moved, over every declaration whose name is on its line:
+
+       | Fix | ksp | kotlin-logging | HikariCP | WxJava |
+       | --- | ---: | ---: | ---: | ---: |
+       | Declarations compared (name on its line) | 4,330 | 400 | 2,102 | 50,029 |
+       | Scan from the name (constructor properties, try resources, an enum constant) | 150 | 6 | 194 | 349 |
+       | String templates over several lines | 25 | 0 | 0 | 0 |
+       | A header ending in `:` | 28 | 4 | 0 | 0 |
+
+       Each kind of move was read in source, and the new span is the declaration's own. Go's labeller doesn't use this
+       scan, and its files are byte for byte the same across all three labellings.
+   - **Rebuilds:** a scip-java rebuild can reorder an enumeration's rows. [fresh/enumerations/SHA256SUMS](fresh/enumerations/SHA256SUMS)
+     covers the files as labelled. The questions depend on the rows, not their order: shuffling the rows draws the same
+     questions.
+   - **The calls:** mapping.toml's, unchanged. Serena's language servers for Go, Java and Kotlin, and those tools'
+     images, are prepared before the run.
+
 ## Changes after the first run
 
 The first run (2026-10-29, KnowCode at integration/0.7 b6c9bd5) was scored, and its two repetitions were compared. An
