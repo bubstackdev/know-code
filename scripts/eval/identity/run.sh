@@ -102,13 +102,16 @@ case $LANGUAGE in
     CATALOG=$(sed -nE 's/.*(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$ENVS")
     [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^kotlin = \"[^\"]*\"/kotlin = \"$CATALOG\"/' gradle/libs.versions.toml
          grep -qx 'kotlin = \"$CATALOG\"' gradle/libs.versions.toml"
+    # TOOLCHAINS=ID@SHA256[,…]: JDKs a build's toolchains ask for beyond 17, 21 and the image's own, fetched with the
+    # network up and checked against the archive's digest (jvm/toolchains.sh).
+    TOOLCHAINS=$(sed -nE 's/.*(^| )TOOLCHAINS=([^ ]+).*/\2/p' <<<"$ENVS" | tr ',' ' ')
     # GRADLE_WRAPPER=V gives the container's copy a Gradle wrapper for version V, for a build that runs Gradle some other
     # way (hermit); the wrapper is generated in an empty directory, so the build itself isn't configured to make it.
     WRAPPER=$(sed -nE 's/.*(^| )GRADLE_WRAPPER=([^ ]+).*/\2/p' <<<"$ENVS")
     [ -z "$WRAPPER" ] || run "mkdir -p /tmp/wrapper && cd /tmp/wrapper && : > settings.gradle && gradle -q wrapper --gradle-version $WRAPPER
          cp -R gradlew gradle /work/src/ && cd /work/src && ./gradlew --version >>$LOG 2>&1"
     run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /work/tools/skip-buildsrc.gradle /root/.gradle/init.d/
-         JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk
+         JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk\$(bash /work/tools/toolchains.sh $TOOLCHAINS)
          echo org.gradle.java.installations.paths=\$JDKS > /root/.gradle/gradle.properties
          cd /work/src && $BUILD $ARGS >>$LOG 2>&1 || echo 'restore build failed' >>$LOG
          rm -f index.scip" ;;

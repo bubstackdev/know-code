@@ -11,9 +11,11 @@
 # exposed: pins Kotlin 2.3.20 in its version catalog (KOTLIN_CATALOG, as moshi's variable) and, like ktlint, turns on
 #   Gradle's configuration cache. Its Gradle (8.14) compiles buildSrc with a Kotlin too old for scip-java's plugin,
 #   so buildSrc compiles without it (jvm/skip-buildsrc.gradle).
-# moshix: like ktlint, turns on Gradle's configuration cache.
+# moshix: like ktlint, turns on Gradle's configuration cache; its Gradle plugin's build asks for a JDK 23 toolchain
+#   (TOOLCHAINS: Temurin 23.0.2+7, its aarch64 Linux archive's sha256, as Adoptium publishes it).
 # misk: pins Kotlin 2.3.10 in its version catalog (KOTLIN_CATALOG) and runs Gradle 9.3.0 through hermit, with no
-#   wrapper; GRADLE_WRAPPER gives the container's copy a wrapper for that Gradle version.
+#   wrapper; GRADLE_WRAPPER gives the container's copy a wrapper for that Gradle version. Its admin console's web
+#   front end is an npm build, which the offline build can't run and which holds no Kotlin, so it is left out.
 gson 17 maven -- --batch-mode clean verify -DskipTests -pl !proto
 commons-lang 17 maven -- --batch-mode clean verify -DskipTests -Dcommons.compiler.fork=true '-Dcommons.compiler.javac=${maven.compiler.executable}'
 spring-petclinic 17 maven -- --batch-mode clean verify -DskipTests
@@ -24,5 +26,5 @@ jsoup 17 maven -- --batch-mode clean verify -DskipTests
 jackson-core 17 maven -- --batch-mode clean verify -DskipTests
 ktlint 26 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
 exposed 21 gradle KOTLIN_CATALOG=2.4.21 SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
-moshix 21 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
-misk 21 gradle KOTLIN_CATALOG=2.4.21 GRADLE_WRAPPER=9.3.0 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+moshix 21 gradle TOOLCHAINS=temurin:1.23.0.2@fb43ae1202402842559cb6223886ec1663b90ffbec48479abbcb92c92c9012eb -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+misk 21 gradle KOTLIN_CATALOG=2.4.21 GRADLE_WRAPPER=9.3.0 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache -x :misk-admin:buildMiskWeb
