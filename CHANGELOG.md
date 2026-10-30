@@ -4,6 +4,17 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `find` answers a plain name with the declarations named exactly that, and sets the other matches apart. When a
+  name asked with no kind and no qualifier has declarations named exactly as typed, `items` holds only those.
+  `similar` names up to half the limit of the other matches (another case, a prefix, a word) as `kind name file:line`
+  lines, shown but never counted as items: `total` is items, `similar` and the matches in neither. With none in
+  neither, the answer isn't cut; otherwise the rest is a `more` entry, as before. A qualified name, a kind, or a name
+  nothing declares exactly in that case is answered as before. On find-dev-v1 (711 questions over eight public
+  repositories that compare-v1 doesn't use), the first page's precision for an exact name rises from 0.637 (654 of
+  1,027 rows) to 0.974 (644 of 661) at the same recall (0.876); with `similar`, recall for a lower-cased name is 0.900
+  (0.897 before) and for a name's first 60% 0.740 (0.743). On the replay gate's five repositories, `kc_find` answers
+  are 34% smaller (23,896 to 15,742 bytes).
+
 - `docs` fences each file in its Map in that file's language. A file in a language the Map didn't name was fenced as
   Swift (a Java file came out as ```` ```swift ````); Java, Kotlin, Go, JavaScript and Swift are now named, and a file
   of any other language is fenced bare.
