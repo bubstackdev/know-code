@@ -121,7 +121,7 @@ it shows against the files.
 | --- | --- | --- |
 | What depends on a symbol, a file or a diff, by proximity: `direct` (hop 1), `near` (2), `far` (3+), `test`; plus files history couples to it | `knowcode impact [SYMBOL] \| --file F \| --diff working` | `kc_impact` (topics `kc_impact.crossings`, `kc_impact.history`) |
 | The tests to run, ranked, with reasons and a confidence | `knowcode tests FILE... \| --diff REV` | `kc_tests` |
-| Declared test targets (SwiftPM, .NET test projects, `package.json` test scripts): their tests and how to run them, not ranked | `knowcode test-targets [NAME]` | `kc_test_targets` (the `kc` op `test_targets`) |
+| Declared test targets (SwiftPM, .NET test projects, `package.json` test scripts, Go modules): their tests and how to run them, not ranked | `knowcode test-targets [NAME]` | `kc_test_targets` (the `kc` op `test_targets`) |
 | Files that usually change in the same commits | `knowcode coupled FILE` | `kc_coupled` |
 | Who could review a change | `knowcode reviewers FILE... \| --diff REV` | `kc_reviewers` |
 | Dead-code candidates, `unused` or `possibly unused` with reasons (C#, TypeScript) | `knowcode unused` | `kc_unused` |
