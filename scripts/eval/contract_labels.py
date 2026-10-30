@@ -40,7 +40,48 @@ PAIRS = {
     'bitwarden': dict(server='bitwarden-server', client='bitwarden-clients', server_pin='9129efbd1531d5d8472345638efad7ef25a7337a',
                       client_pin='abccf1e342dccba06a3cc635cd4c706defa64a32', controllers=r'^src/.*/Controllers?/.*\.cs$',
                       client_src='libs/', requests='bitwarden'),
+    'petclinic': dict(server='petclinic-rest', client='petclinic-angular', server_pin='afc8fc1d3b8ec8de69414482b3bd70a1da78cb95',
+                      client_pin='efe6c201a9a3eb6e8669cf65f1cbbbf5a3f1959e', controllers=r'(^|/)openapi\.ya?ml$',
+                      client_src='src/app/', requests='petclinic', server_kind='openapi'),
+    # Second clients of a server already surveyed: the same server commits, another client's requests.
+    'jellyfin-vue': dict(server='jellyfin-server', client='jellyfin-vue', server_pin='aec42b345e1a7da25ee5492183f12209338df688',
+                         client_pin='80a2f392e183f8e13c33ec2668f4c347826567cd', controllers=r'^Jellyfin\.Api/Controllers/.*\.cs$',
+                         client_src='.', requests='jellyfin', same_server_as='jellyfin'),
+    'bitwarden-dc': dict(server='bitwarden-server', client='bitwarden-directory-connector',
+                         server_pin='9129efbd1531d5d8472345638efad7ef25a7337a', client_pin='0145d3939dcd873ea47b7a44d0f45d7eda60b2c2',
+                         controllers=r'^src/.*/Controllers?/.*\.cs$', client_src='.', requests='bitwarden', same_server_as='bitwarden'),
 }
+
+
+def openapi_routes(text, bases=None):
+    """The routes an OpenAPI document declares: (verb, path, operationId, line) for each operation under `paths`."""
+    out, path, in_paths, verb_at = [], None, False, None
+    for n, line in enumerate(text.splitlines(), 1):
+        if re.match(r'^\S', line):
+            in_paths = line.startswith('paths:')
+            continue
+        if not in_paths:
+            continue
+        m = re.match(r'^  (/\S*):\s*$', line)
+        if m:
+            path = m.group(1)
+            continue
+        m = re.match(r'^    (get|post|put|delete|patch):\s*$', line)
+        if m and path:
+            verb_at = (m.group(1).upper(), n)
+            out.append([verb_at[0], path.strip('/'), '', n])
+            continue
+        m = re.match(r'^      operationId:\s*(\S+)', line)
+        if m and out and verb_at and out[-1][3] == verb_at[1]:
+            out[-1][2] = m.group(1)
+    return [tuple(r) for r in out]
+
+
+def readers(p):
+    """How a pair's server declares its routes: (routes of a file, prefixes its files inherit, the pathspec of its files)."""
+    if p.get('server_kind') == 'openapi':
+        return openapi_routes, lambda clone, sha: {}, '*openapi.y*ml'
+    return routes, base_prefixes, '*Controller*/*.cs'
 VERBS = {'HttpGet': 'GET', 'HttpPost': 'POST', 'HttpPut': 'PUT', 'HttpDelete': 'DELETE', 'HttpPatch': 'PATCH'}
 ATTR = re.compile(r'\[\s*(Route|Http(?:Get|Post|Put|Delete|Patch))\s*(?:\(\s*(?:"([^"]*)")?[^)]*\))?\s*(?:,[^\]]*)?\]')
 CLASS = re.compile(r'\bclass\s+(\w+)(?:\s*:\s*(\w+))?')
@@ -88,14 +129,65 @@ def routes(text, bases=None):
     return out
 
 
+class Repo:
+    """One clone's objects, read through one `git cat-file --batch` process: a tree's files with their blob ids (once per
+    commit), each blob's text (once per blob), and each blob's routes (once per blob and inherited prefixes). A
+    controller no commit changed is read once over the whole history."""
+
+    def __init__(self, clone):
+        self.clone = clone
+        self.proc = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', 'cat-file', '--batch'], cwd=clone, env=GIT_ENV,
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.trees, self.texts, self.parsed = {}, {}, {}
+
+    def tree(self, sha):
+        """{path: blob id} of every file at `sha`."""
+        if sha not in self.trees:
+            out = {}
+            for line in git(self.clone, 'ls-tree', '-r', sha).splitlines():
+                meta, path = line.split('\t', 1)
+                out[path] = meta.split()[2]
+            self.trees[sha] = out
+        return self.trees[sha]
+
+    def text(self, blob):
+        if blob not in self.texts:
+            self.proc.stdin.write(f'{blob}\n'.encode())
+            self.proc.stdin.flush()
+            head = self.proc.stdout.readline().decode().split()
+            if len(head) < 3 or head[1] == 'missing':
+                self.texts[blob] = ''
+            else:
+                data = self.proc.stdout.read(int(head[2]))
+                self.proc.stdout.read(1)
+                self.texts[blob] = data.decode('utf-8', 'replace')
+        return self.texts[blob]
+
+    def routes(self, read, blob, bases):
+        key = (read.__name__, blob, tuple(sorted(bases.items())))
+        if key not in self.parsed:
+            self.parsed[key] = read(self.text(blob), bases)
+        return self.parsed[key]
+
+
+REPOS = {}
+
+
+def repo(clone):
+    if str(clone) not in REPOS:
+        REPOS[str(clone)] = Repo(clone)
+    return REPOS[str(clone)]
+
+
 def base_prefixes(clone, sha):
     """The `[Route]` templates of the base controllers at `sha` (`Base*Controller.cs`): what a controller writing no
     `[Route]` of its own inherits."""
+    r = repo(clone)
     out = {}
-    for f in git(clone, 'ls-tree', '-r', '--name-only', sha).splitlines():
+    for f, blob in sorted(r.tree(sha).items()):
         if re.search(r'(^|/)Base\w*Controller\.cs$', f):
             pending = []
-            for line in git(clone, 'show', f'{sha}:{f}').splitlines():
+            for line in r.text(blob).splitlines():
                 pending += [(k, t) for k, t in ATTR.findall(line)]
                 c = CLASS.search(line)
                 if c:
@@ -106,15 +198,25 @@ def base_prefixes(clone, sha):
     return out
 
 
-def server_routes(clone, sha, controllers):
-    """{(verb, norm path): (path, action, file, line)} of every controller at `sha`."""
+def declared(clone, sha, p, files=None):
+    """{(verb, norm path): (path, action, file, line)} of the routes the pair's server declares at `sha`, in `files` (each
+    one there; default: every file the pair's regex matches)."""
+    read, inherited, _ = readers(p)
+    r = repo(clone)
+    tree = r.tree(sha)
+    bases = inherited(clone, sha)
     out = {}
-    bases = base_prefixes(clone, sha)
-    files = [f for f in git(clone, 'ls-tree', '-r', '--name-only', sha).splitlines() if re.search(controllers, f)]
-    for f in files:
-        for verb, path, action, line in routes(git(clone, 'show', f'{sha}:{f}'), bases):
+    for f in sorted(files if files is not None else (f for f in tree if re.search(p['controllers'], f))):
+        if f not in tree:
+            continue  # a file the commit adds, or deletes, isn't there on one side
+        for verb, path, action, line in r.routes(read, tree[f], bases):
             out.setdefault((verb, norm(path)), (path, action, f, line))
     return out
+
+
+def server_routes(clone, sha, p):
+    """{(verb, norm path): (path, action, file, line)} of every route the pair's server declares at `sha`."""
+    return declared(clone, sha, p)
 
 
 def lower_camel(name):
@@ -161,8 +263,8 @@ def url_template(src, at):
 def jellyfin_requests(clone, sha, src_dir):
     """Every request the client at `sha` makes that names a route: (kind, key, file, line), `sdk` with the method called,
     `url` with the path built. Read with `git grep` at the commit, never from a checkout."""
-    def grep(*args):
-        p = git_ok(clone, 'grep', '-n', '-I', *args, sha, '--', src_dir)
+    def grep(*args, paths=None):
+        p = git_ok(clone, 'grep', '-n', '-I', *args, sha, '--', *(paths or [src_dir]))
         for l in p.splitlines():
             _, f, n, text = l.split(':', 3)
             if f.endswith(('.ts', '.tsx', '.js', '.jsx')) and '/__tests__/' not in f and not re.search(r'\.(test|spec)\.', f):
@@ -170,7 +272,8 @@ def jellyfin_requests(clone, sha, src_dir):
     out = []
     sdk_files = {l.split(':', 1)[1] for l in git_ok(clone, 'grep', '-l', '-F', '@jellyfin/sdk', sha, '--', src_dir).splitlines()}
     # `git grep` takes POSIX patterns, without `\s` or `\w`: a fixed string finds the lines, Python's regex the calls.
-    for f, n, line in grep('-F', '-e', ')'):
+    # Only in the files importing the SDK: every line holding `)` elsewhere would be read for nothing.
+    for f, n, line in (grep('-F', '-e', ')', paths=sorted(sdk_files)) if sdk_files else []):
         if f in sdk_files:
             for m in re.finditer(r'\)\s*\.\s*(\w+)\s*\(', line):
                 out.append(('sdk', m.group(1), f, n))
@@ -272,16 +375,44 @@ def bitwarden_requests(clone, sha, src_dir):
     return out
 
 
-REQUESTS = {'jellyfin': jellyfin_requests, 'bitwarden': bitwarden_requests}
+URL_FIELD = re.compile(r"""(?:\bprivate\s+|\bconst\s+|\blet\s+)?(?:this\.)?(\w+)\s*=\s*environment\.REST_API_URL\s*\+\s*(['"`])(.*?)\2""")
+HTTP_CALL = re.compile(r'this\.http\s*\.\s*(get|post|put|delete|patch)\s*(?:<[^(]*?>)?\s*\(', re.S)
 
 
-def survey(work, pair):
+def petclinic_requests(clone, sha, src_dir):
+    """Every Angular `HttpClient` call of the client at `sha` (`this.http.get<T>(url, …)`): (`send`, `VERB path`, file,
+    line). A URL is built from a field or local set to `environment.REST_API_URL + '…'`: its literal stands for it, and
+    the API's base (`environment.REST_API_URL`, the server's `/petclinic/api`) is left out on both sides."""
+    out = []
+    files = [l.split(':', 1)[1] for l in git_ok(clone, 'grep', '-l', '-F', 'this.http', sha, '--', src_dir).splitlines()]
+    for f in files:
+        if not f.endswith('.ts') or f.endswith('.spec.ts'):
+            continue
+        text = git_ok(clone, 'show', f'{sha}:{f}')
+        fields = {m.group(1): m.group(3) for m in URL_FIELD.finditer(text)}
+        for m in HTTP_CALL.finditer(text):
+            # The call's first argument, its URL fields and locals written as their literals.
+            arg = text[m.end():m.end() + 400]
+            for name, lit in sorted(fields.items(), key=lambda kv: -len(kv[0])):
+                arg = re.sub(rf'(?:this\.)?\b{re.escape(name)}\b', "'" + lit.replace('${', '{') + "'", arg)
+            t = url_template(arg, 0)
+            if t:
+                line = text.count('\n', 0, m.start()) + 1
+                out.append(('send', f"{m.group(1).upper()} {norm(t.split('?')[0])}", f, line))
+    return out
+
+
+REQUESTS = {'jellyfin': jellyfin_requests, 'bitwarden': bitwarden_requests, 'petclinic': petclinic_requests}
+
+
+def survey(work, pair, limit=None):
     p = PAIRS[pair]
     server, client = Path(work)/'clones'/p['server'], Path(work)/'clones'/p['client']
-    # The commits touching a controller (by the pathspec of the directories controllers are in; filtered by regex after).
-    log = git(server, 'log', '--no-merges', f'--since={SINCE}', '--format=%H %cI', p['server_pin'], '--', '*Controller*/*.cs')
+    read, inherited, pathspec = readers(p)
+    # The commits touching a file declaring routes (by a pathspec; filtered by the pair's regex after).
+    log = git(server, 'log', '--no-merges', f'--since={SINCE}', '--format=%H %cI', p['server_pin'], '--', pathspec)
     rows, requests = [], {}
-    for entry in log.splitlines():
+    for entry in log.splitlines()[:limit]:
         sha, when = entry.split()
         parents = git(server, 'rev-list', '--parents', '-n', '1', sha).split()[1:]
         if len(parents) != 1:
@@ -290,23 +421,12 @@ def survey(work, pair):
                    if re.search(p['controllers'], f)]
         if not changed:
             continue
-        def of(rev, files):
-            out = {}
-            bases = base_prefixes(server, rev)
-            for f in files:
-                try:
-                    text = git_ok(server, 'show', f'{rev}:{f}')
-                except RuntimeError:
-                    continue  # a file the commit adds, or deletes, isn't there on one side
-                for verb, path, action, line in routes(text, bases):
-                    out.setdefault((verb, norm(path)), (path, action, f, line))
-            return out
-        before = of(parents[0], changed)
-        gone = {k: v for k, v in before.items() if k not in of(sha, changed)}
+        before = declared(server, parents[0], p, changed)
+        gone = {k: v for k, v in before.items() if k not in declared(server, sha, p, changed)}
         if not gone:
             continue
         # A route moved to another controller is still served.
-        after = server_routes(server, sha, p['controllers'])
+        after = server_routes(server, sha, p)
         gone = {k: v for k, v in gone.items() if k not in after}
         if not gone:
             continue
@@ -323,6 +443,23 @@ def survey(work, pair):
     return rows
 
 
+def relabel(work, pair, survey_rows):
+    """A second client's labels for the routes a survey of its server found gone: the same rows, its own client read at
+    its last commit at or before each server commit's committer date."""
+    p = PAIRS[pair]
+    server, client = Path(work)/'clones'/p['server'], Path(work)/'clones'/p['client']
+    out, requests, when = [], {}, {}
+    for r in survey_rows:
+        if r['commit'] not in when:
+            when[r['commit']] = git(server, 'show', '-s', '--format=%cI', r['commit']).strip()
+        csha = git(client, 'log', '-1', f"--before={when[r['commit']]}", '--format=%H', p['client_pin']).strip()
+        if csha and csha not in requests:
+            requests[csha] = REQUESTS[p['requests']](client, csha, p['client_src'])
+        out.append(dict(r, pair=pair, client_commit=csha,
+                        consumers=consumers((r['verb'], norm(r['path'])), r['action'], requests.get(csha, []))))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -330,8 +467,13 @@ def main():
     s.add_argument('--work', required=True)
     s.add_argument('--pair', default='jellyfin', choices=sorted(PAIRS))
     s.add_argument('--out')
+    s.add_argument('--limit', type=int, help='only the first LIMIT server commits (newest first): for checks')
+    s.add_argument('--from', dest='source', help="for a pair sharing a server (same_server_as): that pair's survey, reused")
     args = ap.parse_args()
-    rows = survey(args.work, args.pair)
+    if args.source:
+        rows = relabel(args.work, args.pair, [json.loads(l) for l in Path(args.source).read_text().splitlines() if l.strip()])
+    else:
+        rows = survey(args.work, args.pair, args.limit)
     if args.out:
         Path(args.out).write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
     commits = {r['commit'] for r in rows}
