@@ -4,7 +4,7 @@
 #     sites.sh FRAMEWORK MODULE
 #
 # Copies the framework's module (the version the program's build uses, `go list -m`) out of the module cache, places a
-# call to KCRecord where it adds a route (gin's RouterGroup.handle, echo v4's Echo.add, chi's Mux.handle) and a
+# call to KCRecord where it adds a route (gin's RouterGroup.handle, echo v4's Echo.add, echo v5's DefaultRouter.Add, chi's Mux.handle) and a
 # kc_sites.go holding KCRecord and KCSites beside it, and points the container's copy of the program's module at the
 # copy with a `replace` (go build -overlay can't replace module cache files). The site is the first stack frame outside
 # the framework's module and the standard library. The module cache and the clone are untouched.
@@ -20,6 +20,8 @@ case $fw in
        expr='s/(func \(group \*RouterGroup\) handle\(httpMethod, relativePath string, handlers HandlersChain\) IRoutes \{\n\tabsolutePath := group\.calculateAbsolutePath\(relativePath\)\n)/$1\tKCRecord(httpMethod+" "+absolutePath)\n/' ;;
   echo) pkg=echo file=echo.go
        expr='s/(func \(e \*Echo\) add\(host, method, path string, handler HandlerFunc, [^\n]*\) \*Route \{\n)/$1\tKCRecord(method+" "+path)\n/' ;;
+  echo5) pkg=echo file=router.go
+       expr='s/(func \(r \*DefaultRouter\) Add\(route Route\) \(RouteInfo, error\) \{\n)/$1\tKCRecord(route.Method+" "+route.Path)\n/' ;;
   chi) pkg=chi file=mux.go
        expr='s/(\n)(\treturn mx\.tree\.InsertRoute\(method, pattern, h\)\n)/$1\tKCRecord(KCHandlerKey(handler)+" "+pattern)\n$2/' ;;
   *) echo "sites.sh: no site hook for $fw" >&2; exit 1 ;;

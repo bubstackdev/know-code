@@ -231,3 +231,21 @@ pattern, every exclusion decision, and every figure above, is the same.
 These held-outs have now been read, so a score on them after a fix isn't out of sample: the fixes they show are made
 and measured on routes-v1's repositories, and a new held-out per framework is named before its labelling.
 
+### Held-out repositories, round 2
+
+Named after the fixes the first round showed (helper prefixes, tests' groups, registration through a function
+parameter), chosen by their structure alone before any KnowCode answer on them was read, and committed before any was
+labelled. Open-source licences only, since the labels quote their paths and routes. Pinned at their default branches'
+heads on 2026-10-30 ([repos-heldout.txt](../../scripts/eval/routes/repos-heldout.txt)):
+
+| Framework | Repository | Commit | Program |
+| --- | --- | --- | --- |
+| gin | flipped-aurora/gin-vue-admin (the module in `server/`) | `cee04b08` | a harness test in `initialize` building `Routers()`, the gin engine the server serves |
+| echo | go-vikunja/vikunja | `d4899715` | a harness test in `pkg/routes` building `NewEcho()` and `RegisterRoutes(e)`, as `vikunja web` does, over the default configuration |
+| chi | smallstep/certificates | `06ac06a1` | a harness test in `api` building `Route(chi.NewRouter())`, as `ca/ca.go` does |
+| net/http | none | | no open-source repository found, in the time given, whose `ServeMux` of at least 20 routes a harness can list under the rule: round 2 has no net/http held-out |
+
+vikunja uses echo v5, whose registration sites the labeller records at `DefaultRouter.Add` (no routes-v1 repository
+uses echo v5, so those sites are read in the listing before scoring). They are labelled once and scored once, under
+v1.2, and published beside the first round. The replacement rule above applies, with these fallbacks named now:
+eddycjy/go-gin-example for gin and navidrome/navidrome for chi.

@@ -4,3 +4,7 @@ gin-realworld go https://github.com/gothinkster/golang-gin-realworld-example-app
 echo-realworld go https://github.com/xesina/golang-echo-realworld-example-app e578590b51e93440c5bdfdb5a98578679c0ee383
 goatcounter go https://github.com/arp242/goatcounter c031008a8d28c85b36708824f23b28957e7ed262
 pkgsite go https://github.com/golang/pkgsite fb32d103a734d75ea28b6f96a3ef24e08c2b2e22
+# Round 2, after the fixes the first round showed: pinned at their default branch's head on 2026-10-30.
+gin-vue-admin go https://github.com/flipped-aurora/gin-vue-admin cee04b08d1262036ca33e3026e1e13d29471c7d5
+vikunja go https://github.com/go-vikunja/vikunja d4899715e3724448aaa08951f474a575c7d729a0
+step-ca go https://github.com/smallstep/certificates 06ac06a18186397a5887df91c5443d96f57dd966
