@@ -341,6 +341,11 @@ def extent(lines, start, lang, body):
                     k += 2 if text[k] == '\\' else 1
                 j = k + 1
                 continue
+            if c == '=' and depth == 0 and body and lang == 'kotlin' and text[j:j + 2] not in ('==', '=>') \
+                    and (j == 0 or text[j - 1] not in '!<>='):
+                # An expression body (`fun f() = if (…) { … } else { … }`, `typealias X = …`): its braces are the
+                # expression's, so it ends as an expression does, not at the first `}`.
+                body = False
             if c in OPENERS:
                 depth += 1
             elif c in CLOSERS:
