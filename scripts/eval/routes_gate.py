@@ -149,6 +149,18 @@ def dependent(regions, file, line):
     return any(r['file'].removeprefix('/work/src/') == file and r['start'] <= line <= r['end'] for r in regions)
 
 
+# echo's not-found handler as echo's own listing names it: the method marker later versions give its placeholders,
+# its route name there (`echo_route_not_found:/prefix`), or the function itself, echo's NotFoundHandler, the first
+# function literal of the package's declarations (v4.1.16 and others give placeholders the real methods).
+ECHO_NOT_FOUND = re.compile(r'^(echo_route_not_found\b.*|github\.com/labstack/echo(/v\d+)?\.init\.func1)$')
+
+
+def placeholder(label):
+    """Whether a label is one of echo's not-found placeholders, which the rule says aren't routes."""
+    return label['method'] == 'echo_route_not_found' or (
+        label['framework'] == 'echo' and all(ECHO_NOT_FOUND.match(h) for h in label['handlers']))
+
+
 def exclude(labels, rows, regions):
     """routes-v1.1's exclusions (eval/routes-v1/README.md): the labels and KnowCode routes left in, and what was left
     out and why. echo's not-found placeholders are not routes. A route both sides have is left out only when both
@@ -158,7 +170,7 @@ def exclude(labels, rows, regions):
     out = dict(placeholders=[], labels=[], routes=[], disagree=[])
     kept_labels = []
     for l in labels:
-        if l['method'] == 'echo_route_not_found':
+        if placeholder(l):
             out['placeholders'].append(f"{l['method']} {l['path']}")
         else:
             kept_labels.append(l)

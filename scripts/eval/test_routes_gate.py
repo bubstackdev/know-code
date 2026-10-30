@@ -88,6 +88,16 @@ class Score(unittest.TestCase):
         self.assertEqual(len(out['disagree']), 1)
         self.assertIn('/split', out['disagree'][0])
 
+    def test_echo_placeholders_by_handler(self):
+        lab = lambda m, p, h: dict(repo='orchard', framework='echo', method=m, path=p, handlers=[h], locs=[])
+        labels = [lab('CONNECT', '/api/trees/*', 'github.com/labstack/echo/v4.init.func1'),   # v4.1.16's placeholder
+                  lab('echo_route_not_found', '/g', 'echo_route_not_found:/g'),               # later versions' marker
+                  lab('GET', '/static/*', 'github.com/labstack/echo/v4.StaticDirectoryHandler.func1'),
+                  lab('GET', '/api/trees', 'orchard.listTrees')]
+        kept, _, out = gate.exclude(labels, [], [])
+        self.assertEqual([l['path'] for l in kept], ['/static/*', '/api/trees'])
+        self.assertEqual(len(out['placeholders']), 2)
+
     def test_a_small_framework_is_reported_not_gated(self):
         s = gate.summarize({'a': {'gin': dict(routes=3, routes_matched=1, labels=3, labels_matched=1, false=[], missed=[])}})
         self.assertFalse(s['gin']['gated'])
