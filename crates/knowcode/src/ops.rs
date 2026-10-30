@@ -7787,14 +7787,20 @@ fn docs_markdown(env: &Value, r: &Value) -> String {
         );
         for f in files {
             let file = s(&f["file"]);
+            // The fence's language, for highlighting; one KnowCode doesn't name is left bare rather than mislabelled.
             let lang = match file.rsplit('.').next() {
+                Some("swift") => "swift",
                 Some("py") => "python",
                 Some("rs") => "rust",
                 Some("cs") => "csharp",
-                Some("ts") => "typescript",
+                Some("ts" | "mts" | "cts") => "typescript",
                 Some("tsx") => "tsx",
+                Some("js" | "mjs" | "cjs" | "jsx") => "javascript",
+                Some("java") => "java",
+                Some("kt" | "kts") => "kotlin",
+                Some("go") => "go",
                 Some("cfm" | "cfc" | "cfs") => "cfml",
-                _ => "swift",
+                _ => "",
             };
             let _ = writeln!(md, "### `{file}`\n\n```{lang}");
             for sym in arr(&f["symbols"]) {
@@ -8526,6 +8532,18 @@ pub fn note_rm(id: i64, args: &Scope) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// Each file in docs' `## Map` is fenced with its own language, and one KnowCode doesn't name with none: a Java
+    /// file once came out as ```swift.
+    #[test]
+    fn docs_map_fences_each_file_in_its_own_language() {
+        let file = |f: &str| json!({ "file": f, "symbols": [{ "signature": "x", "line": 1 }] });
+        let r = json!({ "repo": "shop", "map": { "files": [file("src/A.java"), file("pkg/b.go"), file("src/c.swift"), file("build.gradle")] } });
+        let md = docs_markdown(&json!({}), &r);
+        for (f, fence) in [("src/A.java", "```java\n"), ("pkg/b.go", "```go\n"), ("src/c.swift", "```swift\n"), ("build.gradle", "```\n")] {
+            assert!(md.contains(&format!("### `{f}`\n\n{fence}")), "{f}: {md}");
+        }
+    }
 
     /// A fan-out's workers run as the query that started it: what they note is the query's, and its cancellation
     /// stops them.
