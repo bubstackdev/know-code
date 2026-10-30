@@ -1080,7 +1080,7 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || {
                 let d = &out.data;
                 if !d.items.is_empty() || d.manifests.is_empty() {
-                    render::find(&d.items, d.total, d.multi, d.capped, &d.declared);
+                    render::find(&d.items, &d.similar, d.total, d.multi, d.capped, &d.declared);
                 }
                 render::manifest_hits(&d.manifests);
             })
