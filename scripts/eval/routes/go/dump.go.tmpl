@@ -33,6 +33,36 @@ func kcOut(r kcRoute) {
 	fmt.Printf("{\"t\": \"route\", %s\n", b[1:])
 }
 
+// kcOutAt prints a route once per registration site its framework's hook recorded under key (routes-v1.1), or once
+// without one when no hook ran.
+func kcOutAt(r kcRoute, sites map[string][]string, key string) {
+	if len(sites[key]) == 0 {
+		kcOut(r)
+		return
+	}
+	for _, s := range sites[key] {
+		r.Loc = s
+		kcOut(r)
+	}
+}
+
+// kcChiKey finds a chi route's sites: chi records them by endpoint handler and the pattern its own (sub)router has,
+// and walks the full route; the longest tail of the route that the same handler was registered under is the one.
+// The handler is the endpoint as registered, before route middleware wraps it, which is what chi.Walk hands back;
+// a handler shared by several routes (one wrapper's closure) is told apart by the pattern.
+func kcChiKey(sites map[string][]string, handler, route string) string {
+	segs := strings.Split(strings.TrimPrefix(route, "/"), "/")
+	for i := range segs {
+		if k := handler + " /" + strings.Join(segs[i:], "/"); len(sites[k]) > 0 {
+			return k
+		}
+	}
+	if k := handler + " /"; len(sites[k]) > 0 {
+		return k
+	}
+	return ""
+}
+
 func kcFuncName(v interface{}) string {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() == reflect.Func {
