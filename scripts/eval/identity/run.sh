@@ -97,18 +97,16 @@ case $LANGUAGE in
     ARGS=${LINE#* -- }
     read -r _ JVM TOOL ENVS <<<"${LINE%% -- *}"
     BUILD="env $ENVS JVM_VERSION=$JVM scip-java index --build-tool=$TOOL --"
-    # KOTLIN_CATALOG=V sets the Kotlin version in the container's copy of the file a build pins it in rather than reading
-    # a variable (scip-java's Kotlin plugin needs Kotlin 2.4): gradle/libs.versions.toml's `kotlin = "…"`, or the file
-    # KOTLIN_FILE names, whose `KOTLIN_VERSION = "…"` constant is the pin.
+    # KOTLIN_CATALOG=V sets the Kotlin version in the container's copy of gradle/libs.versions.toml, for a build that
+    # pins it there rather than reading a variable (scip-java's Kotlin plugin needs Kotlin 2.4).
     CATALOG=$(sed -nE 's/.*(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$ENVS")
-    PINNED=$(sed -nE 's/.*(^| )KOTLIN_FILE=([^ ]+).*/\2/p' <<<"$ENVS")
-    PINNED=${PINNED:-gradle/libs.versions.toml}
-    [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^([[:space:]]*(const val )?(kotlin|KOTLIN_VERSION) = )\"[^\"]*\"/\\1\"$CATALOG\"/' $PINNED
-         grep -qE '(kotlin|KOTLIN_VERSION) = \"$CATALOG\"' $PINNED"
-    # GIT_TAG=T makes the container's copy a git checkout of one commit tagged T, for a build whose release plugin reads
-    # its version from git (the copy holds the tracked files only).
-    TAG=$(sed -nE 's/.*(^| )GIT_TAG=([^ ]+).*/\2/p' <<<"$ENVS")
-    [ -z "$TAG" ] || run "cd /work/src && git init -q && git add -A && git -c user.name=label -c user.email=label@invalid commit -qm label && git tag $TAG"
+    [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^kotlin = \"[^\"]*\"/kotlin = \"$CATALOG\"/' gradle/libs.versions.toml
+         grep -qx 'kotlin = \"$CATALOG\"' gradle/libs.versions.toml"
+    # GRADLE_WRAPPER=V gives the container's copy a Gradle wrapper for version V, for a build that runs Gradle some other
+    # way (hermit); the wrapper is generated in an empty directory, so the build itself isn't configured to make it.
+    WRAPPER=$(sed -nE 's/.*(^| )GRADLE_WRAPPER=([^ ]+).*/\2/p' <<<"$ENVS")
+    [ -z "$WRAPPER" ] || run "mkdir -p /tmp/wrapper && cd /tmp/wrapper && : > settings.gradle && gradle -q wrapper --gradle-version $WRAPPER
+         cp -R gradlew gradle /work/src/ && cd /work/src && ./gradlew --version >>$LOG 2>&1"
     run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /work/tools/skip-buildsrc.gradle /root/.gradle/init.d/
          JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk
          echo org.gradle.java.installations.paths=\$JDKS > /root/.gradle/gradle.properties

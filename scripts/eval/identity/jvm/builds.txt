@@ -11,9 +11,9 @@
 # exposed: pins Kotlin 2.3.20 in its version catalog (KOTLIN_CATALOG, as moshi's variable) and, like ktlint, turns on
 #   Gradle's configuration cache. Its Gradle (8.14) compiles buildSrc with a Kotlin too old for scip-java's plugin,
 #   so buildSrc compiles without it (jvm/skip-buildsrc.gradle).
-# dgs-framework: pins Kotlin 2.2.20 as buildSrc's KOTLIN_VERSION constant (KOTLIN_FILE names the file KOTLIN_CATALOG
-#   rewrites), and its buildSrc compiles without scip-java's plugin, as exposed's does. Its release plugin reads the
-#   version from git, so the copy is made a checkout tagged v12.1.0 (GIT_TAG).
+# moshix: like ktlint, turns on Gradle's configuration cache.
+# misk: pins Kotlin 2.3.10 in its version catalog (KOTLIN_CATALOG) and runs Gradle 9.3.0 through hermit, with no
+#   wrapper; GRADLE_WRAPPER gives the container's copy a wrapper for that Gradle version.
 gson 17 maven -- --batch-mode clean verify -DskipTests -pl !proto
 commons-lang 17 maven -- --batch-mode clean verify -DskipTests -Dcommons.compiler.fork=true '-Dcommons.compiler.javac=${maven.compiler.executable}'
 spring-petclinic 17 maven -- --batch-mode clean verify -DskipTests
@@ -24,4 +24,5 @@ jsoup 17 maven -- --batch-mode clean verify -DskipTests
 jackson-core 17 maven -- --batch-mode clean verify -DskipTests
 ktlint 26 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
 exposed 21 gradle KOTLIN_CATALOG=2.4.21 SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
-dgs-framework 21 gradle KOTLIN_CATALOG=2.4.21 KOTLIN_FILE=buildSrc/src/main/kotlin/Versions.kt SCIP_SKIP_BUILDSRC=1 GIT_TAG=v12.1.0 -- clean scipPrintDependencies scipCompileAll
+moshix 21 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+misk 21 gradle KOTLIN_CATALOG=2.4.21 GRADLE_WRAPPER=9.3.0 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache

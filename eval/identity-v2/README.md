@@ -291,21 +291,31 @@ without it. It turns on Gradle's configuration cache, so it is built with `--no-
 | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
 | Kotlin | type | 20 | 40 | 40 | 10 | 27 | 137 |
 
-### Held out, third: dgs-framework (Kotlin)
+### Held out, third: MoshiX and misk (Kotlin)
 
-Exposed's four wrong links led to two more resolver changes, so a third held-out set tests them fresh. The choice was
-committed before any labelling, and the labels follow the same rule, labeller and sampler, committed before any
-KnowCode answer on them is read, and scored once.
+Exposed's four wrong links led to two more resolver changes, so a third held-out set tests them fresh: two
+repositories as one set, chosen and committed before any labelling, labelled by the same rule, labeller and sampler,
+committed before any KnowCode answer on them is read, and scored once.
 
-[http4k](https://github.com/http4k/http4k) at 6.61.0.0 was chosen first and can't be built for labelling: its build
-logic is an included build of precompiled script plugins (`*.gradle.kts` under `src/main/kotlin`), and scip-java
-0.13.2's Gradle plugin, which its init script applies to every project of every build, reads each Kotlin compile's
-compiler arguments while the build is configured. Under Gradle 9 those arguments come from a task that hasn't run yet,
-and Gradle refuses the read, so the build fails before compiling anything; nothing was enumerated. The approved
-fallback, [Netflix/dgs-framework](https://github.com/Netflix/dgs-framework) at its v12.1.0 tag, replaces it. It pins
-Kotlin 2.2.20 as `buildSrc`'s `KOTLIN_VERSION` constant, which the container's copy sets to 2.4.21 (`KOTLIN_FILE`
-names the file `KOTLIN_CATALOG` rewrites), and its `buildSrc` compiles without scip-java's plugin, as Exposed's does
-([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Only its Kotlin references are drawn.
+Two repositories chosen first couldn't be built for labelling, and nothing from either was enumerated:
+
+- [http4k](https://github.com/http4k/http4k) at 6.61.0.0: its build logic is an included build of precompiled script
+  plugins (`*.gradle.kts` under `src/main/kotlin`), and scip-java 0.13.2's Gradle plugin, which its init script applies
+  to every project of every build, reads each Kotlin compile's compiler arguments while the build is configured. Under
+  Gradle 9 those arguments come from a task that hasn't run yet, and Gradle refuses the read, so the build fails before
+  compiling anything.
+- [Netflix/dgs-framework](https://github.com/Netflix/dgs-framework) at v12.1.0: it pins Kotlin 2.2.20, and with the
+  container's copy raised to Kotlin 2.4 (scip-java's plugin needs it) its Kotlin compiles still load Kotlin's scripting
+  compiler plugin at a version the 2.4 compiler refuses, even with Kotlin's own artifacts held to 2.4 on the compiler's
+  classpaths; it was given up after a 30-minute limit.
+
+So the set is drawn from repositories already on, or near, Kotlin 2.4, with no precompiled build scripts:
+[ZacSweers/MoshiX](https://github.com/ZacSweers/MoshiX) at its 0.38.0 tag (Kotlin 2.4.20, Gradle 9.8.0), and
+[cashapp/misk](https://github.com/cashapp/misk) at its v2026.10.28.211731-46eb623 tag, which pins Kotlin 2.3.10 in its
+version catalog (the container's copy is set to 2.4.21, as for Exposed) and runs Gradle 9.3.0 through hermit without
+a wrapper (`GRADLE_WRAPPER` gives the container's copy one, for that version). Both turn on Gradle's configuration
+cache and are built with `--no-configuration-cache` ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Only
+Kotlin references are drawn.
 
 ### Scoring
 
