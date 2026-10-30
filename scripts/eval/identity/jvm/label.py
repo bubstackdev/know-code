@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -19,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scip import DEFINITION, byte_column, read_index  # noqa: E402
 
 LANGUAGES = {'.java': 'java', '.kt': 'kotlin'}
+# compare-v1 (eval/compare-v1/README.md) adds `in` to each reference row; identity-v2's output is unchanged without it.
+ENCLOSING = os.environ.get('LABEL_ENCLOSING') == '1'
 # Build output and generated sources: annotation processors' and KSP's output, Kotlin's and Gradle's build dirs.
 GENERATED = ('build', 'target', 'generated', 'out', '.gradle')
 ABSTRACT = re.compile(r'\babstract\b')
@@ -191,6 +194,21 @@ def enumerate_repo(repo, src, index):
         return up in defs
 
     members = {(enclosing(symbol), descriptor_of(symbol)[0]) for symbol, d in defs.items() if not d['generated']}
+    # compare-v1's `in`: each counted declaration's span, from its name line to its end (extent), per file.
+    spans = {}
+    if ENCLOSING:
+        for symbol, d in defs.items():
+            got = None if d['generated'] else name_and_group(symbol)
+            if got:
+                word = re.compile(r'(?<![\w$])' + re.escape(got[0]) + r'(?![\w$])')
+                for f, ln in d['locs']:
+                    lines = lines_of(f)
+                    # A member the compiler synthesises at another declaration (a data class's `componentN`, a
+                    # property's `get`) has no source of its own: its name isn't on its line, and it encloses nothing.
+                    if ln > len(lines) or not word.search(lines[ln - 1]):
+                        continue
+                    last = extent(lines, ln, LANGUAGES[Path(f).suffix], got[1] in ('type', 'callable'))
+                    spans.setdefault(f, []).append((ln, last, symbol))
     seen = set()
     for rel, lang, d in docs:
         lines = lines_of(rel)
@@ -275,8 +293,89 @@ def enumerate_repo(repo, src, index):
                 row.update(inside=True, locs=sorted([list(loc) for loc in target['locs']]), origin=None)
             else:
                 row.update(inside=False, locs=[], origin=origin(symbol))
+            if ENCLOSING:
+                row['in'] = innermost(spans.get(rel, []), line)
             out.append(row)
     return out
+
+
+OPENERS, CLOSERS = '([{', ')]}'
+# A Kotlin line that continues the expression above it, so a newline before it doesn't end a declaration.
+CONTINUES = re.compile(r'^\s*(?:\.|\?\.|\?:|&&|\|\||[-+*%]|/(?![/*])|as\b|is\b|in\b|!in\b|else\b'
+                       # a property's accessors on the lines after it (`get() = …`, `private set`)
+                       r'|(?:(?:private|protected|internal|public|override|open|inline)\s+)*(?:get|set)\b(?!\s*[:=]))')
+
+
+def extent(lines, start, lang, body):
+    """The last line of the declaration whose name is on line `start` (1-based), for compare-v1's `in` field: scanning
+    from the name, outside strings, characters and comments (history-v1's span rule), it ends at a `;` at depth 0; for
+    a type or a callable (`body`), at the `}` closing a block opened at depth 0; in Kotlin also at a newline at depth 0
+    when the next line doesn't continue the expression (`fun f() = …`, `val x = …`, a class with no body). A field's
+    initializer may hold braces (an anonymous class, a lambda): it runs on to its end. Unended, it ends at the file's."""
+    depth, i, n = 0, start - 1, len(lines)
+    text = lines[i] if i < n else ''
+    j = 0
+    while i < n:
+        text = lines[i]
+        while j < len(text):
+            c, two, three = text[j], text[j:j + 2], text[j:j + 3]
+            if two == '//':
+                break
+            if two == '/*':
+                end = text.find('*/', j + 2)
+                while end < 0 and i + 1 < n:
+                    i, j, text = i + 1, 0, lines[i + 1]
+                    end = text.find('*/')
+                j = (end + 2) if end >= 0 else len(text)
+                continue
+            if three == '"""':  # a Java text block or a Kotlin raw string, possibly over several lines
+                end = text.find('"""', j + 3)
+                while end < 0 and i + 1 < n:
+                    i, text = i + 1, lines[i + 1]
+                    end = text.find('"""')
+                j = (end + 3) if end >= 0 else len(text)
+                continue
+            if c in '"\'':
+                k = j + 1
+                while k < len(text) and text[k] != c:
+                    k += 2 if text[k] == '\\' else 1
+                j = k + 1
+                continue
+            if c == '=' and depth == 0 and body and lang == 'kotlin' and text[j:j + 2] not in ('==', '=>') \
+                    and (j == 0 or text[j - 1] not in '!<>='):
+                # An expression body (`fun f() = if (…) { … } else { … }`, `typealias X = …`): its braces are the
+                # expression's, so it ends as an expression does, not at the first `}`.
+                body = False
+            if c in OPENERS:
+                depth += 1
+            elif c in CLOSERS:
+                depth -= 1
+                if depth < 0:  # a bracket opened before the declaration closes: it sat in a list (a parameter)
+                    return i + 1
+                if c == '}' and depth == 0 and body:
+                    return i + 1
+            elif c == ';' and depth == 0:
+                return i + 1
+            elif c == ',' and depth == 0 and not body:  # one of several: parameters, or fields declared together
+                return i + 1
+            j += 1
+        if lang == 'kotlin' and depth == 0:
+            following = next((lines[k] for k in range(i + 1, n)
+                              if lines[k].strip() and not lines[k].lstrip().startswith(('//', '/*', '*'))), '')
+            if text.strip() and not text.rstrip().endswith(('=', ',', '(', '->', '.')) and not CONTINUES.match(following) \
+                    and not following.lstrip().startswith('{'):
+                return i + 1
+        i, j = i + 1, 0
+    return n
+
+
+def innermost(spans, line):
+    """The key of the narrowest span holding `line`, or None at file level."""
+    best = None
+    for first, last, key in spans:
+        if first <= line <= last and (best is None or last - first < best[1] - best[0]):
+            best = (first, last, key)
+    return best[2] if best else None
 
 
 ANNOTATIONS = re.compile(r'^\s*(?:@\w+(?:\.\w+)*(?:\([^)]*\))?\s*)+')

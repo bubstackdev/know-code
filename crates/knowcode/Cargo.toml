@@ -17,6 +17,7 @@ kc-extract.workspace = true
 kc-index.workspace = true
 kc-store.workspace = true
 libc.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rmcp.workspace = true
