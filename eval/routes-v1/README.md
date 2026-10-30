@@ -240,12 +240,19 @@ heads on 2026-10-30 ([repos-heldout.txt](../../scripts/eval/routes/repos-heldout
 
 | Framework | Repository | Commit | Program |
 | --- | --- | --- | --- |
-| gin | flipped-aurora/gin-vue-admin (the module in `server/`) | `cee04b08` | a harness test in `initialize` building `Routers()`, the gin engine the server serves |
+| gin | flipped-aurora/gin-vue-admin (the module in `server/`) | `cee04b08` | a harness test in `core` initialising the server as its `main` does short of the database (the repository's `config.yaml`) and building `initialize.Routers()`, the gin engine `RunServer` serves |
 | echo | go-vikunja/vikunja | `d4899715` | a harness test in `pkg/routes` building `NewEcho()` and `RegisterRoutes(e)`, as `vikunja web` does, over the default configuration |
 | chi | smallstep/certificates | `06ac06a1` | a harness test in `api` building `Route(chi.NewRouter())`, as `ca/ca.go` does |
 | net/http | none | | no open-source repository found, in the time given, whose `ServeMux` of at least 20 routes a harness can list under the rule: round 2 has no net/http held-out |
 
-vikunja uses echo v5, whose registration sites the labeller records at `DefaultRouter.Add` (no routes-v1 repository
+Two programs were corrected before any was listed or any answer read: gin-vue-admin's harness first built `Routers()`
+without the configuration its `main` loads, and the empty file-store path's catch-all conflicted with its swagger route;
+vikunja embeds its front end's build, which isn't committed, so an empty stand-in is created in the container's copy
+([prepare.sh](../../scripts/eval/routes/go/harness/vikunja/prepare.sh)), as for gotify and opengist. vikunja uses echo
+v5, whose registration sites the labeller records at `DefaultRouter.Add`, and whose route answering every method (`Any`)
+its listing names `echo_route_any`, which the labeller writes as method `*`, as the rule does. vikunja registers its v2
+API through huma's echo adapter, so those routes' sites are the adapter's (the first frame outside echo and the
+standard library), never configuration-dependent (no routes-v1 repository
 uses echo v5, so those sites are read in the listing before scoring). They are labelled once and scored once, under
 v1.2, and published beside the first round. The replacement rule above applies, with these fallbacks named now:
 eddycjy/go-gin-example for gin and navidrome/navidrome for chi.
