@@ -260,6 +260,7 @@ const QUESTIONS: &[(&[&str], bool)] = &[
     (&["search", "Order"], false),
     (&["grep-ast", "new $X($$$)", "-l", "cs"], false),
     (&["rules", "--regex", "Order"], false),
+    (&["review", "--diff", "HEAD~2"], false),
     (&["deps"], false),
     (&["routes"], false),
     (&["tables"], false),

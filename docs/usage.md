@@ -45,6 +45,7 @@ command, run `knowcode <command> --help`.
 | Text or regex over every file, ranked definitions first | `knowcode search` | `kc_search` |
 | Code patterns over syntax trees ([ast-grep](https://ast-grep.github.io) patterns) | `knowcode grep-ast 'new HttpClient($$$)' -l cs` | `kc_grep_ast` |
 | A repo's own rules ([ast-grep rule files](https://ast-grep.github.io/reference/yaml.html)), and as a monitor, only the matches since a commit | `knowcode rules --rules lint/ [--new-since main]` | `kc_rules` (the `kc` op `rules`) |
+| One review of a diff: what it changes, the tests to run, files usually changed with it, what depends on it, the rule matches it brings | `knowcode review --diff main [--format sarif]` | `kc_review` (the `kc` op `review`) |
 
 `search` matches per line, like `git grep`. Hits are ranked `def` (the match covers a declared name), `decl`
 (elsewhere on a declaration line), `code`, then `test`, `comment` and `doc`. It stops at 50,000 matching lines,
@@ -75,6 +76,17 @@ didn't. A match is
 known by its rule and its matched text, so one that moved or whose file was renamed isn't new; only the files that
 differ from REF are read, in both versions. The base is the monitor's only state: nothing is stored, and it runs only
 when asked. `--format sarif` prints a SARIF 2.1.0 log (locations and messages, no source text) with every match.
+
+`review --diff REF` answers once for the diff from REF (or `working`) to the working tree, where a client would
+otherwise join `impact --diff`, `tests`, `coupled` and `rules`: the changed files with the symbols in their changed
+lines, the tests to run (with their target's command where a manifest declares one), the files that usually change
+with them and weren't changed, what depends on the changed symbols (one hop, by file), and the repo's rule matches
+the diff brings. Its `contracts` section is reserved for the routes, messages and tables a diff breaks in other repos,
+and says `unsupported` until it is filled. Each
+section says whether it is whole and how to continue it; the tests are advice, never the only ones to run. The CLI
+prints a markdown comment for a pull request; `--format sarif` prints a SARIF 2.1.0 log, contract breaks as errors
+and possible breaks as warnings; `--json` gives the answer, whose structure [answers.md](answers.md#review) describes.
+`--changes`, `--dependents`, `--tests` and `--missed` set how many of each are listed.
 
 ## Understand a symbol
 
@@ -280,12 +292,13 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_task` | `task` | `kc_task` |
 | `kc_test_targets` | `test-targets` | `kc_test_targets` |
 | `kc_rules` | `rules` | `kc_rules` |
+| `kc_review` | `review` | `kc_review` |
 
 `kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
 and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it. Nor is `kc_test_targets`, read by an
 automated client once per task: it is the `kc` op `test_targets`, and `--tools all,kc_test_targets` advertises it.
 Nor is `kc_rules`, which a pipeline or a client asks for by name: it is the `kc` op `rules`, and `--tools
-all,kc_rules` advertises it.
+all,kc_rules` advertises it. `kc_review` is served the same way: the `kc` op `review`, and `--tools all,kc_review`.
 
 ## Capabilities
 
@@ -386,6 +399,7 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `search` | `-e/--regex`, `-i/--ignore-case`, `-S/--smart-case`, `-w/--word`, `-l/--lang`, `-g/--glob`, `-C/--context`, `-n/--limit`, `--offset`, `--files`, `-a/--all` |
 | `grep-ast` | `-l/--lang`, `--selector`, `--inside`, `--has`, `--not-inside`, `--not-has`, `--text`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
 | `rules` | `--rules`, `--regex`, `--new-since`, `--format`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
+| `review` | `--diff`, `--changes`, `--dependents`, `--tests`, `--missed`, `--format` |
 | `tables` | `--all-callers` |
 | `routes`, `events`, `deps` | |
 | `fetch-deps` | `--into DIR` (required), `--dry-run`, `--full`, `--add-root`, `--include-blocked` |

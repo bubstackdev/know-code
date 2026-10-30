@@ -193,6 +193,7 @@ const QUESTIONS: &[&[&str]] = &[
     &["grep-ast", "class $C: $$$", "-l", "python"],
     &["rules", "--regex", "(?i)zqx"],
     &["rules", "--regex", "(?i)zqx", "--new-since", "HEAD~2"],
+    &["review", "--diff", "HEAD~2"],
     &["deps"],
     &["routes"],
     &["tables"],

@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
+  `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
+  target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,
+  by file), and the rule matches it brings. Its `contracts` section (the routes, messages and tables a diff breaks in
+  other repos) is reserved and says `unsupported` until a following change fills it. Each section says whether it is whole and how to continue it.
+  `--format sarif` prints a SARIF 2.1.0 log and the MCP op answers `markdown` too, for a pull request comment. The
+  structure is versioned (1) and its row ids are stable; [answers.md](docs/answers.md#review) describes both.
+
 - `docs` fences each file in its Map in that file's language. A file in a language the Map didn't name was fenced as
   Swift (a Java file came out as ```` ```swift ````); Java, Kotlin, Go, JavaScript and Swift are now named, and a file
   of any other language is fenced bare.
