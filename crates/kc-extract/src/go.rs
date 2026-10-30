@@ -25,7 +25,10 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, ImportBinding, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 1;
+mod client;
+mod http;
+
+pub const VERSION: u32 = 3;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -58,6 +61,10 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         facts: FileFacts::default(),
         scopes: Vec::new(),
         imports: HashSet::new(),
+        frameworks: Vec::new(),
+        pending_router: None,
+        package_routers: HashMap::new(),
+        handlers: Vec::new(),
         seen: HashSet::new(),
     };
     cx.header(tree.root_node());
@@ -67,6 +74,7 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         cx.facts.unsupported.push(Unsupported { area: "build", construct: constraint, line });
     }
     cx.visit(tree.root_node());
+    cx.anchor_handlers();
     cx.facts
 }
 
@@ -239,6 +247,10 @@ struct Scope {
     locals: HashMap<String, Option<TypeExpr>>,
     /// Type parameters, which are never references to a declaration.
     type_params: HashSet<String>,
+    /// Router values, with the prefix of the routes registered on them (see `http`).
+    routers: HashMap<String, http::Router>,
+    /// The key a function's router parameters and result are known by, for a function or method (see `http`).
+    key: Option<String>,
 }
 
 struct Cx<'a> {
@@ -248,6 +260,14 @@ struct Cx<'a> {
     scopes: Vec<Scope>,
     /// The names imports bind in this file: aliases, and each unaliased path's likely package name.
     imports: HashSet<String>,
+    /// The HTTP frameworks this file imports, by the name it uses for each (see `http`).
+    frameworks: Vec<(String, http::Fw)>,
+    /// The router a chi `Route` or `Group` call hands the closure it passes, until the closure is read.
+    pending_router: Option<http::Router>,
+    /// Server routes (indexes into `facts.http_routes`) and the handler each names, anchored once the file is read.
+    handlers: Vec<(usize, (String, Option<String>))>,
+    /// Package-level router variables (`var router = gin.Default()`).
+    package_routers: HashMap<String, http::Router>,
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
 }
 
@@ -289,6 +309,10 @@ impl<'a> Cx<'a> {
                             l => {
                                 self.imports.insert(l.to_string());
                             }
+                        }
+                        if let Some(fw) = http::framework(&module) {
+                            let name = if local.is_empty() { package_name_guess(&module).to_string() } else { local.clone() };
+                            self.frameworks.push((name, fw));
                         }
                         self.facts.bindings.push(ImportBinding { local, name: "*".into(), module, line: line(spec), export: false });
                     }
@@ -479,7 +503,7 @@ impl<'a> Cx<'a> {
             // A defined type's underlying type, or an alias's target: what its values are.
             self.facts.symbols[sym].type_name = type_expr(self.src, t, &type_params).map(|t| t.encode());
         }
-        self.scopes.push(Scope { sym, callable: false, locals: HashMap::new(), type_params });
+        self.scopes.push(Scope { sym, callable: false, locals: HashMap::new(), type_params, routers: HashMap::new(), key: None });
         if let Some(tp) = spec.child_by_field_name("type_parameters") {
             self.visit(tp);
         }
@@ -526,7 +550,7 @@ impl<'a> Cx<'a> {
                     let name = self.text(n).to_string();
                     let m = self.push(c, name, SymbolKind::Method, Some(owner.to_string()), c.end_byte());
                     self.facts.symbols[m].type_name = c.child_by_field_name("result").and_then(|r| result_type(self.src, r)).map(|t| t.encode());
-                    self.scopes.push(Scope { sym: m, callable: true, locals: HashMap::new(), type_params: HashSet::new() });
+                    self.scopes.push(Scope { sym: m, callable: true, locals: HashMap::new(), type_params: HashSet::new(), routers: HashMap::new(), key: None });
                     for p in ["parameters", "result"] {
                         match c.child_by_field_name(p) {
                             Some(x) if x.kind() == "parameter_list" => self.params(x),
@@ -580,12 +604,13 @@ impl<'a> Cx<'a> {
         let sym = self.push(node, name, kind, container.clone(), header_end);
         self.facts.symbols[sym].type_name =
             node.child_by_field_name("result").and_then(|r| result_type(self.src, r)).map(|t| t.encode());
+        let key = self.func_key(container.as_deref(), self.text(n));
         // A method's receiver type's parameters (`func (l *List[T])`) are type parameters in its body.
         let mut type_params = self.type_params(node);
         if let Some(t) = recv_type {
             type_params.extend(receiver_type_params(self.src, t));
         }
-        self.scopes.push(Scope { sym, callable: true, locals: HashMap::new(), type_params });
+        self.scopes.push(Scope { sym, callable: true, locals: HashMap::new(), type_params, routers: HashMap::new(), key: Some(key.clone()) });
         if let Some(r) = receiver {
             self.params(r);
         }
@@ -595,6 +620,27 @@ impl<'a> Cx<'a> {
                     self.params(x);
                 } else {
                     self.visit(x);
+                }
+            }
+        }
+        // A router parameter: its routes go under the prefixes callers pass it.
+        if let Some(params) = node.child_by_field_name("parameters") {
+            let mut i = 0;
+            for p in children(params).filter(|c| matches!(c.kind(), "parameter_declaration" | "variadic_parameter_declaration")) {
+                let names: Vec<String> = children(p).filter(|c| c.kind() == "identifier").map(|c| self.text(c).to_string()).collect();
+                let ty = p.child_by_field_name("type");
+                let fw = ty.and_then(|t| self.router_type(t));
+                // A registration function parameter (`handle func(string, http.Handler)`) is kept as a router named
+                // with `()`: its calls register on the mux the caller passes.
+                let registrar = ty.is_some_and(|t| self.registrar_type(t));
+                for name in names.iter().chain(names.is_empty().then(|| "_".to_string()).iter()) {
+                    if let (Some(fw), Some(s)) = (fw, self.scopes.last_mut()) {
+                        s.routers.insert(name.clone(), http::Router { fw, prefix: format!("{{@{key}#{i}}}") });
+                    }
+                    if let (true, Some(s)) = (registrar, self.scopes.last_mut()) {
+                        s.routers.insert(format!("{name}()"), http::Router { fw: http::Fw::NetHttp, prefix: format!("{{@{key}#{i}}}") });
+                    }
+                    i += 1;
                 }
             }
         }
@@ -609,7 +655,19 @@ impl<'a> Cx<'a> {
     fn func_literal(&mut self, node: Node) {
         let Some(sym) = self.current() else { return self.visit_children(node) };
         let outer: HashMap<String, Option<TypeExpr>> = self.scopes.iter().flat_map(|s| s.locals.clone()).collect();
-        self.scopes.push(Scope { sym, callable: true, locals: outer, type_params: HashSet::new() });
+        self.scopes.push(Scope { sym, callable: true, locals: outer, type_params: HashSet::new(), routers: HashMap::new(), key: None });
+        // chi's `Route` and `Group` hand the closure a router: its first parameter.
+        if let Some(r) = self.pending_router.take()
+            && let Some(first) = node
+                .child_by_field_name("parameters")
+                .and_then(|ps| children(ps).find(|c| c.kind() == "parameter_declaration"))
+                .and_then(|p| children(p).find(|c| c.kind() == "identifier"))
+        {
+            let name = self.text(first).to_string();
+            if let Some(s) = self.scopes.last_mut() {
+                s.routers.insert(name, r);
+            }
+        }
         for f in ["parameters", "result"] {
             if let Some(x) = node.child_by_field_name(f) {
                 if x.kind() == "parameter_list" {
@@ -657,10 +715,18 @@ impl<'a> Cx<'a> {
                     continue;
                 }
                 let te = spec_type.clone().or_else(|| values.get(i).and_then(|v| self.expr_type(*v)));
+                if top && spec.kind() == "const_spec"
+                    && let Some(v) = values.get(i)
+                {
+                    self.string_const(&name, *v, spec);
+                }
+                if top && let Some(r) = values.get(i).and_then(|v| self.router_of(*v)) {
+                    self.package_routers.insert(name.clone(), r);
+                }
                 if top {
                     let s = self.push(spec, name, SymbolKind::Property, None, spec.end_byte());
                     self.facts.symbols[s].type_name = te.map(|t| t.encode());
-                    self.scopes.push(Scope { sym: s, callable: false, locals: HashMap::new(), type_params: HashSet::new() });
+                    self.scopes.push(Scope { sym: s, callable: false, locals: HashMap::new(), type_params: HashSet::new(), routers: HashMap::new(), key: None });
                     if i == 0 {
                         if let Some(t) = ty {
                             self.visit(t);
@@ -671,6 +737,9 @@ impl<'a> Cx<'a> {
                     }
                     self.scopes.pop();
                 } else {
+                    if let Some(r) = values.get(i).and_then(|v| self.router_of(*v)) {
+                        self.bind_router(&name, r, values[i]);
+                    }
                     self.declare(&name, te);
                 }
             }
@@ -704,11 +773,37 @@ impl<'a> Cx<'a> {
                 None
             };
             let name = self.text(*l).to_string();
+            if right.len() == left.len()
+                && let Some(r) = right.get(i).and_then(|v| self.router_of(*v))
+            {
+                self.bind_router(&name, r, right[i]);
+            }
             if self.local(&name).is_some() && te.is_none() {
                 continue; // reassigned in a multi-assignment: keep what is known
             }
             self.declare(&name, te);
         }
+    }
+
+    /// A router bound to a local: one a function builds goes under the prefixes its result is mounted at.
+    fn bind_router(&mut self, name: &str, mut r: http::Router, value: Node) {
+        let built = r.prefix.is_empty() && value.kind() == "call_expression";
+        let key = self.scopes.iter().rev().find(|s| s.callable && s.key.is_some()).and_then(|s| s.key.clone());
+        if built && let Some(k) = key.filter(|_| self.returns_value()) {
+            r.prefix = format!("{{@{k}#ret}}");
+        }
+        if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.callable) {
+            s.routers.insert(name.to_string(), r);
+        }
+    }
+
+    /// Whether the innermost function declaration has a result.
+    fn returns_value(&self) -> bool {
+        self.scopes.iter().rev().find(|s| s.callable && s.key.is_some()).is_some_and(|s| self.facts.symbols[s.sym].signature.contains(')') && {
+            let sig = &self.facts.symbols[s.sym].signature;
+            // `func f(…) T`: something follows the parameters' closing parenthesis.
+            sig.rsplit_once(')').is_some_and(|(_, after)| !after.trim().is_empty())
+        })
     }
 
     fn range(&mut self, node: Node) {
@@ -763,6 +858,7 @@ impl<'a> Cx<'a> {
 
     fn call(&mut self, node: Node) {
         let Some(f) = node.child_by_field_name("function") else { return self.visit_children(node) };
+        self.route_call(node, f);
         match f.kind() {
             "identifier" => self.identifier(f, RefKind::Call),
             "selector_expression" => self.selector(f, true),
@@ -779,6 +875,8 @@ impl<'a> Cx<'a> {
         if let Some(a) = node.child_by_field_name("arguments") {
             self.visit(a);
         }
+        // A `Route` or `Group` passed something other than a closure: nothing takes its router.
+        self.pending_router = None;
     }
 
     /// `F[T](x)`: a call of the generic function `F`, which tree-sitter may parse as a conversion to a generic type.

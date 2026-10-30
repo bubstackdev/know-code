@@ -3,7 +3,8 @@
 
 Usage: python3 scripts/check-installer.py [target/distrib]
 Run bash scripts/package-native.sh first (the local manifest must reach the global phase).
-This never changes HOME or shell profiles; use a fresh OS account to validate default PATH changes.
+It runs with a throwaway HOME (scripts/kc_env.py) and never touches the user's shell profiles; use a fresh OS account
+to validate default PATH changes.
 """
 from __future__ import annotations
 
@@ -16,6 +17,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
 
 
 def check(artifacts: Path) -> None:
@@ -33,13 +36,10 @@ def check(artifacts: Path) -> None:
         assert {"knowcode", "LICENSE-MIT", "LICENSE-APACHE"} <= names, names
     with tempfile.TemporaryDirectory(prefix="knowcode-installer-check-") as temp:
         base = Path(temp).resolve()
-        env = dict(os.environ)
+        env = kc_env.knowcode_env(base, KNOWCODE_DOWNLOAD_URL=artifacts.as_uri(), KNOWCODE_INSTALL_DIR=str(base / "bin"),
+                                  KNOWCODE_NO_MODIFY_PATH="1", XDG_CONFIG_HOME=str(base / "installer-config"))
         for key in ("KNOWCODE_UNMANAGED_INSTALL", "KNOWCODE_GITHUB_TOKEN"):
             env.pop(key, None)
-        env.update(KNOWCODE_DOWNLOAD_URL=artifacts.as_uri(), KNOWCODE_INSTALL_DIR=str(base / "bin"), KNOWCODE_NO_MODIFY_PATH="1",
-                   KNOWCODE_UPDATE_CHECK="0",
-                   XDG_CONFIG_HOME=str(base / "installer-config"), KNOWCODE_CONFIG_DIR=str(base / "config"),
-                   KNOWCODE_CACHE_DIR=str(base / "cache"), KNOWCODE_DATA_DIR=str(base / "data"))
         def run(args: list[str]) -> subprocess.CompletedProcess:
             out = subprocess.run(args, env=env, cwd=base, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
             assert out.returncode == 0, (args, out.stdout, out.stderr)

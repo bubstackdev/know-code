@@ -14,7 +14,8 @@ brings it up to date with the working tree before answering, and resolves names 
 
 ## The index
 
-Each checkout gets `<cache>/repos/<name>-<hash>.sqlite`, opened in WAL mode. It holds:
+Each checkout gets `<tree>/repos/<name>-<hash>.sqlite`, opened in WAL mode, where `<tree>` is this build's own part of
+the cache (see "Versions sharing a cache" below). It holds:
 
 - files with `(path, mtime, size, blake3)`;
 - symbols, references with their site (file, line, column), relations, imports and tags;
@@ -32,7 +33,26 @@ dependency repos when the answer crosses into them), so an edit to one file neve
 Each extractor has a version; bumping it re-extracts that language's files on the next query.
 
 An index written by a newer schema is refused with an error naming both schemas, rather than rebuilt; an older one
-is rebuilt.
+is rebuilt. Neither happens between released versions, which keep their indexes apart:
+
+**Versions sharing a cache.** Two versions of KnowCode can share one cache: an upgrade, a downgrade, or another tool
+that bundles its own knowcode. Each index schema has its own tree, `<cache>/v/s<schema>/`, holding every file whose
+format depends on it: `repos/`, `bases/`, `locks/`, and the workspace summary and discovery files. Builds of different
+schemas never open or rewrite each other's files. Builds of one schema share a tree: one with another extractor or
+resolver version re-extracts the languages that differ in place, as an upgrade always has, so a release that bumps one
+extractor doesn't reindex every repository from scratch. Alternating two such builds is correct but slower, each
+re-extracting what the other changed. 0.6.1 and older keep their files at the cache's top level, which later builds
+never open or change. Shared by every version at the top level: the update check's state (`updates/`), the cursor key,
+notes left in the cache by older versions, and `locks/maintenance.lock`, which every version takes, so that one
+cleaner runs at a time.
+
+After an upgrade to a new schema, the new build's tree starts empty, so each repository is indexed afresh on its first
+query. A downgrade finds the older version's files as it left them.
+
+The cache budget (`cache.max_size`) counts every tree. Maintenance evicts other schemas' files first, least recently
+used first, then this build's. It only deletes another build's file, never rewrites it, and only one no process holds
+(by that build's own writer lock and reader lease). A tree under `v/` left empty goes whole, and `purge` and
+`uninstall` clear every tree.
 
 One thing in the index isn't the repo's own code: for an SDK package the repo declares as an external client
 (`declare module '<package>'` in a `.d.ts`), installed in its `node_modules` at the version its lockfile pins, the
@@ -142,7 +162,7 @@ exact call going on from it. Walk answers are pinned by a snapshot test (`crates
 ## The cache lifecycle
 
 - **Shared bases.** Worktrees and clones of one repo share bases: immutable copies of the repo's index at a commit,
-  in `<cache>/bases/`, keyed by the repo's identity (its origin, else its git directory), the commit, the build and
+  in `<tree>/bases/`, keyed by the repo's identity (its origin, else its git directory), the commit, the build and
   the privacy policy. A checkout clean at a commit (no change, no untracked file) publishes one after it is indexed,
   when the repo has another checkout and no base is within a few files of that commit; it is written by `VACUUM
   INTO` (no free pages, no WAL) and the checkout's own index becomes a clone of it. A new checkout's index starts as a

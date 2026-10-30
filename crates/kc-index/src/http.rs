@@ -202,13 +202,14 @@ fn host_repo<'a>(host: &str, served: &'a HashMap<String, Vec<(PathBuf, String)>>
     }
 }
 
-/// Verb and normalized path, or `None` for a route whose path isn't known.
+/// Verb and normalized path, or `None` for a route whose path isn't known. A parameter is `{}` however the
+/// framework writes it: `{id}`, gin's and echo's `:id`, and a catch-all's `*path`.
 fn key(r: &RouteRow) -> Option<(String, String)> {
     let path = r.path.as_ref()?;
     let norm: Vec<String> = path
         .split('/')
         .filter(|s| !s.is_empty())
-        .map(|s| if s.starts_with('{') { "{}".to_string() } else { s.to_ascii_lowercase() })
+        .map(|s| if s.starts_with(['{', ':', '*']) { "{}".to_string() } else { s.to_ascii_lowercase() })
         .collect();
     Some((r.verb.to_ascii_uppercase(), norm.join("/")))
 }

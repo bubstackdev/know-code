@@ -111,6 +111,27 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(config::cache_dir()?.0)
 }
 
+/// This build's part of the cache: `<cache>/v/<key>/`, holding every file whose format depends on the index schema
+/// (`repos/`, `bases/`, `locks/`, `workspace.json`, `discovery.json`). Builds of different schemas keep apart and never
+/// rewrite each other's files, so any two versions can share one cache; 0.6.1 and older keep theirs at the top level,
+/// which this build never opens. What all builds share stays at the top: the update check's state, the cursor key,
+/// notes, and the maintenance lock.
+pub fn tree_dir() -> Result<PathBuf> {
+    Ok(cache_dir()?.join(DATA_TREES).join(data_key()))
+}
+
+/// The directory under the cache holding each build's data tree (see [`tree_dir`]).
+pub const DATA_TREES: &str = "v";
+
+/// The name of this build's data tree: its index schema (`s24`). Builds of one schema share a tree: one with another
+/// extractor or resolver version re-extracts the languages that differ in place, as an upgrade did before, which keeps
+/// a release that bumps one extractor from reindexing every repository from scratch. Alternating two such builds is
+/// correct but slower, each re-extracting what the other changed.
+pub fn data_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| format!("s{}", kc_store::SCHEMA_VERSION))
+}
+
 pub use git::{command as git_command, repo_root};
 
 /// A full rediscovery is forced at least this often, as a backstop for changes the cheap check can't see (a file
@@ -124,11 +145,11 @@ pub const SUMMARY_GEN: &str = "summary_gen";
 /// Cached `dirty` is recomputed with `git status` at least this often.
 const DIRTY_TTL_SECS: u64 = 60;
 
-/// The index file for a repo root: `<cache>/repos/<name>-<hash>.sqlite`.
+/// The index file for a repo root: `<tree>/repos/<name>-<hash>.sqlite` (see [`tree_dir`]).
 pub fn db_path(root: &Path) -> Result<PathBuf> {
     let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
     let hash = blake3::hash(root.to_string_lossy().as_bytes()).to_hex();
-    Ok(cache_dir()?.join("repos").join(format!("{name}-{}.sqlite", &hash[..12])))
+    Ok(tree_dir()?.join("repos").join(format!("{name}-{}.sqlite", &hash[..12])))
 }
 
 /// Opens (creating if needed) the index for a repo root and records the root in it.

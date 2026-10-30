@@ -92,7 +92,7 @@ pub fn text(here: &Here, indexes: usize, one: bool) -> Option<String> {
 
 /// How many repo indexes the cache holds, from its directory listing alone; `None` when it holds none.
 fn index_count() -> Option<usize> {
-    let dir = kc_index::cache_dir().ok()?.join("repos");
+    let dir = kc_index::tree_dir().ok()?.join("repos");
     let n = std::fs::read_dir(dir).ok()?.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "sqlite")).count();
     (n > 0).then_some(n)
 }

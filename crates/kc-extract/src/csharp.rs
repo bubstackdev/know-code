@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 35;
+pub const VERSION: u32 = 37;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -118,6 +118,7 @@ pub fn extract(source: &str) -> FileFacts {
         conv,
         facts: FileFacts::default(),
         scopes: Vec::new(),
+        top_level: None,
         seen: HashMap::new(),
         routes: Vec::new(),
         controllers: Vec::new(),
@@ -198,6 +199,8 @@ struct Cx<'a> {
     conv: std::sync::Arc<crate::conventions::Conventions>,
     facts: FileFacts,
     scopes: Vec<Scope>,
+    /// The symbol standing for the file's top-level statements, and their locals so far (see `top_level`).
+    top_level: Option<(usize, HashMap<String, TypeExpr>)>,
     /// Each reference recorded, to its index in `facts.refs`: one per symbol, name, kind, line and column, so two
     /// occurrences on a line stay two references.
     seen: HashMap<(Option<usize>, String, RefKind, u32, u32), usize>,
@@ -418,7 +421,7 @@ impl<'a> Cx<'a> {
             }
             "global_statement" => {
                 self.facts.script = true;
-                self.visit_children(node);
+                self.top_level(node);
             }
             "local_declaration_statement" | "using_statement" | "fixed_statement" => {
                 self.locals(node);
@@ -706,6 +709,31 @@ impl<'a> Cx<'a> {
         f(self);
         self.scopes.pop();
         self.builders.truncate(mark);
+    }
+
+    /// A top-level statement, in the scope of the entry point the compiler makes of a file's top-level statements
+    /// (`Program.Main`, here one symbol spanning them): what they call and the routes they map belong to it, as a
+    /// method's do, and a local one statement declares (`var app = builder.Build();`) is typed in the next.
+    fn top_level(&mut self, node: Node) {
+        let (sym, locals) = match self.top_level.take() {
+            Some(s) => s,
+            None => {
+                let statements: Vec<Node> =
+                    node.parent().map(|root| children(root).filter(|c| c.kind() == "global_statement").collect()).unwrap_or_default();
+                let (first, last) = (statements.first().copied().unwrap_or(node), statements.last().copied().unwrap_or(node));
+                let sym = self.push(first, "Main".to_string(), SymbolKind::Function, Some("Program".to_string()), Some(first));
+                let s = &mut self.facts.symbols[sym];
+                s.signature = "top-level statements".to_string();
+                s.tags.push("entrypoint");
+                s.end_line = last.end_position().row as u32 + 1;
+                s.end_byte = last.end_byte() as u32;
+                (sym, HashMap::new())
+            }
+        };
+        self.scopes.push(Scope { sym, type_name: None, callable: true, locals });
+        self.visit_children(node);
+        let scope = self.scopes.pop().expect("pushed");
+        self.top_level = Some((sym, scope.locals));
     }
 
     fn bind(&mut self, name: String, ty: TypeExpr) {
@@ -1013,6 +1041,12 @@ impl<'a> Cx<'a> {
                         locals.insert(self.text(pn).to_string(), te);
                     }
                 }
+            }
+            // `params object[] values`: the grammar's parameter array isn't a `parameter` node.
+            if let Some((pn, t)) = params_array(params)
+                && let Some(te) = type_expr(self.src, t)
+            {
+                locals.insert(self.text(pn).to_string(), te);
             }
         }
         self.in_scope(sym, None, true, locals, |cx| {
@@ -2913,7 +2947,16 @@ impl<'a> Cx<'a> {
                 named("string")
             }
             "null_literal" | "default_expression" | "lambda_expression" | "anonymous_method_expression" => None,
+            // `[a, b]` (C# 12) has no type of its own: it takes the parameter's, and no type parameter is inferred
+            // from it.
+            "collection_expression" => named("@collection"),
             "object_creation_expression" => e.child_by_field_name("type").and_then(|t| type_expr(self.src, t)),
+            // A capitalised name passed as a value isn't a type (a type isn't an argument): a field or property of
+            // the caller's type, as a lower-case one is, unless it's a local.
+            "identifier" => {
+                let name = self.text(e);
+                self.local(name).or_else(|| Some(TypeExpr::root(PathRoot::Prop(name.to_string()))))
+            }
             "prefix_unary_expression" if children(e).any(|c| self.text(c) == "-") => {
                 children(e).find(|c| c.is_named()).and_then(|c| self.argument_type(c))
             }
@@ -3792,6 +3835,18 @@ fn unqualified(n: Node) -> Node {
 }
 
 /// The method, local function or constructor whose body holds `node` (inside a lambda, too).
+/// The compilation unit, when `node` is in a top-level statement.
+fn top_level_root(node: Node) -> Option<Node> {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind() == "global_statement" {
+            return n.parent();
+        }
+        cur = n.parent();
+    }
+    None
+}
+
 fn enclosing_method(node: Node) -> Option<Node> {
     let mut cur = node.parent();
     while let Some(n) = cur {
@@ -4387,9 +4442,10 @@ impl Cx<'_> {
             // The application or an endpoint builder: typed so, or named so when its type isn't written.
             let app = !group && callee.starts_with("Map") && e.kind() == "identifier" && {
                 let name = self.text(e);
-                match self.local(name).map(|t| t.encode()) {
-                    Some(t) => endpoint_builder(&t),
-                    None => matches!(name, "app" | "application" | "endpoints" | "routes" | "builder"),
+                match self.local(name) {
+                    Some(t @ (TypeExpr::Named(_) | TypeExpr::Generic { .. })) => endpoint_builder(&t.encode()),
+                    // Untyped, or typed by an expression read later (`var app = builder.Build();`): by its name.
+                    _ => matches!(name, "app" | "application" | "endpoints" | "routes" | "builder"),
                 }
             };
             if !group && !app {
@@ -4773,7 +4829,8 @@ fn method_group_position(src: &str, node: Node) -> bool {
 
 /// Whether the member holding `at` declares a local function `name`.
 fn local_function_named(src: &str, at: Node, name: &str) -> bool {
-    let Some(m) = enclosing_method(at) else { return false };
+    // In top-level statements, the file's: its local functions are the entry point's.
+    let Some(m) = enclosing_method(at).or_else(|| top_level_root(at)) else { return false };
     let mut stack = vec![m];
     while let Some(n) = stack.pop() {
         if n.kind() == "local_function_statement" && n.child_by_field_name("name").is_some_and(|x| &src[x.byte_range()] == name) {
@@ -4941,14 +4998,32 @@ fn parameters(src: &str, decl: Node, list: Node) -> ((u32, Option<u32>), Option<
     ((min, max), lambda_types)
 }
 
+/// A parameter list's `params` array, as its name and type nodes: the grammar inlines it (`params`, a type, a name)
+/// rather than making it a `parameter`.
+fn params_array(list: Node) -> Option<(Node, Node)> {
+    let mut after = false;
+    let mut ty = None;
+    for c in children(list) {
+        match c.kind() {
+            "params" => after = true,
+            "identifier" if after && ty.is_some() => return ty.map(|t| (c, t)),
+            k if after && c.is_named() && k != "attribute_list" => ty = Some(c),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A method's parameters' declared types (see [`FileFacts::param_types`]), as JSON; `None` without parameters. A type
-/// parameter of the method or of an enclosing type is `null`, and so is any type built on one.
+/// parameter of the method or of an enclosing type is `null`, and so is any type built on one. A `params` array isn't
+/// among them: its type, when it is no type parameter's, is `rest`.
 fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
     let mut ps: Vec<Node> = children(list).filter(|c| c.kind() == "parameter").collect();
     if ps.first().is_some_and(|p| has_modifier(src, *p, "this")) {
         ps.remove(0);
     }
-    if ps.is_empty() {
+    let rest = params_array(list).map(|(_, t)| t);
+    if ps.is_empty() && rest.is_none() {
         return None;
     }
     let mut generic = type_params_of(src, decl);
@@ -4971,7 +5046,10 @@ fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
         })
         .collect();
     let names: Vec<&str> = ps.iter().map(|p| p.child_by_field_name("name").map_or("", |n| &src[n.byte_range()])).collect();
-    Some(serde_json::json!({ "types": types, "names": names }).to_string())
+    match rest.and_then(|t| type_expr(src, t)).filter(|t| !mentions_generic(t)) {
+        Some(rest) => Some(serde_json::json!({ "types": types, "names": names, "rest": rest.encode() }).to_string()),
+        None => Some(serde_json::json!({ "types": types, "names": names }).to_string()),
+    }
 }
 
 /// The input types of a delegate type, encoded: `Func<A, B, R>` → A, B; `Action<A>` and `Predicate<A>` → A;
@@ -7405,11 +7483,20 @@ public static class CatalogApi
         );
         let groups: Vec<Option<&str>> = f.http_routes.iter().filter(|r| r.side == "group").map(|r| r.service.as_deref()).collect();
         assert_eq!(groups, [Some("MapOrdersApi#0"), Some("MapLines#0")]);
-        // The application passed to a `Map…` helper at the top level: the helper's routes keep their own paths.
-        let program = extract("var app = builder.Build();\napp.MapCatalogApi();\nEndpoints.MapHealth(app);\napp.MapGet(\"/\", () => \"up\");\n");
+        // The application passed to a `Map…` helper at the top level: the helper's routes keep their own paths. What
+        // top-level statements map belongs to the entry point the compiler makes of them, and a method group handler
+        // there, a local function of it, is the endpoint's own.
+        let program = extract(
+            "var app = builder.Build();\napp.MapCatalogApi();\nEndpoints.MapHealth(app);\napp.MapGet(\"/\", () => \"up\");\napp.MapGet(\"/ready\", Ready);\n\nstatic string Ready() => \"ok\";\n",
+        );
         assert_eq!(
             endpoints(&program),
-            [e("group", "", "", "-", 2), e("group", "", "", "-", 3), e("server", "GET", "", "-", 4)]
+            [
+                e("group", "", "", "Main", 2),
+                e("group", "", "", "Main", 3),
+                e("server", "GET", "", "Main", 4),
+                e("server", "GET", "ready", "Ready", 5),
+            ]
         );
         assert_eq!(program.http_routes[1].service.as_deref(), Some("MapHealth#0"));
     }

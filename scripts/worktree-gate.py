@@ -40,6 +40,9 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LIST = ROOT / "scripts" / "worktree-gate" / "repos.json"
@@ -103,13 +106,11 @@ def make_worktrees(repo, src, wt_dir, n):
 
 
 def env_for(work, cache, shared=True):
-    env = dict(os.environ)
-    env.pop("KNOWCODE_VERIFY", None)
     cfg = work / "config" / cache.name
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "config.toml").write_text(f"[cache]\nmax_size = 0\nshared_bases = {'true' if shared else 'false'}\n[update]\ncheck = false\n")
-    env.update(KNOWCODE_CACHE_DIR=str(cache), KNOWCODE_CONFIG_DIR=str(cfg), KNOWCODE_DATA_DIR=str(work / "data" / cache.name),
-               KNOWCODE_UPDATE_CHECK="0")
+    env = kc_env.knowcode_env(work / "env" / cache.name, cache=cache, config=cfg, data=work / "data" / cache.name)
+    env.pop("KNOWCODE_VERIFY", None)
     return env
 
 

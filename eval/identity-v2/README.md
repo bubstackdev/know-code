@@ -16,7 +16,10 @@ doesn't change to fit them. A change to the rule is a new set.
 
 Each language keeps its labels in its own directory: `labels.jsonl`, `strata.json` (per stratum, how many references
 there were and how many were drawn), `exclusions.json` (per reason, how many references the toolchain binds the rule
-leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in).
+leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in). A digest
+covers an enumeration's rows, not its bytes ([digest.py](../../scripts/eval/identity/digest.py)): each row with its keys
+sorted, the lines sorted. Two labelling runs of one pinned repository give the same rows, but scip-java writes its
+documents in an order that varies from build to build, and gzip's bytes vary from one compressor to another.
 
 ## Java and Kotlin
 
@@ -245,6 +248,48 @@ KnowCode answer on it was read, and scored once.
 | Java | call | 20 | 40 | 40 | 10 | 40 | 150 |
 | Java | member | 20 | 40 | 40 | 10 | 40 | 150 |
 | Java | type | 20 | 40 | 0 | 10 | 0 | 70 |
+
+### Held out: ktlint (Kotlin)
+
+KnowCode's Kotlin resolver was developed against the Kotlin labels above, so a held-out set tests it fresh:
+[pinterest/ktlint](https://github.com/pinterest/ktlint), Kotlin only, pinned at its head on 2026-10-29, labelled,
+drawn and committed in [kotlin-holdout/](kotlin-holdout/labels.jsonl) the same way before any KnowCode answer on it was
+read, and scored once. Its build needs a Java 26 runtime and turns on Gradle's configuration cache, which scip-java's
+Gradle plugin doesn't support, so it is built on JDK 26 with `--no-configuration-cache`
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Its `build-logic` sources aren't compiled by the
+build and give no references.
+
+500 references (381 inside, 119 outside), drawn from 39727 Kotlin references by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 0 | 9 | 11 | 0 | 0 | 20 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 1 | 10 | 9 | 80 |
+
+### Held out, second: Exposed (Kotlin)
+
+ktlint's two outside links led to three resolver changes (an explicit import over a class's own name, no repository
+member on a library receiver's `this`, and `private` declarations unseen from other files), so ktlint no longer tests
+those fresh. [JetBrains/Exposed](https://github.com/JetBrains/Exposed) at its 1.6.0 tag, Kotlin only, is labelled,
+drawn and committed in [kotlin-holdout-2/](kotlin-holdout-2/labels.jsonl) the same way before any KnowCode answer on it
+is read, and scored once. Two build settings, neither changing a source file
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)): it pins Kotlin 2.3.20 in its version catalog, which the
+container's copy sets to 2.4.21 (scip-java's Kotlin plugin needs 2.4, as for moshi); and its Gradle 8.14 compiles
+`buildSrc` with an embedded Kotlin too old for that plugin, so `buildSrc`, build logic that gives no labels, compiles
+without it. It turns on Gradle's configuration cache, so it is built with `--no-configuration-cache`, as ktlint is.
+
+637 references (500 inside, 137 outside), drawn from the 125367 eligible Kotlin references counted in [strata.json](kotlin-holdout-2/strata.json) by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 27 | 137 |
 
 ### Scoring
 

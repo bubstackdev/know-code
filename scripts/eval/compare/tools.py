@@ -7,6 +7,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # scripts/: kc_env
+import kc_env  # noqa: E402
 
 from compare import mcp
 
@@ -24,8 +28,8 @@ def environment(tool, state):
     env.update(HOME=str(home), XDG_CACHE_HOME=str(home/'cache'), XDG_CONFIG_HOME=str(home/'config'),
                XDG_DATA_HOME=str(home/'data'))
     if tool == 'knowcode':
-        env.update(KNOWCODE_CACHE_DIR=str(home/'kc-cache'), KNOWCODE_CONFIG_DIR=str(home/'kc-config'),
-                   KNOWCODE_DATA_DIR=str(home/'kc-data'), KNOWCODE_UPDATE_CHECK='0')
+        env = kc_env.knowcode_env(home, start=env, cache=home/'kc-cache', config=home/'kc-config',
+                                  data=home/'kc-data', HOME=str(home))
     elif tool == 'codebase-memory-mcp':
         env.update(CBM_CACHE_DIR=str(home/'cbm-cache'))
     return env
