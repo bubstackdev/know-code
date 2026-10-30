@@ -147,7 +147,40 @@ impl<'a> Cx<'a> {
                     _ => None,
                 }
             }
+            // `mux.Handle` passed as a value: a registration function on the mux (see `registrar_type`).
+            "selector_expression" => {
+                let r = self.router_of(e.child_by_field_name("operand")?)?;
+                let m = self.text(e.child_by_field_name("field")?);
+                (r.fw == Fw::NetHttp && matches!(m, "Handle" | "HandleFunc")).then_some(r)
+            }
             _ => None,
+        }
+    }
+
+    /// Whether a parameter's type is a registration function, `func(string, http.Handler)` (or an `http.HandlerFunc`, or
+    /// a `func(http.ResponseWriter, *http.Request)`, second): the signature of a ServeMux's `Handle` and `HandleFunc`,
+    /// through which a function registers routes on whatever mux its caller passes.
+    pub(super) fn registrar_type(&self, t: Node) -> bool {
+        if t.kind() != "function_type" {
+            return false;
+        }
+        let Some(params) = t.child_by_field_name("parameters") else { return false };
+        let types: Vec<String> = children(params)
+            .filter(|c| c.kind() == "parameter_declaration")
+            .flat_map(|p| {
+                let n = children(p).filter(|c| c.kind() == "identifier").count().max(1);
+                let ty: String = p.child_by_field_name("type").map(|t| self.text(t).split_whitespace().collect()).unwrap_or_default();
+                std::iter::repeat_n(ty, n)
+            })
+            .collect();
+        let Some(q) = self.frameworks.iter().find(|(_, fw)| *fw == Fw::NetHttp).map(|(q, _)| q.as_str()) else { return false };
+        match types.as_slice() {
+            [a, b] if a == "string" => {
+                b == &format!("{q}.Handler")
+                    || b == &format!("{q}.HandlerFunc")
+                    || (b.starts_with("func(") && b.contains(&format!("{q}.ResponseWriter")) && b.contains(&format!("*{q}.Request")))
+            }
+            _ => false,
         }
     }
 
@@ -305,13 +338,34 @@ impl<'a> Cx<'a> {
     }
 
     fn registration(&mut self, call: Node, f: Node, args: &[Node]) {
-        // A router passed to a helper: the helper's parameter gets this router's prefix.
-        if let Some(key) = self.callee_key(f) {
+        // A router passed to a helper: the helper's parameter gets this router's prefix. A method called on a value whose
+        // type the syntax doesn't give (`h.Register(v1)`, `h` from a constructor) is keyed `?.Register`, which the store
+        // reads for a method of that name no exactly keyed caller reaches. A test's routers are the test's: a group it
+        // passes a helper says nothing of the prefixes the program serves the helper's routes under.
+        let key = self.callee_key(f).or_else(|| {
+            let (operand, field) = (f.child_by_field_name("operand")?, f.child_by_field_name("field")?);
+            (f.kind() == "selector_expression" && !(operand.kind() == "identifier" && self.is_import(self.text(operand))))
+                .then(|| format!("?.{}", self.text(field)))
+        });
+        if let Some(key) = key.filter(|_| !self.test_file) {
             for (i, a) in args.iter().enumerate() {
                 if let Some(r) = self.router_of(*a) {
                     self.push_group(format!("{key}#{i}"), Ok(r.prefix), *a);
                 }
             }
+        }
+        // A call of a registration function parameter: a `Handle` on the mux its caller passed.
+        if f.kind() == "identifier"
+            && let Some(router) = self.router_named(&format!("{}()", self.text(f)))
+        {
+            match args.first().and_then(|p| self.literal(*p)) {
+                Some(p) if !p.starts_with("{=") => {
+                    let (verb, path) = pattern(&p);
+                    self.push_route(&verb, join(&router.prefix, &path), call);
+                }
+                _ => self.unsupported_route(self.text(f), "its pattern isn't a literal", call),
+            }
+            return;
         }
         if f.kind() != "selector_expression" {
             return;
@@ -528,6 +582,50 @@ mod tests {
                 row("server", "GET", "{@orchard.adminRouter#ret}accounts"),
             ]
         );
+    }
+
+    #[test]
+    fn helpers_on_untyped_values_registration_functions_and_tests() {
+        let got = routes(
+            r#"package orchard
+
+import (
+	"net/http"
+
+	"github.com/labstack/echo/v4"
+)
+
+func main() {
+	e := echo.New()
+	v1 := e.Group("/api")
+	h := NewPicker()
+	h.Register(v1)
+	mux := http.NewServeMux()
+	Install(mux.Handle)
+}
+
+func Install(handle func(string, http.Handler)) {
+	handle("GET /trees/{id}", nil)
+	handle(dynamicPattern(), nil)
+}
+"#,
+        );
+        assert_eq!(
+            got,
+            vec![
+                // A method on a value of unknown type: keyed by its name.
+                row("group", "", "?.Register#0 <- api"),
+                // The mux whose Handle is passed.
+                row("group", "", "orchard.Install#0 <- "),
+                row("server", "GET", "{@orchard.Install#0}trees/{id}"),
+            ]
+        );
+        let test = crate::go::extract(
+            "orchard/routes_test.go",
+            "package orchard\n\nimport \"github.com/gin-gonic/gin\"\n\nfunc TestTrees(t *testing.T) {\n\tr := gin.New()\n\tTrees(r.Group(\"/trees\"))\n}\n",
+        );
+        // A test's router passed to a helper says nothing of the program's prefixes.
+        assert!(test.http_routes.iter().all(|r| r.side != "group"), "{:?}", test.http_routes);
     }
 
     #[test]

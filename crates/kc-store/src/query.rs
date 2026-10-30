@@ -4080,7 +4080,14 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
         return vec![Err(format!("its route group is passed through more than {GROUP_DEPTH} helpers"))];
     }
     let none = vec![Ok(String::new())];
-    let prefixes = groups.get(key).filter(|p| !p.is_empty()).unwrap_or(&none);
+    // A method's parameter (`pkg.Type.Method#i`) no caller keys exactly takes the groups passed to a method of that
+    // name on a value whose type the caller's syntax doesn't give (`?.Method#i`, as Go's extractor records them).
+    let loose = key.split_once('#').and_then(|(f, i)| (f.matches('.').count() >= 2).then(|| format!("?.{}#{i}", f.rsplit('.').next().unwrap_or(f))));
+    let prefixes = groups
+        .get(key)
+        .filter(|p| !p.is_empty())
+        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()))
+        .unwrap_or(&none);
     let mut out = Vec::new();
     for p in prefixes {
         match p {
@@ -8102,6 +8109,22 @@ mod tests {
         let lone = ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!Get}").unwrap();
         assert!(lone.as_ref().is_err_and(|why| why.contains("src/Lone")), "{lone:?}");
         assert_eq!(ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!*Help}").unwrap(), ok(&[]));
+    }
+
+    #[test]
+    fn a_method_no_caller_keys_takes_groups_passed_to_its_name() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> = [
+            ("?.Register#0".to_string(), vec![Ok("api".to_string())]),
+            ("orchard.Picker.Mount#0".to_string(), vec![Ok("v2".to_string())]),
+            ("?.Mount#0".to_string(), vec![Ok("other".to_string())]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(under_groups("{@orchard.Picker.Register#0}trees", &groups, 0), [Ok("api/trees".to_string())]);
+        // An exactly keyed caller wins over the name.
+        assert_eq!(under_groups("{@orchard.Picker.Mount#0}trees", &groups, 0), [Ok("v2/trees".to_string())]);
+        // A function (`pkg.F`) is always keyed exactly by its callers.
+        assert_eq!(under_groups("{@orchard.Register#0}trees", &groups, 0), [Ok("trees".to_string())]);
     }
 
     #[test]
