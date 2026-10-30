@@ -4,6 +4,28 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# minimal API mapped in top-level statements (`app.MapGet("/health", Health)` in `Program.cs`) has an owner in
+  answers. Such routes were in the workspace summary but in no `context` answer: top-level statements had no symbol,
+  and a local function passed as the handler wasn't taken for one. Top-level statements are now one symbol,
+  `Program.Main`, as the compiler's entry point is, which owns the routes its lambdas serve and the calls it makes;
+  a local function passed as the handler owns its route, as a method does. C# files are read again once.
+- C# calls tell more overloads apart. An overload with a `params` array had its last other parameter left unchecked,
+  so `Write(level, "x", e)` could still match `Write(LogEventLevel, string, params object[])` with an `Exception`
+  where a `string` goes. A method's own `params` array, a field passed by name and a collection expression (`[a, b]`)
+  now have types at the call; and of a generic overload (`M<T>(…, T)`) and a `params` one, the call picks the one C#
+  does: the `params` one for an array of its type or a collection expression, the generic one for any other value,
+  and with nothing for the array, the overload without one. C# files are read again once. On identity-v1's C# labels,
+  `exact` precision rises from 0.996 to 0.998 and linked recall from 0.730 to 0.754, with none newly wrong; on
+  impact-dev-v1, impact's recall rises from 0.816 to 0.828.
+- Go HTTP routes and clients. Routes registered with `net/http` (including method patterns such as
+  `"GET /items/{id}"`), gin, echo and chi are listed with their groups and mounts, and the requests Go code sends
+  with `net/http` link to the routes that serve them, across repos as other languages' do. Go files are read again
+  once.
+- In Swift, a use inside a function or type declared in a function body (a local `func check` in a test, a local
+  class's `deinit`) belongs to the enclosing function, as the compiler's index reports it. `impact`, `trace` and `tests`
+  reach that function in the same hop, rather than one hop later through the helper and the same-named helpers of
+  other functions, and no longer list the helper itself. Such declarations carry the tag `local`. Swift files are read
+  again once. On impact-dev-v1, labels found only at depth 3 fall from 33 to 4, with fewer rows.
 - A React component used only through JSX has dependents. A tag (`<Page …>`, `</Page>`) was recorded as a type
   reference, which `impact`, `trace` and `tests` don't follow from a function, so a component rendered only that way
   answered "nothing affected". A tag is now a call of its component, as the TypeScript compiler binds it (`<Ns.Comp>`

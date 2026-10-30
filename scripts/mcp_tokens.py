@@ -18,9 +18,13 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ENDPOINT = "https://api.anthropic.com/v1/messages/count_tokens"
 MODEL = "claude-opus-5-5"
@@ -49,17 +53,14 @@ def main():
     ap.add_argument("--bin", required=True)
     ap.add_argument("--calls", required=True)
     ap.add_argument("--repo", help="the repo to serve from, indexed before the first call")
-    ap.add_argument("--cache", help="a directory for the server's cache, config and data")
+    ap.add_argument("--cache", help="a directory for the server's home, cache, config and data (default: a new temporary one)")
     ap.add_argument("--out", help="directory for the answers")
     ap.add_argument("--json", help="file for the sizes")
     ap.add_argument("--count-tokens", action="store_true", help="count tokens with the API instead of estimating")
     ap.add_argument("--compare", help="a --json file from another run, printed beside this one")
     a = ap.parse_args()
 
-    env = dict(os.environ, KNOWCODE_UPDATE_CHECK="0")
-    if a.cache:
-        for name in ("CACHE", "CONFIG", "DATA"):
-            env[f"KNOWCODE_{name}_DIR"] = str(Path(a.cache, name.lower()).resolve())
+    env = kc_env.knowcode_env(Path(a.cache).resolve() if a.cache else tempfile.mkdtemp(prefix="knowcode-mcp-tokens-"))
     tokens = (lambda text: len(text.encode()) // 4)
     if a.count_tokens:
         key = os.environ.get("ANTHROPIC_API_KEY")
