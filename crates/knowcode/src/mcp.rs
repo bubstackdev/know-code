@@ -82,6 +82,10 @@ pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, defaul
 pub const TASK_FILES: Range = Range { what: "Files to list", min: 1, default: 6, max: 30, note: "", type_max: None };
 pub const TASK_DEPENDENTS: Range = Range { what: "Dependents to list", min: 0, default: 6, max: 40, note: "", type_max: None };
 pub const TASK_TESTS: Range = Range { what: "Tests to list", min: 0, default: 4, max: 30, note: "", type_max: None };
+pub const REVIEW_CHANGES: Range = Range { what: "Changed files to list", min: 1, default: 30, max: 200, note: "", type_max: None };
+pub const REVIEW_DEPENDENTS: Range = Range { what: "Dependent files to list", min: 0, default: 8, max: 40, note: "", type_max: None };
+pub const REVIEW_TESTS: Range = Range { what: "Tests to list", min: 0, default: 6, max: 30, note: "", type_max: None };
+pub const REVIEW_MISSED: Range = Range { what: "Missed partners to list", min: 0, default: 6, max: 30, note: "", type_max: None };
 pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "", type_max: None };
 pub const ANSWER_CHARS: Range = Range {
     what: "Answer size cap in characters",
@@ -106,6 +110,10 @@ pub const RANGES: &[(&str, &str, &Range)] = &[
     ("kc_task", "files", &TASK_FILES),
     ("kc_task", "dependents", &TASK_DEPENDENTS),
     ("kc_task", "tests", &TASK_TESTS),
+    ("kc_review", "changes", &REVIEW_CHANGES),
+    ("kc_review", "dependents", &REVIEW_DEPENDENTS),
+    ("kc_review", "tests", &REVIEW_TESTS),
+    ("kc_review", "missed", &REVIEW_MISSED),
     ("*", "max_chars", &ANSWER_CHARS),
 ];
 
@@ -128,6 +136,7 @@ pub const CHOICES: &[(&str, &str, &[&str])] = &[
     ("kc_grep_ast", "lang", &["csharp", "typescript", "javascript", "python", "rust", "swift"]),
     ("kc_note_add", "tag", &["decision", "gotcha", "todo"]),
     ("kc_rules", "format", &["json", "sarif"]),
+    ("kc_review", "format", &["json", "markdown", "sarif"]),
     ("kc_path", "format", &["tree", "json", "mermaid"]),
     ("kc_flow", "format", &["tree", "json", "mermaid"]),
     ("kc_areas", "format", &["json", "mermaid"]),
@@ -348,6 +357,29 @@ pub struct LocateParams {
     /// Rank files across every indexed repo.
     #[serde(default)]
     pub workspace: bool,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReviewParams {
+    /// `working` (uncommitted changes) or a git revision: the diff reviewed is from it to the working tree.
+    pub diff: String,
+    /// Changed files to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub changes: Option<usize>,
+    /// Dependent files to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub dependents: Option<usize>,
+    /// Tests to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub tests: Option<usize>,
+    /// Missed partners to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub missed: Option<usize>,
+    /// `json` (default), `markdown` (a comment for a pull request) or `sarif` (a SARIF 2.1.0 log).
+    #[serde(default)]
+    pub format: Option<String>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -980,6 +1012,7 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("task", "goal", ""),
     ("test_targets", "name", ""),
     ("rules", "rules", "rules"),
+    ("review", "diff", ""),
 ];
 
 /// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
@@ -1203,6 +1236,7 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_task", &[("goal", "")]),
     ("kc_test_targets", &[("name", "")]),
     ("kc_rules", &[("rules", "Rule files or directories, from the repo's root."), ("new_since", "A commit: only matches it lacked.")]),
+    ("kc_review", &[("diff", "`working` or a git revision.")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -1237,7 +1271,7 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
 
 /// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
 /// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
-pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets", "kc_rules"];
+pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets", "kc_rules", "kc_review"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -2205,6 +2239,7 @@ fn answer_list(key: &str) -> bool {
             | "sql"
             | "links"
             | "other_files"
+            | "changes"
     )
 }
 
@@ -2540,6 +2575,29 @@ impl KnowcodeServer {
         match (p.query, p.queries) {
             (Some(q), many) if many.is_empty() => run(p.common.max_chars, move || locate(&q)).await,
             (one, many) => run_batch(p.common.max_chars, inputs(one, many, "query or queries")?, locate).await,
+        }
+    }
+
+    #[tool(description = "One bounded answer for a diff: what it changes, the tests to run, files usually changed with it, what depends on it, contracts it breaks, rule matches. kc_help kc_review.")]
+    async fn kc_review(&self, Parameters(p): Parameters<ReviewParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        let mut params = crate::review::ReviewParams::new(p.diff);
+        params.changes = REVIEW_CHANGES.clamp(p.changes);
+        params.dependents = REVIEW_DEPENDENTS.clamp(p.dependents);
+        params.tests = REVIEW_TESTS.clamp(p.tests);
+        params.missed = REVIEW_MISSED.clamp(p.missed);
+        match p.format.as_deref() {
+            None | Some("json") => run(p.common.max_chars, move || Ok(crate::review::review(&params, &scope)?.env))
+                .await
+                .map(|text| crate::review::reading_order(&text)),
+            // A comment and a log are read whole (a cut SARIF log isn't valid): `max_chars` doesn't apply, and what the
+            // answer missed is in them (the comment's notes, the log's notifications).
+            Some("markdown") => blocking(false, move || Ok(crate::review_format::markdown(&crate::review::review(&params, &scope)?.env))).await,
+            Some("sarif") => {
+                blocking(false, move || Ok(serde_json::to_string(&crate::review_format::sarif(&crate::review::review(&params, &scope)?.env)).unwrap_or_default()))
+                    .await
+            }
+            Some(other) => Err(ToolError::new(Code::InvalidArgument, format!("format must be json, markdown or sarif, not {other}"))),
         }
     }
 
@@ -3085,6 +3143,7 @@ impl KnowcodeServer {
             "kc_task" => self.kc_task(a(t, args)?).await,
             "kc_test_targets" => self.kc_test_targets(a(t, args)?).await,
             "kc_rules" => self.kc_rules(a(t, args)?).await,
+            "kc_review" => self.kc_review(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
         out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
@@ -3430,7 +3489,7 @@ mod tests {
     #[test]
     fn bounds_are_said_as_answers_apply_them() {
         // Every tool with a bounded parameter, those served on request too.
-        let s = server("all,kc_rules");
+        let s = server("all,kc_rules,kc_review");
         let advertised: std::collections::HashMap<String, rmcp::model::Tool> =
             s.tool_router.list_all().into_iter().map(|t| (t.name.to_string(), t)).collect();
         for (tool, param, r) in RANGES.iter().filter(|(t, _, _)| *t != "*") {
@@ -3636,6 +3695,7 @@ mod tests {
             "kc_task" => as_::<TaskParams>(args),
             "kc_test_targets" => as_::<TestTargetsParams>(args),
             "kc_rules" => as_::<RulesParams>(args),
+            "kc_review" => as_::<ReviewParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -3647,7 +3707,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all,kc_capabilities,kc_test_targets,kc_rules");
+        let s = server("all,kc_capabilities,kc_test_targets,kc_rules,kc_review");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -3690,7 +3750,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all,kc_capabilities,kc_test_targets,kc_rules");
+        let s = server("all,kc_capabilities,kc_test_targets,kc_rules,kc_review");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
@@ -4478,6 +4538,39 @@ mod tests {
         assert!(refs["items"][0]["cite"].get("at").is_none(), "{refs}");
         assert!(!refs_bare.contains("\"cite\""), "{refs_bare}");
         assert_eq!(bad.unwrap_err(), "cite must be brief, lines, check or none, not all");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// kc_review answers its structure as JSON, a comment as markdown and a SARIF log, and refuses another format.
+    #[test]
+    fn review_answers_json_markdown_or_sarif() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-review");
+        let root = crate::ops::tests::repo(&base, "shop", &[("src/A.cs", "class A\n{\n    int F() => 1;\n}\n")]);
+        for args in [&["init", "-q"][..], &["add", "-A"], &["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-qm", "base"]] {
+            assert!(std::process::Command::new("git").arg("-C").arg(&root).args(args).status().unwrap().success());
+        }
+        std::fs::write(root.join("src/A.cs"), "class A\n{\n    int F() => 2;\n}\n").unwrap();
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("all,kc_review") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let (json, md, sarif, bad) = rt.block_on(async {
+            (
+                s.kc_review(p(json!({ "diff": "working" }))).await.unwrap(),
+                s.kc_review(p(json!({ "diff": "working", "format": "markdown" }))).await.unwrap(),
+                s.kc_review(p(json!({ "diff": "working", "format": "sarif" }))).await.unwrap(),
+                s.kc_review(p(json!({ "diff": "working", "format": "html" }))).await,
+            )
+        });
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["version"], 1, "{json}");
+        assert_eq!(v["changes"][0]["file"], "src/A.cs", "{json}");
+        assert!(md.contains("src/A.cs"), "{md}");
+        let log: Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(log["version"], "2.1.0", "{sarif}");
+        assert_eq!(bad.unwrap_err().code, Code::InvalidArgument);
         let _ = std::fs::remove_dir_all(&base);
     }
 

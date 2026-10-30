@@ -28,6 +28,9 @@ mod render;
 #[cfg(test)]
 mod repo_walks;
 mod rules;
+// The `review` answer's markdown and SARIF: called by review's `format`, which its wiring adds.
+#[allow(dead_code)]
+mod review_format;
 mod restricted;
 mod review;
 mod session_hook;
@@ -231,6 +234,30 @@ enum Cmd {
         /// Tests to list.
         #[arg(long, default_value_t = mcp::TASK_TESTS.default)]
         tests: usize,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
+    /// One bounded review of a diff: what it changes, the tests to run, files usually changed with it, what depends on
+    /// it, and the repo's rule matches it brings.
+    Review {
+        /// `working` (uncommitted changes) or a git revision: the diff is from it to the working tree.
+        #[arg(long, default_value = "working")]
+        diff: String,
+        /// Changed files to list.
+        #[arg(long, default_value_t = mcp::REVIEW_CHANGES.default)]
+        changes: usize,
+        /// Dependent files to list.
+        #[arg(long, default_value_t = mcp::REVIEW_DEPENDENTS.default)]
+        dependents: usize,
+        /// Tests to list.
+        #[arg(long, default_value_t = mcp::REVIEW_TESTS.default)]
+        tests: usize,
+        /// Missed partners to list.
+        #[arg(long, default_value_t = mcp::REVIEW_MISSED.default)]
+        missed: usize,
+        /// `markdown` (default: a comment for a pull request), or `sarif` (a SARIF 2.1.0 log); --json gives the answer.
+        #[arg(long, default_value = "markdown")]
+        format: String,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -1071,6 +1098,22 @@ fn run(cli: Cli) -> Result<()> {
             };
             let out = task::task(&p, &repo.scope())?;
             emit(&repo, &out.env, || task::render(&out.env))
+        }
+        Cmd::Review { diff, changes, dependents, tests, missed, format, repo } => {
+            let mut p = review::ReviewParams::new(diff);
+            p.changes = mcp::REVIEW_CHANGES.clamp(Some(changes));
+            p.dependents = mcp::REVIEW_DEPENDENTS.clamp(Some(dependents));
+            p.tests = mcp::REVIEW_TESTS.clamp(Some(tests));
+            p.missed = mcp::REVIEW_MISSED.clamp(Some(missed));
+            let out = review::review(&p, &repo.scope())?;
+            match format.as_str() {
+                "markdown" => emit(&repo, &out.env, || print!("{}", review_format::markdown(&out.env))),
+                "sarif" => {
+                    println!("{}", serde_json::to_string_pretty(&review_format::sarif(&out.env))?);
+                    Ok(())
+                }
+                other => anyhow::bail!("--format is markdown or sarif, not {other}"),
+            }
         }
         Cmd::Refs { name, kind, limit, cite, repo } => {
             cite.enter();

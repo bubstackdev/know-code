@@ -3,9 +3,10 @@
 //! Rule files are read with ast-grep-config, the crate the ast-grep command line reads them with (vendored in
 //! `crates/ast-grep-config` with its YAML read by yaml-rust2), over the same ast-grep-core: a rule's `stopBy`
 //! defaults, kind selectors, utilities, constraints and suppression comments mean here what they mean there, and a
-//! rule's matches are the command line's on the same files. Three things are
-//! refused rather than ignored: `fix` (KnowCode only reports), languages KnowCode has no grammar for, and JavaScript
-//! (KnowCode parses it with the TSX grammar, whose node kinds differ from ast-grep's JavaScript grammar).
+//! rule's matches are the command line's on the same files. Four things are
+//! refused rather than ignored: `fix` (KnowCode only reports), languages KnowCode has no grammar for, JavaScript
+//! (KnowCode parses it with the TSX grammar, whose node kinds differ from ast-grep's JavaScript grammar) and Kotlin
+//! (KnowCode's Kotlin grammar isn't ast-grep's).
 
 use std::path::{Path, PathBuf};
 
@@ -42,6 +43,8 @@ const LANGS: &[(Lang, &[&str], &[&str])] = &[
     (Lang::Swift, &["swift"], &["swift"]),
     (Lang::TypeScript, &["ts", "typescript"], &["ts", "cts", "mts"]),
     (Lang::Tsx, &["tsx"], &["tsx"]),
+    (Lang::Java, &["java"], &["java"]),
+    (Lang::Go, &["go", "golang"], &["go"]),
 ];
 
 impl RuleLang {
@@ -56,10 +59,16 @@ impl RuleLang {
                  ast-grep's JavaScript grammar, so matches could differ from the ast-grep command line's"
             );
         }
+        if ["kotlin", "kt"].iter().any(|a| name.eq_ignore_ascii_case(a)) {
+            bail!(
+                "Kotlin rules aren't supported: KnowCode parses Kotlin with tree-sitter-kotlin-ng, ast-grep with its own \
+                 Kotlin grammar, whose node kinds differ, so matches could differ from the ast-grep command line's"
+            );
+        }
         let (lang, ..) = LANGS
             .iter()
             .find(|(_, names, _)| names.iter().any(|a| name.eq_ignore_ascii_case(a)))
-            .ok_or_else(|| anyhow!("rules cover CSharp, TypeScript, Tsx, Python, Rust and Swift, not {name}"))?;
+            .ok_or_else(|| anyhow!("rules cover CSharp, TypeScript, Tsx, Python, Rust, Swift, Java and Go, not {name}"))?;
         RuleLang::of(*lang).ok_or_else(|| anyhow!("no grammar for {name}"))
     }
 }
@@ -398,7 +407,8 @@ mod tests {
         let err = |y: &str| set(y).err().map(|e| format!("{e:#}")).unwrap_or_default();
         assert!(err("id: r\nlanguage: ts\nrule: {pattern: a}\nfix: b\n").contains("`fix` is refused"));
         assert!(err("id: r\nlanguage: js\nrule: {pattern: a}\n").contains("JavaScript rules aren't supported"));
-        assert!(err("id: r\nlanguage: go\nrule: {pattern: a}\n").contains("not go"));
+        assert!(err("id: r\nlanguage: kotlin\nrule: {pattern: a}\n").contains("Kotlin rules aren't supported"));
+        assert!(err("id: r\nlanguage: ruby\nrule: {pattern: a}\n").contains("not ruby"));
         assert!(err("language: ts\nrule: {pattern: a}\n").contains("no `id`"));
     }
     #[test]

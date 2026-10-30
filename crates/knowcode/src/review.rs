@@ -22,9 +22,6 @@
 //! `symbols`, a missing `change` means `changed` (`removed` is written out). The dependents and the tests are walked on one symbol graph (see
 //! [`crate::walk::Graph::begin_walk`]), as `task` walks them.
 
-// Not dispatched yet: the op's last PR adds its `ops.rs` dispatch line, its MCP tool and CLI command, and takes this
-// out. Until then the module is reached only from its tests.
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 
@@ -69,6 +66,9 @@ const ROWS_PER_FILE: usize = 3;
 /// longest list, which is often theirs, so the other sections keep within these and leave the room to them.
 const DEPENDENTS_BYTES: usize = 1600;
 const TESTS_BYTES: usize = 800;
+
+/// Rule matches looked for at most: past them the rules section says it is cut.
+const RULE_MATCHES: usize = 10_000;
 
 /// The dependents walk: one hop, at most this many symbols.
 const WALK_LIMIT: usize = 60;
@@ -310,7 +310,6 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     retain_incomplete(&mut env, |i| !matches!(i.reason, Reason::Capped | Reason::Budget | Reason::Policy | Reason::Depth));
     let diff_arg = json!(p.diff);
     env["version"] = json!(VERSION);
-    env["repo"] = json!(ops::repo_name(root));
     env["base"] = json!(r.base);
     env["head"] = json!(if p.diff == "working" { "working".to_string() } else { kc_index::head_commit(root).unwrap_or_default() });
     // The envelope's `commit` is HEAD; against a revision `head` says the same, once.
@@ -353,7 +352,27 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     let contracts_whole = contracts.as_ref().is_ok_and(|c| c.unsettled.is_empty());
     let contracts_total = contract_rows.len();
     env["contracts"] = json!(contract_rows);
-    env["rules"] = json!([]);
+    // The repo's own rules (`[rules] paths`) as a monitor against the base: only the matches the change brings. A rule
+    // file refused (a `fix`, a blocked path) is said in `unsettled`; the review goes on without it.
+    let (mut rule_rows, mut rules_whole, mut rules_why) = (Vec::new(), true, Vec::new());
+    match r.base.as_deref().map(|b| crate::rules::for_review(root, b, scope.no_sync, RULE_MATCHES)) {
+        Some(Ok(found)) => {
+            for m in &found.matches {
+                rule_rows.push(json!({ "id": rule_id("", &m.file, &m.rule, &m.matched, m.n), "rule": m.rule, "severity": m.severity,
+                                       "message": m.message, "file": m.file, "line": m.line, "end": m.end }));
+            }
+            rules_whole = found.complete;
+            rules_why = found.incomplete.clone();
+        }
+        Some(Err(e)) => {
+            said(&mut unsettled, format!("rules not run ({e:#})"));
+            rules_whole = false;
+            rules_why.push("failed");
+        }
+        None => {}
+    }
+    let rules_total = rule_rows.len();
+    env["rules"] = json!(rule_rows);
     env["walkthrough"] = Value::Null;
     env["unsettled"] = json!(unsettled);
     let shown = |k: &str| env[k].as_array().map_or(0, Vec::len);
@@ -366,7 +385,7 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
                               if deps_whole { &[] } else { &["depth"] }),
         // HTTP routes are read; bus messages and table columns aren't yet, so the section is never whole.
         "contracts": section_json(contracts_total, contracts_total, false, String::new(), if contracts_whole { &["unsupported"] } else { &["unsupported", "failed"] }),
-        "rules": section_json(0, 0, true, String::new(), &[]),
+        "rules": section_json(rules_total, rules_total, rules_whole, String::new(), &rules_why),
     });
     sections["tests"]["advisory"] = json!(ADVISORY);
     env["sections"] = sections;

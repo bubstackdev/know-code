@@ -838,8 +838,8 @@ needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; 
 `utils`, `transform`, `files`, `ignores`) over its files and reports each match: `rule`, `severity`, `file`, `line`,
 `column`, `end_line`, `end_column`, `message` (metavariables filled in) and `text` (its first line). A rule matches what
 the ast-grep command line (0.50) matches on the same files, `ast-grep-ignore` comments included. Read only: a rule with
-`fix` is refused. Languages: CSharp, TypeScript, Tsx, Python, Rust, Swift; a JavaScript rule is refused, since
-KnowCode parses JavaScript with another grammar than ast-grep's.
+`fix` is refused. Languages: CSharp, TypeScript, Tsx, Python, Rust, Swift, Java, Go; a JavaScript or Kotlin rule is
+refused, since KnowCode parses those with other grammars than ast-grep's.
 
 `rules` names rule files or directories of them, relative to the repo's root (inside it); none: the config's
 `rules.paths`. `rule` takes rules written inline. A rule file over 2 MiB, or whose YAML aliases stand for over 100,000
@@ -853,6 +853,33 @@ Nothing is stored between runs. `paths` globs (a leading `!` excludes); page wit
 `new_since` gives the commit each repo was compared with. `format` `sarif` answers with a SARIF 2.1.0 log of every
 match (locations and messages, no source text; what the answer missed is in the run's notifications), whole whatever
 `max_chars` says. Served on request: `all` leaves the tool out unless named; the `kc` op is `rules`."#,
+    },
+    Topic {
+        name: "kc_review",
+        summary: "one bounded answer for a diff: what it changes, tests, partners, dependents, contracts, rules",
+        text: r#"One bounded answer for a diff (`diff`: `working`, or a git revision to diff the working tree against), where a
+client reviewing a change would otherwise join `impact`, `tests`, `coupled` and `rules` itself. Sections, in reading
+order:
+
+- `changes`: each changed file (`added`, `modified`, `deleted`, `renamed`) with up to 3 of the symbols in its changed
+  lines (`change: removed` for a definition the diff removes; an added file's symbols are counted, not listed);
+- `tests`: the tests to run, each with `confidence` and `run` (its target's command) where a manifest declares one;
+  advice, never the only tests to run;
+- `missed`: files that usually change with the changed ones, which the diff leaves alone;
+- `dependents`: by file, what depends on the changed symbols, one hop, in this repo and others (`class` is `direct`,
+  `near`, `far` or `test`);
+- `contracts`: the routes, messages and tables the diff breaks in other repos, each with its consumers (`verdict`
+  `broken` or `possible`); not read yet, so the section says `unsupported`;
+- `rules`: matches of the repo's own rules (`[rules] paths`) that the diff brings;
+- `walkthrough` (reserved, null) and `unsettled`: what the index can't settle.
+
+`version` is the answer's structure (1). Every row has a stable `id`, a hash of its kind and fields, never its line.
+`sections` says per section whether it is whole (`complete`), how many rows it shows of how many, and, for a cut one,
+the call continuing it (`next`) and why (`incomplete`); a field with nothing to report is left out. `changes`,
+`dependents`, `tests`, `missed` set how many are listed. `format` `markdown` answers with a comment for a pull request,
+`sarif` with a SARIF 2.1.0 log (contract breaks are errors, possible breaks warnings, rule matches at their
+severity), both whole whatever `max_chars` says. Served on request: `all` leaves the tool out unless named; the `kc`
+op is `review`."#,
     },
     Topic {
         name: "kc_capabilities",

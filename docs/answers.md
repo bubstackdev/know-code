@@ -465,6 +465,38 @@ its cursor or the parameter to raise.
 
 The CLI's `--json` output is the full envelope.
 
+## review
+
+`review` answers once for a diff, in a structure renderers and CI build on: `version` says which (1). A change to a
+field's meaning is a new version.
+
+- **Sections**, in reading order: `changes`, `tests`, `missed`, `dependents`, `contracts`, `rules`, `walkthrough`
+  (reserved: null) and `unsettled` (what the index can't settle, never a blocked path). Top level: `version`, `repo`
+  (the reviewed repo's root, as in every answer; a renderer shows its last component), `base` (the commit diffed
+  against), `head` (`working`, or the commit), and the envelope above.
+- **Rows** are objects. Each has an `id` and a `file`, and lines (1-based, never columns) where there are any; `repo`
+  only when it isn't the reviewed repo, except a contract's consumer, which always has it.
+- **`sections.<name>`**: `complete`, `shown` of `total`, and for a cut section `next` (the call that continues it) and
+  `incomplete` (the reasons, as in `incomplete` above). A cut section is a top-level `incomplete` entry too.
+- **Left out when there is nothing to say:** a missing `next` means no call continues the section, a missing
+  `incomplete` means no reason cut it, and a changed file's symbol without `change` is `changed` (only `removed` is
+  written).
+- **`class`** of a dependent row is one of `direct` (hop 1), `near` (2), `far` (3 and more) and `test`, by the nearer
+  of its hop and any ambiguous way to it.
+- **`verdict`** of a contract's consumer: `broken` when its request matched the old route exactly and nothing the repo
+  serves now answers it; `possible` when the link was by name or one of several.
+
+**Ids.** An `id` is 16 hex digits: FNV-1a 64 of the row's kind and fields joined by a zero byte. No line, row order or
+page is in it, so a CI job finds the row again after edits elsewhere in the file. An empty field stays empty; `repo`
+is empty for the reviewed repo.
+
+| Kind | Fields |
+| --- | --- |
+| `change`, `test`, `missed`, `dependent` | repo, file |
+| `contract` | repo, file, (empty), the contract (`GET api/items/{id}`) |
+| `consumer` | repo, file, symbol, the contract, the link |
+| `rule` | repo, file, the rule's id, the matched text, the match's index among that rule's matches of the same text in the file |
+
 ## How to use an answer
 
 - Check `complete`. If it is `false`, read each `incomplete` entry before drawing a conclusion; if it is `true`, the

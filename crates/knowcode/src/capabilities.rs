@@ -47,6 +47,13 @@ fn shape(tool: &str) -> Shape {
         "kc_status" => Shape { format: "json", formats: &["json"], keys: &["complete", "schema", "coverage", "freshness"], list: None },
         "kc_rename_preview" => Shape { keys: &["complete", "items", "total", "symbol", "new_name", "refused"], ..LIST },
         "kc_rules" => Shape { formats: &["json", "sarif"], ..LIST },
+        // Sections rather than one list of items: each says itself whether it is whole (`sections`).
+        "kc_review" => Shape {
+            format: "json",
+            formats: &["json", "markdown", "sarif"],
+            keys: &["complete", "version", "changes", "tests", "missed", "dependents", "contracts", "rules", "unsettled", "sections"],
+            list: None,
+        },
         "kc_task" => Shape { keys: &["complete", "items", "total", "dependents", "tests", "unsettled", "sections"], ..LIST },
         "kc_help" => Shape { format: "text", formats: &["text"], keys: &[], list: None },
         "kc_capabilities" => Shape { format: "json", formats: &["json"], keys: &["capabilities", "server", "protocol", "ops"], list: Some("ops") },
