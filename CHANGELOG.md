@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `review` lists the HTTP routes a diff removes or changes, each with the requests in other repos it served that no
+  route the repo serves now answers: `broken` when the request matched the old route exactly, `possible` when it was
+  linked by name or as one of several. A route whose old path can't be placed is said in `unsettled`. Bus messages and
+  table columns follow.
+
 - `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
   `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
   target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,

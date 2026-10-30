@@ -868,8 +868,9 @@ order:
 - `missed`: files that usually change with the changed ones, which the diff leaves alone;
 - `dependents`: by file, what depends on the changed symbols, one hop, in this repo and others (`class` is `direct`,
   `near`, `far` or `test`);
-- `contracts`: the routes, messages and tables the diff breaks in other repos, each with its consumers (`verdict`
-  `broken` or `possible`); not read yet, so the section says `unsupported`;
+- `contracts`: HTTP routes the diff removes or changes, each with the requests in other repos it served that nothing
+  serves now (`verdict` `broken` on an exact link, `possible` by name or among several); bus messages and table
+  columns aren't read yet, so the section says `unsupported`;
 - `rules`: matches of the repo's own rules (`[rules] paths`) that the diff brings;
 - `walkthrough` (reserved, null) and `unsettled`: what the index can't settle.
 

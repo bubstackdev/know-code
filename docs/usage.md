@@ -80,9 +80,10 @@ when asked. `--format sarif` prints a SARIF 2.1.0 log (locations and messages, n
 `review --diff REF` answers once for the diff from REF (or `working`) to the working tree, where a client would
 otherwise join `impact --diff`, `tests`, `coupled` and `rules`: the changed files with the symbols in their changed
 lines, the tests to run (with their target's command where a manifest declares one), the files that usually change
-with them and weren't changed, what depends on the changed symbols (one hop, by file), and the repo's rule matches
-the diff brings. Its `contracts` section is reserved for the routes, messages and tables a diff breaks in other repos,
-and says `unsupported` until it is filled. Each
+with them and weren't changed, what depends on the changed symbols (one hop, by file), the HTTP routes the diff
+removes or changes with the requests in other repos they break, and the repo's rule matches the diff brings. A route's
+old path is read from the changed file's version at REF; a request still answered by a route the repo serves now isn't
+broken. Bus messages and table columns aren't read yet: the `contracts` section says `unsupported`. Each
 section says whether it is whole and how to continue it; the tests are advice, never the only ones to run. The CLI
 prints a markdown comment for a pull request; `--format sarif` prints a SARIF 2.1.0 log, contract breaks as errors
 and possible breaks as warnings; `--json` gives the answer, whose structure [answers.md](answers.md#review) describes.
