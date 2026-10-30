@@ -93,6 +93,31 @@ class ReplayGateTests(unittest.TestCase):
             self.assertEqual(replay_gate.places(text, ['app', 'web'], roots),
                              ['app/src/api.cs:3', 'web/src/client.ts:7', 'app/src/api.cs:4', 'src/nowhere.cs:1'])
 
+    def test_places_read_a_json_answers_file_and_line_fields(self):
+        with tempfile.TemporaryDirectory() as temp:
+            roots = {r: Path(temp)/r for r in ('app', 'web')}
+            for root in roots.values():
+                (root/'src').mkdir(parents=True)
+            (roots['app']/'src/api.cs').write_text('x')
+            answer = {
+                'repo': str(roots['app']),
+                'declared': 'the only declaration of Api in app: class Api at src/api.cs:3',
+                'items': [
+                    {'file': 'src/api.cs', 'line': 3, 'end_line': 9, 'name': 'Api'},
+                    {'file': 'src/client.ts', 'line': 7, 'repo': 'web'},
+                    {'file': 'src/api.cs', 'line': 5, 'repo': str(roots['app'])},
+                    # A file with no line, a line of 0 and a flag aren't places.
+                    {'file': 'src/readme.md'},
+                    {'file': 'src/api.cs', 'line': 0},
+                    {'file': 'src/api.cs', 'line': True},
+                    {'callers': [{'site': {'file': 'src/nowhere.cs', 'line': 2}}]},
+                ],
+            }
+            self.assertEqual(replay_gate.places(json.dumps(answer), ['app'], roots), [
+                'app/src/api.cs:3', 'app/src/api.cs:3', 'web/src/client.ts:7', 'app/src/api.cs:5', 'src/nowhere.cs:2'])
+            # Text that isn't JSON is read as text only.
+            self.assertEqual(replay_gate.places('{"file": "src/api.cs", "line": 3', ['app'], roots), [])
+
     def test_places_read_a_tree_rows_call_sites_in_its_callers_file(self):
         # The row shapes of public2-two-hop-impact-009's answer: a walked row across a library boundary, one with two
         # call sites, and a cross-repo row of the older form.
