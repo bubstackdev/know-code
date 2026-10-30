@@ -125,11 +125,14 @@ instead, with the same `{reason, detail, hint}` (reason `capped` or `budget`), a
 - a symbol's `callers`, `callees` and `members`, the tables its calls reach (`touches_tables`), the candidate
   `targets` of one reference, its `source`, the `repos` list, and strings the size cap shortened;
 - cites past the first few that give their place without their line (`cite text: 12 of 30 cites quote their line`);
-- a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every match
-  with the name asked for (in any case) is listed and the rest match by prefix or word; `search`'s when every file with
-  a match is named, on the page or in `other_files`, and the rest are their other lines (`rest` says when they are
-  all in tests, comments and prose: a first page at the default limit shows every hit in code when there are at most
-  60 hits and they fit, and leaves those a page away). Cut further to fit
+- a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every
+  declaration named exactly as a plain name asked is listed (the other matches, in another case, by prefix or by word,
+  are not items: up to half the limit of them are named apart in `similar`, shown but not counted as items, so
+  `total` is the items, `similar` and the matches in neither; with none in neither, nothing is cut), or, when none is
+  named exactly so, when every match with the name in any case is listed and the rest match by prefix or word;
+  `search`'s when every file with a match is named, on the page or in `other_files`, and the rest are their other
+  lines (`rest` says when they are all in tests, comments and prose: a first page at the default limit shows every
+  hit in code when there are at most 60 hits and they fit, and leaves those a page away). Cut further to fit
   `max_chars`, the page is incomplete.
 
 The lists an answer is about stay `incomplete` when cut: the answer's `items` (references, impact rows, search hits

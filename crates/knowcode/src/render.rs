@@ -121,7 +121,8 @@ pub fn at(chain: &[kc_store::query::SymbolAt], indexed: bool) {
 }
 
 /// `capped`: more definitions matched than were read, so `total` is a lower bound and a match may be missing.
-pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: bool, declared: &[String]) {
+/// `similar`: other names' matches, set apart when `items` holds only the declarations named exactly as asked.
+pub fn find(items: &[(PathBuf, FindHit)], similar: &[String], total: usize, multi: bool, capped: bool, declared: &[String]) {
     let cap = || {
         if capped {
             println!(
@@ -141,9 +142,15 @@ pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: boo
         println!("{:<9} {}  {}{tags}", kw(&s.kind, &s.file), qualified(s), loc(multi.then_some(root.as_path()), &s.file, s.line));
         println!("          {}", s.signature);
     }
-    if total > items.len() {
+    if !similar.is_empty() {
+        println!("similar names:");
+        for line in similar {
+            println!("          {line}");
+        }
+    }
+    if total > items.len() + similar.len() {
         let more = if capped { "at least " } else { "" };
-        println!("… {more}{} more (raise --limit or narrow with --kind)", total - items.len());
+        println!("… {more}{} more (raise --limit or narrow with --kind)", total - items.len() - similar.len());
     }
     cap();
     for d in declared {

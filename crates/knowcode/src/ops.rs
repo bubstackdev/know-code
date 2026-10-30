@@ -899,6 +899,9 @@ pub struct FindData {
     pub manifests: Vec<ManifestHit>,
     /// Per repo, its declarations of the name (see [`crate::whole::declared`]).
     pub declared: Vec<String>,
+    /// Other names' matches, one line each, when `items` holds only the declarations named exactly as asked: never
+    /// counted among the items.
+    pub similar: Vec<String>,
 }
 
 /// Every client route (request contract) in the selected repos, with the actions serving it. Reads the workspace
@@ -1592,15 +1595,23 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     // The rest of the workspace, for the `declared` statement: each repo whose summary says it may declare the name, or
     // name it, is opened; the others are known not to, as last indexed.
     let bare = query::split_dotted(q.trim()).1.to_string();
+    // A plain name with declarations named exactly that answers with those alone, and names a few of the other
+    // matches (another case, a prefix, a word) apart in `similar`: on find-dev-v1, mixing them into the page cut the
+    // first page's precision for exact names from 0.974 to 0.637 at the same recall. A qualified name or a kind
+    // narrows the matches itself, and is answered as before. Each repo reads up to half a page more, for `similar`.
+    let apart = symbols && kind.is_none() && !bare.is_empty() && bare == q.trim() && !bare.contains(['#', ':', '/', ' ']);
+    let fetch = if apart { limit.saturating_add(limit / 2) } else { limit };
+    let mut name_cut = false;
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if symbols {
             // Ties go by path and line, not by a rank: the rank was only used when cached, so the order depended on
             // cache state, and ranking ties didn't help (concept-find on replayed commits: 0 better, 0 worse).
-            let found = query::find_counted(o.store.conn(), q, kind, limit, &kc_store::rank::FileRank::default())?;
+            let found = query::find_counted(o.store.conn(), q, kind, fetch, &kc_store::rank::FileRank::default())?;
             total += found.total;
             capped |= found.capped;
             exact_cut |= found.total > found.hits.len() && found.hits.last().is_some_and(|h| h.matched == "exact");
+            name_cut |= found.total > found.hits.len() && found.hits.last().is_some_and(|h| h.symbol.name == bare);
             items.extend(found.hits.into_iter().map(|h| (o.root.clone(), h)));
             declared.extend(crate::whole::declared(&o, q, kind)?);
         }
@@ -1667,18 +1678,36 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         .map(|s| if unchecked == 0 { s } else { format!("{s}. Not checked: {unchecked} repo{} of the workspace not indexed yet", if unchecked == 1 { "" } else { "s" }) })
         .into_iter()
         .collect();
+    let apart = apart && items.iter().any(|(_, h): &(PathBuf, FindHit)| h.symbol.name == bare);
     // Across repos, keep each repo's ranking but interleave by match quality.
     if roots.len() > 1 {
-        let rank = |m: &str| match m {
-            "exact" => 0,
-            "prefix" => 1,
-            _ => 2,
+        let rank = |h: &FindHit| match h.matched {
+            "exact" if apart && h.symbol.name == bare => 0,
+            "exact" => 1,
+            "prefix" => 2,
+            _ => 3,
         };
-        items.sort_by_key(|(_, h)| rank(h.matched));
+        items.sort_by_key(|(_, h)| rank(h));
     }
-    exact_cut |= items.iter().skip(limit).any(|(_, h)| h.matched == "exact");
-    items.truncate(limit);
     let multi = roots.len() > 1;
+    let mut similar = Vec::new();
+    if apart {
+        let (named, others): (Vec<_>, Vec<_>) = items.into_iter().partition(|(_, h)| h.symbol.name == bare);
+        name_cut |= named.len() > limit;
+        items = named;
+        similar = others
+            .iter()
+            .take(limit / 2)
+            .map(|(root, h)| {
+                let s = &h.symbol;
+                let file = if multi { format!("{}/{}", repo_name(root), s.file) } else { s.file.clone() };
+                format!("{} {}  {file}:{}", s.kind, s.qualified(), s.line)
+            })
+            .collect();
+    } else {
+        exact_cut |= items.iter().skip(limit).any(|(_, h)| h.matched == "exact");
+    }
+    items.truncate(limit);
     // A declaration of the name asked for quotes the line naming it, read from the working tree now and checked
     // against the index: what an agent would otherwise open the file to see. The first few only, so that none is
     // left with its place alone under `cite: brief`.
@@ -1697,7 +1726,11 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         .collect();
     // A cite that drifted says so in its `check`; the answer isn't less whole for it (its items come from the index,
     // and a repo behind its working tree is said in `stale` already), so no `incomplete` entry of its own.
-    let mut env = envelope(&opened, json!(list), total, items.len());
+    // `similar` rows are matches shown that aren't items (`total` = items + similar + those cut): with none cut, nothing
+    // is hidden, and the answer isn't cut.
+    let hidden = total - items.len() - similar.len().min(total - items.len());
+    let shown = if apart && hidden == 0 && !capped { total } else { items.len() };
+    let mut env = envelope(&opened, json!(list), total, shown);
     // Past the candidate cap, the total is a lower bound and a match may be missing: never a complete answer.
     if capped {
         env["truncated"] = json!(true);
@@ -1713,7 +1746,19 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     }
     // Every match with the name asked for is listed: the rows cut are other names (by prefix or by word), more to
     // read rather than missing from the answer.
-    if total > items.len() && !exact_cut && !capped && items.iter().any(|(_, h)| h.matched == "exact") {
+    if apart {
+        if hidden > 0 && !name_cut && !capped {
+            let others = total - items.len();
+            env["rest"] = json!(format!(
+                "every declaration named exactly {bare} is listed; `similar` names {} of the {others} other match{}, in another case, by prefix or by word (raise limit for more)",
+                similar.len(),
+                if others == 1 { "" } else { "es" }
+            ));
+        }
+        if !similar.is_empty() {
+            env["similar"] = json!(similar);
+        }
+    } else if total > items.len() && !exact_cut && !capped && items.iter().any(|(_, h)| h.matched == "exact") {
         env["rest"] = json!(format!("every match named {bare} (in any case) is listed; the rest match by prefix or word"));
     }
     if !manifest_hits.is_empty() {
@@ -1723,7 +1768,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         env["manifests_total"] = json!(manifests_total);
     }
     finish(&mut env);
-    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared } })
+    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared, similar } })
 }
 
 pub struct LocateData {
@@ -12673,10 +12718,12 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// A find cut past every match with the name asked for is complete, the other names `more`; cut among them, it
-    /// is incomplete.
+    /// A plain name with declarations named exactly that answers with those alone, a few other names apart in
+    /// `similar`, and is complete with the rest `more`; cut among those named so, it is incomplete. A name no
+    /// declaration has exactly, a qualified name and a kind are answered as before: every match named so in any case
+    /// listed first, the other names after them on the page.
     #[test]
-    fn find_is_complete_when_only_other_names_are_cut() {
+    fn find_lists_the_exact_name_alone_and_other_names_apart() {
         let cache = test_cache();
         let base = cache.dir("find-rest");
         let root = repo(
@@ -12686,16 +12733,43 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
                 ("a.py", "class Ledger:\n    pass\n"),
                 ("b.py", "class Ledger:\n    pass\n"),
                 ("c.py", "class LedgerRow:\n    pass\nclass LedgerTotal:\n    pass\nclass LedgerView:\n    pass\n"),
+                ("d.py", "class Book:\n    def ledger(self):\n        pass\n"),
             ],
         );
         let scope = Scope { repos: vec![root], no_sync: false };
-        let env = find("Ledger", None, 3, &scope).unwrap().env;
-        assert_eq!((env["complete"].clone(), env.get("incomplete")), (json!(true), None), "{env}");
+        let out = find("Ledger", None, 4, &scope).unwrap();
+        let env = out.env;
+        let names: Vec<&str> = env["items"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Ledger", "Ledger"], "{env}");
+        // The other case first, then the prefixes; `similar` never counts among the items.
+        assert_eq!(env["similar"], json!(["method Book.ledger  d.py:2", "class LedgerRow  c.py:1"]), "{env}");
+        assert_eq!(out.data.similar.len(), 2);
+        assert_eq!((env["complete"].clone(), env.get("incomplete"), env["total"].clone()), (json!(true), None, json!(6)), "{env}");
         let more = crate::contract::more_of(&env);
-        assert!(more.len() == 1 && more[0].detail.starts_with("items: 3 of 5 shown; every match named Ledger"), "{env}");
+        assert!(
+            more.len() == 1 && more[0].detail.starts_with("items: 2 of 6 shown; every declaration named exactly Ledger is listed; `similar` names 2 of the 4 other matches"),
+            "{env}"
+        );
+        // Every other match in `similar`: nothing hidden, so nothing cut.
+        let env = find("Ledger", None, 10, &scope).unwrap().env;
+        assert_eq!(env["similar"].as_array().unwrap().len(), 4, "{env}");
+        assert_eq!((env["complete"].clone(), env.get("more"), env.get("rest"), env["truncated"].clone()), (json!(true), None, None, json!(false)), "{env}");
         // One of the two named so cut: incomplete.
         let env = find("Ledger", None, 1, &scope).unwrap().env;
         assert_eq!((env["complete"].clone(), env.get("rest")), (json!(false), None), "{env}");
+        // No declaration named `LEDGER` exactly: the page as before, the case-blind matches first.
+        let env = find("LEDGER", None, 4, &scope).unwrap().env;
+        assert_eq!(env.get("similar"), None, "{env}");
+        let names: Vec<&str> = env["items"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names.len(), 4, "{env}");
+        assert!(names[..3].iter().all(|n| n.eq_ignore_ascii_case("ledger")), "{env}");
+        // A kind narrows the matches itself: as before.
+        let env = find("Ledger", Some("class"), 4, &scope).unwrap().env;
+        assert_eq!((env.get("similar"), env["items"].as_array().unwrap().len()), (None, 4), "{env}");
+        assert!(env["rest"].as_str().unwrap().starts_with("every match named Ledger (in any case)"), "{env}");
+        // A qualified name: as before.
+        let env = find("Book.ledger", None, 4, &scope).unwrap().env;
+        assert_eq!((env.get("similar"), env["items"][0]["name"].clone()), (None, json!("ledger")), "{env}");
         let _ = std::fs::remove_dir_all(&base);
     }
 
