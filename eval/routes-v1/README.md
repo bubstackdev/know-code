@@ -195,3 +195,39 @@ route changes this set was used to develop. Their figures are published beside r
 v1.2, and aren't tuned against. A held-out repository that can't be listed under the rule is replaced, before any
 KnowCode answer on it is read, by the next candidate for its framework, and the replacement is named here with the
 reason.
+
+### Held-out results, scored once
+
+Labelled once in the container ([run.sh](../../scripts/eval/routes/run.sh) with `SITES=1`; every program listed its
+routes) and scored once under v1.2 against KnowCode at integration/0.7 with the Go routes (#281), before any change made
+after reading them. [go/heldout](go/heldout/): the labels, each with its registration sites; the program records; the
+exclusion tool's regions; the listings' digests; and the score.
+
+| Framework | Repository | Labels | Precision | Recall | `context` check |
+| --- | --- | ---: | --- | --- | ---: |
+| chi | arp242/goatcounter | 135 | 0.959 (117/122, 0.908–0.982) | 1.000 (135/135, 0.972–1.000) | 50/50 |
+| echo | xesina/golang-echo-realworld-example-app | 82 | 0.000 (0/19, 0.000–0.168) | 0.000 (0/82, 0.000–0.045) | 19/19 |
+| gin | gothinkster/golang-gin-realworld-example-app | 27 | 0.731 (19/26, 0.539–0.863) | 0.963 (26/27, 0.817–0.993) | 36/36 |
+| net/http | golang/pkgsite | 48 | – (no routes read) | 0.000 (0/48, 0.000–0.074) | – |
+
+chi holds out of sample. echo and gin fail on group prefixes through helpers: echo-realworld registers every route in
+`(*Handler).Register(v1)`, called on a value whose type the syntax doesn't give, so none of its 19 routes carries the
+`/api` group's prefix; gin-realworld's `users` helpers lose `/api` (7 false routes) while its `articles` helpers, called
+the same way, keep it. net/http fails on registration through a function parameter: pkgsite's frontend registers every
+route through `Install(handle func(string, http.Handler), …)`, which KnowCode doesn't read (named as the expected
+weakness before scoring). goatcounter's 5 false routes are `NewWebsite`'s, a router the program serves only for its
+own website's host, which the package's tests reference.
+
+v1.2 left out 2 of goatcounter's KnowCode routes and 1 label (`GET /*`, under a condition on both sides; the ACME
+challenge, under `if acmeh != nil`) and 1 pkgsite route (in a test file the harness compiles, unreferenced); there were
+no disagreements. echo-realworld pins echo v4.1.16, whose group placeholders carry real methods and echo's
+`NotFoundHandler` rather than the later `echo_route_not_found` marker: 62 of its 82 labels are placeholders the scorer
+didn't recognise; by the rule's words they aren't routes, and without them echo's recall is 0/20.
+
+goatcounter was relabelled once after scoring, before any change to KnowCode: its first listing keyed chi's sites by
+handler identity, which one wrapper's closures share, so routes carried other routes' sites. Keyed by endpoint and
+pattern, every exclusion decision, and every figure above, is the same.
+
+These held-outs have now been read, so a score on them after a fix isn't out of sample: the fixes they show are made
+and measured on routes-v1's repositories, and a new held-out per framework is named before its labelling.
+
