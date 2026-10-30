@@ -1,0 +1,282 @@
+{
+ "misk/java/call/inside/2-4": {
+  "available": 28,
+  "drawn": 22
+ },
+ "misk/java/call/inside/5+": {
+  "available": 85,
+  "drawn": 40
+ },
+ "misk/java/call/outside/0": {
+  "available": 334,
+  "drawn": 10
+ },
+ "misk/java/call/outside/1+": {
+  "available": 334,
+  "drawn": 40
+ },
+ "misk/java/member/inside/1": {
+  "available": 24,
+  "drawn": 8
+ },
+ "misk/java/member/inside/2-4": {
+  "available": 373,
+  "drawn": 40
+ },
+ "misk/java/member/inside/5+": {
+  "available": 203,
+  "drawn": 40
+ },
+ "misk/java/member/outside/0": {
+  "available": 90,
+  "drawn": 10
+ },
+ "misk/java/member/outside/1+": {
+  "available": 22,
+  "drawn": 3
+ },
+ "misk/java/type/inside/1": {
+  "available": 299,
+  "drawn": 20
+ },
+ "misk/java/type/inside/2-4": {
+  "available": 43,
+  "drawn": 32
+ },
+ "misk/java/type/inside/5+": {
+  "available": 103,
+  "drawn": 37
+ },
+ "misk/java/type/outside/0": {
+  "available": 717,
+  "drawn": 10
+ },
+ "misk/java/type/outside/1+": {
+  "available": 158,
+  "drawn": 20
+ },
+ "misk/kotlin/call/inside/1": {
+  "available": 3456,
+  "drawn": 20
+ },
+ "misk/kotlin/call/inside/2-4": {
+  "available": 3829,
+  "drawn": 40
+ },
+ "misk/kotlin/call/inside/5+": {
+  "available": 4020,
+  "drawn": 40
+ },
+ "misk/kotlin/call/outside/0": {
+  "available": 26183,
+  "drawn": 10
+ },
+ "misk/kotlin/call/outside/1+": {
+  "available": 16170,
+  "drawn": 40
+ },
+ "misk/kotlin/dispatch/inside/1": {
+  "available": 187,
+  "drawn": 20
+ },
+ "misk/kotlin/dispatch/inside/2-4": {
+  "available": 1163,
+  "drawn": 40
+ },
+ "misk/kotlin/dispatch/inside/5+": {
+  "available": 3354,
+  "drawn": 40
+ },
+ "misk/kotlin/extension/inside/1": {
+  "available": 855,
+  "drawn": 20
+ },
+ "misk/kotlin/extension/inside/2-4": {
+  "available": 601,
+  "drawn": 40
+ },
+ "misk/kotlin/extension/inside/5+": {
+  "available": 448,
+  "drawn": 40
+ },
+ "misk/kotlin/member/inside/1": {
+  "available": 7455,
+  "drawn": 20
+ },
+ "misk/kotlin/member/inside/2-4": {
+  "available": 8438,
+  "drawn": 40
+ },
+ "misk/kotlin/member/inside/5+": {
+  "available": 11539,
+  "drawn": 40
+ },
+ "misk/kotlin/member/outside/0": {
+  "available": 4479,
+  "drawn": 10
+ },
+ "misk/kotlin/member/outside/1+": {
+  "available": 3923,
+  "drawn": 40
+ },
+ "misk/kotlin/type/inside/1": {
+  "available": 8529,
+  "drawn": 20
+ },
+ "misk/kotlin/type/inside/2-4": {
+  "available": 3014,
+  "drawn": 40
+ },
+ "misk/kotlin/type/inside/5+": {
+  "available": 328,
+  "drawn": 40
+ },
+ "misk/kotlin/type/outside/0": {
+  "available": 14815,
+  "drawn": 10
+ },
+ "misk/kotlin/type/outside/1+": {
+  "available": 6641,
+  "drawn": 40
+ },
+ "moshix/java/call/inside/1": {
+  "available": 30,
+  "drawn": 4
+ },
+ "moshix/java/call/inside/5+": {
+  "available": 10,
+  "drawn": 10
+ },
+ "moshix/java/call/outside/0": {
+  "available": 93,
+  "drawn": 10
+ },
+ "moshix/java/call/outside/1+": {
+  "available": 36,
+  "drawn": 19
+ },
+ "moshix/java/extension/inside/1": {
+  "available": 1,
+  "drawn": 1
+ },
+ "moshix/java/member/inside/1": {
+  "available": 2,
+  "drawn": 2
+ },
+ "moshix/java/member/inside/2-4": {
+  "available": 3,
+  "drawn": 3
+ },
+ "moshix/java/member/inside/5+": {
+  "available": 20,
+  "drawn": 11
+ },
+ "moshix/java/member/outside/0": {
+  "available": 1,
+  "drawn": 1
+ },
+ "moshix/java/type/inside/1": {
+  "available": 52,
+  "drawn": 20
+ },
+ "moshix/java/type/inside/2-4": {
+  "available": 38,
+  "drawn": 20
+ },
+ "moshix/java/type/inside/5+": {
+  "available": 33,
+  "drawn": 23
+ },
+ "moshix/java/type/outside/0": {
+  "available": 174,
+  "drawn": 10
+ },
+ "moshix/java/type/outside/1+": {
+  "available": 4,
+  "drawn": 4
+ },
+ "moshix/kotlin/call/inside/1": {
+  "available": 118,
+  "drawn": 20
+ },
+ "moshix/kotlin/call/inside/2-4": {
+  "available": 20,
+  "drawn": 17
+ },
+ "moshix/kotlin/call/inside/5+": {
+  "available": 68,
+  "drawn": 40
+ },
+ "moshix/kotlin/call/outside/0": {
+  "available": 2971,
+  "drawn": 10
+ },
+ "moshix/kotlin/call/outside/1+": {
+  "available": 756,
+  "drawn": 40
+ },
+ "moshix/kotlin/dispatch/inside/1": {
+  "available": 2,
+  "drawn": 2
+ },
+ "moshix/kotlin/dispatch/inside/2-4": {
+  "available": 9,
+  "drawn": 9
+ },
+ "moshix/kotlin/dispatch/inside/5+": {
+  "available": 12,
+  "drawn": 10
+ },
+ "moshix/kotlin/extension/inside/1": {
+  "available": 148,
+  "drawn": 20
+ },
+ "moshix/kotlin/extension/inside/2-4": {
+  "available": 82,
+  "drawn": 40
+ },
+ "moshix/kotlin/extension/inside/5+": {
+  "available": 39,
+  "drawn": 28
+ },
+ "moshix/kotlin/member/inside/1": {
+  "available": 539,
+  "drawn": 20
+ },
+ "moshix/kotlin/member/inside/2-4": {
+  "available": 395,
+  "drawn": 40
+ },
+ "moshix/kotlin/member/inside/5+": {
+  "available": 574,
+  "drawn": 40
+ },
+ "moshix/kotlin/member/outside/0": {
+  "available": 1037,
+  "drawn": 10
+ },
+ "moshix/kotlin/member/outside/1+": {
+  "available": 360,
+  "drawn": 40
+ },
+ "moshix/kotlin/type/inside/1": {
+  "available": 239,
+  "drawn": 20
+ },
+ "moshix/kotlin/type/inside/2-4": {
+  "available": 199,
+  "drawn": 40
+ },
+ "moshix/kotlin/type/inside/5+": {
+  "available": 57,
+  "drawn": 36
+ },
+ "moshix/kotlin/type/outside/0": {
+  "available": 2257,
+  "drawn": 10
+ },
+ "moshix/kotlin/type/outside/1+": {
+  "available": 32,
+  "drawn": 10
+ }
+}

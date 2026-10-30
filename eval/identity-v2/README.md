@@ -314,8 +314,34 @@ So the set is drawn from repositories already on, or near, Kotlin 2.4, with no p
 [cashapp/misk](https://github.com/cashapp/misk) at its v2026.10.28.211731-46eb623 tag, which pins Kotlin 2.3.10 in its
 version catalog (the container's copy is set to 2.4.21, as for Exposed) and runs Gradle 9.3.0 through hermit without
 a wrapper (`GRADLE_WRAPPER` gives the container's copy one, for that version). Both turn on Gradle's configuration
-cache and are built with `--no-configuration-cache` ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Only
-Kotlin references are drawn.
+cache and are built with `--no-configuration-cache` ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). MoshiX's
+Gradle plugin build asks for a JDK 23 toolchain, fetched and checked against its published digest; misk's admin
+console's web front end, an npm build with no Kotlin, is left out of its build.
+
+1622 references in [kotlin-holdout-3/](kotlin-holdout-3/labels.jsonl): 1152 Kotlin (882 inside, 270 outside), drawn from
+the 139341 eligible Kotlin references counted in [strata.json](kotlin-holdout-3/strata.json), and 470 Java
+(333 inside, 137 outside) from 3310, which the same draw gives from the two repositories' Java sources. Kotlin is
+the held-out set; its Java references are scored and reported beside it.
+
+| Repository | Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| moshix | Kotlin | extension | 20 | 40 | 28 | 0 | 0 | 88 |
+| moshix | Kotlin | dispatch | 2 | 9 | 10 | 0 | 0 | 21 |
+| moshix | Kotlin | call | 20 | 17 | 40 | 10 | 40 | 127 |
+| moshix | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| moshix | Kotlin | type | 20 | 40 | 36 | 10 | 10 | 116 |
+| moshix | Java | extension | 1 | 0 | 0 | 0 | 0 | 1 |
+| moshix | Java | call | 4 | 0 | 10 | 10 | 19 | 43 |
+| moshix | Java | member | 2 | 3 | 11 | 1 | 0 | 17 |
+| moshix | Java | type | 20 | 20 | 23 | 10 | 4 | 77 |
+| misk | Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | type | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Java | call | 0 | 22 | 40 | 10 | 40 | 112 |
+| misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
+| misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
 
 ### Scoring
 

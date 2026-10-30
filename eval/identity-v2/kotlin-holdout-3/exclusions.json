@@ -1,0 +1,15 @@
+{
+ "java/class_literal": 47,
+ "java/import": 282,
+ "java/overload_unmatched": 44,
+ "java/synthesised": 42,
+ "kotlin/bound_two_ways": 126,
+ "kotlin/class_literal": 1,
+ "kotlin/generated_target": 1039,
+ "kotlin/import": 19445,
+ "kotlin/operator": 6574,
+ "kotlin/outside_own_type": 201,
+ "kotlin/overload_unmatched": 264,
+ "kotlin/renamed_or_implicit": 1349,
+ "kotlin/synthesised": 834
+}
