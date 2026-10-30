@@ -306,7 +306,6 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     retain_incomplete(&mut env, |i| !matches!(i.reason, Reason::Capped | Reason::Budget | Reason::Policy | Reason::Depth));
     let diff_arg = json!(p.diff);
     env["version"] = json!(VERSION);
-    env["repo"] = json!(ops::repo_name(root));
     env["base"] = json!(r.base);
     env["head"] = json!(if p.diff == "working" { "working".to_string() } else { kc_index::head_commit(root).unwrap_or_default() });
     // The envelope's `commit` is HEAD; against a revision `head` says the same, once.

@@ -104,7 +104,10 @@ pub fn markdown(env: &Value) -> String {
     let head = s(env, "head");
     let head = if head == "working" { "the working tree".to_string() } else { code(&head[..head.len().min(12)]) };
     let base = s(env, "base");
-    let _ = writeln!(out, "### KnowCode review of {} ({} against {})", code(s(env, "repo")), head, code(&base[..base.len().min(12)]));
+    // The repo by its name: `repo` is its root, a path on the machine that answered, which a comment never shows.
+    let repo = s(env, "repo");
+    let name = std::path::Path::new(repo).file_name().and_then(|n| n.to_str()).unwrap_or(repo);
+    let _ = writeln!(out, "### KnowCode review of {} ({} against {})", code(name), head, code(&base[..base.len().min(12)]));
     let consumers: Vec<(&Value, &Value)> = rows(env, "contracts").iter().flat_map(|c| c["consumers"].as_array().into_iter().flatten().map(move |k| (c, k))).collect();
     let broken = consumers.iter().filter(|(_, k)| s(k, "verdict") == "broken").count();
     let possible = consumers.len() - broken;

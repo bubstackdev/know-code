@@ -471,8 +471,9 @@ The CLI's `--json` output is the full envelope.
 field's meaning is a new version.
 
 - **Sections**, in reading order: `changes`, `tests`, `missed`, `dependents`, `contracts`, `rules`, `walkthrough`
-  (reserved: null) and `unsettled` (what the index can't settle, never a blocked path). Top level: `version`, `repo`,
-  `base` (the commit diffed against), `head` (`working`, or the commit), and the envelope above.
+  (reserved: null) and `unsettled` (what the index can't settle, never a blocked path). Top level: `version`, `repo`
+  (the reviewed repo's root, as in every answer; a renderer shows its last component), `base` (the commit diffed
+  against), `head` (`working`, or the commit), and the envelope above.
 - **Rows** are objects. Each has an `id` and a `file`, and lines (1-based, never columns) where there are any; `repo`
   only when it isn't the reviewed repo, except a contract's consumer, which always has it.
 - **`sections.<name>`**: `complete`, `shown` of `total`, and for a cut section `next` (the call that continues it) and
