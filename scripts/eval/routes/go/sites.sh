@@ -21,7 +21,7 @@ case $fw in
   echo) pkg=echo file=echo.go
        expr='s/(func \(e \*Echo\) add\(host, method, path string, handler HandlerFunc, [^\n]*\) \*Route \{\n)/$1\tKCRecord(method+" "+path)\n/' ;;
   chi) pkg=chi file=mux.go
-       expr='s/(\n)(\treturn mx\.tree\.InsertRoute\(method, pattern, h\)\n)/$1\tKCRecord(KCHandlerKey(h))\n$2/' ;;
+       expr='s/(\n)(\treturn mx\.tree\.InsertRoute\(method, pattern, h\)\n)/$1\tKCRecord(KCHandlerKey(handler)+" "+pattern)\n$2/' ;;
   *) echo "sites.sh: no site hook for $fw" >&2; exit 1 ;;
 esac
 if [ ! -d "$dir" ]; then
@@ -41,7 +41,8 @@ import (
 	"strings"
 )
 
-// KCSites holds, by route (gin, echo: "METHOD path") or endpoint handler (chi), each site that registered it.
+// KCSites holds, by route (gin, echo: "METHOD path"; chi: the endpoint handler's identity and the pattern as its own
+// router has it), each site that registered it.
 var KCSites = map[string][]string{}
 
 var _ = http.MethodGet

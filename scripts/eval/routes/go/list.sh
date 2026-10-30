@@ -55,7 +55,7 @@ for chi in github.com/go-chi/chi/v5 github.com/go-chi/chi; do
 					kcMounts[route] = true
 					method = "*"
 				}
-				kcOutAt(kcRoute{Framework: "chi", Method: method, Path: route, Handler: name}, chi.KCSites, chi.KCHandlerKey(h))
+				kcOutAt(kcRoute{Framework: "chi", Method: method, Path: route, Handler: name}, chi.KCSites, kcChiKey(chi.KCSites, chi.KCHandlerKey(h), route))
 				return nil
 			})'
     # chi's own repository builds chi from its source: no module to hook, so its routes are listed without sites.
