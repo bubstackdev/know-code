@@ -5,7 +5,7 @@ its own changes on top of it, and keeps every freshness guarantee a separate ind
 
 ## What exists in 0.5
 
-- One SQLite index per checkout (`<cache>/repos/<name>-<hash>.sqlite`). References are stored unresolved and
+- One SQLite index per checkout (`<tree>/repos/<name>-<hash>.sqlite`, in the build's own part of the cache). References are stored unresolved and
   resolved at query time against the whole index, so an edit to one file never re-extracts another.
 - A new checkout of an indexed repo is seeded with `VACUUM INTO` from the most recently indexed checkout of the same
   origin (`kc_index::seed`). The first sync then hashes every file and extracts only those whose content differs.
@@ -35,7 +35,7 @@ which the clone gets by construction from the existing incremental sync.
 - **Key:** the repository's identity (its normalized origin; without one, its git common directory, which every
   worktree of a checkout shares), the full commit, the build (schema, resolver and extractor versions, as the
   freshness snapshot records them) and the privacy policy's key.
-- **Where:** `<cache>/bases/<name>-<identity hash>-<commit>.sqlite`, with a `.used` access record.
+- **Where:** `<tree>/bases/<name>-<identity hash>-<commit>.sqlite`, with a `.used` access record.
 - **Made from** a checkout whose tree is clean at that commit (`git status --porcelain` empty, untracked files
   included, since they are indexed) right after a sync with no failed reads, by `VACUUM INTO` a temporary file
   renamed into place. `VACUUM INTO` writes a consistent copy while other processes use the source, and leaves no

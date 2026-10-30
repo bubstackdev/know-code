@@ -60,7 +60,7 @@ node_modules = true              # read declared SDK clients' code from node_mod
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `cache.dir` | the user cache directory | Where indexes live. |
-| `cache.max_size` | `2147483648` (2 GiB) | Idle indexes above this are evicted least recently used. Bytes or a size such as `"4 GiB"`; `0` disables size eviction. |
+| `cache.max_size` | `2147483648` (2 GiB) | Idle indexes above this are evicted least recently used, other KnowCode versions' first when versions share the cache (docs/architecture.md, "Versions sharing a cache"). Bytes or a size such as `"4 GiB"`; `0` disables size eviction. |
 | `cache.shared_bases` | `true` | Whether checkouts of a repo with more than one (worktrees, clones) share a base: a checkout clean at a commit publishes one, and a new checkout's index starts as a clone of the nearest (see [architecture](architecture.md#the-cache-lifecycle)). |
 | `notes.path` | `notes.sqlite` in the data directory | The notes database. |
 | `workspace.roots` | none | Directories whose git repos make up the workspace. |

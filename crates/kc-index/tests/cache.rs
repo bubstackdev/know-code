@@ -86,6 +86,9 @@ fn invariant_pruning_and_purge_preserve_notes_and_unrelated_cache_files() {
     fs::create_dir_all(cache_dir.join("corpus/work")).unwrap();
     fs::write(cache_dir.join("corpus/work/keep"), b"unrelated work").unwrap();
     fs::write(cache_dir.join("notes.sqlite"), b"legacy durable notes").unwrap();
+    fs::write(kc_index::tree_dir().unwrap().join("repos/foreign.sqlite"), b"not a KnowCode index").unwrap();
+    // And one where 0.6.1 and older keep their indexes, which another build's maintenance must leave too.
+    fs::create_dir_all(cache_dir.join("repos")).unwrap();
     fs::write(cache_dir.join("repos/foreign.sqlite"), b"not a KnowCode index").unwrap();
     config::set("cache.max_size", "0").unwrap();
     let unlimited = cache::maintain(&[]).unwrap();
@@ -99,6 +102,7 @@ fn invariant_pruning_and_purge_preserve_notes_and_unrelated_cache_files() {
     assert_eq!(fs::read(cache_dir.join("corpus/work/keep")).unwrap(), b"unrelated work");
     assert_eq!(fs::read(cache_dir.join("notes.sqlite")).unwrap(), b"legacy durable notes");
     assert_eq!(fs::read(cache_dir.join("repos/foreign.sqlite")).unwrap(), b"not a KnowCode index");
+    assert_eq!(fs::read(kc_index::tree_dir().unwrap().join("repos/foreign.sqlite")).unwrap(), b"not a KnowCode index");
 }
 
 #[test]
@@ -133,16 +137,16 @@ fn invariant_blocking_policy_purges_an_evicted_repositories_cached_facts() {
     cache::maintain(&[]).unwrap();
     assert!(!kc_index::db_path(&root).unwrap().exists());
     assert!(workspace::all_summaries().unwrap().iter().find(|s| s.root == root).unwrap().may_define("handler_app"));
-    assert!(fs::read_to_string(f.base.join("cache/workspace.json")).unwrap().contains("qzx_cache_internal_package"));
+    assert!(fs::read_to_string(kc_index::tree_dir().unwrap().join("workspace.json")).unwrap().contains("qzx_cache_internal_package"));
     fs::write(root.join(".knowcode-privacy.yml"), "level: 1\n").unwrap();
     let summaries = workspace::all_summaries().unwrap();
     let blocked = summaries.iter().find(|s| s.root == root).unwrap();
     assert!(blocked.blocked.whole);
     assert!(!blocked.may_define("handler_app"));
     assert_eq!(kc_index::notes::count().unwrap(), 0);
-    assert!(!fs::read_to_string(f.base.join("cache/workspace.json")).unwrap().contains("qzx_cache_internal_package"));
+    assert!(!fs::read_to_string(kc_index::tree_dir().unwrap().join("workspace.json")).unwrap().contains("qzx_cache_internal_package"));
     assert!(!fs::read(kc_index::notes::db_path().unwrap()).unwrap().windows(b"qzx_cache_private_note".len()).any(|b| b == b"qzx_cache_private_note"));
-    assert!(!fs::read_to_string(f.base.join("cache/workspace.json")).unwrap().contains("handler_app"));
+    assert!(!fs::read_to_string(kc_index::tree_dir().unwrap().join("workspace.json")).unwrap().contains("handler_app"));
 }
 
 struct Reader(Child);
@@ -226,4 +230,103 @@ fn invariant_a_new_policy_waits_for_a_reader_instead_of_refusing() {
     drop(reader);
     assert_eq!(opener.join().unwrap().unwrap().as_deref(), Some(root.to_str().unwrap()));
     assert!(workspace::all_summaries().unwrap().iter().find(|s| s.root == root).unwrap().blocked.whole);
+}
+
+/// An index another build wrote for `root`, at `tree` (`<cache>` for 0.6.1 and older, `<cache>/v/<key>` for others):
+/// named as every version names it, with the root and schema it records.
+fn other_index(tree: &Path, root: &Path, schema: u32) -> PathBuf {
+    let db = tree.join("repos").join(kc_index::db_path(root).unwrap().file_name().unwrap());
+    fs::create_dir_all(db.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE padding(x BLOB);").unwrap();
+    conn.execute("INSERT INTO meta VALUES ('root', ?1), ('schema_version', ?2)", [root.to_str().unwrap(), &schema.to_string()]).unwrap();
+    conn.execute("INSERT INTO padding VALUES (zeroblob(65536))", []).unwrap();
+    db
+}
+
+/// Sets when a file counts as last used: its `.used` record's (or its own) modification time.
+fn used_at(file: &Path, secs_ago: u64) {
+    let at = std::time::SystemTime::now() - Duration::from_secs(secs_ago);
+    let used = file.with_extension("used");
+    let target = if used.exists() { used } else { file.to_path_buf() };
+    fs::File::options().write(true).open(&target).unwrap().set_modified(at).unwrap();
+}
+
+#[test]
+fn a_builds_data_lives_in_its_own_tree_named_for_what_it_reads() {
+    let f = Fixture::new();
+    let key = kc_index::data_key();
+    let (schema, hash) = key.split_once('-').unwrap();
+    assert_eq!(schema, format!("s{}", kc_store::SCHEMA_VERSION));
+    assert!(hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit()), "{key}");
+    let tree = f.base.join("cache/v").join(key);
+    assert_eq!(kc_index::tree_dir().unwrap(), tree);
+    let root = f.repo("app");
+    assert!(kc_index::db_path(&root).unwrap().starts_with(tree.join("repos")));
+    workspace::all_summaries().unwrap();
+    assert!(tree.join("workspace.json").is_file());
+    // Nothing of this build's data at the top level, where 0.6.1 and older keep theirs.
+    for name in ["repos", "bases", "workspace.json", "discovery.json"] {
+        assert!(!f.base.join("cache").join(name).exists(), "{name}");
+    }
+}
+
+#[test]
+fn maintenance_evicts_other_builds_files_first_and_never_rewrites_them() {
+    let f = Fixture::new();
+    let cache = f.base.join("cache");
+    let mine = f.repo("mine");
+    let (legacy_root, other_root, held_root) = (f.repo("legacy"), f.repo("other"), f.repo("held"));
+    // 0.6.1's index at the top level, another version's tree with an index and a base, and an index of that version
+    // a process holds.
+    let legacy = other_index(&cache, &legacy_root, 21);
+    let tree = cache.join("v/s99-0123abcd");
+    let other = other_index(&tree, &other_root, 99);
+    let held = other_index(&tree, &held_root, 99);
+    let base = tree.join("bases/widgets-0123456789ab-1-0.sqlite");
+    fs::create_dir_all(base.parent().unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(&base).unwrap();
+    conn.execute_batch("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('base.build', '99');").unwrap();
+    drop(conn);
+    fs::write(cache.join("workspace.json"), b"{\"format\":\"21.21\"}").unwrap();
+    for (file, ago) in [(&legacy, 400), (&other, 300), (&base, 200), (&held, 100)] {
+        used_at(file, ago);
+    }
+    let lock = fs::File::options().create(true).truncate(false).write(true).open({
+        fs::create_dir_all(tree.join("locks")).unwrap();
+        tree.join("locks").join(held.with_extension("lock").file_name().unwrap())
+    }).unwrap();
+    lock.lock().unwrap();
+    let legacy_bytes = fs::read(&legacy).unwrap();
+
+    // Under budget: nothing goes, and the budget counts every tree.
+    config::set("cache.max_size", "1GiB").unwrap();
+    let report = cache::maintain(&[]).unwrap();
+    assert!(report.removed.is_empty(), "{report:?}");
+    let all = report.bytes_before.unwrap();
+    assert!(all > kc_index::index_bytes(&mine).unwrap() + 4 * 65536, "{all}");
+    assert_eq!(fs::read(&legacy).unwrap(), legacy_bytes, "another build's index is never rewritten");
+
+    // Over budget by what the other builds hold: theirs go, least recently used first; the held one and this build's
+    // stay.
+    config::set("cache.max_size", &(all - 1).to_string()).unwrap();
+    let report = cache::maintain(&[]).unwrap();
+    let removed: Vec<&Path> = report.removed.iter().map(|r| r.root.as_path()).collect();
+    assert_eq!(removed, [legacy_root.as_path()], "{report:?}");
+    config::set("cache.max_size", "1").unwrap();
+    let report = cache::maintain(&[]).unwrap();
+    let removed: Vec<(&Path, &str)> = report.removed.iter().map(|r| (r.root.as_path(), r.reason)).collect();
+    assert_eq!(&removed[..2], [(other_root.as_path(), "other_version"), (base.as_path(), "other_version")], "{report:?}");
+    assert!(report.kept.iter().any(|k| k.root == held_root && k.reason == "in_use"), "{report:?}");
+    assert!(held.exists() && !other.exists() && !base.exists() && !legacy.exists());
+    // Then this build's own, least recently used first, but never its most recent (the fixture indexed `held` last).
+    assert!(removed[2..].iter().all(|(_, reason)| *reason == "size") && removed.iter().any(|(root, _)| *root == mine.as_path()), "{report:?}");
+    assert!(kc_index::db_path(&held_root).unwrap().exists(), "this build's most recent index stays");
+    assert!(cache.join("workspace.json").exists(), "0.6.1's summary file is its own");
+
+    // Let go of, the held index goes too, and its tree, now empty, with it.
+    drop(lock);
+    cache::maintain(&[]).unwrap();
+    assert!(!tree.exists(), "an emptied tree of another version goes whole");
+    assert!(kc_index::tree_dir().unwrap().exists());
 }

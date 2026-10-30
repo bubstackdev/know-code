@@ -235,7 +235,7 @@ class NativeStreamTests(unittest.TestCase):
                 self.assertEqual(context['items'][0]['source'], source_text.strip())
                 self.assertEqual(context['items'][0]['symbol']['file'], 'app.ts')
                 self.assertEqual(context['freshness']['reparsed'], 1)
-                self.assertTrue(list((session/'control/kc-cache/repos').glob('*.sqlite')))
+                self.assertTrue(list((session/'control/kc-cache').glob('repos/*.sqlite')) + list((session/'control/kc-cache').glob('v/*/repos/*.sqlite')))
                 self.assertTrue(results['fixture_note']['is_error'])
                 self.assertIn('No such tool available', json.dumps(results['fixture_note']['content']))
                 self.assertFalse(any(b'synthetic forbidden note' in path.read_bytes()

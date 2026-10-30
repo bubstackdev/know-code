@@ -111,6 +111,29 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(config::cache_dir()?.0)
 }
 
+/// This build's part of the cache: `<cache>/v/<key>/`, holding every file whose format depends on the index schema
+/// or the extractors (`repos/`, `bases/`, `locks/`, `workspace.json`, `discovery.json`). Builds that read different
+/// data (another schema, resolver or extractor) keep apart and never rewrite each other's files, so any two versions
+/// can share one cache; 0.6.1 and older keep theirs at the top level, which this build never opens. What all builds
+/// share stays at the top: the update check's state, the cursor key, notes, and the maintenance lock.
+pub fn tree_dir() -> Result<PathBuf> {
+    Ok(cache_dir()?.join(DATA_TREES).join(data_key()))
+}
+
+/// The directory under the cache holding each build's data tree (see [`tree_dir`]).
+pub const DATA_TREES: &str = "v";
+
+/// The name of this build's data tree: the index schema and a hash of the resolver and extractor versions it reads
+/// with (`s24-3f9a1c2e`). Configured conventions aren't part of it: changing them re-extracts in place, as before.
+pub fn data_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        let versions: Vec<String> = kc_extract::Lang::ALL.iter().map(|l| format!("{}{}", l.as_str(), l.base_version())).collect();
+        let data = format!("{}|r{}|{}", kc_store::SCHEMA_VERSION, kc_store::RESOLVER_VERSION, versions.join(","));
+        format!("s{}-{}", kc_store::SCHEMA_VERSION, &blake3::hash(data.as_bytes()).to_hex()[..8])
+    })
+}
+
 pub use git::{command as git_command, repo_root};
 
 /// A full rediscovery is forced at least this often, as a backstop for changes the cheap check can't see (a file
@@ -124,11 +147,11 @@ pub const SUMMARY_GEN: &str = "summary_gen";
 /// Cached `dirty` is recomputed with `git status` at least this often.
 const DIRTY_TTL_SECS: u64 = 60;
 
-/// The index file for a repo root: `<cache>/repos/<name>-<hash>.sqlite`.
+/// The index file for a repo root: `<tree>/repos/<name>-<hash>.sqlite` (see [`tree_dir`]).
 pub fn db_path(root: &Path) -> Result<PathBuf> {
     let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
     let hash = blake3::hash(root.to_string_lossy().as_bytes()).to_hex();
-    Ok(cache_dir()?.join("repos").join(format!("{name}-{}.sqlite", &hash[..12])))
+    Ok(tree_dir()?.join("repos").join(format!("{name}-{}.sqlite", &hash[..12])))
 }
 
 /// Opens (creating if needed) the index for a repo root and records the root in it.
