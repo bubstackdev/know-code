@@ -138,7 +138,7 @@ def summarise(questions, answers, decls, bound, clones):
     misses = []
     for a in answers:
         q = by_id[a['id']]
-        lang = LANGUAGES[q['repo']]
+        lang = language(q)
         for key in ((a['tool'], q['type'], lang), (a['tool'], q['type'], 'all')):
             groups[key]['outcomes'].append(a['outcome'])
         if a['outcome'] == 'judged':
@@ -249,7 +249,7 @@ def score_all_questions(questions, answers, decls, bound, clones):
             j = judge(q, a, decls, bound, source)
         else:
             j = score.Judged(misses=[tuple(x) for x in q['labels']])
-        for lang in (LANGUAGES[q['repo']], 'all'):
+        for lang in (language(q), 'all'):
             groups[(a['tool'], q['type'], lang)].append(j)
     return [{'tool': t, 'type': ty, 'language': l, **score.pool(js)} for (t, ty, l), js in sorted(groups.items())]
 

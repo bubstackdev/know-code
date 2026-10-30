@@ -4,9 +4,29 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode rules` runs a repo's own ast-grep rule files and prints their matches, each with its rule's severity and
+  message. Rules are read with the library the ast-grep command line uses (vendored, its YAML read by yaml-rust2), so
+  a rule matches what `ast-grep scan` matches on the same files: on a fixture of 46 rules in six languages, all 89
+  matches are the same, and so are the rule files it refuses. `fix` is refused, since KnowCode only reports, and so is
+  JavaScript, which KnowCode parses with another grammar. Rule files come from `--rules` or the new `rules.paths` key,
+  and are only read. `--format sarif` prints a SARIF 2.1.0 log.
+- `knowcode rules --new-since REF` is a monitor: only the matches REF didn't have, read from the files that differ
+  from it, with moved code and renamed files not counted as new. `--regex` monitors a line regex instead of rules.
+  Replayed over 600 commits of serilog, Autofac and hono, the rule monitors fired on exactly the 27 commits that
+  ast-grep, run at each commit and its parent, labels, and six text monitors on exactly the 117 that `git log -G`
+  labels, with the same count of new matches at every commit.
+- The `kc` op `rules` (`kc_rules`, served on request) answers the same, with `format: sarif` for a SARIF log. It reads
+  rule files only from inside the repo.
 - `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
   shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
   answer left out as comments.
+- A React component used only through JSX has dependents. A tag (`<Page …>`, `</Page>`) was recorded as a type
+  reference, which `impact`, `trace` and `tests` don't follow from a function, so a component rendered only that way
+  answered "nothing affected". A tag is now a call of its component, as the TypeScript compiler binds it (`<Ns.Comp>`
+  a member of `Ns`), and rendering a class component creates it; `refs` lists these uses as `call` instead of
+  `type_ref`. TypeScript and JavaScript files are read again once. On impact-dev-v1's 92 questions, impact's recall
+  rises from 0.816 to 0.858 (71 more labels found in 5 jellyfin-web questions, no other answer changed), and `tests`
+  for hono's `src/jsx/components.ts` reaches the tests that render its components.
 - `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
   tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
   is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves

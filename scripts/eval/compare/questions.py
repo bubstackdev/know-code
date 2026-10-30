@@ -218,10 +218,16 @@ def main(argv=None):
     ap.add_argument('enumerations', nargs='+', type=Path)
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--strata', type=Path, required=True)
+    ap.add_argument('--lang', action='append', default=[], metavar='REPO=LANG',
+                    help="each question's language when the repository isn't identity-v1's (step 5's fresh ones)")
     args = ap.parse_args(argv)
+    langs = dict(spec.split('=', 1) for spec in args.lang)
     questions, strata = [], {}
     for path in sorted(args.enumerations):
         q, s = draw(read(path))
+        for one in q:
+            if one['repo'] in langs:
+                one['lang'] = langs[one['repo']]
         questions += q
         strata.update(s)
     questions.sort(key=lambda q: q['id'])

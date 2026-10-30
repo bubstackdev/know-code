@@ -6033,12 +6033,13 @@ fn cs_namespaces(
 }
 
 /// Whether a top-level TypeScript declaration of kind `def_kind` can be what a `ref_kind` reference names: a module's
-/// constants and functions are values (`SetCart(…)`, `ofType(SetCart)`, `inject(TOKEN)`) as much as its classes.
+/// constants and functions are values (`SetCart(…)`, `ofType(SetCart)`, `inject(TOKEN)`) as much as its classes. A
+/// class can't be called without `new`, so a call naming one is a JSX tag rendering a class component (`<Board />`).
 fn ts_top_level_compatible(ref_kind: &str, def_kind: &str) -> bool {
     match ref_kind {
         "type_ref" | "member" => !matches!(def_kind, "init" | "case" | "method"),
         "instantiate" => matches!(def_kind, "class" | "function" | "property"),
-        "call" => matches!(def_kind, "function" | "property"),
+        "call" => matches!(def_kind, "function" | "property" | "class"),
         _ => false,
     }
 }

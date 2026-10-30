@@ -77,7 +77,7 @@ SAMPLES = {
     'reviewers': {'files': ['src/Shelf.cs']}, 'history': {'symbol': 'Shelf.Count'}, 'overview': {}, 'areas': {},
     'notes': {}, 'grep_ast': {'pattern': 'Count($$$)', 'lang': 'cs'}, 'status': {}, 'capabilities': {},
     'note_add': {'symbol': 'Shelf.Count', 'text': 'counts by owner'},
-    'task': {'goal': 'count items on a shelf'}, 'test_targets': {},
+    'task': {'goal': 'count items on a shelf'}, 'test_targets': {}, 'rules': {'regex': 'Count'},
 }
 
 

@@ -1,0 +1,24 @@
+# How run.sh builds compare-v1's fresh JVM candidates (REPOS and BUILDS point it here): each candidate gets one attempt
+# with scip-java's own defaults as identity-v2 uses them (Maven: clean verify without tests, JDK 17; Gradle:
+# scipCompileAll, JDK 21). A candidate that doesn't label cleanly this way is skipped, and selection.md says why.
+retrofit 21 gradle -- clean scipPrintDependencies scipCompileAll
+WxJava 17 maven -- --batch-mode clean verify -DskipTests
+okio 21 gradle -- clean scipPrintDependencies scipCompileAll
+javalin 17 maven -- --batch-mode clean verify -DskipTests -Dmaven.gitcommitid.skip=true
+kotlinx-serialization 21 gradle SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll
+mockk 21 gradle SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll
+seata 17 maven -- --batch-mode clean verify -DskipTests
+redisson 21 maven -- --batch-mode clean verify -DskipTests
+HikariCP 17 maven -- --batch-mode clean verify -DskipTests -Ddocker.skip=true
+Sa-Token 17 maven -- --batch-mode clean verify -DskipTests -Dgpg.skip=true
+disruptor 21 gradle -- clean scipPrintDependencies scipCompileAll
+embabel-agent 17 maven -- --batch-mode clean verify -DskipTests -Dmaven.gitcommitid.skip=true
+ksp 21 gradle SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll
+Store 21 gradle -- clean scipPrintDependencies scipCompileAll
+Kodein 21 gradle -- clean scipPrintDependencies scipCompileAll
+clikt 21 gradle KOTLIN_CATALOG=2.4.21 -- clean scipPrintDependencies scipCompileAll
+wire 21 gradle -- clean scipPrintDependencies scipCompileAll
+RxKotlin 21 gradle -- clean scipPrintDependencies scipCompileAll
+fuel 21 gradle -- clean scipPrintDependencies scipCompileAll
+mockito-kotlin 21 gradle -- clean scipPrintDependencies scipCompileAll
+kotlin-logging 21 gradle KOTLIN_CATALOG=2.4.21 -- clean scipPrintDependencies scipCompileAll

@@ -44,6 +44,9 @@ block_at = 1                     # content at this level or below is blocked; 0 
 malformed = "restricted"         # a privacy file that can't be read: "restricted" or "default"
 file = ".knowcode-privacy.yml"   # the privacy file's name and keys (see "Privacy file")
 
+[rules]
+paths = ["lint/rules"]           # ast-grep rule files `knowcode rules` reads, from each repo's root
+
 [conventions.csharp.bus]         # names your code base's own conventions use (see "Conventions")
 message_attributes = ["BusMessage"]
 
@@ -75,6 +78,7 @@ node_modules = true              # read declared SDK clients' code from node_mod
 | `privacy.level_key` | `"level"` | A rule's key for its level. |
 | `update.check` | `true` | Whether to run the daily update check. |
 | `hooks.session_start` | `true` | Whether the Claude Code plugin's session-start hook adds its line (what is indexed here, and which tools to call). |
+| `rules.paths` | none | Rule files, or directories of them, that `knowcode rules` reads when none is named. A relative path is taken from each repo's root; the files are only read. |
 | `index.node_modules` | `true` | Whether the code of an SDK package a repo declares as an external client is read from its `node_modules` (see [Ignoring paths](#ignoring-paths)). |
 
 The `[conventions.*]` keys are in [Conventions](#conventions).

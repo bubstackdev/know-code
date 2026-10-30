@@ -116,11 +116,12 @@ def homebrew(text: str) -> str:
     the checkout's git config and out of every step but the push, which receives it through `env:`."""
     job = "  publish-homebrew-formula:\n"
     assert text.count(job) == 1, "expected the Homebrew publish job; review dist-workspace.toml's publish-jobs"
+    # The tap token lives in the `release` environment, which only `v*.*.*` tags may deploy to (docs/releasing.md).
     text = replace(text, '    runs-on: "ubuntu-24.04"\n    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n'
                    '      PLAN: ${{ needs.plan.outputs.val }}\n',
-                   '    runs-on: "ubuntu-24.04"\n    permissions:\n      "contents": "read"\n    env:\n'
-                   '      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      PLAN: ${{ needs.plan.outputs.val }}\n',
-                   "Homebrew job permissions")
+                   '    runs-on: "ubuntu-24.04"\n    environment: release\n    permissions:\n      "contents": "read"\n'
+                   '    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      PLAN: ${{ needs.plan.outputs.val }}\n',
+                   "Homebrew job permissions and environment")
     text = replace(text, '      GITHUB_USER: "axo bot"\n      GITHUB_EMAIL: "admin+bot@axo.dev"\n',
                    f'      GITHUB_USER: "{BOT_NAME}"\n      GITHUB_EMAIL: "{BOT_EMAIL}"\n', "Homebrew commit identity")
     text = replace(text,

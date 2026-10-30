@@ -1,0 +1,25 @@
+# compare-v1's fresh repositories (eval/compare-v1/README.md, step 5): name, language, URL and the commit labelled, pinned
+# at their heads on 2026-10-29. Candidates in the selection rule's order; selection.md records which were kept.
+retrofit jvm https://github.com/lysine-dev/retrofit 8eab31ec45999abdc09bb5e885d9d1dcf40db7e0
+WxJava jvm https://github.com/binarywang/WxJava 1b22c250810f79da2e33a51ab06d740c768ae4cf
+okio jvm https://github.com/lysine-dev/okio 61d53efb0a3cdabd90332cf3226f3e0f44525b0f
+javalin jvm https://github.com/javalin/javalin 3c6d62fe04e84075922b390b03c53126b093fbb3
+kotlinx-serialization jvm https://github.com/Kotlin/kotlinx.serialization 6f6a2e66c3dbf4a34e86a030368ecb0f7a734d22
+mockk jvm https://github.com/mockk/mockk c2fb66f841973e725b367650e69c4bac9babba20
+seata jvm https://github.com/apache/incubator-seata a9b03977be324c170741ebc37d797d5bfd159552
+redisson jvm https://github.com/redisson/redisson d68b29112c4b96f3ad5da504181a784707b0f2bd
+gorm go https://github.com/go-gorm/gorm ead4e04ba7c6a49654649131e587133b1d9f3eca
+bubbletea go https://github.com/charmbracelet/bubbletea 67b4c7a8a2b34a0b1ce15261b0c705bc7e1a04b7
+HikariCP jvm https://github.com/brettwooldridge/HikariCP a4d93f4f85517f90e632b795486d7102e933d7ff
+Sa-Token jvm https://github.com/dromara/Sa-Token cb191342372cec5045a8c26f38c61a6ea2147ff8
+disruptor jvm https://github.com/LMAX-Exchange/disruptor c871ca49826a6be7ada6957f6fbafcfecf7b1f87
+embabel-agent jvm https://github.com/embabel/embabel-agent 159c239a787a6043f738fd22cbd1fb7453ce4dca
+ksp jvm https://github.com/google/ksp 93d71709eda9c0e6a39b281c5434834d9fdcec4f
+Store jvm https://github.com/MobileNativeFoundation/Store 74a5988ff1c998055455b42509763e933a66da79
+Kodein jvm https://github.com/kosi-libs/Kodein f26ea0c9ed50f2496cc8f6272849ca1c19df8892
+clikt jvm https://github.com/ajalt/clikt fa2e48c54995a88d492f05568a64889d99994877
+wire jvm https://github.com/square/wire ddad173b70a5b584608d1ebf6a2e31aa46821d26
+RxKotlin jvm https://github.com/ReactiveX/RxKotlin 88176f6691de8de39d092f144671341bec30d4f8
+fuel jvm https://github.com/kittinunf/fuel 57aa89126e0d488dd54cfc2d0d9215ade2a578a9
+mockito-kotlin jvm https://github.com/mockito/mockito-kotlin 5969d27280ea670520003c75776057b20f7f3dfb
+kotlin-logging jvm https://github.com/oshai/kotlin-logging 015921623488b8e9164f5e59e8c3bc49ec8feb11

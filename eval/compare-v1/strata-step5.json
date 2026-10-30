@@ -1,0 +1,434 @@
+{
+ "HikariCP/find/1": [
+  907,
+  4
+ ],
+ "HikariCP/find/2-4": [
+  291,
+  4
+ ],
+ "HikariCP/find/5-20": [
+  44,
+  4
+ ],
+ "HikariCP/impact/1": [
+  196,
+  4
+ ],
+ "HikariCP/impact/10+": [
+  33,
+  4
+ ],
+ "HikariCP/impact/2-9": [
+  172,
+  4
+ ],
+ "HikariCP/refs/callable/1-4": [
+  271,
+  3
+ ],
+ "HikariCP/refs/callable/30-200": [
+  15,
+  3
+ ],
+ "HikariCP/refs/callable/5-29": [
+  67,
+  3
+ ],
+ "HikariCP/refs/dispatch/1-4": [
+  42,
+  3
+ ],
+ "HikariCP/refs/dispatch/5-29": [
+  6,
+  3
+ ],
+ "HikariCP/refs/member/1-4": [
+  392,
+  3
+ ],
+ "HikariCP/refs/member/30-200": [
+  10,
+  3
+ ],
+ "HikariCP/refs/member/5-29": [
+  139,
+  3
+ ],
+ "HikariCP/refs/over-200": [
+  0,
+  0
+ ],
+ "HikariCP/refs/type/1-4": [
+  51,
+  3
+ ],
+ "HikariCP/refs/type/30-200": [
+  8,
+  3
+ ],
+ "HikariCP/refs/type/5-29": [
+  25,
+  3
+ ],
+ "WxJava/find/1": [
+  15833,
+  4
+ ],
+ "WxJava/find/2-4": [
+  10297,
+  4
+ ],
+ "WxJava/find/5-20": [
+  2512,
+  4
+ ],
+ "WxJava/impact/1": [
+  3944,
+  4
+ ],
+ "WxJava/impact/10+": [
+  151,
+  4
+ ],
+ "WxJava/impact/2-9": [
+  1471,
+  4
+ ],
+ "WxJava/refs/callable/1-4": [
+  4769,
+  3
+ ],
+ "WxJava/refs/callable/30-200": [
+  37,
+  3
+ ],
+ "WxJava/refs/callable/5-29": [
+  286,
+  3
+ ],
+ "WxJava/refs/dispatch/1-4": [
+  451,
+  3
+ ],
+ "WxJava/refs/dispatch/30-200": [
+  29,
+  3
+ ],
+ "WxJava/refs/dispatch/5-29": [
+  104,
+  3
+ ],
+ "WxJava/refs/member/1-4": [
+  22775,
+  3
+ ],
+ "WxJava/refs/member/30-200": [
+  38,
+  3
+ ],
+ "WxJava/refs/member/5-29": [
+  515,
+  3
+ ],
+ "WxJava/refs/over-200": [
+  33,
+  0
+ ],
+ "WxJava/refs/type/1-4": [
+  4053,
+  3
+ ],
+ "WxJava/refs/type/30-200": [
+  62,
+  3
+ ],
+ "WxJava/refs/type/5-29": [
+  1060,
+  3
+ ],
+ "bubbletea/find/1": [
+  823,
+  4
+ ],
+ "bubbletea/find/2-4": [
+  113,
+  4
+ ],
+ "bubbletea/find/5-20": [
+  21,
+  4
+ ],
+ "bubbletea/impact/1": [
+  170,
+  4
+ ],
+ "bubbletea/impact/10+": [
+  6,
+  4
+ ],
+ "bubbletea/impact/2-9": [
+  92,
+  4
+ ],
+ "bubbletea/refs/callable/1-4": [
+  231,
+  3
+ ],
+ "bubbletea/refs/callable/30-200": [
+  3,
+  3
+ ],
+ "bubbletea/refs/callable/5-29": [
+  13,
+  3
+ ],
+ "bubbletea/refs/dispatch/1-4": [
+  21,
+  3
+ ],
+ "bubbletea/refs/member/1-4": [
+  406,
+  3
+ ],
+ "bubbletea/refs/member/30-200": [
+  3,
+  3
+ ],
+ "bubbletea/refs/member/5-29": [
+  164,
+  3
+ ],
+ "bubbletea/refs/over-200": [
+  0,
+  0
+ ],
+ "bubbletea/refs/type/1-4": [
+  137,
+  3
+ ],
+ "bubbletea/refs/type/30-200": [
+  3,
+  3
+ ],
+ "bubbletea/refs/type/5-29": [
+  71,
+  3
+ ],
+ "gorm/find/1": [
+  1301,
+  4
+ ],
+ "gorm/find/2-4": [
+  285,
+  4
+ ],
+ "gorm/find/5-20": [
+  66,
+  4
+ ],
+ "gorm/impact/1": [
+  222,
+  4
+ ],
+ "gorm/impact/10+": [
+  32,
+  4
+ ],
+ "gorm/impact/2-9": [
+  191,
+  4
+ ],
+ "gorm/refs/callable/1-4": [
+  231,
+  3
+ ],
+ "gorm/refs/callable/30-200": [
+  10,
+  3
+ ],
+ "gorm/refs/callable/5-29": [
+  88,
+  3
+ ],
+ "gorm/refs/dispatch/1-4": [
+  100,
+  3
+ ],
+ "gorm/refs/dispatch/30-200": [
+  2,
+  2
+ ],
+ "gorm/refs/dispatch/5-29": [
+  13,
+  3
+ ],
+ "gorm/refs/member/1-4": [
+  386,
+  3
+ ],
+ "gorm/refs/member/30-200": [
+  72,
+  3
+ ],
+ "gorm/refs/member/5-29": [
+  273,
+  3
+ ],
+ "gorm/refs/over-200": [
+  6,
+  0
+ ],
+ "gorm/refs/type/1-4": [
+  153,
+  3
+ ],
+ "gorm/refs/type/30-200": [
+  23,
+  3
+ ],
+ "gorm/refs/type/5-29": [
+  126,
+  3
+ ],
+ "kotlin-logging/find/1": [
+  212,
+  4
+ ],
+ "kotlin-logging/find/2-4": [
+  46,
+  4
+ ],
+ "kotlin-logging/find/5-20": [
+  12,
+  4
+ ],
+ "kotlin-logging/impact/1": [
+  49,
+  4
+ ],
+ "kotlin-logging/impact/10+": [
+  3,
+  3
+ ],
+ "kotlin-logging/impact/2-9": [
+  38,
+  4
+ ],
+ "kotlin-logging/refs/callable/1-4": [
+  53,
+  3
+ ],
+ "kotlin-logging/refs/callable/5-29": [
+  10,
+  3
+ ],
+ "kotlin-logging/refs/dispatch/1-4": [
+  25,
+  3
+ ],
+ "kotlin-logging/refs/dispatch/5-29": [
+  6,
+  3
+ ],
+ "kotlin-logging/refs/member/1-4": [
+  64,
+  3
+ ],
+ "kotlin-logging/refs/member/5-29": [
+  22,
+  3
+ ],
+ "kotlin-logging/refs/over-200": [
+  0,
+  0
+ ],
+ "kotlin-logging/refs/type/1-4": [
+  28,
+  3
+ ],
+ "kotlin-logging/refs/type/30-200": [
+  4,
+  3
+ ],
+ "kotlin-logging/refs/type/5-29": [
+  10,
+  3
+ ],
+ "ksp/find/1": [
+  1808,
+  4
+ ],
+ "ksp/find/2-4": [
+  300,
+  4
+ ],
+ "ksp/find/5-20": [
+  87,
+  4
+ ],
+ "ksp/impact/1": [
+  518,
+  4
+ ],
+ "ksp/impact/10+": [
+  42,
+  4
+ ],
+ "ksp/impact/2-9": [
+  319,
+  4
+ ],
+ "ksp/refs/callable/1-4": [
+  682,
+  3
+ ],
+ "ksp/refs/callable/30-200": [
+  7,
+  3
+ ],
+ "ksp/refs/callable/5-29": [
+  108,
+  3
+ ],
+ "ksp/refs/dispatch/1-4": [
+  148,
+  3
+ ],
+ "ksp/refs/dispatch/30-200": [
+  21,
+  3
+ ],
+ "ksp/refs/dispatch/5-29": [
+  67,
+  3
+ ],
+ "ksp/refs/member/1-4": [
+  804,
+  3
+ ],
+ "ksp/refs/member/30-200": [
+  14,
+  3
+ ],
+ "ksp/refs/member/5-29": [
+  213,
+  3
+ ],
+ "ksp/refs/over-200": [
+  3,
+  0
+ ],
+ "ksp/refs/type/1-4": [
+  116,
+  3
+ ],
+ "ksp/refs/type/30-200": [
+  30,
+  3
+ ],
+ "ksp/refs/type/5-29": [
+  66,
+  3
+ ]
+}
