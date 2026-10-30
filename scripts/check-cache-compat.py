@@ -6,9 +6,11 @@
 OTHER is another knowcode binary (CI passes the latest release), THIS the build under test. They take turns on one
 cache, over a workspace of two fixture repositories, with an edit between rounds: every run must succeed and answer a
 symbol lookup, a references query and a workspace-wide lookup made from outside any repository. After each run, the
-other build's data must be byte for byte as it was. This build keeps its data in its own tree, `<cache>/v/<key>/`
+other build's data must be byte for byte as it was. This build keeps its data in its own tree, `<cache>/v/s<schema>/`
 (crates/kc-index/src/lib.rs `tree_dir`); 0.6.1 and older keep theirs at the cache's top level. The only files a run may
-add outside its own data are the ones every version shares: the maintenance lock and the cursor key.
+add outside its own data are the ones every version shares: the maintenance lock and the cursor key. Two builds of one
+schema share a tree by design (one re-extracts what the other's extractors changed), so for such a pair only the
+answers are checked, and the run says so.
 
 Exits 1 with the first failure.
 """
@@ -76,6 +78,7 @@ def main() -> None:
             f'[workspace]\nroots = ["{ws}"]\nmax_depth = 2\n\n[cache]\nmax_size = "10 GiB"\n')
         trees_before = set()
         mine: str | None = None  # this build's tree, `v/<key>`, once it has made one
+        shared = False  # this build uses the tree the other build made: same schema
         rounds = [("other", other), ("this", this), ("other", other), ("this", this), ("edit", None),
                   ("other", other), ("this", this), ("other", other), ("this", this)]
         for n, (who, binary) in enumerate(rounds, 1):
@@ -97,20 +100,26 @@ def main() -> None:
             ask(binary, env, ws, ["find", "chargeCard"], "src/charge.ts", label)
             if n > 5:
                 ask(binary, env, shop, ["find", "removeItem"], "src/cart.ts", label)
-            if who == "this" and mine is None:
+            if who == "this" and mine is None and not shared:
                 made = ({p.name for p in (cache / "v").iterdir()} if (cache / "v").is_dir() else set()) - trees_before
                 if len(made) == 1:
                     mine = "v/" + made.pop()
                     # Files this run made in its new tree aren't the other build's.
                     before = {k: v for k, v in before.items() if not k.startswith(mine + "/")}
+                elif not made and trees_before:
+                    shared = True
+                    print(f"{label}: shares the other build's tree (one schema); checking answers only")
+            if shared:
+                print(f"{label}: answered")
+                continue
             after = snapshot(cache, theirs)
             changed = sorted(k for k in before if after.get(k) != before[k])
             if changed:
                 raise SystemExit(f"{label} changed the other build's files: {changed[:10]}")
             print(f"{label}: answered; the other build's {len(before)} files unchanged")
-        if mine is None:
+        if mine is None and not shared:
             raise SystemExit("this build made no tree of its own under v/; is it a build with per-version cache trees?")
-    print("cache compatibility: both builds answered every round, and neither changed the other's data")
+    print("cache compatibility: both builds answered every round" + ("" if shared else ", and neither changed the other's data"))
 
 
 if __name__ == "__main__":

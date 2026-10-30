@@ -4,14 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
-- Versions of KnowCode can share one cache. Each version now keeps its indexes, shared bases, summary and discovery
-  files and their locks in its own part of the cache (`v/s<schema>-<hash>/`), and never opens, rebuilds or rewrites
-  another version's. Before, a newer build rebuilt an older build's indexes in place for its own schema, and the older
-  build then refused them ("written by a newer knowcode"); two builds of one schema took turns re-extracting each
-  other's work; and each rewrote the other's workspace summary. 0.6.1 and older keep their files at the cache's top
-  level, untouched. The cache budget counts every version's files and evicts other versions' first, least recently
-  used first. After upgrading, each repository is indexed afresh on its first query, as after an extractor change; a
-  downgrade finds its own indexes as it left them.
+- Versions of KnowCode can share one cache. Each index schema now has its own part of the cache (`v/s<schema>/`), with
+  its indexes, shared bases, summary and discovery files and their locks, and a version never opens, rebuilds or
+  rewrites another schema's. Before, a newer build rebuilt an older build's indexes in place for its own schema, and the
+  older build then refused them ("written by a newer knowcode"); and each rewrote the other's workspace summary.
+  0.6.1 and older keep their files at the cache's top level, untouched. Versions of one schema share their part, and
+  one with a changed extractor re-extracts that language, as before. The cache budget counts every version's files
+  and evicts other versions' first, least recently used first. After upgrading to a new schema, each repository is
+  indexed afresh on its first query; a downgrade finds its own indexes as it left them.
 - Go routes registered through helpers are found under their groups' prefixes in more programs: a helper method
   called on a value whose type isn't written (`h.Register(v1)`) takes the groups passed to it, a group a test passes
   a helper no longer adds a prefix-less copy of the helper's routes, and a function taking a `handle func(string,

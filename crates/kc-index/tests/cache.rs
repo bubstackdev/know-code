@@ -256,9 +256,7 @@ fn used_at(file: &Path, secs_ago: u64) {
 fn a_builds_data_lives_in_its_own_tree_named_for_what_it_reads() {
     let f = Fixture::new();
     let key = kc_index::data_key();
-    let (schema, hash) = key.split_once('-').unwrap();
-    assert_eq!(schema, format!("s{}", kc_store::SCHEMA_VERSION));
-    assert!(hash.len() == 8 && hash.bytes().all(|b| b.is_ascii_hexdigit()), "{key}");
+    assert_eq!(key, format!("s{}", kc_store::SCHEMA_VERSION), "named for the schema alone");
     let tree = f.base.join("cache/v").join(key);
     assert_eq!(kc_index::tree_dir().unwrap(), tree);
     let root = f.repo("app");
@@ -280,7 +278,7 @@ fn maintenance_evicts_other_builds_files_first_and_never_rewrites_them() {
     // 0.6.1's index at the top level, another version's tree with an index and a base, and an index of that version
     // a process holds.
     let legacy = other_index(&cache, &legacy_root, 21);
-    let tree = cache.join("v/s99-0123abcd");
+    let tree = cache.join("v/s99");
     let other = other_index(&tree, &other_root, 99);
     let held = other_index(&tree, &held_root, 99);
     let base = tree.join("bases/widgets-0123456789ab-1-0.sqlite");

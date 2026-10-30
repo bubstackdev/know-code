@@ -36,19 +36,20 @@ An index written by a newer schema is refused with an error naming both schemas,
 is rebuilt. Neither happens between released versions, which keep their indexes apart:
 
 **Versions sharing a cache.** Two versions of KnowCode can share one cache: an upgrade, a downgrade, or another tool
-that bundles its own knowcode. Each build keeps every file whose format depends on what it reads in its own tree,
-`<cache>/v/s<schema>-<hash>/`: `repos/`, `bases/`, `locks/`, and the workspace summary and discovery files. The hash covers the
-resolver and extractor versions, so two builds that read different data never rewrite each other's files, and two
-releases that differ only in an extractor don't take turns re-extracting each other's work. Configured conventions
-aren't part of the hash: changing them re-extracts in place. 0.6.1 and older keep their files at the cache's top
-level, which later builds never open or change. Shared by every version at the top level: the update check's state
-(`updates/`), the cursor key, notes left in the cache by older versions, and `locks/maintenance.lock`, which every
-version takes, so that one cleaner runs at a time.
+that bundles its own knowcode. Each index schema has its own tree, `<cache>/v/s<schema>/`, holding every file whose
+format depends on it: `repos/`, `bases/`, `locks/`, and the workspace summary and discovery files. Builds of different
+schemas never open or rewrite each other's files. Builds of one schema share a tree: one with another extractor or
+resolver version re-extracts the languages that differ in place, as an upgrade always has, so a release that bumps one
+extractor doesn't reindex every repository from scratch. Alternating two such builds is correct but slower, each
+re-extracting what the other changed. 0.6.1 and older keep their files at the cache's top level, which later builds
+never open or change. Shared by every version at the top level: the update check's state (`updates/`), the cursor key,
+notes left in the cache by older versions, and `locks/maintenance.lock`, which every version takes, so that one
+cleaner runs at a time.
 
-After an upgrade, the new build's tree starts empty, so each repository is indexed afresh on its first query, as after
-an extractor change. A downgrade finds the older version's files as it left them.
+After an upgrade to a new schema, the new build's tree starts empty, so each repository is indexed afresh on its first
+query. A downgrade finds the older version's files as it left them.
 
-The cache budget (`cache.max_size`) counts every tree. Maintenance evicts other builds' files first, least recently
+The cache budget (`cache.max_size`) counts every tree. Maintenance evicts other schemas' files first, least recently
 used first, then this build's. It only deletes another build's file, never rewrites it, and only one no process holds
 (by that build's own writer lock and reader lease). A tree under `v/` left empty goes whole, and `purge` and
 `uninstall` clear every tree.

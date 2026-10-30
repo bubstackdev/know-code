@@ -112,10 +112,10 @@ pub fn cache_dir() -> Result<PathBuf> {
 }
 
 /// This build's part of the cache: `<cache>/v/<key>/`, holding every file whose format depends on the index schema
-/// or the extractors (`repos/`, `bases/`, `locks/`, `workspace.json`, `discovery.json`). Builds that read different
-/// data (another schema, resolver or extractor) keep apart and never rewrite each other's files, so any two versions
-/// can share one cache; 0.6.1 and older keep theirs at the top level, which this build never opens. What all builds
-/// share stays at the top: the update check's state, the cursor key, notes, and the maintenance lock.
+/// (`repos/`, `bases/`, `locks/`, `workspace.json`, `discovery.json`). Builds of different schemas keep apart and never
+/// rewrite each other's files, so any two versions can share one cache; 0.6.1 and older keep theirs at the top level,
+/// which this build never opens. What all builds share stays at the top: the update check's state, the cursor key,
+/// notes, and the maintenance lock.
 pub fn tree_dir() -> Result<PathBuf> {
     Ok(cache_dir()?.join(DATA_TREES).join(data_key()))
 }
@@ -123,15 +123,13 @@ pub fn tree_dir() -> Result<PathBuf> {
 /// The directory under the cache holding each build's data tree (see [`tree_dir`]).
 pub const DATA_TREES: &str = "v";
 
-/// The name of this build's data tree: the index schema and a hash of the resolver and extractor versions it reads
-/// with (`s24-3f9a1c2e`). Configured conventions aren't part of it: changing them re-extracts in place, as before.
+/// The name of this build's data tree: its index schema (`s24`). Builds of one schema share a tree: one with another
+/// extractor or resolver version re-extracts the languages that differ in place, as an upgrade did before, which keeps
+/// a release that bumps one extractor from reindexing every repository from scratch. Alternating two such builds is
+/// correct but slower, each re-extracting what the other changed.
 pub fn data_key() -> &'static str {
     static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    KEY.get_or_init(|| {
-        let versions: Vec<String> = kc_extract::Lang::ALL.iter().map(|l| format!("{}{}", l.as_str(), l.base_version())).collect();
-        let data = format!("{}|r{}|{}", kc_store::SCHEMA_VERSION, kc_store::RESOLVER_VERSION, versions.join(","));
-        format!("s{}-{}", kc_store::SCHEMA_VERSION, &blake3::hash(data.as_bytes()).to_hex()[..8])
-    })
+    KEY.get_or_init(|| format!("s{}", kc_store::SCHEMA_VERSION))
 }
 
 pub use git::{command as git_command, repo_root};
