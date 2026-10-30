@@ -207,7 +207,7 @@ def enumerate_repo(repo, src, index):
                     # property's `get`) has no source of its own: its name isn't on its line, and it encloses nothing.
                     if ln > len(lines) or not word.search(lines[ln - 1]):
                         continue
-                    last = extent(lines, ln, LANGUAGES[Path(f).suffix], got[1] in ('type', 'callable'))
+                    last = extent(lines, ln, LANGUAGES[Path(f).suffix], got[1] in ('type', 'callable'), got[0])
                     spans.setdefault(f, []).append((ln, last, symbol))
     seen = set()
     for rel, lang, d in docs:
@@ -306,15 +306,17 @@ CONTINUES = re.compile(r'^\s*(?:\.|\?\.|\?:|&&|\|\||[-+*%]|/(?![/*])|as\b|is\b|i
                        r'|(?:(?:private|protected|internal|public|override|open|inline)\s+)*(?:get|set)\b(?!\s*[:=]))')
 
 
-def extent(lines, start, lang, body):
+def extent(lines, start, lang, body, name=None):
     """The last line of the declaration whose name is on line `start` (1-based), for compare-v1's `in` field: scanning
     from the name, outside strings, characters and comments (history-v1's span rule), it ends at a `;` at depth 0; for
     a type or a callable (`body`), at the `}` closing a block opened at depth 0; in Kotlin also at a newline at depth 0
     when the next line doesn't continue the expression (`fun f() = …`, `val x = …`, a class with no body). A field's
-    initializer may hold braces (an anonymous class, a lambda): it runs on to its end. Unended, it ends at the file's."""
+    initializer may hold braces (an anonymous class, a lambda): it runs on to its end. Unended, it ends at the file's.
+    The scan starts at `name`'s first use in code on that line, so that a bracket opened before it (the `(` of
+    `class C(val p: T) {` around the property `p`) is one the declaration sits in, not one of its own."""
     depth, i, n = 0, start - 1, len(lines)
     text = lines[i] if i < n else ''
-    j = 0
+    j = name_column(text, name, lang) if name else 0
     while i < n:
         text = lines[i]
         while j < len(text):
@@ -336,10 +338,8 @@ def extent(lines, start, lang, body):
                 j = (end + 3) if end >= 0 else len(text)
                 continue
             if c in '"\'':
-                k = j + 1
-                while k < len(text) and text[k] != c:
-                    k += 2 if text[k] == '\\' else 1
-                j = k + 1
+                i, j = skip_quoted(lines, i, j, lang)
+                text = lines[i]
                 continue
             if c == '=' and depth == 0 and body and lang == 'kotlin' and text[j:j + 2] not in ('==', '=>') \
                     and (j == 0 or text[j - 1] not in '!<>='):
@@ -367,6 +367,61 @@ def extent(lines, start, lang, body):
                 return i + 1
         i, j = i + 1, 0
     return n
+
+
+def name_column(text, name, lang):
+    """The column of `name`'s first use as a word in code on one line (outside strings, characters and comments), or
+    0 when it has none."""
+    word = re.compile(r'(?<![\w$])' + re.escape(name) + r'(?![\w$])')
+    j = 0
+    while j < len(text):
+        if text.startswith(('//', '/*'), j):
+            break
+        if text[j] in '"\'':
+            _, j = skip_quoted([text], 0, j, lang)
+            continue
+        if word.match(text, j):
+            return j
+        j += 1
+    return 0
+
+
+def skip_quoted(lines, i, j, lang):
+    """(line index, column) just past the string or character literal opening at lines[i][j]; an unclosed one ends at
+    its line's end. A Kotlin string's template (`${…}`) is code: its braces, strings and newlines are its own, so a
+    template running onto the next line doesn't leave its closing `}` to be counted as the declaration's."""
+    text, q, k = lines[i], lines[i][j], j + 1
+    while k < len(text) and text[k] != q:
+        if text[k] == '\\':
+            k += 2
+        elif lang == 'kotlin' and q == '"' and text.startswith('${', k):
+            i, k = skip_template(lines, i, k + 2, lang)
+            text = lines[i]
+        else:
+            k += 1
+    return i, k + 1
+
+
+def skip_template(lines, i, j, lang):
+    """(line index, column) just past the `}` closing a Kotlin string template whose code starts at lines[i][j]."""
+    depth, n = 1, len(lines)
+    while i < n:
+        text = lines[i]
+        while j < len(text):
+            c = text[j]
+            if c in '"\'':
+                i, j = skip_quoted(lines, i, j, lang)
+                text = lines[i]
+                continue
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    return i, j + 1
+            j += 1
+        i, j = i + 1, 0
+    return n - 1, len(lines[n - 1])
 
 
 def innermost(spans, line):
