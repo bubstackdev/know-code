@@ -28,18 +28,26 @@ if grep -q 'github.com/gin-gonic/gin ' go.mod; then
 			}'
   site gin github.com/gin-gonic/gin
 fi
-if grep -q 'github.com/labstack/echo/v4 ' go.mod; then
-  add '"github.com/labstack/echo/v4"' '		case *echo.Echo:
+# echo v4 is imported as echo4, so that a module requiring both v4 and v5 can list both. A module requiring both lists
+# v4 only when the program builds it (it may be another dependency's).
+echo4_built() {
+  grep -q 'github.com/labstack/echo/v5 ' go.mod || return 0
+  case $pkg in test:*) d=${pkg#test:}; t=-test ;; *) d=$pkg; t= ;; esac
+  go list -deps $t "./$d" 2>/dev/null | grep -qx 'github.com/labstack/echo/v4'
+}
+if grep -q 'github.com/labstack/echo/v4 ' go.mod && echo4_built; then
+  add 'echo4 "github.com/labstack/echo/v4"' '		case *echo4.Echo:
 			for _, rt := range r.Routes() {
-				kcOutAt(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name}, echo.KCSites, rt.Method+" "+rt.Path)
+				kcOutAt(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name}, echo4.KCSites, rt.Method+" "+rt.Path)
 			}'
   site echo github.com/labstack/echo/v4
 fi
 if grep -q 'github.com/labstack/echo/v5 ' go.mod; then
   add '"github.com/labstack/echo/v5"' '		case *echo.Echo:
 			for _, rt := range r.Router().Routes() {
-				kcOut(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name})
+				kcOutAt(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name}, echo.KCSites, rt.Method+" "+rt.Path)
 			}'
+  site echo5 github.com/labstack/echo/v5
 fi
 # A framework is in the build when go.mod requires it, or is it (chi's own examples, in its module).
 for chi in github.com/go-chi/chi/v5 github.com/go-chi/chi; do
