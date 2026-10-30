@@ -16,6 +16,10 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target" / "release" / "knowcode"
@@ -50,8 +54,9 @@ def main():
     ws = Path(a.workspace)
     repos = [ws / r for r in a.repos] if a.repos else sorted(p for p in ws.iterdir() if (p / ".git").exists())
     repos = [r for r in repos if swift_bytes(r)[0] > 0]
-    cache = tempfile.mkdtemp(prefix="knowcode-measure-")
-    env = dict(os.environ, KNOWCODE_CACHE_DIR=cache)
+    base = Path(tempfile.mkdtemp(prefix="knowcode-measure-"))
+    cache = str(base / "cache")
+    env = kc_env.knowcode_env(base)
     threads = ["--threads", str(a.threads)] if a.threads else []
 
     print(f"Binary: {BIN.stat().st_size / 1e6:.1f} MB. Runs per cold index: {a.runs}.\n")

@@ -46,6 +46,8 @@ mod walk;
 mod unread;
 mod whole;
 #[cfg(test)]
+mod local_decl_tests;
+#[cfg(test)]
 mod jsx_impact_tests;
 
 use std::path::PathBuf;

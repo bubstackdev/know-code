@@ -52,6 +52,8 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/: kc_env
+import kc_env  # noqa: E402
 import public_transcript  # noqa: E402
 import recheck  # noqa: E402
 
@@ -186,10 +188,8 @@ def workspaces(source, work, only=None):
 
 
 def build_env(base):
-    env = dict(GIT_ENV, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'), KNOWCODE_CONFIG_DIR=str(base/'config'),
-               KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
-    (base/'home').mkdir(parents=True, exist_ok=True)
-    return env
+    # On the bare git environment, not the caller's: a run depends on nothing of the machine's user.
+    return kc_env.knowcode_env(base, start=GIT_ENV)
 
 
 # --- MCP ------------------------------------------------------------------------------------------------------------

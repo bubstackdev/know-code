@@ -286,3 +286,76 @@ fn extension_methods_are_found_by_the_static_class_declaring_them() {
     assert_eq!(lines_of("CollectionExtensions.RegisterDecorator"), vec![31]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const SINK: &str = r#"
+using System;
+
+namespace App;
+
+public enum Level { Info }
+
+public interface ISink
+{
+    private static readonly object[] Nothing = Array.Empty<object>();
+
+    void Emit(Level level, string template) => Emit(level, template, Nothing);
+    void Emit<T>(Level level, string template, T value) { }
+    void Emit(Level level, string template, params object?[]? values);
+    void Emit(Level level, Exception? error, string template) => Emit(level, error, template, Nothing);
+    void Emit<T>(Level level, Exception? error, string template, T value) { }
+    void Emit(Level level, Exception? error, string template, params object?[]? values);
+
+    void Info(Exception? error, string template, params object?[]? values) => Emit(Level.Info, error, template, values);
+    void Info(string template, params object?[]? values) => Info((Exception?)null, template, values);
+    void Count(Level level, string template) => Emit(level, template, 3);
+    void Wrap<T>(Level level, string template, T value) => Emit(level, template, [value]);
+    void Plain(Level level) => Emit(level, "plain");
+}
+"#;
+
+/// Each call of `name` on `line`: its confidence and its targets' lines.
+fn at_line(conn: &rusqlite::Connection, name: &str, line: u32) -> Vec<(&'static str, Vec<u32>)> {
+    let (refs, _) = query::refs(conn, name, &["call"], 50).unwrap();
+    refs.into_iter().filter(|r| r.line == line).map(|r| (r.confidence, lines(&r))).collect()
+}
+
+#[test]
+fn an_overload_taking_the_arguments_as_typed_beats_a_generic_one_and_one_they_dont_fit() {
+    let root = scratch("overload-ties");
+    write(&root, "src/App/Sink.cs", SINK);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    // An `object[]` field for the last parameter: the non-generic `params` overload, as C# prefers it to `Emit<T>`.
+    assert_eq!(at_line(conn, "Emit", 12), [("exact", vec![14])]);
+    assert_eq!(at_line(conn, "Emit", 15), [("exact", vec![17])]);
+    // A parameter typed `params object?[]?` passed on: the `Exception` overload taking it as is.
+    assert_eq!(at_line(conn, "Emit", 19), [("exact", vec![17])]);
+    // A cast argument has the type it's cast to.
+    assert_eq!(at_line(conn, "Info", 20), [("exact", vec![19])]);
+    // A value that isn't an `object`: the generic overload takes it as is, where `params` would box it.
+    assert_eq!(at_line(conn, "Emit", 21), [("exact", vec![13])]);
+    // A collection expression (C# 12) gives `T` no type: the `params` overload.
+    assert_eq!(at_line(conn, "Emit", 22), [("exact", vec![14])]);
+    // Nothing for the array: the overload without one, as C# prefers it to `params` expanded to nothing.
+    assert_eq!(at_line(conn, "Emit", 23), [("exact", vec![12])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Parameter types written before `rest` was recorded (no `rest` key) still parse, and the tie-break that needs it
+/// stays out: the generic and `params` overloads are left as candidates, as they were.
+#[test]
+fn parameter_types_stored_without_rest_resolve_as_before() {
+    let root = scratch("overload-ties-old-rows");
+    write(&root, "src/App/Sink.cs", SINK);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    let changed = conn.execute("UPDATE symbols SET param_types = json_remove(param_types, '$.rest') WHERE param_types LIKE '%\"rest\"%'", []).unwrap();
+    assert!(changed > 0, "the fixture has `params` overloads");
+    assert_eq!(at_line(conn, "Emit", 12), [("ambiguous", vec![13, 14])]);
+    assert_eq!(at_line(conn, "Emit", 22), [("ambiguous", vec![13, 14])]);
+    // Telling overloads apart by the types they list is unchanged.
+    assert_eq!(at_line(conn, "Info", 20), [("exact", vec![19])]);
+    let _ = std::fs::remove_dir_all(&root);
+}

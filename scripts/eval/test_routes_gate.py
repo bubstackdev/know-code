@@ -59,6 +59,45 @@ class Score(unittest.TestCase):
         self.assertTrue(s['gated'])
         self.assertFalse(s['passed'])
 
+    def test_only_compiled_code_counts(self):
+        programs = [dict(package='cmd/app', status='listed', dirs=['api', 'cmd/app']),
+                    dict(package='test:internal/api', status='listed', dirs=['internal/api']),
+                    dict(package='examples/x', status='no listing', dirs=['examples/x'])]
+        dirs = gate.covered(programs)
+        self.assertTrue(gate.in_dirs('api/crates.go', dirs))
+        self.assertFalse(gate.in_dirs('api/crates_test.go', dirs))
+        self.assertTrue(gate.in_dirs('internal/api/routes_test.go', dirs))
+        self.assertFalse(gate.in_dirs('examples/x/main.go', dirs))
+
+    def test_v11_exclusions(self):
+        regions = [dict(repo='orchard', file='/work/src/routes.go', start=10, end=12, reason='condition')]
+        label = lambda m, p, *locs: dict(repo='orchard', framework='gin', method=m, path=p, handlers=['h'], locs=list(locs))
+        row = lambda v, p, line: dict(verb=v, path=p, file='routes.go', line=line)
+        labels = [label('GET', '/oidc', '/work/src/routes.go:11'),       # both sides dependent: out
+                  label('GET', '/trees', '/work/src/routes.go:4'),       # neither: in
+                  label('GET', '/split', '/work/src/routes.go:11'),      # the sides disagree: in, listed
+                  label('GET', '/only', '/work/src/routes.go:12'),       # labelled only, dependent: out
+                  label('echo_route_not_found', '/g/*')]                  # echo's placeholder: not a route
+        rows = [row('GET', 'oidc', 11), row('GET', 'trees', 4), row('GET', 'split', 20), row('GET', 'debug', 10)]
+        kept, kept_rows, out = gate.exclude(labels, rows, regions)
+        self.assertEqual([l['path'] for l in kept], ['/trees', '/split'])
+        self.assertEqual([r['path'] for r in kept_rows], ['trees', 'split'])
+        self.assertEqual(out['placeholders'], ['echo_route_not_found /g/*'])
+        self.assertEqual(out['labels'], ['GET /oidc', 'GET /only'])
+        self.assertEqual(out['routes'], ['GET /debug at routes.go:10', 'GET /oidc at routes.go:11'])
+        self.assertEqual(len(out['disagree']), 1)
+        self.assertIn('/split', out['disagree'][0])
+
+    def test_echo_placeholders_by_handler(self):
+        lab = lambda m, p, h: dict(repo='orchard', framework='echo', method=m, path=p, handlers=[h], locs=[])
+        labels = [lab('CONNECT', '/api/trees/*', 'github.com/labstack/echo/v4.init.func1'),   # v4.1.16's placeholder
+                  lab('echo_route_not_found', '/g', 'echo_route_not_found:/g'),               # later versions' marker
+                  lab('GET', '/static/*', 'github.com/labstack/echo/v4.StaticDirectoryHandler.func1'),
+                  lab('GET', '/api/trees', 'orchard.listTrees')]
+        kept, _, out = gate.exclude(labels, [], [])
+        self.assertEqual([l['path'] for l in kept], ['/static/*', '/api/trees'])
+        self.assertEqual(len(out['placeholders']), 2)
+
     def test_a_small_framework_is_reported_not_gated(self):
         s = gate.summarize({'a': {'gin': dict(routes=3, routes_matched=1, labels=3, labels_matched=1, false=[], missed=[])}})
         self.assertFalse(s['gin']['gated'])

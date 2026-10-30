@@ -36,7 +36,7 @@ fn format() -> String {
     let _ = crate::config::load();
     format!("1.{}.{}", kc_store::SCHEMA_VERSION, kc_extract::Lang::ALL.map(|l| l.extractor_version().to_string()).join("."))
 }
-pub fn path() -> Result<PathBuf> { Ok(crate::cache_dir()?.join("discovery.json")) }
+pub fn path() -> Result<PathBuf> { Ok(crate::tree_dir()?.join("discovery.json")) }
 pub(crate) fn stamp() -> Result<String> { Ok(git::stamp(&path()?)) }
 fn shared() -> Result<std::sync::Arc<Catalog>> {
     let path = path()?;
@@ -81,7 +81,7 @@ pub(crate) fn ensure_discovered() -> Result<()> {
     type Last = Option<(PathBuf, Vec<PathBuf>, usize, std::time::Instant, Vec<(PathBuf, String)>)>;
     static LAST: std::sync::Mutex<Last> = std::sync::Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = crate::cache_dir()?;
+    let cache = crate::tree_dir()?;
     if path()?.exists() && last.as_ref().is_some_and(|(previous, dirs, d, at, stamps)| *previous == cache && *dirs == roots && *d == depth
         && at.elapsed() < std::time::Duration::from_secs(60) && stamps.iter().all(|(p, stamp)| git::stamp(p) == *stamp)) { return Ok(()); }
     discover_roots()?;

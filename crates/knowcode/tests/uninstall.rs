@@ -144,7 +144,8 @@ fn invariant_uninstall_preserves_settings_notes_and_unrelated_files_by_default()
     assert!(Command::new("git").args(["init", "-q"]).arg(p.path("repo")).status().unwrap().success());
     p.write("repo/api.ts", "export function handler() { return 42; }\n");
     success(p.run(&["index", p.path("repo").to_str().unwrap(), "--threads", "1"]));
-    assert!(p.path("cache/locks").is_dir(), "indexing leaves coordination locks");
+    let trees: Vec<PathBuf> = fs::read_dir(p.path("cache/v")).unwrap().map(|t| t.unwrap().path()).collect();
+    assert!(trees.len() == 1 && trees[0].join("locks").is_dir(), "indexing leaves coordination locks, in the build's own tree: {trees:?}");
     p.write("cache/updates/state.json", "{\"format\":1}");
     p.write("cache/updates/unrelated", "keep");
     p.write("cache/locks/unrelated", "keep");
@@ -168,6 +169,7 @@ fn invariant_uninstall_preserves_settings_notes_and_unrelated_files_by_default()
     assert!(p.path("config/config.toml").exists());
     assert_eq!(fs::read_to_string(p.path("cache/unrelated/work")).unwrap(), "keep");
     assert!(!p.path("cache/repos").exists());
+    assert!(!p.path("cache/v").exists(), "the build's tree goes with its indexes and locks");
     success(p.run(&["uninstall"]));
     success(p.run(&["uninstall", "--delete-config", "--delete-notes"]));
     assert_eq!(note_count(&p.path("data/notes.sqlite")), 0);

@@ -18,6 +18,8 @@ import sys
 import tarfile
 import tempfile
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
 
 
 API = "https://api.github.com/repos/bubstackdev/know-code/releases/latest"
@@ -85,11 +87,8 @@ pathlib.Path(args[args.index("--output") + 1]).write_bytes(source.read_bytes())
 '''.replace("@DOWNLOAD@", download).replace("@ARCHIVE@", archive_url).replace("@LATEST@", LATEST)
             .replace("@TAG@", f"https://github.com/bubstackdev/know-code/releases/tag/v{new}"))
         curl.chmod(0o700)
-        env = dict(os.environ)
-        env.update(PATH=str(tools) + os.pathsep + env["PATH"], UPDATE_FIXTURE=str(root),
-                   KNOWCODE_UPDATE_CHECK="0", KNOWCODE_CONFIG_DIR=str(root / "config"),
-                   KNOWCODE_CACHE_DIR=str(root / "cache"), KNOWCODE_DATA_DIR=str(root / "data"),
-                   XDG_CONFIG_HOME=str(root / "xdg"))
+        env = kc_env.knowcode_env(root, PATH=str(tools) + os.pathsep + os.environ["PATH"], UPDATE_FIXTURE=str(root),
+                                  XDG_CONFIG_HOME=str(root / "xdg"))
         requests = root / "requests"
         def calls() -> list[dict]:
             return [json.loads(line) for line in requests.read_text().splitlines()] if requests.exists() else []

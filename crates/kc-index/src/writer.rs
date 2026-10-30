@@ -36,6 +36,12 @@ impl WriterLock {
         Self::get(&crate::db_path(root)?.with_extension("lock"), false)
     }
 
+    /// [`Self::try_acquire`] for the index file at `db`, which may be another build's: its lock sits beside its own
+    /// `repos/`, as that build names it.
+    pub(crate) fn try_acquire_db(db: &Path) -> Result<Option<Self>> {
+        Self::get(&db.with_extension("lock"), false)
+    }
+
     fn get(db_lock: &Path, wait: bool) -> Result<Option<Self>> {
         let path = lock_path(db_lock)?;
         if let Some(file) = HELD.with(|h| h.borrow().get(&path).and_then(Weak::upgrade)) {
@@ -108,7 +114,7 @@ pub(crate) fn idle_within(db: &Path, wait: Duration) -> Result<Option<File>> {
 /// Serializes summary-file edits. Eviction takes this before trying any per-repo exclusive lifetime lease;
 /// ordinary summary reads may then open shared index leases without a lock-order cycle.
 pub(crate) fn workspace(wait: bool) -> Result<Option<WriterLock>> {
-    WriterLock::get(&crate::cache_dir()?.join("repos/workspace-meta.lock"), wait)
+    WriterLock::get(&crate::tree_dir()?.join("repos/workspace-meta.lock"), wait)
 }
 
 /// Release a reader snapshot before waiting for a writer; otherwise the current writer's checkpoint can wait on
