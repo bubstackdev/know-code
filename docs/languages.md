@@ -294,8 +294,11 @@ HTTP routes:
   (`"GET /items/{id}"`); gin, echo and chi verbs, `Any`/`Match`/`Handle`/`Add`/`Method`, static files, groups
   (`Group`, `Route`, `With`) and chi's `Mount`. A router is placed by its constructor, its type, or the group it was
   made from; a router a function receives or returns takes the prefixes its callers give it, so a route registered in
-  a helper (`func api(r gin.IRouter)`) carries the prefix of every group it's registered under. A path may be a
-  package constant. A registration under a run-time condition (`if cfg.OIDC { … }`) is listed: which configuration
+  a helper (`func api(r gin.IRouter)`) carries the prefix of every group it's registered under. A helper method called
+  on a value whose type the syntax doesn't give (`h.Register(v1)`) takes the groups passed to methods of that name
+  when no caller names its type; a group a test builds doesn't count toward a helper's prefixes. A function taking a
+  registration function (`handle func(string, http.Handler)`, which callers pass as `mux.Handle`) registers its calls'
+  patterns on that mux. A path may be a package constant. A registration under a run-time condition (`if cfg.OIDC { … }`) is listed: which configuration
   serves it isn't known from source.
 - **Clients.** `net/http`'s `Get`, `Head`, `Post`, `PostForm`, `NewRequest` and `NewRequestWithContext`, on the
   package, `http.DefaultClient` or an `http.Client`. The URL is read from literals, `+`, `fmt.Sprintf` and package

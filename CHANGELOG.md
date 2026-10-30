@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Go routes registered through helpers are found under their groups' prefixes in more programs: a helper method
+  called on a value whose type isn't written (`h.Register(v1)`) takes the groups passed to it, a group a test passes
+  a helper no longer adds a prefix-less copy of the helper's routes, and a function taking a `handle func(string,
+  http.Handler)` (passed `mux.Handle`) registers its patterns on that mux. Go files are read again once; HTTP links
+  are recomputed.
 - A C# minimal API mapped in top-level statements (`app.MapGet("/health", Health)` in `Program.cs`) has an owner in
   answers. Such routes were in the workspace summary but in no `context` answer: top-level statements had no symbol,
   and a local function passed as the handler wasn't taken for one. Top-level statements are now one symbol,
