@@ -23,3 +23,12 @@ go-routing . . stdlib
 urgentry . test:internal/api
 code-for-blog 2021/go-rest-servers/stdlib-newmux .
 flipt . cmd/flipt server
+# routes-v1.2's held-out repositories (repos-heldout.txt).
+gin-realworld . .
+echo-realworld . .
+goatcounter . test:handlers
+pkgsite . test:internal/frontend
+# routes-v1.2's round-2 held-out repositories (repos-heldout.txt).
+gin-vue-admin server test:initialize
+vikunja . test:pkg/routes
+step-ca . test:api

@@ -34,6 +34,8 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/: kc_env
+import kc_env  # noqa: E402
 from common import wilson  # noqa: E402
 
 GATE = 0.95
@@ -75,18 +77,23 @@ def binary_hash(path):
 
 
 def env_for(base):
-    return dict(os.environ, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'),
-                KNOWCODE_CONFIG_DIR=str(base/'config'), KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
+    return kc_env.knowcode_env(base)
 
 
 def covered(programs):
-    """The repository directories the listed programs compile."""
-    return {d for p in programs if p['status'] == 'listed' for d in p['dirs']}
+    """The repository directories the listed programs compile, and those whose test files they compile too (a harness
+    test's own package): a program never compiles its packages' `_test.go` files."""
+    dirs = {d for p in programs if p['status'] == 'listed' for d in p['dirs']}
+    tests = {p['package'][len('test:'):] for p in programs if p['status'] == 'listed' and p['package'].startswith('test:')}
+    return dirs, tests
 
 
 def in_dirs(file, dirs):
+    dirs, tests = dirs
     d = file.rsplit('/', 1)[0] if '/' in file else '.'
-    return d in dirs or (d == '.' and '.' in dirs) or (d == '.' and '' in dirs)
+    if file.endswith('_test.go') and d not in tests:
+        return False
+    return d in dirs or (d == '.' and ('.' in dirs or '' in dirs))
 
 
 def attribute(row, labels):
@@ -129,6 +136,69 @@ def score_repo(labels, rows):
         else:
             f['missed'].append(f"{l['method']} {l['path']} ({', '.join(l['handlers'][:2])})")
     return dict(out)
+
+
+def site_of(loc):
+    """A registration site as (repository file, line): the labeller's `/work/src/FILE:LINE`."""
+    file, _, line = loc.rpartition(':')
+    return file.removeprefix('/work/src/'), int(line)
+
+
+def dependent(regions, file, line):
+    """Whether a site lies in one of the exclusion tool's configuration-dependent regions."""
+    return any(r['file'].removeprefix('/work/src/') == file and r['start'] <= line <= r['end'] for r in regions)
+
+
+# echo's not-found handler as echo's own listing names it: the method marker later versions give its placeholders,
+# its route name there (`echo_route_not_found:/prefix`), or the function itself, echo's NotFoundHandler, the first
+# function literal of the package's declarations (v4.1.16 and others give placeholders the real methods).
+ECHO_NOT_FOUND = re.compile(r'^(echo_route_not_found\b.*|github\.com/labstack/echo(/v\d+)?\.init\.func1)$')
+
+
+def placeholder(label):
+    """Whether a label is one of echo's not-found placeholders, which the rule says aren't routes."""
+    return label['method'] == 'echo_route_not_found' or (
+        label['framework'] == 'echo' and all(ECHO_NOT_FOUND.match(h) for h in label['handlers']))
+
+
+def exclude(labels, rows, regions):
+    """routes-v1.1's exclusions (eval/routes-v1/README.md): the labels and KnowCode routes left in, and what was left
+    out and why. echo's not-found placeholders are not routes. A route both sides have is left out only when both
+    sides' sites are configuration-dependent (every site the labeller recorded for it, and every KnowCode route row
+    matching it); where they disagree it stays in and the disagreement is listed. A route only one side has is left
+    out when its own sites are."""
+    out = dict(placeholders=[], labels=[], routes=[], disagree=[])
+    kept_labels = []
+    for l in labels:
+        if placeholder(l):
+            out['placeholders'].append(f"{l['method']} {l['path']}")
+        else:
+            kept_labels.append(l)
+    label_dep = {id(l): bool(l.get('locs')) and all(dependent(regions, *site_of(x)) for x in l['locs'])
+                 for l in kept_labels}
+    row_dep = {id(r): dependent(regions, r['file'], r['line']) for r in rows}
+    key = lambda r: ((r['verb'] or '*').upper(), norm(r['path']))
+    drop_labels, drop_rows = set(), set()
+    for l in kept_labels:
+        hits = [r for r in rows if matches(key(r), method_and_path(l))]
+        if not hits:
+            if label_dep[id(l)]:
+                drop_labels.add(id(l))
+            continue
+        sides = (label_dep[id(l)], all(row_dep[id(r)] for r in hits))
+        if all(sides):
+            drop_labels.add(id(l))
+            drop_rows.update(id(r) for r in hits)
+        elif any(sides):
+            out['disagree'].append(f"{l['method']} {l['path']}: labeller's site {'is' if sides[0] else 'is not'}, "
+                                   f"KnowCode's {', '.join(r['file'] + ':' + str(r['line']) for r in hits)} "
+                                   f"{'is' if sides[1] else 'is not'} configuration-dependent")
+    for r in rows:
+        if id(r) not in drop_rows and row_dep[id(r)] and not any(matches(key(r), method_and_path(l)) for l in kept_labels):
+            drop_rows.add(id(r))
+    out['labels'] = [f"{l['method']} {l['path']}" for l in kept_labels if id(l) in drop_labels]
+    out['routes'] = sorted({f"{r['verb']} /{r['path']} at {r['file']}:{r['line']}" for r in rows if id(r) in drop_rows})
+    return ([l for l in kept_labels if id(l) not in drop_labels], [r for r in rows if id(r) not in drop_rows], out)
 
 
 def ratio(k, n):
@@ -180,7 +250,9 @@ def run(args):
     repos = sorted(set(args.repos.split(',')) if args.repos else {l['repo'] for l in labels})
     work = Path(args.work).resolve()
     binary, reader = Path(args.knowcode).resolve(), Path(args.reader).resolve()
-    per_repo, served, sample_pool = {}, {}, defaultdict(list)
+    per_repo, served, sample_pool, excluded = {}, {}, defaultdict(list), {}
+    # routes-v1.1: the exclusion tool's regions, one JSON line each with its repository (run.sh SITES=1's excl output).
+    regions = [x for path in args.exclusions for x in jsonl(path)] if args.exclusions else None
     for repo in repos:
         clone = work/'clones'/repo
         env = env_for(work/'kc'/binary_hash(binary)/repo)
@@ -189,6 +261,8 @@ def run(args):
         dirs = covered(programs.get(repo, []))
         rows = [r for r in map(json.loads, out.stdout.splitlines()) if in_dirs(r['file'], dirs)]
         mine = [l for l in labels if l['repo'] == repo]
+        if regions is not None:
+            mine, rows, excluded[repo] = exclude(mine, rows, [x for x in regions if x['repo'] == repo])
         per_repo[repo] = score_repo(mine, rows)
         served[repo] = len(rows)
         for r in rows:
@@ -204,7 +278,9 @@ def run(args):
             ok += confirm(binary, clone, env_for(work/'kc'/binary_hash(binary)/repo), r)
         checks[f] = dict(sampled=len(picked), confirmed=ok)
     summary = dict(binary=binary_hash(binary), labels=str(args.labels), served=served, frameworks=summarize(per_repo),
-                   context_check=checks, per_repo=per_repo)
+                   context_check=checks, per_repo=per_repo, rule='routes-v1.2' if regions is not None else 'routes-v1')
+    if regions is not None:
+        summary['excluded'] = excluded
     text = json.dumps(summary, indent=1, sort_keys=True) + '\n'
     if args.out:
         Path(args.out).write_text(text)
@@ -238,6 +314,7 @@ def main():
         r.add_argument(a, required=True)
     r.add_argument('--repos')
     r.add_argument('--out')
+    r.add_argument('--exclusions', nargs='+', help="routes-v1.1: the exclusion tool's regions (each line with its repo)")
     p = sub.add_parser('report')
     p.add_argument('summary')
     args = ap.parse_args()

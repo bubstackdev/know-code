@@ -2702,6 +2702,10 @@ impl TypeOracle<'_> {
     /// `string`); `Some(true)` when it certainly accepts it; `None` when it can't be told (library types whose
     /// supertypes the repo doesn't declare, generics, delegates).
     fn accepts_arg(&mut self, arg: &TypeExpr, param: &TypeExpr) -> Result<Option<bool>> {
+        // A collection expression converts to any collection type, which isn't told here.
+        if matches!(arg, TypeExpr::Named(n) if n == "@collection") {
+            return Ok(None);
+        }
         let name = |t: &TypeExpr| match t {
             TypeExpr::Named(n) => Some(keyword_type(last_segment(n)).to_string()),
             TypeExpr::Generic { name, .. } => Some(keyword_type(last_segment(name)).to_string()),
@@ -2833,12 +2837,10 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
                     },
                     None => k,
                 };
-                // Past the declared parameters: a `params` array's elements, which aren't read.
+                // Past the declared parameters: a `params` array's elements, which aren't read. The array itself is
+                // never among them (the extractor's `parameter_types` leaves it out), so each one listed is checked.
                 let Some(Some(p)) = params.types.get(at) else { continue };
                 let (Some(arg), Some(p)) = (arg, TypeExpr::decode(p)) else { continue };
-                if defs[i].max_args.is_none() && at + 1 >= params.types.len() {
-                    continue;
-                }
                 if oracle.accepts_arg(arg, &p)? == Some(false) {
                     fits = false;
                     break;
@@ -2862,6 +2864,10 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
                         drop[i] = true;
                     }
                 }
+            }
+            let left: Vec<usize> = left.into_iter().filter(|&i| !drop[i]).collect();
+            if let Some(loser) = generic_or_params(&defs, &left, &evaluated) {
+                drop[loser] = true;
             }
         }
     }
@@ -3008,13 +3014,75 @@ fn identical_parameters(def: &Def, args: &[(Option<String>, Option<TypeExpr>)]) 
     })
 }
 
+/// Of an overload with a fixed number of parameters and a `params` one (`M(…, params E[] rest)`) that agree on the
+/// parameters before the array, the one C# calls, when the arguments' types tell. With no argument for the array, the
+/// fixed one: C# prefers a call's normal form to `params` expanded to nothing. Otherwise the fixed one must take type
+/// parameters there (`M<T>(…, T)`): the `params` one wins for an argument of its array type, taken as is either way
+/// (C# prefers the non-generic of two equally good), and for a collection expression, from which no type parameter
+/// is inferred; the generic one wins for values that aren't of type E, which `params` would convert. Returns the
+/// other, to drop; `None` when the types don't tell.
+fn generic_or_params(defs: &[&Def], left: &[usize], args: &[(Option<String>, Option<TypeExpr>)]) -> Option<usize> {
+    if args.iter().any(|(named, _)| named.is_some()) {
+        return None;
+    }
+    // One such pair among the overloads left (others the types didn't rule out stay as they are).
+    let mut losers = left.iter().flat_map(|&g| left.iter().map(move |&n| (g, n))).filter_map(|(g, n)| pair_loser(defs, g, n, args));
+    let loser = losers.next()?;
+    losers.next().is_none().then_some(loser)
+}
+
+/// [`generic_or_params`] for the fixed overload `g` and the `params` overload `n`.
+fn pair_loser(defs: &[&Def], g: usize, n: usize, args: &[(Option<String>, Option<TypeExpr>)]) -> Option<usize> {
+    if defs[g].max_args.is_none() || defs[n].max_args.is_some() {
+        return None;
+    }
+    let (gp, np) = (defs[g].params.as_deref().and_then(Params::decode)?, defs[n].params.as_deref().and_then(Params::decode)?);
+    let rest = norm_type(&TypeExpr::decode(np.rest.as_deref()?)?)?;
+    let elem = rest.strip_suffix("[]")?;
+    let fixed = np.types.len();
+    if gp.types.len() != args.len() || fixed > args.len() {
+        return None;
+    }
+    // The same parameters before the tail; only type parameters in it.
+    if (0..fixed).any(|k| gp.types[k].is_none() || gp.types[k] != np.types[k]) || gp.types[fixed..].iter().any(Option::is_some) {
+        return None;
+    }
+    // No argument for the array: C# prefers the overload taking the call in its normal form to `params` expanded
+    // to nothing.
+    if args.len() == fixed {
+        return Some(n);
+    }
+    let tail: Vec<String> = args[fixed..].iter().map(|(_, t)| t.as_ref().and_then(norm_type)).collect::<Option<_>>()?;
+    // An integer literal is an `int` as is.
+    let elem_as_is = |t: &String| t == elem || (t == "@int" && elem == "int");
+    match &tail[..] {
+        // A collection expression gives no type parameter a type: only the `params` overload takes it.
+        [one] if *one == rest || one == "@collection" => Some(g),
+        _ if tail.iter().all(elem_as_is) => Some(g),
+        _ if tail.iter().all(|t| !elem_as_is(t) && t != &rest) => Some(n),
+        _ => None,
+    }
+}
+
+/// A type as C# names it, for telling whether an argument is taken as is: a keyword type by its keyword, an array
+/// by its element's name and `[]`; `None` for any other form, which isn't compared.
+fn norm_type(t: &TypeExpr) -> Option<String> {
+    match t {
+        TypeExpr::Named(n) => Some(keyword_type(last_segment(n)).to_string()),
+        TypeExpr::Array(e) => Some(format!("{}[]", norm_type(e)?)),
+        _ => None,
+    }
+}
+
 /// A C# method's parameters as stored (see `FileFacts::param_types`): each one's declared type, encoded (`None` for a
-/// type parameter), and name.
+/// type parameter), and name; and a `params` array's type, `rest`, which `types` leaves out.
 #[derive(serde::Deserialize)]
 struct Params {
     types: Vec<Option<String>>,
     #[serde(default)]
     names: Vec<String>,
+    #[serde(default)]
+    rest: Option<String>,
 }
 
 impl Params {
@@ -4012,7 +4080,14 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
         return vec![Err(format!("its route group is passed through more than {GROUP_DEPTH} helpers"))];
     }
     let none = vec![Ok(String::new())];
-    let prefixes = groups.get(key).filter(|p| !p.is_empty()).unwrap_or(&none);
+    // A method's parameter (`pkg.Type.Method#i`) no caller keys exactly takes the groups passed to a method of that
+    // name on a value whose type the caller's syntax doesn't give (`?.Method#i`, as Go's extractor records them).
+    let loose = key.split_once('#').and_then(|(f, i)| (f.matches('.').count() >= 2).then(|| format!("?.{}#{i}", f.rsplit('.').next().unwrap_or(f))));
+    let prefixes = groups
+        .get(key)
+        .filter(|p| !p.is_empty())
+        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()))
+        .unwrap_or(&none);
     let mut out = Vec::new();
     for p in prefixes {
         match p {
@@ -8034,6 +8109,22 @@ mod tests {
         let lone = ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!Get}").unwrap();
         assert!(lone.as_ref().is_err_and(|why| why.contains("src/Lone")), "{lone:?}");
         assert_eq!(ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!*Help}").unwrap(), ok(&[]));
+    }
+
+    #[test]
+    fn a_method_no_caller_keys_takes_groups_passed_to_its_name() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> = [
+            ("?.Register#0".to_string(), vec![Ok("api".to_string())]),
+            ("orchard.Picker.Mount#0".to_string(), vec![Ok("v2".to_string())]),
+            ("?.Mount#0".to_string(), vec![Ok("other".to_string())]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(under_groups("{@orchard.Picker.Register#0}trees", &groups, 0), [Ok("api/trees".to_string())]);
+        // An exactly keyed caller wins over the name.
+        assert_eq!(under_groups("{@orchard.Picker.Mount#0}trees", &groups, 0), [Ok("v2/trees".to_string())]);
+        // A function (`pkg.F`) is always keyed exactly by its callers.
+        assert_eq!(under_groups("{@orchard.Register#0}trees", &groups, 0), [Ok("trees".to_string())]);
     }
 
     #[test]

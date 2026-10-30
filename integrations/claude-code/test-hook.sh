@@ -107,7 +107,8 @@ starts "Bash: words containing rg, ag" shell "$(bash_event "cargo fmt && npm run
 starts "Read" shell "$(event Read "$symbol")"
 starts "empty input" shell ''
 
-if [ -e "$tmp/empty-cache/repos" ] && [ -n "$(ls -A "$tmp/empty-cache/repos")" ]; then
+# Any index, in a build's own tree (empty-cache/v/<key>/repos) or at the top level (0.6.1 and older).
+if [ -n "$(find "$tmp/empty-cache" -name '*.sqlite' 2>/dev/null)" ]; then
     echo "FAIL the hook created an index"
     fails=$((fails + 1))
 fi

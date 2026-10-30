@@ -336,7 +336,7 @@ fn http_routes_link_frontend_contracts_to_backend_actions() {
     assert_eq!(callers, [("ApiGetFilters".to_string(), "exact")]);
 
     // A summary written by an older build (no `routes`, same index stamps) must not be trusted.
-    let path = base.parent().unwrap().join("cache/workspace.json");
+    let path = kc_index::tree_dir().unwrap().join("workspace.json");
     let current: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let repos = current.get("repos").cloned().unwrap_or(current);
     let mut old = serde_json::Map::new();
@@ -1462,5 +1462,59 @@ fn a_seeded_worktree_names_its_root_role_after_its_own_directory() {
     sync(&wt_root, &mut store, &opts).unwrap();
     assert!(!query::find(store.conn(), "web-role-wt", None, 5).unwrap().0.is_empty());
     assert!(query::find(store.conn(), "web-role", None, 5).unwrap().0.iter().all(|h| h.symbol.name != "web-role"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn go_routes_and_clients_link_across_repos() {
+    let turn = turn();
+    let base = turn.dir("go-http");
+    let api = scratch(&base, "orchard-api");
+    write(&api, "go.mod", "module example.com/orchard\n\ngo 1.22\n\nrequire github.com/gin-gonic/gin v1.10.0\n");
+    write(
+        &api,
+        "src/routes.go",
+        "package api\n\nimport \"github.com/gin-gonic/gin\"\n\nconst treesPath = \"/trees\"\n\n\
+         func Router() *gin.Engine {\n\tr := gin.Default()\n\tv1 := r.Group(\"/api/v1\")\n\ttrees(v1.Group(treesPath))\n\treturn r\n}\n\n\
+         func trees(g *gin.RouterGroup) {\n\tg.GET(\"/:id\", getTree)\n\tg.DELETE(\"/:id\", removeTree)\n\tg.GET(\"/:id/fruit\", listFruit)\n}\n\n\
+         func getTree(c *gin.Context)    {}\nfunc removeTree(c *gin.Context) {}\nfunc listFruit(c *gin.Context)  {}\n",
+    );
+    let picker = scratch(&base, "picker");
+    write(&picker, "go.mod", "module example.com/picker\n\ngo 1.22\n");
+    write(
+        &picker,
+        "src/client.go",
+        "package picker\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"net/http\"\n)\n\n\
+         type Client struct {\n\tbase string\n\thttp *http.Client\n}\n\n\
+         func (p *Client) Tree(id string) {\n\thttp.Get(p.base + \"/api/v1/trees/\" + id)\n}\n\n\
+         func (p *Client) Remove(ctx context.Context, id string) {\n\treq, _ := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf(\"%s/api/v1/trees/%s\", p.base, id), nil)\n\tp.http.Do(req)\n}\n",
+    );
+    let web = scratch(&base, "web");
+    write(&web, "src/fruit.ts", "export function fruit(id: string) { return fetch(`/api/v1/trees/${id}/fruit`); }\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &picker, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    // The group's prefix and the constant reach the routes the helper registers.
+    let served: Vec<(String, String, String)> =
+        routes(0).into_iter().filter(|r| r.side == "server").map(|r| (r.symbol, r.verb, r.path.unwrap_or_default())).collect();
+    let s = |sym: &str, verb: &str, path: &str| (sym.to_string(), verb.to_string(), path.to_string());
+    // Each route belongs to its handler, under the group's prefix and the constant the helper's group was given.
+    assert_eq!(
+        served,
+        [s("getTree", "GET", "api/v1/trees/:id"), s("removeTree", "DELETE", "api/v1/trees/:id"), s("listFruit", "GET", "api/v1/trees/:id/fruit")]
+    );
+    let link = |i: usize, symbol: &str| -> Vec<(String, &'static str)> {
+        let r = routes(i).into_iter().find(|r| r.symbol == symbol).unwrap_or_else(|| panic!("{symbol}"));
+        kc_index::http::handlers(&r, &roots[i], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    let one = |sym: &str| vec![(sym.to_string(), "exact")];
+    // Go requests, their base addresses dropped and `:id` a parameter, and a TypeScript one.
+    assert_eq!(link(1, "Client.Tree"), one("getTree"));
+    assert_eq!(link(1, "Client.Remove"), one("removeTree"));
+    assert_eq!(link(2, "fruit"), one("listFruit"));
     let _ = std::fs::remove_dir_all(&base);
 }

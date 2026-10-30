@@ -1,7 +1,7 @@
 //! routes-v1's reader agrees with the answers: the routes a repo serves, as the workspace summary holds them
 //! (crates/kc-index/examples/served_routes.rs reads them the same way), are exactly the "serves" rows `context` gives
-//! for their owners (eval/routes-v1/README.md, Scoring). One fixture per extractor the routes gate measures; Go's and
-//! Java's are added with their route extraction.
+//! for their owners (eval/routes-v1/README.md, Scoring). One fixture per extractor the routes gate measures; Java's is
+//! added with its route extraction.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -88,14 +88,35 @@ fn the_summarys_served_routes_are_contexts() {
                 "Api/CratesController.cs",
                 "using Microsoft.AspNetCore.Mvc;\n\n[Route(\"api/crates\")]\npublic class CratesController : Controller\n{\n    [HttpGet(\"{id}\")]\n    public object Get(int id) => null;\n\n    [HttpPost]\n    public object Create() => null;\n}\n",
             ),
-            // A minimal API registered in a method. One registered in top-level statements is in the summary but not in
-            // any `context` answer: a known gap of C#'s, reported, and the reason the gate also samples `context`.
+            // A minimal API registered in a method, and others in top-level statements: those belong to the entry point
+            // the compiler makes of them (`Program.Main`), which `context` answers for at their lines.
             (
                 "Api/Endpoints.cs",
                 "public static class Endpoints\n{\n    public static void Map(WebApplication app)\n    {\n        app.MapGet(\"/health\", Health);\n    }\n\n    static string Health() => \"ok\";\n}\n",
             ),
+            (
+                "Api/Program.cs",
+                "var builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\n\napp.MapGet(\"/ready\", Ready);\napp.MapPost(\"/ping\", () => \"pong\");\nEndpoints.Map(app);\n\napp.Run();\n\nstatic string Ready() => \"ok\";\n",
+            ),
         ],
     );
-    assert_eq!(agree(&cs), 3);
+    assert_eq!(agree(&cs), 5);
+    // Go: a route on its handler (declared in the file), one under a helper's group prefix, and one left with the
+    // function registering it (a closure).
+    let go = repo(
+        &base,
+        "orchard-api",
+        &[
+            ("go.mod", "module example.com/orchard\n\ngo 1.22\n\nrequire github.com/gin-gonic/gin v1.10.0\n"),
+            (
+                "routes.go",
+                "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\n\
+                 func main() {\n\tr := gin.Default()\n\ttrees(r.Group(\"/api/v1\"))\n\tr.GET(\"/ping\", func(c *gin.Context) {})\n\thttp.ListenAndServe(\":8080\", r)\n}\n\n\
+                 func trees(g *gin.RouterGroup) {\n\tg.GET(\"/trees/:id\", getTree)\n}\n\n\
+                 func getTree(c *gin.Context) {}\n",
+            ),
+        ],
+    );
+    assert_eq!(agree(&go), 2);
     let _ = fs::remove_dir_all(&base);
 }

@@ -18,6 +18,7 @@ def load(name, path):
 
 
 sample = load('identity_sample', HERE/'identity/sample.py')
+digest = load('identity_digest', HERE/'identity/digest.py')
 jvm_label = load('identity_jvm_label', HERE/'identity/jvm/label.py')
 
 
@@ -277,6 +278,23 @@ class DrawLanguageTest(unittest.TestCase):
                 dict(t='ref', repo='m', lang='java', file='A.java', line=1, col=1, key='k2')]
         self.assertEqual(sample.exclusions(rows), {('java', 'import'): 1, ('kotlin', 'import'): 1,
                                                    ('java', 'bound_two_ways'): 1})
+
+
+
+class DigestTest(unittest.TestCase):
+    def test_rows_not_bytes(self):
+        """Rows in another order, keys in another order, or another compressor's bytes: one digest; a changed row: another."""
+        import gzip
+        rows = ['{"name": "find", "line": 3}', '{"name": "save", "line": 9}']
+        with tempfile.TemporaryDirectory() as d:
+            def write(name, lines, level):
+                p = Path(d)/name
+                p.write_bytes(gzip.compress(('\n'.join(lines) + '\n').encode(), compresslevel=level, mtime=0))
+                return digest.digest(p)
+            first = write('a.jsonl.gz', rows, 9)
+            self.assertEqual(first, write('b.jsonl.gz', rows[::-1], 1))
+            self.assertEqual(first, write('c.jsonl.gz', ['{"line": 3, "name": "find"}', rows[1]], 6))
+            self.assertNotEqual(first, write('d.jsonl.gz', ['{"name": "find", "line": 4}', rows[1]], 9))
 
 
 if __name__ == '__main__':

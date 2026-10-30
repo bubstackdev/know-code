@@ -18,7 +18,7 @@ edges: the gaps below are the places to check by hand.
 | Java | `.java` | types, members, calls, instantiations, type and member uses, imports | packages, single-type, on-demand and static imports, receiver types |
 | Python | `.py` | definitions, calls, imports | imports (relative and absolute) |
 | Rust | `.rs`, `Cargo.toml` | definitions, calls, uses | by name and receiver within the repo |
-| Go | `.go`, `go.mod` | types, functions, methods, fields, interface methods, calls, type and member uses | packages, imports through `go.mod`, receiver types, embedding |
+| Go | `.go`, `go.mod` | types, functions, methods, fields, interface methods, calls, type and member uses, HTTP routes and clients | packages, imports through `go.mod`, receiver types, embedding |
 | ColdFusion (CFML) | `.cfm`, `.cfc`, `.cfs` | templates, components, functions, includes, queries | by path, as the engine resolves them |
 | SQL | `.sql` | tables, views, procedures, functions, triggers, events | by name, without case or quotes |
 | Terraform | `.tf` | resources, data sources, modules, variables, locals, outputs, providers | by address within a configuration directory |
@@ -288,6 +288,22 @@ Resolved as the compiler scopes names, and never by a name alone:
 - **The default build.** Linux, any architecture, cgo on, no custom tags. A file another build compiles
   (`x_windows.go`, `//go:build nomsgpack`) is read, but its declarations give way to the default build's.
 
+HTTP routes:
+
+- **Servers.** `net/http`'s `Handle` and `HandleFunc` on a `ServeMux` or the default one, with method patterns
+  (`"GET /items/{id}"`); gin, echo and chi verbs, `Any`/`Match`/`Handle`/`Add`/`Method`, static files, groups
+  (`Group`, `Route`, `With`) and chi's `Mount`. A router is placed by its constructor, its type, or the group it was
+  made from; a router a function receives or returns takes the prefixes its callers give it, so a route registered in
+  a helper (`func api(r gin.IRouter)`) carries the prefix of every group it's registered under. A helper method called
+  on a value whose type the syntax doesn't give (`h.Register(v1)`) takes the groups passed to methods of that name
+  when no caller names its type; a group a test builds doesn't count toward a helper's prefixes. A function taking a
+  registration function (`handle func(string, http.Handler)`, which callers pass as `mux.Handle`) registers its calls'
+  patterns on that mux. A path may be a package constant. A registration under a run-time condition (`if cfg.OIDC { … }`) is listed: which configuration
+  serves it isn't known from source.
+- **Clients.** `net/http`'s `Get`, `Head`, `Post`, `PostForm`, `NewRequest` and `NewRequestWithContext`, on the
+  package, `http.DefaultClient` or an `http.Client`. The URL is read from literals, `+`, `fmt.Sprintf` and package
+  constants; a value before the path (`base + "/orders"`) is the base address and dropped.
+
 Known gaps: a type isn't matched to the interfaces it satisfies implicitly (a call through an interface resolves to
 the interface's method); a generic receiver resolves to its generic type's members; dot imports leave their names
 unresolved. Measured against the type checker on three public repositories in
@@ -395,6 +411,7 @@ on them is incomplete with reason `unsupported`, naming the first few with `file
 | GitLab CI | an include or trigger in a form not read (kind `unknown` in `ci_includes`) | the jobs and includes it brings |
 | Angular | a lazy route in a form not read (a default export, a module string) | the routes it loads |
 | Go | a file the default build leaves out (`x_windows.go`, a `//go:build` constraint false without custom tags), area `build`; `import "C"` (cgo), area `cgo` | the declarations only another build compiles; the C code `C.name` refers to |
+| HTTP (Go) | a registration whose path or method isn't a literal or a constant; a request whose method is chosen at run time | the routes it registers, and the requests it sends |
 | Razor | `.razor` and `.cshtml` files, which aren't parsed: a C# `refs` or `impact` answer from a repo holding any checks them as text for the name and names the lines that name it (`refs` says in `checked` when none does); with more than 20 names to check, it says the files exist, naming one | uses of C# code in their markup and `@code` blocks |
 | HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes whose template isn't a literal or names an area, an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
 
