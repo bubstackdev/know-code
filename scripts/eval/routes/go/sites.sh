@@ -26,6 +26,8 @@ case $fw in
 esac
 if [ ! -d "$dir" ]; then
   mkdir -p /work/ov/sites && cp -R "$src" "$dir" && chmod -R u+w "$dir"
+  # A pre-module version (chi v4 is `+incompatible`) has no go.mod, which a replacement directory needs.
+  [ -f "$dir/go.mod" ] || printf 'module %s\n' "$module" > "$dir/go.mod"
   perl -0pi -e "$expr" "$dir/$file"
   [ "$(grep -c 'KCRecord(' "$dir/$file")" = 1 ] || { echo "sites.sh: $fw $version: site hook not placed" >&2; exit 1; }
   cat > "$dir/kc_sites.go" <<GO

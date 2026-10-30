@@ -58,14 +58,15 @@ for chi in github.com/go-chi/chi/v5 github.com/go-chi/chi; do
 				kcOutAt(kcRoute{Framework: "chi", Method: method, Path: route, Handler: name}, chi.KCSites, chi.KCHandlerKey(h))
 				return nil
 			})'
-    # chi's own repository builds chi from its source: no module to hook.
-    grep -qE "^module $chi\$" go.mod || site chi "$chi"
+    # chi's own repository builds chi from its source: no module to hook, so its routes are listed without sites.
+    if grep -qE "^module $chi\$" go.mod; then unhooked=chi; else site chi "$chi"; fi
     break
   fi
 done
 
 # Without the site hooks, a route is printed as its framework lists it.
-[ -f /in/sites ] || cases=$(printf '%s\n' "$cases" | perl -pe 's/kcOutAt\((kcRoute\{.*\}), \w+\.KCSites, .*\)$/kcOut($1)/')
+[ -f /in/sites ] || unhooked='\w+'
+[ -z "${unhooked:-}" ] || cases=$(printf '%s\n' "$cases" | perl -pe "s/kcOutAt\\((kcRoute\\{.*\\}), $unhooked\\.KCSites, .*\\)\$/kcOut(\$1)/")
 
 case $pkg in
   test:*) dir=${pkg#test:}; target_dir=$(cd "$dir" && pwd); dump_pkg=$(go list -f '{{.Name}}' "./$dir") ;;
