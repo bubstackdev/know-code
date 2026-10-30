@@ -1,0 +1,95 @@
+{
+ "echo-realworld": [
+  {
+   "dirs": [
+    "article",
+    "db",
+    "docs",
+    "handler",
+    "model",
+    "router",
+    "router/middleware",
+    "store",
+    "user",
+    "utils"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "gin-realworld": [
+  {
+   "dirs": [
+    "articles",
+    "common",
+    "users"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "goatcounter": [
+  {
+   "dirs": [
+    "acme",
+    "cron",
+    "handlers",
+    "pkg/bgrun",
+    "pkg/db2",
+    "pkg/geo",
+    "pkg/geo/geoip2",
+    "pkg/geo/maxminddb",
+    "pkg/log",
+    "pkg/metrics",
+    "widgets"
+   ],
+   "module": ".",
+   "package": "test:handlers",
+   "status": "listed"
+  }
+ ],
+ "pkgsite": [
+  {
+   "dirs": [
+    "internal",
+    "internal/api",
+    "internal/config",
+    "internal/cookie",
+    "internal/derrors",
+    "internal/experiment",
+    "internal/fetch",
+    "internal/frontend",
+    "internal/frontend/page",
+    "internal/frontend/serrors",
+    "internal/frontend/templates",
+    "internal/frontend/urlinfo",
+    "internal/frontend/versions",
+    "internal/fuzzy",
+    "internal/godoc",
+    "internal/godoc/codec",
+    "internal/godoc/dochtml",
+    "internal/godoc/dochtml/internal/render",
+    "internal/godoc/importer",
+    "internal/licenses",
+    "internal/log",
+    "internal/memory",
+    "internal/middleware/stats",
+    "internal/natural",
+    "internal/osv",
+    "internal/proxy",
+    "internal/queue",
+    "internal/sanitizer",
+    "internal/source",
+    "internal/stdlib",
+    "internal/trace",
+    "internal/version",
+    "internal/vuln"
+   ],
+   "module": ".",
+   "package": "test:internal/frontend",
+   "status": "listed"
+  }
+ ]
+}

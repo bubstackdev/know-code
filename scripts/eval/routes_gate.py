@@ -266,7 +266,7 @@ def run(args):
             ok += confirm(binary, clone, env_for(work/'kc'/binary_hash(binary)/repo), r)
         checks[f] = dict(sampled=len(picked), confirmed=ok)
     summary = dict(binary=binary_hash(binary), labels=str(args.labels), served=served, frameworks=summarize(per_repo),
-                   context_check=checks, per_repo=per_repo, rule='routes-v1.1' if regions is not None else 'routes-v1')
+                   context_check=checks, per_repo=per_repo, rule='routes-v1.2' if regions is not None else 'routes-v1')
     if regions is not None:
         summary['excluded'] = excluded
     text = json.dumps(summary, indent=1, sort_keys=True) + '\n'
