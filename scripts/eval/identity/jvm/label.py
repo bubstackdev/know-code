@@ -302,6 +302,8 @@ def enumerate_repo(repo, src, index):
 OPENERS, CLOSERS = '([{', ')]}'
 # A Kotlin line that continues the expression above it, so a newline before it doesn't end a declaration.
 CONTINUES = re.compile(r'^\s*(?:\.|\?\.|\?:|&&|\|\||[-+*%]|/(?![/*])|as\b|is\b|in\b|!in\b|else\b'
+                       # a type's supertypes or constraints below its header (`) : Base() {`, `where T : …`)
+                       r'|:(?!:)|where\b'
                        # a property's accessors on the lines after it (`get() = …`, `private set`)
                        r'|(?:(?:private|protected|internal|public|override|open|inline)\s+)*(?:get|set)\b(?!\s*[:=]))')
 
@@ -362,7 +364,7 @@ def extent(lines, start, lang, body, name=None):
         if lang == 'kotlin' and depth == 0:
             following = next((lines[k] for k in range(i + 1, n)
                               if lines[k].strip() and not lines[k].lstrip().startswith(('//', '/*', '*'))), '')
-            if text.strip() and not text.rstrip().endswith(('=', ',', '(', '->', '.')) and not CONTINUES.match(following) \
+            if text.strip() and not text.rstrip().endswith(('=', ',', '(', '->', '.', ':')) and not CONTINUES.match(following) \
                     and not following.lstrip().startswith('{'):
                 return i + 1
         i, j = i + 1, 0
