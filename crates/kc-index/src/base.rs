@@ -37,7 +37,7 @@ const MIN_DISTANCE: usize = 50;
 
 /// `meta` keys a base records about itself, and the commit a clone started from.
 const META_COMMIT: &str = "base.commit";
-const META_BUILD: &str = "base.build";
+pub(crate) const META_BUILD: &str = "base.build";
 const META_DIRNAME: &str = "base.dirname";
 /// In a checkout's index: the base it was cloned from (`<file name>`), for provenance.
 pub const META_FROM: &str = "base.from";
@@ -95,7 +95,7 @@ pub struct Base {
 }
 
 pub fn dir() -> Result<PathBuf> {
-    Ok(crate::cache_dir()?.join(DIR))
+    Ok(crate::tree_dir()?.join(DIR))
 }
 
 /// Opens a base read-only without creating a `-wal` or `-shm` beside it: a base is never written after it is published.
@@ -441,7 +441,7 @@ fn publish_from(root: &Path, source: &kc_store::Store, commit: &str, key: &str) 
     }
     let dir = dir()?;
     fs::create_dir_all(&dir)?;
-    let locks = crate::cache_dir()?.join("locks");
+    let locks = crate::tree_dir()?.join("locks");
     fs::create_dir_all(&locks)?;
     // Named like a repository's lock (`<name>-<12 hex digits>.lock`), so uninstall recognises it.
     let lock = writer::lock_file(&locks.join(format!("bases-{}.lock", id.hash)))?;
@@ -527,7 +527,7 @@ pub fn wait_or_claim(root: &Path) -> Result<Turn> {
     if BUILDING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(r, _)| r == root) {
         return Ok(Turn::Building);
     }
-    let locks = crate::cache_dir()?.join("locks");
+    let locks = crate::tree_dir()?.join("locks");
     fs::create_dir_all(&locks)?;
     // Named like a repository's lock (`<name>-<12 hex digits>.lock`), so uninstall recognises it.
     let lock = writer::lock_file(&locks.join(format!("build{}-{}.lock", &commit[..commit.len().min(12)], id.hash)))?;
@@ -680,8 +680,13 @@ pub(crate) fn current(base: &Path) -> bool {
 
 /// Every published base file: for maintenance.
 pub fn all() -> Result<Vec<(PathBuf, u64, std::time::SystemTime)>> {
+    all_in(&dir()?)
+}
+
+/// Every base file in `dir`, which may be another build's (see [`crate::data_dir`]), least recently used first.
+pub(crate) fn all_in(dir: &Path) -> Result<Vec<(PathBuf, u64, std::time::SystemTime)>> {
     let mut out = Vec::new();
-    let items = match fs::read_dir(dir()?) {
+    let items = match fs::read_dir(dir) {
         Ok(items) => items,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(out),
         Err(e) => return Err(e.into()),
