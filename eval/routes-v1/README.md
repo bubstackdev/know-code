@@ -249,7 +249,10 @@ Two programs were corrected before any was listed or any answer read: gin-vue-ad
 without the configuration its `main` loads, and the empty file-store path's catch-all conflicted with its swagger route;
 vikunja embeds its front end's build, which isn't committed, so an empty stand-in is created in the container's copy
 ([prepare.sh](../../scripts/eval/routes/go/harness/vikunja/prepare.sh)), as for gotify and opengist. vikunja uses echo
-v5, whose registration sites the labeller records at `DefaultRouter.Add` (no routes-v1 repository
+v5, whose registration sites the labeller records at `DefaultRouter.Add`, and whose route answering every method (`Any`)
+its listing names `echo_route_any`, which the labeller writes as method `*`, as the rule does. vikunja registers its v2
+API through huma's echo adapter, so those routes' sites are the adapter's (the first frame outside echo and the
+standard library), never configuration-dependent (no routes-v1 repository
 uses echo v5, so those sites are read in the listing before scoring). They are labelled once and scored once, under
 v1.2, and published beside the first round. The replacement rule above applies, with these fallbacks named now:
 eddycjy/go-gin-example for gin and navidrome/navidrome for chi.
