@@ -3,12 +3,13 @@
 (eval/find-dev-v1/README.md). No model calls.
 
     find_dev.py draw ENUMERATION.jsonl.gz [...] --out eval/find-dev-v1/questions.jsonl
-    find_dev.py run --knowcode BIN --clones DIR --work WORK --questions FILE --out ANSWERS
+    find_dev.py run --knowcode BIN --clones DIR --work WORK --questions FILE --out ANSWERS [--page 10]
     find_dev.py score --questions FILE --answers ANSWERS --enumerations DIR --clones DIR [--out REPORT]
 
 `draw` takes compare-v1's find draw (scripts/eval/compare/questions.py) with this set's seed and quota, and adds each
 name's misspelled and half-remembered forms. `run` asks `BIN find QUERY --json -n 200` per question in each
-repository's pinned clone, with HOME, config, data and cache all the run's own. `score` judges each option's rows
+repository's pinned clone, with HOME, config, data and cache all the run's own; with `--page N`, it asks with `-n N`
+and keeps the build's own page and `similar` lines, scored as option `built`. `score` judges each option's rows
 with compare-v1's judge (score.judge_decls) and prints the counts.
 """
 from __future__ import annotations
@@ -88,7 +89,13 @@ def options(rows, query):
             'cursor': (first, [])}
 
 
-def run(knowcode, clones, work, questions, out):
+def similar_row(line):
+    """A `similar` line (`kind name  file:line`) as a row."""
+    file, _, at = line.rsplit('  ', 1)[-1].rpartition(':')
+    return {'file': file, 'line': int(at)}
+
+
+def run(knowcode, clones, work, questions, out, page=None):
     work = Path(work).resolve()
     dirs = {k: work / k for k in ('home', 'config', 'data', 'cache')}
     for d in dirs.values():
@@ -97,15 +104,18 @@ def run(knowcode, clones, work, questions, out):
                KNOWCODE_DATA_DIR=str(dirs['data']), KNOWCODE_CACHE_DIR=str(dirs['cache']))
     with open(out, 'w') as f:
         for q in questions:
-            p = subprocess.run([knowcode, 'find', q['query'], '--json', '-n', '200'], cwd=Path(clones) / q['repo'],
+            p = subprocess.run([knowcode, 'find', q['query'], '--json', '-n', str(page or 200)], cwd=Path(clones) / q['repo'],
                                env=env, capture_output=True, text=True)
-            rows = []
+            rows, similar = [], []
             if p.returncode == 0:
                 data = json.loads(p.stdout)
                 rows = [{'file': i.get('file'), 'line': i.get('line'), 'name': i.get('name'), 'matched': i.get('matched')}
                         for i in data.get('items', [])]
-            f.write(json.dumps({'id': q['id'], 'ok': p.returncode == 0, 'rows': rows,
-                                'error': p.stderr.strip()[-300:] if p.returncode else None}) + '\n')
+                similar = [similar_row(line) for line in data.get('similar', [])]
+            a = {'id': q['id'], 'ok': p.returncode == 0, 'rows': rows, 'error': p.stderr.strip()[-300:] if p.returncode else None}
+            if page:
+                a.update(page=page, similar=similar)
+            f.write(json.dumps(a) + '\n')
 
 
 def score(questions, answers, enumerations, clones):
@@ -135,7 +145,8 @@ def score(questions, answers, enumerations, clones):
             totals[('error', q['form'])]['questions'] += 1
             continue
         labels = {tuple(lab) for lab in q['labels']}
-        for option, (page, similar) in options(a['rows'], q['query']).items():
+        built = {'built': (a['rows'], a['similar'])} if a.get('page') else None
+        for option, (page, similar) in (built or options(a['rows'], q['query'])).items():
             t = totals[(option, q['form'])]
             t['questions'] += 1
             j = compare_score.judge_decls([('decl', r['file'], r['line']) for r in page], labels, decls[q['repo']], source(q['repo']))
@@ -186,6 +197,7 @@ def main(argv=None):
     r.add_argument('--work', required=True)
     r.add_argument('--questions', required=True)
     r.add_argument('--out', required=True)
+    r.add_argument('--page', type=int, help="ask with -n PAGE and keep the build's own page and similar lines")
     s = sub.add_parser('score')
     s.add_argument('--questions', required=True)
     s.add_argument('--answers', required=True)
@@ -200,7 +212,7 @@ def main(argv=None):
         return 0
     qs = [json.loads(line) for line in Path(args.questions).read_text().splitlines() if line.strip()]
     if args.cmd == 'run':
-        run(args.knowcode, args.clones, args.work, qs, args.out)
+        run(args.knowcode, args.clones, args.work, qs, args.out, args.page)
         return 0
     answers = [json.loads(line) for line in Path(args.answers).read_text().splitlines() if line.strip()]
     text = report(score(qs, answers, args.enumerations, args.clones))

@@ -28,8 +28,13 @@ saying it has every declaration of the name in the workspace (whichever repo was
 overloads, and how many references in code name it across the workspace (the other mentions: uses, which kc_refs
 resolves). When files KnowCode doesn't read as code (Razor, vendored JavaScript) name it too, the count is "at least",
 with those lines. Each item declaring the name asked for quotes the line naming it in `cite`, read from the file now
-and checked against the index (`check: verified`). Matches with the name asked for (in any case) come first: when only
-others are past the limit, the answer is `complete` and they are a `more` entry. Use kc_locate when you know what the code does but not its name,
+and checked against the index (`check: verified`). When a plain name (no kind, not
+qualified) has declarations named exactly so, `items` holds only those, and `similar` names up to half the limit of
+the other matches (another case, a prefix, a word) as `kind name file:line` lines, shown but never items (`total` counts both and the matches in
+neither); with every exact one listed the answer is `complete`, and matches in neither list are a `more` entry that
+`rest` explains. Otherwise matches with
+the name asked for (in any case) come first: when only others are past the limit, the answer is `complete` and they
+are a `more` entry. Use kc_locate when you know what the code does but not its name,
 kc_search for exact text."#,
     },
     Topic {

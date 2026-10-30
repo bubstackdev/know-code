@@ -31,5 +31,9 @@ class OptionsTest(unittest.TestCase):
         self.assertTrue(all(o[k] == (rows, []) for k in find_dev.OPTIONS))
 
 
+    def test_a_similar_line_is_read_as_its_place(self):
+        self.assertEqual(find_dev.similar_row('method Book.ledger  src/a b.py:12'), {'file': 'src/a b.py', 'line': 12})
+
+
 if __name__ == '__main__':
     unittest.main()
