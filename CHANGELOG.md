@@ -9,6 +9,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
   (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
   did; identity-v1's TypeScript figures are unchanged.
+- Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
+  `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
+  (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages
+  (`e.Group(apiv2.GroupPrefix)`). echo's paths are joined as echo joins them, by concatenation: `GET("s")` on a
+  `/user` group is `/users`, not `/user/s`. A function registering routes on a parameter of the repository's own
+  interface type (`func Route(r Router)`, with `r.MethodFunc("GET", "/health", …)`) serves them where a caller passes
+  it a router (`api.Route(chi.NewRouter())`), under that caller's prefix; with no such caller (a cache's `Get`), they
+  are not routes. Found on routes-v1's second round of held-out repositories; routes-v1's
+  development repositories score the same, since none uses these forms.
 - `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
