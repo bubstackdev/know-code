@@ -1889,6 +1889,44 @@ fn receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<Receiver> {
     Ok(recv)
 }
 
+/// Of `ids` (of `named`), those declared on a type that a property named like the receiver's last segment holds:
+/// `c.req.header` reaches `header` on the type of some `req`. `None` when the receiver isn't a value's property
+/// (`c.req`, not `c`, `c.req()` or `c[k]`), or when some type's property of that name has no type written, so it
+/// may hold any.
+fn through_property(oracle: &mut TypeOracle, receiver: &str, named: &[Def], ids: &[i64]) -> Result<Option<Vec<i64>>> {
+    let Some((_, prop)) = receiver.rsplit_once('.') else { return Ok(None) };
+    if prop.is_empty() || !prop.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return Ok(None);
+    }
+    // Members of types only: a container-less property is a local or an object literal's key, which no other code
+    // reaches through a name.
+    let mut stmt = oracle.conn.prepare_cached("SELECT type_name FROM symbols WHERE name = ?1 AND kind = 'property' AND container IS NOT NULL")?;
+    let written: Vec<Option<String>> = stmt.query_map([prop], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    if written.is_empty() || written.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    let mut held: Vec<String> = Vec::new();
+    for t in written.into_iter().flatten() {
+        // The type's own name, without type arguments or array brackets (`HonoRequest<P, I>`, `Item[]`).
+        let base: String = t.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.').collect();
+        let base = last_segment(&base).to_string();
+        if base.is_empty() {
+            return Ok(None);
+        }
+        for ty in oracle.chain(&base)? {
+            if !held.contains(&ty) {
+                held.push(ty);
+            }
+        }
+    }
+    let kept = ids
+        .iter()
+        .copied()
+        .filter(|id| named.iter().find(|d| d.id == *id).and_then(|d| d.container.as_deref()).is_some_and(|c| held.iter().any(|t| last_segment(c) == last_segment(t))))
+        .collect();
+    Ok(Some(kept))
+}
+
 /// In C#, a call chain off a name the repo doesn't define at all (`Policy.Handle<E>().RetryAsync(3).ExecuteAsync(…)`,
 /// `System.IO.File.Open(…)`): the chain is a library's, so its members aren't the repo's same-named ones. Returns
 /// that root name.
@@ -5766,6 +5804,18 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     found if found.is_empty() => (confidence, ids),
                     found => (if found.len() == 1 { "exact" } else { "ambiguous" }, found),
                 },
+                _ => (confidence, ids),
+            };
+            // A TypeScript member reached through a property of a value whose type isn't known (`c.req.header(…)`, `c` a
+            // handler's untyped parameter): of the candidates, those a type's property of that name can hold. Kept
+            // ambiguous: the value may be of a type the repo doesn't declare.
+            let (confidence, ids) = match hit.receiver.as_deref() {
+                Some(r) if ts && confidence == "ambiguous" && hit.kind != "type_ref" && matches!(recv, Receiver::Unknown) => {
+                    match through_property(&mut oracle, r, named, &ids)? {
+                        Some(kept) if !kept.is_empty() && kept.len() < ids.len() => (confidence, kept),
+                        _ => (confidence, ids),
+                    }
+                }
                 _ => (confidence, ids),
             };
             if explain {
