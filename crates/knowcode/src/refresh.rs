@@ -194,6 +194,8 @@ fn index_in_background(root: &Path, threads: usize) -> Outcome {
         }
         Ok(report)
     });
+    // What the indexing freed goes back, as after a server call: an idle server otherwise holds its high-water mark.
+    crate::memory::release();
     match result {
         Ok(r) => r.map_err(|e| format!("{e:#}")),
         Err(_) => Err("background indexer panicked".into()),
@@ -314,6 +316,7 @@ fn derive_in_background(root: &Path) -> std::result::Result<bool, String> {
         let _ = kc_index::base::publish(root);
         Ok(true)
     });
+    crate::memory::release();
     match result {
         Ok(r) => r.map_err(|e| format!("{e:#}")),
         Err(_) => Err("panicked".into()),
