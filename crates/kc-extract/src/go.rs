@@ -64,11 +64,13 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         frameworks: Vec::new(),
         pending_router: None,
         package_routers: HashMap::new(),
+        field_routers: HashMap::new(),
         requests: HashMap::new(),
         handlers: Vec::new(),
         seen: HashSet::new(),
     };
     cx.header(tree.root_node());
+    cx.router_fields(tree.root_node());
     if let Some((constraint, line)) = excluded(path, source) {
         // The default build doesn't compile the file: its declarations are another build's, which resolution doesn't
         // take for the default build's (see `kc_store::go`).
@@ -269,6 +271,9 @@ struct Cx<'a> {
     handlers: Vec<(usize, (String, Option<String>))>,
     /// Package-level router variables (`var router = gin.Default()`).
     package_routers: HashMap<String, http::Router>,
+    /// Fields of this file's struct types that hold a root router (`router *chi.Mux`), by type and field name: read
+    /// before the file's functions, so a method sees them wherever the struct is declared.
+    field_routers: HashMap<(String, String), http::Fw>,
     /// Requests built with `NewRequest` and held in a variable, by the function building them and the variable: the
     /// verb and encoded path a `Do` sending that variable requests (see `client`).
     requests: HashMap<(Option<usize>, String), (String, String)>,
@@ -282,6 +287,22 @@ impl<'a> Cx<'a> {
 
     fn current(&self) -> Option<usize> {
         self.scopes.last().map(|s| s.sym)
+    }
+
+    /// The fields of the file's top-level struct types that hold a root router (see `field_routers`).
+    fn router_fields(&mut self, root: Node) {
+        for decl in children(root).filter(|c| c.kind() == "type_declaration") {
+            for spec in children(decl).filter(|c| c.kind() == "type_spec") {
+                let (Some(name), Some(ty)) = (spec.child_by_field_name("name"), spec.child_by_field_name("type")) else { continue };
+                let Some(list) = (ty.kind() == "struct_type").then(|| children(ty).find(|c| c.kind() == "field_declaration_list")).flatten() else { continue };
+                for field in children(list).filter(|c| c.kind() == "field_declaration") {
+                    let Some(fw) = field.child_by_field_name("type").and_then(|t| self.root_router_type(t)) else { continue };
+                    for n in children(field).filter(|c| c.kind() == "field_identifier") {
+                        self.field_routers.insert((self.text(name).to_string(), self.text(n).to_string()), fw);
+                    }
+                }
+            }
+        }
     }
 
     /// The package clause and the imports, read first so that every reference sees every import.
@@ -633,6 +654,10 @@ impl<'a> Cx<'a> {
             for p in children(params).filter(|c| matches!(c.kind(), "parameter_declaration" | "variadic_parameter_declaration")) {
                 let names: Vec<String> = children(p).filter(|c| c.kind() == "identifier").map(|c| self.text(c).to_string()).collect();
                 let ty = p.child_by_field_name("type");
+                // A parameter of one of the repository's own types (`r Router`, an interface a `*chi.Mux` satisfies) may be
+                // a router: its routes are kept under a marked key, which the store keeps only where a caller passes a
+                // router to it (`kc_store::query::under_groups`), so a cache's or client's `Get` is never a route.
+                let maybe = ty.is_some_and(|t| self.own_type(t));
                 let fw = ty.and_then(|t| self.router_type(t));
                 // A registration function parameter (`handle func(string, http.Handler)`) is kept as a router named
                 // with `()`: its calls register on the mux the caller passes.
@@ -640,6 +665,8 @@ impl<'a> Cx<'a> {
                 for name in names.iter().chain(names.is_empty().then(|| "_".to_string()).iter()) {
                     if let (Some(fw), Some(s)) = (fw, self.scopes.last_mut()) {
                         s.routers.insert(name.clone(), http::Router { fw, prefix: format!("{{@{key}#{i}}}") });
+                    } else if let (true, Some(s)) = (maybe && !self.test_file, self.scopes.last_mut()) {
+                        s.routers.insert(name.clone(), http::Router { fw: http::Fw::Chi, prefix: format!("{{@{key}#{i}?}}") });
                     }
                     if let (true, Some(s)) = (registrar, self.scopes.last_mut()) {
                         s.routers.insert(format!("{name}()"), http::Router { fw: http::Fw::NetHttp, prefix: format!("{{@{key}#{i}}}") });
