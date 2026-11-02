@@ -218,3 +218,55 @@ fn the_freshness_snapshot_proves_unchanged_or_says_changed() {
     drop(store);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// What a sync reads besides the repo's own files is part of what the stat snapshot proves unchanged: the SCIP index
+/// (rewritten in place, or replaced by a rename, as indexers do: neither adds a name to its directory) and a declared
+/// client package's `package.json` in `node_modules` (another version installed). Otherwise a server finds the repo
+/// unchanged and keeps answering from the facts the old file gave, until a source file changes.
+#[test]
+fn the_freshness_snapshot_covers_the_scip_index_and_installed_packages() {
+    let root = scratch("outside-inputs");
+    write(&root, "App.cs", "namespace Demo;\npublic class App\n{\n    public void Run() { }\n}\n");
+    write(&root, "src/client.d.ts", "declare module 'demo-client' {\n    class Client {\n        ping(): Promise<any>;\n    }\n}\n");
+    write(&root, "node_modules/demo-client/package.json", r#"{ "name": "demo-client", "version": "1.0.0", "main": "index.js" }"#);
+    write(&root, "node_modules/demo-client/index.js", "export default class Client {\n  ping() { return this.ajax({ type: 'GET', url: 'ping' }); }\n}\n");
+    write(&root, "package-lock.json", r#"{ "lockfileVersion": 3, "packages": { "": {}, "node_modules/demo-client": { "version": "1.0.0" } } }"#);
+    write(&root, "src/node_modules/other/package.json", r#"{ "name": "other", "version": "1.0.0" }"#);
+    write(&root, ".gitignore", "node_modules/\n");
+    let scip = |tool: &str| kc_index::scip::encode::index(tool, &format!("file://{}", root.display()), &[]);
+    std::fs::write(root.join("index.scip"), scip("scip-dotnet")).unwrap();
+    let db = root.join(".git/kc-test.sqlite");
+    let mut store = Store::open(&db).unwrap();
+    assert!(sync(&root, &mut store, &opts()).unwrap().scip.is_some(), "index.scip is read");
+    assert!(!changed_since_sync(&root, &db), "unchanged right after a sync");
+
+    // The indexer runs again and writes over its file.
+    std::fs::write(root.join("index.scip"), scip("scip-dotnet 2")).unwrap();
+    assert!(changed_since_sync(&root, &db), "the SCIP index rewritten in place");
+    assert!(sync(&root, &mut store, &opts()).unwrap().scip.is_some(), "read again");
+    assert!(!changed_since_sync(&root, &db));
+    // Or writes a new file and renames it over the old one.
+    std::fs::write(root.join("index.scip.tmp"), scip("scip-dotnet 3")).unwrap();
+    std::fs::rename(root.join("index.scip.tmp"), root.join("index.scip")).unwrap();
+    assert!(changed_since_sync(&root, &db), "the SCIP index replaced");
+    sync(&root, &mut store, &opts()).unwrap();
+    assert!(!changed_since_sync(&root, &db));
+    std::fs::remove_file(root.join("index.scip")).unwrap();
+    assert!(changed_since_sync(&root, &db), "the SCIP index removed");
+    sync(&root, &mut store, &opts()).unwrap();
+    assert!(!changed_since_sync(&root, &db));
+
+    // Another version of the declared client installed: what the sync reads of it changes.
+    write(&root, "node_modules/demo-client/package.json", r#"{ "name": "demo-client", "version": "1.1.0", "main": "index.js" }"#);
+    assert!(changed_since_sync(&root, &db), "the installed package changed");
+    sync(&root, &mut store, &opts()).unwrap();
+    assert!(!changed_since_sync(&root, &db));
+    // A copy installed nearer the declaring file, which Node would resolve first (beside another package: no directory
+    // the snapshot lists changes).
+    write(&root, "src/node_modules/demo-client/package.json", r#"{ "name": "demo-client", "version": "1.0.0", "main": "index.js" }"#);
+    assert!(changed_since_sync(&root, &db), "a nearer installed copy");
+    sync(&root, &mut store, &opts()).unwrap();
+    assert!(!changed_since_sync(&root, &db));
+    drop(store);
+    let _ = std::fs::remove_dir_all(&root);
+}

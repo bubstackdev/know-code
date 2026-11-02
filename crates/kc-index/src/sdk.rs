@@ -103,21 +103,24 @@ pub struct SdkRequest {
 }
 
 /// Whether reading declared packages from `node_modules` is on (`index.node_modules`, on by default).
-fn enabled() -> bool {
+pub(crate) fn enabled() -> bool {
     crate::config::node_modules().map(|(on, _)| on).unwrap_or(true)
 }
 
 /// Reads the packages the repo at `root` declares as external clients again when what they are read from changed
 /// (the declaring files, the installed `package.json`s, the lockfiles, the setting), and stores them in the index.
-/// Returns whether the stored packages changed. Best effort: a package that can't be read says why.
-pub fn refresh(root: &Path, store: &mut Store, privacy: &Privacy) -> Result<bool> {
+/// Returns whether the stored packages changed. Best effort: a package that can't be read says why. What it reads
+/// outside the repo's indexed files is stamped into `outside` first (see [`observe`]).
+pub(crate) fn refresh(root: &Path, store: &mut Store, privacy: &Privacy, outside: &mut crate::fresh::Outside) -> Result<bool> {
     let on = enabled();
+    outside.settings(crate::fresh::settings(on));
     let dts: Vec<(String, String)> = store
         .conn()
         .prepare("SELECT path, hash FROM files WHERE path LIKE '%.d.ts' ORDER BY path")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let declared = if on { declared(root, &dts, privacy) } else { Vec::new() };
+    observe(root, &declared, outside);
     let stamp = stamp_of(root, on, &dts, &declared);
     if store.meta(META_STAMP)?.as_deref() == Some(stamp.as_str()) {
         return Ok(false);
@@ -199,6 +202,40 @@ fn stamp_of(root: &Path, on: bool, dts: &[(String, String)], declared: &[(String
         }
     }
     blake3::hash(parts.join("\n").as_bytes()).to_hex().to_string()
+}
+
+/// Stamps what [`stamp_of`] and the reads after it look at outside the indexed files, before they do: for each declared
+/// package, every `node_modules/<name>` [`locate`] tries until the one it finds, that one's `package.json`, and every
+/// lockfile name [`lockfile`] tries until the one it finds. A copy installed nearer, another version installed, or a
+/// lockfile added then changes a stamp.
+fn observe(root: &Path, declared: &[(String, String)], outside: &mut crate::fresh::Outside) {
+    for (name, file) in declared {
+        let mut dir = Path::new(file).parent().map(Path::to_path_buf).unwrap_or_default();
+        loop {
+            let candidate = dir.join("node_modules").join(name);
+            outside.note(root, &candidate);
+            if std::fs::symlink_metadata(root.join(&candidate)).is_ok() {
+                outside.note(root, &candidate.join("package.json"));
+                let mut at = dir;
+                'lock: loop {
+                    for f in ["package-lock.json", "npm-shrinkwrap.json", "yarn.lock"] {
+                        let p = at.join(f);
+                        outside.note(root, &p);
+                        if root.join(&p).is_file() {
+                            break 'lock;
+                        }
+                    }
+                    if !at.pop() {
+                        break;
+                    }
+                }
+                break;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
 }
 
 /// The repo-relative directory a package is installed at for code in `file` (the nearest `node_modules/<name>`

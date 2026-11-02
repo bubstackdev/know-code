@@ -26,6 +26,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
   gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
   6–14%, for 11–22 MB more peak memory. The index is the same.
+- A server notices a regenerated SCIP index without waiting for a source file to change. Before answering, a server
+  checks by `stat` alone whether a repo changed since its last sync, and skips the sync when not; that check didn't
+  cover the files a sync reads outside the indexed ones, so rewriting `index.scip` (in place, or by renaming a new
+  file over it), editing a build file the SCIP facts depend on (`global.json`, `packages.lock.json`, a lock file),
+  installing another version of a declared client package in `node_modules`, or turning `index.node_modules` off
+  went unseen until an indexed file changed. They are now part of the check. The CLI, which syncs before every
+  answer, was not affected. Also, after an upgrade that changes resolution but no extractor, a repo's freshness
+  record is written again at the next sync; before, the old one was kept, and each server query on the repo synced
+  it until a file changed.
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.

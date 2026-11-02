@@ -6,6 +6,10 @@
 //! for another index file) counts as changed, which costs a sync and nothing more. It is built from the index itself
 //! after a sync commits, removed before a sync that changes the index commits, and not written while a file can't be
 //! read, so it never describes a state the index doesn't hold.
+//!
+//! A sync also reads files that aren't indexed: the SCIP index, the build files its facts depend on, and a declared
+//! client package's `package.json` in `node_modules` (see [`Outside`]). The snapshot stamps those too, each before it
+//! is read, so a change to one is a change to the repo.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -18,13 +22,17 @@ use serde::{Deserialize, Serialize};
 use crate::{Sniffed, discovery_inputs, git, names_hash};
 
 /// Bumped when [`Snapshot`] changes.
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     format: u32,
     /// The schema and every extractor's version: an index another build wrote may be stale for this one.
     build: String,
+    /// [`settings`] at the sync.
+    settings: String,
+    /// What the sync read outside the indexed files, each with its stamp as taken before the read (see [`Outside`]).
+    outside: Vec<(String, String)>,
     /// Device, inode and creation time of the index file: a rebuilt or replaced index is a different file. The
     /// creation time because a file recreated at once can get the inode just freed (ext4 does).
     index: (u64, u64, u128),
@@ -44,6 +52,65 @@ pub(crate) fn build() -> String {
 
     let versions: Vec<String> = Lang::ALL.iter().map(|l| format!("{}{}", l.as_str(), l.extractor_version())).collect();
     format!("{}|r{}|{}", kc_store::SCHEMA_VERSION, kc_store::RESOLVER_VERSION, versions.join(","))
+}
+
+/// The settings a sync reads besides those the extractor versions carry: whether declared client packages are read.
+pub(crate) fn settings(node_modules: bool) -> String {
+    format!("node_modules={node_modules}")
+}
+
+/// The first fields of a [`Snapshot`], serialized as it is: a snapshot whose file starts with these was written for
+/// this build, these settings and these outside stamps.
+#[derive(Serialize)]
+struct Head<'a> {
+    format: u32,
+    build: String,
+    settings: String,
+    outside: &'a [(String, String)],
+}
+
+/// The stat a snapshot keeps of a file outside the indexed ones: none (`-`), a symbolic link (marked, then what it
+/// leads to), or what [`git::stamp`] says.
+fn stamp(path: &Path) -> String {
+    match std::fs::symlink_metadata(path) {
+        Err(_) => "-".to_string(),
+        Ok(m) if m.is_symlink() => format!("link:{}", git::stamp(path)),
+        Ok(_) => git::stamp(path),
+    }
+}
+
+/// What a sync reads that isn't an indexed file, with each path's [`stamp`] taken before the read: a later change
+/// then shows as a stamp that moved, and one made during the read too (the index may hold either content, and the
+/// snapshot claims neither). `None` once something read can't be stamped (a path that isn't UTF-8, a set of inputs
+/// that moved while it was read): the snapshot is then not written, and the repo counts as changed until a sync can
+/// stamp everything. With them, the [`settings`] the sync read under.
+pub(crate) struct Outside {
+    seen: Option<Vec<(String, String)>>,
+    settings: String,
+}
+
+impl Outside {
+    pub(crate) fn new() -> Self {
+        Self { seen: Some(Vec::new()), settings: String::new() }
+    }
+
+    /// Stamps `path` (repo-relative, or absolute), before the caller reads it.
+    pub(crate) fn note(&mut self, root: &Path, path: &Path) {
+        let Some(seen) = &mut self.seen else { return };
+        match path.to_str() {
+            Some(p) => seen.push((p.to_string(), stamp(&root.join(path)))),
+            None => self.seen = None,
+        }
+    }
+
+    pub(crate) fn unprovable(&mut self) {
+        self.seen = None;
+    }
+
+    /// Records the settings the sync read under (see [`settings`]).
+    pub(crate) fn settings(&mut self, settings: String) {
+        self.settings = settings;
+    }
 }
 
 /// Where the snapshot of the index at `db` lives.
@@ -72,15 +139,28 @@ pub(crate) fn invalidate(store: &Store) {
     }
 }
 
-/// Whether a snapshot exists for `store`'s index.
-pub(crate) fn exists(store: &Store) -> bool {
-    db_of(store).is_some_and(|db| path(&db).exists())
+/// Whether `store`'s index has a snapshot written by this build, under these settings, with these outside stamps: a
+/// sync that changed nothing in the index writes one only when it hasn't (an older build's, or one from before the
+/// SCIP index changed, would otherwise call the repo changed at every query).
+pub(crate) fn current(store: &Store, outside: &Outside) -> bool {
+    use std::io::Read as _;
+    let (Some(db), Some(seen)) = (db_of(store), &outside.seen) else { return false };
+    let Ok(head) = serde_json::to_vec(&Head { format: FORMAT, build: build(), settings: outside.settings.clone(), outside: seen }) else { return false };
+    // The serialized head less its closing brace is how the snapshot's own serialization starts.
+    let head = &head[..head.len() - 1];
+    let mut start = vec![0; head.len()];
+    std::fs::File::open(path(&db)).and_then(|mut f| f.read_exact(&mut start)).is_ok() && start == head
 }
 
-/// Writes the snapshot of `store`'s index, read from the index, unless a read failed at the last sync.
-pub(crate) fn write(store: &Store) -> Result<()> {
+/// Writes the snapshot of `store`'s index, read from the index, unless a read failed at the last sync, or something
+/// read outside the indexed files couldn't be stamped (then removes it).
+pub(crate) fn write(store: &Store, outside: &Outside) -> Result<()> {
     let Some(db) = db_of(store) else { return Ok(()) };
     if crate::cache::durable_file(&path(&db))? { return Ok(()); }
+    let Some(seen) = &outside.seen else {
+        let _ = std::fs::remove_file(path(&db));
+        return Ok(());
+    };
     if !crate::failed_reads(store)?.is_empty() {
         let _ = std::fs::remove_file(path(&db));
         return Ok(());
@@ -95,7 +175,7 @@ pub(crate) fn write(store: &Store) -> Result<()> {
         .prepare("SELECT path, mtime_ns, size FROM files")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    let snap = Snapshot { format: FORMAT, build: build(), index, inputs, ignores, dirs: store.dirs()?, sniffed, files };
+    let snap = Snapshot { format: FORMAT, build: build(), settings: outside.settings.clone(), outside: seen.clone(), index, inputs, ignores, dirs: store.dirs()?, sniffed, files };
     // Written whole and renamed into place, so a reader sees the old snapshot, the new one, or none.
     let target = path(&db);
     let tmp = target.with_extension(format!("fresh.{}", std::process::id()));
@@ -105,11 +185,14 @@ pub(crate) fn write(store: &Store) -> Result<()> {
 }
 
 /// Whether `root`'s working tree may differ from what the index at `db` holds: false only when its snapshot proves
-/// nothing changed. Every listed directory, content-sniffed candidate and indexed file is `stat`ed; a directory whose
-/// mtime moved is listed again, and counts as changed only if its entries did.
+/// nothing changed. Every listed directory, content-sniffed candidate, indexed file and file read outside the indexed
+/// ones is `stat`ed; a directory whose mtime moved is listed again, and counts as changed only if its entries did.
 pub fn changed(root: &Path, db: &Path) -> bool {
     let Some(snap) = std::fs::read(path(db)).ok().and_then(|b| serde_json::from_slice::<Snapshot>(&b).ok()) else { return true };
-    if snap.format != FORMAT || snap.build != build() || identity(db) != Some(snap.index) {
+    if snap.format != FORMAT || snap.build != build() || snap.settings != settings(crate::sdk::enabled()) || identity(db) != Some(snap.index) {
+        return true;
+    }
+    if snap.outside.iter().any(|(p, s)| stamp(&root.join(p)) != *s) {
         return true;
     }
     if discovery_inputs(root, &snap.ignores) != snap.inputs {
