@@ -857,12 +857,12 @@ fn gradle_calls(src: &str, name: &str) -> Vec<(usize, Vec<String>)> {
             if !paren && c == b'\n' && !rest[..j].trim_end().ends_with(',') {
                 break;
             }
-            if c == b'"' || c == b'\'' {
-                if let Some(v) = string_at(&rest[j..]) {
-                    j += v.len() + 2;
-                    args.push(v);
-                    continue;
-                }
+            if (c == b'"' || c == b'\'')
+                && let Some(v) = string_at(&rest[j..])
+            {
+                j += v.len() + 2;
+                args.push(v);
+                continue;
             }
             j += 1;
         }
