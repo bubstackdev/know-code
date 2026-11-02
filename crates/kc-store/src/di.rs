@@ -117,6 +117,24 @@ pub fn resolve_made(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// A digest of what [`resolve_made`] wrote: the rows it resolves, by file and in each file's order, without their lines
+/// (an edit moving a registration's line moves no type).
+pub fn made_digest(conn: &Connection) -> Result<String> {
+    let mut h = blake3::Hasher::new();
+    let mut stmt = conn.prepare(
+        "SELECT f.path, d.implementation, d.service, d.service_name FROM di_bindings d JOIN files f ON f.id = d.file_id
+         WHERE d.made IS NOT NULL ORDER BY f.path, d.rowid",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        for i in 0..4 {
+            h.update(r.get::<_, Option<String>>(i)?.as_deref().unwrap_or("\u{1}").as_bytes());
+            h.update(b"\0");
+        }
+    }
+    Ok(h.finalize().to_hex().to_string())
+}
+
 /// Whether the repo registers something as `service` (a bare name).
 pub fn provides(conn: &Connection, service: &str) -> Result<bool> {
     Ok(conn.prepare_cached("SELECT 1 FROM di_bindings WHERE service_name = ?1 LIMIT 1")?.exists([service])?)
