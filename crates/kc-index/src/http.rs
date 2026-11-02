@@ -362,17 +362,25 @@ fn route_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummar
             }
         }
     }
-    // A request to an absolute URL naming a host that isn't this machine and that no indexed repo serves is sent
-    // outside the workspace: a route here on the same path is a coincidence, not its handler (a request to
-    // `https://github.com/{user}.keys` isn't served by the repo's own `GET /:user`). Only the request's own URL counts;
-    // a typed client's base address (`host_at`) is configuration a deployment may override.
-    if let Some(h) = client.host.as_deref()
+    // A request to an absolute URL naming a host that isn't this machine and that no indexed repo serves doesn't reach
+    // the repo making it: a route of its own on the same path is a coincidence, not its handler (opengist's request to
+    // `https://github.com/{user}.keys` isn't served by its own `GET /:user`). Another repo's route may still be what a
+    // frontend's public API host reaches, assuming one deployment, as before. Only the request's own URL counts; a typed
+    // client's base address (`host_at`) is configuration a deployment may override.
+    let cands = if let Some(h) = client.host.as_deref()
         && client.host_at.is_none()
         && !local_host(h)
         && !served_hosts(summaries).contains_key(h)
     {
-        return Vec::new();
-    }
+        let me = identity_of(client_repo, summaries);
+        let others: Vec<_> = cands.into_iter().filter(|(r, _)| identity_of(r, summaries) != me).collect();
+        if others.is_empty() {
+            return Vec::new();
+        }
+        others
+    } else {
+        cands
+    };
     by_hosts(rank(cands, client_repo, summaries, &served), client, client_repo, summaries)
 }
 
@@ -1150,8 +1158,9 @@ mod tests {
         assert_eq!(back, ["Api.drop"]);
     }
 
-    /// A request to an absolute URL on a host no indexed repo serves, and not this machine, reaches nothing here,
-    /// however its path reads; on this machine, or relative, it links by path as before. Both sides agree.
+    /// A request to an absolute URL on a host no indexed repo serves, and not this machine, reaches no route of its own
+    /// repo, however its path reads; another repo's route it still links, assuming one deployment (a frontend naming
+    /// its backend's public host). On this machine, or relative, it links by path as before. Both sides agree.
     #[test]
     fn a_request_to_another_host_links_nothing() {
         let with_host = |mut r: serde_json::Value, host: &str| {
@@ -1175,6 +1184,11 @@ mod tests {
         };
         assert!(linked("Keys.fetch").is_empty());
         assert_eq!(linked("Keys.local"), ["Users.Show"]);
+        let mut both = ws.clone();
+        both.push(repo("/w/hub", vec![route("server", "GET", ":name", None, "Hub.Show")]));
+        let c = both[0].routes.iter().find(|r| r.symbol == "Keys.fetch").unwrap();
+        let to: Vec<_> = handlers(c, Path::new("/w/gists"), &both).into_iter().map(|l| (l.route.symbol, l.assumptions)).collect();
+        assert_eq!(to, [("Hub.Show".to_string(), vec![Assumption::SameDeployment])]);
         assert_eq!(linked("Keys.relative"), ["Users.Show"]);
         let server = ws[0].routes.iter().find(|r| r.side == "server").unwrap();
         let mut back: Vec<String> = callers(server, Path::new("/w/gists"), &ws).into_iter().map(|l| l.route.symbol).collect();
