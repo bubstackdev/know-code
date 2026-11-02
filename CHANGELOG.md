@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
+  but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
+  unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
+  254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls. On Linux the server
+  hands freed memory back to the system after each call and each background job (glibc's `malloc_trim`).
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
