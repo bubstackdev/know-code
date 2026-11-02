@@ -1078,30 +1078,14 @@ fn derive(root: &Path, store: &Store, missing: bool) -> Result<()> {
     Ok(())
 }
 
-/// Within a [`ChangeMemo`], [`changed_repos`] checks each repo once (a query consults the workspace summary from
-/// several places). Outside one, every call checks afresh.
-static CHANGE_MEMO: std::sync::Mutex<(usize, Option<HashMap<PathBuf, bool>>)> = std::sync::Mutex::new((0, None));
-
 /// Remembers [`changed_repos`] answers until dropped: hold one for the length of one query. A repo seen changed stays
-/// so, which only means it is opened (and synced) again.
-pub struct ChangeMemo(());
+/// so, which only means it is opened (and synced) again. The memo is the query's own (see
+/// [`kc_store::limits::Operation::remember_changes`]): another query's, made before an edit, never answers for it.
+pub type ChangeMemo = kc_store::limits::ChangeMemo;
 
-/// Starts (or joins) a [`ChangeMemo`].
+/// Starts (or joins) the current query's [`ChangeMemo`].
 pub fn memo_changes() -> ChangeMemo {
-    let mut m = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
-    m.0 += 1;
-    m.1.get_or_insert_with(HashMap::new);
-    ChangeMemo(())
-}
-
-impl Drop for ChangeMemo {
-    fn drop(&mut self) {
-        let mut m = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
-        m.0 = m.0.saturating_sub(1);
-        if m.0 == 0 {
-            m.1 = None;
-        }
-    }
+    kc_store::limits::current().remember_changes()
 }
 
 /// Of `roots`, the indexed ones whose working tree changed since their last sync (see [`changed_since_sync`]), checked
@@ -1116,10 +1100,8 @@ pub fn changed_repos(roots: &[PathBuf]) -> HashSet<PathBuf> {
         }
         changed_since_sync(root, &db_path(root).expect("checked above"))
     };
-    let known: HashMap<PathBuf, bool> = {
-        let m = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
-        m.1.as_ref().map(|k| roots.iter().filter_map(|r| Some((r.clone(), *k.get(r)?))).collect()).unwrap_or_default()
-    };
+    let query = kc_store::limits::current();
+    let known: HashMap<PathBuf, bool> = roots.iter().filter_map(|r| Some((r.clone(), query.changed(r)?))).collect();
     let todo: Vec<&PathBuf> = roots.iter().filter(|r| !known.contains_key(*r)).collect();
     let chunk = todo.len().div_ceil(8).max(1);
     let checked: Vec<(PathBuf, bool)> = std::thread::scope(|scope| {
@@ -1129,8 +1111,8 @@ pub fn changed_repos(roots: &[PathBuf]) -> HashSet<PathBuf> {
             .collect();
         parts.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
-    if let Some(memo) = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner()).1.as_mut() {
-        memo.extend(checked.iter().cloned());
+    for (root, changed) in &checked {
+        query.note_changed(root, *changed);
     }
     known.into_iter().chain(checked).filter(|(_, changed)| *changed).map(|(r, _)| r).collect()
 }
