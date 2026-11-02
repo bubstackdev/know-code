@@ -382,6 +382,12 @@ impl Resolver {
             1 => return Ok(Some(("exact", found))),
             _ => return Ok(Some(("ambiguous", found))),
         }
+        Ok(self.inherited_member(conn, hit, own)?.0)
+    }
+
+    /// The member the reference names among the supertypes of `own` alone (`super.m()`), nearest level first, as
+    /// [`Self::declared_member`] reads them; and whether a supertype on the way couldn't be followed (a library's).
+    fn inherited_member(&mut self, conn: &Connection, hit: &RefHit, own: i64) -> rusqlite::Result<(Option<(&'static str, Vec<i64>)>, bool)> {
         let mut seen = HashSet::from([own]);
         let mut level = vec![own];
         let mut unsure = false;
@@ -397,11 +403,11 @@ impl Resolver {
                 found.extend(members_of(conn, hit, *id)?);
             }
             if !found.is_empty() {
-                return Ok(Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }));
+                return Ok((Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }), unsure));
             }
             level = next;
         }
-        Ok(None)
+        Ok((None, unsure))
     }
 
     /// A repository type's direct supertypes the repository declares, read by the imports of the file declaring it, and
@@ -584,6 +590,18 @@ impl Resolver {
     }
 
     fn scoped_by_rules(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
+        // `super.m()` names a member of the caller type's supertypes, never the type's own (JLS 15.12.1; Kotlin
+        // alike): read through them by declaration. When none the repository declares has it, it is a library
+        // supertype's (or Object's), so nothing here.
+        if hit.receiver.as_deref() == Some("super") && matches!(hit.kind.as_str(), "call" | "member") {
+            let nest = Self::nest(hit);
+            let package = self.files.get(&hit.file).and_then(|f| f.package.clone());
+            let own = nest.last().and_then(|n| self.qualified.get(&package.as_ref().map_or_else(|| n.clone(), |p| format!("{p}.{n}"))).copied());
+            if let Some(own) = own {
+                let (found, _) = self.inherited_member(conn, hit, own)?;
+                return Ok(Some(found.unwrap_or(("unresolved", Vec::new()))));
+            }
+        }
         // `this` in a Kotlin extension's body is the extension's receiver. On the repository's type its own member
         // decides; on a library's, the members aren't known, so no repository member is a candidate, only a
         // repository extension on that type (and a member would still win over it).
@@ -626,10 +644,9 @@ impl Resolver {
             if let [one] = members.as_slice() {
                 return Ok(Some(("exact", vec![*one])));
             }
-            // Kotlin: a member the type inherits, read through its own declared supertypes. The shared resolution
-            // would walk them by simple name, and so through another package's type of the same name.
+            // A member the type inherits, read through its own declared supertypes. The shared resolution would walk
+            // them by simple name, and so through another package's type of the same name.
             if members.is_empty()
-                && hit.file.ends_with(".kt")
                 && matches!(hit.kind.as_str(), "call" | "member")
                 && let Some(found) = self.declared_member(conn, hit, t)?
             {
@@ -711,9 +728,8 @@ impl Resolver {
             if let [one] = members.as_slice() {
                 return Ok(Some(("exact", vec![*one])));
             }
-            // Kotlin: an inherited member, through the type's own declared supertypes (as for a path above).
+            // An inherited member, through the type's own declared supertypes (as for a path above).
             if members.is_empty()
-                && hit.file.ends_with(".kt")
                 && let Some(found) = self.declared_member(conn, hit, id)?
             {
                 return Ok(Some(found));

@@ -218,3 +218,75 @@ fn a_chain_is_typed_through_declarations_and_member_types() {
     assert_eq!(answer(&save[0]), ("exact", vec!["src/c/Store.java:2".to_string()]), "the field's imported type");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn super_reaches_only_the_supertypes_members() {
+    let root = scratch("java-super");
+    // A library superclass: `super.connect` is its member, never the class's own override.
+    write(
+        &root,
+        "a/src/net/a/Tunnel.java",
+        "package net.a;\n\
+         \n\
+         import org.lib.UnixSocket;\n\
+         \n\
+         class Tunnel extends UnixSocket {\n\
+           public void connect(Object endpoint, int timeout) {\n\
+             super.connect(endpoint, timeout);\n\
+           }\n\
+         }\n",
+    );
+    // The same class in another module, so a name-only match has two to pick from.
+    write(
+        &root,
+        "b/src/net/b/Tunnel.java",
+        "package net.b;\n\
+         \n\
+         import org.lib.UnixSocket;\n\
+         \n\
+         class Tunnel extends UnixSocket {\n\
+           public void connect(Object endpoint, int timeout) {\n\
+             super.connect(endpoint, timeout);\n\
+           }\n\
+         }\n",
+    );
+    // A repository superclass: `super.close` is its member.
+    write(&root, "a/src/net/a/Base.java", "package net.a;\n\nclass Base {\n  void close() {}\n}\n");
+    write(
+        &root,
+        "a/src/net/a/Child.java",
+        "package net.a;\n\nclass Child extends Base {\n  void close() {\n    super.close();\n  }\n}\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    let tunnel = answer(&refs_in(c, "connect", "call", "a/src/net/a/Tunnel.java")[0]);
+    assert_eq!(tunnel, ("unresolved", vec![]), "a library superclass's member");
+    assert_eq!(
+        answer(&refs_in(c, "close", "call", "a/src/net/a/Child.java")[0]),
+        ("exact", vec!["a/src/net/a/Base.java:4".to_string()]),
+        "the repository superclass's member"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_inherited_member_is_read_through_the_receivers_own_supertypes() {
+    let root = scratch("java-inherited");
+    // b's `Flags` inherits `get` from an interface beside it; a's same-named `Flags` declares its own.
+    write(&root, "a/src/m/a/Flags.java", "package m.a;\n\npublic interface Flags {\n  double get(String key);\n}\n");
+    write(&root, "b/src/m/b/Legacy.java", "package m.b;\n\npublic interface Legacy {\n  double get(String key);\n}\n");
+    write(&root, "b/src/m/b/Flags.java", "package m.b;\n\npublic interface Flags extends Legacy {\n}\n");
+    write(
+        &root,
+        "b/src/m/c/Config.java",
+        "package m.c;\n\nimport m.b.Flags;\n\nclass Config {\n  private final Flags flags = null;\n  double d() { return flags.get(\"k\"); }\n}\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(
+        answer(&refs_in(c, "get", "call", "b/src/m/c/Config.java")[0]),
+        ("exact", vec!["b/src/m/b/Legacy.java:4".to_string()]),
+        "through m.b.Flags's own supertype"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
