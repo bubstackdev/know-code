@@ -11,6 +11,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
   is 1.000 over 452 links, linked recall 0.504, and no outside label is linked; Java's linked recall rises to 0.871 as
   Java calls into Kotlin resolve. HELDOUT_KOTLIN
+- `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
+  but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
+  unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
+  254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls. On Linux the server
+  hands freed memory back to the system after each call and each background job (glibc's `malloc_trim`).
+- `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
+  member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
+  protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
+- Indexing Swift packages and walking their code is faster. Which names each SwiftPM target imports by name from
+  outside the repo was read again for every name resolved; it is now read once per target, both when the file
+  ranking is built after indexing (on swift-nio, 209 G instructions down to 14 G) and in a walk, which now also keeps
+  what resolution reads about the repo from one name to the next. Answers are unchanged.
 - Versions of KnowCode can share one cache. Each index schema now has its own part of the cache (`v/s<schema>/`), with
   its indexes, shared bases, summary and discovery files and their locks, and a version never opens, rebuilds or
   rewrites another schema's. Before, a newer build rebuilt an older build's indexes in place for its own schema, and the
@@ -146,6 +158,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
   ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
   Go test files too (`foo_test.go` for `foo.go`).
+- Re-indexing after many files were removed (more than 200, which compacts the index) no longer holds a copy of the
+  whole index in memory: the compaction's copy goes to a temporary file. Re-indexing bitwarden/server after 1,364 of
+  its files were removed peaked at 430 MB footprint and now peaks at 166 MB, for 7% more instructions; the index is
+  the same.
 
 ## 0.6.1 (2026-10-28)
 

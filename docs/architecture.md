@@ -117,6 +117,13 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
   come on top of that, and are freed when their statement ends. SQLite is built without a process-wide page cache or
   allocation counting (`.cargo/config.toml`): with several repos indexing at once, their global locks cost more
   system time than the indexing did. That rules out a process-wide limit (`sqlite3_soft_heap_limit64`).
+- Most of what a long-lived process held was memory freed but kept by the allocator, not memory in use. On macOS the
+  default allocator keeps freed large blocks in a cache that `malloc_zone_pressure_relief` doesn't empty, so `serve`
+  and `index` start themselves again with that cache off (`MallocLargeCache=0`, unless the environment already sets
+  it; `knowcode::memory`). On bitwarden/server (8,274 files) a cold `index` then peaked at 92 to 94 MB of footprint
+  instead of 254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls, for about 1%
+  more instructions. After each call and each background job the server hands freed pages back (glibc's
+  `malloc_trim` on Linux).
 - Calls run one at a time, except that a call past 2 seconds lets the next one start beside it (at most two), and
   `kc_search` and `kc_grep_ast` run in a child process of their own.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a
