@@ -4121,6 +4121,12 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
     if depth >= GROUP_DEPTH {
         return vec![Err(format!("its route group is passed through more than {GROUP_DEPTH} helpers"))];
     }
+    // A marked key (`{@F#i?}`, Go's parameter of one of the repository's own types) may not be a router at all: its
+    // routes are kept only under prefixes a caller passes, never at the root.
+    let (key, marked) = match key.strip_suffix('?') {
+        Some(k) => (k, true),
+        None => (key, false),
+    };
     let none = vec![Ok(String::new())];
     // A method's parameter (`pkg.Type.Method#i`) no caller keys exactly takes the groups passed to a method of that
     // name on a value whose type the caller's syntax doesn't give (`?.Method#i`, as Go's extractor records them).
@@ -4128,8 +4134,12 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
     let prefixes = groups
         .get(key)
         .filter(|p| !p.is_empty())
-        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()))
-        .unwrap_or(&none);
+        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()));
+    let prefixes = match prefixes {
+        Some(p) => p,
+        None if marked => return Vec::new(),
+        None => &none,
+    };
     let mut out = Vec::new();
     for p in prefixes {
         match p {
@@ -8192,6 +8202,17 @@ mod tests {
         assert_eq!(under_groups("{@orchard.Picker.Mount#0}trees", &groups, 0), [Ok("v2/trees".to_string())]);
         // A function (`pkg.F`) is always keyed exactly by its callers.
         assert_eq!(under_groups("{@orchard.Register#0}trees", &groups, 0), [Ok("trees".to_string())]);
+    }
+
+    #[test]
+    fn a_marked_key_needs_a_caller_passing_a_router() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> =
+            [("api.Route#0".to_string(), vec![Ok(String::new()), Ok("1.0".to_string())])].into_iter().collect();
+        // A parameter of the repository's own type that a caller passes a router: under each prefix passed.
+        assert_eq!(under_groups("{@api.Route#0?}health", &groups, 0), [Ok("health".to_string()), Ok("1.0/health".to_string())]);
+        // One no caller passes a router (a cache's `Get`): no route, where an unmarked key would be at the root.
+        assert_eq!(under_groups("{@cache.Warm#0?}health", &groups, 0), Vec::<std::result::Result<String, String>>::new());
+        assert_eq!(under_groups("{@cache.Warm#0}health", &groups, 0), [Ok("health".to_string())]);
     }
 
     #[test]
