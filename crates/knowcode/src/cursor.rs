@@ -319,10 +319,23 @@ pub fn seal(env: &mut Value) {
 /// The answer's list at `ptr` was cut further (by the size cap): marks it continued and renews its cursor. False when
 /// the list isn't one that continues.
 pub fn cut(env: &mut Value, r: &mut Resume, ptr: &str) -> bool {
-    let Some(st) = r.lists.get_mut(ptr) else { return false };
-    st.more = true;
+    if !mark(r, ptr) {
+        return false;
+    }
     stamp(env, r);
     true
+}
+
+/// [`cut`] without renewing the cursors: for cutting many rows at once, [`restamp`] after the last.
+pub fn mark(r: &mut Resume, ptr: &str) -> bool {
+    let Some(st) = r.lists.get_mut(ptr) else { return false };
+    st.more = true;
+    true
+}
+
+/// Renews the cursors of the answer's lists from their rows as they are now (after [`mark`]).
+pub fn restamp(env: &mut Value, r: &Resume) {
+    stamp(env, r);
 }
 
 /// Gives each list that has more rows its cursor, made from its rows as they are now, and takes it from those that

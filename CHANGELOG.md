@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- An MCP answer far over its size (`max_chars`) is cut many rows at a time, and measured again only once it is
+  small: it used to be cut one row at a time, with the whole answer measured after each. A workspace-wide `context` on
+  a table used across many repos can build an answer of tens of MB, and cutting it grew with the rows cut times its
+  size. On a made-up workspace of 120 repos (one table, 400 readers and 30 procedures each), `kc_context` on the
+  table takes 121 G instructions instead of 473 G, nearly all of it building the answer, and
+  answers the same. An answer cut by a little is cut exactly as before.
 - A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
   list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
   sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
