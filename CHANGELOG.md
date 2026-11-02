@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A server's check that a repo is unchanged before answering is cheaper: which indexed files are there by their
+  content rather than their name is now settled when the freshness record is written, not worked out again for every
+  file at every query. On microsoft/TypeScript (32,112 indexed files) a `find` over MCP that needs no sync takes
+  0.64 G instructions instead of 0.97 G; across a workspace of it and seven smaller public repos, 0.86 G instead of
+  1.18 G. Answers are unchanged.
 - A server notices a regenerated SCIP index without waiting for a source file to change. Before answering, a server
   checks by `stat` alone whether a repo changed since its last sync, and skips the sync when not; that check didn't
   cover the files a sync reads outside the indexed ones, so rewriting `index.scip` (in place, or by renaming a new
