@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Building the file reference graph (behind rankings, `overview`, `hotspots` and `areas`, and most of a cold index
+  of a large repo) is faster. A TypeScript type reference read the namespaces of each candidate's file again for
+  every candidate, a Go import scanned every Go file to find the package it names, and two free functions of one name
+  had the module of every candidate worked out from its path; each is now read or worked out once. The connections
+  resolving names keep a 16 MB page cache instead of 2 MB while they do. On microsoft/TypeScript (with its Go
+  sources), building the graph takes 392 G instructions instead of 691 G and a cold index 677 G instead of 976 G;
+  rust-analyzer, swift-nio and jellyfin build theirs in 7–10% fewer. Peak memory footprint is 3 MB higher. The
+  graph is byte for byte the same.
 - Go: a `Do` sending a request its function built (`req, err := http.NewRequest(…)`, then `client.Do(req)`) is a
   request of its own, to the same route, so `routes` lists it and links it where the request is linked.
 - A request whose URL names another host (`https://github.com/{user}.keys`), one that isn't this machine and that no

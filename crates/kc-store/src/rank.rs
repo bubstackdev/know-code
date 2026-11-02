@@ -151,6 +151,12 @@ pub fn workers() -> Workers {
 /// model's `Property`, `HasColumnType`), and each resolved reference carries its targets.
 const CHUNK: usize = 2048;
 
+/// The page cache, in KiB, of each connection resolving names for a graph. Resolving every name reads the index's
+/// symbols and references all over the file, so a query-sized cache reads the same pages from disk again and again
+/// (on microsoft/TypeScript, a fifth of the graph's instructions went to `pread`). 16 MiB, the size a write batch
+/// takes, cuts that by 12% with no higher peak there; larger caches gained little more for their memory.
+const GRAPH_CACHE_KIB: i64 = 16 * 1024;
+
 /// The reference graph: every reference resolved, as for [`query::file_edges`]. Expensive; cache it per index
 /// generation (see `Store::ref_graph`).
 ///
@@ -249,6 +255,8 @@ fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, 
     let path = conn.path().unwrap_or_default().to_string();
     let w = workers();
     let threads = if path.is_empty() { 1 } else { w.threads.clamp(1, names.len().max(1)) };
+    // The caller's connection gets its own cache size back however the names' resolution ends.
+    let _cache = CacheSize::set(conn, -GRAPH_CACHE_KIB)?;
     let next = AtomicUsize::new(0);
     let parts = std::thread::scope(|scope| -> Result<Vec<Edges>> {
         let helpers: Vec<_> = (1..threads)
@@ -281,6 +289,27 @@ fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, 
 }
 
 type Edges = BTreeMap<(String, String), BTreeMap<String, NameUse>>;
+
+/// A connection's page cache set to another size until dropped, then put back as it was (also on an error or a
+/// panic). Best effort: a failed restore costs memory, not answers.
+struct CacheSize<'c> {
+    conn: &'c Connection,
+    was: i64,
+}
+
+impl<'c> CacheSize<'c> {
+    fn set(conn: &'c Connection, size: i64) -> Result<CacheSize<'c>> {
+        let was: i64 = conn.query_row("PRAGMA cache_size", [], |r| r.get(0))?;
+        conn.execute_batch(&format!("PRAGMA cache_size = {size};"))?;
+        Ok(CacheSize { conn, was })
+    }
+}
+
+impl Drop for CacheSize<'_> {
+    fn drop(&mut self) {
+        let _ = self.conn.execute_batch(&format!("PRAGMA cache_size = {};", self.was));
+    }
+}
 
 /// Adds `parts`' counts into `edges`.
 fn merge(edges: &mut Edges, parts: Vec<Edges>) {
@@ -370,7 +399,7 @@ fn open_at(path: &str, generation: &str) -> Result<Connection> {
     use rusqlite::OpenFlags;
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    conn.execute_batch("PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048; BEGIN DEFERRED")?;
+    conn.execute_batch(&format!("PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{GRAPH_CACHE_KIB}; BEGIN DEFERRED"))?;
     anyhow::ensure!(self::generation(&conn)? == generation, "the index moved on");
     Ok(conn)
 }
