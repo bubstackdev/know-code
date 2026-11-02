@@ -1025,8 +1025,8 @@ Under any policy but `default` the answer has `policy: {evidence, excluded, excl
     Topic {
         name: "cursors",
         summary: "continuing a cut list with kc_more",
-        text: r#"A list an answer cut and can continue has a cursor: `cursor` for the answer's own `items`, `<list>_cursor`
-beside a nested list (`items[0].callers_cursor`). Pass it as it is to kc_more for the next page, which has its own
+        text: r#"A list an answer cut and can continue has a cursor: `cursor` for the answer's own `items` (a find's definitions, a
+refs answer's references), `<list>_cursor` beside a nested list (`items[0].callers_cursor`). Pass it as it is to kc_more for the next page, which has its own
 `cursor` until the list ends; the `incomplete` entry for the cut list names the call. Following every cursor gives each
 row of the full list exactly once: in the list's order for lists cut as a prefix, and for a walk's ranked list
 (impact's `affected`, a path search's `paths`), the rows shown first and then the rest of the walk, ranked the same

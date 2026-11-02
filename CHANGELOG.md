@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
+  list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
+  sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
+  autofac, jellyfin, jellyfin-web, hono), 18 of 60 sampled `find` answers were cut with no cursor. Following the
+  cursors, the declarations of the name asked for that are found go from 135 to 145 of 145 compiler-labelled ones in
+  C#, and from 64 to 67 of 78 in TypeScript.
 - Building the file reference graph (behind rankings, `overview`, `hotspots` and `areas`, and most of a cold index
   of a large repo) is faster. A TypeScript type reference read the namespaces of each candidate's file again for
   every candidate, a Go import scanned every Go file to find the package it names, and two free functions of one name

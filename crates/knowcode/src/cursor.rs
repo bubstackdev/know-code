@@ -40,6 +40,12 @@ const PREFIX: &str = "kc1.";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
+    Find {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+        limit: usize,
+    },
     Refs {
         name: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -260,6 +266,10 @@ impl List {
 pub fn offer(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, extra: &[String]) {
     let mut g = gens(env);
     g.extend(extra.iter().cloned());
+    offer_at(env, req, scope, lists, g);
+}
+
+fn offer_at(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, g: Vec<String>) {
     let lists = lists
         .into_iter()
         .map(|l| (l.ptr.clone(), ListState { l: l.ptr, o0: l.start, b: l.start, h0: FNV_BASIS, n: l.n, k: None, more: l.more }))
@@ -267,6 +277,27 @@ pub fn offer(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, ext
     let r = Resume { q: Query { req, repos: scope.repos.clone(), no_sync: scope.no_sync, cite: kc_store::limits::current().cite() }, g, lists };
     stamp(env, &r);
     env[FIELD] = json!(r);
+}
+
+/// Definitions matching `q` ([`ops::find`]), their list continuable: one cut at `limit`, or later by the size cap,
+/// has a cursor to the rest. Without one, an answer cut to fit named the cut definitions nowhere but `declared`, and
+/// a reader listing `items` missed them. Offered here rather than inside [`ops::find`] so that its callers who need no
+/// cursor (the declared statement's tests, refresh checks) keep the plain answer.
+pub fn find_definitions(q: &str, kind: Option<&str>, limit: usize, scope: &Scope) -> Result<ops::Out<ops::FindData>> {
+    let mut out = ops::find(q, kind, limit, scope)?;
+    let more = out.data.total > out.data.items.len();
+    let req = Request::Find { query: q.to_string(), kind: kind.map(str::to_string), limit };
+    // The rows come from the repos asked about alone: the rest of the workspace, read for `declared`, changing under
+    // the cursor doesn't change them, so it doesn't make the cursor stale.
+    let asked: Vec<&str> = match out.env["repos"].as_array() {
+        Some(repos) => repos.iter().filter_map(|r| r["repo"].as_str()).collect(),
+        None => out.env["repo"].as_str().into_iter().collect(),
+    };
+    let mut view = json!({ "provenance": out.env["provenance"].as_array().map(|ps| ps.iter().filter(|p| p["repo"].as_str().is_some_and(|r| asked.contains(&r))).cloned().collect::<Vec<_>>()) });
+    let g = gens(&view);
+    offer_at(&mut out.env, req, scope, vec![List::new("/items", limit, more)], g);
+    crate::contract::finish(&mut out.env);
+    Ok(out)
 }
 
 /// The answer's [`Resume`], taken out of it (to measure the answer as it will be output).
@@ -538,6 +569,7 @@ fn decode(s: &str) -> Result<Cursor> {
 /// isn't one this KnowCode made.
 pub fn tool_of(cursor: &str) -> Result<&'static str> {
     Ok(match decode(cursor)?.q.req {
+        Request::Find { .. } => "kc_find",
         Request::Refs { .. } => "kc_refs",
         Request::Context { .. } => "kc_context",
         Request::Trace { .. } => "kc_trace",
@@ -602,6 +634,7 @@ fn run(q: &Query, raise: Raise) -> Result<Value> {
         _ => limit,
     };
     Ok(match &q.req {
+        Request::Find { query, kind, limit } => find_definitions(query, kind.as_deref(), up(*limit), &scope)?.env,
         Request::Refs { name, kinds, limit } => ops::refs(name, kinds, up(*limit), &scope)?.env,
         Request::Context { symbol, budget, source, limit } => {
             let raise = match raise {
@@ -924,6 +957,17 @@ mod tests {
         assert!(pages >= 4, "{pages}");
         assert_eq!(keys(&rows), keys(&rows_at(&all, "/items")));
 
+        // Definitions found: a prefix of their order, the same name's first. `Go` is declared 56 times.
+        let env = find_definitions("Go", None, 7, &s).unwrap().env;
+        capped_hints_continue(&env);
+        assert!(env["cursor"].as_str().is_some(), "a find cut at its limit continues: {env}");
+        let all = ops::find("Go", None, 10_000, &s).unwrap().env;
+        let (rows, pages) = follow(&env, "/items");
+        assert!(pages >= 7, "{pages}");
+        assert_eq!(keys(&rows), keys(&rows_at(&all, "/items")));
+        // A find whose matches all fit has no cursor.
+        assert!(find_definitions("Ping", None, 10, &s).unwrap().env.get("cursor").is_none());
+
         // A context's callers, conformers and accessors.
         let env = ops::context("Hub.Ping", 600, Default::default(), &s).unwrap().env;
         capped_hints_continue(&env);
@@ -1153,6 +1197,22 @@ mod tests {
             }
             let (rows, _) = follow(&v, "/items");
             assert_eq!(keys(&no_col(rows)), all, "max_chars {max}");
+        }
+        // A find cut to fit continues the same way, though its limit didn't cut it.
+        let all = keys(&rows_at(&ops::find("Go", None, 1000, &s).unwrap().env, "/items"));
+        for max in [1_000, 2_000, 4_000] {
+            let env = find_definitions("Go", None, 1000, &s).unwrap().env;
+            let mut v: Value = serde_json::from_str(&crate::mcp::cap(env, max)).unwrap();
+            assert!(v["items"].as_array().unwrap().len() < all.len(), "max_chars {max} cuts");
+            let handle = v["cursor"].as_str().expect("a find cut to fit continues").to_string();
+            v["cursor"] = Value::from(crate::compact::resolve(&handle).unwrap());
+            if let Some(name) = v.get("name").cloned() {
+                for r in v["items"].as_array_mut().unwrap() {
+                    r["name"] = name.clone();
+                }
+            }
+            let (rows, _) = follow(&v, "/items");
+            assert_eq!(keys(&rows), all, "max_chars {max}");
         }
         let _ = std::fs::remove_dir_all(&base);
     }
