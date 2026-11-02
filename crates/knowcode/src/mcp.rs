@@ -2348,7 +2348,8 @@ fn shrink(v: &mut Value, keep: f64) -> Option<Cut> {
         }
     }
     // The rest of a site's statement goes before any row.
-    let other = |path: &str| Some(Cut { path: path.to_string(), rows: 0, bytes: None });
+    // A string shortened counts as one item cut, as it always has in `omitted`; detail dropped isn't counted.
+    let other = |path: &str| Some(Cut { path: path.to_string(), rows: u64::from(!path.is_empty()), bytes: None });
     if unstate(v) {
         return other("");
     }
