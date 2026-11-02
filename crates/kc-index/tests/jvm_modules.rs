@@ -2,7 +2,7 @@
 //! directory (a Gradle settings script's `include`s name them too), and each package carries the coordinates other
 //! builds depend on it by.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use kc_index::{SyncOptions, sync};
@@ -23,7 +23,7 @@ fn repo(name: &str, files: &[(&str, &str)]) -> (PathBuf, Store) {
     (dir, store)
 }
 
-fn modules(dir: &PathBuf, store: &Store) -> Vec<(String, String, String)> {
+fn modules(dir: &Path, store: &Store) -> Vec<(String, String, String)> {
     let areas = kc_index::areas::areas(dir, store).unwrap();
     let mut out: Vec<(String, String, String)> =
         kc_index::areas::declared(store, &areas).unwrap().modules.into_iter().map(|m| (m.name, m.kind, m.dir)).collect();
