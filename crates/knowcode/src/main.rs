@@ -54,6 +54,8 @@ mod jsx_impact_tests;
 mod overload_tests;
 #[cfg(test)]
 mod receiver_path_tests;
+#[cfg(test)]
+mod refs_target_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -1130,7 +1132,10 @@ fn run(cli: Cli) -> Result<()> {
             cite.enter();
             let out = ops::refs(&name, &kind, limit, &repo.scope())?;
             let d = &out.data;
-            emit(&repo, &out.env, || render::refs(&name, d))
+            emit(&repo, &out.env, || {
+                render::refs(&name, d);
+                render::refs_apart(&out.env);
+            })
         }
         Cmd::Context { symbol, budget, source, limit, cite, repo } => {
             cite.enter();

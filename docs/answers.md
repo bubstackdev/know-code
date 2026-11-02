@@ -162,6 +162,23 @@ is `capped` when a limit cuts it; a list on the side is in `more` (see [More is 
 These remain and agree with `incomplete` and `more`: `truncated` and `total`, `capped` (`find`, `search`), `freshness.failed`
 with `freshness.status`, a list's `<list>_total` and `<list>_truncated`, and the MCP server's `left_out` and `hint`.
 
+## References to one declaration
+
+`refs` asked by a place (`file:line`, `path#name`) answers for the declaration there, not for its name. Its rows are
+split three ways, each said by the answer itself:
+
+- `items`: the rows bound to that declaration, either to it alone or ambiguously with it among the candidates
+  (`confidence: ambiguous`). `total`, `by_confidence`, `callers` and `cursor` count these alone.
+- `elsewhere`: the rows the answer binds only to another declaration of the name (another overload, a same-named
+  member of another type), counted per declaration as `{qualified, file, line, rows}`, or `{among: [...], rows}` for
+  an ambiguity between others. `elsewhere_note` says how many and how to list them (`refs` on that declaration's
+  place). Nothing about the declaration asked for is missing, so this isn't an `incomplete` entry.
+- `unplaced`: uses of the name the answer can't place (unresolved, or ambiguous with no candidate listed), as rows,
+  with `unplaced_total` and their own `unplaced_cursor`. An `unsupported` entry says some may be the declaration's:
+  a reader counting its references can check them, and one that wants only certain rows can leave them out.
+
+A `refs` asked by a name answers for every use of the name, all in `items`, as before.
+
 ## Cursors
 
 A list that was cut and can be continued carries a cursor: `cursor` for the answer's own `items`, `<list>_cursor`
@@ -177,10 +194,11 @@ own (over MCP, a search's hits are text rows there too).
   A `find` answer's cursor records only the repos asked about: the rest of the workspace, read for its `declared`
   statement, holds none of its rows.
 - Over MCP a cursor is a short handle (`kc~1f`) that the server maps to the full cursor, for its last 4096 cursors.
-- Lists that continue: definitions found (`find`), references, a context's callers, callees, members, conformers and table accessors, a
-  trace's nodes, impact's `affected`, `coupled` and `cross_repo`, every list of a repo's deploy answer
-  (`deploy_chains`, `deployed_by`, `own`, `ci_templates`, `ci_includes`, `ci_skipped`), a path search's paths and
-  candidate ends, rename sites, and `search` and `grep-ast` hits.
+- Lists that continue: definitions found (`find`), references (and a placed `refs` answer's `unplaced`), a context's
+  callers, callees, members, conformers and table accessors, a trace's nodes, impact's `affected`, `coupled` and
+  `cross_repo`, every list of a repo's deploy answer (`deploy_chains`, `deployed_by`, `own`, `ci_templates`,
+  `ci_includes`, `ci_skipped`), a path search's paths and candidate ends, rename sites, and `search` and `grep-ast`
+  hits.
 - `search` and `grep-ast` also page with `--offset` and `next_offset`.
 - A rename preview cut by the size cap is `refused`: a partial preview can't be applied as it is.
 

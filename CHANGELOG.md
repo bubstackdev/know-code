@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `refs` asked by a place (`file:line`) answers for that declaration alone. Rows bound only to another declaration
+  of the name (another overload, a same-named member) are no longer listed among its references. They are counted per
+  declaration in `elsewhere`, with how to list them. Uses that can't be placed (unresolved, or ambiguous with no
+  candidate) are listed apart in `unplaced`, with their own cursor and an `incomplete` entry saying some may be the
+  declaration's. `items`, `total`, `callers` and the cursor count the declaration's own rows. On 172 sampled `refs`
+  questions over five public C# and TypeScript repositories, scored against the compilers' bindings, precision goes
+  from 0.810 to 0.907 in C# (recall 0.855 to 0.873) and from 0.732 to 0.791 in TypeScript (recall unchanged at
+  0.786). A refs asked by name is unchanged.
 - `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
   `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
   target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,
