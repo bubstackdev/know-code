@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Go: a `Do` sending a request its function built (`req, err := http.NewRequest(…)`, then `client.Do(req)`) is a
+  request of its own, to the same route, so `routes` lists it and links it where the request is linked.
+- A request whose URL names another host (`https://github.com/{user}.keys`), one that isn't this machine and that no
+  indexed repo serves, is no longer linked to a route of its own repo that happens to share its path. Its links to
+  other repos' routes (a frontend naming its backend's public host) stay, as do requests on this machine
+  (`localhost`), relative ones, and those through a typed client's base address.
 - Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
   `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
   (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages
