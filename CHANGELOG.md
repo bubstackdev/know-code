@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Workspace-wide questions hold less memory and, when indexes have been evicted from the cache, do half the work.
+  Checking which repos have a saved index read and fully parsed the whole workspace summary file once per repo; it
+  now reads only the fields it needs, once per check. The summaries last read are released before new ones are read,
+  and the file is written through a buffer rather than built whole first. Answers are unchanged. On 111 public repos,
+  a workspace-wide `refs` peaked at 76 to 81 MB instead of 95 to 106 MB; with the indexes evicted, at 35 to 38 MB
+  instead of 43 to 44 MB, with 11 G instructions instead of 21 G.
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.

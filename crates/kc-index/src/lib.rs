@@ -1107,12 +1107,16 @@ impl Drop for ChangeMemo {
 /// Of `roots`, the indexed ones whose working tree changed since their last sync (see [`changed_since_sync`]), checked
 /// on a few threads. One no longer on disk isn't (nothing there to sync).
 pub fn changed_repos(roots: &[PathBuf]) -> HashSet<PathBuf> {
+    // Read once, by whichever thread first meets a root whose index is gone, not once per such root: on a large
+    // workspace the summary file is tens of megabytes.
+    let saved: std::sync::OnceLock<Option<HashSet<PathBuf>>> = std::sync::OnceLock::new();
     let check = |root: &PathBuf| -> bool {
         if !root.join(".git").exists() {
             return false;
         }
         if !db_path(root).is_ok_and(|p| p.exists()) {
-            return workspace::has_saved_index(root).unwrap_or(true) || !light::unchanged(root);
+            let saved = saved.get_or_init(|| workspace::saved_index_roots().ok());
+            return saved.as_ref().is_none_or(|s| s.contains(root)) || !light::unchanged(root);
         }
         changed_since_sync(root, &db_path(root).expect("checked above"))
     };
