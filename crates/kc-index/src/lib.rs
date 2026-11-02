@@ -1370,17 +1370,19 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
     mark.record("write.commit");
     // SDK packages the repo declares as external clients, read from its `node_modules` when they changed.
     let mark = meter::Mark::now();
-    sdk::refresh(root, store, &privacy)?;
+    // What they read outside the indexed files, stamped before it is read, goes into the snapshot.
+    let mut outside = fresh::Outside::new();
+    sdk::refresh(root, store, &privacy, &mut outside)?;
     mark.record("sdk");
     let mark = meter::Mark::now();
-    report.scip = scip::refresh(root, store, opts.scip_compare)?;
+    report.scip = scip::refresh(root, store, opts.scip_compare, &mut outside)?;
     mark.record("scip");
     let mark = meter::Mark::now();
     if !report.failed.is_empty() {
         fresh::invalidate(store);
-    } else if rewrites || !fresh::exists(store) {
+    } else if rewrites || !fresh::current(store, &outside) {
         // Best effort: without it, the repo only counts as changed.
-        let _ = fresh::write(store);
+        let _ = fresh::write(store, &outside);
     }
     mark.record("write.snapshot");
     report.write_ms = ms(t3);

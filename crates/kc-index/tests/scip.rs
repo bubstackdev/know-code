@@ -242,6 +242,37 @@ fn a_change_to_any_compilation_input_retires_the_scip_facts() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A build file KnowCode doesn't index (`global.json`) edited in place is a change to the repo: the freshness check a
+/// server makes before skipping a sync stats it, as the sync's own check of the SCIP facts' inputs does, so the facts
+/// it may retire aren't served as current.
+#[test]
+fn a_build_file_edited_in_place_is_a_change_to_the_repo() {
+    let root = scratch("scip-build-file");
+    let a = "namespace A;\npublic class Worker { public void Save() {} }\n";
+    let caller = "public class Caller { public void Run(A.Worker w) { w.Save(); } }\n";
+    for (path, text) in [("A.cs", a), ("Caller.cs", caller), ("global.json", "{ \"sdk\": { \"version\": \"8.0.100\" } }\n")] {
+        std::fs::write(root.join(path), text).unwrap();
+    }
+    let docs = [
+        defs_doc("A.cs", a, &[(1, "Save", "A/Worker#Save().")]),
+        encode::document("Caller.cs", &[occ(caller, 0, "Save", 0, &sym("A/Worker#Save()."), 0)], &[]),
+    ];
+    std::fs::write(root.join("index.scip"), encode::index("scip-dotnet", &format!("file://{}", root.display()), &docs)).unwrap();
+    let db = root.join(".git/knowcode-test.sqlite");
+    let mut store = Store::open(&db).unwrap();
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    sync(&root, &mut store, &opts).unwrap();
+    // The ingest changed which build files are watched: the next sync can stamp them all.
+    sync(&root, &mut store, &opts).unwrap();
+    assert!(!kc_index::changed_since_sync(&root, &db), "unchanged after a sync");
+    std::fs::write(root.join("global.json"), "{ \"sdk\": { \"version\": \"9.0.100\" } }\n").unwrap();
+    assert!(kc_index::changed_since_sync(&root, &db), "a build file edited in place");
+    sync(&root, &mut store, &opts).unwrap();
+    assert_eq!(kc_store::scip::coverage(store.conn()).unwrap().stale_projects, ["csharp:*"]);
+    assert!(!kc_index::changed_since_sync(&root, &db), "unchanged after the sync that saw it");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn invariant_projects_go_stale_with_their_own_inputs_and_their_references() {
     // Lib; App references Lib; Tool stands alone.

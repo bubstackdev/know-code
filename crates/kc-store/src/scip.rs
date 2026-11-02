@@ -362,6 +362,18 @@ fn checked_stamp(conn: &Connection, root: &Path, dirs: &BTreeSet<String>) -> Res
     Ok(format!("{}|{}", meta(conn, "tree_gen")?.unwrap_or_default(), h.finalize().to_hex()))
 }
 
+/// The repo paths [`checked_stamp`] stats, when there is anything to check (see [`inputs_may_have_changed`]): the
+/// directories build files are looked for in and the build files known. A freshness check that skips the sync stats
+/// them too, since none of them is an indexed file.
+pub fn watched(conn: &Connection) -> Result<Vec<String>> {
+    if !conn.prepare_cached("SELECT 1 FROM scip_files LIMIT 1")?.exists([])? || meta(conn, "scip.units")?.is_none() {
+        return Ok(Vec::new());
+    }
+    let dirs: BTreeSet<String> = meta(conn, "scip.dirs")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let known: BuildHashes = meta(conn, "scip.build")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    Ok(dirs.into_iter().chain(known.into_keys()).collect())
+}
+
 /// Whether [`check_inputs`] has anything to check: there are SCIP facts with recorded inputs, and the generation or a
 /// build file's stat moved since the last check. Reads only; the caller takes the write lock only when it is so.
 pub fn inputs_may_have_changed(conn: &Connection, root: &Path) -> Result<bool> {
