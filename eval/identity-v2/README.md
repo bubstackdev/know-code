@@ -359,7 +359,9 @@ refuses the read. graphql-kotlin (Gradle 9.4.0) failed so with and without jvm/s
 8.9, with Kotlin 2.0.21 pinned in buildSrc's dependencies) failed the same way. This is http4k's failure above. The
 labeller now has a setting for it, `SCIP_ROOT_BUILD_ONLY`: a `gradlew` in front of the container's copy's own
 (jvm/gradlew-root-only.sh) keeps scip-java's init script to the root build, so build logic, which is never labelled,
-compiles without the plugin. With that setting and its version catalog's Kotlin set to 2.4.21
+compiles without the plugin. Exposed, labelled again with the changed labeller, gives an enumeration of the same
+row digest as the one its labels were drawn from (a9c94f30…, [enumerations.sha256](kotlin-holdout-2/enumerations.sha256)).
+With that setting and its version catalog's Kotlin set to 2.4.21
 ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)), graphql-kotlin builds, and it is the set; ktorm wasn't
 needed.
 
