@@ -43,6 +43,8 @@ mod whole;
 mod local_decl_tests;
 #[cfg(test)]
 mod jsx_impact_tests;
+#[cfg(test)]
+mod overload_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;
