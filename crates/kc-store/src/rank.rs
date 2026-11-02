@@ -255,10 +255,8 @@ fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, 
     let path = conn.path().unwrap_or_default().to_string();
     let w = workers();
     let threads = if path.is_empty() { 1 } else { w.threads.clamp(1, names.len().max(1)) };
-    // The caller's connection keeps its own cache size once the names are resolved.
-    let kib: i64 = conn.query_row("PRAGMA cache_size", [], |r| r.get(0))?;
-    conn.execute_batch(&format!("PRAGMA cache_size = -{GRAPH_CACHE_KIB};"))?;
-    let restore = || conn.execute_batch(&format!("PRAGMA cache_size = {kib};"));
+    // The caller's connection gets its own cache size back however the names' resolution ends.
+    let _cache = CacheSize::set(conn, -GRAPH_CACHE_KIB)?;
     let next = AtomicUsize::new(0);
     let parts = std::thread::scope(|scope| -> Result<Vec<Edges>> {
         let helpers: Vec<_> = (1..threads)
@@ -284,15 +282,34 @@ fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, 
         }
         mine?;
         Ok(parts)
-    });
-    restore()?;
-    let parts = parts?;
+    })?;
     let mut edges = Edges::new();
     merge(&mut edges, parts);
     Ok(edges)
 }
 
 type Edges = BTreeMap<(String, String), BTreeMap<String, NameUse>>;
+
+/// A connection's page cache set to another size until dropped, then put back as it was (also on an error or a
+/// panic). Best effort: a failed restore costs memory, not answers.
+struct CacheSize<'c> {
+    conn: &'c Connection,
+    was: i64,
+}
+
+impl<'c> CacheSize<'c> {
+    fn set(conn: &'c Connection, size: i64) -> Result<CacheSize<'c>> {
+        let was: i64 = conn.query_row("PRAGMA cache_size", [], |r| r.get(0))?;
+        conn.execute_batch(&format!("PRAGMA cache_size = {size};"))?;
+        Ok(CacheSize { conn, was })
+    }
+}
+
+impl Drop for CacheSize<'_> {
+    fn drop(&mut self) {
+        let _ = self.conn.execute_batch(&format!("PRAGMA cache_size = {};", self.was));
+    }
+}
 
 /// Adds `parts`' counts into `edges`.
 fn merge(edges: &mut Edges, parts: Vec<Edges>) {
