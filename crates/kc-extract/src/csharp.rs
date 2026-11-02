@@ -140,6 +140,7 @@ pub fn extract(source: &str) -> FileFacts {
         handlers: Vec::new(),
         method_groups: Vec::new(),
         string_fields: Vec::new(),
+        path: crate::Ancestry::default(),
     };
     cx.visit(tree.root_node());
     cx.resolve_bus_helpers();
@@ -251,6 +252,8 @@ struct Cx<'a> {
     method_groups: Vec<(BareMember, bool)>,
     /// `readonly string` fields holding a literal, by type and name: constants a URL can name in camelCase.
     string_fields: Vec<(String, String)>,
+    /// The nodes [`Cx::visit`] is inside, for [`Cx::parent`].
+    path: crate::Ancestry<'a>,
 }
 
 /// An endpoint (index into `facts.http_routes`) whose handler is a method group: `name`, qualified as written
@@ -326,7 +329,17 @@ impl<'a> Cx<'a> {
         self.scopes.iter().rev().find_map(|s| s.type_name.clone())
     }
 
-    fn visit(&mut self, node: Node) {
+    fn visit(&mut self, node: Node<'a>) {
+        self.path.enter(node);
+        self.visit_node(node);
+        self.path.leave();
+    }
+
+    fn parent(&self, node: Node<'a>) -> Option<Node<'a>> {
+        self.path.parent(node)
+    }
+
+    fn visit_node(&mut self, node: Node<'a>) {
         if node.is_error() || node.is_missing() {
             self.facts.parse_errors += 1;
         }
@@ -340,8 +353,9 @@ impl<'a> Cx<'a> {
         if NEST_KINDS.contains(&node.kind())
             && let Some(s) = self.scopes.iter().rev().find(|s| s.callable)
         {
-            let sym = &mut self.facts.symbols[s.sym];
-            let depth = crate::nesting_depth(node, NEST_KINDS, (sym.start_byte, sym.end_byte));
+            let (i, outer) = (s.sym, (self.facts.symbols[s.sym].start_byte, self.facts.symbols[s.sym].end_byte));
+            let depth = crate::nesting_depth_by(node, NEST_KINDS, outer, |n| self.parent(n));
+            let sym = &mut self.facts.symbols[i];
             sym.nesting = sym.nesting.max(depth);
             crate::record_bump(sym, node, NEST_KINDS, depth);
         }
@@ -370,7 +384,7 @@ impl<'a> Cx<'a> {
             }
             "property_declaration" | "indexer_declaration" => self.property(node),
             "field_declaration" | "event_field_declaration" => self.field(node),
-            "comment" if node.parent().is_some_and(|p| matches!(p.kind(), "declaration_list" | "method_declaration")) => {
+            "comment" if self.parent(node).is_some_and(|p| matches!(p.kind(), "declaration_list" | "method_declaration")) => {
                 self.commented_routes(node)
             }
             "enum_member_declaration" => {
@@ -455,7 +469,7 @@ impl<'a> Cx<'a> {
                 self.bus_publish(node);
                 self.helper_call(node);
                 self.consumer_registration(node);
-                if !chain_inner(node) {
+                if !chain_inner(node, |n| self.parent(n)) {
                     self.di_registrations(node);
                 }
                 self.service_descriptor(node);
@@ -467,17 +481,17 @@ impl<'a> Cx<'a> {
                     match f.kind() {
                         "member_access_expression" => {
                             if let Some(e) = f.child_by_field_name("expression") {
-                                self.visit(e);
+                                self.visit_child(f, e);
                             }
                         }
                         "identifier" | "generic_name" => {}
                         // `x?.M(…)`: the call is recorded above; `x` is read.
                         "conditional_access_expression" => {
                             if let Some(c) = f.child_by_field_name("condition") {
-                                self.visit(c);
+                                self.visit_child(f, c);
                             }
                         }
-                        _ => self.visit(f),
+                        _ => self.visit_child(node, f),
                     }
                 }
                 if let Some(a) = node.child_by_field_name("arguments") {
@@ -514,7 +528,7 @@ impl<'a> Cx<'a> {
                             }
                         }
                     }
-                    self.visit(a);
+                    self.visit_child(node, a);
                     self.child_rules.truncate(children_mark);
                     self.builders.truncate(mark);
                     self.mapping_sources.truncate(sources);
@@ -540,7 +554,7 @@ impl<'a> Cx<'a> {
                 }
                 for f in ["arguments", "initializer"] {
                     if let Some(c) = node.child_by_field_name(f) {
-                        self.visit(c);
+                        self.visit_child(node, c);
                     }
                 }
             }
@@ -585,23 +599,23 @@ impl<'a> Cx<'a> {
                     self.add(name, receiver, rt, RefKind::Member, n);
                 }
                 if let Some(e) = node.child_by_field_name("expression") {
-                    self.visit(e);
+                    self.visit_child(node, e);
                 }
             }
             // `Details.Add(x)`, `Items.Count`, `Details = …` in the class declaring them: a use of the member (see
             // `bare_member_reads`).
             "identifier"
-                if node.parent().is_some_and(|p| {
+                if self.parent(node).is_some_and(|p| {
                     (matches!(p.kind(), "member_access_expression" | "conditional_access_expression")
                         && (p.child_by_field_name("expression") == Some(node) || p.child_by_field_name("condition") == Some(node)))
                         // `Details = new …` in the class declaring `Details` (not `new T { Details = … }`).
                         || (p.kind() == "assignment_expression"
                             && p.child_by_field_name("left") == Some(node)
-                            && p.parent().is_none_or(|g| g.kind() != "initializer_expression"))
+                            && self.parent(p).is_none_or(|g| g.kind() != "initializer_expression"))
                 }) =>
             {
                 let name = self.text(node);
-                let assigned = node.parent().is_some_and(|p| p.kind() == "assignment_expression");
+                let assigned = self.parent(node).is_some_and(|p| p.kind() == "assignment_expression");
                 if self.local(name).is_none()
                     && !self.bound_in_member(node, name)
                     && let Some(owner) = self.enclosing_type()
@@ -620,7 +634,7 @@ impl<'a> Cx<'a> {
             "conditional_access_expression" => {
                 // The condition first: a plain read of the same name on the line keeps its own receiver.
                 if let Some(c) = node.child_by_field_name("condition") {
-                    self.visit(c);
+                    self.visit_child(node, c);
                 }
                 if let Some((e, n)) = conditional_member(node) {
                     let receiver = Some(collapse(self.text(e), RECEIVER_CAP));
@@ -629,19 +643,19 @@ impl<'a> Cx<'a> {
                     self.add(name, receiver, rt, RefKind::Member, n);
                 }
                 for c in children(node).filter(|c| c.kind() != "member_binding_expression" && Some(*c) != node.child_by_field_name("condition")) {
-                    self.visit(c);
+                    self.visit_child(node, c);
                 }
             }
             // `Subscribe(Handle)`, `Task.Run(Work)`, `x.Changed += OnChanged`: a method group passed as a delegate.
-            "identifier" if method_group_position(self.src, node) => self.method_group(node),
+            "identifier" if method_group_position(self.src, node, |n| self.parent(n)) => self.method_group(node),
             "assignment_expression" => {
                 self.command_text(node);
                 self.base_address(node);
                 // `new Payout { Details = … }`: a write of the created type's member.
-                if let Some(created) = node
-                    .parent()
+                if let Some(created) = self
+                    .parent(node)
                     .filter(|p| p.kind() == "initializer_expression")
-                    .and_then(|p| p.parent())
+                    .and_then(|p| self.parent(p))
                     .filter(|g| g.kind() == "object_creation_expression")
                     .and_then(|g| g.child_by_field_name("type"))
                     .and_then(|t| type_expr(self.src, t))
@@ -689,7 +703,7 @@ impl<'a> Cx<'a> {
                 }
                 for c in children(node) {
                     if Some(c) != node.child_by_field_name("type") {
-                        self.visit(c);
+                        self.visit_child(node, c);
                     }
                 }
             }
@@ -697,10 +711,16 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn visit_children(&mut self, node: Node) {
+    fn visit_children(&mut self, node: Node<'a>) {
         for c in children(node) {
-            self.visit(c);
+            self.visit_child(node, c);
         }
+    }
+
+    /// Visits `child`, one of `parent`'s children.
+    fn visit_child(&mut self, parent: Node<'a>, child: Node<'a>) {
+        self.path.child_of(parent);
+        self.visit(child);
     }
 
     fn in_scope(&mut self, sym: usize, type_name: Option<String>, callable: bool, locals: HashMap<String, TypeExpr>, f: impl FnOnce(&mut Self)) {
@@ -714,7 +734,7 @@ impl<'a> Cx<'a> {
     /// A top-level statement, in the scope of the entry point the compiler makes of a file's top-level statements
     /// (`Program.Main`, here one symbol spanning them): what they call and the routes they map belong to it, as a
     /// method's do, and a local one statement declares (`var app = builder.Build();`) is typed in the next.
-    fn top_level(&mut self, node: Node) {
+    fn top_level(&mut self, node: Node<'a>) {
         let (sym, locals) = match self.top_level.take() {
             Some(s) => s,
             None => {
@@ -778,7 +798,7 @@ impl<'a> Cx<'a> {
         self.facts.symbols.len() - 1
     }
 
-    fn type_decl(&mut self, node: Node) {
+    fn type_decl(&mut self, node: Node<'a>) {
         let Some(n) = node.child_by_field_name("name") else { return self.visit_children(node) };
         let name = self.text(n).to_string();
         let kind = match node.kind() {
@@ -930,7 +950,7 @@ impl<'a> Cx<'a> {
         self.in_scope(sym, Some(qualified), false, locals, |cx| {
             for c in children(node) {
                 if !matches!(c.kind(), "identifier" | "attribute_list" | "base_list" | "parameter_list") {
-                    cx.visit(c);
+                    cx.visit_child(node, c);
                 } else if c.kind() == "base_list" {
                     // Base types are type references from this type, so `refs` finds subclasses and implementers.
                     for b in children(c).filter(|b| b.is_named()) {
@@ -948,7 +968,7 @@ impl<'a> Cx<'a> {
                             // `: Entry<T>(id)` parses as the base type with its arguments beside it.
                             "argument_list" => {
                                 cx.chained("base", Some(b), b);
-                                cx.visit(b);
+                                cx.visit_child(c, b);
                             }
                             _ => cx.type_refs(b, false),
                         }
@@ -962,7 +982,7 @@ impl<'a> Cx<'a> {
         self.controllers.pop();
     }
 
-    fn function(&mut self, node: Node) {
+    fn function(&mut self, node: Node<'a>) {
         let in_type = self.scopes.last().is_some_and(|s| s.type_name.is_some());
         let (name, kind) = match node.kind() {
             "constructor_declaration" => ("init".to_string(), SymbolKind::Init),
@@ -1053,13 +1073,13 @@ impl<'a> Cx<'a> {
             cx.builders.extend(builders);
             for c in children(node) {
                 if !matches!(c.kind(), "identifier" | "attribute_list" | "modifier") && Some(c) != ret {
-                    cx.visit(c);
+                    cx.visit_child(node, c);
                 }
             }
         });
     }
 
-    fn property(&mut self, node: Node) {
+    fn property(&mut self, node: Node<'a>) {
         let name = match node.child_by_field_name("name") {
             Some(n) => self.text(n).to_string(),
             None if node.kind() == "indexer_declaration" => "this[]".to_string(),
@@ -1086,13 +1106,13 @@ impl<'a> Cx<'a> {
         self.in_scope(sym, None, true, locals, |cx| {
             for f in ["accessors", "value"] {
                 if let Some(c) = node.child_by_field_name(f) {
-                    cx.visit(c);
+                    cx.visit_child(node, c);
                 }
             }
         });
     }
 
-    fn field(&mut self, node: Node) {
+    fn field(&mut self, node: Node<'a>) {
         let Some(decl) = children(node).find(|c| c.kind() == "variable_declaration") else { return };
         let t = decl.child_by_field_name("type");
         let declared = t.and_then(|t| type_expr(self.src, t));
@@ -1612,7 +1632,7 @@ impl<'a> Cx<'a> {
             _ => return,
         };
         let message = dotted_type(self.src, message);
-        if message.is_empty() || message.ends_with("Consumer") || type_params_around(self.src, call).contains(&message) {
+        if message.is_empty() || message.ends_with("Consumer") || type_params_around(self.src, call, |n| self.parent(n)).contains(&message) {
             return;
         }
         let Some(from) = self.current() else { return };
@@ -1660,7 +1680,7 @@ impl<'a> Cx<'a> {
             .then(|| children(n).filter(|c| c.kind() == "type_argument_list").flat_map(children).find(|c| c.is_named()))
             .flatten()
             .map(|t| dotted_type(self.src, t));
-        let params = type_params_around(self.src, call);
+        let params = type_params_around(self.src, call, |n| self.parent(n));
         let message = explicit
             .clone()
             .or_else(|| self.message_type(first))
@@ -1707,7 +1727,7 @@ impl<'a> Cx<'a> {
     /// How a publish inside a method sends what the method's caller gives it: its type parameter (`Publish<T>(…)`,
     /// a parameter of type `T`, `new T { … }`) or an `object` parameter.
     fn forwarded(&self, call: Node, explicit: Option<&str>, first: Node) -> Option<Forwarded> {
-        let decl = enclosing_method(call)?;
+        let decl = enclosing_method(call, |n| self.parent(n))?;
         let tparams = type_params_of(self.src, decl);
         let params = param_types(self.src, decl);
         let of_type = |t: &str| params.iter().enumerate().filter(|(_, (_, p))| p == t).map(|(k, _)| k).collect::<Vec<_>>();
@@ -1765,7 +1785,7 @@ impl<'a> Cx<'a> {
         if targs.is_empty() && args.iter().all(|a| matches!(a, ArgType::Unknown)) {
             return;
         }
-        let decl = enclosing_method(call);
+        let decl = enclosing_method(call, |n| self.parent(n));
         let call = HelperCall {
             from,
             name: name_text(self.src, g),
@@ -1775,7 +1795,7 @@ impl<'a> Cx<'a> {
             scopes: self.bus_scopes(),
             tparams: decl.map(|d| type_params_of(self.src, d)).unwrap_or_default(),
             params: decl.map(|d| param_types(self.src, d).into_iter().map(|p| p.1).collect()).unwrap_or_default(),
-            outer: type_params_around(self.src, call),
+            outer: type_params_around(self.src, call, |n| self.parent(n)),
         };
         if let Some(h) = self.helpers.as_mut() {
             h.calls.push(call);
@@ -2008,7 +2028,7 @@ impl<'a> Cx<'a> {
             "event_declaration",
         ];
         let mut member = at;
-        while let Some(p) = member.parent() {
+        while let Some(p) = self.parent(member) {
             member = p;
             if MEMBERS.contains(&p.kind()) {
                 break;
@@ -2840,7 +2860,7 @@ impl<'a> Cx<'a> {
 
     /// `c.AddBus<IOrders>()`, `Get<IOrders>()`, `x?.Resolve<IOrders>()`: the type arguments of the method called,
     /// each a use of its type.
-    fn invoked_type_args(&mut self, node: Node) {
+    fn invoked_type_args(&mut self, node: Node<'a>) {
         let Some(f) = node.child_by_field_name("function") else { return };
         let name = match f.kind() {
             "generic_name" => Some(f),
@@ -3236,9 +3256,9 @@ impl<'a> Cx<'a> {
             return;
         }
         // A piece of a concatenation is read with the whole.
-        let mut up = node.parent();
+        let mut up = self.parent(node);
         while let Some(p) = up.filter(|p| p.kind() == "parenthesized_expression") {
-            up = p.parent();
+            up = self.parent(p);
         }
         if up.is_some_and(is_concat) {
             return;
@@ -3453,7 +3473,7 @@ impl<'a> Cx<'a> {
     fn add(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) {
         // A value of a constrained type parameter (`where T : BaseItem`) has the constraint's members.
         let receiver_type = receiver_type.map(|enc| match TypeExpr::decode(&enc) {
-            Some(t) => t.replace_named(&|n: &str| if starts_upper(n) { constraint_type(self.src, at, n) } else { None }).encode(),
+            Some(t) => t.replace_named(&|n: &str| if starts_upper(n) { constraint_type(self.src, at, n, |x| self.parent(x)) } else { None }).encode(),
             None => enc,
         });
         let from = self.current();
@@ -3807,8 +3827,9 @@ fn type_params_of(src: &str, decl: Node) -> Vec<String> {
 /// What a value of type parameter `name`, in scope at `node`, has its members looked up on: the one type its nearest
 /// declaration constrains it to (`where T : BaseItem, new()` → `BaseItem`). `None` when `name` isn't a type parameter
 /// there, or it has no type constraint, or several (the member may be any one's), or one naming another type parameter.
-fn constraint_type(src: &str, node: Node, name: &str) -> Option<TypeExpr> {
-    let mut cur = node.parent();
+/// `parent` gives each node's parent.
+fn constraint_type<'t>(src: &str, node: Node<'t>, name: &str, parent: impl Fn(Node<'t>) -> Option<Node<'t>> + Copy) -> Option<TypeExpr> {
+    let mut cur = parent(node);
     while let Some(n) = cur {
         if type_params_of(src, n).iter().any(|p| p == name) {
             let types: Vec<Node> = children(n)
@@ -3821,10 +3842,10 @@ fn constraint_type(src: &str, node: Node, name: &str) -> Option<TypeExpr> {
                 .filter(|t| !matches!(&src[t.byte_range()], "notnull" | "unmanaged" | "default"))
                 .collect();
             let [t] = types.as_slice() else { return None };
-            let around = type_params_around(src, n);
+            let around = type_params_around(src, n, parent);
             return type_expr(src, *t).filter(|e| !matches!(e, TypeExpr::Named(c) if around.contains(c) || type_params_of(src, n).contains(c)));
         }
-        cur = n.parent();
+        cur = parent(n);
     }
     None
 }
@@ -3836,24 +3857,24 @@ fn unqualified(n: Node) -> Node {
 
 /// The method, local function or constructor whose body holds `node` (inside a lambda, too).
 /// The compilation unit, when `node` is in a top-level statement.
-fn top_level_root(node: Node) -> Option<Node> {
-    let mut cur = node.parent();
+fn top_level_root<'t>(node: Node<'t>, parent: impl Fn(Node<'t>) -> Option<Node<'t>> + Copy) -> Option<Node<'t>> {
+    let mut cur = parent(node);
     while let Some(n) = cur {
         if n.kind() == "global_statement" {
-            return n.parent();
+            return parent(n);
         }
-        cur = n.parent();
+        cur = parent(n);
     }
     None
 }
 
-fn enclosing_method(node: Node) -> Option<Node> {
-    let mut cur = node.parent();
+fn enclosing_method<'t>(node: Node<'t>, parent: impl Fn(Node<'t>) -> Option<Node<'t>> + Copy) -> Option<Node<'t>> {
+    let mut cur = parent(node);
     while let Some(n) = cur {
         match n.kind() {
             "method_declaration" | "local_function_statement" | "constructor_declaration" => return Some(n),
             "class_declaration" | "struct_declaration" | "record_declaration" | "interface_declaration" => return None,
-            _ => cur = n.parent(),
+            _ => cur = parent(n),
         }
     }
     None
@@ -3871,13 +3892,13 @@ fn param_types(src: &str, decl: Node) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Type parameters in scope at `node`: those of every enclosing method and type.
-fn type_params_around(src: &str, node: Node) -> Vec<String> {
+/// Type parameters in scope at `node`: those of every enclosing method and type. `parent` gives each node's parent.
+fn type_params_around<'t>(src: &str, node: Node<'t>, parent: impl Fn(Node<'t>) -> Option<Node<'t>>) -> Vec<String> {
     let mut out = Vec::new();
-    let mut cur = node.parent();
+    let mut cur = parent(node);
     while let Some(n) = cur {
         out.extend(type_params_of(src, n));
-        cur = n.parent();
+        cur = parent(n);
     }
     out
 }
@@ -3934,12 +3955,12 @@ fn chain_links<'t>(src: &str, call: Node<'t>) -> Vec<Link<'t>> {
 }
 
 /// Whether `call` is the receiver of a further call in its chain (`a.B()` in `a.B().C()`), so the outer call reads
-/// the whole chain.
-fn chain_inner(call: Node) -> bool {
-    call.parent().is_some_and(|p| {
+/// the whole chain. `parent` gives each node's parent.
+fn chain_inner<'t>(call: Node<'t>, parent: impl Fn(Node<'t>) -> Option<Node<'t>>) -> bool {
+    parent(call).is_some_and(|p| {
         p.kind() == "member_access_expression"
             && p.child_by_field_name("expression") == Some(call)
-            && p.parent().is_some_and(|g| g.kind() == "invocation_expression" && g.child_by_field_name("function") == Some(p))
+            && parent(p).is_some_and(|g| g.kind() == "invocation_expression" && g.child_by_field_name("function") == Some(p))
     })
 }
 
@@ -4336,7 +4357,7 @@ impl Cx<'_> {
         match h.kind() {
             "identifier" => {
                 let name = self.text(h);
-                let local = self.local(name).is_some() || (self.bound_in_member(h, name) && !local_function_named(self.src, h, name));
+                let local = self.local(name).is_some() || (self.bound_in_member(h, name) && !local_function_named(self.src, h, name, |n| self.parent(n)));
                 (!local).then(|| (name.to_string(), None))
             }
             "member_access_expression" => {
@@ -4558,7 +4579,7 @@ impl Cx<'_> {
         if self.local(name).is_some() {
             return;
         }
-        let local_fn = local_function_named(self.src, node, name);
+        let local_fn = local_function_named(self.src, node, name, |n| self.parent(n));
         if !local_fn && self.bound_in_member(node, name) {
             return;
         }
@@ -4746,7 +4767,7 @@ fn join_route(base: &str, template: &str) -> String {
 /// is 0).
 fn param_base(src: &str, e: Node) -> Option<String> {
     let name = &src[e.byte_range()];
-    let m = enclosing_method(e).filter(|m| m.kind() != "constructor_declaration")?;
+    let m = enclosing_method(e, |n| n.parent()).filter(|m| m.kind() != "constructor_declaration")?;
     let method = &src[m.child_by_field_name("name")?.byte_range()];
     let params = m.child_by_field_name("parameters")?;
     let i = children(params)
@@ -4808,12 +4829,12 @@ fn typed_client(src: &str, node: Node) -> Option<Option<String>> {
 
 /// Whether `node` (an identifier) is passed as a delegate: a call's or constructor's argument (not `nameof`'s, not an
 /// argument's name), or the right side of `+=` or `-=`.
-fn method_group_position(src: &str, node: Node) -> bool {
-    let Some(p) = node.parent() else { return false };
+fn method_group_position<'t>(src: &str, node: Node<'t>, parent: impl Fn(Node<'t>) -> Option<Node<'t>> + Copy) -> bool {
+    let Some(p) = parent(node) else { return false };
     match p.kind() {
         "argument" => {
             p.child_by_field_name("name") != Some(node)
-                && p.parent().and_then(|l| l.parent()).is_some_and(|c| match c.kind() {
+                && parent(p).and_then(parent).is_some_and(|c| match c.kind() {
                     "invocation_expression" => c.child_by_field_name("function").is_none_or(|f| &src[f.byte_range()] != "nameof"),
                     "object_creation_expression" | "implicit_object_creation_expression" | "constructor_initializer" => true,
                     _ => false,
@@ -4828,9 +4849,9 @@ fn method_group_position(src: &str, node: Node) -> bool {
 }
 
 /// Whether the member holding `at` declares a local function `name`.
-fn local_function_named(src: &str, at: Node, name: &str) -> bool {
+fn local_function_named<'t>(src: &str, at: Node<'t>, name: &str, parent: impl Fn(Node<'t>) -> Option<Node<'t>> + Copy) -> bool {
     // In top-level statements, the file's: its local functions are the entry point's.
-    let Some(m) = enclosing_method(at).or_else(|| top_level_root(at)) else { return false };
+    let Some(m) = enclosing_method(at, parent).or_else(|| top_level_root(at, parent)) else { return false };
     let mut stack = vec![m];
     while let Some(n) = stack.pop() {
         if n.kind() == "local_function_statement" && n.child_by_field_name("name").is_some_and(|x| &src[x.byte_range()] == name) {
@@ -4844,7 +4865,7 @@ fn local_function_named(src: &str, at: Node, name: &str) -> bool {
 /// The value a local `name` is initialized with, when the method holding `at` declares it once, before `at`, and never
 /// assigns it again.
 fn local_value<'t>(src: &str, at: Node<'t>, name: &str) -> Option<Node<'t>> {
-    let body = enclosing_method(at)?;
+    let body = enclosing_method(at, |n| n.parent())?;
     let (mut found, mut declared, mut assigned) = (None, 0, false);
     let mut stack = vec![body];
     while let Some(n) = stack.pop() {
@@ -4988,7 +5009,7 @@ fn parameters(src: &str, decl: Node, list: Node) -> ((u32, Option<u32>), Option<
         |p: &Node| p.child_by_field_name("type").is_some_and(|t| !matches!(t.kind(), "predefined_type" | "identifier"));
     let delegates: Vec<Option<Vec<Option<String>>>> = if ps.iter().any(generic_param) {
         let mut generic = type_params_of(src, decl);
-        generic.extend(type_params_around(src, decl));
+        generic.extend(type_params_around(src, decl, |n| n.parent()));
         ps.iter().map(|p| p.child_by_field_name("type").and_then(|t| delegate_inputs(src, t, &generic))).collect()
     } else {
         Vec::new()
@@ -5027,7 +5048,7 @@ fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
         return None;
     }
     let mut generic = type_params_of(src, decl);
-    generic.extend(type_params_around(src, decl));
+    generic.extend(type_params_around(src, decl, |n| n.parent()));
     let mentions_generic = |t: &TypeExpr| {
         let any = std::cell::Cell::new(false);
         t.clone().map_names(&|n: &str| {
