@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" | "java" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" | "kt" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -341,6 +341,35 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
     });
     let total = ranked.len();
     Ok(Found { hits: ranked.into_iter().take(limit).map(|(_, h)| h).collect(), total, capped })
+}
+
+/// [`definitions`] remembered by query, for one connection reading one snapshot: a walk asks for the same type and
+/// member names at every node it expands (the owner of each member, each protocol a type conforms to), and a lookup
+/// that misses runs several fallbacks. The answer is a function of the snapshot alone, so remembering it changes no
+/// answer; a memo must not outlive the snapshot or move to another connection.
+///
+/// It also remembers each protocol member's running implementations ([`crate::db::running_implementations`]), which
+/// a walk asks for the same requirement at every implementation of it it reaches.
+#[derive(Debug, Default)]
+pub struct DefinitionsMemo(HashMap<String, Vec<SymbolRow>>, HashMap<i64, Vec<i64>>);
+
+impl DefinitionsMemo {
+    pub fn get(&mut self, conn: &Connection, query: &str) -> Result<Vec<SymbolRow>> {
+        if let Some(rows) = self.0.get(query) {
+            return Ok(rows.clone());
+        }
+        let rows = definitions(conn, query)?;
+        self.0.insert(query.to_string(), rows.clone());
+        Ok(rows)
+    }
+
+    /// [`crate::db::running_implementations`] of the member `id`, remembered.
+    pub fn running_implementations(&mut self, conn: &Connection, id: i64) -> Result<&[i64]> {
+        Ok(match self.1.entry(id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(crate::db::running_implementations(conn, id)?),
+        })
+    }
 }
 
 /// Definitions with exactly this name (case-sensitive), optionally inside a container, best kind first, then live
@@ -567,11 +596,14 @@ impl Def {
             None => true,
             Some(r) => self.declaring.as_deref().is_some_and(|c| last_segment(c) == last_segment(r)),
         };
-        if self.extension && !as_static {
-            let Some(min) = self.min_args else { return true };
-            return args >= min && self.max_args.is_none_or(|m| args <= m);
+        let Some(min) = self.min_args else { return true };
+        let fits = |n: u32| n >= min && self.max_args.is_none_or(|m| n <= m);
+        match (self.extension, as_static) {
+            (true, false) => fits(args),
+            // Called as a static method, an extension method's first argument is its receiver.
+            (true, true) => args > 0 && fits(args - 1),
+            (false, _) => fits(args),
         }
-        self.accepts(args)
     }
 }
 
@@ -862,6 +894,8 @@ struct TypeOracle<'c> {
     /// The TypeScript file being resolved: a free function it calls is its own or an imported one, never another
     /// file's of the same name.
     file: Option<String>,
+    /// The Java or Kotlin file being resolved: a function `private` to another file never gives a call its type.
+    jvm_file: Option<String>,
     supers: HashMap<String, Vec<String>>,
     /// Per name, `None` when no type, extension or typealias has it, else its typealiases (see [`Self::alias`]).
     defined: HashMap<String, Option<Vec<Alias>>>,
@@ -918,7 +952,7 @@ type MemberKey = (String, String, bool, Option<String>);
 type TypeAt = (Option<String>, Option<String>);
 
 /// A call whose return type is looked up: owner, caller's type, name, and (TypeScript) the calling file.
-type ReturnKey = (Option<String>, Option<String>, String, Option<String>);
+type ReturnKey = (Option<String>, Option<String>, String, Option<String>, Option<String>);
 
 /// A method taking a delegate: its container, fewest and most arguments, and per parameter the delegate's input types.
 struct LambdaSig {
@@ -935,6 +969,7 @@ impl<'c> TypeOracle<'c> {
             members: HashMap::new(),
             returns: HashMap::new(),
             file: None,
+            jvm_file: None,
             supers: HashMap::new(),
             defined: HashMap::new(),
             lambdas: HashMap::new(),
@@ -1689,7 +1724,7 @@ impl<'c> TypeOracle<'c> {
     /// The declared return type of a function, as (its container, encoded type).
     fn return_type(&mut self, owner: Option<&str>, scope: Option<&str>, name: &str) -> Result<Option<(Option<String>, String)>> {
         let file = if owner.is_none() { self.file.clone() } else { None };
-        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone());
+        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone(), self.jvm_file.clone());
         if let Some(v) = self.returns.get(&key) {
             let v = v.clone();
             return Ok(v.map(|(c, t, f)| {
@@ -1698,12 +1733,22 @@ impl<'c> TypeOracle<'c> {
             }));
         }
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.container, s.type_name, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+            "SELECT s.container, s.type_name, f.path, s.id FROM symbols s JOIN files f ON f.id = s.file_id
              WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('function', 'method') AND s.type_name IS NOT NULL
              ORDER BY f.path, s.start_byte",
         )?;
-        let rows: Vec<(Option<String>, String, String)> =
-            stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut rows: Vec<(Option<String>, String, String)> = Vec::new();
+        for row in stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?)))? {
+            let (container, ty, path, id) = row?;
+            // Java and Kotlin: a function `private` to another file can't be the one called here, so its type is
+            // never this call's.
+            if let Some(f) = self.jvm_file.as_deref()
+                && crate::jvm::hidden_from(self.conn, f, id)?
+            {
+                continue;
+            }
+            rows.push((container, ty, path));
+        }
         let own = file.as_ref().and_then(|f| rows.iter().find(|(c, _, p)| c.is_none() && p == f)).cloned();
         let defs = rows;
         let in_container = |c: &Option<String>, want: &str| c.as_deref().is_some_and(|c| c == want || c.ends_with(&format!(".{want}")));
@@ -1842,6 +1887,44 @@ fn receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<Receiver> {
         return Ok(Receiver::Foreign(vec![root]));
     }
     Ok(recv)
+}
+
+/// Of `ids` (of `named`), those declared on a type that a property named like the receiver's last segment holds:
+/// `c.req.header` reaches `header` on the type of some `req`. `None` when the receiver isn't a value's property
+/// (`c.req`, not `c`, `c.req()` or `c[k]`), or when some type's property of that name has no type written, so it
+/// may hold any.
+fn through_property(oracle: &mut TypeOracle, receiver: &str, named: &[Def], ids: &[i64]) -> Result<Option<Vec<i64>>> {
+    let Some((_, prop)) = receiver.rsplit_once('.') else { return Ok(None) };
+    if prop.is_empty() || !prop.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return Ok(None);
+    }
+    // Members of types only: a container-less property is a local or an object literal's key, which no other code
+    // reaches through a name.
+    let mut stmt = oracle.conn.prepare_cached("SELECT type_name FROM symbols WHERE name = ?1 AND kind = 'property' AND container IS NOT NULL")?;
+    let written: Vec<Option<String>> = stmt.query_map([prop], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    if written.is_empty() || written.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    let mut held: Vec<String> = Vec::new();
+    for t in written.into_iter().flatten() {
+        // The type's own name, without type arguments or array brackets (`HonoRequest<P, I>`, `Item[]`).
+        let base: String = t.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.').collect();
+        let base = last_segment(&base).to_string();
+        if base.is_empty() {
+            return Ok(None);
+        }
+        for ty in oracle.chain(&base)? {
+            if !held.contains(&ty) {
+                held.push(ty);
+            }
+        }
+    }
+    let kept = ids
+        .iter()
+        .copied()
+        .filter(|id| named.iter().find(|d| d.id == *id).and_then(|d| d.container.as_deref()).is_some_and(|c| held.iter().any(|t| last_segment(c) == last_segment(t))))
+        .collect();
+    Ok(Some(kept))
 }
 
 /// In C#, a call chain off a name the repo doesn't define at all (`Policy.Handle<E>().RetryAsync(3).ExecuteAsync(…)`,
@@ -2082,7 +2165,7 @@ fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, fil
         Some(None) => return Ok(Vec::new()),
         None => (None, q.to_string()),
     };
-    let found = ts_namespace_declared(conn, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
+    let found = ts_namespace_declared(conn, &mut modules.namespace_spans, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
     // Of a namespace declared in several places, the file's own shadows the others.
     if from.is_none() && found.iter().any(|(_, f)| f == file) {
         return Ok(found.into_iter().filter(|(_, f)| f == file).map(|(id, _)| id).collect());
@@ -2091,14 +2174,26 @@ fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, fil
 }
 
 /// Of `defs`, the ids and files of those whose innermost enclosing TypeScript namespace is named `q`.
-fn ts_namespace_declared<'a>(conn: &Connection, q: &str, defs: impl Iterator<Item = &'a Def>) -> Result<Vec<(i64, String)>> {
+fn ts_namespace_declared<'a>(
+    conn: &Connection,
+    cache: &mut HashMap<String, crate::ts::NamespaceSpans>,
+    q: &str,
+    defs: impl Iterator<Item = &'a Def>,
+) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare_cached(
         "SELECT CASE WHEN s.container IS NULL THEN s.name ELSE s.container || '.' || s.name END, s.start_line, s.end_line
            FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.kind = 'module'",
     )?;
     let mut out = Vec::new();
     for d in defs.filter(|d| d.container.is_none() && crate::ts::is_ts_path(&d.file)) {
-        let spans: Vec<(String, u32, u32)> = stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let spans = match cache.get(&d.file) {
+            Some(spans) => spans.clone(),
+            None => {
+                let spans: Vec<(String, u32, u32)> =
+                    stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+                cache.entry(d.file.clone()).or_insert(std::rc::Rc::new(spans)).clone()
+            }
+        };
         let innermost = spans.iter().filter(|(_, start, end)| *start <= d.line && d.line <= *end)
             // The tightest span; of nested ones on one line, the deeper.
             .min_by_key(|(name, start, end)| (end - start, std::cmp::Reverse(name.len())));
@@ -2379,9 +2474,10 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
     if hit.kind == "call"
         && let Some(n) = hit.args
     {
-        // Narrowed as either call form allows: the receiver-aware fit only rules a call out (see `takes_none`), never
-        // picks among overloads, as an outside type's own method may be the one a value's call reaches.
-        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
+        // Narrowed as the call's form allows: an extension method called on a value takes no argument for its
+        // receiver, so an overload taking one fewer can't be the one called (`builder.Register<T>(f)` is no call of
+        // `Register<T, U>(this Builder b)`).
+        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| if hit.file.ends_with(".cs") { d.accepts_call(hit, n) } else { d.accepts(n) }).collect();
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
@@ -2595,7 +2691,9 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                         return ("exact", same_file.iter().map(|d| d.id).collect());
                     }
                     let module = module_of(&hit.file);
-                    let same_module: Vec<&Def> = free.iter().copied().filter(|d| module_of(&d.file) == module).collect();
+                    // A file's module is a prefix of its path: the cheap test first, for names with many definitions.
+                    let same_module: Vec<&Def> =
+                        free.iter().copied().filter(|d| d.file.starts_with(module) && module_of(&d.file) == module).collect();
                     if same_module.len() == 1 {
                         return ("unique_name", vec![same_module[0].id]);
                     }
@@ -2945,11 +3043,14 @@ fn chained_constructor(
     let ty = if receiver == "this" {
         Some(own)
     } else {
-        // The base class: the class among the bases any part of the type lists.
+        // The base class: the class among the bases any part of the type lists, the parts taken by file (a part's
+        // lines say nothing about another file's).
         let bases: Vec<String> = conn
             .prepare_cached(
                 "SELECT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id JOIN symbols o ON o.id = ?1
-                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct') ORDER BY r.line",
+                 JOIN files f ON f.id = r.file_id
+                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct')
+                 ORDER BY f.path, r.line, r.rowid",
             )?
             .query_map([own], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -3095,7 +3196,7 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang IN ('csharp', 'java') THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java', 'kotlin') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
@@ -4079,6 +4180,12 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
     if depth >= GROUP_DEPTH {
         return vec![Err(format!("its route group is passed through more than {GROUP_DEPTH} helpers"))];
     }
+    // A marked key (`{@F#i?}`, Go's parameter of one of the repository's own types) may not be a router at all: its
+    // routes are kept only under prefixes a caller passes, never at the root.
+    let (key, marked) = match key.strip_suffix('?') {
+        Some(k) => (k, true),
+        None => (key, false),
+    };
     let none = vec![Ok(String::new())];
     // A method's parameter (`pkg.Type.Method#i`) no caller keys exactly takes the groups passed to a method of that
     // name on a value whose type the caller's syntax doesn't give (`?.Method#i`, as Go's extractor records them).
@@ -4086,8 +4193,12 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
     let prefixes = groups
         .get(key)
         .filter(|p| !p.is_empty())
-        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()))
-        .unwrap_or(&none);
+        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()));
+    let prefixes = match prefixes {
+        Some(p) => p,
+        None if marked => return Vec::new(),
+        None => &none,
+    };
     let mut out = Vec::new();
     for p in prefixes {
         match p {
@@ -5261,7 +5372,12 @@ fn scoped_out_type(
 }
 
 pub(crate) fn resolve_all(conn: &Connection, hits: &mut [RefHit]) -> Result<()> {
-    resolve_hits(conn, hits, true, &mut Resolution::default())
+    resolve_all_in(conn, hits, &mut Resolution::default())
+}
+
+/// [`resolve_all`], reading what resolution needs about the repo through `shared` (kept for `conn`'s snapshot).
+pub(crate) fn resolve_all_in(conn: &Connection, hits: &mut [RefHit], shared: &mut Resolution) -> Result<()> {
+    resolve_hits(conn, hits, true, shared)
 }
 
 /// [`resolve_all`] by the heuristics alone, ignoring any SCIP index: for comparing the two.
@@ -5282,6 +5398,7 @@ pub struct Resolution {
     py_modules: crate::py::Modules,
     go_modules: crate::go::Modules,
     precise: Option<crate::scip::Precise>,
+    swift_scoped: SwiftScoped,
 }
 
 /// Rivals an edge's evidence lists at most (`rivals_total` counts them all).
@@ -5327,12 +5444,16 @@ fn dropped_by(dropped: &mut HashMap<i64, &'static str>, on: bool, before: &[&Def
 
 /// Whether a declaration in `lang` is one code in `file` can name: TypeScript, TSX and JavaScript count as one.
 fn same_language(file: &str, lang: &str) -> bool {
-    let family = if matches!(lang, "typescript" | "tsx" | "javascript") { "ts" } else { lang };
+    let family = match lang {
+        "typescript" | "tsx" | "javascript" => "ts",
+        "java" | "kotlin" => "jvm",
+        l => l,
+    };
     let ext = file.rsplit_once('.').map_or("", |(_, e)| e);
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
-        "java" => Some("java"),
+        "java" | "kt" => Some("jvm"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),
@@ -5413,7 +5534,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let go_modules = &mut shared.go_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
-    let mut swift_scoped = SwiftScoped::default();
+    let swift_scoped = &mut shared.swift_scoped;
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -5510,6 +5631,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             ("unresolved", Vec::new())
         } else {
             oracle.file = ts.then(|| hit.file.clone());
+            oracle.jvm_file = java.then(|| hit.file.clone());
             oracle.here = cs.then(|| hit.file.clone());
             oracle.caller = hit.caller_type();
             let mut recv = if cs && !cs_type {
@@ -5682,6 +5804,18 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     found if found.is_empty() => (confidence, ids),
                     found => (if found.len() == 1 { "exact" } else { "ambiguous" }, found),
                 },
+                _ => (confidence, ids),
+            };
+            // A TypeScript member reached through a property of a value whose type isn't known (`c.req.header(…)`, `c` a
+            // handler's untyped parameter): of the candidates, those a type's property of that name can hold. Kept
+            // ambiguous: the value may be of a type the repo doesn't declare.
+            let (confidence, ids) = match hit.receiver.as_deref() {
+                Some(r) if ts && confidence == "ambiguous" && hit.kind != "type_ref" && matches!(recv, Receiver::Unknown) => {
+                    match through_property(&mut oracle, r, named, &ids)? {
+                        Some(kept) if !kept.is_empty() && kept.len() < ids.len() => (confidence, kept),
+                        _ => (confidence, ids),
+                    }
+                }
                 _ => (confidence, ids),
             };
             if explain {
@@ -6336,6 +6470,12 @@ fn is_zero_usize(n: &usize) -> bool {
 /// References to a name, resolved. `kinds` filters by reference kind (`call`, `instantiate`, `type_ref`).
 pub fn refs(conn: &Connection, query: &str, kinds: &[&str], limit: usize) -> Result<(Vec<RefHit>, RefSummary)> {
     refs_with(conn, query, kinds, limit, &[])
+}
+
+/// Every reference to `query` of `kinds`, as [`refs`] gives them uncut, reading what resolution needs about the repo
+/// through `shared` (kept for `conn`'s snapshot): a walk resolves many names on one snapshot.
+pub(crate) fn refs_in_resolution(conn: &Connection, query: &str, kinds: &[&str], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, &[], false, shared)?.0)
 }
 
 /// [`refs`], also resolving references that leave the repo against `deps`.
@@ -7353,10 +7493,15 @@ impl Implemented {
 /// members it overrides: same-named members of the same kind, taking the same arguments, in the type's supertypes,
 /// transitively.
 pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Implemented>> {
+    implemented_members_with(conn, sym, &mut DefinitionsMemo::default())
+}
+
+/// [`implemented_members`], looking definitions up through `defs` (kept for `conn`'s snapshot).
+pub fn implemented_members_with(conn: &Connection, sym: &SymbolRow, defs: &mut DefinitionsMemo) -> Result<Vec<Implemented>> {
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let parents = supertypes(conn, &short)?;
-    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false)
+    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false, defs)
 }
 
 /// Whether a member taking `a` (min_args, max_args) and one taking `b` take the same parameters, as an
@@ -7374,7 +7519,7 @@ pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolR
     if outside.is_empty() {
         return Ok(Vec::new());
     }
-    implemented_in(conn, dep, sym, outside, seen, true)
+    implemented_in(conn, dep, sym, outside, seen, true, &mut DefinitionsMemo::default())
 }
 
 /// Whether `sym`'s type names a supertype, directly or through its own repo's types, that its repo (`conn`) doesn't
@@ -7519,6 +7664,8 @@ fn implemented_in(
     start: Vec<String>,
     mut seen: HashSet<String>,
     dependency: bool,
+    // Definitions in `types`, remembered.
+    defs: &mut DefinitionsMemo,
 ) -> Result<Vec<Implemented>> {
     let same_repo = !dependency;
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
@@ -7541,11 +7688,12 @@ fn implemented_in(
                 continue;
             }
             queue.push(p.clone());
-            let interface = definitions(types, &p)?.iter().any(|d| d.kind == "protocol");
+            let interface = defs.get(types, &p)?.iter().any(|d| d.kind == "protocol");
             if !interface && !overrides {
                 continue;
             }
-            let mut members: Vec<SymbolRow> = definitions(types, &format!("{p}.{}", sym.name))?
+            let mut members: Vec<SymbolRow> = defs
+                .get(types, &format!("{p}.{}", sym.name))?
                 .into_iter()
                 .filter(|d| {
                     !(same_repo && d.id == sym.id)
@@ -7581,7 +7729,7 @@ fn implemented_in(
                 // Implemented elsewhere too: by another type (this type's other overloads don't count, nor do test
                 // doubles beside one real implementation).
                 let mut shared = dependency || !interface;
-                for i in crate::db::running_implementations(types, m.id)? {
+                for &i in defs.running_implementations(types, m.id)? {
                     let c: Option<String> = types.prepare_cached("SELECT container FROM symbols WHERE id = ?1")?.query_row([i], |r| r.get(0))?;
                     shared |= c.as_deref() != Some(container);
                 }
@@ -8125,6 +8273,17 @@ mod tests {
         assert_eq!(under_groups("{@orchard.Picker.Mount#0}trees", &groups, 0), [Ok("v2/trees".to_string())]);
         // A function (`pkg.F`) is always keyed exactly by its callers.
         assert_eq!(under_groups("{@orchard.Register#0}trees", &groups, 0), [Ok("trees".to_string())]);
+    }
+
+    #[test]
+    fn a_marked_key_needs_a_caller_passing_a_router() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> =
+            [("api.Route#0".to_string(), vec![Ok(String::new()), Ok("1.0".to_string())])].into_iter().collect();
+        // A parameter of the repository's own type that a caller passes a router: under each prefix passed.
+        assert_eq!(under_groups("{@api.Route#0?}health", &groups, 0), [Ok("health".to_string()), Ok("1.0/health".to_string())]);
+        // One no caller passes a router (a cache's `Get`): no route, where an unmarked key would be at the root.
+        assert_eq!(under_groups("{@cache.Warm#0?}health", &groups, 0), Vec::<std::result::Result<String, String>>::new());
+        assert_eq!(under_groups("{@cache.Warm#0}health", &groups, 0), [Ok("health".to_string())]);
     }
 
     #[test]

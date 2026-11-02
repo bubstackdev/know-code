@@ -29,6 +29,6 @@ echo-realworld . .
 goatcounter . test:handlers
 pkgsite . test:internal/frontend
 # routes-v1.2's round-2 held-out repositories (repos-heldout.txt).
-gin-vue-admin server test:initialize
+gin-vue-admin server test:core
 vikunja . test:pkg/routes
 step-ca . test:api

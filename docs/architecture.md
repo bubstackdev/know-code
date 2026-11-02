@@ -7,7 +7,7 @@ brings it up to date with the working tree before answering, and resolves names 
 
 | Crate | Role |
 | --- | --- |
-| `kc-extract` | Per-file extraction with tree-sitter (Swift, Python, Rust, C#, TypeScript/TSX/JavaScript, Java, CFML, Terraform, Angular templates), a SQL statement scanner, Ansible YAML and Jinja, GitLab CI, and manifests (SwiftPM, XcodeGen, Cargo, `.csproj`, `package.json`, `tsconfig.json`). Extraction is context-free: changing one file never forces another to be re-extracted. |
+| `kc-extract` | Per-file extraction with tree-sitter (Swift, Python, Rust, C#, TypeScript/TSX/JavaScript, Java, Kotlin, CFML, Terraform, Angular templates), a SQL statement scanner, Ansible YAML and Jinja, GitLab CI, and manifests (SwiftPM, XcodeGen, Cargo, `.csproj`, `package.json`, `tsconfig.json`). Extraction is context-free: changing one file never forces another to be re-extracted. |
 | `kc-store` | The SQLite schema, FTS5 and trigram search, name resolution and graph queries (`query.rs`, `trace.rs`), the answer contract types (`answer.rs`), and execution limits (`limits.rs`). |
 | `kc-index` | File discovery, ignore rules, freshness, incremental indexing, the content index, git history (hotspots, co-change, ownership, test selection), cross-repo linking (HTTP, bus, SQL, Terraform, Ansible, CI), the workspace summary, configuration, privacy, notes, the writer lock and the cache lifecycle. |
 | `knowcode` | The CLI (`main.rs`), the operations behind each command (`ops.rs`), walks, paths and flows, rendering, the answer contract (`contract.rs`), cursors, the MCP server (`mcp.rs`) and its help topics (`help.rs`), client setup, uninstall and updates. |
@@ -31,6 +31,17 @@ the cache (see "Versions sharing a cache" below). It holds:
 References are stored unresolved. Resolution happens at query time against the whole index (and against
 dependency repos when the answer crosses into them), so an edit to one file never requires re-extracting others.
 Each extractor has a version; bumping it re-extracts that language's files on the next query.
+
+**The reference graph after an edit.** The file reference graph behind rankings, `overview`, `hotspots` and `areas`
+resolves every reference name; each name's edges come from resolving that name alone. A sync that changed only
+references (every file it re-extracted kept its *surface key*: all its facts but its references, positions counted
+only by their order in the file) logs the names those files referenced before and after, in `graph_log`. The next
+graph is then the cached one with those names resolved again, plus the names DI factories file constructions under
+(they come from calls in any file) and, ignoring case, CFML and SQL spellings. Anything else rebuilds it in full: a
+file added or removed, a changed surface, more than 50 files (or 5%) changed, a change in what DI factories make,
+SCIP facts (matched to definitions by line in any file), a generation moved without a log entry (a SCIP ingest, an
+older build sharing the cache), or another resolver version. The test `ref_graph_update` checks the updated graph
+against one built afresh after every edit of a random sequence.
 
 An index written by a newer schema is refused with an error naming both schemas, rather than rebuilt; an older one
 is rebuilt. Neither happens between released versions, which keep their indexes apart:
@@ -117,6 +128,13 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
   come on top of that, and are freed when their statement ends. SQLite is built without a process-wide page cache or
   allocation counting (`.cargo/config.toml`): with several repos indexing at once, their global locks cost more
   system time than the indexing did. That rules out a process-wide limit (`sqlite3_soft_heap_limit64`).
+- Most of what a long-lived process held was memory freed but kept by the allocator, not memory in use. On macOS the
+  default allocator keeps freed large blocks in a cache that `malloc_zone_pressure_relief` doesn't empty, so `serve`
+  and `index` start themselves again with that cache off (`MallocLargeCache=0`, unless the environment already sets
+  it; `knowcode::memory`). On bitwarden/server (8,274 files) a cold `index` then peaked at 92 to 94 MB of footprint
+  instead of 254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls, for about 1%
+  more instructions. After each call and each background job the server hands freed pages back (glibc's
+  `malloc_trim` on Linux).
 - Calls run one at a time, except that a call past 2 seconds lets the next one start beside it (at most two), and
   `kc_search` and `kc_grep_ast` run in a child process of their own.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a

@@ -240,12 +240,61 @@ heads on 2026-10-30 ([repos-heldout.txt](../../scripts/eval/routes/repos-heldout
 
 | Framework | Repository | Commit | Program |
 | --- | --- | --- | --- |
-| gin | flipped-aurora/gin-vue-admin (the module in `server/`) | `cee04b08` | a harness test in `initialize` building `Routers()`, the gin engine the server serves |
+| gin | flipped-aurora/gin-vue-admin (the module in `server/`) | `cee04b08` | a harness test in `core` initialising the server as its `main` does short of the database (the repository's `config.yaml`) and building `initialize.Routers()`, the gin engine `RunServer` serves |
 | echo | go-vikunja/vikunja | `d4899715` | a harness test in `pkg/routes` building `NewEcho()` and `RegisterRoutes(e)`, as `vikunja web` does, over the default configuration |
 | chi | smallstep/certificates | `06ac06a1` | a harness test in `api` building `Route(chi.NewRouter())`, as `ca/ca.go` does |
 | net/http | none | | no open-source repository found, in the time given, whose `ServeMux` of at least 20 routes a harness can list under the rule: round 2 has no net/http held-out |
 
-vikunja uses echo v5, whose registration sites the labeller records at `DefaultRouter.Add` (no routes-v1 repository
+Two programs were corrected before any was listed or any answer read: gin-vue-admin's harness first built `Routers()`
+without the configuration its `main` loads, and the empty file-store path's catch-all conflicted with its swagger route;
+vikunja embeds its front end's build, which isn't committed, so an empty stand-in is created in the container's copy
+([prepare.sh](../../scripts/eval/routes/go/harness/vikunja/prepare.sh)), as for gotify and opengist. vikunja uses echo
+v5, whose registration sites the labeller records at `DefaultRouter.Add`, and whose route answering every method (`Any`)
+its listing names `echo_route_any`, which the labeller writes as method `*`, as the rule does. vikunja registers its v2
+API through huma's echo adapter, so those routes' sites are the adapter's (the first frame outside echo and the
+standard library), never configuration-dependent (no routes-v1 repository
 uses echo v5, so those sites are read in the listing before scoring). They are labelled once and scored once, under
 v1.2, and published beside the first round. The replacement rule above applies, with these fallbacks named now:
 eddycjy/go-gin-example for gin and navidrome/navidrome for chi.
+
+### Held-out results, round 2, scored once
+
+Labelled once in the container ([run.sh](../../scripts/eval/routes/run.sh) with `SITES=1`; each repository's one
+program listed its routes: gin-vue-admin 139, vikunja 396, step-ca 29) and scored once under v1.2 against KnowCode at
+integration/0.7 `5b59ef0`, the labels frozen before any answer was read. Before scoring, vikunja's echo v5 sites were
+read in the listing: its 188 routes registered in its own code are each at an echo registration call, and its other 208
+are at huma's echo adapter (`humaecho.go`, outside the repository), so the exclusion tool's regions never cover them.
+[go/heldout2](go/heldout2/): the labels with their registration sites, the program records, the exclusion tool's
+regions, the listings' digests and the score.
+
+| Framework | Repository | Labels | Precision | Recall | `context` check |
+| --- | --- | ---: | --- | --- | ---: |
+| chi | smallstep/certificates | 29 | – (no routes read) | 0.000 (0/29, 0.000–0.117) | – |
+| echo | go-vikunja/vikunja | 345 | 0.900 (126/140, 0.839–0.940) | 0.365 (126/345, 0.316–0.417) | 50/50 |
+| gin | flipped-aurora/gin-vue-admin | 139 | 0.682 (137/201, 0.614–0.742) | 0.978 (136/139, 0.939–0.993) | 50/50 |
+
+All three fail, each on its own cause:
+
+- **chi**: step-ca registers every route in `Route(r Router)`, through `MethodFunc` on its own interface `Router`,
+  which a `*chi.Mux` satisfies; KnowCode doesn't read a call on a value of a repository's interface type as chi's, so it
+  has no routes.
+- **echo**: 208 of the 219 missed labels are vikunja's v2 API, which it registers through huma (`huma.Register` with a
+  `huma.Operation`), a framework KnowCode doesn't read, on echo by huma's adapter. Of the rest, 4 routes on the `/api/v2`
+  group lose their prefix (a constant from another package, `apiv2.GroupPrefix`), 4 false routes beside 4 misses; 6
+  build their path at runtime (`"/"+ms.Name()+"/status"`); and `u.GET("s", …)` on the `/user` group is joined with a
+  slash (`/api/v1/user/s`), while echo concatenates (`/api/v1/users`), 1 false route and 1 miss. The other false routes
+  are 8 metrics and pprof routes registered after an early return on configuration (`if !enabled { return }`), which the
+  rule's conditions don't cover, and 1 route in a `_test.go` file the harness compiles.
+- **gin**: the 64 false routes are gin-vue-admin's plugins' routes (`server/plugin/…`), registered only once the
+  database is ready: `InstallPlugin` returns early, subscribing them for later, when no database is configured, as in the
+  harness; an early return isn't one of the rule's conditions. The 3 misses are paths read from configuration: swagger's
+  `RouterPrefix + "/swagger/*any"` and the file store's `StaticFS` (GET and HEAD).
+
+v1.2 left out 56 of gin-vue-admin's KnowCode routes (its auto-code and skills routers, under conditions, no label
+matching them), and 51 vikunja labels with 60 KnowCode routes (its CalDAV routes and others under configuration
+conditions on both sides); no echo placeholders were found, and there were no disagreements.
+
+An early return on configuration (`if !enabled { return }` before the registrations) is a known limit of v1.2: the
+rule's conditions are the bodies of `if`, `switch` and `select`, so routes registered after such a return stay in, on
+both sides, although the listed program doesn't serve them. It accounts for 8 of vikunja's false routes and gin-vue-admin's 64. The rule is
+not changed for it now.

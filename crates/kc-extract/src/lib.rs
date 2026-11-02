@@ -13,6 +13,7 @@ mod go;
 pub mod hosts;
 pub mod html;
 mod java;
+mod kotlin;
 mod manifest;
 mod python;
 mod rust;
@@ -46,6 +47,8 @@ pub enum Lang {
     Tsx,
     /// Java (`.java`).
     Java,
+    /// Kotlin (`.kt`); read with Java as one JVM family.
+    Kotlin,
     /// Plain JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`), read by the TypeScript extractor with the TSX grammar.
     /// Minified and bundled files are left out (see [`Lang::from_path`] and [`typescript::is_minified`]).
     JavaScript,
@@ -84,7 +87,7 @@ pub enum Lang {
 
 impl Lang {
     /// Every language this build indexes.
-    pub const ALL: [Lang; 23] = [
+    pub const ALL: [Lang; 24] = [
         Lang::Swift,
         Lang::Python,
         Lang::Rust,
@@ -93,6 +96,7 @@ impl Lang {
         Lang::Tsx,
         Lang::JavaScript,
         Lang::Java,
+        Lang::Kotlin,
         Lang::SwiftPackage,
         Lang::XcodeGen,
         Lang::Cargo,
@@ -111,8 +115,9 @@ impl Lang {
     ];
 
     /// `as_str` of the languages with symbols (not manifests).
-    pub const SOURCE: [&str; 13] = [
-        "swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "java", "cfml", "sql", "ansible", "terraform", "go",
+    pub const SOURCE: [&str; 14] = [
+        "swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "java", "kotlin", "cfml", "sql", "ansible",
+        "terraform", "go",
     ];
 
     pub fn from_path(path: &str) -> Option<Lang> {
@@ -132,6 +137,7 @@ impl Lang {
                 Some("rs") => Some(Lang::Rust),
                 Some("cs") => Some(Lang::CSharp),
                 Some("java") => Some(Lang::Java),
+                Some("kt") => Some(Lang::Kotlin),
                 Some("csproj") => Some(Lang::CsProj),
                 Some("html") => Some(Lang::Html),
                 Some("ts" | "mts" | "cts") => Some(Lang::TypeScript),
@@ -158,6 +164,7 @@ impl Lang {
             Lang::Tsx => "tsx",
             Lang::JavaScript => "javascript",
             Lang::Java => "java",
+            Lang::Kotlin => "kotlin",
             Lang::SwiftPackage => "swiftpm",
             Lang::XcodeGen => "xcodegen",
             Lang::Cargo => "cargo",
@@ -194,6 +201,7 @@ impl Lang {
             Lang::Rust => rust::VERSION,
             Lang::CSharp => csharp::VERSION,
             Lang::Java => java::VERSION,
+            Lang::Kotlin => kotlin::VERSION,
             Lang::Html => html::VERSION,
             Lang::Cfml => cfml::VERSION,
             Lang::Sql => sql::VERSION,
@@ -815,19 +823,70 @@ pub struct FileFacts {
     pub package: Option<String>,
 }
 
+/// The nodes a visitor is inside, outermost first, each with its parent when it was visited as one of that node's
+/// children: parents read from here cost a short scan, where tree-sitter's `parent()` walks down from the root on
+/// every call (a fifth of Swift extraction when read per identifier).
+#[derive(Default)]
+pub(crate) struct Ancestry<'t> {
+    path: Vec<(tree_sitter::Node<'t>, Option<tree_sitter::Node<'t>>)>,
+    next: Option<tree_sitter::Node<'t>>,
+}
+
+impl<'t> Ancestry<'t> {
+    /// The visitor enters `node`: a child of the node [`Self::child_of`] named just before, if it did.
+    pub(crate) fn enter(&mut self, node: tree_sitter::Node<'t>) {
+        let parent = self.next.take();
+        self.path.push((node, parent));
+    }
+
+    pub(crate) fn leave(&mut self) {
+        self.path.pop();
+    }
+
+    /// The node entered next is one of `parent`'s children.
+    pub(crate) fn child_of(&mut self, parent: tree_sitter::Node<'t>) {
+        self.next = Some(parent);
+    }
+
+    /// `node`'s parent: the one it was entered as a child of, or the node entered around it when that is its parent
+    /// (a visitor can skip a level), else tree-sitter's.
+    pub(crate) fn parent(&self, node: tree_sitter::Node<'t>) -> Option<tree_sitter::Node<'t>> {
+        if let Some(k) = self.path.iter().rposition(|(n, _)| *n == node) {
+            if let Some(p) = self.path[k].1 {
+                return Some(p);
+            }
+            if let Some(&(p, _)) = k.checked_sub(1).and_then(|k| self.path.get(k))
+                && p.child_with_descendant(node) == Some(node)
+            {
+                return Some(p);
+            }
+        }
+        node.parent()
+    }
+}
+
 /// Depth of the control-flow block `node` within the callable spanning bytes `outer` (`node` itself is level 1):
 /// the number of `nest` kinds on the path up to the callable, not counting `else if` links.
 fn nesting_depth(node: tree_sitter::Node, nest: &[&str], outer: (u32, u32)) -> u32 {
+    nesting_depth_by(node, nest, outer, |n| n.parent())
+}
+
+/// [`nesting_depth`] with each node's parent given by `parent`, for an extractor that knows the parents without
+/// tree-sitter's `parent()`, which walks down from the root on every call.
+fn nesting_depth_by<'t>(
+    node: tree_sitter::Node<'t>, nest: &[&str], outer: (u32, u32), parent: impl Fn(tree_sitter::Node<'t>) -> Option<tree_sitter::Node<'t>>,
+) -> u32 {
     let mut depth = 0;
     let mut n = Some(node);
     while let Some(c) = n {
         if c.start_byte() as u32 <= outer.0 && c.end_byte() as u32 >= outer.1 {
             break;
         }
-        if nest.contains(&c.kind()) && !is_else_if(c) {
+        let p = parent(c);
+        if nest.contains(&c.kind()) && !is_else_if_in(c, p) {
             depth += 1;
         }
-        n = c.parent();
+        n = p;
     }
     depth
 }
@@ -883,7 +942,12 @@ fn record_condition(sym: &mut Symbol, node: tree_sitter::Node, src: &str) {
 /// An `if` that is the `else` branch of another `if`: an `else_clause` child, or a direct child of an `if` of the same
 /// kind that isn't its then-branch.
 fn is_else_if(node: tree_sitter::Node) -> bool {
-    let Some(p) = node.parent() else { return false };
+    is_else_if_in(node, node.parent())
+}
+
+/// [`is_else_if`] for `node` within `parent`.
+fn is_else_if_in(node: tree_sitter::Node, parent: Option<tree_sitter::Node>) -> bool {
+    let Some(p) = parent else { return false };
     p.kind() == "else_clause"
         || (p.kind() == node.kind() && node.kind().starts_with("if") && p.child_by_field_name("consequence") != Some(node))
 }
@@ -959,6 +1023,7 @@ pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
         Lang::Rust => rust::extract(source),
         Lang::CSharp => csharp::extract(source),
         Lang::Java => java::extract(source),
+        Lang::Kotlin => kotlin::extract(source),
         Lang::TypeScript => typescript::extract(source, false),
         Lang::Tsx => typescript::extract(source, true),
         Lang::JavaScript if typescript::is_minified(source) || typescript::is_library(source) => FileFacts::default(),
@@ -1056,6 +1121,7 @@ pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
         Lang::Tsx | Lang::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Lang::Go => tree_sitter_go::LANGUAGE.into(),
         Lang::Java => tree_sitter_java::LANGUAGE.into(),
+        Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         _ => return None,
     })
 }
@@ -1063,6 +1129,40 @@ pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whatever path a visitor takes down a tree (every child, a grandchild skipping its parent, a node entered
+    /// without saying whose child it is), [`Ancestry::parent`] names tree-sitter's parent, for nodes entered and not.
+    #[test]
+    fn ancestry_parents_are_tree_sitters() {
+        fn walk<'t>(path: &mut Ancestry<'t>, node: tree_sitter::Node<'t>, depth: usize, checked: &mut usize) {
+            path.enter(node);
+            assert_eq!(path.parent(node), node.parent());
+            *checked += 1;
+            let mut cursor = node.walk();
+            for (i, c) in node.children(&mut cursor).enumerate() {
+                assert_eq!(path.parent(c), c.parent());
+                match (depth + i) % 3 {
+                    0 => path.child_of(node),
+                    // Skips `c`: its children are entered under `node`.
+                    1 if c.child_count() > 0 => {
+                        let mut cursor = c.walk();
+                        for g in c.children(&mut cursor) {
+                            walk(path, g, depth + 1, checked);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                walk(path, c, depth + 1, checked);
+            }
+            path.leave();
+        }
+        let src = "class A {\n  func f(x: Int) -> Int {\n    if x > 0 { return g(x) { $0 + 1 } }\n    for y in [1, 2] where y > x { print(y) }\n    return try await h(x).k()\n  }\n}\n";
+        let tree = swift::parse(src).unwrap();
+        let (mut path, mut checked) = (Ancestry::default(), 0);
+        walk(&mut path, tree.root_node(), 0, &mut checked);
+        assert!(checked > 50, "{checked}");
+    }
 
     #[test]
     fn javascript_is_read_unless_built() {

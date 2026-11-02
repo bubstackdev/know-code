@@ -45,7 +45,12 @@ fi
 if grep -q 'github.com/labstack/echo/v5 ' go.mod; then
   add '"github.com/labstack/echo/v5"' '		case *echo.Echo:
 			for _, rt := range r.Router().Routes() {
-				kcOutAt(kcRoute{Framework: "echo", Method: rt.Method, Path: rt.Path, Handler: rt.Name}, echo.KCSites, rt.Method+" "+rt.Path)
+				// echo v5 lists a route answering every method (Any) under its own marker: method *, as the rule writes it.
+				m := rt.Method
+				if m == echo.RouteAny {
+					m = "*"
+				}
+				kcOutAt(kcRoute{Framework: "echo", Method: m, Path: rt.Path, Handler: rt.Name}, echo.KCSites, rt.Method+" "+rt.Path)
 			}'
   site echo5 github.com/labstack/echo/v5
 fi

@@ -748,7 +748,10 @@ fn parse_coverage(opened: &[Opened], env: &mut Value) {
         match v {
             Value::Object(m) => {
                 let repo = m.get("repo").and_then(Value::as_str).or(repo);
-                if let Some(f) = m.get("file").and_then(Value::as_str)
+                // Only the first COVERAGE_FILES are checked: past them, looking each new file up in the list cost the
+                // square of the files named, and a workspace answer names tens of thousands.
+                if files.len() < COVERAGE_FILES
+                    && let Some(f) = m.get("file").and_then(Value::as_str)
                     && !files.iter().any(|(r, x)| x == f && r.as_deref() == repo)
                 {
                     files.push((repo.map(str::to_string), f.to_string()));

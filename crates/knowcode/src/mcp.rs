@@ -1572,7 +1572,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
     .await
     .map_err(|e| ToolError::new(Code::Internal, e.to_string()));
     cancel_on_drop.0 = None;
-    release_memory();
+    crate::memory::release();
     result?.map_err(ToolError::from)
 }
 
@@ -2077,20 +2077,6 @@ fn noted(workspace: bool, mut env: Value) -> Value {
     env
 }
 
-/// Hands freed pages back to the OS after each call, so resident memory tracks what is in use rather than the
-/// high-water mark of the biggest call.
-fn release_memory() {
-    #[cfg(target_os = "macos")]
-    {
-        unsafe extern "C" {
-            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
-        }
-        // SAFETY: a null zone means all zones; goal 0 means release as much as possible. No pointers are kept.
-        unsafe {
-            malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
-        }
-    }
-}
 
 /// The answer as the server outputs it: [`cap_full`], said in its compact form (see [`crate::compact`]).
 pub(crate) fn cap(env: Value, max: usize) -> String {
@@ -2123,25 +2109,59 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
     // The compact form is measured exactly when the full form, less what compacting saved at the last exact
     // measure, says it may fit: compacting a clone at every item cut would cost more than the cut.
     let mut len = crate::compact::measure(&env, names).len();
-    let mut saved = env.to_string().len().saturating_sub(len);
+    let mut full = env.to_string().len();
+    let mut saved = full.saturating_sub(len);
     let mut guard = 0;
     let mut lost: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    // Cursors not yet renewed for rows cut (see `FAR`).
+    let mut unstamped = false;
     while len > max && guard < 10_000 {
         guard += 1;
+        // Far over the size (a workspace answer can be thousands of times it), rows go many at a time: each list cut
+        // loses up to half its rows, and while the answer is large nothing is measured, finished or stamped again; the
+        // size is the full form's less the rows removed, counted as they go. Cutting one row at a time, each followed
+        // by a measure of the whole answer, cost the rows cut times the answer's size: past ten minutes for a table used
+        // across a large workspace. Halving at most, and measuring exactly once the answer is small enough for that to
+        // be cheap, leaves at least twice the size for the last cuts, which go one row at a time as before: an answer
+        // cut by a little is cut the same, and one cut by a lot keeps as many rows.
+        let far = len > FAR * max;
+        let keep = if far { (FAR * max) as f64 / len as f64 } else { 1.0 }.max(0.5);
         // Rows' detail dropped (a statement's lines, whose cite then compacts further than the full form says): measured
         // exactly before any row is cut.
         let mut detail = false;
-        match shrink(&mut env) {
+        let mut removed = None;
+        match shrink(&mut env, keep) {
             // Rows' detail dropped: no row lost.
-            Some(path) if path.is_empty() => detail = true,
-            Some(path) => {
+            Some(c) if c.path.is_empty() => detail = true,
+            Some(c) => {
                 if let Some(r) = resume.as_mut() {
-                    crate::cursor::cut(&mut env, r, &path);
+                    if far {
+                        unstamped |= crate::cursor::mark(r, &c.path);
+                    } else {
+                        crate::cursor::cut(&mut env, r, &c.path);
+                    }
                 }
-                refuse_partial_rename(&mut env, &path);
-                *lost.entry(path).or_default() += 1;
+                refuse_partial_rename(&mut env, &c.path);
+                *lost.entry(c.path).or_default() += c.rows;
+                removed = c.bytes;
             }
             None => break,
+        }
+        // While far, the size is the full form's less the rows removed, at the compact form's last measured ratio.
+        if far
+            && !detail
+            && let Some(bytes) = removed
+        {
+            let ratio = len as f64 / full.max(1) as f64;
+            full = full.saturating_sub(bytes);
+            len = (full as f64 * ratio) as usize;
+            if len > FAR * max && full > MEASURED * max {
+                continue;
+            }
+        }
+        if unstamped && let Some(r) = resume.as_ref() {
+            crate::cursor::restamp(&mut env, r);
+            unstamped = false;
         }
         // A workspace `kc_status` answers with an array of per-repo objects.
         if let Some(obj) = env.as_object_mut()
@@ -2165,12 +2185,17 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
             );
         }
         crate::contract::finish(&mut env);
-        let full = env.to_string().len();
+        full = env.to_string().len();
+        #[cfg(test)]
+        MEASURED_BYTES.with(|n| n.set(n.get() + full));
         len = full.saturating_sub(saved);
-        if len <= max || detail {
+        if len <= max || detail || far {
             len = crate::compact::measure(&env, names).len();
             saved = full.saturating_sub(len);
         }
+    }
+    if unstamped && let Some(r) = resume.as_ref() {
+        crate::cursor::restamp(&mut env, r);
     }
     // A context bundle's own lists, counted as they are after the cap.
     if env["items"].as_array().is_some_and(|items| items.iter().any(|i| i.get("callers_summary").is_some())) {
@@ -2301,14 +2326,41 @@ fn unstate(v: &mut Value) -> bool {
     }
 }
 
-/// Trims one item from the longest list, returning its path (`/items`, `/items/0/callers`); or shortens a long
+/// How far over the size an answer is cut many rows at a time (see `cap_full_named`).
+const FAR: usize = 4;
+/// Below how many times the size an answer far over it is measured exactly after each cut: small enough to be cheap.
+const MEASURED: usize = 64;
+
+#[cfg(test)]
+thread_local! {
+    /// How many bytes of the answer the size cap serialised to measure it while cutting, for tests of its cost.
+    static MEASURED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What one [`shrink`] took: where (as [`shrink`] says), how many rows, and their size in the full form when they were
+/// rows of a list (`None` when it shortened strings or dropped detail).
+struct Cut {
+    path: String,
+    rows: u64,
+    bytes: Option<usize>,
+}
+
+/// Cuts `a` to `keep` of its rows (at least one goes, one stays), returning how many went and their size.
+fn cut_rows(a: &mut Vec<Value>, keep: f64) -> (u64, usize) {
+    let stay = ((a.len() as f64 * keep).ceil() as usize).clamp(1, a.len().saturating_sub(1).max(1));
+    let gone: Vec<Value> = a.drain(stay.min(a.len())..).collect();
+    let bytes = gone.iter().map(|x| x.to_string().len() + 1).sum();
+    (gone.len() as u64, bytes)
+}
+
+/// Trims the longest list (one row, or all but `keep` of its rows), returning its path (`/items`, `/items/0/callers`); or shortens a long
 /// string, returning `/…`; or drops the detail of answer lists' rows, returning an empty path; `None` when nothing is
 /// left to trim. A rename's `group` (the members renamed together) and a path's `steps` are never cut: a path or a
 /// group cut short would mislead; the list holding them is cut instead. A deploy answer's tails go before the rest,
 /// and its chains and includes are cut whole (see [`atomic`]), in the answer and in a page of one of those lists. The
 /// lists an answer is about (see [`answer_list`]) go last: every other list down to one row, the source shortened and
 /// their rows' detail dropped first.
-fn shrink(v: &mut Value) -> Option<String> {
+fn shrink(v: &mut Value, keep: f64) -> Option<Cut> {
     type Found<'a> = (&'a mut Vec<Value>, String, (u8, usize));
     // Prefer trimming the longest array anywhere in the response; a list inside an answer list's row ranks with it.
     fn longest(v: &mut Value, path: String, whole: bool, answer: bool) -> Option<Found<'_>> {
@@ -2391,35 +2443,37 @@ fn shrink(v: &mut Value) -> Option<String> {
         }
     }
     // The rest of a site's statement goes before any row.
+    // A string shortened counts as one item cut, as it always has in `omitted`; detail dropped isn't counted.
+    let other = |path: &str| Some(Cut { path: path.to_string(), rows: u64::from(!path.is_empty()), bytes: None });
     if unstate(v) {
-        return Some(String::new());
+        return other("");
     }
     if let Some((a, path, (tier, _))) = longest(v, String::new(), false, false)
         && tier > 0
     {
-        a.pop();
-        return Some(path);
+        let (rows, bytes) = cut_rows(a, keep);
+        return Some(Cut { path, rows, bytes: Some(bytes) });
     }
     // Only the lists the answer is about are left to cut: the source, their rows' detail and the other lists' last
     // rows go first.
     if trim_strings(v, false) {
-        return Some("/…".to_string());
+        return other("/…");
     }
     if slim(v, false) {
-        return Some(String::new());
+        return other("");
     }
     // A page of one list (`kc_more`) is that list's rows only.
     if v.get("list").is_none()
         && let Some(path) = last_row(v, String::new())
     {
-        return Some(path);
+        return Some(Cut { path, rows: 1, bytes: None });
     }
     if let Some((a, path, _)) = longest(v, String::new(), false, false) {
-        a.pop();
-        return Some(path);
+        let (rows, bytes) = cut_rows(a, keep);
+        return Some(Cut { path, rows, bytes: Some(bytes) });
     }
     // Last resort: shorten long strings anywhere.
-    trim_strings(v, true).then(|| "/…".to_string())
+    if trim_strings(v, true) { other("/…") } else { None }
 }
 
 
@@ -2557,7 +2611,7 @@ impl KnowcodeServer {
     async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
-            let env = ops::find(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
+            let env = crate::cursor::find_definitions(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
             let what = format!("no definition matches {:?}{}", p.query, p.kind.as_deref().map(|k| format!(" of kind {k}")).unwrap_or_default());
             Ok(explain(env, &what, "limit"))
         })
@@ -3396,7 +3450,7 @@ fn run_server(server: KnowcodeServer) -> anyhow::Result<()> {
     kc_index::light::discover_roots()?;
     crate::refresh::start();
     // No process-wide SQLite memory limit: SQLite is built without the counting it needs (see .cargo/config.toml).
-    // Each connection's page cache is bounded by its `cache_size`, and `release_memory` hands freed pages back.
+    // Each connection's page cache is bounded by its `cache_size`, and `crate::memory::release` hands freed pages back.
     // Stdin and stdout each hold a blocking thread; the others run tool work, one per lane (see `WORK`).
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).max_blocking_threads(5).enable_all().build()?;
     rt.block_on(async move {
@@ -4015,6 +4069,30 @@ mod tests {
         assert!(v["incomplete"].as_array().unwrap().iter().any(|i| i["reason"] == "budget" && i["detail"].as_str().unwrap().starts_with("inputs: ")), "{v}");
         let v: Value = serde_json::from_str(&batch(80_000, 1).unwrap()).unwrap();
         assert_eq!((v.get("complete"), v.get("incomplete"), v["results"][0].get("complete")), (Some(&json!(true)), None, Some(&json!(true))), "{v}");
+    }
+
+    #[test]
+    fn an_answer_far_over_the_size_is_cut_without_measuring_it_at_every_row() {
+        // A workspace answer: 150 repos, each with 300 accessors, about 3 MB against 8,000 characters.
+        let items: Vec<Value> = (0..150)
+            .map(|r| {
+                let rows: Vec<Value> = (0..300).map(|k| json!({ "file": format!("svc{r}/src/Reader{k}.cs"), "line": k + 1, "name": "Read" })).collect();
+                json!({ "repo": format!("svc{r}"), "table": { "name": "ledger", "accessors": rows } })
+            })
+            .collect();
+        let env = json!({ "repo": "workspace", "items": items, "total": 150, "truncated": false });
+        let size = env.to_string().len();
+        MEASURED_BYTES.with(|n| n.set(0));
+        let out = cap(env, 8_000);
+        let measured = MEASURED_BYTES.with(std::cell::Cell::get);
+        assert!(out.len() <= 8_000, "{} chars", out.len());
+        let v: Value = serde_json::from_str(&out).unwrap();
+        // Measuring the whole answer after each row cut serialised it about 75 times over (each repo cut, the answer a
+        // little smaller); cut by halves, measured only once small, it is serialised about once.
+        assert!(measured < 2 * size, "{measured} bytes measured for an answer of {size}");
+        // As many rows as fit are kept: the one repo left keeps more than a handful of its accessors.
+        assert_eq!(v["items"].as_array().map(Vec::len), Some(1), "{out}");
+        assert!(v["items"][0]["table"]["accessors"].as_array().map_or(0, Vec::len) > 20, "{out}");
     }
 
     #[test]

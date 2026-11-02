@@ -550,7 +550,12 @@ impl Model {
                 m.file_types.entry(s.file.clone()).or_default().push(i);
             }
         }
-        let mut stmt = conn.prepare("SELECT from_id, target_name FROM relations")?;
+        // In declaration order (file, then line), not row order: a partial type's declarations in several files are
+        // written in whichever order the parallel indexer finishes them, and the bases' order is shown to users.
+        let mut stmt = conn.prepare(
+            "SELECT r.from_id, r.target_name FROM relations r JOIN files f ON f.id = r.file_id
+             ORDER BY f.path, r.line, r.rowid",
+        )?;
         let rels: Vec<(i64, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         for (from, target) in rels {
             if let Some(s) = m.sym(from) {
@@ -2468,6 +2473,35 @@ mod tests {
 
     fn ctxs(found: &[(String, Occ)]) -> Vec<(u32, Ctx)> {
         found.iter().map(|(_, o)| (o.line, o.ctx)).collect()
+    }
+
+    #[test]
+    fn external_bases_follow_declaration_order_not_row_order() {
+        // A partial class declared in two files, the later path written first (as a parallel index may).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT, lang TEXT);
+             CREATE TABLE symbols (id INTEGER PRIMARY KEY, name TEXT, kind TEXT, container TEXT, signature TEXT, attrs TEXT,
+                                   tags TEXT, file_id INTEGER, start_line INTEGER, end_line INTEGER, parent_id INTEGER);
+             CREATE TABLE relations (file_id INTEGER, from_id INTEGER, target TEXT, target_name TEXT, kind TEXT, line INTEGER);
+             INSERT INTO files VALUES (1, 'src/Writer.cs', 'csharp'), (2, 'src/Writer.Async.cs', 'csharp');
+             INSERT INTO symbols VALUES (1, 'Writer', 'class', 'Acme', '', '', '', 1, 3, 9, NULL),
+                                        (2, 'Writer', 'class', 'Acme', '', '', '', 2, 3, 9, NULL);
+             INSERT INTO relations VALUES (1, 1, 'IDisposable', 'IDisposable', 'implements', 3),
+                                          (2, 2, 'IAsyncDisposable', 'IAsyncDisposable', 'implements', 3);",
+        )
+        .unwrap();
+        let m = Model::load(&conn).unwrap();
+        let q = m.syms[0].qualified();
+        assert_eq!(m.external_bases(&q), ["IAsyncDisposable", "IDisposable"]);
+        // The same rows written the other way round give the same order.
+        conn.execute_batch(
+            "DELETE FROM relations;
+             INSERT INTO relations VALUES (2, 2, 'IAsyncDisposable', 'IAsyncDisposable', 'implements', 3),
+                                          (1, 1, 'IDisposable', 'IDisposable', 'implements', 3);",
+        )
+        .unwrap();
+        assert_eq!(Model::load(&conn).unwrap().external_bases(&q), ["IAsyncDisposable", "IDisposable"]);
     }
 
     #[test]

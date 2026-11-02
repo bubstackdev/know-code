@@ -1,6 +1,7 @@
 //! Go HTTP client calls: `net/http`'s `Get`, `Head`, `Post`, `PostForm`, `NewRequest` and `NewRequestWithContext`,
 //! and the same methods of an `http.Client`, as client routes of the calling function. A request built with
-//! `NewRequest` is the call site; the `Do` that sends it adds nothing the request doesn't say.
+//! `NewRequest` is a call site, and so is the `Do` that sends it, when the request is a variable the same function built
+//! (`req, err := http.NewRequest(…)`, then `client.Do(req)`): it requests what the request says.
 //!
 //! The URL is read as [`urls`] pieces: string literals, `+`, `fmt.Sprintf`'s format with its verbs as values, a
 //! package constant as `{=Name}`. A value before any text is a base address (`base + "/orders"`), dropped as the
@@ -18,6 +19,15 @@ use crate::urls::{self, Piece};
 impl<'a> Cx<'a> {
     /// A client call `q.M(args)`: a request, read as a client route; `false` when the call isn't one.
     pub(super) fn client_call(&mut self, call: Node, operand: Node, method: &str, args: &[Node]) -> bool {
+        // `x.Do(req)` sending a request this function built: whatever `x` is, `Do` is the send.
+        if method == "Do"
+            && let [r] = args
+            && r.kind() == "identifier"
+            && let Some((verb, path)) = self.requests.get(&(self.current(), self.text(*r).to_string())).cloned()
+        {
+            self.facts.http_routes.push(HttpRoute { sym: self.current(), side: "client", verb, path, path_ref: None, service: None, service_ref: None, line: line(call) });
+            return true;
+        }
         if !self.is_http_client(operand) {
             return false;
         }
@@ -30,20 +40,41 @@ impl<'a> Cx<'a> {
         };
         let path = urls::encode(&self.url_pieces(url), true).filter(|p| urls::looks_like_path(p)).unwrap_or_default();
         match verb {
-            Some(verb) => self.facts.http_routes.push(HttpRoute {
-                sym: self.current(),
-                side: "client",
-                verb,
-                path,
-                path_ref: None,
-                service: None,
-                service_ref: None,
-                line: line(call),
-            }),
+            Some(verb) => {
+                if method.starts_with("NewRequest")
+                    && let Some(name) = self.assigned_to(call)
+                {
+                    self.requests.insert((self.current(), name), (verb.clone(), path.clone()));
+                }
+                self.facts.http_routes.push(HttpRoute {
+                    sym: self.current(),
+                    side: "client",
+                    verb,
+                    path,
+                    path_ref: None,
+                    service: None,
+                    service_ref: None,
+                    line: line(call),
+                })
+            }
             // A method chosen at run time (a wrapper's parameter): the request is seen but can't be linked.
             None => self.unsupported_route(method, "its method isn't a literal", call),
         }
         true
+    }
+
+    /// The variable a call's first result is assigned to: `req` in `req, err := f()`, `req, err = f()` or
+    /// `var req, err = f()`.
+    fn assigned_to(&self, call: Node) -> Option<String> {
+        let list = call.parent().filter(|p| p.kind() == "expression_list")?;
+        let stmt = list.parent()?;
+        let left = match stmt.kind() {
+            "short_var_declaration" | "assignment_statement" => stmt.child_by_field_name("left")?,
+            "var_spec" => stmt,
+            _ => return None,
+        };
+        let first = children(left).find(|c| c.kind() == "identifier")?;
+        Some(self.text(first).to_string()).filter(|n| n != "_")
     }
 
     /// Whether a receiver is `net/http` itself, `http.DefaultClient`, or a value typed `http.Client`.
@@ -200,4 +231,43 @@ func send(method, url string) {
             ]
         );
     }
+
+    #[test]
+    fn a_do_sends_the_request_its_function_built() {
+        let facts = crate::go::extract(
+            "orchard/client.go",
+            r#"package orchard
+
+import "net/http"
+
+const apiBase = "/api/v2"
+
+func (c *Client) Admin(id string) {
+	req, err := http.NewRequest(http.MethodGet, apiBase+"/admins/"+id, nil)
+	res, err := c.HTTPClient.Do(req)
+	var post, _ = http.NewRequest("POST", "/admins", nil)
+	httpClient.Do(post)
+	c.HTTPClient.Do(built)
+	worker.Do(job)
 }
+
+func send(c *http.Client) {
+	c.Do(req)
+}
+"#,
+        );
+        let got: Vec<(u32, String, String)> =
+            facts.http_routes.iter().filter(|r| r.side == "client").map(|r| (r.line, r.verb.clone(), r.path.clone())).collect();
+        // A request held by another function, or built elsewhere, isn't known at its `Do`.
+        assert_eq!(
+            got,
+            [
+                (8, "GET".to_string(), "{=apiBase}/admins/{}".to_string()),
+                (9, "GET".to_string(), "{=apiBase}/admins/{}".to_string()),
+                (10, "POST".to_string(), "/admins".to_string()),
+                (11, "POST".to_string(), "/admins".to_string()),
+            ]
+        );
+    }
+}
+
