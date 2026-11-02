@@ -12,6 +12,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   label is newly wrong. The index schema moves to 25 (each declaration's scope), so the first query after upgrading
   indexes each repo again, at the same cost as a cold index (hono 15.6 G instructions, jellyfin 108 G); builds of
   schema 24 sharing the cache keep their own indexes.
+- An MCP answer is cut to its size in the call's own lane, and cutting stops when the call is cancelled (its
+  client gone, or its deadline passed): a cancelled call no longer keeps a core busy cutting an answer nobody reads.
 - An answer naming many files no longer takes time growing with their square to say which of them have parse
   errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
   workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of
