@@ -2448,7 +2448,7 @@ impl KnowcodeServer {
     async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
-            let env = ops::find(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
+            let env = crate::cursor::find_definitions(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
             let what = format!("no definition matches {:?}{}", p.query, p.kind.as_deref().map(|k| format!(" of kind {k}")).unwrap_or_default());
             Ok(explain(env, &what, "limit"))
         })

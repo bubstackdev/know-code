@@ -1010,7 +1010,7 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || render::at(&out.data, out.env["file_indexed"].as_bool().unwrap_or(false)))
         }
         Cmd::Find { query, kind, limit, repo } => {
-            let out = ops::find(&query, kind.as_deref(), limit, &repo.scope())?;
+            let out = cursor::find_definitions(&query, kind.as_deref(), limit, &repo.scope())?;
             emit(&repo, &out.env, || {
                 let d = &out.data;
                 if !d.items.is_empty() || d.manifests.is_empty() {
