@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -37,6 +36,8 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))  # scripts/: kc_env
+import kc_env  # noqa: E402
 import rules_gate  # noqa: E402
 
 
@@ -151,9 +152,7 @@ def run(knowcode, clone, rules, work, labels, regex=None, glob=None):
         git(clone, "worktree", "add", "--detach", str(tree), labels[0]["commit"])
     # Every directory KnowCode reads is the run's own, HOME included: nothing of the user's (config, workspace roots,
     # notes) reaches the replay.
-    (work / "kc/home").mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, KNOWCODE_UPDATE_CHECK="0", HOME=str(work / "kc/home"), KNOWCODE_CACHE_DIR=str(work / "kc/cache"),
-               KNOWCODE_CONFIG_DIR=str(work / "kc/config"), KNOWCODE_DATA_DIR=str(work / "kc/data"))
+    env = kc_env.knowcode_env(work / "kc")
     results = []
     for lab in labels:
         subprocess.run(["git", "-C", str(tree), "checkout", "-q", "--detach", lab["commit"]], check=True)

@@ -408,7 +408,12 @@ mod tests {
     fn sarif_matches_its_golden_file_with_findings_only() {
         let env = answer();
         let log = sarif(&env);
-        golden("review.sarif", &(serde_json::to_string_pretty(&log).unwrap() + "\n"));
+        // The tool's version is the build's own; the golden file holds a fixed one so a version bump doesn't fail it.
+        let text = serde_json::to_string_pretty(&log).unwrap().replace(
+            &format!("\"version\": \"{}\"", env!("CARGO_PKG_VERSION")),
+            "\"version\": \"0.0.0-test\"",
+        );
+        golden("review.sarif", &(text + "\n"));
         let results = log["runs"][0]["results"].as_array().unwrap();
         // One result per consumer and per rule match; tests, missed and dependents are advice, not findings.
         assert_eq!(results.len(), 3);
