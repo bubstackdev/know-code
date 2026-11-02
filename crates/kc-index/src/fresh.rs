@@ -124,7 +124,7 @@ pub(crate) fn db_of(store: &Store) -> Option<PathBuf> {
     store.conn().path().filter(|p| !p.is_empty()).map(PathBuf::from)
 }
 
-fn identity(db: &Path) -> Option<(u64, u64, u128)> {
+pub(crate) fn identity(db: &Path) -> Option<(u64, u64, u128)> {
     use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(db).ok()?;
     // 0 where the file system keeps no creation time: device and inode alone, as before.
@@ -193,7 +193,18 @@ pub(crate) fn write(store: &Store, outside: &Outside) -> Result<()> {
 /// nothing changed. Every listed directory, content-sniffed candidate, indexed file and file read outside the indexed
 /// ones is `stat`ed; a directory whose mtime moved is listed again, and counts as changed only if its entries did.
 pub fn changed(root: &Path, db: &Path) -> bool {
-    let Some(snap) = std::fs::read(path(db)).ok().and_then(|b| serde_json::from_slice::<Snapshot>(&b).ok()) else { return true };
+    unchanged(root, db).is_none()
+}
+
+/// [`changed`]'s proof that nothing changed: the identity of the index file the snapshot proved current (see
+/// [`identity`]), or `None` when it doesn't prove it.
+pub(crate) fn unchanged(root: &Path, db: &Path) -> Option<(u64, u64, u128)> {
+    let snap = std::fs::read(path(db)).ok().and_then(|b| serde_json::from_slice::<Snapshot>(&b).ok())?;
+    (!differs(root, db, &snap)).then_some(snap.index)
+}
+
+/// Whether `root`'s working tree, or the index file at `db`, may differ from what `snap` recorded.
+fn differs(root: &Path, db: &Path, snap: &Snapshot) -> bool {
     if snap.format != FORMAT || snap.build != build() || snap.settings != settings(crate::sdk::enabled()) || identity(db) != Some(snap.index) {
         return true;
     }

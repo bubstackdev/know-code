@@ -163,3 +163,44 @@ fn invariant_a_query_never_takes_another_querys_proof_of_unchanged() {
     });
     assert!(first, "unchanged when the first query checked");
 }
+
+/// A query that found a repo unchanged by its snapshot doesn't check it again when it opens it: the proof was made
+/// after the query started, as a second one would be. It holds for that index file only (a rebuilt index is checked
+/// again), for that query only, and a repo found changed is checked again.
+#[test]
+fn invariant_a_query_reuses_only_its_own_proof_for_the_same_index_file() {
+    use kc_store::limits::{Operation, enter};
+    let f = Fixture::new();
+    let root = f.repo("app", &[("api.ts", "export function oldHandler() { return 42; }\n")]);
+    let db = kc_index::db_path(&root).unwrap();
+    let sync = |root: &Path| {
+        let mut store = kc_index::open(root).unwrap();
+        kc_index::sync(root, &mut store, &kc_index::SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    };
+    sync(&root);
+    {
+        let _query = enter(Operation::new());
+        let _memo = kc_index::memo_changes();
+        assert!(!kc_index::changed_repos(std::slice::from_ref(&root)).contains(&root));
+        fs::write(root.join("api.ts"), "export function newlyAddedHandler() { return 4242; }\n").unwrap();
+        assert!(!kc_index::changed_in_query(&root, &db), "the query's own proof, for the same index file");
+        assert!(kc_index::changed_since_sync(&root, &db));
+    }
+    {
+        let _query = enter(Operation::new());
+        let _memo = kc_index::memo_changes();
+        assert!(kc_index::changed_in_query(&root, &db), "another query checks for itself");
+        sync(&root);
+        assert!(!kc_index::changed_in_query(&root, &db), "found changed, checked again");
+    }
+    {
+        let _query = enter(Operation::new());
+        let _memo = kc_index::memo_changes();
+        assert!(!kc_index::changed_repos(std::slice::from_ref(&root)).contains(&root));
+        // The index rebuilt: another file, whatever its snapshot says.
+        kc_index::forget(&root).unwrap();
+        sync(&root);
+        fs::write(root.join("api.ts"), "export function oldHandler() { return 42; }\n").unwrap();
+        assert!(kc_index::changed_in_query(&root, &db), "a rebuilt index is checked again");
+    }
+}
