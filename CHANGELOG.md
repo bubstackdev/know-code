@@ -26,6 +26,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
   gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
   6–14%, for 11–22 MB more peak memory. The index is the same.
+- A server's check that a repo is unchanged before answering is cheaper: which indexed files are there by their
+  content rather than their name is now settled when the freshness record is written, not worked out again for every
+  file at every query. On microsoft/TypeScript (32,112 indexed files) a `find` over MCP that needs no sync takes
+  0.64 G instructions instead of 0.97 G; across a workspace of it and seven smaller public repos, 0.86 G instead of
+  1.18 G. Answers are unchanged.
 - A server notices a regenerated SCIP index without waiting for a source file to change. Before answering, a server
   checks by `stat` alone whether a repo changed since its last sync, and skips the sync when not; that check didn't
   cover the files a sync reads outside the indexed ones, so rewriting `index.scip` (in place, or by renaming a new

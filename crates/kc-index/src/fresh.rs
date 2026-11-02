@@ -21,8 +21,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Sniffed, discovery_inputs, git, names_hash};
 
-/// Bumped when [`Snapshot`] changes.
-const FORMAT: u32 = 3;
+/// Bumped when [`Snapshot`] changes, or what a written one implies: since 4, that the files indexed by content are
+/// the candidates admitted by content (see [`admitted_indexed`]).
+const FORMAT: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
@@ -167,7 +168,7 @@ pub(crate) fn write(store: &Store, outside: &Outside) -> Result<()> {
     }
     let Some(index) = identity(&db) else { return Ok(()) };
     let ignores: Vec<String> = store.meta("disc.ignores")?.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let (Some(inputs), Some(sniffed)) = (store.meta("disc.inputs")?, store.meta("disc.sniff")?.and_then(|s| serde_json::from_str(&s).ok())) else {
+    let (Some(inputs), Some(sniffed)) = (store.meta("disc.inputs")?, store.meta("disc.sniff")?.and_then(|s| serde_json::from_str::<Vec<Sniffed>>(&s).ok())) else {
         return Ok(());
     };
     let files: Vec<(String, i64, i64)> = store
@@ -175,6 +176,10 @@ pub(crate) fn write(store: &Store, outside: &Outside) -> Result<()> {
         .prepare("SELECT path, mtime_ns, size FROM files")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
+    if !admitted_indexed(&sniffed, &files) {
+        let _ = std::fs::remove_file(path(&db));
+        return Ok(());
+    }
     let snap = Snapshot { format: FORMAT, build: build(), settings: outside.settings.clone(), outside: seen.clone(), index, inputs, ignores, dirs: store.dirs()?, sniffed, files };
     // Written whole and renamed into place, so a reader sees the old snapshot, the new one, or none.
     let target = path(&db);
@@ -205,28 +210,40 @@ pub fn changed(root: &Path, db: &Path) -> bool {
             return true;
         }
     }
-    let stat = |p: &str| std::fs::symlink_metadata(root.join(p)).ok().filter(|m| !m.is_symlink()).map(|m| (git::mtime_ns(&m), m.len() as i64));
-    let mut admitted: HashSet<&str> = HashSet::new();
+    // One buffer for every path stat-ed: joining each to the root allocated a path per file.
+    use std::os::unix::ffi::OsStrExt;
+    let mut full = root.as_os_str().as_bytes().to_vec();
+    full.push(b'/');
+    let base = full.len();
+    let mut stat = |p: &str| {
+        full.truncate(base);
+        full.extend_from_slice(p.as_bytes());
+        let path = Path::new(std::ffi::OsStr::from_bytes(&full));
+        std::fs::symlink_metadata(path).ok().filter(|m| !m.is_symlink()).map(|m| (git::mtime_ns(&m), m.len() as i64))
+    };
     for s in &snap.sniffed {
         if stat(&s.path).unwrap_or((0, -1)) != (s.mtime_ns, s.size) {
             return true;
         }
-        if s.lang().is_some() {
-            admitted.insert(&s.path);
-        }
     }
+    // Which files are indexed by content was checked against the candidates when the snapshot was written.
+    snap.files.iter().any(|(p, mtime, size)| stat(p) != Some((*mtime, *size)))
+}
+
+/// Whether the files indexed by content (a path no extractor claims) are exactly the candidates admitted by content.
+/// One indexed by content and no longer admitted, or one admitted and not indexed (new, or too large), counts as
+/// changed, which only costs a sync. Both lists are the snapshot's, so this is decided when it is written, not at
+/// every check: each path's language took a sixth of a check's instructions on a repo of 32,000 files.
+fn admitted_indexed(sniffed: &[Sniffed], files: &[(String, i64, i64)]) -> bool {
+    let admitted: HashSet<&str> = sniffed.iter().filter(|s| s.lang().is_some()).map(|s| s.path.as_str()).collect();
     let mut indexed_admitted = 0;
-    for (p, mtime, size) in &snap.files {
+    for (p, _, _) in files {
         if Lang::from_path(p).is_none() {
             if !admitted.contains(p.as_str()) {
-                return true; // indexed by content, no longer admitted
+                return false;
             }
             indexed_admitted += 1;
         }
-        if stat(p) != Some((*mtime, *size)) {
-            return true;
-        }
     }
-    // A candidate admitted but not indexed (new, or too large: counted as changed, which only costs a sync).
-    indexed_admitted != admitted.len()
+    indexed_admitted == admitted.len()
 }
