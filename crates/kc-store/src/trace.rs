@@ -932,7 +932,7 @@ impl Tracer<'_> {
                         continue;
                     }
                     let hits = self.refs_named(&sym.name, kinds.clone(), Some(req.id))?;
-                    let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
+                    let hits = if self.one_of { through_one_of(self.conn, &mut self.defs, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
                 // Members declared further up: an interface's base interface (`Impl : IDerived`, `IDerived : IBase`,
@@ -952,7 +952,7 @@ impl Tracer<'_> {
                         .into_iter()
                         .filter(|h| h.receiver_type.as_deref().is_none_or(|r| is_a.contains(bare_type(r))))
                         .collect();
-                    let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
+                    let hits = if self.one_of { through_one_of(self.conn, &mut self.defs, req.id, hits)? } else { hits };
                     // A base class member runs itself, or another override, for other instances.
                     let hits = if self.one_of && m.shared { ambiguous_all(hits) } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
@@ -964,7 +964,7 @@ impl Tracer<'_> {
                     }
                     let Some(req) = self.symbol(base)? else { continue };
                     let hits = self.refs_named(&req.name, kinds.clone(), Some(req.id))?;
-                    let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
+                    let hits = if self.one_of { through_one_of(self.conn, &mut self.defs, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
                 // And calls through a library's interface or base class it implements, one no indexed repo defines
@@ -1021,8 +1021,8 @@ fn binding_evidence(b: &crate::di::Bound) -> Option<Evidence> {
 /// Calls through the protocol requirement `req`, as calls of one implementation among several: `ambiguous`, as the
 /// forward edge from the requirement to each implementation (`dispatch`) is, so a walk filters the edge the same
 /// way in either direction.
-fn through_one_of(conn: &Connection, req: i64, hits: Vec<RefHit>) -> Result<Vec<RefHit>> {
-    if crate::db::running_implementations(conn, req)?.len() <= 1 {
+fn through_one_of(conn: &Connection, defs: &mut query::DefinitionsMemo, req: i64, hits: Vec<RefHit>) -> Result<Vec<RefHit>> {
+    if defs.running_implementations(conn, req)?.len() <= 1 {
         return Ok(hits);
     }
     Ok(hits
