@@ -30,6 +30,14 @@ pub(super) struct Router {
     pub prefix: String,
 }
 
+impl Router {
+    /// A parameter of one of the repository's own types that may be a router (see `Cx::own_type`): its prefix starts
+    /// with a marked key, `{@F#i?}`, and registrations on it are read as chi's and gin's and echo's alike.
+    fn maybe(&self) -> bool {
+        self.prefix.starts_with("{@") && self.prefix.find('}').is_some_and(|j| self.prefix[..j].ends_with('?'))
+    }
+}
+
 /// The framework an import path is, if one read here.
 pub(super) fn framework(path: &str) -> Option<Fw> {
     match path {
@@ -210,6 +218,19 @@ impl<'a> Cx<'a> {
             }
             _ => false,
         }
+    }
+
+    /// Whether a type is one the repository declares, named without a package (`Router`): not a builtin, a type
+    /// parameter or another package's type.
+    pub(super) fn own_type(&self, t: Node) -> bool {
+        const BUILTIN: &[&str] = &[
+            "any", "bool", "byte", "comparable", "complex64", "complex128", "error", "float32", "float64", "int", "int8",
+            "int16", "int32", "int64", "rune", "string", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+        ];
+        let name = self.text(t);
+        t.kind() == "type_identifier"
+            && !BUILTIN.contains(&name)
+            && !self.scopes.iter().any(|s| s.type_params.contains(name))
     }
 
     /// The root router a struct field's type is: `*gin.Engine`, `*echo.Echo`, `*chi.Mux` or `*http.ServeMux`. Only a
@@ -451,6 +472,20 @@ impl<'a> Cx<'a> {
         };
         let Some(router) = router else { return };
         let path_at = |i: usize| args.get(i).copied();
+        // A router of the repository's own type: only a registration with a literal path and a handler (gin's and
+        // echo's verbs too); anything else on it is the type's own method, and says nothing, not even `unsupported`.
+        if router.maybe() {
+            let path = if matches!(method, "Method" | "MethodFunc") { path_at(1) } else { path_at(0) };
+            if args.len() < 2 || path.and_then(|p| self.literal(p)).is_none() {
+                return;
+            }
+            if GIN_ECHO_VERBS.contains(&method) {
+                return self.route(&router, method, path, call);
+            }
+            if !(CHI_VERBS.contains(&method) || matches!(method, "Method" | "MethodFunc" | "Handle" | "HandleFunc")) {
+                return;
+            }
+        }
         match (router.fw, method) {
             (Fw::Gin | Fw::Echo, m) if GIN_ECHO_VERBS.contains(&m) => self.route(&router, m, path_at(0), call),
             (Fw::Gin | Fw::Echo, "Any") => self.route(&router, "*", path_at(0), call),
@@ -847,6 +882,51 @@ type server struct {
         );
         // The struct is declared after the method; a group in a field has a prefix nobody gives, so it isn't one.
         assert_eq!(got, [row("server", "GET", "healthz"), row("server", "GET", "api/v2/seeds"), row("server", "GET", "far")]);
+    }
+
+    #[test]
+    fn parameters_of_the_repositorys_own_types_are_marked() {
+        let facts = crate::go::extract(
+            "orchard/api.go",
+            r#"package orchard
+
+import "net/http"
+
+type Router interface {
+	MethodFunc(method, pattern string, h http.HandlerFunc)
+}
+
+func Route(r Router) {
+	r.MethodFunc("GET", "/health", Health)
+	r.Get("/trees/{id}", Tree)
+	r.GET("/ping", Ping)
+}
+
+func Warm(c Cache, key string) {
+	c.Get("/fixed", nil)
+	c.Get(key, nil)
+	c.Delete(key)
+	c.Close()
+}
+
+func Typed[T any](t T, n int) {
+	t.Get("/never", nil)
+}
+"#,
+        );
+        let got: Vec<(String, String)> = facts.http_routes.iter().map(|r| (r.verb.clone(), r.path.clone())).collect();
+        // Each is kept under a marked key: the store keeps it only where a caller passes a router (`Route`'s caller
+        // does, `Warm`'s never). A call that isn't a registration on such a parameter isn't even `unsupported`.
+        assert_eq!(
+            got,
+            [
+                ("GET".to_string(), "{@orchard.Route#0?}health".to_string()),
+                ("GET".to_string(), "{@orchard.Route#0?}trees/{id}".to_string()),
+                ("GET".to_string(), "{@orchard.Route#0?}ping".to_string()),
+                ("GET".to_string(), "{@orchard.Warm#0?}fixed".to_string()),
+            ]
+        );
+        assert!(facts.unsupported.is_empty(), "{:?}", facts.unsupported);
     }
 
     #[test]

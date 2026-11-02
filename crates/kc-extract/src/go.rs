@@ -650,6 +650,10 @@ impl<'a> Cx<'a> {
             for p in children(params).filter(|c| matches!(c.kind(), "parameter_declaration" | "variadic_parameter_declaration")) {
                 let names: Vec<String> = children(p).filter(|c| c.kind() == "identifier").map(|c| self.text(c).to_string()).collect();
                 let ty = p.child_by_field_name("type");
+                // A parameter of one of the repository's own types (`r Router`, an interface a `*chi.Mux` satisfies) may be
+                // a router: its routes are kept under a marked key, which the store keeps only where a caller passes a
+                // router to it (`kc_store::query::under_groups`), so a cache's or client's `Get` is never a route.
+                let maybe = ty.is_some_and(|t| self.own_type(t));
                 let fw = ty.and_then(|t| self.router_type(t));
                 // A registration function parameter (`handle func(string, http.Handler)`) is kept as a router named
                 // with `()`: its calls register on the mux the caller passes.
@@ -657,6 +661,8 @@ impl<'a> Cx<'a> {
                 for name in names.iter().chain(names.is_empty().then(|| "_".to_string()).iter()) {
                     if let (Some(fw), Some(s)) = (fw, self.scopes.last_mut()) {
                         s.routers.insert(name.clone(), http::Router { fw, prefix: format!("{{@{key}#{i}}}") });
+                    } else if let (true, Some(s)) = (maybe && !self.test_file, self.scopes.last_mut()) {
+                        s.routers.insert(name.clone(), http::Router { fw: http::Fw::Chi, prefix: format!("{{@{key}#{i}?}}") });
                     }
                     if let (true, Some(s)) = (registrar, self.scopes.last_mut()) {
                         s.routers.insert(format!("{name}()"), http::Router { fw: http::Fw::NetHttp, prefix: format!("{{@{key}#{i}}}") });
