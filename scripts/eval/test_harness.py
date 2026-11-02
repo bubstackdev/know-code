@@ -168,9 +168,12 @@ def run_diff(a, b):
 
 
 # A stand-in for the binary: answers each command with its argv, its working directory and its config directory as
-# JSON; `boom` fails, `refuse` answers and exits 2 (as `rename` does when it refuses), `slow` prints no JSON.
+# JSON; `boom` fails, `refuse` answers and exits 2 (as `rename` does when it refuses), `slow` prints no JSON, `cut`
+# answers with cursors and an index size that name its cache, as a real cut answer and `stats` do.
 FAKE_BIN = """#!/bin/sh
 case "$1" in
+  cut) printf '{"cursor": "c-%s", "index": {"own_bytes": %d, "files": 3}, "items": [{"f": "b", "callers_cursor": "%s-1"}, {"f": "a", "callers": []}]}\\n' \\
+         "$KNOWCODE_CACHE_DIR" "${#KNOWCODE_CACHE_DIR}" "$KNOWCODE_CACHE_DIR"; exit 0 ;;
   boom) echo "knowcode: no such symbol" >&2; exit 3 ;;
   refuse) echo '{"items": [{"refused": true}]}'; exit 2 ;;
   slow) echo 'not json'; exit 0 ;;
@@ -258,11 +261,11 @@ class Snapshot(unittest.TestCase):
         bin_.chmod(0o755)
         return bin_
 
-    def take(self, queries, out="snap", config=None):
+    def take(self, queries, out="snap", config=None, cache="cache"):
         (self.t / "root" / "r1").mkdir(parents=True, exist_ok=True)
         qs = self.t / "queries.toml"
         qs.write_text(f'root = "{self.t / "root"}"\n' + queries)
-        ns = type("A", (), {"queries": str(qs), "bin": self.fake(), "cache": str(self.t / "cache"),
+        ns = type("A", (), {"queries": str(qs), "bin": self.fake(), "cache": str(self.t / cache),
                             "out": str(self.t / out), "index": False, "only": None, "jobs": 2, "threads": 1,
                             "config": config})
         code = 0
@@ -310,6 +313,19 @@ class Snapshot(unittest.TestCase):
         code, _, out = self.take('[[query]]\nid = "refused"\nrepo = "r1"\ncmd = "refuse"\n')
         self.assertEqual(code, 1)
         self.assertEqual(sorted(p.name for p in out.glob("*.json")), ["_meta.json", "refused.json"])
+
+    def test_two_caches_of_one_build_give_the_same_snapshot(self):
+        # Cursors are signed per cache and `/index/own_bytes` measures the cache: neither is part of the answer, but
+        # whether a list was cut is, so a cursor is masked, not dropped.
+        queries = '[[query]]\nid = "ranked"\nrepo = "r1"\ncmd = "cut"\n[[query]]\nid = "set"\nrepo = "r1"\ncmd = "cut"\nunordered = true\n'
+        code, _, a = self.take(queries, out="a", cache="cache-a")
+        self.assertEqual(code, 0)
+        code, _, b = self.take(queries, out="b", cache="cache-b-longer")
+        self.assertEqual(code, 0)
+        ans = json.loads((a / "ranked.json").read_text())
+        self.assertEqual((ans["cursor"], ans["index"]), ("<cursor>", {"files": 3}))
+        self.assertEqual(ans["items"], [{"f": "b", "callers_cursor": "<cursor>"}, {"f": "a", "callers": []}])
+        self.assertEqual(run_diff(a, b), (0, "\n0 of 2 queries differ; 2 identical.\n"))
 
     def test_a_config_dir_given_overrides_the_query_sets(self):
         given = self.t / "team-config"

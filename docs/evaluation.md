@@ -41,12 +41,13 @@ scripts/eval/run.py snapshot --queries eval/queries.toml --bin target/release/kn
 scripts/eval/run.py diff /tmp/snap-base /tmp/snap-new      # 0 same, 1 any answer differs, 2 refused
 ```
 
-[`eval/queries.toml`](../eval/queries.toml) is the public query set, over repos `scripts/corpus.py fetch` clones.
-Each query runs with `--json --no-sync` and an empty config directory of its own. Answers are normalised before
-they are stored (build info, freshness, timings and row ids dropped; paths under the root made relative). Every list
-keeps its order, so a changed ranking is a difference; only commands whose lists carry no ranking are sorted, named
-in `UNORDERED` in `scripts/eval/snapshot.py`. A snapshot in which any query failed is invalid, and `diff` refuses to
-compare it.
+[`eval/queries.toml`](../eval/queries.toml) is the public query set, over repos `scripts/corpus.py fetch` clones. Each
+query runs with `--json --no-sync` and an empty config directory of its own. Answers are normalised before they are
+stored (build info, freshness, timings and row ids dropped; paths under the root made relative; cursors, which are
+signed per cache, masked; the index's own size dropped), so two fresh caches of one build give the same snapshot.
+Every list keeps its order, so a changed ranking is a difference; only commands whose lists carry no ranking are
+sorted, named in `UNORDERED` in `scripts/eval/snapshot.py`. A snapshot in which any query failed is invalid, and
+`diff` refuses to compare it.
 
 Answers must not depend on the order files were stored in. With `KNOWCODE_INSERT_REVERSED=1`, indexing stores files
 in reverse path order; a snapshot taken that way must equal one taken normally.
