@@ -10,6 +10,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   indexed repo serves, is no longer linked to a route of its own repo that happens to share its path. Its links to
   other repos' routes (a frontend naming its backend's public host) stay, as do requests on this machine
   (`localhost`), relative ones, and those through a typed client's base address.
+- TypeScript and JavaScript requests whose base address is a value glued to the first path segment
+  (`` axios.delete(`${config.get('url')}application/${id}`) ``, the base ending in `/`) now read as `application/{}`
+  rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
+  (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
+  did; identity-v1's TypeScript figures are unchanged.
 - Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
   `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
   (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages
