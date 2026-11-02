@@ -39,5 +39,58 @@ class GoSites(unittest.TestCase):
         self.assertEqual(got, [(4, 'http.NewRequest('), (5, 'HTTPClient.Do('), (6, 'http.Get('), (7, 'http.DefaultClient.Do(')])
 
 
+def link(file, start, verb, path, repo='orchard-api', line=None):
+    return dict(repo=repo, file=file, line=line or start, start_line=start, end_line=start + 5, symbol='h',
+                verb=verb, path=path)
+
+
+class Score(unittest.TestCase):
+    """The score step, by eval/route-links-v1/README.md's "Scoring"."""
+
+    def label(self, id, items=(), negatives=(), completeness='exhaustive', dynamic=False):
+        return dict(id=id, group='orchard', items=list(items), negatives=list(negatives), completeness=completeness,
+                    dynamic_name=dynamic)
+
+    def test_matches_by_file_and_lines_or_by_route(self):
+        item = dict(item='GET /api/trees/{id}', evidence='orchard-api/trees.go:40')
+        self.assertEqual(route_links.match(link('trees.go', 43, 'POST', 'other'), item), 'file')
+        self.assertIsNone(route_links.match(link('trees.go', 44, 'POST', 'other'), item))
+        self.assertEqual(route_links.match(link('router.go', 9, 'GET', 'API/Trees/:treeId/'), item), 'route')
+        self.assertIsNone(route_links.match(link('router.go', 9, 'PUT', 'api/trees/:id'), item))
+        self.assertEqual(route_links.match(link('router.go', 9, '*', 'api/trees/:id'), item), 'route')
+
+    def test_precision_and_recall(self):
+        get = dict(item='GET /api/trees', evidence='orchard-api/trees.go:10')
+        put = dict(item='PUT /api/trees', evidence='orchard-api/trees.go:20', optional=True)
+        neg = dict(item='DELETE /api/trees', evidence='orchard-api/trees.go:30')
+        labels = [
+            self.label('orchard-web/src/api.ts:5', [get, put], [neg]),
+            self.label('orchard-web/src/api.ts:9'),                                   # served outside the corpus
+            self.label('orchard-web/src/api.ts:12', [get], completeness='lower_bound'),
+            self.label('orchard-web/src/api.ts:14#2', [get], completeness='uncertain'),
+        ]
+        rows = [
+            dict(repo='orchard-web', file='src/api.ts', line=5, links=[link('router.go', 3, 'GET', 'api/trees'),
+                                                                      link('router.go', 4, 'DELETE', 'api/trees')]),
+            dict(repo='orchard-web', file='src/api.ts', line=9, links=[link('router.go', 3, 'GET', 'api/trees')]),
+            dict(repo='orchard-web', file='src/api.ts', line=12, links=[link('router.go', 4, 'DELETE', 'api/trees')]),
+        ]
+        sites = route_links.tally(labels, rows)
+        f = route_links.figures(sites)
+        # Precision: the exhaustive sites' links (5: 1 right, 1 to a negative; 9: a link from a site with no items).
+        self.assertEqual((f['precision']['k'], f['precision']['n']), (1, 3))
+        # Recall: the required GET at 5 and at 12; the optional PUT isn't linked, so it doesn't count.
+        self.assertEqual((f['recall']['k'], f['recall']['n']), (1, 2))
+        self.assertEqual(f['uncertain'], 1)
+        self.assertEqual(sites[0]['clauses'], {'route': 1})
+        self.assertEqual(route_links.language('src/api.ts'), 'TypeScript and JavaScript')
+
+    def test_an_optional_item_linked_counts(self):
+        put = dict(item='PUT /api/trees', evidence='orchard-api/trees.go:20', optional=True)
+        rows = [dict(repo='orchard-web', file='a.js', line=1, links=[link('trees.go', 20, 'PUT', 'api/trees')])]
+        f = route_links.figures(route_links.tally([self.label('orchard-web/a.js:1', [put])], rows))
+        self.assertEqual((f['recall']['k'], f['recall']['n'], f['precision']['k'], f['precision']['n']), (1, 1, 1, 1))
+
+
 if __name__ == '__main__':
     unittest.main()
