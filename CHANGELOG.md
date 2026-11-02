@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The first question that reads a C# repo's database model (`impact`, `context`, `tables`, `overview` or a walk on
+  an EF Core repo) takes far less memory and time to build it. Finding which accessors assign an entity's properties
+  resolved every reference in the repo to each property name (`Id`, `Name`, …) before keeping the few made in those
+  accessors; it now keeps them as they are read. The model and answers are unchanged. The first `impact` after an
+  `index` peaked at 82 MB instead of 316 MB on bitwarden/server (29.8 G instructions instead of 47.3 G), and at 36 to
+  37 MB instead of 90 to 91 MB on jellyfin (7.7 G instead of 10.6 G).
+
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
