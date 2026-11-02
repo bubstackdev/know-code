@@ -313,7 +313,9 @@ python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/id
 
 The labels are in [go/](go/labels.jsonl): 1,194 over three repositories (cobra 242, chi 418, gin 534), 705 inside and
 489 outside, per stratum in [go/strata.json](go/strata.json). Two runs of each repository give byte-identical
-enumerations ([go/enumerations.sha256](go/enumerations.sha256)).
+enumerations ([go/enumerations.sha256](go/enumerations.sha256)). The digests were first recorded over the gzip
+bytes; a third run, whose files had those same byte digests, gave the row digests now recorded, and the labels, strata
+and exclusions drawn from it are byte-identical to the committed ones (the held-out set's too).
 
 ### Repositories
 
