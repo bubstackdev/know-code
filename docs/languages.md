@@ -421,7 +421,9 @@ elements (not `dependencyManagement`'s or a plugin's) as `groupId:artifactId`. A
 named as Gradle names it, by its directory (`group:directory` when it sets a literal `group`), with each dependency
 written as coordinates (`implementation("g:a:v")`) and each `project(":x")`; a settings script names the build
 (`rootProject.name`) and its projects (`include`), so a project configured only from the root is a module too. Each
-project is a declared module in `knowcode areas`.
+project is a declared module in `knowcode areas`; a build script that the settings script nearest above it doesn't
+include isn't, since Gradle doesn't build it, while one beside its own settings script (a plugin's test fixture) is a
+build of its own.
 
 ## Configurable conventions
 
