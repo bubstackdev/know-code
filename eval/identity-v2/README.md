@@ -343,6 +343,15 @@ the held-out set; its Java references are scored and reported beside it.
 | misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
 | misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
 
+### Held out, fourth and last: graphql-kotlin (Kotlin)
+
+MoshiX and misk's six wrong links led to three more resolver rules, so a fourth set tests them fresh, and it is the
+last for 0.7: whatever it scores is published as it is. [ExpediaGroup/graphql-kotlin](https://github.com/ExpediaGroup/graphql-kotlin)
+at its 11.0.0 tag, Kotlin on the JVM only, was chosen and committed before any labelling. If it can't be built for
+labelling, its named reserve is [kotlin-orm/ktorm](https://github.com/kotlin-orm/ktorm) at its v4.2.1 tag, and a build
+failure is recorded here and isn't a scoring round. It is labelled, drawn and committed in kotlin-holdout-4/ the same
+way before any KnowCode answer on it is read, and scored once, by the build with every Kotlin rule above.
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:
