@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use kc_extract::Lang;
-use kc_store::{FileRecord, Store};
+use kc_store::{FileRecord, Prepared, Store};
 use serde::{Deserialize, Serialize};
 
 use crate::privacy::Privacy;
@@ -489,7 +489,8 @@ fn methods(sources: &[Source]) -> Result<Vec<SdkMethod>> {
             let lang = if s.path.ends_with(".ts") { Lang::TypeScript } else { Lang::JavaScript };
             let facts = kc_extract::extract_package_source(&s.text, tsx);
             let hash = blake3::hash(s.text.as_bytes()).to_hex().to_string();
-            batch.put(&FileRecord { path: &s.path, lang, mtime_ns: 0, size: s.text.len() as i64, hash: &hash, lines: s.text.lines().count() as u32, facts: &facts })?;
+            let prepared = Prepared::of(&s.path, lang, &facts);
+            batch.put(&FileRecord { path: &s.path, lang, mtime_ns: 0, size: s.text.len() as i64, hash: &hash, lines: s.text.lines().count() as u32, facts: &facts, prepared: &prepared })?;
         }
         batch.commit()?;
     }

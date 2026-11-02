@@ -17,6 +17,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   for the same reason as Swift's: the C# extractor climbed tree-sitter parents from each identifier, reference and
   call (to the member holding it, a type parameter's declaration, the call a method group is passed to), and now
   reads them from the nodes it is inside. What is extracted is unchanged.
+- Indexing writes faster again: the parse workers now also compute what the writer used to work out from each
+  file's facts before inserting them (the file's search document, its symbols' search tokens and its summary key), so
+  the one writer thread only inserts rows. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's
+  instructions fell another 24–25%; the work moved to the parse workers, which run in parallel. The index is the same.
 - Indexing writes faster. The one thread that writes an index re-prepared most of its SQL statements for every file
   (a file's facts take about 30 statements; the connection kept 16), and its 2 MB page cache spilled dirty pages to
   the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch

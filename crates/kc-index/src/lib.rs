@@ -60,7 +60,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use kc_extract::{FileFacts, Lang};
-use kc_store::{FileRecord, Store};
+use kc_store::{FileRecord, Prepared, Store};
 use serde::Serialize;
 
 /// Files larger than this are left out of the content (search) index (generated code, fixtures).
@@ -883,7 +883,7 @@ impl Default for SyncOptions {
 }
 
 enum Work {
-    Parsed { path: String, lang: Lang, mtime_ns: i64, size: i64, hash: String, lines: u32, facts: Box<FileFacts> },
+    Parsed { path: String, lang: Lang, mtime_ns: i64, size: i64, hash: String, lines: u32, facts: Box<FileFacts>, prepared: Box<Prepared> },
     Touched { id: i64, mtime_ns: i64, size: i64 },
     Failed { path: String },
 }
@@ -1295,6 +1295,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
                                             let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                                             kc_extract::ansible::name_root_role(&mut facts, &name);
                                         }
+                                        // Computed here rather than by the one writer, which every file waits on.
+                                        let prepared = Box::new(Prepared::of(path, *lang, &facts));
                                         Work::Parsed {
                                             path: path.clone(),
                                             lang: *lang,
@@ -1303,6 +1305,7 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
                                             hash,
                                             lines,
                                             facts: Box::new(facts),
+                                            prepared,
                                         }
                                     }
                                 }
@@ -1320,8 +1323,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
         // On an error, `rx` is dropped on return, which stops the workers.
         for work in rx {
             match work {
-                Work::Parsed { path, lang, mtime_ns, size, hash, lines, facts } => {
-                    summary_changed |= batch.put(&FileRecord { path: &path, lang, mtime_ns, size, hash: &hash, lines, facts: &facts })?;
+                Work::Parsed { path, lang, mtime_ns, size, hash, lines, facts, prepared } => {
+                    summary_changed |= batch.put(&FileRecord { path: &path, lang, mtime_ns, size, hash: &hash, lines, facts: &facts, prepared: &prepared })?;
                     report.parsed += 1;
                     report.bytes_parsed += size as u64;
                 }
