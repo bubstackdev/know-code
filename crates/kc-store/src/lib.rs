@@ -486,6 +486,28 @@ pub struct FileRecord<'a> {
     pub hash: &'a str,
     pub lines: u32,
     pub facts: &'a FileFacts,
+    /// What its rows need beyond the facts: [`Prepared::of`] them.
+    pub prepared: &'a Prepared,
+}
+
+/// The parts of a file's rows computed from its facts alone: its `locate` document, its symbols' FTS tokens and its
+/// summary key. One thread writes an index while several parse, so the parse workers compute these and the writer
+/// only inserts them.
+pub struct Prepared {
+    /// `None` for a file `locate` never reads as a document (see [`Batch::put`]).
+    document: Option<([String; 4], i64)>,
+    /// Per symbol, in order.
+    tokens: Vec<String>,
+    summary: String,
+}
+
+impl Prepared {
+    pub fn of(path: &str, lang: Lang, facts: &FileFacts) -> Prepared {
+        // A config file read only for its hosts stays the text document `locate` read it as before (see
+        // `kc_index::textdocs`).
+        let document = (lang != Lang::HostConfig).then(|| locate::file_document(path, facts));
+        Prepared { document, tokens: facts.symbols.iter().map(|s| name_tokens(&s.name)).collect(), summary: summary_key(lang, facts) }
+    }
 }
 
 /// A repo's index. Reads made through [`Store::conn`] while a snapshot is held (see [`Store::begin_snapshot`]) all see
@@ -1187,13 +1209,10 @@ impl Batch<'_> {
                 rec.facts.param_types.get(&i)
             ])?;
             let id = self.tx.last_insert_rowid();
-            fts_stmt.execute(params![id, name_tokens(&s.name)])?;
+            fts_stmt.execute(params![id, rec.prepared.tokens[i]])?;
             ids.push(id);
         }
-        // A config file read only for its hosts stays the text document `locate` read it as before (see
-        // `kc_index::textdocs`).
-        if rec.lang != Lang::HostConfig {
-            let (fields, len) = locate::file_document(rec.path, rec.facts);
+        if let Some((fields, len)) = &rec.prepared.document {
             self.tx
                 .prepare_cached("INSERT INTO files_fts(rowid, path, names, docs, refs, len) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
                 .execute(params![file_id, fields[0], fields[1], fields[2], fields[3], len])?;
@@ -1349,7 +1368,7 @@ impl Batch<'_> {
                 ])?;
             }
         }
-        let key = summary_key(rec.lang, rec.facts);
+        let key = &rec.prepared.summary;
         let old: Option<String> = match existing {
             Some(_) => self.tx.prepare_cached("SELECT summary FROM file_keys WHERE file_id = ?1")?.query_row([file_id], |r| r.get(0)).optional()?,
             None => None,
@@ -1694,7 +1713,8 @@ mod tests {
         assert!(!facts.unsupported.is_empty() && !facts.ansible.is_empty(), "{facts:?}");
         let put = |store: &mut Store, facts: &FileFacts| {
             let b = store.batch().unwrap();
-            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts }).unwrap();
+            let prepared = Prepared::of("site.yml", Lang::Ansible, facts);
+            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts, prepared: &prepared }).unwrap();
             b.commit().unwrap();
         };
         put(&mut store, &facts);
@@ -1727,7 +1747,8 @@ mod tests {
         let src = "public static class Api\n{\n    public static void Map(WebApplication app)\n    {\n        app.MapGet(Paths.Item(), GetItem);\n        app.MapGet(\"/items\", ListItems);\n    }\n    static string GetItem(int id) => \"\";\n    static string ListItems() => \"\";\n}\n";
         let facts = kc_extract::extract_file(Lang::CSharp, "Api.cs", src);
         let b = store.batch().unwrap();
-        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts }).unwrap();
+        let prepared = Prepared::of("Api.cs", Lang::CSharp, &facts);
+        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts, prepared: &prepared }).unwrap();
         b.commit().unwrap();
         let conn = store.conn();
         let stored: Vec<(String, String, u32, Option<String>)> = conn
