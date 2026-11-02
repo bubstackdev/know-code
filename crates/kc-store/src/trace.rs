@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::answer::{Assumption, Evidence, EvidencePolicy, PolicyReport, Verdict};
-use crate::query::{self, REF_COLS, RefHit, SYMBOL_COLS, SymbolRow, is_type_or_extension, ref_row, resolve_all, symbol_row};
+use crate::query::{self, REF_COLS, RefHit, SYMBOL_COLS, SymbolRow, is_type_or_extension, ref_row, symbol_row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -546,6 +546,8 @@ struct Tracer<'c> {
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
     /// Definitions looked up, by query, at the snapshot the walk reads.
     defs: query::DefinitionsMemo,
+    /// What resolving references reads about the repo, at the snapshot the walk reads.
+    res: query::Resolution,
     /// Registration (`file:line, lifetime`) of each implementation member reached `via_di`.
     bindings: HashMap<i64, String>,
     /// Edges resolved from a SCIP index: (the symbol reached, the site).
@@ -609,7 +611,7 @@ impl Tracer<'_> {
     fn refs_named(&mut self, name: &str, kinds: Vec<&'static str>) -> Result<Vec<RefHit>> {
         let key = (name.to_string(), kinds.clone());
         if !self.refs_by_name.contains_key(&key) {
-            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
+            let hits = query::refs_in_resolution(self.conn, name, &kinds, &mut self.res)?;
             self.refs_by_name.insert(key.clone(), hits);
         }
         Ok(self.refs_by_name[&key].clone())
@@ -619,7 +621,7 @@ impl Tracer<'_> {
     fn refs_named_where(&mut self, name: &str, kinds: Vec<&'static str>, keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
         let key = (name.to_string(), kinds.clone());
         if !self.refs_by_name.contains_key(&key) {
-            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
+            let hits = query::refs_in_resolution(self.conn, name, &kinds, &mut self.res)?;
             self.refs_by_name.insert(key.clone(), hits);
         }
         Ok(self.refs_by_name[&key].iter().filter(|h| keep(h)).cloned().collect())
@@ -650,7 +652,7 @@ impl Tracer<'_> {
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut hits: Vec<RefHit> = stmt.query_map([sym.id], ref_row)?.collect::<rusqlite::Result<_>>()?;
-        resolve_all(self.conn, &mut hits)?;
+        query::resolve_all_in(self.conn, &mut hits, &mut self.res)?;
         let mut seen = HashSet::new();
         for h in hits {
             if !matches!(h.confidence, "exact" | "unique_name" | "ambiguous") {
@@ -1074,6 +1076,7 @@ fn ambiguous_all(hits: Vec<RefHit>) -> Vec<RefHit> {
 pub struct EdgeCache {
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
     defs: query::DefinitionsMemo,
+    res: query::Resolution,
     bindings: HashMap<i64, String>,
     precise: HashSet<(i64, String)>,
     evidence: HashMap<(i64, String), Evidence>,
@@ -1108,6 +1111,7 @@ impl EdgeCache {
             conn,
             refs_by_name: std::mem::take(&mut self.refs_by_name),
             defs: std::mem::take(&mut self.defs),
+            res: std::mem::take(&mut self.res),
             bindings: std::mem::take(&mut self.bindings),
             precise: std::mem::take(&mut self.precise),
             evidence: std::mem::take(&mut self.evidence),
@@ -1117,6 +1121,7 @@ impl EdgeCache {
         let out = f(&mut t);
         self.refs_by_name = t.refs_by_name;
         self.defs = t.defs;
+        self.res = t.res;
         self.bindings = t.bindings;
         self.precise = t.precise;
         self.evidence = t.evidence;

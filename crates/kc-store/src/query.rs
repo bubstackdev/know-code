@@ -5279,7 +5279,12 @@ fn scoped_out_type(
 }
 
 pub(crate) fn resolve_all(conn: &Connection, hits: &mut [RefHit]) -> Result<()> {
-    resolve_hits(conn, hits, true, &mut Resolution::default())
+    resolve_all_in(conn, hits, &mut Resolution::default())
+}
+
+/// [`resolve_all`], reading what resolution needs about the repo through `shared` (kept for `conn`'s snapshot).
+pub(crate) fn resolve_all_in(conn: &Connection, hits: &mut [RefHit], shared: &mut Resolution) -> Result<()> {
+    resolve_hits(conn, hits, true, shared)
 }
 
 /// [`resolve_all`] by the heuristics alone, ignoring any SCIP index: for comparing the two.
@@ -5300,6 +5305,7 @@ pub struct Resolution {
     py_modules: crate::py::Modules,
     go_modules: crate::go::Modules,
     precise: Option<crate::scip::Precise>,
+    swift_scoped: SwiftScoped,
 }
 
 /// Rivals an edge's evidence lists at most (`rivals_total` counts them all).
@@ -5431,7 +5437,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let go_modules = &mut shared.go_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
-    let mut swift_scoped = SwiftScoped::default();
+    let swift_scoped = &mut shared.swift_scoped;
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -6354,6 +6360,12 @@ fn is_zero_usize(n: &usize) -> bool {
 /// References to a name, resolved. `kinds` filters by reference kind (`call`, `instantiate`, `type_ref`).
 pub fn refs(conn: &Connection, query: &str, kinds: &[&str], limit: usize) -> Result<(Vec<RefHit>, RefSummary)> {
     refs_with(conn, query, kinds, limit, &[])
+}
+
+/// Every reference to `query` of `kinds`, as [`refs`] gives them uncut, reading what resolution needs about the repo
+/// through `shared` (kept for `conn`'s snapshot): a walk resolves many names on one snapshot.
+pub(crate) fn refs_in_resolution(conn: &Connection, query: &str, kinds: &[&str], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, &[], false, shared)?.0)
 }
 
 /// [`refs`], also resolving references that leave the repo against `deps`.
