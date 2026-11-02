@@ -17,6 +17,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   for the same reason as Swift's: the C# extractor climbed tree-sitter parents from each identifier, reference and
   call (to the member holding it, a type parameter's declaration, the call a method group is passed to), and now
   reads them from the nodes it is inside. What is extracted is unchanged.
+- Indexing writes faster. The one thread that writes an index re-prepared most of its SQL statements for every file
+  (a file's facts take about 30 statements; the connection kept 16), and its 2 MB page cache spilled dirty pages to
+  the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
+  gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
+  6–14%, for 11–22 MB more peak memory. The index is the same.
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
