@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- An answer naming many files no longer takes time growing with their square to say which of them have parse
+  errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
+  workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of
+  110 G from the CLI (58 G instead of 164 G over MCP), with the same answer.
 - An MCP answer far over its size (`max_chars`) is cut many rows at a time, and measured again only once it is
   small: it used to be cut one row at a time, with the whole answer measured after each. A workspace-wide `context` on
   a table used across many repos can build an answer of tens of MB, and cutting it grew with the rows cut times its
