@@ -221,3 +221,148 @@ fn inherited_members_by_declaration_and_receiver_lambdas() {
     assert_eq!(answer(&refs_in(c, "url", "member", svc)[0]).0, "ambiguous", "a repo function's `Meta.() -> T`");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_member_shadows_an_extension_only_where_it_fits_the_call() {
+    let root = scratch("kt-member-arity");
+    write(
+        &root,
+        "src/q/Query.kt",
+        "package q\n\
+         \n\
+         import kotlin.reflect.KClass\n\
+         \n\
+         interface Query {\n\
+           interface Factory {\n\
+             fun <Q : Query> newQuery(queryClass: KClass<Q>): Q\n\
+           }\n\
+         }\n\
+         \n\
+         inline fun <reified T : Query> Query.Factory.newQuery(): T = newQuery(T::class)\n",
+    );
+    write(
+        &root,
+        "src/q/Use.kt",
+        "package q\n\
+         \n\
+         class Use(private val factory: Query.Factory) {\n\
+           fun go() {\n\
+             factory.newQuery<Query>()\n\
+             factory.newQuery(Query::class)\n\
+           }\n\
+         }\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    let calls = refs_in(c, "newQuery", "call", "src/q/Use.kt");
+    assert_eq!(answer(&calls[0]), ("exact", vec!["src/q/Query.kt:11".to_string()]), "no argument: the extension");
+    assert_eq!(answer(&calls[1]), ("exact", vec!["src/q/Query.kt:7".to_string()]), "one argument: the member");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_value_typed_by_a_call_sees_only_the_functions_its_file_can() {
+    let root = scratch("kt-private-return");
+    write(
+        &root,
+        "src/t/Transports.kt",
+        "package t\n\nclass HttpTransport {\n  fun start() {}\n}\n\nclass SocketTransport {\n  fun start() {}\n}\n",
+    );
+    write(
+        &root,
+        "src/t/HttpTest.kt",
+        "package t\n\
+         \n\
+         class HttpTest {\n\
+           private fun build(retries: Int? = null) =\n\
+             HttpTransport()\n\
+         \n\
+           fun go() {\n\
+             val transport = build()\n\
+             transport.start()\n\
+           }\n\
+         }\n",
+    );
+    write(
+        &root,
+        "src/t/SocketTest.kt",
+        "package t\n\
+         \n\
+         class SocketTest {\n\
+           private fun build(): SocketTransport {\n\
+             return SocketTransport()\n\
+           }\n\
+         \n\
+           fun go() {\n\
+             val transport = build()\n\
+             transport.start()\n\
+           }\n\
+         }\n",
+    );
+    // No written type and no constructor in the body: untyped here, never typed by the other file's `build`.
+    write(
+        &root,
+        "src/t/OtherTest.kt",
+        "package t\n\
+         \n\
+         class OtherTest {\n\
+           private fun build() = Factory.make()\n\
+         \n\
+           fun go() {\n\
+             val transport = build()\n\
+             transport.start()\n\
+           }\n\
+         }\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(
+        answer(&refs_in(c, "start", "call", "src/t/HttpTest.kt")[0]),
+        ("exact", vec!["src/t/Transports.kt:4".to_string()]),
+        "the constructor its own `build` returns"
+    );
+    let other = answer(&refs_in(c, "start", "call", "src/t/OtherTest.kt")[0]);
+    assert_eq!(other.0, "ambiguous", "candidates, never typed by another file's private `build`: {other:?}");
+    assert_eq!(
+        answer(&refs_in(c, "start", "call", "src/t/SocketTest.kt")[0]),
+        ("exact", vec!["src/t/Transports.kt:8".to_string()]),
+        "its own file's `build`"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_member_inherited_by_a_typed_receiver_is_read_through_its_own_supertypes() {
+    let root = scratch("kt-same-named");
+    write(&root, "m/src/m/flags/Flags.kt", "package m.flags\n\ninterface Flags {\n  fun getDouble(key: String, scope: String): Double\n}\n");
+    // w's `Flags` inherits the method from an interface declared beside it; m's declares its own.
+    write(
+        &root,
+        "w/src/w/flags/Flags.kt",
+        "package w.flags\n\ninterface Flags : Legacy\n\ninterface Legacy {\n  fun getDouble(key: String, scope: String): Double\n}\n",
+    );
+    write(&root, "w/src/w/flags/Dynamic.kt", "package w.flags\n\ninterface Dynamic {\n  fun getDouble(key: String): Double\n}\n");
+    write(&root, "m/src/m/flags/Dynamic.kt", "package m.flags\n\ninterface Dynamic {\n  fun getDouble(key: String): Double\n}\n");
+    write(
+        &root,
+        "m/src/m/ld/Config.kt",
+        "package m.ld\n\nimport m.flags.Dynamic\nimport m.flags.Flags\n\nclass Config(private val flags: Flags) : Dynamic {\n  override fun getDouble(key: String): Double = flags.getDouble(key, \"s\")\n}\n",
+    );
+    write(
+        &root,
+        "w/src/w/ld/Config.kt",
+        "package w.ld\n\nimport w.flags.*\n\nclass Config(private val flags: Flags) : Dynamic {\n  override fun getDouble(key: String): Double = flags.getDouble(key, \"s\")\n}\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(
+        answer(&refs_in(c, "getDouble", "call", "w/src/w/ld/Config.kt")[0]),
+        ("exact", vec!["w/src/w/flags/Flags.kt:6".to_string()]),
+        "the star import's Flags, through its supertype"
+    );
+    assert_eq!(
+        answer(&refs_in(c, "getDouble", "call", "m/src/m/ld/Config.kt")[0]),
+        ("exact", vec!["m/src/m/flags/Flags.kt:4".to_string()])
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

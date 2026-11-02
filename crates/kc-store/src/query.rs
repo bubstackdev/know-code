@@ -880,6 +880,8 @@ struct TypeOracle<'c> {
     /// The TypeScript file being resolved: a free function it calls is its own or an imported one, never another
     /// file's of the same name.
     file: Option<String>,
+    /// The Java or Kotlin file being resolved: a function `private` to another file never gives a call its type.
+    jvm_file: Option<String>,
     supers: HashMap<String, Vec<String>>,
     /// Per name, `None` when no type, extension or typealias has it, else its typealiases (see [`Self::alias`]).
     defined: HashMap<String, Option<Vec<Alias>>>,
@@ -936,7 +938,7 @@ type MemberKey = (String, String, bool, Option<String>);
 type TypeAt = (Option<String>, Option<String>);
 
 /// A call whose return type is looked up: owner, caller's type, name, and (TypeScript) the calling file.
-type ReturnKey = (Option<String>, Option<String>, String, Option<String>);
+type ReturnKey = (Option<String>, Option<String>, String, Option<String>, Option<String>);
 
 /// A method taking a delegate: its container, fewest and most arguments, and per parameter the delegate's input types.
 struct LambdaSig {
@@ -953,6 +955,7 @@ impl<'c> TypeOracle<'c> {
             members: HashMap::new(),
             returns: HashMap::new(),
             file: None,
+            jvm_file: None,
             supers: HashMap::new(),
             defined: HashMap::new(),
             lambdas: HashMap::new(),
@@ -1707,7 +1710,7 @@ impl<'c> TypeOracle<'c> {
     /// The declared return type of a function, as (its container, encoded type).
     fn return_type(&mut self, owner: Option<&str>, scope: Option<&str>, name: &str) -> Result<Option<(Option<String>, String)>> {
         let file = if owner.is_none() { self.file.clone() } else { None };
-        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone());
+        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone(), self.jvm_file.clone());
         if let Some(v) = self.returns.get(&key) {
             let v = v.clone();
             return Ok(v.map(|(c, t, f)| {
@@ -1716,12 +1719,22 @@ impl<'c> TypeOracle<'c> {
             }));
         }
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.container, s.type_name, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+            "SELECT s.container, s.type_name, f.path, s.id FROM symbols s JOIN files f ON f.id = s.file_id
              WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('function', 'method') AND s.type_name IS NOT NULL
              ORDER BY f.path, s.start_byte",
         )?;
-        let rows: Vec<(Option<String>, String, String)> =
-            stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut rows: Vec<(Option<String>, String, String)> = Vec::new();
+        for row in stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?)))? {
+            let (container, ty, path, id) = row?;
+            // Java and Kotlin: a function `private` to another file can't be the one called here, so its type is
+            // never this call's.
+            if let Some(f) = self.jvm_file.as_deref()
+                && crate::jvm::hidden_from(self.conn, f, id)?
+            {
+                continue;
+            }
+            rows.push((container, ty, path));
+        }
         let own = file.as_ref().and_then(|f| rows.iter().find(|(c, _, p)| c.is_none() && p == f)).cloned();
         let defs = rows;
         let in_container = |c: &Option<String>, want: &str| c.as_deref().is_some_and(|c| c == want || c.ends_with(&format!(".{want}")));
@@ -5538,6 +5551,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             ("unresolved", Vec::new())
         } else {
             oracle.file = ts.then(|| hit.file.clone());
+            oracle.jvm_file = java.then(|| hit.file.clone());
             oracle.here = cs.then(|| hit.file.clone());
             oracle.caller = hit.caller_type();
             let mut recv = if cs && !cs_type {

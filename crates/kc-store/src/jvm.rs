@@ -12,6 +12,7 @@
 //! resolution in `query`, and [`Resolver::after`] keeps its answer from naming one declaration by name alone.
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -91,7 +92,8 @@ pub struct Resolver {
     qualified: HashMap<String, i64>,
     /// Packages the repository declares types in.
     packages: HashSet<String>,
-    files: HashMap<String, FileScope>,
+    /// Shared, so a resolution can keep a file's scope while it reads other types through `self`.
+    files: HashMap<String, Rc<FileScope>>,
     /// Per type id: the simple names of its direct supertypes, as written.
     supers: HashMap<i64, Vec<String>>,
     /// By id: the type's declaration, for reading its supertypes where it is declared.
@@ -196,7 +198,7 @@ impl Resolver {
                     }
                 }
             }
-            self.files.insert(file.to_string(), s);
+            self.files.insert(file.to_string(), Rc::new(s));
         }
         Ok(&self.files[file])
     }
@@ -362,31 +364,42 @@ impl Resolver {
         for outer in nest.iter().rev() {
             let q = package.as_ref().map_or_else(|| outer.clone(), |p| format!("{p}.{outer}"));
             let Some(&own) = self.qualified.get(&q) else { continue };
-            let found = members_of(conn, hit, own)?;
-            match found.len() {
-                0 => {}
-                1 => return Ok(Some(("exact", found))),
-                _ => return Ok(Some(("ambiguous", found))),
+            if let Some(found) = self.declared_member(conn, hit, own)? {
+                return Ok(Some(found));
             }
-            let mut seen = HashSet::from([own]);
-            let mut level = vec![own];
-            let mut unsure = false;
-            while !level.is_empty() {
-                let mut next = Vec::new();
-                for id in level {
-                    let (supers, unfollowed) = self.supertypes(conn, id)?;
-                    unsure |= unfollowed;
-                    next.extend(supers.into_iter().filter(|s| seen.insert(*s)));
-                }
-                let mut found = Vec::new();
-                for id in &next {
-                    found.extend(members_of(conn, hit, *id)?);
-                }
-                if !found.is_empty() {
-                    return Ok(Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }));
-                }
-                level = next;
+        }
+        Ok(None)
+    }
+
+    /// The member the reference names on the repository type `own`, by declaration: `own`'s, else the nearest level
+    /// of its supertypes declaring it, each read where its subtype is declared, so a same-named type elsewhere never
+    /// stands in for one. A candidate only when an unfollowed supertype on the way may declare it too. `None` when no
+    /// type on the way declares it.
+    fn declared_member(&mut self, conn: &Connection, hit: &RefHit, own: i64) -> rusqlite::Result<Option<(&'static str, Vec<i64>)>> {
+        let found = members_of(conn, hit, own)?;
+        match found.len() {
+            0 => {}
+            1 => return Ok(Some(("exact", found))),
+            _ => return Ok(Some(("ambiguous", found))),
+        }
+        let mut seen = HashSet::from([own]);
+        let mut level = vec![own];
+        let mut unsure = false;
+        while !level.is_empty() {
+            let mut next = Vec::new();
+            for id in level {
+                let (supers, unfollowed) = self.supertypes(conn, id)?;
+                unsure |= unfollowed;
+                next.extend(supers.into_iter().filter(|s| seen.insert(*s)));
             }
+            let mut found = Vec::new();
+            for id in &next {
+                found.extend(members_of(conn, hit, *id)?);
+            }
+            if !found.is_empty() {
+                return Ok(Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }));
+            }
+            level = next;
         }
         Ok(None)
     }
@@ -604,13 +617,23 @@ impl Resolver {
             }
             _ => None,
         };
-        let file = &self.files[&hit.file];
+        let file_rc = Rc::clone(&self.files[&hit.file]);
+        let file: &FileScope = &file_rc;
         let nest = Self::nest(hit);
         let at = (hit.file.as_str(), hit.line);
         if let Some(t) = path_type {
             let members = members_of(conn, hit, t)?;
             if let [one] = members.as_slice() {
                 return Ok(Some(("exact", vec![*one])));
+            }
+            // Kotlin: a member the type inherits, read through its own declared supertypes. The shared resolution
+            // would walk them by simple name, and so through another package's type of the same name.
+            if members.is_empty()
+                && hit.file.ends_with(".kt")
+                && matches!(hit.kind.as_str(), "call" | "member")
+                && let Some(found) = self.declared_member(conn, hit, t)?
+            {
+                return Ok(Some(found));
             }
         }
         let typed = |found: Found| -> (&'static str, Vec<i64>) {
@@ -683,9 +706,17 @@ impl Resolver {
             && let [id] = ids.as_slice()
             && matches!(hit.kind.as_str(), "call" | "member")
         {
-            let members = members_of(conn, hit, *id)?;
+            let id = *id;
+            let members = members_of(conn, hit, id)?;
             if let [one] = members.as_slice() {
                 return Ok(Some(("exact", vec![*one])));
+            }
+            // Kotlin: an inherited member, through the type's own declared supertypes (as for a path above).
+            if members.is_empty()
+                && hit.file.ends_with(".kt")
+                && let Some(found) = self.declared_member(conn, hit, id)?
+            {
+                return Ok(Some(found));
             }
         }
         // In a Kotlin extension's body a bare name is first the receiver's member (`fun KmClass.isEnum() = kind == …`
@@ -1014,39 +1045,45 @@ fn receiver_function_type(signature: &str) -> bool {
 /// within its own type (Kotlin) or top-level type (Java), so never from another file; the file is the check, as each
 /// of those lies within one.
 fn visible_ids(conn: &Connection, hit: &RefHit, ids: Vec<i64>) -> rusqlite::Result<Vec<i64>> {
+    let mut out = Vec::new();
+    for id in ids {
+        if !hidden_from(conn, &hit.file, id)? {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
+/// Whether the Java or Kotlin declaration `id` is `private` to another file than `file` (itself, or a type it is
+/// declared in, is `private`). Declarations of other languages, and gone ones, aren't hidden by this rule.
+pub(crate) fn hidden_from(conn: &Connection, file: &str, id: i64) -> rusqlite::Result<bool> {
     let mut place = conn.prepare_cached(
         "SELECT s.file_id, f.path, s.name, s.container, s.signature FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1",
     )?;
     let mut outer = conn.prepare_cached(
         "SELECT signature FROM symbols WHERE file_id = ?1 AND name = ?2 AND name = ?2 COLLATE BINARY AND container IS ?3",
     )?;
-    let mut out = Vec::new();
-    for id in ids {
-        let row: Option<(i64, String, String, Option<String>, String)> =
-            place.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).optional()?;
-        let Some((file_id, path, name, container, signature)) = row else { continue };
-        if path == hit.file || !crate::jvm::handles(&path) {
-            out.push(id);
-            continue;
-        }
-        let mut hidden = is_private(&signature, &name);
-        if let Some(container) = container.as_deref() {
-            let parts: Vec<&str> = container.split('.').collect();
-            for k in 1..=parts.len() {
-                if hidden {
-                    break;
-                }
-                let within = (k > 1).then(|| parts[..k - 1].join("."));
-                let signatures: Vec<String> =
-                    outer.query_map(params![file_id, parts[k - 1], within], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-                hidden = signatures.iter().any(|s| is_private(s, parts[k - 1]));
+    let row: Option<(i64, String, String, Option<String>, String)> =
+        place.query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).optional()?;
+    let Some((file_id, path, name, container, signature)) = row else { return Ok(false) };
+    if path == file || !handles(&path) {
+        return Ok(false);
+    }
+    if is_private(&signature, &name) {
+        return Ok(true);
+    }
+    if let Some(container) = container.as_deref() {
+        let parts: Vec<&str> = container.split('.').collect();
+        for k in 1..=parts.len() {
+            let within = (k > 1).then(|| parts[..k - 1].join("."));
+            let signatures: Vec<String> =
+                outer.query_map(params![file_id, parts[k - 1], within], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            if signatures.iter().any(|s| is_private(s, parts[k - 1])) {
+                return Ok(true);
             }
         }
-        if !hidden {
-            out.push(id);
-        }
     }
-    Ok(out)
+    Ok(false)
 }
 
 /// Whether a declaration's signature carries `private` among the modifiers before its name.

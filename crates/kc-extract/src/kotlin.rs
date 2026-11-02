@@ -455,10 +455,13 @@ impl<'a> Cx<'a> {
         if let Some(p) = params {
             let all: Vec<Node> = children(p).filter(|c| c.kind() == "parameter").collect();
             let vararg = self.text(p).contains("vararg");
-            // A parameter with a default may be left out.
-            let defaults = children(p).filter(|c| is_expression(c.kind())).count() as u32;
+            // A parameter with a default may be left out. Its default is the expression after it among the list's
+            // children; the `parameter` nodes themselves aren't defaults.
+            let defaults = children(p).filter(|c| c.kind() != "parameter" && is_expression(c.kind())).count() as u32;
             let n = all.len() as u32;
-            self.facts.symbols[sym].arity = Some((n.saturating_sub(defaults), (!vararg).then_some(n)));
+            // A `vararg` parameter takes no arguments as well as many.
+            let optional = defaults + u32::from(vararg);
+            self.facts.symbols[sym].arity = Some((n.saturating_sub(optional), (!vararg).then_some(n)));
         }
         // The return type follows the parameters; a type before the name is an extension's receiver.
         let ret = params.and_then(|p| {
@@ -473,6 +476,13 @@ impl<'a> Cx<'a> {
         });
         if let Some(t) = ret {
             self.facts.symbols[sym].type_name = self.declared_type(t);
+        } else if let Some(body) = children(node).find(|c| c.kind() == "function_body")
+            && let Some(call) = children(body).find(|c| c.is_named())
+            && call.kind() == "call_expression"
+        {
+            // `fun build() = Transport(…)`: with no written type, the type is what the body constructs, as kotlinc
+            // infers it. Left unset, the query would take another function's of the same name.
+            self.facts.symbols[sym].type_name = self.constructed(call);
         }
         self.with_callable(Some(sym), |cx| {
             for c in children(node) {
@@ -1078,5 +1088,20 @@ mod tests {
         let members = refs(&f, RefKind::Member);
         assert!(members.contains(&("count".into(), None)));
         assert!(!members.iter().any(|(n, _)| n == "cart" || n == "it"), "locals aren't members");
+    }
+
+    #[test]
+    fn function_arity_counts_only_defaults_as_optional() {
+        let f = extract(
+            "interface F {\n  fun <Q : Any> make(kind: KClass<Q>): Q\n}\n\
+             fun both(a: Int, b: Int = 1) = a + b\n\
+             fun none() = 0\n\
+             fun many(vararg xs: Int) = xs.size\n",
+        );
+        let arity = |n: &str| f.symbols.iter().find(|s| s.name == n).unwrap().arity;
+        assert_eq!(arity("make"), Some((1, Some(1))));
+        assert_eq!(arity("both"), Some((1, Some(2))));
+        assert_eq!(arity("none"), Some((0, Some(0))));
+        assert_eq!(arity("many"), Some((0, None)));
     }
 }
