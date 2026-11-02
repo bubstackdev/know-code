@@ -40,4 +40,6 @@
 # fde5357, whose Rust code is the change's base.
 # 0.7's Go: the tree-sitter-go grammar (231,248 bytes, eval/size/grammars.md, both passes) and the Go extractor,
 # go.mod reading and resolver (132,256): 38826672, up 363504 from integration/0.7 bb0bb3c's dist build (38463168).
-38826672
+# 0.7's Kotlin: the tree-sitter-kotlin-ng grammar (3,467,728 bytes, eval/size/grammars.md, both passes) and the Kotlin
+# extractor and resolver (132,192): 42658096, up 3599920 from integration/0.7 7c71d53's dist build (39058176).
+42658096
