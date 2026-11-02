@@ -1,0 +1,86 @@
+{
+ "graphql-kotlin/kotlin/call/inside/1": {
+  "available": 1259,
+  "drawn": 20
+ },
+ "graphql-kotlin/kotlin/call/inside/2-4": {
+  "available": 338,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/call/inside/5+": {
+  "available": 220,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/call/outside/0": {
+  "available": 11073,
+  "drawn": 10
+ },
+ "graphql-kotlin/kotlin/call/outside/1+": {
+  "available": 1696,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/dispatch/inside/1": {
+  "available": 100,
+  "drawn": 20
+ },
+ "graphql-kotlin/kotlin/dispatch/inside/2-4": {
+  "available": 104,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/dispatch/inside/5+": {
+  "available": 184,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/extension/inside/1": {
+  "available": 322,
+  "drawn": 20
+ },
+ "graphql-kotlin/kotlin/extension/inside/2-4": {
+  "available": 367,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/extension/inside/5+": {
+  "available": 54,
+  "drawn": 19
+ },
+ "graphql-kotlin/kotlin/member/inside/1": {
+  "available": 1810,
+  "drawn": 20
+ },
+ "graphql-kotlin/kotlin/member/inside/2-4": {
+  "available": 1087,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/member/inside/5+": {
+  "available": 1723,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/member/outside/0": {
+  "available": 2425,
+  "drawn": 10
+ },
+ "graphql-kotlin/kotlin/member/outside/1+": {
+  "available": 1177,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/type/inside/1": {
+  "available": 1890,
+  "drawn": 20
+ },
+ "graphql-kotlin/kotlin/type/inside/2-4": {
+  "available": 633,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/type/inside/5+": {
+  "available": 266,
+  "drawn": 40
+ },
+ "graphql-kotlin/kotlin/type/outside/0": {
+  "available": 5908,
+  "drawn": 10
+ },
+ "graphql-kotlin/kotlin/type/outside/1+": {
+  "available": 209,
+  "drawn": 39
+ }
+}

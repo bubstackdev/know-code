@@ -343,6 +343,39 @@ the held-out set; its Java references are scored and reported beside it.
 | misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
 | misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
 
+### Held out, fourth and last: graphql-kotlin (Kotlin)
+
+MoshiX and misk's six wrong links led to three more resolver rules, so a fourth set tests them fresh, and it is the
+last for 0.7: whatever it scores is published as it is.
+[ExpediaGroup/graphql-kotlin](https://github.com/ExpediaGroup/graphql-kotlin) at its 11.0.0 tag, Kotlin on the JVM
+only, was chosen and committed before any labelling, with [kotlin-orm/ktorm](https://github.com/kotlin-orm/ktorm) at
+its v4.2.1 tag named as the reserve should it not build.
+
+Neither built at first, and nothing from either was enumerated then. Both keep their build logic in a buildSrc of
+precompiled script plugins (`*.gradle.kts` conventions). scip-java 0.13.2's init script applies its Gradle plugin to
+every project of every build, buildSrc's too, and the plugin reads each Kotlin compile's compiler arguments while the
+build is configured; for a precompiled script plugin those arguments come from a task that hasn't run yet, and Gradle
+refuses the read. graphql-kotlin (Gradle 9.4.0) failed so with and without jvm/skip-buildsrc.gradle; ktorm (Gradle
+8.9, with Kotlin 2.0.21 pinned in buildSrc's dependencies) failed the same way. This is http4k's failure above. The
+labeller now has a setting for it, `SCIP_ROOT_BUILD_ONLY`: a `gradlew` in front of the container's copy's own
+(jvm/gradlew-root-only.sh) keeps scip-java's init script to the root build, so build logic, which is never labelled,
+compiles without the plugin. Exposed, labelled again with the changed labeller, gives an enumeration of the same
+row digest as the one its labels were drawn from (a9c94f30…, [enumerations.sha256](kotlin-holdout-2/enumerations.sha256)).
+With that setting and its version catalog's Kotlin set to 2.4.21
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)), graphql-kotlin builds, and it is the set; ktorm wasn't
+needed.
+
+628 references in [kotlin-holdout-4/](kotlin-holdout-4/labels.jsonl), all Kotlin (479 inside, 149 outside), drawn from
+the 32845 eligible references counted in [strata.json](kotlin-holdout-4/strata.json), committed before any KnowCode
+answer on them is read, and scored once, by a build with every Kotlin rule above:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 19 | 0 | 0 | 79 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 39 | 149 |
 ### Kotlin, scored
 
 Each held-out set was scored once, by the build of its day, and its figures stand as scored: a rule added after
@@ -356,9 +389,11 @@ every change; it shows no regression, not accuracy on unseen code.
 | Exposed, held out | after ktlint's | 637 | 500 | 175 | 0.977 (4 wrong) | 0.342 | 0.606 | 1 |
 | MoshiX and misk, held out | after Exposed's | 1152 | 882 | 426 | 0.986 (6 wrong) | 0.476 | 0.780 | 0 |
 | MoshiX and misk, Java beside it | after Exposed's | 470 | 333 | 276 | 1.000 | 0.829 | 0.886 | 1 |
+| graphql-kotlin, held out, last | after MoshiX and misk's | 628 | 479 | 272 | 1.000 | 0.568 | 0.869 | 1 |
 
-None of the three held-out sets meets the gate's 0.99 and no outside link at its single scoring. What each found, and
-the rule each led to:
+None of the four held-out sets meets the gate at its single scoring. The last, graphql-kotlin, meets its `exact`
+precision (1.000 over 272 links) and falls short only on the outside label it links. What each found, and the rule each
+led to:
 
 - **ktlint** (1 wrong, 2 outside). An explicit import of a name inside a top-level class of that name was read as the
   class (`import …EditorConfigLoader` in `class EditorConfigLoader`); kotlinc reads the import. `this.text` in an
@@ -380,6 +415,12 @@ the rule each led to:
   `FeatureFlags`, which declares it (1 wrong); a typed receiver's inherited member is now read through its own
   declared supertypes. The Java outside link is `super.connect(…)` linked to the class's own override, which
   `super` never reaches (JLS 15.12.1); that rule is Java resolution's, in its own change.
+- **graphql-kotlin** (0 wrong, 1 outside), scored by integration/0.7 at f3fc3a8, which doesn't hold that `super`
+  rule. `super.transform(…)` in `SynchronizedDataLoader`, whose supertype `DelegatingDataLoader` is a library's, was
+  linked (`unique_name`) to the class's own override of `transform`: the same cause as MoshiX and misk's Java outside
+  link, in Kotlin. That cause is fixed by the `super` rule of the Java change that follows MoshiX and misk (it covers
+  Kotlin's `super` too), which landed after this set was scored; the fix can't be re-measured on this set, the last
+  held-out set for 0.7.
 
 **Recall.** Linked recall on the held-out sets (0.430, 0.342, 0.476) is near the tuned set's (0.482), and below
 Java's (0.874) because much of Kotlin is written in lambdas with receivers: builder DSLs, `apply` and `with` blocks,

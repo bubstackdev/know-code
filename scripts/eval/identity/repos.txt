@@ -37,3 +37,7 @@ exposed jvm https://github.com/JetBrains/Exposed ba50abcc256d85af9b0142f4d7474ce
 # chosen first, couldn't be built for labelling: eval/identity-v2/README.md.)
 moshix jvm https://github.com/ZacSweers/MoshiX 4414c1b0b14a92a754902e7263dcf5b889551ffe
 misk jvm https://github.com/cashapp/misk 46eb623d3347ef9839a4a0f4a8e5488e38d787d2
+# The fourth and last held-out Kotlin set (eval/identity-v2/kotlin-holdout-4), after fixes from the third, chosen before
+# any labelling: graphql-kotlin at tag 11.0.0. Its reserve, used only if it can't be built, is ktorm at tag v4.2.1
+# (kotlin-orm/ktorm 1f0fd021a2a5679dd0ea066aed147973c695e77f).
+graphql-kotlin jvm https://github.com/ExpediaGroup/graphql-kotlin b0ff9bd6db8636d76e81f6186f9b41dd78e686e9

@@ -16,6 +16,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   autofac, jellyfin, jellyfin-web, hono), 18 of 60 sampled `find` answers were cut with no cursor. Following the
   cursors, the declarations of the name asked for that are found go from 135 to 145 of 145 compiler-labelled ones in
   C#, and from 64 to 67 of 78 in TypeScript.
+- C#: a call's overloads are told apart by the number of arguments it passes in the form it is called. An extension
+  method called on a value (`rack.Stack<int>(pick)`) takes no argument for its receiver, and one called as a static
+  method (`RackExtensions.Stack<int, string>(rack)`) passes it as its first; either was counted both ways before, so
+  an overload that couldn't be the one called stayed among an ambiguous call's candidates, and impact listed the
+  call's method among that overload's callers. On identity-v1's C# labels, 17 more references are linked `exact`, all
+  of them right (`exact` precision stays 0.998), and ambiguous answers fall from 203 to 185.
 - Building the file reference graph (behind rankings, `overview`, `hotspots` and `areas`, and most of a cold index
   of a large repo) is faster. A TypeScript type reference read the namespaces of each candidate's file again for
   every candidate, a Go import scanned every Go file to find the package it names, and two free functions of one name
@@ -35,15 +41,21 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
   (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
   did; identity-v1's TypeScript figures are unchanged.
+- In Java and Kotlin, `super.m()` resolves to a supertype's member, never to the calling class's own override, as
+  javac and kotlinc bind it; when the repository's supertypes don't declare it, it is a library's and stays
+  unresolved. A member a typed receiver inherits is read through that type's own declared supertypes in Java too, so a
+  same-named type in another package is never taken for one. On jsoup's held-out labels, linked recall rises from
+  0.813 to 0.831, with `exact` precision 1.000 and no outside label linked.
 - Kotlin is read, with Java as one family. Classes, objects, companions, functions, extensions and properties in `.kt`
   files are indexed, and names resolve as kotlinc scopes them: by package and imports (aliases included), a class's
   companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
   Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
   the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
   is 1.000 over 433 links, linked recall 0.482, and no outside label is linked; Java's linked recall rises to 0.874 as
-  Java calls into Kotlin resolve. Three held-out Kotlin sets, each scored once before the rules it led to, fell short:
-  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1) and 0.986 on MoshiX and misk
-  (0). Each cause is now a resolution rule; `eval/identity-v2/README.md` lists them with the scores.
+  Java calls into Kotlin resolve. Four held-out Kotlin sets, each scored once, fell short of the gate:
+  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1), 0.986 on MoshiX and misk (0),
+  and, last, 1.000 over 272 links on graphql-kotlin (1, a `super` call). Each cause is now a resolution rule;
+  `eval/identity-v2/README.md` lists them with the scores.
 - Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
   `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
   (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages

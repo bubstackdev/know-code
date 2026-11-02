@@ -366,3 +366,52 @@ fn a_member_inherited_by_a_typed_receiver_is_read_through_its_own_supertypes() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn super_reaches_only_the_supertypes_members() {
+    let root = scratch("kt-super");
+    // On a library supertype, `super.close()` is the library's member, never the class's own override.
+    write(
+        &root,
+        "src/io/Pipe.kt",
+        "package io\n\nimport org.lib.Stream\n\nclass Pipe : Stream() {\n  override fun close() {\n    super.close()\n  }\n}\n",
+    );
+    write(&root, "src/io/Base.kt", "package io\n\nopen class Base {\n  open fun flush() {}\n}\n");
+    write(
+        &root,
+        "src/io/Child.kt",
+        "package io\n\nclass Child : Base() {\n  override fun flush() {\n    super.flush()\n  }\n}\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(answer(&refs_in(c, "close", "call", "src/io/Pipe.kt")[0]), ("unresolved", vec![]), "a library supertype's member");
+    assert_eq!(
+        answer(&refs_in(c, "flush", "call", "src/io/Child.kt")[0]),
+        ("exact", vec!["src/io/Base.kt:4".to_string()]),
+        "the repository supertype's member"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn super_reads_a_generic_qualified_supertype() {
+    let root = scratch("kt-super-generic");
+    write(
+        &root,
+        "src/spec/Tagged.kt",
+        "package spec\n\ninterface Tagged {\n  interface Builder<out T : Builder<T>> {\n    fun tag(t: String): T = this as T\n  }\n}\n",
+    );
+    write(
+        &root,
+        "src/spec/Fun.kt",
+        "package spec\n\nclass Fun {\n  class Builder :\n    Tagged.Builder<Builder> {\n    override fun tag(t: String): Builder = super.tag(t)\n  }\n}\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(
+        answer(&refs_in(c, "tag", "call", "src/spec/Fun.kt")[0]),
+        ("exact", vec!["src/spec/Tagged.kt:5".to_string()]),
+        "the generic, qualified supertype's member"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
