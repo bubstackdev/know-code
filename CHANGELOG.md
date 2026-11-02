@@ -26,6 +26,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
   gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
   6–14%, for 11–22 MB more peak memory. The index is the same.
+- A server opens fewer SQLite connections per repo per query. Whether an index needs its schema created or migrated
+  is remembered for the server's lifetime once it is found current (a file at this build's schema stays so), and the
+  check for stale derived data reads through the query's own connection instead of opening a second one. A
+  workspace-wide `find` over microsoft/TypeScript and seven smaller public repos takes 5–8% fewer instructions.
+  Answers are unchanged.
 - A server's check that a repo is unchanged before answering is cheaper: which indexed files are there by their
   content rather than their name is now settled when the freshness record is written, not worked out again for every
   file at every query. On microsoft/TypeScript (32,112 indexed files) a `find` over MCP that needs no sync takes

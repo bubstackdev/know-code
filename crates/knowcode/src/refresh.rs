@@ -529,13 +529,15 @@ fn open_synced(root: &Path, mut store: Store, claim: Option<kc_index::base::Clai
         // drawing on the older data says so itself (`stale_derived`). Waiting for it, the first call of a session
         // ran out of its budget and called a current index "queued or running". Derived data never computed (an
         // index a query or an older build made) is built in the background.
+        // The worker may have committed after open() pinned its snapshot, before the stat check: the snapshot is
+        // taken again. The derived data is read between the two, as committed now, on this connection: inside a
+        // snapshot, reading it opened a second connection (`Store::side`) at every query.
+        store.end_snapshot()?;
         if kc_index::derived_stale(root, &store)? {
             Worker::shared().schedule(root)?;
         } else if kc_index::derived_missing(&store)? {
             Deriver::shared().queue(root);
         }
-        // The worker may have committed after open() pinned its snapshot, before the stat check.
-        store.end_snapshot()?;
         store.begin_snapshot()?;
         return Ok((store, Some(SyncReport::default())));
     }

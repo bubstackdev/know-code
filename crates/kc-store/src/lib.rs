@@ -630,6 +630,14 @@ fn set_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+/// Device, inode and creation time of the file at `path` (0 where the file system keeps none); `None` when there is none.
+fn file_identity(path: &Path) -> Option<(u64, u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    let created = m.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Some((m.dev(), m.ino(), created))
+}
+
 /// Opens a read transaction on `conn` and takes its snapshot (a deferred transaction takes it at its first read).
 fn begin_snapshot(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN DEFERRED")?;
@@ -689,12 +697,25 @@ impl Store {
     }
 
     /// Whether opening this index would create or migrate its schema. Does not write to the file.
+    ///
+    /// A file found at this build's schema stays at it: only an older schema is ever rebuilt, and each schema has its
+    /// own part of the cache, so no other build rewrites it. This process remembers such files by identity (device,
+    /// inode, creation time; a file recreated is another), and finds them current again without opening a connection:
+    /// a server opened one per repo per query for this.
     pub fn needs_migration(path: &Path) -> Result<bool> {
-        if !path.exists() {
-            return Ok(true);
+        static CURRENT: std::sync::Mutex<Option<std::collections::HashSet<(u64, u64, u128)>>> = std::sync::Mutex::new(None);
+        let Some(id) = file_identity(path) else { return Ok(true) };
+        let known = |id| CURRENT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|k| k.contains(&id));
+        if id.2 != 0 && known(id) {
+            return Ok(false);
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        Ok(schema_state(&conn)? != Schema::Current)
+        let current = schema_state(&conn)? == Schema::Current;
+        // Without a creation time, a file recreated at once could get the inode just freed: not remembered.
+        if current && id.2 != 0 {
+            CURRENT.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id);
+        }
+        Ok(!current)
     }
 
     pub fn open(path: &Path) -> Result<Store> {
@@ -1632,6 +1653,27 @@ mod tests {
             }
             assert_eq!(Store::open(&path).unwrap().meta("root").unwrap().as_deref(), Some("/x"));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An index found current is found so again without a connection; one recreated at the same path is a new file,
+    /// checked afresh.
+    #[test]
+    fn a_current_index_is_remembered_and_a_recreated_one_checked_again() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-current-{}", std::process::id()));
+        let path = dir.join("i.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Store::needs_migration(&path).unwrap(), "no file yet");
+        drop(Store::open(&path).unwrap());
+        assert!(!Store::needs_migration(&path).unwrap());
+        assert!(!Store::needs_migration(&path).unwrap(), "remembered");
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1');").unwrap();
+        drop(raw);
+        assert!(Store::needs_migration(&path).unwrap(), "a new file at the same path, of an older schema");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
