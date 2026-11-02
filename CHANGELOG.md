@@ -4,6 +4,14 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
+  is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
+  one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
+  every other's uses. On identity-v1's TypeScript labels, 30 more references are linked `exact`, all of them right
+  (`exact` precision 0.998), ambiguous answers fall from 139 to 108, recall (linked) goes from 0.597 to 0.636, and no
+  label is newly wrong. The index schema moves to 25 (each declaration's scope), so the first query after upgrading
+  indexes each repo again, at the same cost as a cold index (hono 15.6 G instructions, jellyfin 108 G); builds of
+  schema 24 sharing the cache keep their own indexes.
 - An answer naming many files no longer takes time growing with their square to say which of them have parse
   errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
   workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of

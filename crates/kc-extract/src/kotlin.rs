@@ -339,6 +339,7 @@ impl<'a> Cx<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         self.facts.symbols.len() - 1
     }

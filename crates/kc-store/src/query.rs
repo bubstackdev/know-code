@@ -577,6 +577,8 @@ struct Def {
     on_actor: bool,
     /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
     alias_member: bool,
+    /// For a declaration inside a function body: the lines of that body, where alone its name can be used.
+    scope: Option<(u32, u32)>,
 }
 
 impl Def {
@@ -3202,7 +3204,7 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
      f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
-     p.kind IS 'typealias'";
+     p.kind IS 'typealias', s.scope_start, s.scope_end";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -3230,6 +3232,10 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
         alias_member: r.get(20)?,
+        scope: match (r.get::<_, Option<u32>>(21)?, r.get::<_, Option<u32>>(22)?) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        },
     })
 }
 
@@ -5796,6 +5802,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 .filter(|d| !(d.lang == "swift" && d.external_container && in_tests(&d.file) && in_sources(&hit.file)))
                 .collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
+            let before = if explain { usable.clone() } else { Vec::new() };
+            let usable = in_block(hit, usable);
+            dropped_by(&mut dropped, explain, &before, &usable, "scope");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
             // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
             // which no type or module the lookup reads declares: the namespace's own declarations of the name.
@@ -6312,7 +6321,7 @@ fn ts_scoped(
             }))
         }
         None if hit.receiver.is_none() && hit.kind != "member" => {
-            let own: Vec<i64> = defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).map(|d| d.id).collect();
+            let own: Vec<i64> = in_block(hit, defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).collect()).iter().map(|d| d.id).collect();
             if !own.is_empty() {
                 return Ok(Some(("exact", own)));
             }
@@ -6329,6 +6338,24 @@ fn ts_scoped(
             Ok(None)
         }
         None => Ok(None),
+    }
+}
+
+/// Of `defs`, those `hit` can name where it is. A declaration inside a function body (a `const` or `type` in a test's
+/// callback) is named only there, and never through a value (`x.name`) unless it is a local type's member; of those
+/// holding the reference, the innermost shadows the others and every declaration outside it, as a block's own
+/// declaration does.
+fn in_block<'d>(hit: &RefHit, defs: Vec<&'d Def>) -> Vec<&'d Def> {
+    let visible: Vec<&Def> = defs
+        .into_iter()
+        .filter(|d| match d.scope {
+            None => true,
+            Some((a, b)) => d.file == hit.file && (a..=b).contains(&hit.line) && (hit.receiver.is_none() || d.container.is_some()),
+        })
+        .collect();
+    match visible.iter().filter(|d| d.container.is_none()).filter_map(|d| d.scope.map(|(a, b)| b - a)).min() {
+        Some(w) if hit.receiver.is_none() => visible.into_iter().filter(|d| d.container.is_some() || d.scope.is_some_and(|(a, b)| b - a == w)).collect(),
+        _ => visible,
     }
 }
 
