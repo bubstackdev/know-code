@@ -28,7 +28,7 @@ use crate::{FileFacts, ImportBinding, Ref, RefKind, Relation, RelationKind, Symb
 mod client;
 mod http;
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 5;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -64,6 +64,7 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         frameworks: Vec::new(),
         pending_router: None,
         package_routers: HashMap::new(),
+        requests: HashMap::new(),
         handlers: Vec::new(),
         seen: HashSet::new(),
     };
@@ -268,6 +269,9 @@ struct Cx<'a> {
     handlers: Vec<(usize, (String, Option<String>))>,
     /// Package-level router variables (`var router = gin.Default()`).
     package_routers: HashMap<String, http::Router>,
+    /// Requests built with `NewRequest` and held in a variable, by the function building them and the variable: the
+    /// verb and encoded path a `Do` sending that variable requests (see `client`).
+    requests: HashMap<(Option<usize>, String), (String, String)>,
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
 }
 

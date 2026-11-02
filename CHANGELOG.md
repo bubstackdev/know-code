@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Go: a `Do` sending a request its function built (`req, err := http.NewRequest(…)`, then `client.Do(req)`) is a
+  request of its own, to the same route, so `routes` lists it and links it where the request is linked.
+- A request whose URL names another host (`https://github.com/{user}.keys`), one that isn't this machine and that no
+  indexed repo serves, is no longer linked to a route of the workspace that happens to share its path. Requests on
+  this machine (`localhost`), relative ones, and those through a typed client's base address link as before.
 - `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
