@@ -51,13 +51,39 @@ class Score(unittest.TestCase):
         return dict(id=id, group='orchard', items=list(items), negatives=list(negatives), completeness=completeness,
                     dynamic_name=dynamic)
 
-    def test_matches_by_file_and_lines_or_by_route(self):
+    def test_a_link_giving_a_route_matches_by_route_alone(self):
         item = dict(item='GET /api/trees/{id}', evidence='orchard-api/trees.go:40')
-        self.assertEqual(route_links.match(link('trees.go', 43, 'POST', 'other'), item), 'file')
-        self.assertIsNone(route_links.match(link('trees.go', 44, 'POST', 'other'), item))
         self.assertEqual(route_links.match(link('router.go', 9, 'GET', 'API/Trees/:treeId/'), item), 'route')
-        self.assertIsNone(route_links.match(link('router.go', 9, 'PUT', 'api/trees/:id'), item))
         self.assertEqual(route_links.match(link('router.go', 9, '*', 'api/trees/:id'), item), 'route')
+        self.assertIsNone(route_links.match(link('router.go', 9, 'PUT', 'api/trees/:id'), item))
+        # In the item's file, near its evidence, but another route: not a match.
+        self.assertIsNone(route_links.match(link('trees.go', 41, 'POST', 'api/trees'), item))
+        # File only (the secondary figure), and a link with no route: the file clause.
+        self.assertEqual(route_links.match(link('trees.go', 43, 'POST', 'other'), item, file_only=True), 'file')
+        self.assertIsNone(route_links.match(link('trees.go', 44, 'POST', 'other'), item, file_only=True))
+        self.assertEqual(route_links.match(link('trees.go', 37, 'GET', None), item), 'file')
+
+    def test_handlers_near_each_other_and_a_registrar(self):
+        """Made-up fixtures. One: gin's main() registers GET and POST /api/trees to listTrees (line 5) and plantTree
+        (line 7), the GET site's negative; by the file clause the right GET link would match the negative too. Two: the
+        handlers are declared in another package, so each link's row is the registering function's (main.go:8)."""
+        get = dict(item='GET /api/trees', evidence='orchard-api/main.go:5', optional=True)
+        post = dict(item='POST /api/trees', evidence='orchard-api/main.go:7', optional=True)
+        labels = [self.label('orchard-web/src/api.ts:2', [get], [post]), self.label('orchard-web/src/api.ts:6', [post])]
+        rows = [dict(repo='orchard-web', file='src/api.ts', line=2, links=[link('main.go', 5, 'GET', 'api/trees', line=12)]),
+                dict(repo='orchard-web', file='src/api.ts', line=6, links=[link('main.go', 7, 'POST', 'api/trees', line=13)])]
+        f = route_links.figures(route_links.tally(labels, rows))
+        self.assertEqual((f['precision']['k'], f['precision']['n'], f['recall']['k'], f['recall']['n']), (2, 2, 2, 2))
+        f = route_links.figures(route_links.tally(labels, rows, file_only=True))
+        self.assertEqual((f['precision']['k'], f['precision']['n']), (1, 2))
+
+        get['evidence'], post['evidence'] = 'orchard-api/handlers/trees.go:7', 'orchard-api/handlers/trees.go:9'
+        rows = [dict(repo='orchard-web', file='src/api.ts', line=2, links=[link('main.go', 8, 'GET', 'api/trees', line=9)]),
+                dict(repo='orchard-web', file='src/api.ts', line=6, links=[link('main.go', 8, 'POST', 'api/trees', line=10)])]
+        f = route_links.figures(route_links.tally(labels, rows))
+        self.assertEqual((f['precision']['k'], f['precision']['n']), (2, 2))
+        f = route_links.figures(route_links.tally(labels, rows, file_only=True))
+        self.assertEqual((f['precision']['k'], f['precision']['n']), (0, 2))
 
     def test_precision_and_recall(self):
         get = dict(item='GET /api/trees', evidence='orchard-api/trees.go:10')

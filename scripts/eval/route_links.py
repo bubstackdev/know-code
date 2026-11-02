@@ -18,6 +18,17 @@ WORK/kc/<binary hash>/<group>, never in the clone, and its requests are read wit
 that isn't a product path (crates/kc-index/examples/client_links.rs): the `routes` answer names a request by the
 symbol making it, and a site is a call, two of which one function can hold. The reader's links are the `routes`
 answer's (both call `kc_index::http::handlers`); the scorer checks that per requesting symbol and reports the agreement.
+
+The rule's match: "a link matches an item when its handler is in the item's file within 3 lines of its evidence, or,
+where an answer gives the route, when the routes are equal". Its reading here was decided before any answer on a
+labelled set was read. A link names the server route row it reaches, and the reader gives that row's verb and path, so
+for such a link the route clause alone decides whether it matches an item or a negative; the file clause applies only
+to a link with no route (a generated client's operation). The reasons, both seen on made-up fixtures
+(test_route_links.py): handlers declared within 3 lines of each other are one another's negatives by the file clause,
+so a right link would also match a negative; and a Go route whose handler is declared in another file is a row of the
+function registering it, so the file clause compares a registrar with a handler. Beside these figures, `file_only` scores the same links by the file clause alone: what a user can
+check today, since the `routes` answer's link items give a route's file and lines but not its path. Each match records
+the clause it used.
 """
 from __future__ import annotations
 
@@ -180,15 +191,16 @@ def item_route(item):
     return route_key(verb, path)
 
 
-def match(link, target):
-    """How a link matches a label's item or negative, or None: `file` when the linked handler is in the item's file
-    within NEAR lines of its evidence, `route` when the linked route equals the item's."""
+def match(link, target, file_only=False):
+    """How a link matches a label's item or negative, or None: `route` when the link gives a route and it equals the
+    item's; `file`, for a link giving no route (or with `file_only`), when the linked handler is in the item's file
+    within NEAR lines of its evidence."""
+    if link.get('path') is not None and not file_only:
+        return 'route' if same_route(route_key(link['verb'], link['path']), item_route(target['item'])) else None
     m = EVIDENCE.match(target.get('evidence', ''))
     if m and link['repo'] == m.group(1) and link['file'] == m.group(2) \
             and abs(link['start_line'] - int(m.group(3))) <= NEAR:
         return 'file'
-    if link.get('path') is not None and same_route(route_key(link['verb'], link['path']), item_route(target['item'])):
-        return 'route'
     return None
 
 
@@ -203,7 +215,7 @@ def links_at(rows, label):
     return [out[k] for k in sorted(out, key=str)]
 
 
-def tally(labels, rows):
+def tally(labels, rows, file_only=False):
     """Per site, by the rule: precision over the links from `exhaustive` sites (a link counts right when it matches one
     of the site's items and none of its negatives; a link from a site with no items is wrong); recall over the
     required items of `exhaustive` and `lower_bound` sites, with an optional item counted only when it is linked.
@@ -215,8 +227,8 @@ def tally(labels, rows):
                     dynamic=bool(label.get('dynamic_name')), completeness=label['completeness'],
                     links=len(links), right=0, wrong=[], required=0, found=0, missed=[], clauses={})
         for l in links:
-            how = [match(l, i) for i in label['items']]
-            bad = any(match(l, n) for n in label.get('negatives', []))
+            how = [match(l, i, file_only) for i in label['items']]
+            bad = any(match(l, n, file_only) for n in label.get('negatives', []))
             if any(how) and not bad:
                 site['right'] += 1
                 c = next(h for h in how if h)
@@ -224,7 +236,7 @@ def tally(labels, rows):
             else:
                 site['wrong'].append(f"{l['verb']} /{l.get('path') or ''} at {l['repo']}/{l['file']}:{l['line']}")
         for i in label['items']:
-            linked = any(match(l, i) for l in links)
+            linked = any(match(l, i, file_only) for l in links)
             if i.get('optional') and not linked:
                 continue
             site['required'] += 1
@@ -317,11 +329,19 @@ def run(args):
             else:
                 agree['differ'].append(f'{key[0]}: {key[1]}')
     sites = tally(labels, rows)
-    summary = dict(rule='route-links-v1', binary=tag, labels=args.labels, agreement=agree,
-                   figures=breakdown(sites), sites=sites)
+    secondary = tally(labels, rows, file_only=True)
+    clauses = {}
+    for s in sites:
+        for c, n in s['clauses'].items():
+            clauses[c] = clauses.get(c, 0) + n
+    summary = dict(rule='route-links-v1', binary=tag, labels=args.labels, agreement=agree, clauses=clauses,
+                   figures=breakdown(sites), sites=sites, file_only=dict(figures=breakdown(secondary)))
     if args.out:
         Path(args.out).write_text(json.dumps(summary, indent=1, sort_keys=True) + '\n')
     print(report(summary))
+    print('\nfile clause only (secondary):\n')
+    print(report(summary['file_only']))
+    print(f"\nmatches by clause: {clauses}")
     print(f"\nreader and `routes` answer agree on {agree['same']} of {agree['symbols']} requesting symbols")
 
 
