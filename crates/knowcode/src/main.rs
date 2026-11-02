@@ -15,6 +15,7 @@ mod help;
 mod history;
 mod hook;
 mod mcp;
+mod memory;
 mod more_text;
 mod ops;
 mod pending;
@@ -903,6 +904,10 @@ fn notes_repo(path: &std::path::Path) -> Result<PathBuf> {
 
 fn main() {
     let cli = Cli::parse();
+    // Before any thread starts: the long-lived commands run with an allocator that gives freed memory back.
+    if matches!(&cli.command, Cmd::Serve { .. } | Cmd::Index { .. }) {
+        memory::lean_allocator();
+    }
     // A command or query that has to build a repo's reference graph is one the user waits for: most of the machine
     // (a server's background builds take their own share, see `refresh`). Read only when one is built.
     kc_store::rank::set_default_threads(|| {

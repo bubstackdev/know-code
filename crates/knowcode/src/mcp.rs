@@ -1495,7 +1495,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
     .await
     .map_err(|e| ToolError::new(Code::Internal, e.to_string()));
     cancel_on_drop.0 = None;
-    release_memory();
+    crate::memory::release();
     result?.map_err(ToolError::from)
 }
 
@@ -1983,20 +1983,6 @@ fn noted(workspace: bool, mut env: Value) -> Value {
     env
 }
 
-/// Hands freed pages back to the OS after each call, so resident memory tracks what is in use rather than the
-/// high-water mark of the biggest call.
-fn release_memory() {
-    #[cfg(target_os = "macos")]
-    {
-        unsafe extern "C" {
-            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
-        }
-        // SAFETY: a null zone means all zones; goal 0 means release as much as possible. No pointers are kept.
-        unsafe {
-            malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
-        }
-    }
-}
 
 /// The answer as the server outputs it: [`cap_full`], said in its compact form (see [`crate::compact`]).
 pub(crate) fn cap(env: Value, max: usize) -> String {
@@ -3224,7 +3210,7 @@ fn run_server(server: KnowcodeServer) -> anyhow::Result<()> {
     kc_index::light::discover_roots()?;
     crate::refresh::start();
     // No process-wide SQLite memory limit: SQLite is built without the counting it needs (see .cargo/config.toml).
-    // Each connection's page cache is bounded by its `cache_size`, and `release_memory` hands freed pages back.
+    // Each connection's page cache is bounded by its `cache_size`, and `crate::memory::release` hands freed pages back.
     // Stdin and stdout each hold a blocking thread; the others run tool work, one per lane (see `WORK`).
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).max_blocking_threads(5).enable_all().build()?;
     rt.block_on(async move {
