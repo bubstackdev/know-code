@@ -15,6 +15,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
   (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
   did; identity-v1's TypeScript figures are unchanged.
+- Kotlin is read, with Java as one family. Classes, objects, companions, functions, extensions and properties in `.kt`
+  files are indexed, and names resolve as kotlinc scopes them: by package and imports (aliases included), a class's
+  companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
+  Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
+  the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
+  is 1.000 over 433 links, linked recall 0.482, and no outside label is linked; Java's linked recall rises to 0.874 as
+  Java calls into Kotlin resolve. Three held-out Kotlin sets, each scored once before the rules it led to, fell short:
+  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1) and 0.986 on MoshiX and misk
+  (0). Each cause is now a resolution rule; `eval/identity-v2/README.md` lists them with the scores.
 - Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
   `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
   (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages

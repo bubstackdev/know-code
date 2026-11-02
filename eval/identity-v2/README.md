@@ -343,6 +343,58 @@ the held-out set; its Java references are scored and reported beside it.
 | misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
 | misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
 
+### Kotlin, scored
+
+Each held-out set was scored once, by the build of its day, and its figures stand as scored: a rule added after
+reading one can't be measured on it again. The set above, which the resolver was developed against, is re-scored after
+every change; it shows no regression, not accuracy on unseen code.
+
+| Set | Build | Labels | Inside | `exact` rows | `exact` precision | Recall, linked | Recall, among candidates | Outside linked |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| identity-v2 Kotlin (tuned on) | this change | 1185 | 899 | 433 | 1.000 | 0.482 | 0.848 | 0 |
+| ktlint, held out | before its rules | 500 | 381 | 165 | 0.994 (1 wrong) | 0.430 | 0.787 | 2 |
+| Exposed, held out | after ktlint's | 637 | 500 | 175 | 0.977 (4 wrong) | 0.342 | 0.606 | 1 |
+| MoshiX and misk, held out | after Exposed's | 1152 | 882 | 426 | 0.986 (6 wrong) | 0.476 | 0.780 | 0 |
+| MoshiX and misk, Java beside it | after Exposed's | 470 | 333 | 276 | 1.000 | 0.829 | 0.886 | 1 |
+
+None of the three held-out sets meets the gate's 0.99 and no outside link at its single scoring. What each found, and
+the rule each led to:
+
+- **ktlint** (1 wrong, 2 outside). An explicit import of a name inside a top-level class of that name was read as the
+  class (`import …EditorConfigLoader` in `class EditorConfigLoader`); kotlinc reads the import. `this.text` in an
+  extension on a library type was linked to a repository member named `text`; a library receiver's members aren't
+  known, so only a repository extension on that type is a candidate (that link's other target was a member of a
+  `private` nested class in another file). A `private` declaration, or one inside a `private` type, is now seen
+  only in its own file.
+- **Exposed** (4 wrong, 1 outside). A bare name in a lambda with a receiver (`lazyMetadata { url }`, `x.apply {
+  close() }`) was linked to the enclosing class's member; the receiver's members come first, and the receiver isn't
+  typed, so such a name is now a candidate only. And two same-named test classes in different modules pooled their
+  supertypes, so a bare call reached the other module's base class; members are now read through each type's own
+  declared supertypes.
+- **MoshiX and misk** (6 wrong; the 1 outside link is a Java reference). `factory.newQuery<Q>()` was linked to the
+  member `newQuery(queryClass)` rather than the extension `newQuery()` (3 wrong): every Kotlin function's minimum
+  argument count was taken as zero, so the member fit a call it can't take, and a member shadows an extension only
+  where it fits. `val transport = build()` was typed by another file's `private fun build()` (2 wrong); a function
+  `private` to another file never types a call, and an expression body that constructs a type gives that type.
+  `featureFlags.getDouble(…)` on wisp's `FeatureFlags`, which inherits it, was linked to misk's same-named
+  `FeatureFlags`, which declares it (1 wrong); a typed receiver's inherited member is now read through its own
+  declared supertypes. The Java outside link is `super.connect(…)` linked to the class's own override, which
+  `super` never reaches (JLS 15.12.1); that rule is Java resolution's, in its own change.
+
+**Recall.** Linked recall on the held-out sets (0.430, 0.342, 0.476) is near the tuned set's (0.482), and below
+Java's (0.874) because much of Kotlin is written in lambdas with receivers: builder DSLs, `apply` and `with` blocks,
+and a repository's own `T.() -> R` parameters. A bare name in one is a candidate rather than a link, since the
+receiver isn't typed; on the tuned set that rule costs 26 links (recall 0.504 without it). Calls of extension
+functions are the other gap: on MoshiX and misk, 3 of 188 inside extension references are linked, and 136 have
+candidates instead.
+
+**Parse errors.** tree-sitter-kotlin-ng 1.1.0 can't read a nested class whose primary constructor starts on the line
+after its name; such a file is parsed again with those line breaks joined, every position kept (docs/languages.md).
+That recovers 9 files: 5 in kotlinpoet, 3 in misk and 1 in moshi, holding 86 of the tuned set's labels and 5 of
+MoshiX and misk's. Other files with parse errors are reported as such and indexed as far as they parse: 30 labels of
+the tuned set, 51 of ktlint's, 105 of Exposed's and 107 of MoshiX and misk's are in one. Most of MoshiX's 28 such
+files are its compiler plugin's test data, written with diagnostic markers that aren't Kotlin.
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:
