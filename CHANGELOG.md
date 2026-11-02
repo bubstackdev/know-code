@@ -26,6 +26,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the member and skips supertypes that aren't protocols. On swift-nio, `tests Sources/NIOCore/ChannelPipeline.swift`
   takes about a third fewer instructions; on Alamofire, `tests Source/Core/Session.swift` about two thirds fewer.
   Answers are unchanged.
+- A walk asks which implementations of a protocol member may run once per member, not again at every implementation
+  it reaches. On Alamofire, `tests Source/Core/Session.swift` takes about 40% fewer instructions again. Answers are
+  unchanged.
 - Indexing Swift packages and walking their code is faster. Which names each SwiftPM target imports by name from
   outside the repo was read again for every name resolved; it is now read once per target, both when the file
   ranking is built after indexing (on swift-nio, 209 G instructions down to 14 G) and in a walk, which now also keeps
