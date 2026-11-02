@@ -149,6 +149,7 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         type_name: None,
         arity: None,
         lambda_types: None,
+        scope: None,
     });
     cx.scopes.push(Scope::new(0));
     // A component written in CFScript, or a `.cfs` file, is script throughout.
@@ -470,6 +471,7 @@ impl<'a> Cx<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         self.facts.symbols.len() - 1
     }
@@ -664,6 +666,7 @@ impl<'a> Cx<'a> {
             type_name: ty.clone(),
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         if let Some(t) = ty {
             self.bind(&name, false, Ty::Component(t));

@@ -47,6 +47,8 @@ mod jsx_impact_tests;
 mod overload_tests;
 #[cfg(test)]
 mod receiver_path_tests;
+#[cfg(test)]
+mod ts_local_scope_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;

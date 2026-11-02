@@ -357,6 +357,11 @@ pub struct Symbol {
     /// there is typed from it at query time. C# only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lambda_types: Option<String>,
+    /// For a declaration inside a function, a callback or a function's block (a TypeScript `const` or `type` in a
+    /// test's `it(() => …)`): the first and last lines of the innermost function body holding it, the only place its
+    /// name can be used. `None` at module and type level. TypeScript only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
