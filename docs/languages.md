@@ -15,8 +15,8 @@ edges: the gaps below are the places to check by hand.
 | C# | `.cs`, `.csproj` | types, members, calls, instantiations, type and member uses | namespaces, `using`s, project references, receiver types, DI |
 | TypeScript, TSX, JavaScript | `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.jsx`, `tsconfig*.json`, `jsconfig.json`, `package.json` | the same, plus Angular templates (`.html`) | imports, tsconfig `paths`/`baseUrl`, receiver types, Angular DI |
 | Swift | `.swift`, `Package.swift`, XcodeGen `project.yml` | types, extensions, conformances, members, calls, attributes | receiver and caller types, supertypes, protocols |
-| Java | `.java` | types, members, calls, instantiations, type and member uses, imports | packages, single-type, on-demand and static imports, receiver types |
-| Kotlin | `.kt` | types, objects, companions, functions, extensions, properties, calls, type and member uses, imports | packages, imports and aliases, companions, extensions by receiver type, receiver types; one family with Java |
+| Java | `.java`, `pom.xml`, Gradle scripts | types, members, calls, instantiations, type and member uses, imports | packages, single-type, on-demand and static imports, receiver types |
+| Kotlin | `.kt`, Gradle scripts | types, objects, companions, functions, extensions, properties, calls, type and member uses, imports | packages, imports and aliases, companions, extensions by receiver type, receiver types; one family with Java |
 | Python | `.py` | definitions, calls, imports | imports (relative and absolute) |
 | Rust | `.rs`, `Cargo.toml` | definitions, calls, uses | by name and receiver within the repo |
 | Go | `.go`, `go.mod` | types, functions, methods, fields, interface methods, calls, type and member uses, HTTP routes and clients | packages, imports through `go.mod`, receiver types, embedding |
@@ -408,10 +408,20 @@ at run time are reported as `unresolved`.
 
 ## Manifests
 
-SwiftPM, XcodeGen, Cargo, MSBuild (`.csproj`), npm (`package.json`) and Go (`go.mod`: the module, its requires and
-replaces) manifests give packages and repo-to-repo edges. A path dependency links to the repo it lands in; a registry dependency (NuGet, npm, crates) links to the
+SwiftPM, XcodeGen, Cargo, MSBuild (`.csproj`), npm (`package.json`), Go (`go.mod`: the module, its requires and
+replaces), Maven (`pom.xml`) and Gradle (`build.gradle[.kts]`, `settings.gradle[.kts]`) manifests give packages and
+repo-to-repo edges. A path dependency links to the repo it lands in; a registry dependency (NuGet, npm, crates) links to the
 indexed repo declaring that package, with `revision_unverified` when the version can't be checked. Checkouts of one
 origin (a clone, a worktree, a second clone) count as one repo.
+
+Maven and Gradle files are read as text and never run, so a plugin, a property (`${project.version}`), a profile, a
+version catalog entry (`libs.okio`) or an `allprojects` block isn't resolved. A `pom.xml` is the package
+`groupId:artifactId` (the parent's groupId when it sets none), with its `<modules>` and its own `<dependency>`
+elements (not `dependencyManagement`'s or a plugin's) as `groupId:artifactId`. A Gradle build script is its project,
+named as Gradle names it, by its directory (`group:directory` when it sets a literal `group`), with each dependency
+written as coordinates (`implementation("g:a:v")`) and each `project(":x")`; a settings script names the build
+(`rootProject.name`) and its projects (`include`), so a project configured only from the root is a module too. Each
+project is a declared module in `knowcode areas`.
 
 ## Configurable conventions
 

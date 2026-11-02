@@ -29,6 +29,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `Context.header` among its targets or makes the caller one of that method's. On jellyfin-web and hono's sampled
   `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
   `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
+- Maven and Gradle builds are read. A `pom.xml` is a package named by its coordinates (`groupId:artifactId`), with
+  its modules and dependencies; a Gradle build script is its project, with the dependencies it writes as coordinates
+  and the projects it depends on, and a settings script names the build's projects. Each project is a declared module
+  in `areas`, and a dependency on a package another indexed repo builds links the two repos, as other manifests'
+  registry dependencies do. The files are read as text, never run: plugins, properties, profiles and version
+  catalogs aren't resolved.
 - A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
   list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
   sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
