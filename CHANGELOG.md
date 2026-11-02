@@ -35,6 +35,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
   (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
   did; identity-v1's TypeScript figures are unchanged.
+- In Java and Kotlin, `super.m()` resolves to a supertype's member, never to the calling class's own override, as
+  javac and kotlinc bind it; when the repository's supertypes don't declare it, it is a library's and stays
+  unresolved. A member a typed receiver inherits is read through that type's own declared supertypes in Java too, so a
+  same-named type in another package is never taken for one. On jsoup's held-out labels, linked recall rises from
+  0.813 to 0.831, with `exact` precision 1.000 and no outside label linked.
 - Kotlin is read, with Java as one family. Classes, objects, companions, functions, extensions and properties in `.kt`
   files are indexed, and names resolve as kotlinc scopes them: by package and imports (aliases included), a class's
   companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
