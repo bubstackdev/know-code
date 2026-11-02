@@ -61,6 +61,18 @@ fn join(prefix: &str, path: &str) -> String {
     }
 }
 
+/// `prefix` and `path` joined as echo joins them: a group's prefix followed directly by the path (`g.prefix + path`,
+/// in v4 and v5 alike), with a `/` put in front only when the whole has none. So `GET("s")` on a `/user` group is
+/// `/users`, and `GET("/s")` is `/user/s`. A prefix that is only a group key (`{@F#0}`) is followed as by [`join`]: the
+/// callers' prefixes it stands for are joined in the store.
+fn echo_join(prefix: &str, path: &str) -> String {
+    let key_only = prefix.starts_with("{@") && prefix.find('}') == Some(prefix.len() - 1);
+    if path.is_empty() || path.starts_with('/') || prefix.is_empty() || prefix.ends_with('/') || key_only {
+        return join(prefix, path);
+    }
+    format!("{prefix}{}", path.trim_end_matches('/'))
+}
+
 /// A `net/http` pattern's method and path: `"GET /items/{id}"` is `GET` and `/items/{id}`; no method answers every
 /// one. `{$}`, which anchors the path's end, isn't part of it.
 fn pattern(p: &str) -> (String, String) {
@@ -139,18 +151,34 @@ impl<'a> Cx<'a> {
                     None => return None,
                 };
                 match (base.fw, method) {
-                    (Fw::Gin | Fw::Echo, "Group" | "SubGroup") => {
+                    (Fw::Gin, "Group" | "SubGroup") => {
                         let p = self.literal(*args.first()?)?;
                         Some(Router { fw: base.fw, prefix: join(&base.prefix, &p) })
+                    }
+                    // echo's group prefix is concatenated, and a trailing `/` is kept for the paths joined to it.
+                    (Fw::Echo, "Group" | "SubGroup") => {
+                        let p = self.literal(*args.first()?)?;
+                        let mut prefix = echo_join(&base.prefix, &p);
+                        if p.ends_with('/') && !prefix.is_empty() {
+                            prefix.push('/');
+                        }
+                        Some(Router { fw: base.fw, prefix })
                     }
                     (Fw::Chi, "With") | (Fw::Gin | Fw::Echo, "Use") => Some(base),
                     _ => None,
                 }
             }
-            // `mux.Handle` passed as a value: a registration function on the mux (see `registrar_type`).
             "selector_expression" => {
-                let r = self.router_of(e.child_by_field_name("operand")?)?;
+                let operand = e.child_by_field_name("operand")?;
                 let m = self.text(e.child_by_field_name("field")?);
+                // A router held in a field of a struct this file declares (`s.router`, a `*chi.Mux`).
+                if let Some(crate::types::TypeExpr::Named(t)) = self.expr_type(operand)
+                    && let Some(fw) = self.field_routers.get(&(t, m.to_string()))
+                {
+                    return Some(Router { fw: *fw, prefix: String::new() });
+                }
+                // `mux.Handle` passed as a value: a registration function on the mux (see `registrar_type`).
+                let r = self.router_of(operand)?;
                 (r.fw == Fw::NetHttp && matches!(m, "Handle" | "HandleFunc")).then_some(r)
             }
             _ => None,
@@ -184,7 +212,23 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// A route path written as a string literal, or `{=Name}` for a constant of this package.
+    /// The root router a struct field's type is: `*gin.Engine`, `*echo.Echo`, `*chi.Mux` or `*http.ServeMux`. Only a
+    /// root: a group in a field (`*gin.RouterGroup`) carries a prefix the field's declaration doesn't give.
+    pub(super) fn root_router_type(&self, t: Node) -> Option<Fw> {
+        let text: String = self.text(t).split_whitespace().collect();
+        let (q, name) = text.strip_prefix('*')?.split_once('.')?;
+        let fw = self.fw_of(q)?;
+        let is = match fw {
+            Fw::Gin => name == "Engine",
+            Fw::Echo => name == "Echo",
+            Fw::Chi => name == "Mux",
+            Fw::NetHttp => name == "ServeMux",
+        };
+        is.then_some(fw)
+    }
+
+    /// A route path written as a string literal, `{=Name}` for a constant of this package or of another package of the
+    /// repository (`apiv2.GroupPrefix`; the store looks a constant up by its name), or those joined with `+`.
     fn literal(&self, e: Node) -> Option<String> {
         match e.kind() {
             "interpreted_string_literal" | "raw_string_literal" => {
@@ -192,6 +236,21 @@ impl<'a> Cx<'a> {
                 Some(t[1..t.len().saturating_sub(1)].to_string())
             }
             "identifier" if self.local(self.text(e)).is_none() => Some(format!("{{={}}}", self.text(e))),
+            "selector_expression" => {
+                let operand = e.child_by_field_name("operand")?;
+                let name = self.text(e.child_by_field_name("field")?);
+                let q = self.text(operand);
+                if operand.kind() != "identifier" || self.local(q).is_some() || !self.is_import(q) || self.fw_of(q).is_some() {
+                    return None;
+                }
+                // The standard library's constants (`http.MethodGet`) aren't the repository's.
+                let binding = self.facts.bindings.iter().find(|b| b.local == q || (b.local.is_empty() && crate::go::package_name_guess(&b.module) == q))?;
+                binding.module.split('/').next().is_some_and(|h| h.contains('.')).then(|| format!("{{={name}}}"))
+            }
+            "binary_expression" if e.child_by_field_name("operator").is_some_and(|o| self.text(o) == "+") => {
+                Some(self.literal(e.child_by_field_name("left")?)? + &self.literal(e.child_by_field_name("right")?)?)
+            }
+            "parenthesized_expression" => children(e).find(|c| c.is_named()).and_then(|c| self.literal(c)),
             _ => None,
         }
     }
@@ -518,7 +577,7 @@ impl<'a> Cx<'a> {
         }
         match path.and_then(|p| self.literal(p)) {
             Some(p) => {
-                let path = join(&router.prefix, &p);
+                let path = if router.fw == Fw::Echo { echo_join(&router.prefix, &p) } else { join(&router.prefix, &p) };
                 self.push_route(verb, path, call);
             }
             None => self.unsupported_route(verb, "its path isn't a literal or a constant", call),
@@ -683,6 +742,114 @@ func Register(mux *http.ServeMux) {
     }
 
     #[test]
+    fn echo_concatenates_and_gin_joins() {
+        let got = routes(
+            r#"package orchard
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/labstack/echo/v4"
+)
+
+func main() {
+	e := echo.New()
+	a := e.Group("/api/v1")
+	u := a.Group("/user")
+	u.GET("", show)
+	u.GET("s", list)
+	u.GET("/s", sub)
+	x := e.Group("/crates/")
+	x.GET("s", crate)
+	r := gin.Default()
+	g := r.Group("/user")
+	g.GET("s", list)
+}
+"#,
+        );
+        assert_eq!(
+            got,
+            [
+                row("server", "GET", "api/v1/user"),
+                row("server", "GET", "api/v1/users"),
+                row("server", "GET", "api/v1/user/s"),
+                row("server", "GET", "crates/s"),
+                row("server", "GET", "user/s"),
+            ]
+        );
+    }
+
+    #[test]
+    fn paths_from_constants_of_other_packages_and_joined_with_plus() {
+        let got = routes(
+            r#"package orchard
+
+import (
+	"net/http"
+
+	"example.com/orchard/apiv2"
+	"github.com/go-chi/chi/v5"
+	"github.com/labstack/echo/v4"
+)
+
+const treePath = "/api/v2/trees"
+
+func main() {
+	e := echo.New()
+	g := e.Group(apiv2.GroupPrefix)
+	g.GET("/docs", docs)
+	e.Add(http.MethodGet, "/health", health)
+	r := chi.NewRouter()
+	r.Get(treePath+"/{name}", get)
+	r.Post((treePath + "/{name}") + "/water", water)
+	r.Get(http.StatusText(200), other)
+}
+"#,
+        );
+        assert_eq!(
+            got,
+            [
+                row("server", "GET", "{=GroupPrefix}/docs"),
+                row("server", "GET", "{=treePath}/{name}"),
+                row("server", "POST", "{=treePath}/{name}/water"),
+            ]
+        );
+    }
+
+    #[test]
+    fn routers_in_struct_fields() {
+        let got = routes(
+            r#"package orchard
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-chi/chi/v5"
+)
+
+func (s *server) init() {
+	s.router = chi.NewRouter()
+	s.router.Get("/healthz", health)
+	s.router.Group(func(router chi.Router) {
+		router.Get("/api/v2/seeds", seeds)
+	})
+	s.group.GET("/far", far)
+	s.cache.Get("/not-a-route", nil)
+	http.ListenAndServe(":80", s.router)
+}
+
+type server struct {
+	router *chi.Mux
+	group  *gin.RouterGroup
+	cache  *Cache
+}
+"#,
+        );
+        // The struct is declared after the method; a group in a field has a prefix nobody gives, so it isn't one.
+        assert_eq!(got, [row("server", "GET", "healthz"), row("server", "GET", "api/v2/seeds"), row("server", "GET", "far")]);
+    }
+
+    #[test]
     fn joining_and_patterns() {
         assert_eq!(join("", "/v1/"), "v1");
         assert_eq!(join("v1", "/users"), "v1/users");
@@ -691,5 +858,11 @@ func Register(mux *http.ServeMux) {
         assert_eq!(join("api", "/"), "api");
         assert_eq!(pattern("GET /items/{id}"), ("GET".to_string(), "/items/{id}".to_string()));
         assert_eq!(pattern("/{$}"), ("*".to_string(), "/".to_string()));
+        assert_eq!(echo_join("api/user", "s"), "api/users");
+        assert_eq!(echo_join("api/user", "/s"), "api/user/s");
+        assert_eq!(echo_join("api/user/", "s"), "api/user/s");
+        assert_eq!(echo_join("", "s"), "s");
+        assert_eq!(echo_join("{@shop.routes#0}", "s"), "{@shop.routes#0}s");
+        assert_eq!(echo_join("{@shop.routes#0}v1", "s"), "{@shop.routes#0}v1s");
     }
 }

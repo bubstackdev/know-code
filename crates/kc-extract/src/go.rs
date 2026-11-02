@@ -28,7 +28,7 @@ use crate::{FileFacts, ImportBinding, Ref, RefKind, Relation, RelationKind, Symb
 mod client;
 mod http;
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -64,10 +64,12 @@ pub fn extract(path: &str, source: &str) -> FileFacts {
         frameworks: Vec::new(),
         pending_router: None,
         package_routers: HashMap::new(),
+        field_routers: HashMap::new(),
         handlers: Vec::new(),
         seen: HashSet::new(),
     };
     cx.header(tree.root_node());
+    cx.router_fields(tree.root_node());
     if let Some((constraint, line)) = excluded(path, source) {
         // The default build doesn't compile the file: its declarations are another build's, which resolution doesn't
         // take for the default build's (see `kc_store::go`).
@@ -268,6 +270,9 @@ struct Cx<'a> {
     handlers: Vec<(usize, (String, Option<String>))>,
     /// Package-level router variables (`var router = gin.Default()`).
     package_routers: HashMap<String, http::Router>,
+    /// Fields of this file's struct types that hold a root router (`router *chi.Mux`), by type and field name: read
+    /// before the file's functions, so a method sees them wherever the struct is declared.
+    field_routers: HashMap<(String, String), http::Fw>,
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
 }
 
@@ -278,6 +283,22 @@ impl<'a> Cx<'a> {
 
     fn current(&self) -> Option<usize> {
         self.scopes.last().map(|s| s.sym)
+    }
+
+    /// The fields of the file's top-level struct types that hold a root router (see `field_routers`).
+    fn router_fields(&mut self, root: Node) {
+        for decl in children(root).filter(|c| c.kind() == "type_declaration") {
+            for spec in children(decl).filter(|c| c.kind() == "type_spec") {
+                let (Some(name), Some(ty)) = (spec.child_by_field_name("name"), spec.child_by_field_name("type")) else { continue };
+                let Some(list) = (ty.kind() == "struct_type").then(|| children(ty).find(|c| c.kind() == "field_declaration_list")).flatten() else { continue };
+                for field in children(list).filter(|c| c.kind() == "field_declaration") {
+                    let Some(fw) = field.child_by_field_name("type").and_then(|t| self.root_router_type(t)) else { continue };
+                    for n in children(field).filter(|c| c.kind() == "field_identifier") {
+                        self.field_routers.insert((self.text(name).to_string(), self.text(n).to_string()), fw);
+                    }
+                }
+            }
+        }
     }
 
     /// The package clause and the imports, read first so that every reference sees every import.
