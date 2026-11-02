@@ -216,6 +216,24 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
     let mut packages = kc_store::manifests::packages(store.conn())?;
     let is_settings = |p: &kc_store::manifests::PackageRow| p.kind == "gradle" && p.file.rsplit('/').next().is_some_and(|f| f.starts_with("settings."));
     packages.sort_by_key(|p| is_settings(p));
+    // Each Gradle settings script's directory and the project directories it includes: a build script is a project
+    // of the build whose settings script is nearest above it only if that script includes it (or is beside it).
+    let builds: Vec<(String, Vec<String>)> = packages
+        .iter()
+        .filter(|p| is_settings(p))
+        .map(|p| {
+            let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
+            let projects = p.targets.iter().filter(|t| t.kind == "module").map(|t| {
+                let dir = t.name.replace(':', "/");
+                if base.is_empty() { dir } else { format!("{base}/{dir}") }
+            });
+            (base.to_string(), projects.collect())
+        })
+        .collect();
+    let in_its_build = |dir: &str| {
+        let nearest = builds.iter().filter(|(b, _)| under(b, dir) || b == dir).max_by_key(|(b, _)| b.len());
+        nearest.is_none_or(|(b, projects)| b == dir || projects.iter().any(|p| p == dir))
+    };
     for p in packages {
         let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
         let join = |parts: &[&str]| parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("/");
@@ -243,7 +261,7 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
                 for t in p.targets.iter().filter(|t| t.kind == "module") {
                     add(&t.name, &p.kind, join(&[base, &t.name.replace(':', "/")]));
                 }
-                if !p.name.is_empty() && p.name != "(workspace)" && !is_settings(&p) {
+                if !p.name.is_empty() && p.name != "(workspace)" && !is_settings(&p) && in_its_build(base) {
                     add(&p.name, &p.kind, base.to_string());
                 }
             }

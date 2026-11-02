@@ -48,6 +48,13 @@ fn a_gradle_build_declares_a_module_per_project() {
             ("web/admin/src/main/kotlin/Admin.kt", "package org.example.shop\n\nclass Admin\n"),
             // A project with no build script of its own, configured from the root.
             ("docs/src/main/java/org/example/shop/Docs.java", &class("Docs")),
+            // A build script the settings script doesn't include: Gradle never builds it.
+            ("old/build.gradle.kts", "plugins { java }\n"),
+            ("old/src/main/java/org/example/shop/Old.java", &class("Old")),
+            // A build of its own (a plugin's test fixture), with a settings script beside it.
+            ("plugin/src/test/resources/fixture/settings.gradle.kts", "rootProject.name = \"fixture\"\n"),
+            ("plugin/src/test/resources/fixture/build.gradle.kts", "plugins { java }\n"),
+            ("plugin/src/test/resources/fixture/src/main/java/Fixture.java", "class Fixture {}\n"),
         ],
     );
     assert_eq!(
@@ -57,6 +64,7 @@ fn a_gradle_build_declares_a_module_per_project() {
             ("admin".to_string(), "gradle".to_string(), "web/admin".to_string()),
             // ...or, with none, by the settings script's `include`.
             ("docs".to_string(), "gradle".to_string(), "docs".to_string()),
+            ("fixture".to_string(), "gradle".to_string(), "plugin/src/test/resources/fixture".to_string()),
             ("org.example:core".to_string(), "gradle".to_string(), "core".to_string()),
         ]
     );
