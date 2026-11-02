@@ -1747,7 +1747,8 @@ pub fn surface_key(lang: Lang, facts: &FileFacts, positions: bool) -> String {
 }
 
 /// Replaces every position in a serialized fact by its rank among the file's positions of that unit (lines, columns,
-/// byte offsets; equal values keep equal ranks). Resolution compares a file's positions only with each other (a
+/// byte offsets; equal values keep equal ranks). Any number in a field named `line` or `col` is taken for a position:
+/// a fact field so named that isn't one must be renamed, or its changes would count only by order. Resolution compares a file's positions only with each other (a
 /// definition inside a namespace's line span, two candidates declared on one line), and those comparisons come out the
 /// same for any edit that keeps the ranks; an edit inside a body moves the declarations after it all alike.
 fn strip_positions(v: &mut serde_json::Value) {

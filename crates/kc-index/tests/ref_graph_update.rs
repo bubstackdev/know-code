@@ -175,6 +175,11 @@ fn edit(root: &Path, files: &[String], originals: &BTreeMap<String, String>, rng
 /// Runs `steps` seeded edits over the repo at `root`, checking after each sync that the graph the store gives is
 /// the one built afresh. Returns how many syncs logged names (could update rather than rebuild).
 fn check_updates(root: &Path, seed: u64, steps: usize, insert_reversed: bool) -> usize {
+    check_updates_every(root, seed, steps, insert_reversed, 1)
+}
+
+/// [`check_updates`], asking for the graph only after every `every` syncs: an update then follows several log entries.
+fn check_updates_every(root: &Path, seed: u64, steps: usize, insert_reversed: bool, every: usize) -> usize {
     let mut files: Vec<String> = Vec::new();
     let out = Command::new("git").args(["ls-files"]).current_dir(root).output().unwrap();
     for f in String::from_utf8(out.stdout).unwrap().lines() {
@@ -194,22 +199,26 @@ fn check_updates(root: &Path, seed: u64, steps: usize, insert_reversed: bool) ->
     for step in 0..steps {
         done.push(edit(root, &files, &originals, &mut Rng(seed.wrapping_mul(1_000_003).wrapping_add(step as u64 + 1))));
         sync(root, &mut store, &opts).unwrap();
+        if (step + 1) % every != 0 {
+            continue;
+        }
         let graph = store.ref_graph().unwrap();
         let fresh = kc_store::rank::ref_graph(store.conn()).unwrap();
-        assert_eq!(json(&graph), json(&fresh), "seed {seed}, reversed {insert_reversed}, after: {done:#?}");
+        assert_eq!(json(&graph), json(&fresh), "seed {seed}, reversed {insert_reversed}, every {every}, after: {done:#?}");
     }
     store.conn().query_row("SELECT COUNT(*) FROM graph_log WHERE names IS NOT NULL", [], |r| r.get::<_, i64>(0)).unwrap() as usize
 }
 
 #[test]
 fn invariant_an_updated_reference_graph_is_the_graph_built_afresh() {
-    for (seed, reversed) in [(1, false), (2, true), (3, false)] {
+    // Seed 4 asks for the graph every fourth sync only: names gathered over several log entries.
+    for (seed, reversed, every) in [(1, false, 1), (2, true, 1), (3, false, 1), (4, false, 4)] {
         let root = scratch(&format!("graph-update-{seed}"));
         git(&root, &["init", "-q"]);
         fixture(&root);
         git(&root, &["add", "-A"]);
         git(&root, &["commit", "-q", "-m", "fixture"]);
-        let updated = check_updates(&root, seed, 60, reversed);
+        let updated = check_updates_every(&root, seed, 60, reversed, every);
         // Most edits are inside bodies: the update, not a rebuild, must be what was checked.
         assert!(updated >= 20, "seed {seed}: only {updated} of 60 syncs could update the graph");
         let _ = std::fs::remove_dir_all(&root);
