@@ -293,8 +293,11 @@ pub fn find_definitions(q: &str, kind: Option<&str>, limit: usize, scope: &Scope
         Some(repos) => repos.iter().filter_map(|r| r["repo"].as_str()).collect(),
         None => out.env["repo"].as_str().into_iter().collect(),
     };
-    let mut view = json!({ "provenance": out.env["provenance"].as_array().map(|ps| ps.iter().filter(|p| p["repo"].as_str().is_some_and(|r| asked.contains(&r))).cloned().collect::<Vec<_>>()) });
-    let g = gens(&view);
+    let answered: Vec<Value> = out.env["provenance"]
+        .as_array()
+        .map(|ps| ps.iter().filter(|p| p["repo"].as_str().is_some_and(|r| asked.contains(&r))).cloned().collect())
+        .unwrap_or_default();
+    let g = gens(&json!({ "provenance": answered }));
     offer_at(&mut out.env, req, scope, vec![List::new("/items", limit, more)], g);
     crate::contract::finish(&mut out.env);
     Ok(out)
