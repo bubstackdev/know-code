@@ -10,7 +10,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
   the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
   is 1.000 over 433 links, linked recall 0.482, and no outside label is linked; Java's linked recall rises to 0.874 as
-  Java calls into Kotlin resolve. HELDOUT_KOTLIN
+  Java calls into Kotlin resolve. Three held-out Kotlin sets, each scored once before the rules it led to, fell short:
+  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1) and 0.986 on MoshiX and misk
+  (0). Each cause is now a resolution rule; `eval/identity-v2/README.md` lists them with the scores.
 - `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
