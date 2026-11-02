@@ -114,7 +114,13 @@ pub(crate) struct Modules {
     scripts: HashMap<String, bool>,
     /// The packages the repo augments (`declare module 'pkg' { … }`), by package name.
     augmented: Option<HashSet<String>>,
+    /// Per file, its namespaces (`module` symbols) with their line spans (see `query::ts_namespace_declared`): read
+    /// once per file, where each type reference used to read them again for every candidate.
+    pub(crate) namespace_spans: HashMap<String, NamespaceSpans>,
 }
+
+/// A file's namespaces: each one's dotted name and its first and last lines.
+pub(crate) type NamespaceSpans = std::rc::Rc<Vec<(String, u32, u32)>>;
 
 /// A TypeScript or JavaScript module's path, by its extension: its imports resolve through [`Modules`].
 pub fn is_ts_path(path: &str) -> bool {

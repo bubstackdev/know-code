@@ -151,6 +151,12 @@ pub fn workers() -> Workers {
 /// model's `Property`, `HasColumnType`), and each resolved reference carries its targets.
 const CHUNK: usize = 2048;
 
+/// The page cache, in KiB, of each connection resolving names for a graph. Resolving every name reads the index's
+/// symbols and references all over the file, so a query-sized cache reads the same pages from disk again and again
+/// (on microsoft/TypeScript, a fifth of the graph's instructions went to `pread`). 16 MiB, the size a write batch
+/// takes, cuts that by 12% with no higher peak there; larger caches gained little more for their memory.
+const GRAPH_CACHE_KIB: i64 = 16 * 1024;
+
 /// The reference graph: every reference resolved, as for [`query::file_edges`]. Expensive; cache it per index
 /// generation (see `Store::ref_graph`).
 ///
@@ -249,6 +255,10 @@ fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, 
     let path = conn.path().unwrap_or_default().to_string();
     let w = workers();
     let threads = if path.is_empty() { 1 } else { w.threads.clamp(1, names.len().max(1)) };
+    // The caller's connection keeps its own cache size once the names are resolved.
+    let kib: i64 = conn.query_row("PRAGMA cache_size", [], |r| r.get(0))?;
+    conn.execute_batch(&format!("PRAGMA cache_size = -{GRAPH_CACHE_KIB};"))?;
+    let restore = || conn.execute_batch(&format!("PRAGMA cache_size = {kib};"));
     let next = AtomicUsize::new(0);
     let parts = std::thread::scope(|scope| -> Result<Vec<Edges>> {
         let helpers: Vec<_> = (1..threads)
@@ -274,7 +284,9 @@ fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, 
         }
         mine?;
         Ok(parts)
-    })?;
+    });
+    restore()?;
+    let parts = parts?;
     let mut edges = Edges::new();
     merge(&mut edges, parts);
     Ok(edges)
@@ -370,7 +382,7 @@ fn open_at(path: &str, generation: &str) -> Result<Connection> {
     use rusqlite::OpenFlags;
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    conn.execute_batch("PRAGMA temp_store = MEMORY; PRAGMA cache_size = -2048; BEGIN DEFERRED")?;
+    conn.execute_batch(&format!("PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{GRAPH_CACHE_KIB}; BEGIN DEFERRED"))?;
     anyhow::ensure!(self::generation(&conn)? == generation, "the index moved on");
     Ok(conn)
 }

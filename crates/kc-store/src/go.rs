@@ -86,6 +86,9 @@ pub(crate) struct Modules {
     imports: HashMap<String, Vec<(String, String)>>,
     by_name: HashMap<String, Vec<Sym>>,
     embeds: HashMap<i64, Vec<String>>,
+    /// Per module directory and import path, where the import is: [`Modules::place`] reads every Go file to find a
+    /// directory's package clause.
+    places: HashMap<(String, String), Place>,
 }
 
 impl Modules {
@@ -195,8 +198,18 @@ impl Modules {
 
     /// Where an import path of `file` is.
     fn place(&mut self, conn: &Connection, file: &str, import: &str) -> Result<Place> {
-        let modules = self.modules(conn)?.to_vec();
-        let Some(own) = modules.iter().find(|m| under(&m.dir, file)) else { return Ok(Place::Outside) };
+        // Only the module holding `file` matters: the place is the same for every file of the module.
+        let Some(own) = self.modules(conn)?.iter().find(|m| under(&m.dir, file)).cloned() else { return Ok(Place::Outside) };
+        let key = (own.dir.clone(), import.to_string());
+        if let Some(p) = self.places.get(&key) {
+            return Ok(p.clone());
+        }
+        let place = self.place_in(conn, &own, import)?;
+        self.places.insert(key, place.clone());
+        Ok(place)
+    }
+
+    fn place_in(&mut self, conn: &Connection, own: &Module, import: &str) -> Result<Place> {
         let dir = if let Some(rest) = strip_module(import, &own.path) {
             Some(join(&own.dir, rest))
         } else {

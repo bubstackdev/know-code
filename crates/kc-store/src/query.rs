@@ -2111,7 +2111,7 @@ fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, fil
         Some(None) => return Ok(Vec::new()),
         None => (None, q.to_string()),
     };
-    let found = ts_namespace_declared(conn, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
+    let found = ts_namespace_declared(conn, &mut modules.namespace_spans, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
     // Of a namespace declared in several places, the file's own shadows the others.
     if from.is_none() && found.iter().any(|(_, f)| f == file) {
         return Ok(found.into_iter().filter(|(_, f)| f == file).map(|(id, _)| id).collect());
@@ -2120,14 +2120,26 @@ fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, fil
 }
 
 /// Of `defs`, the ids and files of those whose innermost enclosing TypeScript namespace is named `q`.
-fn ts_namespace_declared<'a>(conn: &Connection, q: &str, defs: impl Iterator<Item = &'a Def>) -> Result<Vec<(i64, String)>> {
+fn ts_namespace_declared<'a>(
+    conn: &Connection,
+    cache: &mut HashMap<String, crate::ts::NamespaceSpans>,
+    q: &str,
+    defs: impl Iterator<Item = &'a Def>,
+) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare_cached(
         "SELECT CASE WHEN s.container IS NULL THEN s.name ELSE s.container || '.' || s.name END, s.start_line, s.end_line
            FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.kind = 'module'",
     )?;
     let mut out = Vec::new();
     for d in defs.filter(|d| d.container.is_none() && crate::ts::is_ts_path(&d.file)) {
-        let spans: Vec<(String, u32, u32)> = stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let spans = match cache.get(&d.file) {
+            Some(spans) => spans.clone(),
+            None => {
+                let spans: Vec<(String, u32, u32)> =
+                    stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+                cache.entry(d.file.clone()).or_insert(std::rc::Rc::new(spans)).clone()
+            }
+        };
         let innermost = spans.iter().filter(|(_, start, end)| *start <= d.line && d.line <= *end)
             // The tightest span; of nested ones on one line, the deeper.
             .min_by_key(|(name, start, end)| (end - start, std::cmp::Reverse(name.len())));
@@ -2624,7 +2636,9 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                         return ("exact", same_file.iter().map(|d| d.id).collect());
                     }
                     let module = module_of(&hit.file);
-                    let same_module: Vec<&Def> = free.iter().copied().filter(|d| module_of(&d.file) == module).collect();
+                    // A file's module is a prefix of its path: the cheap test first, for names with many definitions.
+                    let same_module: Vec<&Def> =
+                        free.iter().copied().filter(|d| d.file.starts_with(module) && module_of(&d.file) == module).collect();
                     if same_module.len() == 1 {
                         return ("unique_name", vec![same_module[0].id]);
                     }
