@@ -67,3 +67,43 @@ generated and the repository commits; test code):
 ([second-ids.txt](second-ids.txt), `route_links.py seeded`, 21 sites). Each pass is made by its own agent, given
 only this file, route-links-v1's rule, the site list and the pinned clones: neither runs KnowCode or sees KnowCode's
 output, and the second never sees the first. Their instructions are committed in [prompts](prompts/).
+
+## Results, scored once
+
+Scored once with `route_links.py score` (#320: route-links-v1's Scoring, a link giving a route matched by the route
+alone, the file clause beside it as a secondary figure) against KnowCode at integration/0.7 `5b59ef0`; the labels were
+frozen in #282. [score.json](score.json) holds every site with its links, misses and wrong links. The reader's links
+agree with the `routes` answer's on 139 of 139 requesting symbols.
+
+**Under-powered.** 47 Go sites and 22 TypeScript and JavaScript sites have a required item, both under 50, so neither
+language's figure gates on its own; they are reported with their Wilson 95% intervals.
+
+| Slice | Sites | Precision | Recall | Precision, file clause only |
+| --- | ---: | --- | --- | --- |
+| Go | 71 | 0.000 (0/1, 0.000–0.793) | 0.000 (0/90, 0.000–0.041) | 0.000 (0/1) |
+| TypeScript and JavaScript | 34 | 1.000 (5/5, 0.566–1.000) | 0.179 (5/28, 0.079–0.356) | 0.000 (0/5) |
+| gotify | 22 | – (no links) | 0.000 (0/23, 0.000–0.143) | – |
+| opengist | 14 | 0.833 (5/6, 0.436–0.970) | 0.385 (5/13, 0.177–0.645) | 0.000 (0/6) |
+| flipt | 8 | – (no links) | – (no required item; none of 24 optional linked) | – |
+| sftpgo | 61 | – (no links) | 0.000 (0/82, 0.000–0.045) | – |
+| all | 105 | 0.833 (5/6, 0.436–0.970) | 0.042 (5/118, 0.018–0.095) | 0.000 (0/6) |
+
+The figures without `dynamic_name` sites are the same. Every match used the route clause (5); the file clause alone
+finds none, because the links' rows are the handlers' or their registrars' declarations, never within 3 lines of a
+label's evidence on these repositories.
+
+Where the misses come from:
+
+- **sftpgo's server routes aren't read** (78 of its 82 missed items, all its terraform provider's). sftpgo registers on
+  a router held in a struct field (`s.router.Get(…)`) and writes paths as a package constant joined to a literal
+  (`adminPath+"/{username}"`); KnowCode reads neither form (both reproduced on a made-up fixture), so the provider's
+  requests, whose paths KnowCode does read (`api/v2/admins/{}`), have no route to link to.
+- **`Client.Do` sites** (43 Go items): the request is built on an earlier line (`http.NewRequest`), where KnowCode
+  places it; the `Do` call that sends it has no request of its own.
+- **gotify's base URL** (17 items with a request read, 6 without): every request is
+  `` `${config.get('url')}application/${id}` ``, a base read at runtime glued to the first segment, so the path read is
+  `{}application/{}`, which no route matches; a path with no slash after the base (`{}application`) isn't read at all.
+- **opengist**: its IPC client builds `baseURL+path` (8 items, no request read), and its checkbox request is relative to
+  the page (`location.href… + '/checkbox'`). The one wrong link is a request to an external host,
+  `https://github.com/{nickname}.keys`, linked to opengist's own `GET /:user`.
+- **flipt**: every item is optional (raw `fetch`, or a base URL from the server's answer) and none is linked.
