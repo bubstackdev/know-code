@@ -26,6 +26,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
   gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
   6–14%, for 11–22 MB more peak memory. The index is the same.
+- A workspace-wide query over a server checks each repo's freshness once. It checked the repos its workspace summary
+  could rule out, then checked again each one it opened; it now takes its own earlier proof that the repo is
+  unchanged, made after it started, for the same index file. Over microsoft/TypeScript and seven smaller public
+  repos, a workspace-wide `refs` takes 1.68 to 1.85 G instructions instead of 2.39 to 2.55 G. Answers are unchanged.
 - A server answering two calls at once no longer lets one rely on the other's freshness check. A workspace-wide
   query checks by `stat` which repos changed since their summaries were written, and remembers the answers for its
   length; the memory was the process's, shared by every query running, so a query that started after an edit could

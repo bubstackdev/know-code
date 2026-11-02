@@ -523,7 +523,7 @@ fn open_synced(root: &Path, mut store: Store, claim: Option<kc_index::base::Clai
     };
     Worker::shared().watch(root); // watch even when this call finds an already-fresh index
     let db = kc_index::db_path(root)?;
-    if !SyncOptions::default().verify && !kc_index::changed_since_sync(root, &db) {
+    if !SyncOptions::default().verify && !kc_index::changed_in_query(root, &db) {
         // The index matches the working tree. Derived data an earlier query computed may be from an earlier index
         // (after a CLI command synced it): the worker brings it up to date, but the index answers now, and an answer
         // drawing on the older data says so itself (`stale_derived`). Waiting for it, the first call of a session

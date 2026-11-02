@@ -1011,6 +1011,20 @@ pub fn changed_since_sync(root: &Path, db: &Path) -> bool {
     fresh::changed(root, db)
 }
 
+/// [`changed_since_sync`] for the query running: unchanged without a check when the query found so already, under a
+/// [`ChangeMemo`], by the snapshot of this same index file (a workspace query checks the repos its summary rules out,
+/// then opens some of them); else checked now, and remembered. The proof was made after the query started, as one
+/// made now would be; a repo found changed is checked again, since a sync may have finished since.
+pub fn changed_in_query(root: &Path, db: &Path) -> bool {
+    let query = kc_store::limits::current();
+    if query.changed(root).and_then(|c| c.proof).is_some_and(|proof| fresh::identity(db) == Some(proof)) {
+        return false;
+    }
+    let proof = fresh::unchanged(root, db);
+    query.note_changed(root, kc_store::limits::Change { changed: proof.is_none(), proof });
+    proof.is_none()
+}
+
 /// Whether derived data an earlier query computed (the areas, the file ranking) is from an earlier index generation
 /// or history than `store`'s. Never computed, it isn't stale: the query needing it computes it.
 pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
@@ -1091,30 +1105,32 @@ pub fn memo_changes() -> ChangeMemo {
 /// Of `roots`, the indexed ones whose working tree changed since their last sync (see [`changed_since_sync`]), checked
 /// on a few threads. One no longer on disk isn't (nothing there to sync).
 pub fn changed_repos(roots: &[PathBuf]) -> HashSet<PathBuf> {
-    let check = |root: &PathBuf| -> bool {
+    use kc_store::limits::Change;
+    let check = |root: &PathBuf| -> Change {
         if !root.join(".git").exists() {
-            return false;
+            return Change { changed: false, proof: None };
         }
         if !db_path(root).is_ok_and(|p| p.exists()) {
-            return workspace::has_saved_index(root).unwrap_or(true) || !light::unchanged(root);
+            return Change { changed: workspace::has_saved_index(root).unwrap_or(true) || !light::unchanged(root), proof: None };
         }
-        changed_since_sync(root, &db_path(root).expect("checked above"))
+        let proof = fresh::unchanged(root, &db_path(root).expect("checked above"));
+        Change { changed: proof.is_none(), proof }
     };
     let query = kc_store::limits::current();
-    let known: HashMap<PathBuf, bool> = roots.iter().filter_map(|r| Some((r.clone(), query.changed(r)?))).collect();
+    let known: HashMap<PathBuf, bool> = roots.iter().filter_map(|r| Some((r.clone(), query.changed(r)?.changed))).collect();
     let todo: Vec<&PathBuf> = roots.iter().filter(|r| !known.contains_key(*r)).collect();
     let chunk = todo.len().div_ceil(8).max(1);
-    let checked: Vec<(PathBuf, bool)> = std::thread::scope(|scope| {
+    let checked: Vec<(PathBuf, Change)> = std::thread::scope(|scope| {
         let parts: Vec<_> = todo
             .chunks(chunk)
             .map(|part| scope.spawn(move || part.iter().map(|r| ((*r).clone(), check(r))).collect::<Vec<_>>()))
             .collect();
         parts.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
-    for (root, changed) in &checked {
-        query.note_changed(root, *changed);
+    for (root, change) in &checked {
+        query.note_changed(root, *change);
     }
-    known.into_iter().chain(checked).filter(|(_, changed)| *changed).map(|(r, _)| r).collect()
+    known.into_iter().chain(checked.into_iter().map(|(r, c)| (r, c.changed))).filter(|(_, changed)| *changed).map(|(r, _)| r).collect()
 }
 
 /// Indexes `paths` again however their stat looks: their content was seen to differ from what the index holds (a
