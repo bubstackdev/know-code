@@ -9,6 +9,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
   254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls. On Linux the server
   hands freed memory back to the system after each call and each background job (glibc's `malloc_trim`).
+- Indexing Swift is faster: on swift-nio, reading its files takes 20% fewer instructions (21.2 G down to 17.0 G). The
+  Swift extractor asked tree-sitter for the parent of nearly every identifier and call, and tree-sitter finds a
+  parent by walking down from the root of the file; the extractor now keeps the nodes it is inside and reads parents
+  from there. What is extracted is unchanged.
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
