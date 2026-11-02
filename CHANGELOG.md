@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
+  could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
+  files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
+  (by file path, then line).
 - `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
   but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
   unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
