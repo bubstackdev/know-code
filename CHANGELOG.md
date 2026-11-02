@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- TypeScript and JavaScript requests whose base address is a value glued to the first path segment
+  (`` axios.delete(`${config.get('url')}application/${id}`) ``, the base ending in `/`) now read as `application/{}`
+  rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
+  (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
+  did; identity-v1's TypeScript figures are unchanged.
 - `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
