@@ -124,3 +124,42 @@ fn invariant_a_new_nested_checkout_is_discovered_after_the_inventory_was_cached(
     assert!(summaries.iter().any(|s| s.root == root && s.light));
     assert!(!kc_index::db_path(&root).unwrap().exists());
 }
+
+/// What a query found unchanged is remembered for that query only: another query, running at the same time in the
+/// same process (a server answering two calls at once), that started after an edit checks the repo itself, and finds
+/// it changed. Otherwise it would rule the repo out by a summary of the tree before the edit.
+#[test]
+fn invariant_a_query_never_takes_another_querys_proof_of_unchanged() {
+    use kc_store::limits::{Operation, enter};
+    let f = Fixture::new();
+    let root = f.repo("app", &[("api.ts", "export function oldHandler() { return 42; }\n")]);
+    let mut store = kc_index::open(&root).unwrap();
+    kc_index::sync(&root, &mut store, &kc_index::SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    drop(store);
+    let first = std::thread::scope(|scope| {
+        let (proved, proved_rx) = std::sync::mpsc::channel();
+        let (finish, finish_rx) = std::sync::mpsc::channel::<()>();
+        let checked = root.clone();
+        let first = scope.spawn(move || {
+            let root = checked;
+            let _query = enter(Operation::new());
+            let _memo = kc_index::memo_changes();
+            let unchanged = !kc_index::changed_repos(std::slice::from_ref(&root)).contains(&root);
+            proved.send(()).unwrap();
+            finish_rx.recv().unwrap();
+            unchanged
+        });
+        proved_rx.recv().unwrap();
+        fs::write(root.join("api.ts"), "export function newlyAddedHandler() { return 4242; }\n").unwrap();
+        // A second query, begun after the edit while the first still runs.
+        let second = {
+            let _query = enter(Operation::new());
+            let _memo = kc_index::memo_changes();
+            kc_index::changed_repos(std::slice::from_ref(&root)).contains(&root)
+        };
+        assert!(second, "the second query took the first one's proof, made before the edit");
+        finish.send(()).unwrap();
+        first.join().unwrap()
+    });
+    assert!(first, "unchanged when the first query checked");
+}

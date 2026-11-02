@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A server answering two calls at once no longer lets one rely on the other's freshness check. A workspace-wide
+  query checks by `stat` which repos changed since their summaries were written, and remembers the answers for its
+  length; the memory was the process's, shared by every query running, so a query that started after an edit could
+  take a check another query made before it, and rule the edited repo out by its old summary. Each query now
+  remembers only its own checks.
 - A server opens fewer SQLite connections per repo per query. Whether an index needs its schema created or migrated
   is remembered for the server's lifetime once it is found current (a file at this build's schema stays so), and the
   check for stale derived data reads through the query's own connection instead of opening a second one. A
