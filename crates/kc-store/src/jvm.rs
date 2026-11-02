@@ -54,6 +54,9 @@ impl JavaType {
     }
 }
 
+/// A resolution's confidence and targets.
+type Resolved = (&'static str, Vec<i64>);
+
 /// What a type name written in a file is.
 #[derive(Debug, Clone, PartialEq)]
 enum Found {
@@ -399,7 +402,7 @@ impl Resolver {
     /// The member the reference names among the supertypes of `own` alone (`super.m()`), nearest level first, as
     /// [`Self::declared_member`] reads them; and whether a supertype on the way couldn't be followed and may be the
     /// repository's.
-    fn inherited_member(&mut self, conn: &Connection, hit: &RefHit, own: i64) -> rusqlite::Result<(Option<(&'static str, Vec<i64>)>, bool)> {
+    fn inherited_member(&mut self, conn: &Connection, hit: &RefHit, own: i64) -> rusqlite::Result<(Option<Resolved>, bool)> {
         let mut seen = HashSet::from([own]);
         let mut level = vec![own];
         let (mut unsure, mut unknown) = (false, false);
