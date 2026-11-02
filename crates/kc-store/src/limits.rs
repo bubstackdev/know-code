@@ -114,6 +114,9 @@ pub struct Operation {
     /// While a [`SyncMemo`] holds, the repos the query synced, each with what its sync reported (see
     /// [`Operation::synced`]).
     synced: Mutex<Option<std::collections::HashMap<PathBuf, Arc<dyn std::any::Any + Send + Sync>>>>,
+    /// While a [`ChangeMemo`] holds, whether each repo checked had changed since its last sync (see
+    /// [`Operation::changed`]).
+    changes: Mutex<Option<std::collections::HashMap<PathBuf, Change>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -234,6 +237,30 @@ impl Operation {
         lock(&self.synced).as_ref()?.get(root)?.clone().downcast::<T>().ok()
     }
 
+    /// Remembers, until the guard drops, whether each repo the query checks changed since its last sync (see
+    /// [`Operation::note_changed`]): a query consults the workspace summary from several places, and checks each repo
+    /// once. The query's own: a check another query made, even one running now, may predate an edit this one must see.
+    pub fn remember_changes(self: &Arc<Self>) -> ChangeMemo {
+        let mut changes = lock(&self.changes);
+        let outermost = changes.is_none();
+        changes.get_or_insert_with(Default::default);
+        ChangeMemo(outermost.then(|| self.clone()))
+    }
+
+    /// Records whether the repo at `root` changed since its last sync, as the query found, while a [`ChangeMemo`]
+    /// holds.
+    pub fn note_changed(&self, root: &Path, change: Change) {
+        if let Some(changes) = lock(&self.changes).as_mut() {
+            changes.insert(root.to_path_buf(), change);
+        }
+    }
+
+    /// Whether the repo at `root` changed since its last sync, when the query checked it while a [`ChangeMemo`]
+    /// holds.
+    pub fn changed(&self, root: &Path) -> Option<Change> {
+        lock(&self.changes).as_ref()?.get(root).copied()
+    }
+
     /// Records that the query used the index of the repo at `root`.
     pub fn note_touched(&self, root: &Path) {
         lock(&self.touched).insert(root.to_path_buf());
@@ -268,6 +295,26 @@ impl Drop for SyncMemo {
     fn drop(&mut self) {
         if let Some(op) = self.0.take() {
             *lock(&op.synced) = None;
+        }
+    }
+}
+
+/// What a query found of whether a repo changed since its last sync (see [`Operation::note_changed`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Change {
+    pub changed: bool,
+    /// The index file (device, inode, creation time) the repo's freshness snapshot proved current, when that is how it
+    /// was found unchanged: a later check in the query takes the proof for that file only.
+    pub proof: Option<(u64, u64, u128)>,
+}
+
+/// Holds [`Operation::remember_changes`]; the outermost one forgets the checks when dropped.
+pub struct ChangeMemo(Option<Arc<Operation>>);
+
+impl Drop for ChangeMemo {
+    fn drop(&mut self) {
+        if let Some(op) = self.0.take() {
+            *lock(&op.changes) = None;
         }
     }
 }

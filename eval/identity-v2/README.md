@@ -291,6 +291,58 @@ without it. It turns on Gradle's configuration cache, so it is built with `--no-
 | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
 | Kotlin | type | 20 | 40 | 40 | 10 | 27 | 137 |
 
+### Held out, third: MoshiX and misk (Kotlin)
+
+Exposed's four wrong links led to two more resolver changes, so a third held-out set tests them fresh: two
+repositories as one set, chosen and committed before any labelling, labelled by the same rule, labeller and sampler,
+committed before any KnowCode answer on them is read, and scored once.
+
+Two repositories chosen first couldn't be built for labelling, and nothing from either was enumerated:
+
+- [http4k](https://github.com/http4k/http4k) at 6.61.0.0: its build logic is an included build of precompiled script
+  plugins (`*.gradle.kts` under `src/main/kotlin`), and scip-java 0.13.2's Gradle plugin, which its init script applies
+  to every project of every build, reads each Kotlin compile's compiler arguments while the build is configured. Under
+  Gradle 9 those arguments come from a task that hasn't run yet, and Gradle refuses the read, so the build fails before
+  compiling anything.
+- [Netflix/dgs-framework](https://github.com/Netflix/dgs-framework) at v12.1.0: it pins Kotlin 2.2.20, and with the
+  container's copy raised to Kotlin 2.4 (scip-java's plugin needs it) its Kotlin compiles still load Kotlin's scripting
+  compiler plugin at a version the 2.4 compiler refuses, even with Kotlin's own artifacts held to 2.4 on the compiler's
+  classpaths; it was given up after a 30-minute limit.
+
+So the set is drawn from repositories already on, or near, Kotlin 2.4, with no precompiled build scripts:
+[ZacSweers/MoshiX](https://github.com/ZacSweers/MoshiX) at its 0.38.0 tag (Kotlin 2.4.20, Gradle 9.8.0), and
+[cashapp/misk](https://github.com/cashapp/misk) at its v2026.10.28.211731-46eb623 tag, which pins Kotlin 2.3.10 in its
+version catalog (the container's copy is set to 2.4.21, as for Exposed) and runs Gradle 9.3.0 through hermit without
+a wrapper (`GRADLE_WRAPPER` gives the container's copy one, for that version). Both turn on Gradle's configuration
+cache and are built with `--no-configuration-cache` ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). MoshiX's
+Gradle plugin build asks for a JDK 23 toolchain, fetched and checked against its published digest; misk's admin
+console's web front end, an npm build with no Kotlin, is left out of its build.
+
+1622 references in [kotlin-holdout-3/](kotlin-holdout-3/labels.jsonl): 1152 Kotlin (882 inside, 270 outside), drawn from
+the 139341 eligible Kotlin references counted in [strata.json](kotlin-holdout-3/strata.json), and 470 Java
+(333 inside, 137 outside) from 3310, which the same draw gives from the two repositories' Java sources. Kotlin is
+the held-out set; its Java references are scored and reported beside it.
+
+| Repository | Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| moshix | Kotlin | extension | 20 | 40 | 28 | 0 | 0 | 88 |
+| moshix | Kotlin | dispatch | 2 | 9 | 10 | 0 | 0 | 21 |
+| moshix | Kotlin | call | 20 | 17 | 40 | 10 | 40 | 127 |
+| moshix | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| moshix | Kotlin | type | 20 | 40 | 36 | 10 | 10 | 116 |
+| moshix | Java | extension | 1 | 0 | 0 | 0 | 0 | 1 |
+| moshix | Java | call | 4 | 0 | 10 | 10 | 19 | 43 |
+| moshix | Java | member | 2 | 3 | 11 | 1 | 0 | 17 |
+| moshix | Java | type | 20 | 20 | 23 | 10 | 4 | 77 |
+| misk | Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | type | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Java | call | 0 | 22 | 40 | 10 | 40 | 112 |
+| misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
+| misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:
@@ -313,7 +365,9 @@ python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/id
 
 The labels are in [go/](go/labels.jsonl): 1,194 over three repositories (cobra 242, chi 418, gin 534), 705 inside and
 489 outside, per stratum in [go/strata.json](go/strata.json). Two runs of each repository give byte-identical
-enumerations ([go/enumerations.sha256](go/enumerations.sha256)).
+enumerations ([go/enumerations.sha256](go/enumerations.sha256)). The digests were first recorded over the gzip
+bytes; a third run, whose files had those same byte digests, gave the row digests now recorded, and the labels, strata
+and exclusions drawn from it are byte-identical to the committed ones (the held-out set's too).
 
 ### Repositories
 

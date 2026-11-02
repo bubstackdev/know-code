@@ -9,16 +9,74 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
   Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
   the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
-  is 1.000 over 452 links, linked recall 0.504, and no outside label is linked; Java's linked recall rises to 0.871 as
+  is 1.000 over 433 links, linked recall 0.482, and no outside label is linked; Java's linked recall rises to 0.874 as
   Java calls into Kotlin resolve. HELDOUT_KOTLIN
+- `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
+  could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
+  files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
+  (by file path, then line).
 - `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
   but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
   unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
   254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls. On Linux the server
   hands freed memory back to the system after each call and each background job (glibc's `malloc_trim`).
+- Indexing Swift is faster: on swift-nio, reading its files takes 20% fewer instructions (21.2 G down to 17.0 G). The
+  Swift extractor asked tree-sitter for the parent of nearly every identifier and call, and tree-sitter finds a
+  parent by walking down from the root of the file; the extractor now keeps the nodes it is inside and reads parents
+  from there. What is extracted is unchanged.
+- Indexing C# is faster: on Newtonsoft.Json, reading its files takes 20% fewer instructions (44.6 G down to 35.7 G),
+  for the same reason as Swift's: the C# extractor climbed tree-sitter parents from each identifier, reference and
+  call (to the member holding it, a type parameter's declaration, the call a method group is passed to), and now
+  reads them from the nodes it is inside. What is extracted is unchanged.
+- Indexing writes faster again: the parse workers now also compute what the writer used to work out from each
+  file's facts before inserting them (the file's search document, its symbols' search tokens and its summary key), so
+  the one writer thread only inserts rows. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's
+  instructions fell another 24–25%; the work moved to the parse workers, which run in parallel. The index is the same.
+- Indexing writes faster. The one thread that writes an index re-prepared most of its SQL statements for every file
+  (a file's facts take about 30 statements; the connection kept 16), and its 2 MB page cache spilled dirty pages to
+  the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
+  gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
+  6–14%, for 11–22 MB more peak memory. The index is the same.
+- A workspace-wide query over a server checks each repo's freshness once. It checked the repos its workspace summary
+  could rule out, then checked again each one it opened; it now takes its own earlier proof that the repo is
+  unchanged, made after it started, for the same index file. Over microsoft/TypeScript and seven smaller public
+  repos, a workspace-wide `refs` takes 1.68 to 1.85 G instructions instead of 2.39 to 2.55 G. Answers are unchanged.
+- A server answering two calls at once no longer lets one rely on the other's freshness check. A workspace-wide
+  query checks by `stat` which repos changed since their summaries were written, and remembers the answers for its
+  length; the memory was the process's, shared by every query running, so a query that started after an edit could
+  take a check another query made before it, and rule the edited repo out by its old summary. Each query now
+  remembers only its own checks.
+- A server opens fewer SQLite connections per repo per query. Whether an index needs its schema created or migrated
+  is remembered for the server's lifetime once it is found current (a file at this build's schema stays so), and the
+  check for stale derived data reads through the query's own connection instead of opening a second one. A
+  workspace-wide `find` over microsoft/TypeScript and seven smaller public repos takes 5–8% fewer instructions.
+  Answers are unchanged.
+- A server's check that a repo is unchanged before answering is cheaper: which indexed files are there by their
+  content rather than their name is now settled when the freshness record is written, not worked out again for every
+  file at every query. On microsoft/TypeScript (32,112 indexed files) a `find` over MCP that needs no sync takes
+  0.64 G instructions instead of 0.97 G; across a workspace of it and seven smaller public repos, 0.86 G instead of
+  1.18 G. Answers are unchanged.
+- A server notices a regenerated SCIP index without waiting for a source file to change. Before answering, a server
+  checks by `stat` alone whether a repo changed since its last sync, and skips the sync when not; that check didn't
+  cover the files a sync reads outside the indexed ones, so rewriting `index.scip` (in place, or by renaming a new
+  file over it), editing a build file the SCIP facts depend on (`global.json`, `packages.lock.json`, a lock file),
+  installing another version of a declared client package in `node_modules`, or turning `index.node_modules` off
+  went unseen until an indexed file changed. They are now part of the check. The CLI, which syncs before every
+  answer, was not affected. Also, after an upgrade that changes resolution but no extractor, a repo's freshness
+  record is written again at the next sync; before, the old one was kept, and each server query on the repo synced
+  it until a file changed.
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
+- `tests` and `impact` are faster again on code reached through protocols or interfaces. Collecting a member's callers
+  copied every reference to its name, most of which reach another member of that name, and looked up a requirement
+  in each supertype before asking whether it was a protocol at all; it now copies only the references that may reach
+  the member and skips supertypes that aren't protocols. On swift-nio, `tests Sources/NIOCore/ChannelPipeline.swift`
+  takes about a third fewer instructions; on Alamofire, `tests Source/Core/Session.swift` about two thirds fewer.
+  Answers are unchanged.
+- A walk asks which implementations of a protocol member may run once per member, not again at every implementation
+  it reaches. On Alamofire, `tests Source/Core/Session.swift` takes about 40% fewer instructions again. Answers are
+  unchanged.
 - Indexing Swift packages and walking their code is faster. Which names each SwiftPM target imports by name from
   outside the repo was read again for every name resolved; it is now read once per target, both when the file
   ranking is built after indexing (on swift-nio, 209 G instructions down to 14 G) and in a walk, which now also keeps

@@ -347,8 +347,11 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
 /// member names at every node it expands (the owner of each member, each protocol a type conforms to), and a lookup
 /// that misses runs several fallbacks. The answer is a function of the snapshot alone, so remembering it changes no
 /// answer; a memo must not outlive the snapshot or move to another connection.
+///
+/// It also remembers each protocol member's running implementations ([`crate::db::running_implementations`]), which
+/// a walk asks for the same requirement at every implementation of it it reaches.
 #[derive(Debug, Default)]
-pub struct DefinitionsMemo(HashMap<String, Vec<SymbolRow>>);
+pub struct DefinitionsMemo(HashMap<String, Vec<SymbolRow>>, HashMap<i64, Vec<i64>>);
 
 impl DefinitionsMemo {
     pub fn get(&mut self, conn: &Connection, query: &str) -> Result<Vec<SymbolRow>> {
@@ -358,6 +361,14 @@ impl DefinitionsMemo {
         let rows = definitions(conn, query)?;
         self.0.insert(query.to_string(), rows.clone());
         Ok(rows)
+    }
+
+    /// [`crate::db::running_implementations`] of the member `id`, remembered.
+    pub fn running_implementations(&mut self, conn: &Connection, id: i64) -> Result<&[i64]> {
+        Ok(match self.1.entry(id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(crate::db::running_implementations(conn, id)?),
+        })
     }
 }
 
@@ -7637,7 +7648,7 @@ fn implemented_in(
                 // Implemented elsewhere too: by another type (this type's other overloads don't count, nor do test
                 // doubles beside one real implementation).
                 let mut shared = dependency || !interface;
-                for i in crate::db::running_implementations(types, m.id)? {
+                for &i in defs.running_implementations(types, m.id)? {
                     let c: Option<String> = types.prepare_cached("SELECT container FROM symbols WHERE id = ?1")?.query_row([i], |r| r.get(0))?;
                     shared |= c.as_deref() != Some(container);
                 }

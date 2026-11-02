@@ -486,12 +486,42 @@ pub struct FileRecord<'a> {
     pub hash: &'a str,
     pub lines: u32,
     pub facts: &'a FileFacts,
+    /// What its rows need beyond the facts: [`Prepared::of`] them.
+    pub prepared: &'a Prepared,
+}
+
+/// The parts of a file's rows computed from its facts alone: its `locate` document, its symbols' FTS tokens and its
+/// summary key. One thread writes an index while several parse, so the parse workers compute these and the writer
+/// only inserts them.
+pub struct Prepared {
+    /// `None` for a file `locate` never reads as a document (see [`Batch::put`]).
+    document: Option<([String; 4], i64)>,
+    /// Per symbol, in order.
+    tokens: Vec<String>,
+    summary: String,
+}
+
+impl Prepared {
+    pub fn of(path: &str, lang: Lang, facts: &FileFacts) -> Prepared {
+        // A config file read only for its hosts stays the text document `locate` read it as before (see
+        // `kc_index::textdocs`).
+        let document = (lang != Lang::HostConfig).then(|| locate::file_document(path, facts));
+        Prepared { document, tokens: facts.symbols.iter().map(|s| name_tokens(&s.name)).collect(), summary: summary_key(lang, facts) }
+    }
 }
 
 /// A repo's index. Reads made through [`Store::conn`] while a snapshot is held (see [`Store::begin_snapshot`]) all see
 /// one committed state of the index, whatever another process writes meanwhile.
 /// Each connection's page cache, in KiB: queries touch little, and the MCP server may hold several connections.
 pub const CACHE_KIB: i64 = 2048;
+
+/// The page cache of a write batch, in KiB (see [`Store::batch`]). On cold indexes of public repos of 550–2,300 files,
+/// 16 MiB took 6–14% off the writer's instructions (inserts and commit) for 11–22 MB more peak memory; 64 MiB saved
+/// at most a few points more, for 27–60 MB more.
+const BATCH_CACHE_KIB: i64 = 16 * 1024;
+
+/// Prepared statements each connection keeps: every statement a sync writes with, with room to spare.
+const STATEMENT_CACHE: usize = 64;
 
 pub struct Store {
     conn: Connection,
@@ -600,6 +630,14 @@ fn set_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+/// Device, inode and creation time of the file at `path` (0 where the file system keeps none); `None` when there is none.
+fn file_identity(path: &Path) -> Option<(u64, u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    let created = m.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Some((m.dev(), m.ino(), created))
+}
+
 /// Opens a read transaction on `conn` and takes its snapshot (a deferred transaction takes it at its first read).
 fn begin_snapshot(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN DEFERRED")?;
@@ -659,12 +697,25 @@ impl Store {
     }
 
     /// Whether opening this index would create or migrate its schema. Does not write to the file.
+    ///
+    /// A file found at this build's schema stays at it: only an older schema is ever rebuilt, and each schema has its
+    /// own part of the cache, so no other build rewrites it. This process remembers such files by identity (device,
+    /// inode, creation time; a file recreated is another), and finds them current again without opening a connection:
+    /// a server opened one per repo per query for this.
     pub fn needs_migration(path: &Path) -> Result<bool> {
-        if !path.exists() {
-            return Ok(true);
+        static CURRENT: std::sync::Mutex<Option<std::collections::HashSet<(u64, u64, u128)>>> = std::sync::Mutex::new(None);
+        let Some(id) = file_identity(path) else { return Ok(true) };
+        let known = |id| CURRENT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|k| k.contains(&id));
+        if id.2 != 0 && known(id) {
+            return Ok(false);
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        Ok(schema_state(&conn)? != Schema::Current)
+        let current = schema_state(&conn)? == Schema::Current;
+        // Without a creation time, a file recreated at once could get the inode just freed: not remembered.
+        if current && id.2 != 0 {
+            CURRENT.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id);
+        }
+        Ok(!current)
     }
 
     pub fn open(path: &Path) -> Result<Store> {
@@ -675,6 +726,9 @@ impl Store {
         // Another process (the MCP server, a CLI query) may hold the index for a moment: opening while it checkpoints
         // or closes its WAL is briefly busy, so wait rather than fail.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // Writing a file's facts uses about 30 statements (see [`Batch::put`]). With rusqlite's default of 16 cached
+        // statements, the least recently used were evicted on every file and prepared again for the next.
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
         // A 2 MB page cache per connection: queries touch little, and the MCP server may hold several connections.
         conn.execute_batch(&format!("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{CACHE_KIB};"))?;
         set_wal(&conn)?;
@@ -936,10 +990,17 @@ impl Store {
     /// timeout for another writer: a deferred one that read first could not write once another process committed.
     pub fn batch(&mut self) -> Result<Batch<'_>> {
         let resnap = self.end_snapshot()?;
+        // A cold index writes every page of the file in one transaction. In a query-sized cache the dirty pages spill
+        // to the WAL long before the commit, and the pages a sync keeps changing (each table's last leaf and the
+        // inner pages over it, the FTS segments) are written out again after every few files. A larger cache for the
+        // batch keeps them until the commit writes each once; SQLite takes the pages only as the batch dirties them,
+        // so a small sync costs no more than before. The query-sized cache is back once the batch ends.
+        self.conn.execute_batch(&format!("PRAGMA cache_size = -{BATCH_CACHE_KIB};"))?;
+        let cache = CacheRestore { conn: &self.conn, kib: self.cache_kib.get() };
         let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
         // An index made before the table was: created in place, its files' keys missing (each reads as changed).
         tx.execute_batch("CREATE TABLE IF NOT EXISTS file_keys (file_id INTEGER PRIMARY KEY, summary TEXT NOT NULL);")?;
-        Ok(Batch { tx, conn: &self.conn, resnap })
+        Ok(Batch { tx, conn: &self.conn, resnap, _cache: cache })
     }
 
     /// Reclaims space after large deletions (for example, a new ignore rule dropping hundreds of files).
@@ -976,6 +1037,21 @@ pub struct Batch<'c> {
     conn: &'c Connection,
     /// A snapshot was held before the batch: one is taken again after it commits.
     resnap: bool,
+    /// Declared after `tx`, so the cache shrinks back once the transaction has committed or rolled back.
+    _cache: CacheRestore<'c>,
+}
+
+/// Sets a connection's page cache back to `kib` KiB when dropped (see [`Store::batch`]).
+struct CacheRestore<'c> {
+    conn: &'c Connection,
+    kib: i64,
+}
+
+impl Drop for CacheRestore<'_> {
+    fn drop(&mut self) {
+        // Best effort: on failure the connection keeps the batch's cache, which costs memory, not answers.
+        let _ = self.conn.execute_batch(&format!("PRAGMA cache_size = -{};", self.kib));
+    }
 }
 
 impl Batch<'_> {
@@ -1162,13 +1238,10 @@ impl Batch<'_> {
                 rec.facts.param_types.get(&i)
             ])?;
             let id = self.tx.last_insert_rowid();
-            fts_stmt.execute(params![id, name_tokens(&s.name)])?;
+            fts_stmt.execute(params![id, rec.prepared.tokens[i]])?;
             ids.push(id);
         }
-        // A config file read only for its hosts stays the text document `locate` read it as before (see
-        // `kc_index::textdocs`).
-        if rec.lang != Lang::HostConfig {
-            let (fields, len) = locate::file_document(rec.path, rec.facts);
+        if let Some((fields, len)) = &rec.prepared.document {
             self.tx
                 .prepare_cached("INSERT INTO files_fts(rowid, path, names, docs, refs, len) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
                 .execute(params![file_id, fields[0], fields[1], fields[2], fields[3], len])?;
@@ -1324,7 +1397,7 @@ impl Batch<'_> {
                 ])?;
             }
         }
-        let key = summary_key(rec.lang, rec.facts);
+        let key = &rec.prepared.summary;
         let old: Option<String> = match existing {
             Some(_) => self.tx.prepare_cached("SELECT summary FROM file_keys WHERE file_id = ?1")?.query_row([file_id], |r| r.get(0)).optional()?,
             None => None,
@@ -1583,6 +1656,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// An index found current is found so again without a connection; one recreated at the same path is a new file,
+    /// checked afresh.
+    #[test]
+    fn a_current_index_is_remembered_and_a_recreated_one_checked_again() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-current-{}", std::process::id()));
+        let path = dir.join("i.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Store::needs_migration(&path).unwrap(), "no file yet");
+        drop(Store::open(&path).unwrap());
+        assert!(!Store::needs_migration(&path).unwrap());
+        assert!(!Store::needs_migration(&path).unwrap(), "remembered");
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1');").unwrap();
+        drop(raw);
+        assert!(Store::needs_migration(&path).unwrap(), "a new file at the same path, of an older schema");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Opening never destroys an index another build can read: a newer schema is refused and left as it was; only an
     /// older one is rebuilt, tables made outside the schema included.
     #[test]
@@ -1684,7 +1778,8 @@ mod tests {
         assert!(!facts.unsupported.is_empty() && !facts.ansible.is_empty(), "{facts:?}");
         let put = |store: &mut Store, facts: &FileFacts| {
             let b = store.batch().unwrap();
-            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts }).unwrap();
+            let prepared = Prepared::of("site.yml", Lang::Ansible, facts);
+            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts, prepared: &prepared }).unwrap();
             b.commit().unwrap();
         };
         put(&mut store, &facts);
@@ -1717,7 +1812,8 @@ mod tests {
         let src = "public static class Api\n{\n    public static void Map(WebApplication app)\n    {\n        app.MapGet(Paths.Item(), GetItem);\n        app.MapGet(\"/items\", ListItems);\n    }\n    static string GetItem(int id) => \"\";\n    static string ListItems() => \"\";\n}\n";
         let facts = kc_extract::extract_file(Lang::CSharp, "Api.cs", src);
         let b = store.batch().unwrap();
-        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts }).unwrap();
+        let prepared = Prepared::of("Api.cs", Lang::CSharp, &facts);
+        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts, prepared: &prepared }).unwrap();
         b.commit().unwrap();
         let conn = store.conn();
         let stored: Vec<(String, String, u32, Option<String>)> = conn
