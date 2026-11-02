@@ -293,3 +293,8 @@ All three fail, each on its own cause:
 v1.2 left out 56 of gin-vue-admin's KnowCode routes (its auto-code and skills routers, under conditions, no label
 matching them), and 51 vikunja labels with 60 KnowCode routes (its CalDAV routes and others under configuration
 conditions on both sides); no echo placeholders were found, and there were no disagreements.
+
+An early return on configuration (`if !enabled { return }` before the registrations) is a known limit of v1.2: the
+rule's conditions are the bodies of `if`, `switch` and `select`, so routes registered after such a return stay in, on
+both sides, although the listed program doesn't serve them. It accounts for 8 of vikunja's false routes and gin-vue-admin's 64. The rule is
+not changed for it now.
