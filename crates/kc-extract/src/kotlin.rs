@@ -1,0 +1,1107 @@
+//! Kotlin extraction over tree-sitter-kotlin-ng.
+//!
+//! Kotlin is read on Java's model (see `java`), so the two resolve as one JVM family: classes, interfaces, objects
+//! and companion objects, enums and type aliases become symbols (an interface is a protocol, an `object` a class
+//! tagged `object`), and so do functions, properties (a primary constructor's `val`s and `var`s included),
+//! secondary constructors (`init`) and enum entries (cases). An extension function or property keeps its receiver
+//! type in its signature (`fun String.shout()`), which is how resolution tells it from a member. The file's
+//! `package` is its types' namespace (`TypeDecl::ns`) and every `import` is an [`Import`]: `a.b.C`, `a.b.*`, or
+//! `a.b.C as D` for an alias. References keep their receivers as written, typed where the code says: a parameter's or
+//! local's declared type, and a path of fields and calls the query follows through declarations.
+
+use std::collections::{HashMap, HashSet};
+
+use tree_sitter::{Node, Parser};
+
+use crate::swift::{children, collapse, line, name_col};
+use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
+use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
+
+pub const VERSION: u32 = 7;
+
+/// How many enclosing lambdas' functions a reference keeps, innermost first.
+const LAMBDAS_KEPT: usize = 4;
+
+const SIGNATURE_CAP: usize = 240;
+const RECEIVER_CAP: usize = 48;
+
+const BRANCH_KINDS: &[&str] = &["if_expression", "when_entry", "for_statement", "while_statement", "do_while_statement", "catch_block"];
+const NEST_KINDS: &[&str] = &["if_expression", "when_expression", "for_statement", "while_statement", "do_while_statement", "try_expression"];
+
+/// Kotlin's own types and the platform's, whose uses say nothing about the code base.
+const COMMON_TYPES: &[&str] = &[
+    "Any", "Unit", "Nothing", "String", "Int", "Long", "Short", "Byte", "Double", "Float", "Boolean", "Char", "Number",
+    "Array", "List", "MutableList", "Map", "MutableMap", "Set", "MutableSet", "Collection", "Iterable", "Sequence",
+    "Pair", "Triple", "Comparable", "Throwable", "Exception", "Suppress", "JvmStatic", "JvmField", "JvmName",
+    "JvmOverloads", "Deprecated",
+];
+
+pub fn extract(source: &str) -> FileFacts {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_kotlin_ng::LANGUAGE.into()).expect("tree-sitter-kotlin-ng ABI matches tree-sitter");
+    let Some(mut tree) = parser.parse(source, None) else {
+        return FileFacts { parse_errors: 1, ..Default::default() };
+    };
+    // tree-sitter-kotlin-ng 1.1.0 can't read one shape kotlinc does: a nested class whose primary constructor starts
+    // on the line after its name (`class Builder` / `internal constructor(…) : Supers {`). In a class body it ends the
+    // class at the newline and reads a secondary constructor, which fails. Only for an error over exactly that shape,
+    // the file is parsed again without those newlines (tree-sitter's included ranges), so every node keeps its place in
+    // the file as written.
+    let joins = constructor_breaks(source, tree.root_node());
+    if !joins.is_empty()
+        && let Some(recovered) = parse_without(&mut parser, source, &joins)
+        && count_errors(recovered.root_node()) < count_errors(tree.root_node())
+    {
+        tree = recovered;
+    }
+    let mut nested = HashMap::new();
+    member_types(source, tree.root_node(), None, &mut nested);
+    let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested, lambdas: Vec::new() };
+    cx.visit(tree.root_node());
+    cx.facts
+}
+
+/// The newlines that split a class name from its primary constructor (`class Builder` / `internal constructor(`), inside
+/// an ERROR node: the one shape the grammar misreads, and only where it did.
+fn constructor_breaks(src: &str, root: Node) -> Vec<usize> {
+    let mut errors = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.is_error() {
+            errors.push(n.byte_range());
+            continue;
+        }
+        if n.has_error() {
+            stack.extend(children(n));
+        }
+    }
+    let mut out = Vec::new();
+    for range in errors {
+        let text = &src[range.clone()];
+        let mut from = 0;
+        while let Some(at) = text[from..].find("class ") {
+            let start = from + at;
+            from = start + 6;
+            // `class Name<T>` up to the end of its line, nothing else after the name.
+            let line_end = text[start..].find('\n').map_or(text.len(), |e| start + e);
+            let header = text[start + 6..line_end].trim_end();
+            let name_ok = header.split('<').next().is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
+            if !name_ok || line_end >= text.len() {
+                continue;
+            }
+            // The next line: modifiers or annotations, then `constructor(`.
+            let next = text[line_end + 1..].trim_start_matches([' ', '\t']);
+            let mut rest = next;
+            loop {
+                let word: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '@' || *c == '_').collect();
+                if word == "constructor" {
+                    break;
+                }
+                if word.is_empty() || !(word.starts_with('@') || matches!(word.as_str(), "public" | "internal" | "private" | "protected")) {
+                    rest = "";
+                    break;
+                }
+                rest = rest[word.len()..].trim_start_matches([' ', '\t']);
+            }
+            if rest.starts_with("constructor") && rest["constructor".len()..].trim_start().starts_with('(') {
+                out.push(range.start + line_end);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// `src` parsed with the bytes at `skip` left out, positions still the file's.
+fn parse_without(parser: &mut Parser, src: &str, skip: &[usize]) -> Option<tree_sitter::Tree> {
+    let point = |byte: usize| {
+        let before = &src[..byte];
+        let row = before.matches('\n').count();
+        let column = byte - before.rfind('\n').map_or(0, |i| i + 1);
+        tree_sitter::Point { row, column }
+    };
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    for &b in skip {
+        if b > start {
+            ranges.push(tree_sitter::Range { start_byte: start, end_byte: b, start_point: point(start), end_point: point(b) });
+        }
+        start = b + 1;
+    }
+    ranges.push(tree_sitter::Range { start_byte: start, end_byte: src.len(), start_point: point(start), end_point: point(src.len()) });
+    parser.set_included_ranges(&ranges).ok()?;
+    let tree = parser.parse(src, None);
+    parser.set_included_ranges(&[]).ok()?;
+    tree
+}
+
+fn count_errors(root: Node) -> usize {
+    let mut n = 0;
+    let mut stack = vec![root];
+    while let Some(x) = stack.pop() {
+        if x.is_error() || x.is_missing() {
+            n += 1;
+        }
+        if x.has_error() {
+            stack.extend(children(x));
+        }
+    }
+    n
+}
+
+struct Scope {
+    sym: usize,
+    type_name: Option<String>,
+    callable: bool,
+    locals: HashMap<String, Option<String>>,
+}
+
+struct Cx<'a> {
+    src: &'a str,
+    facts: FileFacts,
+    package: Option<String>,
+    scopes: Vec<Scope>,
+    seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
+    /// The file's member types: per type (dotted, within the package), the simple names declared in it.
+    nested: HashMap<String, HashSet<String>>,
+    /// The functions whose lambda argument the code being read is in, outermost first (`apply` in `x.apply { … }`).
+    lambdas: Vec<String>,
+}
+
+impl<'a> Cx<'a> {
+    fn text(&self, n: Node) -> &'a str {
+        &self.src[n.byte_range()]
+    }
+
+    fn current(&self) -> Option<usize> {
+        self.scopes.last().map(|s| s.sym)
+    }
+
+    fn enclosing_type(&self) -> Option<String> {
+        self.scopes.iter().rev().find_map(|s| s.type_name.clone())
+    }
+
+    fn local(&self, name: &str) -> Option<Option<String>> {
+        for s in self.scopes.iter().rev() {
+            if let Some(t) = s.locals.get(name) {
+                return Some(t.clone());
+            }
+            if s.type_name.is_some() {
+                return None;
+            }
+        }
+        None
+    }
+
+    fn declare_local(&mut self, name: &str, ty: Option<String>) {
+        if let Some(s) = self.scopes.iter_mut().rev().find(|s| s.callable) {
+            s.locals.insert(name.to_string(), ty);
+        }
+    }
+
+    fn visit(&mut self, node: Node) {
+        if node.is_error() || node.is_missing() {
+            self.facts.parse_errors += 1;
+        }
+        self.count_shape(node);
+        match node.kind() {
+            "package_header" => {
+                if let Some(q) = children(node).find(|c| c.kind() == "qualified_identifier" || c.kind() == "identifier") {
+                    self.package = Some(self.text(q).split_whitespace().collect());
+                    // The file's package: its top-level functions and properties belong to it, though they carry no
+                    // type's namespace.
+                    self.facts.package = self.package.clone();
+                }
+            }
+            "import" => self.import(node),
+            "class_declaration" | "object_declaration" | "companion_object" => self.type_decl(node),
+            "type_alias" => self.type_alias(node),
+            "function_declaration" => self.function(node),
+            "secondary_constructor" => self.secondary_constructor(node),
+            "property_declaration" => self.property(node),
+            "enum_entry" => self.enum_entry(node),
+            "anonymous_initializer" => self.with_callable(None, |cx| cx.visit_children(node)),
+            "parameter" | "class_parameter" | "lambda_parameter" | "variable_declaration" if self.in_callable() => {
+                // A local's or parameter's name and declared type; its type is a reference too.
+                let ty = children(node).find(|c| is_type_node(c.kind())).and_then(|t| self.declared_type(t));
+                if let Some(n) = children(node).find(|c| c.kind() == "identifier") {
+                    let name = self.text(n).to_string();
+                    self.declare_local(&name, ty);
+                }
+                for c in children(node).filter(|c| c.kind() != "identifier") {
+                    self.visit(c);
+                }
+            }
+            "lambda_literal" => {
+                // `it`, and a lambda's own parameters, are locals.
+                self.declare_local("it", None);
+                self.visit_children(node);
+            }
+            "for_statement" | "catch_block" => self.visit_children(node),
+            "call_expression" => self.call(node),
+            "navigation_expression" => self.navigation(node),
+            "callable_reference" => self.callable_reference(node),
+            "annotation" => {
+                if let Some(t) = descendant_of_kind(node, "user_type") {
+                    self.type_use(t, RefKind::TypeRef, None);
+                }
+                if let Some(args) = descendant_of_kind(node, "value_arguments") {
+                    self.visit(args);
+                }
+            }
+            "user_type" => self.type_use(node, RefKind::TypeRef, None),
+            "identifier" => self.bare_identifier(node),
+            _ => self.visit_children(node),
+        }
+    }
+
+    fn visit_children(&mut self, node: Node) {
+        for c in children(node) {
+            self.visit(c);
+        }
+    }
+
+    fn in_callable(&self) -> bool {
+        self.scopes.last().is_some_and(|s| s.callable)
+    }
+
+    fn with_callable(&mut self, sym: Option<usize>, f: impl FnOnce(&mut Self)) {
+        match sym.or_else(|| self.current()) {
+            Some(sym) => {
+                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new() });
+                f(self);
+                self.scopes.pop();
+            }
+            None => f(self),
+        }
+    }
+
+    fn count_shape(&mut self, node: Node) {
+        let Some(sym) = self.scopes.iter().rev().find(|s| s.callable).map(|s| s.sym) else { return };
+        if BRANCH_KINDS.contains(&node.kind())
+            || (matches!(node.kind(), "conjunction_expression" | "disjunction_expression"))
+        {
+            self.facts.symbols[sym].complexity += 1;
+        }
+        if NEST_KINDS.contains(&node.kind()) {
+            let s = &mut self.facts.symbols[sym];
+            let depth = crate::nesting_depth(node, NEST_KINDS, (s.start_byte, s.end_byte));
+            s.nesting = s.nesting.max(depth);
+        }
+    }
+
+    fn import(&mut self, node: Node) {
+        let Some(q) = children(node).find(|c| c.kind() == "qualified_identifier" || c.kind() == "identifier") else { return };
+        let mut module: String = self.text(q).split_whitespace().collect();
+        let text = self.text(node);
+        if text.trim_end().ends_with('*') {
+            module.push_str(".*");
+        } else if let Some(alias) = children(node).filter(|c| c.kind() == "identifier").last() {
+            module.push_str(" as ");
+            module.push_str(self.text(alias));
+        }
+        self.facts.imports.push(Import { module, line: line(node) });
+    }
+
+    fn push(&mut self, node: Node, name: String, kind: SymbolKind, header_stop: Option<Node>) -> usize {
+        let end = children(node)
+            .find(|c| matches!(c.kind(), "class_body" | "enum_class_body" | "function_body" | "block"))
+            .or(header_stop)
+            .map_or(node.end_byte(), |b| b.start_byte());
+        let signature = collapse(self.src[node.start_byte()..end].trim_end_matches(['=', ' ', '{']), SIGNATURE_CAP);
+        let attrs = annotations(self.src, node);
+        let mut tags = Vec::new();
+        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest")) {
+            tags.push("test");
+        }
+        if kind == SymbolKind::Function && name == "main" {
+            tags.push("entrypoint");
+        }
+        self.facts.symbols.push(Symbol {
+            parent: self.current(),
+            name,
+            kind,
+            container: self.enclosing_type(),
+            signature,
+            doc: doc_comment(self.src, node),
+            attrs,
+            tags,
+            start_line: line(node),
+            end_line: node.end_position().row as u32 + 1,
+            start_byte: node.start_byte() as u32,
+            end_byte: node.end_byte() as u32,
+            complexity: if matches!(kind, SymbolKind::Method | SymbolKind::Function | SymbolKind::Init) { 1 } else { 0 },
+            nesting: 0,
+            bumps: Vec::new(),
+            cond_ops: 0,
+            cond_line: 0,
+            type_name: None,
+            arity: None,
+            lambda_types: None,
+        });
+        self.facts.symbols.len() - 1
+    }
+
+    fn type_decl(&mut self, node: Node) {
+        let name = match node.child_by_field_name("name") {
+            Some(n) => self.text(n).to_string(),
+            None if node.kind() == "companion_object" => "Companion".to_string(),
+            None => return self.visit_children(node),
+        };
+        let keyword_interface = children(node).any(|c| c.kind() == "interface");
+        let modifiers = children(node).find(|c| c.kind() == "modifiers").map(|m| self.text(m)).unwrap_or("");
+        let kind = if keyword_interface || modifiers.split_whitespace().any(|m| m == "annotation") {
+            SymbolKind::Protocol
+        } else if modifiers.split_whitespace().any(|m| m == "enum") {
+            SymbolKind::Enum
+        } else {
+            SymbolKind::Class
+        };
+        let sym = self.push(node, name.clone(), kind, None);
+        match node.kind() {
+            "object_declaration" => self.facts.symbols[sym].tags.push("object"),
+            "companion_object" => self.facts.symbols[sym].tags.push("companion"),
+            _ => {}
+        }
+        let params = children(node)
+            .find(|c| c.kind() == "type_parameters")
+            .map(|tp| {
+                children(tp)
+                    .filter(|c| c.kind() == "type_parameter")
+                    .filter_map(|c| children(c).find(|n| n.kind() == "identifier"))
+                    .map(|n| self.text(n).to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.facts.symbols[sym].type_name = TypeDecl { ns: self.package.clone(), params, ..Default::default() }.encode();
+        let full = self.enclosing_type().map_or_else(|| name.clone(), |o| format!("{o}.{name}"));
+        if let Some(list) = children(node).find(|c| c.kind() == "delegation_specifiers") {
+            for spec in children(list).filter(|c| c.kind() == "delegation_specifier") {
+                let t = children(spec)
+                    .find(|c| c.kind() == "constructor_invocation")
+                    .and_then(|ci| children(ci).find(|c| c.kind() == "user_type"))
+                    .or_else(|| children(spec).find(|c| c.kind() == "user_type"))
+                    .or_else(|| descendant_of_kind(spec, "user_type"));
+                if let Some(t) = t {
+                    if let Some(target) = base_name(self.src, t) {
+                        self.facts.relations.push(Relation { from: sym, target, kind: RelationKind::Inherits, line: line(t) });
+                    }
+                    self.type_use(t, RefKind::TypeRef, None);
+                }
+                // Arguments to the superclass constructor are code in the class.
+                if let Some(args) = descendant_of_kind(spec, "value_arguments") {
+                    self.scopes.push(Scope { sym, type_name: Some(full.clone()), callable: false, locals: HashMap::new() });
+                    self.with_callable(Some(sym), |cx| cx.visit(args));
+                    self.scopes.pop();
+                }
+            }
+        }
+        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new() });
+        for c in children(node).filter(|c| matches!(c.kind(), "modifiers" | "type_parameters" | "type_constraints")) {
+            self.visit(c);
+        }
+        if let Some(pc) = children(node).find(|c| c.kind() == "primary_constructor") {
+            self.primary_constructor(pc);
+        }
+        if let Some(body) = children(node).find(|c| matches!(c.kind(), "class_body" | "enum_class_body")) {
+            self.visit(body);
+        }
+        self.scopes.pop();
+    }
+
+    /// A primary constructor's `val`/`var` parameters are the class's properties; the rest are its parameters.
+    fn primary_constructor(&mut self, pc: Node) {
+        let Some(list) = children(pc).find(|c| c.kind() == "class_parameters") else { return };
+        let params: Vec<Node> = children(list).filter(|c| c.kind() == "class_parameter").collect();
+        let init = self.push(pc, "init".to_string(), SymbolKind::Init, Some(list));
+        let defaults = params.iter().filter(|p| children(**p).any(|c| is_expression(c.kind()))).count() as u32;
+        self.facts.symbols[init].arity = Some((params.len() as u32 - defaults, Some(params.len() as u32)));
+        for p in &params {
+            let holds = self.text(*p).split_whitespace().any(|w| w == "val" || w == "var");
+            let ty_node = children(*p).find(|c| is_type_node(c.kind()));
+            let ty = ty_node.and_then(|t| self.declared_type(t));
+            if holds && let Some(n) = children(*p).find(|c| c.kind() == "identifier") {
+                let name = self.text(n).to_string();
+                let sym = self.push(*p, name, SymbolKind::Property, ty_node);
+                self.facts.symbols[sym].type_name = ty.clone();
+            }
+            if let Some(t) = ty_node {
+                self.visit(t);
+            }
+            for c in children(*p).filter(|c| c.kind() == "modifiers" || is_expression(c.kind())) {
+                self.with_callable(Some(init), |cx| cx.visit(c));
+            }
+        }
+    }
+
+    fn type_alias(&mut self, node: Node) {
+        let Some(n) = node.child_by_field_name("type") else { return };
+        let name = self.text(n).to_string();
+        let sym = self.push(node, name, SymbolKind::Typealias, None);
+        if let Some(t) = children(node).filter(|c| is_type_node(c.kind())).last() {
+            self.facts.symbols[sym].type_name = self.declared_type(t);
+            self.visit(t);
+        }
+    }
+
+    fn function(&mut self, node: Node) {
+        let Some(n) = node.child_by_field_name("name") else { return self.visit_children(node) };
+        let name = self.text(n).to_string();
+        let in_type = self.scopes.last().is_some_and(|s| s.type_name.is_some());
+        let kind = if in_type { SymbolKind::Method } else { SymbolKind::Function };
+        let sym = self.push(node, name, kind, None);
+        let params = children(node).find(|c| c.kind() == "function_value_parameters");
+        if let Some(p) = params {
+            let all: Vec<Node> = children(p).filter(|c| c.kind() == "parameter").collect();
+            let vararg = self.text(p).contains("vararg");
+            // A parameter with a default may be left out. Its default is the expression after it among the list's
+            // children; the `parameter` nodes themselves aren't defaults.
+            let defaults = children(p).filter(|c| c.kind() != "parameter" && is_expression(c.kind())).count() as u32;
+            let n = all.len() as u32;
+            // A `vararg` parameter takes no arguments as well as many.
+            let optional = defaults + u32::from(vararg);
+            self.facts.symbols[sym].arity = Some((n.saturating_sub(optional), (!vararg).then_some(n)));
+        }
+        // The return type follows the parameters; a type before the name is an extension's receiver.
+        let ret = params.and_then(|p| {
+            let mut after = false;
+            children(node).find(|c| {
+                if *c == p {
+                    after = true;
+                    return false;
+                }
+                after && is_type_node(c.kind())
+            })
+        });
+        if let Some(t) = ret {
+            self.facts.symbols[sym].type_name = self.declared_type(t);
+        } else if let Some(body) = children(node).find(|c| c.kind() == "function_body")
+            && let Some(call) = children(body).find(|c| c.is_named())
+            && call.kind() == "call_expression"
+        {
+            // `fun build() = Transport(…)`: with no written type, the type is what the body constructs, as kotlinc
+            // infers it. Left unset, the query would take another function's of the same name.
+            self.facts.symbols[sym].type_name = self.constructed(call);
+        }
+        self.with_callable(Some(sym), |cx| {
+            for c in children(node) {
+                if Some(c) != node.child_by_field_name("name") {
+                    cx.visit(c);
+                }
+            }
+        });
+    }
+
+    fn secondary_constructor(&mut self, node: Node) {
+        let sym = self.push(node, "init".to_string(), SymbolKind::Init, None);
+        if let Some(p) = children(node).find(|c| c.kind() == "function_value_parameters") {
+            let n = children(p).filter(|c| c.kind() == "parameter").count() as u32;
+            self.facts.symbols[sym].arity = Some((n, Some(n)));
+        }
+        self.with_callable(Some(sym), |cx| cx.visit_children(node));
+    }
+
+    fn property(&mut self, node: Node) {
+        if self.in_callable() {
+            // A local `val`/`var`: its name and declared (or constructed) type.
+            if let Some(v) = children(node).find(|c| c.kind() == "variable_declaration") {
+                let ty = children(v)
+                    .find(|c| is_type_node(c.kind()))
+                    .and_then(|t| self.declared_type(t))
+                    .or_else(|| children(node).find(|c| c.kind() == "call_expression").and_then(|e| self.constructed(e)))
+                    // `val x = store.items()`: the initializer's type, as a path the query follows.
+                    .or_else(|| {
+                        children(node)
+                            .find(|c| matches!(c.kind(), "call_expression" | "navigation_expression" | "as_expression"))
+                            .and_then(|e| self.expr_type(e))
+                            .map(|t| t.encode())
+                    });
+                if let Some(n) = children(v).find(|c| c.kind() == "identifier") {
+                    let name = self.text(n).to_string();
+                    self.declare_local(&name, ty);
+                }
+            }
+            for c in children(node).filter(|c| c.kind() != "variable_declaration") {
+                self.visit(c);
+            }
+            if let Some(v) = children(node).find(|c| c.kind() == "variable_declaration") {
+                for c in children(v).filter(|c| is_type_node(c.kind())) {
+                    self.visit(c);
+                }
+            }
+            return;
+        }
+        let Some(v) = children(node).find(|c| c.kind() == "variable_declaration") else { return self.visit_children(node) };
+        let Some(n) = children(v).find(|c| c.kind() == "identifier") else { return };
+        let name = self.text(n).to_string();
+        let in_type = self.scopes.last().is_some_and(|s| s.type_name.is_some());
+        let sym = self.push(node, name, SymbolKind::Property, None);
+        let _ = in_type;
+        let ty = children(v).find(|c| is_type_node(c.kind())).and_then(|t| self.declared_type(t));
+        self.facts.symbols[sym].type_name = ty;
+        self.with_callable(Some(sym), |cx| {
+            for c in children(node) {
+                if c != v {
+                    cx.visit(c);
+                }
+            }
+            for c in children(v).filter(|c| is_type_node(c.kind())) {
+                cx.visit(c);
+            }
+        });
+    }
+
+    fn enum_entry(&mut self, node: Node) {
+        let Some(n) = children(node).find(|c| c.kind() == "identifier") else { return };
+        let name = self.text(n).to_string();
+        let sym = self.push(node, name, SymbolKind::Case, children(node).find(|c| c.kind() == "value_arguments"));
+        self.facts.symbols[sym].type_name = self.enclosing_type();
+        self.with_callable(Some(sym), |cx| {
+            for c in children(node).filter(|c| c.kind() != "identifier") {
+                cx.visit(c);
+            }
+        });
+    }
+
+    fn call(&mut self, node: Node) {
+        let Some(callee) = children(node).find(|c| c.is_named()) else { return };
+        let args = children(node).find(|c| c.kind() == "value_arguments").map(arg_count);
+        let lambda = children(node).any(|c| c.kind() == "annotated_lambda");
+        let args = args.map(|a| a + u32::from(lambda)).or(lambda.then_some(1));
+        let callee_name = match callee.kind() {
+            "identifier" => Some(self.text(callee).to_string()),
+            "navigation_expression" => children(callee).filter(|c| c.is_named()).last().filter(|l| l.kind() == "identifier").map(|l| self.text(l).to_string()),
+            _ => None,
+        };
+        match callee.kind() {
+            "identifier" => {
+                // A local is called only through `invoke`, so `value(x)` with a local `value` in scope still calls a
+                // function named `value`. `Cart(…)`: a constructor call names its type.
+                let name = self.text(callee).to_string();
+                let kind = if type_like(&name) { RefKind::Instantiate } else { RefKind::Call };
+                self.record(callee, name, None, None, kind, args);
+            }
+            "navigation_expression" => {
+                let parts: Vec<Node> = children(callee).filter(|c| c.is_named()).collect();
+                if let (Some(object), Some(last)) = (parts.first(), parts.last())
+                    && last.kind() == "identifier"
+                    && parts.len() >= 2
+                {
+                    let name = self.text(*last).to_string();
+                    let (receiver, receiver_type) = self.receiver_of(*object);
+                    let kind = if type_like(&name) && is_qualifier(self.text(*object)) { RefKind::Instantiate } else { RefKind::Call };
+                    self.record(*last, name, receiver, receiver_type, kind, args);
+                    self.receiver_object(*object);
+                }
+            }
+            _ => self.visit(callee),
+        }
+        for c in children(node).filter(|c| c.kind() != callee.kind() || *c != callee) {
+            if c == callee {
+                continue;
+            }
+            // A lambda argument, trailing or in the parentheses: the code in it is read knowing which function it is
+            // passed to, which may give it a receiver (`apply`, `with`, a `T.() -> R` parameter).
+            match c.kind() {
+                "annotated_lambda" => self.in_lambda(callee_name.as_deref(), c),
+                "value_arguments" => {
+                    for a in children(c) {
+                        if a.kind() == "value_argument" && children(a).any(|l| matches!(l.kind(), "lambda_literal" | "annotated_lambda")) {
+                            self.in_lambda(callee_name.as_deref(), a);
+                        } else {
+                            self.visit(a);
+                        }
+                    }
+                }
+                _ => self.visit(c),
+            }
+        }
+    }
+
+    fn in_lambda(&mut self, callee: Option<&str>, node: Node) {
+        self.lambdas.push(callee.unwrap_or_default().to_string());
+        self.visit(node);
+        self.lambdas.pop();
+    }
+
+    fn navigation(&mut self, node: Node) {
+        let parts: Vec<Node> = children(node).filter(|c| c.is_named()).collect();
+        let (Some(object), Some(last)) = (parts.first(), parts.last()) else { return };
+        if parts.len() < 2 || last.kind() != "identifier" {
+            return self.visit_children(node);
+        }
+        let name = self.text(*last).to_string();
+        let reference = self.src[object.end_byte()..last.start_byte()].contains("::");
+        if reference && name == "class" {
+            // `Order::class`: the type, named.
+            self.receiver_object(*object);
+            return;
+        }
+        let (receiver, receiver_type) = self.receiver_of(*object);
+        // `Item::price`, a member reference, is read as navigation with `::`: it names a function to call.
+        let kind = if reference { RefKind::Call } else { RefKind::Member };
+        self.record(*last, name, receiver, receiver_type, kind, None);
+        self.receiver_object(*object);
+    }
+
+    /// The object of a member use or call: written as a type (`JsonScope.EMPTY`), a type reference; a field or
+    /// property of the caller's (`body.add`), a member use; anything else, visited.
+    fn receiver_object(&mut self, object: Node) {
+        if object.kind() != "identifier" {
+            return self.visit(object);
+        }
+        let name = self.text(object).to_string();
+        if self.local(&name).is_some() || matches!(name.as_str(), "it" | "field") {
+            return;
+        }
+        let kind = if type_like(&name) { RefKind::TypeRef } else { RefKind::Member };
+        self.record(object, name, None, None, kind, None);
+    }
+
+    fn callable_reference(&mut self, node: Node) {
+        // `Type::member`, `x::member`, `::function`, `::Type` (a constructor).
+        let name_node = children(node).filter(|c| c.kind() == "identifier").last();
+        let target = children(node).find(|c| c.is_named() && Some(*c) != name_node);
+        let Some(n) = name_node else { return self.visit_children(node) };
+        let name = self.text(n).to_string();
+        match target {
+            Some(t) => {
+                let (receiver, receiver_type) = self.receiver_of(t);
+                self.record(n, name, receiver, receiver_type, RefKind::Call, None);
+                self.visit(t);
+            }
+            None if type_like(&name) => self.record(n, name, None, None, RefKind::Instantiate, None),
+            None => self.record(n, name, None, None, RefKind::Call, None),
+        }
+    }
+
+    fn bare_identifier(&mut self, node: Node) {
+        let Some(parent) = node.parent() else { return };
+        // An identifier that names what is declared, a label, a part of a qualified or written type, or a named
+        // argument's parameter isn't a use.
+        if matches!(
+            parent.kind(),
+            "variable_declaration" | "parameter" | "class_parameter" | "lambda_parameter" | "function_declaration"
+                | "class_declaration" | "object_declaration" | "companion_object" | "type_alias" | "import"
+                | "package_header" | "qualified_identifier" | "user_type" | "navigation_expression" | "call_expression"
+                | "callable_reference" | "enum_entry" | "type_parameter" | "label" | "annotation" | "setter" | "getter"
+                | "multi_variable_declaration" | "this_expression" | "super_expression" | "jump_expression"
+        ) || (parent.kind() == "value_argument" && self.text(parent).trim_start().starts_with(&format!("{} =", self.text(node))))
+        {
+            return;
+        }
+        let name = self.text(node).to_string();
+        if self.local(&name).is_some() || matches!(name.as_str(), "it" | "field") {
+            return;
+        }
+        self.record(node, name, None, None, RefKind::Member, None);
+    }
+
+    fn receiver_of(&self, object: Node) -> (Option<String>, Option<String>) {
+        let text = collapse(self.text(object), RECEIVER_CAP);
+        let ty = match object.kind() {
+            "identifier" => self.local(self.text(object)).flatten(),
+            "this_expression" => self.this_type(object),
+            _ => None,
+        };
+        (Some(text), ty.or_else(|| self.expr_type(object).map(|t| t.encode())))
+    }
+
+    fn expr_type(&self, e: Node) -> Option<TypeExpr> {
+        match e.kind() {
+            // `this@Outer` is the labelled outer type's instance, not the innermost one.
+            "this_expression" if self.text(e).contains('@') => self.this_type(e).map(TypeExpr::Named),
+            "this_expression" => Some(TypeExpr::root(PathRoot::SelfType)),
+            "identifier" => {
+                let name = self.text(e);
+                match self.local(name) {
+                    Some(t) => t.and_then(|t| TypeExpr::decode(&t)),
+                    None if type_like(name) => None,
+                    None => Some(TypeExpr::root(PathRoot::Prop(name.to_string()))),
+                }
+            }
+            "parenthesized_expression" => children(e).find(|c| c.is_named()).and_then(|c| self.expr_type(c)),
+            "as_expression" => children(e).filter(|c| is_type_node(c.kind())).last().and_then(|t| type_expr(self.src, t)),
+            "navigation_expression" => {
+                let parts: Vec<Node> = children(e).filter(|c| c.is_named()).collect();
+                let (object, last) = (*parts.first()?, *parts.last()?);
+                if parts.len() < 2 {
+                    return None;
+                }
+                self.member_of(object, Seg::Member(self.text(last).to_string()))
+            }
+            "call_expression" => {
+                if let Some(t) = self.constructed(e) {
+                    return TypeExpr::decode(&t);
+                }
+                let callee = children(e).find(|c| c.is_named())?;
+                match callee.kind() {
+                    "identifier" => Some(TypeExpr::Call { owner: None, name: self.text(callee).to_string() }),
+                    "navigation_expression" => {
+                        let parts: Vec<Node> = children(callee).filter(|c| c.is_named()).collect();
+                        let (object, last) = (*parts.first()?, *parts.last()?);
+                        (parts.len() >= 2).then_some(())?;
+                        self.member_of(object, Seg::Call(self.text(last).to_string()))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn member_of(&self, object: Node, seg: Seg) -> Option<TypeExpr> {
+        match self.expr_type(object) {
+            Some(t) => Some(t.then(seg)),
+            None if object.kind() == "identifier" && type_like(self.text(object)) && self.local(self.text(object)).is_none() => {
+                Some(TypeExpr::root(PathRoot::Static(self.text(object).to_string())).then(seg))
+            }
+            None => None,
+        }
+    }
+
+    /// The type `this` means: the innermost type, or for `this@Label` the enclosing type of that name.
+    fn this_type(&self, this: Node) -> Option<String> {
+        let inner = self.enclosing_type()?;
+        let Some((_, label)) = self.text(this).split_once('@') else { return Some(inner) };
+        let parts: Vec<&str> = inner.split('.').collect();
+        (1..=parts.len()).rev().map(|k| parts[..k].join(".")).find(|t| t.rsplit('.').next() == Some(label))
+    }
+
+    /// `Cart(…)` (a capitalised call): the type it constructs.
+    fn constructed(&self, call: Node) -> Option<String> {
+        let callee = children(call).find(|c| c.is_named())?;
+        (callee.kind() == "identifier" && type_like(self.text(callee)) && self.local(self.text(callee)).is_none())
+            .then(|| self.qualify(TypeExpr::Named(self.text(callee).to_string())).encode())
+    }
+
+    fn type_use(&mut self, node: Node, kind: RefKind, args: Option<u32>) {
+        match node.kind() {
+            "user_type" => {
+                let parts: Vec<Node> = children(node).filter(|c| c.kind() == "identifier").collect();
+                if let Some(last) = parts.last() {
+                    let name = self.text(*last).to_string();
+                    let receiver = (parts.len() > 1).then(|| {
+                        let q: Vec<&str> = parts[..parts.len() - 1].iter().map(|p| self.text(*p)).collect();
+                        collapse(&q.join("."), RECEIVER_CAP)
+                    });
+                    self.record(*last, name, receiver, None, kind, args);
+                }
+                for c in children(node).filter(|c| c.kind() == "type_arguments") {
+                    self.visit(c);
+                }
+            }
+            _ => self.visit_children(node),
+        }
+    }
+
+    fn record(&mut self, at: Node, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, args: Option<u32>) {
+        if kind == RefKind::TypeRef && receiver.is_none() && COMMON_TYPES.contains(&name.as_str()) {
+            return;
+        }
+        let ln = line(at);
+        let col = name_col(self.src, at, &name);
+        let from = self.current();
+        if !self.seen.insert((from, name.clone(), kind, ln, col)) {
+            return;
+        }
+        // A bare name, or one on `this`, in a lambda: the functions it is passed to, innermost first, which resolution
+        // reads for a receiver the lambda may have (stored where Swift keeps its call labels).
+        if matches!(kind, RefKind::Call | RefKind::Member)
+            && receiver.as_deref().is_none_or(|r| r == "this")
+            && !self.lambdas.is_empty()
+        {
+            let inner: Vec<&String> = self.lambdas.iter().rev().filter(|l| !l.is_empty()).take(LAMBDAS_KEPT).collect();
+            self.facts.arg_types.insert(self.facts.refs.len(), serde_json::json!({ "lambdas": inner }).to_string());
+        }
+        self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: ln, col, args });
+    }
+
+    fn declared_type(&self, t: Node) -> Option<String> {
+        type_expr(self.src, t).map(|e| self.qualify(e).encode())
+    }
+
+    /// A simple type name inside a type that declares a member type of that name means the member type.
+    fn qualify(&self, e: TypeExpr) -> TypeExpr {
+        let inner = |n: String| -> String {
+            if n.contains('.') {
+                return n;
+            }
+            let Some(t) = self.enclosing_type() else { return n };
+            let parts: Vec<&str> = t.split('.').collect();
+            for k in (1..=parts.len()).rev() {
+                let scope = parts[..k].join(".");
+                if self.nested.get(&scope).is_some_and(|names| names.contains(&n)) {
+                    return format!("{scope}.{n}");
+                }
+            }
+            n
+        };
+        match e {
+            TypeExpr::Named(n) => TypeExpr::Named(inner(n)),
+            TypeExpr::Generic { name, args } => TypeExpr::Generic { name: inner(name), args },
+            TypeExpr::Array(e) => TypeExpr::Array(Box::new(self.qualify(*e))),
+            other => other,
+        }
+    }
+}
+
+fn is_type_node(kind: &str) -> bool {
+    matches!(kind, "user_type" | "nullable_type" | "function_type" | "parenthesized_type" | "non_nullable_type")
+}
+
+fn is_expression(kind: &str) -> bool {
+    !matches!(kind, "identifier" | "modifiers" | "user_type" | "nullable_type" | "function_type" | "parenthesized_type" | ":" | "=" | "," | "val" | "var" | "vararg")
+        && !kind.is_empty()
+        && kind.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && !matches!(kind, "parameter_modifiers" | "type_modifiers" | "line_comment" | "block_comment")
+}
+
+fn descendant_of_kind<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == kind && n != node {
+            return Some(n);
+        }
+        stack.extend(children(n).collect::<Vec<_>>().into_iter().rev());
+    }
+    None
+}
+
+fn type_expr(src: &str, t: Node) -> Option<TypeExpr> {
+    match t.kind() {
+        "nullable_type" | "non_nullable_type" | "parenthesized_type" => children(t).find(|c| is_type_node(c.kind())).and_then(|c| type_expr(src, c)),
+        "user_type" => {
+            let parts: Vec<&str> = children(t).filter(|c| c.kind() == "identifier").map(|c| &src[c.byte_range()]).collect();
+            let name = parts.join(".");
+            let args: Vec<Option<TypeExpr>> = children(t)
+                .find(|c| c.kind() == "type_arguments")
+                .map(|a| {
+                    children(a)
+                        .filter(|c| c.kind() == "type_projection")
+                        .map(|p| children(p).find(|c| is_type_node(c.kind())).and_then(|c| type_expr(src, c)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if name.is_empty() {
+                None
+            } else if args.is_empty() {
+                Some(TypeExpr::Named(name))
+            } else {
+                Some(TypeExpr::Generic { name, args })
+            }
+        }
+        _ => None,
+    }
+}
+
+fn base_name(src: &str, n: Node) -> Option<String> {
+    let parts: Vec<&str> = children(n).filter(|c| c.kind() == "identifier").map(|c| &src[c.byte_range()]).collect();
+    (!parts.is_empty()).then(|| parts.join("."))
+}
+
+fn type_like(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase) && name.chars().any(char::is_lowercase)
+}
+
+/// A dotted qualifier that names a package or types (`a.b`, `Outer`), not an expression.
+fn is_qualifier(s: &str) -> bool {
+    s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+}
+
+fn arg_count(list: Node) -> u32 {
+    children(list).filter(|c| c.kind() == "value_argument").count() as u32
+}
+
+fn annotations(src: &str, node: Node) -> Vec<String> {
+    let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Vec::new() };
+    children(mods)
+        .filter(|c| c.kind() == "annotation")
+        .filter_map(|a| descendant_of_kind(a, "user_type"))
+        .filter_map(|t| children(t).filter(|c| c.kind() == "identifier").last().map(|n| src[n.byte_range()].to_string()))
+        .collect()
+}
+
+fn doc_comment(src: &str, node: Node) -> Option<String> {
+    let prev = node.prev_sibling().filter(|p| p.kind() == "block_comment")?;
+    let text = &src[prev.byte_range()];
+    if !text.starts_with("/**") {
+        return None;
+    }
+    text.trim_start_matches("/**")
+        .trim_end_matches("*/")
+        .lines()
+        .map(|l| l.trim().trim_start_matches('*').trim())
+        .find(|l| !l.is_empty() && !l.starts_with('@'))
+        .map(|l| collapse(l, 160))
+}
+
+/// The member types `node`'s declarations declare, by the dotted name of the declaring type.
+fn member_types(src: &str, node: Node, outer: Option<&str>, out: &mut HashMap<String, HashSet<String>>) {
+    for c in children(node) {
+        let is_type = matches!(c.kind(), "class_declaration" | "object_declaration" | "companion_object");
+        let name = c.child_by_field_name("name").map(|n| src[n.byte_range()].to_string())
+            .or_else(|| (c.kind() == "companion_object").then(|| "Companion".to_string()));
+        match (is_type, name) {
+            (true, Some(name)) => {
+                if let Some(o) = outer {
+                    out.entry(o.to_string()).or_default().insert(name.clone());
+                }
+                let full = outer.map_or_else(|| name.clone(), |o| format!("{o}.{name}"));
+                if let Some(body) = children(c).find(|b| matches!(b.kind(), "class_body" | "enum_class_body")) {
+                    member_types(src, body, Some(&full), out);
+                }
+            }
+            _ if !matches!(c.kind(), "function_declaration" | "function_body" | "lambda_literal") => member_types(src, c, outer, out),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refs(f: &FileFacts, kind: RefKind) -> Vec<(String, Option<String>)> {
+        f.refs.iter().filter(|r| r.kind == kind).map(|r| (r.name.clone(), r.receiver.clone())).collect()
+    }
+
+    #[test]
+    fn declarations_package_and_imports() {
+        let f = extract(
+            "package shop.cart\n\
+             import shop.model.Item as It\n\
+             import shop.util.*\n\
+             class Cart(private val owner: String, items: List<It>) : Base(), Sized {\n\
+               val size: Int get() = 1\n\
+               companion object {\n\
+                 const val MAX = 3\n\
+                 fun of(): Cart = Cart(\"x\", listOf())\n\
+               }\n\
+               fun add(item: It): Cart { store.save(item); return this }\n\
+             }\n\
+             fun String.shout(): String = uppercase()\n\
+             val Cart.big: Boolean get() = size > 1\n\
+             object Registry {\n\
+               fun find(id: Int) = Cart.of()\n\
+             }\n\
+             interface Shape {\n\
+               fun area(): Double\n\
+             }\n\
+             enum class State { OPEN, CLOSED }\n\
+             typealias Carts = List<Cart>\n",
+        );
+        let syms: Vec<_> = f.symbols.iter().map(|s| (s.name.as_str(), s.kind, s.container.as_deref())).collect();
+        for want in [
+            ("Cart", SymbolKind::Class, None),
+            ("owner", SymbolKind::Property, Some("Cart")),
+            ("size", SymbolKind::Property, Some("Cart")),
+            ("Companion", SymbolKind::Class, Some("Cart")),
+            ("MAX", SymbolKind::Property, Some("Cart.Companion")),
+            ("of", SymbolKind::Method, Some("Cart.Companion")),
+            ("add", SymbolKind::Method, Some("Cart")),
+            ("shout", SymbolKind::Function, None),
+            ("big", SymbolKind::Property, None),
+            ("Registry", SymbolKind::Class, None),
+            ("find", SymbolKind::Method, Some("Registry")),
+            ("Shape", SymbolKind::Protocol, None),
+            ("area", SymbolKind::Method, Some("Shape")),
+            ("State", SymbolKind::Enum, None),
+            ("OPEN", SymbolKind::Case, Some("State")),
+            ("Carts", SymbolKind::Typealias, None),
+        ] {
+            assert!(syms.contains(&want), "{want:?} in {syms:?}");
+        }
+        assert!(!syms.iter().any(|(n, _, _)| *n == "items"), "a plain constructor parameter isn't a property");
+        assert_eq!(TypeDecl::decode(f.symbols.iter().find(|s| s.name == "Cart").unwrap().type_name.as_deref()).ns.as_deref(), Some("shop.cart"));
+        let imports: Vec<_> = f.imports.iter().map(|i| i.module.as_str()).collect();
+        assert_eq!(imports, vec!["shop.model.Item as It", "shop.util.*"]);
+        assert_eq!(f.package.as_deref(), Some("shop.cart"));
+        let supers: Vec<_> = f.relations.iter().map(|r| r.target.as_str()).collect();
+        assert_eq!(supers, vec!["Base", "Sized"]);
+        assert!(f.symbols.iter().find(|s| s.name == "shout").unwrap().signature.contains("String.shout"));
+        assert_eq!(f.parse_errors, 0);
+    }
+
+    #[test]
+    fn a_nested_class_with_its_constructor_on_the_next_line_is_recovered() {
+        let src = "package p\n\
+                   class Spec {\n\
+                   \x20 public class Builder\n\
+                   \x20 internal constructor(internal val name: String) :\n\
+                   \x20   Taggable.Builder<Builder> {\n\
+                   \x20   fun build(): Spec = Spec()\n\
+                   \x20 }\n\
+                   }\n";
+        let f = extract(src);
+        assert_eq!(f.parse_errors, 0, "recovered");
+        let builder = f.symbols.iter().find(|s| s.name == "Builder").unwrap();
+        assert_eq!((builder.start_line, builder.container.as_deref()), (3, Some("Spec")));
+        let name = f.symbols.iter().find(|s| s.name == "name").unwrap();
+        assert_eq!((name.start_line, name.container.as_deref()), (4, Some("Spec.Builder")));
+        let build = f.symbols.iter().find(|s| s.name == "build").unwrap();
+        assert_eq!((build.start_line, build.container.as_deref()), (6, Some("Spec.Builder")));
+        // Columns on both sides of the joined newline are the file's.
+        let taggable = f.refs.iter().find(|r| r.name == "Builder" && r.receiver.as_deref() == Some("Taggable")).unwrap();
+        assert_eq!((taggable.line, taggable.col), (5, 14));
+        let spec = f.refs.iter().find(|r| r.name == "Spec" && r.line == 6).unwrap();
+        assert_eq!(spec.col, 18);
+        // The same class at the top level parses as written; nothing is joined there.
+        assert_eq!(constructor_breaks("class B\ninternal constructor(x: Int)\n", {
+            let mut p = Parser::new();
+            p.set_language(&tree_sitter_kotlin_ng::LANGUAGE.into()).unwrap();
+            Box::leak(Box::new(p.parse("class B\ninternal constructor(x: Int)\n", None).unwrap())).root_node()
+        }), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn calls_constructors_members_and_receivers() {
+        let f = extract(
+            "class A {\n\
+               val store: Store = Store()\n\
+               fun run(order: Order) {\n\
+                 val cart = Cart(1)\n\
+                 cart.add(order.total())\n\
+                 store.save(cart)\n\
+                 Helpers.log(\"x\")\n\
+                 xs.forEach { it.go() }\n\
+                 val r = Item::price\n\
+                 count += 1\n\
+               }\n\
+             }\n",
+        );
+        let calls = refs(&f, RefKind::Call);
+        assert!(calls.contains(&("add".into(), Some("cart".into()))));
+        assert!(calls.contains(&("total".into(), Some("order".into()))));
+        assert!(calls.contains(&("save".into(), Some("store".into()))));
+        assert!(calls.contains(&("log".into(), Some("Helpers".into()))));
+        assert!(calls.contains(&("price".into(), Some("Item".into()))));
+        assert_eq!(f.refs.iter().find(|r| r.name == "add").unwrap().receiver_type.as_deref(), Some("Cart"));
+        let g = extract("class Map {\n  fun clear() {}\n  inner class Keys {\n    fun clear() {\n      this@Map.clear()\n    }\n  }\n}\n");
+        let inner = g.refs.iter().find(|r| r.name == "clear" && r.line == 5).unwrap();
+        assert_eq!(inner.receiver_type.as_deref(), Some("Map"), "a labelled this is the outer type");
+        assert_eq!(f.refs.iter().find(|r| r.name == "total").unwrap().receiver_type.as_deref(), Some("Order"));
+        let made = refs(&f, RefKind::Instantiate);
+        assert!(made.contains(&("Cart".into(), None)));
+        assert!(made.contains(&("Store".into(), None)));
+        let members = refs(&f, RefKind::Member);
+        assert!(members.contains(&("count".into(), None)));
+        assert!(!members.iter().any(|(n, _)| n == "cart" || n == "it"), "locals aren't members");
+    }
+
+    #[test]
+    fn function_arity_counts_only_defaults_as_optional() {
+        let f = extract(
+            "interface F {\n  fun <Q : Any> make(kind: KClass<Q>): Q\n}\n\
+             fun both(a: Int, b: Int = 1) = a + b\n\
+             fun none() = 0\n\
+             fun many(vararg xs: Int) = xs.size\n",
+        );
+        let arity = |n: &str| f.symbols.iter().find(|s| s.name == n).unwrap().arity;
+        assert_eq!(arity("make"), Some((1, Some(1))));
+        assert_eq!(arity("both"), Some((1, Some(2))));
+        assert_eq!(arity("none"), Some((0, Some(0))));
+        assert_eq!(arity("many"), Some((0, None)));
+    }
+}

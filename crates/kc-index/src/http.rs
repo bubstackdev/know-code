@@ -362,7 +362,32 @@ fn route_handlers(client: &RouteRow, client_repo: &Path, summaries: &[RepoSummar
             }
         }
     }
+    // A request to an absolute URL naming a host that isn't this machine and that no indexed repo serves doesn't reach
+    // the repo making it: a route of its own on the same path is a coincidence, not its handler (opengist's request to
+    // `https://github.com/{user}.keys` isn't served by its own `GET /:user`). Another repo's route may still be what a
+    // frontend's public API host reaches, assuming one deployment, as before. Only the request's own URL counts; a typed
+    // client's base address (`host_at`) is configuration a deployment may override.
+    let cands = if let Some(h) = client.host.as_deref()
+        && client.host_at.is_none()
+        && !local_host(h)
+        && !served_hosts(summaries).contains_key(h)
+    {
+        let me = identity_of(client_repo, summaries);
+        let others: Vec<_> = cands.into_iter().filter(|(r, _)| identity_of(r, summaries) != me).collect();
+        if others.is_empty() {
+            return Vec::new();
+        }
+        others
+    } else {
+        cands
+    };
     by_hosts(rank(cands, client_repo, summaries, &served), client, client_repo, summaries)
+}
+
+/// This machine, as `kc_extract::urls::host_of` writes it (loopback and any-address are `localhost`), with any port.
+fn local_host(host: &str) -> bool {
+    let name = if host.starts_with('[') { host.split(']').next().map_or(host, |h| &host[..h.len() + 1]) } else { host.split(':').next().unwrap_or(host) };
+    matches!(name, "localhost" | "[::1]") || name.ends_with(".localhost")
 }
 
 /// Links ranked by verb and path, with the host the client repo's settings name deciding among them (see the module
@@ -1131,5 +1156,45 @@ mod tests {
         let any = &ws[1].routes[0];
         let back: Vec<_> = callers(any, Path::new("/w/hooks"), &ws).into_iter().map(|l| l.route.symbol).collect();
         assert_eq!(back, ["Api.drop"]);
+    }
+
+    /// A request to an absolute URL on a host no indexed repo serves, and not this machine, reaches no route of its own
+    /// repo, however its path reads; another repo's route it still links, assuming one deployment (a frontend naming
+    /// its backend's public host). On this machine, or relative, it links by path as before. Both sides agree.
+    #[test]
+    fn a_request_to_another_host_links_nothing() {
+        let with_host = |mut r: serde_json::Value, host: &str| {
+            r["host"] = json!(host);
+            r
+        };
+        let ws = vec![
+            repo(
+                "/w/gists",
+                vec![
+                    with_host(route("client", "GET", "{}.keys", None, "Keys.fetch"), "github.com"),
+                    with_host(route("client", "GET", "{}.keys", None, "Keys.local"), "localhost:6157"),
+                    route("client", "GET", "{}.keys", None, "Keys.relative"),
+                    route("server", "GET", ":user", None, "Users.Show"),
+                ],
+            ),
+        ];
+        let linked = |symbol: &str| {
+            let c = ws[0].routes.iter().find(|r| r.symbol == symbol).unwrap();
+            handlers(c, Path::new("/w/gists"), &ws).into_iter().map(|l| l.route.symbol).collect::<Vec<_>>()
+        };
+        assert!(linked("Keys.fetch").is_empty());
+        assert_eq!(linked("Keys.local"), ["Users.Show"]);
+        let mut both = ws.clone();
+        both.push(repo("/w/hub", vec![route("server", "GET", ":name", None, "Hub.Show")]));
+        let c = both[0].routes.iter().find(|r| r.symbol == "Keys.fetch").unwrap();
+        let to: Vec<_> = handlers(c, Path::new("/w/gists"), &both).into_iter().map(|l| (l.route.symbol, l.assumptions)).collect();
+        assert_eq!(to, [("Hub.Show".to_string(), vec![Assumption::SameDeployment])]);
+        assert_eq!(linked("Keys.relative"), ["Users.Show"]);
+        let server = ws[0].routes.iter().find(|r| r.side == "server").unwrap();
+        let mut back: Vec<String> = callers(server, Path::new("/w/gists"), &ws).into_iter().map(|l| l.route.symbol).collect();
+        back.sort();
+        assert_eq!(back, ["Keys.local", "Keys.relative"]);
+        assert!(local_host("localhost") && local_host("[::1]:8080") && local_host("app.localhost:3000"));
+        assert!(!local_host("github.com") && !local_host("orchard.example:8080"));
     }
 }

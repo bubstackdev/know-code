@@ -52,6 +52,12 @@ sorted, named in `UNORDERED` in `scripts/eval/snapshot.py`. A snapshot in which 
 Answers must not depend on the order files were stored in. With `KNOWCODE_INSERT_REVERSED=1`, indexing stores files
 in reverse path order; a snapshot taken that way must equal one taken normally.
 
+The file reference graph is updated rather than rebuilt after a sync that changed only references (see
+`docs/architecture.md`). With `KNOWCODE_TEST_GRAPH_CHECK=1`, every updated graph is also built afresh and the command
+fails if the two differ: set it while working a repo by hand to check the update on it. The test
+`corpus_updated_reference_graphs_are_the_graphs_built_afresh` (ignored by default; its comment says how to point it at
+the public corpus) does the same over seeded random edits of a copy of each repo.
+
 ### The invariant suite
 
 Tests that check a property over a class of inputs are named `invariant_…`, so `cargo test -- invariant` runs them

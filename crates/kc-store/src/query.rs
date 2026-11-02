@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" | "java" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" | "kt" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -891,6 +891,8 @@ struct TypeOracle<'c> {
     /// The TypeScript file being resolved: a free function it calls is its own or an imported one, never another
     /// file's of the same name.
     file: Option<String>,
+    /// The Java or Kotlin file being resolved: a function `private` to another file never gives a call its type.
+    jvm_file: Option<String>,
     supers: HashMap<String, Vec<String>>,
     /// Per name, `None` when no type, extension or typealias has it, else its typealiases (see [`Self::alias`]).
     defined: HashMap<String, Option<Vec<Alias>>>,
@@ -947,7 +949,7 @@ type MemberKey = (String, String, bool, Option<String>);
 type TypeAt = (Option<String>, Option<String>);
 
 /// A call whose return type is looked up: owner, caller's type, name, and (TypeScript) the calling file.
-type ReturnKey = (Option<String>, Option<String>, String, Option<String>);
+type ReturnKey = (Option<String>, Option<String>, String, Option<String>, Option<String>);
 
 /// A method taking a delegate: its container, fewest and most arguments, and per parameter the delegate's input types.
 struct LambdaSig {
@@ -964,6 +966,7 @@ impl<'c> TypeOracle<'c> {
             members: HashMap::new(),
             returns: HashMap::new(),
             file: None,
+            jvm_file: None,
             supers: HashMap::new(),
             defined: HashMap::new(),
             lambdas: HashMap::new(),
@@ -1718,7 +1721,7 @@ impl<'c> TypeOracle<'c> {
     /// The declared return type of a function, as (its container, encoded type).
     fn return_type(&mut self, owner: Option<&str>, scope: Option<&str>, name: &str) -> Result<Option<(Option<String>, String)>> {
         let file = if owner.is_none() { self.file.clone() } else { None };
-        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone());
+        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone(), self.jvm_file.clone());
         if let Some(v) = self.returns.get(&key) {
             let v = v.clone();
             return Ok(v.map(|(c, t, f)| {
@@ -1727,12 +1730,22 @@ impl<'c> TypeOracle<'c> {
             }));
         }
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.container, s.type_name, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+            "SELECT s.container, s.type_name, f.path, s.id FROM symbols s JOIN files f ON f.id = s.file_id
              WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('function', 'method') AND s.type_name IS NOT NULL
              ORDER BY f.path, s.start_byte",
         )?;
-        let rows: Vec<(Option<String>, String, String)> =
-            stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut rows: Vec<(Option<String>, String, String)> = Vec::new();
+        for row in stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?)))? {
+            let (container, ty, path, id) = row?;
+            // Java and Kotlin: a function `private` to another file can't be the one called here, so its type is
+            // never this call's.
+            if let Some(f) = self.jvm_file.as_deref()
+                && crate::jvm::hidden_from(self.conn, f, id)?
+            {
+                continue;
+            }
+            rows.push((container, ty, path));
+        }
         let own = file.as_ref().and_then(|f| rows.iter().find(|(c, _, p)| c.is_none() && p == f)).cloned();
         let defs = rows;
         let in_container = |c: &Option<String>, want: &str| c.as_deref().is_some_and(|c| c == want || c.ends_with(&format!(".{want}")));
@@ -2974,11 +2987,14 @@ fn chained_constructor(
     let ty = if receiver == "this" {
         Some(own)
     } else {
-        // The base class: the class among the bases any part of the type lists.
+        // The base class: the class among the bases any part of the type lists, the parts taken by file (a part's
+        // lines say nothing about another file's).
         let bases: Vec<String> = conn
             .prepare_cached(
                 "SELECT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id JOIN symbols o ON o.id = ?1
-                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct') ORDER BY r.line",
+                 JOIN files f ON f.id = r.file_id
+                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct')
+                 ORDER BY f.path, r.line, r.rowid",
             )?
             .query_map([own], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -3124,7 +3140,7 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang IN ('csharp', 'java') THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java', 'kotlin') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
@@ -5372,12 +5388,16 @@ fn dropped_by(dropped: &mut HashMap<i64, &'static str>, on: bool, before: &[&Def
 
 /// Whether a declaration in `lang` is one code in `file` can name: TypeScript, TSX and JavaScript count as one.
 fn same_language(file: &str, lang: &str) -> bool {
-    let family = if matches!(lang, "typescript" | "tsx" | "javascript") { "ts" } else { lang };
+    let family = match lang {
+        "typescript" | "tsx" | "javascript" => "ts",
+        "java" | "kotlin" => "jvm",
+        l => l,
+    };
     let ext = file.rsplit_once('.').map_or("", |(_, e)| e);
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
-        "java" => Some("java"),
+        "java" | "kt" => Some("jvm"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),
@@ -5555,6 +5575,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             ("unresolved", Vec::new())
         } else {
             oracle.file = ts.then(|| hit.file.clone());
+            oracle.jvm_file = java.then(|| hit.file.clone());
             oracle.here = cs.then(|| hit.file.clone());
             oracle.caller = hit.caller_type();
             let mut recv = if cs && !cs_type {
