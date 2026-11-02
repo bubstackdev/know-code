@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 27;
+pub const VERSION: u32 = 28;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -1066,7 +1066,7 @@ impl<'a> Cx<'a> {
                     if let Some(val) = string_literal(self.src, v) {
                         self.facts.constants.push(StringConst { qualified: name.clone(), value: val, line: line(d) });
                     } else if matches!(v.kind(), "template_string" | "member_expression" | "binary_expression")
-                        && let Some(val) = urls::encode(&self.url_pieces(v), true)
+                        && let Some(val) = urls::encode(urls::without_glued_base(&self.url_pieces(v)), true)
                     {
                         // `const API = environment.apiUrl`, `` const BASE = `${environment.apiUrl}/v2` ``: a URL
                         // prefix, encoded as a request path is.
@@ -1376,15 +1376,17 @@ impl Cx<'_> {
         if !surely && !pieces.iter().any(named) {
             return self.operation_call(node, receiver.unwrap_or(f), &method);
         }
-        let Some(path) = urls::encode(&pieces, true) else {
+        let Some(path) = urls::encode(urls::without_glued_base(&pieces), true) else {
             // A request whose URL is only known at run time: kept with no path, so an answer can say it wasn't read.
             if surely {
                 self.facts.http_routes.push(HttpRoute { sym, side: "client", verb, path: String::new(), path_ref: None, service: None, service_ref: None, line: line(node) });
             }
             return;
         };
-        // A bare word (`api.get('orders')`) is a path only from a client that is surely HTTP.
-        let bare = !path.contains(['/', '?', '{']) && surely && path.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        // A bare word (`api.get('orders')`, or `message?since=…` once a glued base is dropped) is a path only from a
+        // client that is surely HTTP.
+        let word = path.split('?').next().unwrap_or_default();
+        let bare = !word.is_empty() && !word.contains(['/', '{']) && surely && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
         if urls::looks_like_path(&path) || bare {
             // A URL read from a local: the local and its line, after the path (`{~url@44}`), for the query to name.
             let path = match local {
@@ -1526,7 +1528,7 @@ impl Cx<'_> {
                     return out.push(Piece::Unknown);
                 };
                 let (pa, pb) = (self.url_pieces(a), self.url_pieces(b));
-                let path = |p: &[Piece]| urls::encode(p, true).map(|u| u.split('?').next().unwrap_or_default().to_string());
+                let path = |p: &[Piece]| urls::encode(urls::without_glued_base(p), true).map(|u| u.split('?').next().unwrap_or_default().to_string());
                 match (path(&pa), path(&pb)) {
                     (Some(x), Some(y)) if x == y => {
                         // The pieces up to the query.
@@ -2904,6 +2906,38 @@ export default function (view, params, tabContent) {
 
     /// fetch, axios (and instances), jQuery, superagent-style wrappers and URL builders, with composed URLs; a request
     /// whose URL is known only at run time is kept without a path; calls to generated API clients are operations.
+    #[test]
+    fn a_value_glued_to_the_first_segment_is_the_base_address() {
+        // gotify's web client: a base read at run time (`config.get('url')`, ending in `/`) glued to the path.
+        let f = extract(
+            r#"
+const BASE = `${apiRoot()}api/v2`;
+export class AppStore {
+  remove(id: number) { return axios.delete(`${config.get('url')}application/${id}`); }
+  create() { return axios.post(`${config.get('url')}application`, {}); }
+  since(since: number) { return axios.get(`${config.get('url')}message?since=${since}`); }
+  health() { return axios.get(`${config.get('url')}/health`); }
+  viaConst() { return axios.get(`${BASE}/users`); }
+}
+"#,
+            false,
+        );
+        let routes: Vec<(&str, &str, &str)> =
+            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.as_str(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("remove", "DELETE", "application/{}"),
+                ("create", "POST", "application"),
+                ("since", "GET", "message?since={}"),
+                // A value before a `/` computed by a call may build part of the path: a parameter, as before.
+                ("health", "GET", "{}/health"),
+                ("viaConst", "GET", "{=BASE}/users"),
+            ]
+        );
+        assert!(f.constants.iter().any(|c| c.qualified == "BASE" && c.value == "api/v2"), "{:?}", f.constants);
+    }
+
     #[test]
     fn fetch_axios_jquery_wrappers_and_generated_clients_are_requests() {
         let f = extract(

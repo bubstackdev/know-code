@@ -55,6 +55,17 @@ pub fn encode(pieces: &[Piece], base: bool) -> Option<String> {
     named.then_some(out)
 }
 
+/// A request URL's pieces without the values glued to its first segment (`${config.get('url')}application/${id}`):
+/// they are a base address ending in `/`, since a request's path doesn't begin inside a value, so they go even when a
+/// call computes them, which [`encode`] would otherwise keep as a parameter. Only a segment counts (text starting with
+/// a letter or digit): `${id}.json` keeps its value.
+pub fn without_glued_base(pieces: &[Piece]) -> &[Piece] {
+    match pieces.iter().position(|p| !matches!(p, Piece::Unknown | Piece::Call)) {
+        Some(i) if i > 0 && matches!(&pieces[i], Piece::Text(t) if t.starts_with(|c: char| c.is_ascii_alphanumeric())) => &pieces[i..],
+        _ => pieces,
+    }
+}
+
 /// Whether an encoded path plausibly names an HTTP path rather than some other string (a cache key): it has a `/`
 /// or a constant in it.
 pub fn looks_like_path(encoded: &str) -> bool {
@@ -119,6 +130,14 @@ mod tests {
         assert_eq!(encode(&[Unknown, Unknown, Ref("Api.x".into())], true).as_deref(), Some("{=Api.x}"));
         assert_eq!(encode(&[t("https://h.example/api/x?id="), Unknown], true).as_deref(), Some("https://h.example/api/x?id={}"));
         assert_eq!(encode(&[Call, t("/health")], true).as_deref(), Some("{}/health"));
+        // Values glued to the first segment are a base address ending in `/`, a call's included.
+        let glued = |p: &[Piece]| encode(without_glued_base(p), true);
+        assert_eq!(glued(&[Call, t("application/"), Unknown]).as_deref(), Some("application/{}"));
+        assert_eq!(glued(&[Call, t("application")]).as_deref(), Some("application"));
+        assert_eq!(glued(&[Unknown, Call, t("message?since="), Unknown]).as_deref(), Some("message?since={}"));
+        // Not a segment after the value (an extension, a slash): as before.
+        assert_eq!(glued(&[Call, t(".json")]).as_deref(), Some("{}.json"));
+        assert_eq!(glued(&[Call, t("/health")]).as_deref(), Some("{}/health"));
         // Without a base, a leading value is a path parameter.
         assert_eq!(encode(&[Unknown, t("/details")], false).as_deref(), Some("{}/details"));
         // Nothing named: no path.

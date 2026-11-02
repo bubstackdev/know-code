@@ -4,6 +4,22 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Go: a `Do` sending a request its function built (`req, err := http.NewRequest(…)`, then `client.Do(req)`) is a
+  request of its own, to the same route, so `routes` lists it and links it where the request is linked.
+- A request whose URL names another host (`https://github.com/{user}.keys`), one that isn't this machine and that no
+  indexed repo serves, is no longer linked to a route of its own repo that happens to share its path. Its links to
+  other repos' routes (a frontend naming its backend's public host) stay, as do requests on this machine
+  (`localhost`), relative ones, and those through a typed client's base address.
+- TypeScript and JavaScript requests whose base address is a value glued to the first path segment
+  (`` axios.delete(`${config.get('url')}application/${id}`) ``, the base ending in `/`) now read as `application/{}`
+  rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
+  (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
+  did; identity-v1's TypeScript figures are unchanged.
+- In Java and Kotlin, `super.m()` resolves to a supertype's member, never to the calling class's own override, as
+  javac and kotlinc bind it; when the repository's supertypes don't declare it, it is a library's and stays
+  unresolved. A member a typed receiver inherits is read through that type's own declared supertypes in Java too, so a
+  same-named type in another package is never taken for one. On jsoup's held-out labels, linked recall rises from
+  0.813 to 0.831, with `exact` precision 1.000 and no outside label linked.
 - Kotlin is read, with Java as one family. Classes, objects, companions, functions, extensions and properties in `.kt`
   files are indexed, and names resolve as kotlinc scopes them: by package and imports (aliases included), a class's
   companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
@@ -22,6 +38,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   it a router (`api.Route(chi.NewRouter())`), under that caller's prefix; with no such caller (a cache's `Get`), they
   are not routes. Found on routes-v1's second round of held-out repositories; routes-v1's
   development repositories score the same, since none uses these forms.
+- After an edit that changes only function bodies, `overview`, `hotspots`, `areas` and ranked answers no longer
+  resolve every reference in the repo again. A sync logs the reference names of the files it re-extracted when none
+  of them changed anything else (declarations, signatures, imports, packages; lines counted only by their order in
+  the file), and the file reference graph is then updated for those names only. Anything else (a file added or
+  removed, a declaration changed, more than 50 files or 5% of them, a repo with a SCIP index) rebuilds it as before;
+  so does the first edit of each file after upgrading, until this version has indexed it once. On the last
+  10 commits of rust-analyzer, the two that changed only bodies took `overview` from 49.1 G to 7.5 G and from 48.7 G
+  to 13.6 G instructions; across 1,201 recent commits of nine public repos, 28% change only bodies. Answers are
+  unchanged: after every edit of a random sequence on copies of nine public repos, the updated graph equals one built
+  afresh. A cold index costs about 1% more instructions (swift-nio), for the per-file key.
+- A C# class whose partial declarations in several files name different base classes takes its base class from the
+  parts in file order. The order was by line alone, mixing the files.
 - `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order

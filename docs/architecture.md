@@ -32,6 +32,17 @@ References are stored unresolved. Resolution happens at query time against the w
 dependency repos when the answer crosses into them), so an edit to one file never requires re-extracting others.
 Each extractor has a version; bumping it re-extracts that language's files on the next query.
 
+**The reference graph after an edit.** The file reference graph behind rankings, `overview`, `hotspots` and `areas`
+resolves every reference name; each name's edges come from resolving that name alone. A sync that changed only
+references (every file it re-extracted kept its *surface key*: all its facts but its references, positions counted
+only by their order in the file) logs the names those files referenced before and after, in `graph_log`. The next
+graph is then the cached one with those names resolved again, plus the names DI factories file constructions under
+(they come from calls in any file) and, ignoring case, CFML and SQL spellings. Anything else rebuilds it in full: a
+file added or removed, a changed surface, more than 50 files (or 5%) changed, a change in what DI factories make,
+SCIP facts (matched to definitions by line in any file), a generation moved without a log entry (a SCIP ingest, an
+older build sharing the cache), or another resolver version. The test `ref_graph_update` checks the updated graph
+against one built afresh after every edit of a random sequence.
+
 An index written by a newer schema is refused with an error naming both schemas, rather than rebuilt; an older one
 is rebuilt. Neither happens between released versions, which keep their indexes apart:
 

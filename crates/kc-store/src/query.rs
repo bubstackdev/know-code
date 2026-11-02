@@ -2987,11 +2987,14 @@ fn chained_constructor(
     let ty = if receiver == "this" {
         Some(own)
     } else {
-        // The base class: the class among the bases any part of the type lists.
+        // The base class: the class among the bases any part of the type lists, the parts taken by file (a part's
+        // lines say nothing about another file's).
         let bases: Vec<String> = conn
             .prepare_cached(
                 "SELECT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id JOIN symbols o ON o.id = ?1
-                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct') ORDER BY r.line",
+                 JOIN files f ON f.id = r.file_id
+                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct')
+                 ORDER BY f.path, r.line, r.rowid",
             )?
             .query_map([own], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
