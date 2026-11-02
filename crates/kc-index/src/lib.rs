@@ -1354,8 +1354,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
     }
     if report.parsed + report.removed > 0 {
         batch.set_meta("last_sync", &now_secs().to_string())?;
-        // Invalidates the cached `dirty` flag.
-        batch.set_meta("tree_gen", &now_nanos().to_string())?;
+        // Invalidates the cached `dirty` flag, and logs the names the sync changed for the reference graph.
+        batch.set_generation(&now_nanos().to_string())?;
     }
     // In the same commit as the facts: a summary is reused while this generation holds (see `workspace`).
     if summary_changed || store_lacks_summary_gen {

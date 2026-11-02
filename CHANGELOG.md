@@ -4,6 +4,17 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- After an edit that changes only function bodies, `overview`, `hotspots`, `areas` and ranked answers no longer
+  resolve every reference in the repo again. A sync logs the reference names of the files it re-extracted when none
+  of them changed anything else (declarations, signatures, imports, packages; lines counted only by their order in
+  the file), and the file reference graph is then updated for those names only. Anything else (a file added or
+  removed, a declaration changed, more than 50 files, a repo with a SCIP index) rebuilds it as before. On the last
+  10 commits of rust-analyzer, the two that changed only bodies took `overview` from 49.1 G to 7.5 G and from 48.7 G
+  to 13.6 G instructions; across 1,201 recent commits of nine public repos, 28% change only bodies. Answers are
+  unchanged: after every edit of a random sequence on copies of nine public repos, the updated graph equals one built
+  afresh.
+- A C# class whose partial declarations in several files name different base classes takes its base class from the
+  parts in file order. The order was by line alone, mixing the files.
 - `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order

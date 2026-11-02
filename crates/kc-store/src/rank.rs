@@ -53,6 +53,11 @@ pub struct RefGraph {
     pub files: Vec<String>,
     /// `(src, dst, names)`, sorted by `(src, dst)`, names sorted.
     pub edges: Vec<(String, String, Vec<NameUse>)>,
+    /// The names DI factories' constructions were filed under when the graph was built (see
+    /// [`query::factory_constructions`]): they come from calls in any file, so [`update`] resolves them again.
+    /// `None` in a graph written by a build that didn't keep them: such a graph is never updated, only rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_names: Option<Vec<String>>,
 }
 
 impl RefGraph {
@@ -158,56 +163,129 @@ pub fn ref_graph(conn: &Connection) -> Result<RefGraph> {
 
 /// [`ref_graph`], resolving a name's references `chunk` at a time.
 pub fn ref_graph_chunked(conn: &Connection, chunk: usize) -> Result<RefGraph> {
-    let files: Vec<String> = conn
-        .prepare("SELECT path FROM files WHERE lang NOT IN ('swiftpm', 'xcodegen', 'cargo', 'hostconfig') ORDER BY path")?
-        .query_map([], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    // `symbols.name` groups without case; which spelling a group shows depends on row order, so compare lower-cased.
-    let common: HashSet<String> = conn
-        .prepare("SELECT lower(name) FROM symbols GROUP BY name HAVING COUNT(DISTINCT file_id) > ?1")?
-        .query_map([MANY_DEFINITIONS], |r| r.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
+    let files = graph_files(conn)?;
+    let common = common_names(conn)?;
     let mut names: Vec<(String, i64)> = conn
         .prepare("SELECT name, COUNT(*) FROM refs GROUP BY name")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let names: Vec<String> = names.into_iter().map(|(n, _)| n).collect();
+    let factory_names = factory_names(conn)?;
+    let edges = resolve_names(conn, &names, &common, chunk)?;
+    let edges = edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect();
+    Ok(RefGraph { files, edges, factory_names: Some(factory_names) })
+}
+
+/// `old`, the graph at an earlier generation, brought to the index's: every name in `changed` resolved again, with the
+/// names DI factories file constructions under (then and now) and the names equal to one of those ignoring case (CFML
+/// and SQL references match lower-cased), and every other name's edges kept. Equal to [`ref_graph`] when, between the
+/// two generations, only references changed, and only references named in `changed` (see [`crate::Batch::set_generation`]):
+/// a name's edges come from resolving that name alone, and nothing else its resolution reads moved. `None` for a
+/// graph that didn't keep its factory names.
+pub fn update(conn: &Connection, old: RefGraph, changed: &std::collections::BTreeSet<String>) -> Result<Option<RefGraph>> {
+    update_chunked(conn, old, changed, CHUNK)
+}
+
+fn update_chunked(conn: &Connection, old: RefGraph, changed: &std::collections::BTreeSet<String>, chunk: usize) -> Result<Option<RefGraph>> {
+    let Some(old_factory) = old.factory_names else { return Ok(None) };
+    let factory_names = factory_names(conn)?;
+    let lower: HashSet<String> =
+        changed.iter().chain(&old_factory).chain(&factory_names).map(|n| n.to_lowercase()).collect();
+    // Resolved again: the names references use now that match; dropped from the old graph: those and every name
+    // that matched then (a name no reference uses any more has no edges left).
+    let mut names: Vec<(String, i64)> = conn
+        .prepare("SELECT name, COUNT(*) FROM refs GROUP BY name")?
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|(n, _)| lower.contains(&n.to_lowercase()))
+        .collect();
+    names.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let names: Vec<String> = names.into_iter().map(|(n, _)| n).collect();
+    let common = common_names(conn)?;
+    let fresh = resolve_names(conn, &names, &common, chunk)?;
+    let mut edges: BTreeMap<(String, String), BTreeMap<String, NameUse>> = BTreeMap::new();
+    for (src, dst, uses) in old.edges {
+        let kept: BTreeMap<String, NameUse> =
+            uses.into_iter().filter(|u| !lower.contains(&u.name.to_lowercase())).map(|u| (u.name.clone(), u)).collect();
+        if !kept.is_empty() {
+            edges.insert((src, dst), kept);
+        }
+    }
+    merge(&mut edges, vec![fresh]);
+    let edges = edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect();
+    Ok(Some(RefGraph { files: graph_files(conn)?, edges, factory_names: Some(factory_names) }))
+}
+
+/// The graph's nodes: indexed source files, manifests left out.
+fn graph_files(conn: &Connection) -> Result<Vec<String>> {
+    Ok(conn
+        .prepare("SELECT path FROM files WHERE lang NOT IN ('swiftpm', 'xcodegen', 'cargo', 'hostconfig') ORDER BY path")?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+/// Names defined in more than [`MANY_DEFINITIONS`] files, lower-cased.
+fn common_names(conn: &Connection) -> Result<HashSet<String>> {
+    // `symbols.name` groups without case; which spelling a group shows depends on row order, so compare lower-cased.
+    Ok(conn
+        .prepare("SELECT lower(name) FROM symbols GROUP BY name HAVING COUNT(DISTINCT file_id) > ?1")?
+        .query_map([MANY_DEFINITIONS], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+/// The names DI factories' constructions are filed under, sorted (computed once per generation and kept).
+fn factory_names(conn: &Connection) -> Result<Vec<String>> {
+    let mut names: Vec<String> = query::factory_constructions(conn)?.keys().cloned().collect();
+    names.sort();
+    Ok(names)
+}
+
+/// The edges of `names`, each resolved by one of [`workers`] threads in turn on a connection of its own reading the
+/// index at `conn`'s generation (a thread whose connection reads another one takes no names).
+fn resolve_names(conn: &Connection, names: &[String], common: &HashSet<String>, chunk: usize) -> Result<Edges> {
     let generation = generation(conn)?;
     let path = conn.path().unwrap_or_default().to_string();
     let w = workers();
     let threads = if path.is_empty() { 1 } else { w.threads.clamp(1, names.len().max(1)) };
-    // Kept per index generation: computed here once, not by every thread at once.
-    query::factory_constructions(conn)?;
     let next = AtomicUsize::new(0);
-    let parts = std::thread::scope(|scope| -> Result<Vec<Partial>> {
+    let parts = std::thread::scope(|scope| -> Result<Vec<Edges>> {
         let helpers: Vec<_> = (1..threads)
             .map(|_| {
                 let (names, common, next, path, generation) = (&names, &common, &next, &path, &generation);
-                scope.spawn(move || -> Result<Partial> {
+                scope.spawn(move || -> Result<Edges> {
                     if let Some(init) = w.init {
                         init();
                     }
                     let mut part = Partial::default();
                     // A thread that can't read the index at this generation takes no names: the others resolve them.
-                    let Ok(conn) = open_at(path, generation) else { return Ok(part) };
+                    let Ok(conn) = open_at(path, generation) else { return Ok(part.edges) };
                     part.resolve(&conn, names, next, common, chunk)?;
-                    Ok(part)
+                    Ok(part.edges)
                 })
             })
             .collect();
         let mut own = Partial::default();
-        let mine = own.resolve(conn, &names, &next, &common, chunk);
-        let mut parts = vec![own];
+        let mine = own.resolve(conn, names, &next, common, chunk);
+        let mut parts = vec![own.edges];
         for h in helpers {
             parts.push(h.join().map_err(|_| anyhow::anyhow!("a reference graph thread panicked"))??);
         }
         mine?;
         Ok(parts)
     })?;
-    let mut edges: BTreeMap<(String, String), BTreeMap<String, NameUse>> = BTreeMap::new();
+    let mut edges = Edges::new();
+    merge(&mut edges, parts);
+    Ok(edges)
+}
+
+type Edges = BTreeMap<(String, String), BTreeMap<String, NameUse>>;
+
+/// Adds `parts`' counts into `edges`.
+fn merge(edges: &mut Edges, parts: Vec<Edges>) {
     for part in parts {
-        for (key, uses) in part.edges {
+        for (key, uses) in part {
             let into = edges.entry(key).or_default();
             for (name, u) in uses {
                 match into.entry(name) {
@@ -224,8 +302,6 @@ pub fn ref_graph_chunked(conn: &Connection, chunk: usize) -> Result<RefGraph> {
             }
         }
     }
-    let edges = edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect();
-    Ok(RefGraph { files, edges })
 }
 
 /// The reference graphs being built in this process, by index file and generation: a second thread needing one waits
@@ -305,7 +381,7 @@ type Site = (String, u32, Option<i64>, String, i64);
 /// The edges one thread found, for the names it resolved.
 #[derive(Default)]
 struct Partial {
-    edges: BTreeMap<(String, String), BTreeMap<String, NameUse>>,
+    edges: Edges,
     /// Per target symbol: its file, and whether it is declared `private`.
     target: HashMap<i64, (String, bool)>,
 }
@@ -454,6 +530,7 @@ mod tests {
                     (s.to_string(), d.to_string(), names)
                 })
                 .collect(),
+            factory_names: None,
         }
     }
 
