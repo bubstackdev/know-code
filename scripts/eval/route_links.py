@@ -3,6 +3,7 @@
 
     route_links.py sites CLONES REPOS.txt > sites.jsonl
     route_links.py seeded sites.jsonl > second-ids.txt
+    route_links.py score --knowcode BIN --reader BIN --work WORK --repos REPOS.txt --labels LABELS [--out SUMMARY]
 
 `sites` lists every client call site in the pinned clones by the search eval/route-links-v1/README.md states: one row
 per request-API call (TypeScript and JavaScript, Java and Kotlin, Go), and one per method of a `@FeignClient` or
@@ -10,6 +11,24 @@ per request-API call (TypeScript and JavaScript, Java and Kotlin, Go), and one p
 told apart as `#2` and on. Test code is left out. A labeller reads each site and writes its label by hand.
 
 `seeded` lists the sites labelled a second time: the SECOND share of them, the lowest by the SHA-256 of their id.
+
+`score` scores KnowCode's links from the labelled sites by eval/route-links-v1/README.md's "Scoring", which fixed it
+before any scorer existed. Each group's clones (WORK/clones/GROUP/REPO) are indexed into the build's own cache under
+WORK/kc/<binary hash>/<group>, never in the clone, and its requests are read with the links of each through a reader
+that isn't a product path (crates/kc-index/examples/client_links.rs): the `routes` answer names a request by the
+symbol making it, and a site is a call, two of which one function can hold. The reader's links are the `routes`
+answer's (both call `kc_index::http::handlers`); the scorer checks that per requesting symbol and reports the agreement.
+
+The rule's match: "a link matches an item when its handler is in the item's file within 3 lines of its evidence, or,
+where an answer gives the route, when the routes are equal". Its reading here was decided before any answer on a
+labelled set was read. A link names the server route row it reaches, and the reader gives that row's verb and path, so
+for such a link the route clause alone decides whether it matches an item or a negative; the file clause applies only
+to a link with no route (a generated client's operation). The reasons, both seen on made-up fixtures
+(test_route_links.py): handlers declared within 3 lines of each other are one another's negatives by the file clause,
+so a right link would also match a negative; and a Go route whose handler is declared in another file is a row of the
+function registering it, so the file clause compares a registrar with a handler. Beside these figures, `file_only` scores the same links by the file clause alone: what a user can
+check today, since the `routes` answer's link items give a route's file and lines but not its path. Each match records
+the clause it used.
 """
 from __future__ import annotations
 
@@ -21,6 +40,10 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))  # scripts/: kc_env
 
 SCRIPT_REQUEST = re.compile(
     r'(?<![\w$.])(?:this\.)?(?:http|httpClient)\.(?:get|post|put|patch|delete|request|head|options)\s*[<(]'
@@ -141,6 +164,187 @@ def seeded(ids):
     return sorted(sorted(ids, key=lambda i: hashlib.sha256(i.encode()).hexdigest())[:math.ceil(SECOND * len(ids))])
 
 
+LANGUAGES = {'Go': GO, 'TypeScript and JavaScript': SCRIPTS + ('.vue',), 'Java and Kotlin': JVM, 'C#': ('.cs',)}
+SITE_ID = re.compile(r'^([^/]+)/(.+):(\d+)(?:#\d+)?$')
+EVIDENCE = re.compile(r'^([^/]+)/(.+):(\d+)$')
+NEAR = 3
+
+
+def language(file):
+    return next((name for name, ext in LANGUAGES.items() if file.endswith(ext)), 'other')
+
+
+def route_key(verb, path):
+    """A route by LABELING.md's Routes ruling: case ignored, leading and trailing slashes dropped, `{param}` and
+    `:param` alike (and the query string left off)."""
+    p = re.sub(r'\{[^}]*\}|:[A-Za-z_]\w*', '{}', (path or '').split('?', 1)[0]).strip('/').lower()
+    return (verb or '').upper(), p
+
+
+def same_route(a, b):
+    """Two routes are equal by the ruling; a route answering every verb (`*`) answers each."""
+    return (a[0] == b[0] or '*' in (a[0], b[0])) and a[1] == b[1]
+
+
+def item_route(item):
+    verb, _, path = item.strip().partition(' ')
+    return route_key(verb, path)
+
+
+def match(link, target, file_only=False):
+    """How a link matches a label's item or negative, or None: `route` when the link gives a route and it equals the
+    item's; `file`, for a link giving no route (or with `file_only`), when the linked handler is in the item's file
+    within NEAR lines of its evidence."""
+    if link.get('path') is not None and not file_only:
+        return 'route' if same_route(route_key(link['verb'], link['path']), item_route(target['item'])) else None
+    m = EVIDENCE.match(target.get('evidence', ''))
+    if m and link['repo'] == m.group(1) and link['file'] == m.group(2) \
+            and abs(link['start_line'] - int(m.group(3))) <= NEAR:
+        return 'file'
+    return None
+
+
+def links_at(rows, label):
+    """KnowCode's links from a site: those of every request the reader places at the site's file and line, once each."""
+    repo, file, line = SITE_ID.match(label['id']).groups()
+    out = {}
+    for r in rows:
+        if r['repo'] == repo and r['file'] == file and r['line'] == int(line):
+            for l in r['links']:
+                out[(l['repo'], l['file'], l['line'], l['verb'], l.get('path'))] = l
+    return [out[k] for k in sorted(out, key=str)]
+
+
+def tally(labels, rows, file_only=False):
+    """Per site, by the rule: precision over the links from `exhaustive` sites (a link counts right when it matches one
+    of the site's items and none of its negatives; a link from a site with no items is wrong); recall over the
+    required items of `exhaustive` and `lower_bound` sites, with an optional item counted only when it is linked.
+    `uncertain` sites are kept apart."""
+    out = []
+    for label in labels:
+        links = links_at(rows, label)
+        site = dict(id=label['id'], group=label['group'], language=language(SITE_ID.match(label['id']).group(2)),
+                    dynamic=bool(label.get('dynamic_name')), completeness=label['completeness'],
+                    links=len(links), right=0, wrong=[], required=0, found=0, missed=[], clauses={})
+        for l in links:
+            how = [match(l, i, file_only) for i in label['items']]
+            bad = any(match(l, n, file_only) for n in label.get('negatives', []))
+            if any(how) and not bad:
+                site['right'] += 1
+                c = next(h for h in how if h)
+                site['clauses'][c] = site['clauses'].get(c, 0) + 1
+            else:
+                site['wrong'].append(f"{l['verb']} /{l.get('path') or ''} at {l['repo']}/{l['file']}:{l['line']}")
+        for i in label['items']:
+            linked = any(match(l, i, file_only) for l in links)
+            if i.get('optional') and not linked:
+                continue
+            site['required'] += 1
+            site['found'] += linked
+            if not linked:
+                site['missed'].append(i['item'])
+        out.append(site)
+    return out
+
+
+def figures(sites):
+    """Precision and recall with counts and Wilson 95% intervals over some sites."""
+    from common import wilson
+    prec = [s for s in sites if s['completeness'] == 'exhaustive']
+    rec = [s for s in sites if s['completeness'] in ('exhaustive', 'lower_bound')]
+    k, n = sum(s['right'] for s in prec), sum(s['links'] for s in prec)
+    rk, rn = sum(s['found'] for s in rec), sum(s['required'] for s in rec)
+    return dict(sites=len(sites), uncertain=sum(s['completeness'] == 'uncertain' for s in sites),
+                precision=dict(k=k, n=n, ci=[round(x, 3) for x in wilson(k, n)]),
+                recall=dict(k=rk, n=rn, ci=[round(x, 3) for x in wilson(rk, rn)]))
+
+
+def breakdown(sites):
+    """The rule's figures: per client language and per repository group, with and without the dynamic_name sites."""
+    out = {}
+    for by in ('language', 'group'):
+        for key in sorted({s[by] for s in sites}):
+            mine = [s for s in sites if s[by] == key]
+            out[f'{by}:{key}'] = dict(all=figures(mine), without_dynamic=figures([s for s in mine if not s['dynamic']]))
+    out['all'] = dict(all=figures(sites), without_dynamic=figures([s for s in sites if not s['dynamic']]))
+    return out
+
+
+def fmt(f):
+    if not f['n']:
+        return '–'
+    return f"{f['k'] / f['n']:.3f} ({f['k']}/{f['n']}, {f['ci'][0]:.3f}–{f['ci'][1]:.3f})"
+
+
+def report(summary):
+    lines = ['| Slice | Sites | Precision | Recall | Precision, no dynamic_name | Recall, no dynamic_name |',
+             '| --- | ---: | --- | --- | --- | --- |']
+    for key, v in summary['figures'].items():
+        a, d = v['all'], v['without_dynamic']
+        lines.append(f"| {key} | {a['sites']} | {fmt(a['precision'])} | {fmt(a['recall'])} | {fmt(d['precision'])} "
+                     f"| {fmt(d['recall'])} |")
+    return '\n'.join(lines)
+
+
+def read_answers(binary, env, clones):
+    """The `routes` answer's links per requesting symbol: {(repo, symbol): {(repo, file, line)}}."""
+    args = [str(binary), 'routes', '--json', '--no-sync']
+    for c in clones:
+        args += ['--repo', str(c)]
+    out = json.loads(subprocess.run(args, env=env, cwd=clones[0], check=True, capture_output=True, text=True).stdout)
+    got = {}
+    for item in out['items']:
+        got.setdefault((item['repo'], item['symbol']), set()).update(
+            (l['repo'], l['file'], l['line']) for l in item.get('links', []))
+    return got
+
+
+def run(args):
+    import kc_env
+    labels = [json.loads(x) for x in Path(args.labels).read_text().splitlines() if x.strip()]
+    groups = {}
+    for line in Path(args.repos).read_text().splitlines():
+        if line.strip() and not line.startswith('#'):
+            group, repo = line.split()[:2]
+            groups.setdefault(group, []).append(repo)
+    tag = hashlib.sha256(Path(args.knowcode).read_bytes()).hexdigest()[:16]
+    rows, agree = [], dict(symbols=0, same=0, differ=[])
+    for group, repos in groups.items():
+        clones = [Path(args.work)/'clones'/group/r for r in repos]
+        env = kc_env.knowcode_env(Path(args.work)/'kc'/tag/group)
+        for c in clones:
+            subprocess.run([str(args.knowcode), 'index', str(c)], env=env, cwd=c, check=True, capture_output=True)
+        mine = [json.loads(x) for x in subprocess.run([str(args.reader), *map(str, clones)], env=env, cwd=clones[0],
+                                                     check=True, capture_output=True, text=True).stdout.splitlines()]
+        rows += mine
+        answers = read_answers(args.knowcode, env, clones)
+        per_symbol = {}
+        for r in mine:
+            per_symbol.setdefault((r['repo'], r['symbol']), set()).update(
+                (l['repo'], l['file'], l['line']) for l in r['links'])
+        for key in sorted(set(per_symbol) | set(answers)):
+            agree['symbols'] += 1
+            if per_symbol.get(key, set()) == answers.get(key, set()):
+                agree['same'] += 1
+            else:
+                agree['differ'].append(f'{key[0]}: {key[1]}')
+    sites = tally(labels, rows)
+    secondary = tally(labels, rows, file_only=True)
+    clauses = {}
+    for s in sites:
+        for c, n in s['clauses'].items():
+            clauses[c] = clauses.get(c, 0) + n
+    summary = dict(rule='route-links-v1', binary=tag, labels=args.labels, agreement=agree, clauses=clauses,
+                   figures=breakdown(sites), sites=sites, file_only=dict(figures=breakdown(secondary)))
+    if args.out:
+        Path(args.out).write_text(json.dumps(summary, indent=1, sort_keys=True) + '\n')
+    print(report(summary))
+    print('\nfile clause only (secondary):\n')
+    print(report(summary['file_only']))
+    print(f"\nmatches by clause: {clauses}")
+    print(f"\nreader and `routes` answer agree on {agree['same']} of {agree['symbols']} requesting symbols")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -149,7 +353,17 @@ def main():
     s.add_argument('repos')
     d = sub.add_parser('seeded')
     d.add_argument('sites')
+    r = sub.add_parser('score')
+    r.add_argument('--knowcode', required=True, help='the knowcode binary scored')
+    r.add_argument('--reader', required=True, help="kc-index's client_links example, built from the same tree")
+    r.add_argument('--work', required=True, help='WORK/clones/GROUP/REPO holds the pinned clones')
+    r.add_argument('--repos', required=True, help="the set's repos.txt: group, repository, URL, commit")
+    r.add_argument('--labels', required=True)
+    r.add_argument('--out')
     args = ap.parse_args()
+    if args.cmd == 'score':
+        run(args)
+        return
     if args.cmd == 'seeded':
         ids = [json.loads(line)['id'] for line in Path(args.sites).read_text().splitlines() if line.strip()]
         print('\n'.join(seeded(ids)))
