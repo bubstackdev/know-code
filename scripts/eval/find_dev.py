@@ -20,13 +20,14 @@ import gzip
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / 'compare'))
+sys.path.insert(0, str(HERE.parent))  # scripts/: kc_env
+import kc_env  # noqa: E402
 import questions as compare_questions  # noqa: E402
 import score as compare_score  # noqa: E402
 
@@ -97,11 +98,7 @@ def similar_row(line):
 
 def run(knowcode, clones, work, questions, out, page=None):
     work = Path(work).resolve()
-    dirs = {k: work / k for k in ('home', 'config', 'data', 'cache')}
-    for d in dirs.values():
-        d.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, KNOWCODE_UPDATE_CHECK='0', HOME=str(dirs['home']), KNOWCODE_CONFIG_DIR=str(dirs['config']),
-               KNOWCODE_DATA_DIR=str(dirs['data']), KNOWCODE_CACHE_DIR=str(dirs['cache']))
+    env = kc_env.knowcode_env(work)
     with open(out, 'w') as f:
         for q in questions:
             p = subprocess.run([knowcode, 'find', q['query'], '--json', '-n', str(page or 200)], cwd=Path(clones) / q['repo'],
