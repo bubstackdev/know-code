@@ -945,7 +945,7 @@ impl Store {
         self.derived(&key, &generation, || {
             let Some(graph) = self.ref_graph_updated(&key, &generation)? else { return rank::ref_graph(&self.conn) };
             // Set by the tests (and by hand, to check a repo): the updated graph must be the one built afresh.
-            if std::env::var_os("KNOWCODE_GRAPH_CHECK").is_some() {
+            if std::env::var_os("KNOWCODE_TEST_GRAPH_CHECK").is_some() {
                 let full = rank::ref_graph(&self.conn)?;
                 anyhow::ensure!(
                     serde_json::to_string(&graph)? == serde_json::to_string(&full)?,
