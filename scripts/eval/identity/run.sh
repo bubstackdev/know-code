@@ -110,6 +110,11 @@ case $LANGUAGE in
     WRAPPER=$(sed -nE 's/.*(^| )GRADLE_WRAPPER=([^ ]+).*/\2/p' <<<"$ENVS")
     [ -z "$WRAPPER" ] || run "mkdir -p /tmp/wrapper && cd /tmp/wrapper && : > settings.gradle && gradle -q wrapper --gradle-version $WRAPPER
          cp -R gradlew gradle /work/src/ && cd /work/src && ./gradlew --version >>$LOG 2>&1"
+    # SCIP_ROOT_BUILD_ONLY=1 keeps scip-java's plugin out of the build's own build logic (buildSrc, included builds),
+    # through a gradlew in front of the real one (jvm/gradlew-root-only.sh).
+    if grep -qE '(^| )SCIP_ROOT_BUILD_ONLY=1( |$)' <<<"$ENVS"; then
+      run "cd /work/src && mv gradlew gradlew.real && cp /work/tools/gradlew-root-only.sh gradlew && chmod +x gradlew"
+    fi
     run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /work/tools/skip-buildsrc.gradle /root/.gradle/init.d/
          JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk\$(bash /work/tools/toolchains.sh $TOOLCHAINS)
          echo org.gradle.java.installations.paths=\$JDKS > /root/.gradle/gradle.properties

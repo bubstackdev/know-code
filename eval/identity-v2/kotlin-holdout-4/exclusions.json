@@ -1,0 +1,10 @@
+{
+ "kotlin/bound_two_ways": 21,
+ "kotlin/generated_target": 3,
+ "kotlin/import": 7084,
+ "kotlin/operator": 885,
+ "kotlin/outside_own_type": 1,
+ "kotlin/overload_unmatched": 11,
+ "kotlin/renamed_or_implicit": 121,
+ "kotlin/synthesised": 64
+}

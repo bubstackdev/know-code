@@ -346,11 +346,34 @@ the held-out set; its Java references are scored and reported beside it.
 ### Held out, fourth and last: graphql-kotlin (Kotlin)
 
 MoshiX and misk's six wrong links led to three more resolver rules, so a fourth set tests them fresh, and it is the
-last for 0.7: whatever it scores is published as it is. [ExpediaGroup/graphql-kotlin](https://github.com/ExpediaGroup/graphql-kotlin)
-at its 11.0.0 tag, Kotlin on the JVM only, was chosen and committed before any labelling. If it can't be built for
-labelling, its named reserve is [kotlin-orm/ktorm](https://github.com/kotlin-orm/ktorm) at its v4.2.1 tag, and a build
-failure is recorded here and isn't a scoring round. It is labelled, drawn and committed in kotlin-holdout-4/ the same
-way before any KnowCode answer on it is read, and scored once, by the build with every Kotlin rule above.
+last for 0.7: whatever it scores is published as it is.
+[ExpediaGroup/graphql-kotlin](https://github.com/ExpediaGroup/graphql-kotlin) at its 11.0.0 tag, Kotlin on the JVM
+only, was chosen and committed before any labelling, with [kotlin-orm/ktorm](https://github.com/kotlin-orm/ktorm) at
+its v4.2.1 tag named as the reserve should it not build.
+
+Neither built at first, and nothing from either was enumerated then. Both keep their build logic in a buildSrc of
+precompiled script plugins (`*.gradle.kts` conventions). scip-java 0.13.2's init script applies its Gradle plugin to
+every project of every build, buildSrc's too, and the plugin reads each Kotlin compile's compiler arguments while the
+build is configured; for a precompiled script plugin those arguments come from a task that hasn't run yet, and Gradle
+refuses the read. graphql-kotlin (Gradle 9.4.0) failed so with and without jvm/skip-buildsrc.gradle; ktorm (Gradle
+8.9, with Kotlin 2.0.21 pinned in buildSrc's dependencies) failed the same way. This is http4k's failure above. The
+labeller now has a setting for it, `SCIP_ROOT_BUILD_ONLY`: a `gradlew` in front of the container's copy's own
+(jvm/gradlew-root-only.sh) keeps scip-java's init script to the root build, so build logic, which is never labelled,
+compiles without the plugin. With that setting and its version catalog's Kotlin set to 2.4.21
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)), graphql-kotlin builds, and it is the set; ktorm wasn't
+needed.
+
+628 references in [kotlin-holdout-4/](kotlin-holdout-4/labels.jsonl), all Kotlin (479 inside, 149 outside), drawn from
+the 32845 eligible references counted in [strata.json](kotlin-holdout-4/strata.json), committed before any KnowCode
+answer on them is read, and scored once, by a build with every Kotlin rule above:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 19 | 0 | 0 | 79 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 39 | 149 |
 
 ### Scoring
 
