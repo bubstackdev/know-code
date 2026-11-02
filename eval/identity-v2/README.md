@@ -418,8 +418,9 @@ led to:
 - **graphql-kotlin** (0 wrong, 1 outside), scored by integration/0.7 at f3fc3a8, which doesn't hold that `super`
   rule. `super.transform(…)` in `SynchronizedDataLoader`, whose supertype `DelegatingDataLoader` is a library's, was
   linked (`unique_name`) to the class's own override of `transform`: the same cause as MoshiX and misk's Java outside
-  link, in Kotlin. The `super` rule covers Kotlin as Java; it can't be measured on this set again, and this is the
-  last held-out set for 0.7.
+  link, in Kotlin. That cause is fixed by the `super` rule of the Java change that follows MoshiX and misk (it covers
+  Kotlin's `super` too), which landed after this set was scored; the fix can't be re-measured on this set, the last
+  held-out set for 0.7.
 
 **Recall.** Linked recall on the held-out sets (0.430, 0.342, 0.476) is near the tuned set's (0.482), and below
 Java's (0.874) because much of Kotlin is written in lambdas with receivers: builder DSLs, `apply` and `with` blocks,
