@@ -46,9 +46,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
   the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
   is 1.000 over 433 links, linked recall 0.482, and no outside label is linked; Java's linked recall rises to 0.874 as
-  Java calls into Kotlin resolve. Three held-out Kotlin sets, each scored once before the rules it led to, fell short:
-  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1) and 0.986 on MoshiX and misk
-  (0). Each cause is now a resolution rule; `eval/identity-v2/README.md` lists them with the scores.
+  Java calls into Kotlin resolve. Four held-out Kotlin sets, each scored once, fell short of the gate:
+  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1), 0.986 on MoshiX and misk (0),
+  and, last, 1.000 over 272 links on graphql-kotlin (1, a `super` call). Each cause is now a resolution rule;
+  `eval/identity-v2/README.md` lists them with the scores.
 - Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
   `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
   (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages
