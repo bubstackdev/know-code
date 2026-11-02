@@ -528,14 +528,43 @@ mod tests {
     /// gives no cut.
     #[test]
     fn a_child_stopped_at_its_budget_keeps_what_it_printed() {
+        use std::os::unix::process::CommandExt;
         let _in = enter(Operation::new());
-        // One process printing then waiting: a shell would leave its `sleep` holding the pipe open after the kill.
-        let mut c = Command::new("perl");
-        c.args(["-e", "$| = 1; print qq(first\\n); sleep 30"]);
+        // Output written before the budget's clock starts, so no load can make it late: `pre_exec` runs in the child
+        // once its stdout is the pipe, and `spawn` returns (and the budget starts) only after the child has exec'd. A
+        // child that had to start up and print within a 300 ms budget (perl, before) was sometimes killed first on a
+        // loaded machine, and rightly gave back nothing. One process (`sleep`, not a shell left holding the pipe open
+        // after the kill) then waits out the budget.
+        let mut c = Command::new("sleep");
+        c.arg("30");
+        // SAFETY: the closure runs between fork and exec, where only async-signal-safe calls are allowed: one raw
+        // write(2) on fd 1, and on failure a read of errno; no allocation, formatting or std::io (whose locks another
+        // thread may have held at the fork).
+        unsafe {
+            c.pre_exec(|| {
+                unsafe extern "C" { fn write(fd: i32, buf: *const u8, count: usize) -> isize; }
+                const LINE: &[u8] = b"first\n";
+                if write(1, LINE.as_ptr(), LINE.len()) == LINE.len() as isize {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
         let t = Instant::now();
         let (out, cut) = output_until(c, Kind::Git, "sh", Some(Instant::now() + Duration::from_millis(300))).unwrap();
         assert!(t.elapsed() < Duration::from_secs(10));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "first\n");
+        let cut = cut.expect("a cut");
+        assert!(cut.detail.contains("time budget"), "{}", cut.detail);
+        assert_eq!(take_cuts(), vec![cut]);
+
+        // Output written while the budget runs is kept too: perl starts, prints and waits, with a budget far longer
+        // than it takes to start even on a loaded machine.
+        let mut c = Command::new("perl");
+        c.args(["-e", "$| = 1; print qq(second\\n); sleep 30"]);
+        let (out, cut) = output_until(c, Kind::Git, "perl", Some(Instant::now() + Duration::from_secs(5))).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "second\n");
         let cut = cut.expect("a cut");
         assert!(cut.detail.contains("time budget"), "{}", cut.detail);
         assert_eq!(take_cuts(), vec![cut]);

@@ -151,6 +151,26 @@ The exclusions are computed by a script run in the labelling container from the 
 checker. It never reads KnowCode's output: it lists every configuration-dependent registration site in the code, and
 the scorer applies that list to both sides. Its output is committed beside the labels.
 
+## routes-v1.2: one hop, not transitive
+
+routes-v1.1 is kept above as it was approved; routes-v1.2 replaces its first exclusion's second clause, and nothing
+else. It was made before any held-out repository was labelled, from what the exclusion tool showed on routes-v1's
+(development) repositories: applied transitively, v1.1's clause makes a whole server configuration-dependent whenever
+its program chooses a command with a `switch` (`case "serve":` reaching the router through `serve`), which leaves
+nothing to score. In v1.2, a registration site is configuration-dependent when, by the Go type checker over the
+packages the repository's listed programs compile:
+
+- its call lies inside the body or `else` of an `if`, or a `case` of a `switch` or `select`, within the function (or
+  function literal) containing it (a loop is not a condition); or
+- every reference to that function, from those packages, lies inside such a condition within the function making the
+  reference, or nothing in those packages refers to it. One hop only: what calls the referring function doesn't matter.
+
+The program's `main`, a harness test's test function and `init` functions are exempt from the second clause. A
+reference is a call, or a function or method value; a call through an interface method refers to every method of
+that name in those packages. echo's placeholders, the agreement of both sides, the listing of disagreements, the rule
+for a route only one side has, and the tool's independence from KnowCode's output are as in v1.1. The held-out
+repositories are scored under v1.2.
+
 ### Held-out repositories
 
 One per framework, each serving at least 20 routes by a search of its source for registration calls. Pinned at their
@@ -160,11 +180,79 @@ default branches' heads on 2026-10-29:
 | --- | --- | --- | --- |
 | gin | gothinkster/golang-gin-realworld-example-app | `626c372d` | the module's main package |
 | echo | xesina/golang-echo-realworld-example-app | `e578590b` | the module's main package |
-| chi | arp242/goatcounter | `c031008a` | `cmd/goatcounter serve`, over a new SQLite database |
-| net/http (Go 1.22 method patterns) | miniflux/v2 | `229035a4` | a harness test building its HTTP handler as its own tests do, since the program connects to PostgreSQL before it routes |
+| chi | arp242/goatcounter | `c031008a` | a harness test in `handlers` building `NewBackend`, the router `goatcounter serve` serves for any host, with the program's defaults, as the package's own tests build it |
+| net/http | golang/pkgsite | `fb32d103` | a harness test in `internal/frontend` building the frontend's `ServeMux` as the package's own tests do (`newTestServer`) |
+
+Two were changed under the replacement rule below, before any was labelled and before any KnowCode answer on them
+was read. goatcounter's `serve` serves a host router (`zhttp.HostRoute`) the dump can't list, so its router is listed
+by a harness test, routes-v1's own mechanism. miniflux/v2 can't be listed: its served `ServeMux` holds about six
+patterns and mounts the rest as nested muxes, so the rule's net/http listing (the served mux's own registrations)
+isn't its routes; golang/pkgsite (pinned at its head on 2026-10-29), whose frontend registers its routes on one
+`ServeMux`, took its place.
 
 They are labelled once, with routes-v1's labeller and this rule, and KnowCode is scored on them once, after the Go
 route changes this set was used to develop. Their figures are published beside routes-v1's gate figures, under
-v1.1, and aren't tuned against. A held-out repository that can't be listed under the rule is replaced, before any
+v1.2, and aren't tuned against. A held-out repository that can't be listed under the rule is replaced, before any
 KnowCode answer on it is read, by the next candidate for its framework, and the replacement is named here with the
 reason.
+
+### Held-out results, scored once
+
+Labelled once in the container ([run.sh](../../scripts/eval/routes/run.sh) with `SITES=1`; every program listed its
+routes) and scored once under v1.2 against KnowCode at integration/0.7 with the Go routes (#281), before any change made
+after reading them. [go/heldout](go/heldout/): the labels, each with its registration sites; the program records; the
+exclusion tool's regions; the listings' digests; and the score.
+
+| Framework | Repository | Labels | Precision | Recall | `context` check |
+| --- | --- | ---: | --- | --- | ---: |
+| chi | arp242/goatcounter | 135 | 0.959 (117/122, 0.908–0.982) | 1.000 (135/135, 0.972–1.000) | 50/50 |
+| echo | xesina/golang-echo-realworld-example-app | 82 | 0.000 (0/19, 0.000–0.168) | 0.000 (0/82, 0.000–0.045) | 19/19 |
+| gin | gothinkster/golang-gin-realworld-example-app | 27 | 0.731 (19/26, 0.539–0.863) | 0.963 (26/27, 0.817–0.993) | 36/36 |
+| net/http | golang/pkgsite | 48 | – (no routes read) | 0.000 (0/48, 0.000–0.074) | – |
+
+chi holds out of sample. echo and gin fail on group prefixes through helpers: echo-realworld registers every route in
+`(*Handler).Register(v1)`, called on a value whose type the syntax doesn't give, so none of its 19 routes carries the
+`/api` group's prefix; gin-realworld's `users` helpers lose `/api` (7 false routes) while its `articles` helpers, called
+the same way, keep it. net/http fails on registration through a function parameter: pkgsite's frontend registers every
+route through `Install(handle func(string, http.Handler), …)`, which KnowCode doesn't read (named as the expected
+weakness before scoring). goatcounter's 5 false routes are `NewWebsite`'s, a router the program serves only for its
+own website's host, which the package's tests reference.
+
+v1.2 left out 2 of goatcounter's KnowCode routes and 1 label (`GET /*`, under a condition on both sides; the ACME
+challenge, under `if acmeh != nil`) and 1 pkgsite route (in a test file the harness compiles, unreferenced); there were
+no disagreements. echo-realworld pins echo v4.1.16, whose group placeholders carry real methods and echo's
+`NotFoundHandler` rather than the later `echo_route_not_found` marker: 62 of its 82 labels are placeholders the scorer
+didn't recognise; by the rule's words they aren't routes, and without them echo's recall is 0/20.
+
+goatcounter was relabelled once after scoring, before any change to KnowCode: its first listing keyed chi's sites by
+handler identity, which one wrapper's closures share, so routes carried other routes' sites. Keyed by endpoint and
+pattern, every exclusion decision, and every figure above, is the same.
+
+These held-outs have now been read, so a score on them after a fix isn't out of sample: the fixes they show are made
+and measured on routes-v1's repositories, and a new held-out per framework is named before its labelling.
+
+### Held-out repositories, round 2
+
+Named after the fixes the first round showed (helper prefixes, tests' groups, registration through a function
+parameter), chosen by their structure alone before any KnowCode answer on them was read, and committed before any was
+labelled. Open-source licences only, since the labels quote their paths and routes. Pinned at their default branches'
+heads on 2026-10-30 ([repos-heldout.txt](../../scripts/eval/routes/repos-heldout.txt)):
+
+| Framework | Repository | Commit | Program |
+| --- | --- | --- | --- |
+| gin | flipped-aurora/gin-vue-admin (the module in `server/`) | `cee04b08` | a harness test in `core` initialising the server as its `main` does short of the database (the repository's `config.yaml`) and building `initialize.Routers()`, the gin engine `RunServer` serves |
+| echo | go-vikunja/vikunja | `d4899715` | a harness test in `pkg/routes` building `NewEcho()` and `RegisterRoutes(e)`, as `vikunja web` does, over the default configuration |
+| chi | smallstep/certificates | `06ac06a1` | a harness test in `api` building `Route(chi.NewRouter())`, as `ca/ca.go` does |
+| net/http | none | | no open-source repository found, in the time given, whose `ServeMux` of at least 20 routes a harness can list under the rule: round 2 has no net/http held-out |
+
+Two programs were corrected before any was listed or any answer read: gin-vue-admin's harness first built `Routers()`
+without the configuration its `main` loads, and the empty file-store path's catch-all conflicted with its swagger route;
+vikunja embeds its front end's build, which isn't committed, so an empty stand-in is created in the container's copy
+([prepare.sh](../../scripts/eval/routes/go/harness/vikunja/prepare.sh)), as for gotify and opengist. vikunja uses echo
+v5, whose registration sites the labeller records at `DefaultRouter.Add`, and whose route answering every method (`Any`)
+its listing names `echo_route_any`, which the labeller writes as method `*`, as the rule does. vikunja registers its v2
+API through huma's echo adapter, so those routes' sites are the adapter's (the first frame outside echo and the
+standard library), never configuration-dependent (no routes-v1 repository
+uses echo v5, so those sites are read in the listing before scoring). They are labelled once and scored once, under
+v1.2, and published beside the first round. The replacement rule above applies, with these fallbacks named now:
+eddycjy/go-gin-example for gin and navidrome/navidrome for chi.

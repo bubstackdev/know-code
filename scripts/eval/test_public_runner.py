@@ -112,7 +112,7 @@ class NativeRunnerTests(unittest.TestCase):
                 self.assertIn('mcp__knowcode__kc_context',advertised)
                 self.assertNotIn('mcp__knowcode__kc_note_add',advertised)
                 self.assertEqual(json.loads((base/'output/index-process.json').read_bytes())['returncode'],0)
-                self.assertTrue(list((session/'control/kc-cache/repos').glob('*.sqlite')))
+                self.assertTrue(list((session/'control/kc-cache').glob('repos/*.sqlite')) + list((session/'control/kc-cache').glob('v/*/repos/*.sqlite')))
                 self.assertFalse(result['audit']['policy_flags'])
             else:self.assertFalse((base/'output/index-process.json').exists())
             self.assertNotIn('synthetic-provider-key',(base/'output/relay.json').read_text())

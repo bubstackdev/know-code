@@ -28,7 +28,7 @@ use crate::{FileFacts, ImportBinding, Ref, RefKind, Relation, RelationKind, Symb
 mod client;
 mod http;
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -628,10 +628,17 @@ impl<'a> Cx<'a> {
             let mut i = 0;
             for p in children(params).filter(|c| matches!(c.kind(), "parameter_declaration" | "variadic_parameter_declaration")) {
                 let names: Vec<String> = children(p).filter(|c| c.kind() == "identifier").map(|c| self.text(c).to_string()).collect();
-                let fw = p.child_by_field_name("type").and_then(|t| self.router_type(t));
+                let ty = p.child_by_field_name("type");
+                let fw = ty.and_then(|t| self.router_type(t));
+                // A registration function parameter (`handle func(string, http.Handler)`) is kept as a router named
+                // with `()`: its calls register on the mux the caller passes.
+                let registrar = ty.is_some_and(|t| self.registrar_type(t));
                 for name in names.iter().chain(names.is_empty().then(|| "_".to_string()).iter()) {
                     if let (Some(fw), Some(s)) = (fw, self.scopes.last_mut()) {
                         s.routers.insert(name.clone(), http::Router { fw, prefix: format!("{{@{key}#{i}}}") });
+                    }
+                    if let (true, Some(s)) = (registrar, self.scopes.last_mut()) {
+                        s.routers.insert(format!("{name}()"), http::Router { fw: http::Fw::NetHttp, prefix: format!("{{@{key}#{i}}}") });
                     }
                     i += 1;
                 }

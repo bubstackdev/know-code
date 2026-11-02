@@ -4,6 +4,31 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
+  but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
+  unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
+  254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls. On Linux the server
+  hands freed memory back to the system after each call and each background job (glibc's `malloc_trim`).
+- `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
+  member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
+  protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
+- Indexing Swift packages and walking their code is faster. Which names each SwiftPM target imports by name from
+  outside the repo was read again for every name resolved; it is now read once per target, both when the file
+  ranking is built after indexing (on swift-nio, 209 G instructions down to 14 G) and in a walk, which now also keeps
+  what resolution reads about the repo from one name to the next. Answers are unchanged.
+- Versions of KnowCode can share one cache. Each index schema now has its own part of the cache (`v/s<schema>/`), with
+  its indexes, shared bases, summary and discovery files and their locks, and a version never opens, rebuilds or
+  rewrites another schema's. Before, a newer build rebuilt an older build's indexes in place for its own schema, and the
+  older build then refused them ("written by a newer knowcode"); and each rewrote the other's workspace summary.
+  0.6.1 and older keep their files at the cache's top level, untouched. Versions of one schema share their part, and
+  one with a changed extractor re-extracts that language, as before. The cache budget counts every version's files
+  and evicts other versions' first, least recently used first. After upgrading to a new schema, each repository is
+  indexed afresh on its first query; a downgrade finds its own indexes as it left them.
+- Go routes registered through helpers are found under their groups' prefixes in more programs: a helper method
+  called on a value whose type isn't written (`h.Register(v1)`) takes the groups passed to it, a group a test passes
+  a helper no longer adds a prefix-less copy of the helper's routes, and a function taking a `handle func(string,
+  http.Handler)` (passed `mux.Handle`) registers its patterns on that mux. Go files are read again once; HTTP links
+  are recomputed.
 - A C# minimal API mapped in top-level statements (`app.MapGet("/health", Health)` in `Program.cs`) has an owner in
   answers. Such routes were in the workspace summary but in no `context` answer: top-level statements had no symbol,
   and a local function passed as the handler wasn't taken for one. Top-level statements are now one symbol,
@@ -126,6 +151,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
   ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
   Go test files too (`foo_test.go` for `foo.go`).
+- Re-indexing after many files were removed (more than 200, which compacts the index) no longer holds a copy of the
+  whole index in memory: the compaction's copy goes to a temporary file. Re-indexing bitwarden/server after 1,364 of
+  its files were removed peaked at 430 MB footprint and now peaks at 166 MB, for 7% more instructions; the index is
+  the same.
 
 ## 0.6.1 (2026-10-28)
 

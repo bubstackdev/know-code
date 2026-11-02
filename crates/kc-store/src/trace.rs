@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::answer::{Assumption, Evidence, EvidencePolicy, PolicyReport, Verdict};
-use crate::query::{self, REF_COLS, RefHit, SYMBOL_COLS, SymbolRow, is_type_or_extension, ref_row, resolve_all, symbol_row};
+use crate::query::{self, REF_COLS, RefHit, SYMBOL_COLS, SymbolRow, is_type_or_extension, ref_row, symbol_row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -544,6 +544,10 @@ fn is_zero(n: &usize) -> bool {
 struct Tracer<'c> {
     conn: &'c Connection,
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
+    /// Definitions looked up, by query, at the snapshot the walk reads.
+    defs: query::DefinitionsMemo,
+    /// What resolving references reads about the repo, at the snapshot the walk reads.
+    res: query::Resolution,
     /// Registration (`file:line, lifetime`) of each implementation member reached `via_di`.
     bindings: HashMap<i64, String>,
     /// Edges resolved from a SCIP index: (the symbol reached, the site).
@@ -600,10 +604,14 @@ impl Tracer<'_> {
         symbol(self.conn, id)
     }
 
+    fn definitions(&mut self, query: &str) -> Result<Vec<SymbolRow>> {
+        self.defs.get(self.conn, query)
+    }
+
     fn refs_named(&mut self, name: &str, kinds: Vec<&'static str>) -> Result<Vec<RefHit>> {
         let key = (name.to_string(), kinds.clone());
         if !self.refs_by_name.contains_key(&key) {
-            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
+            let hits = query::refs_in_resolution(self.conn, name, &kinds, &mut self.res)?;
             self.refs_by_name.insert(key.clone(), hits);
         }
         Ok(self.refs_by_name[&key].clone())
@@ -613,7 +621,7 @@ impl Tracer<'_> {
     fn refs_named_where(&mut self, name: &str, kinds: Vec<&'static str>, keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
         let key = (name.to_string(), kinds.clone());
         if !self.refs_by_name.contains_key(&key) {
-            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
+            let hits = query::refs_in_resolution(self.conn, name, &kinds, &mut self.res)?;
             self.refs_by_name.insert(key.clone(), hits);
         }
         Ok(self.refs_by_name[&key].iter().filter(|h| keep(h)).cloned().collect())
@@ -630,7 +638,7 @@ impl Tracer<'_> {
             let targets: Vec<(String, String, u32)> =
                 stmt.query_map([sym.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
             for (name, file, line) in targets {
-                if let Some(t) = query::definitions(self.conn, &name)?.into_iter().find(|d| !is_type_or_extension(&d.kind) || d.kind != "extension") {
+                if let Some(t) = self.definitions(&name)?.into_iter().find(|d| !is_type_or_extension(&d.kind) || d.kind != "extension") {
                     out.push((t, "conforms_to", "exact", Some(format!("{file}:{line}"))));
                 }
             }
@@ -644,7 +652,7 @@ impl Tracer<'_> {
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut hits: Vec<RefHit> = stmt.query_map([sym.id], ref_row)?.collect::<rusqlite::Result<_>>()?;
-        resolve_all(self.conn, &mut hits)?;
+        query::resolve_all_in(self.conn, &mut hits, &mut self.res)?;
         let mut seen = HashSet::new();
         for h in hits {
             if !matches!(h.confidence, "exact" | "unique_name" | "ambiguous") {
@@ -730,7 +738,7 @@ impl Tracer<'_> {
         let mut seen = HashSet::new();
         // SwiftUI never calls `body` from user code: a view's body is reached by creating the view.
         if sym.kind == "property" && sym.name == "body" && let Some(container) = &sym.container {
-            let view = query::definitions(self.conn, container)?.into_iter().find(|d| d.tags.contains("swiftui_view"));
+            let view = self.definitions(container)?.into_iter().find(|d| d.tags.contains("swiftui_view"));
             if let Some(view) = view {
                 let mut edges = self.in_edges(&view)?;
                 edges.retain(|(_, edge, _, _)| *edge == "instantiates");
@@ -739,7 +747,7 @@ impl Tracer<'_> {
         }
         let (name, kinds, target_id) = if sym.kind == "init" {
             let ty = sym.container.as_deref().unwrap_or("");
-            let id = query::definitions(self.conn, ty)?.first().map(|d| d.id);
+            let id = self.definitions(ty)?.first().map(|d| d.id);
             (ty.rsplit('.').next().unwrap_or(ty).to_string(), vec!["instantiate"], id)
         } else if is_type_or_extension(&sym.kind) {
             (sym.name.clone(), vec!["instantiate", "type_ref"], Some(sym.id))
@@ -856,7 +864,7 @@ impl Tracer<'_> {
                 out.push((r, "conformer", "exact", None));
             }
         } else if let Some(container) = &sym.container {
-            let owner = query::definitions(self.conn, container)?.into_iter().find(|d| d.kind != "extension");
+            let owner = self.definitions(container)?.into_iter().find(|d| d.kind != "extension");
             // An interface's static member (C#: `private static readonly object[] NoValues`) is its own: implementing
             // types have none to supply, unless it is `abstract` or `virtual`.
             let words = |w: &str| sym.signature.split_whitespace().any(|x| x == w);
@@ -879,7 +887,7 @@ impl Tracer<'_> {
                 let short = container.rsplit('.').next().unwrap_or(container);
                 // Overloads of the requirement: only the implementations taking the same parameters (see
                 // [`query::same_parameters`]).
-                let overloaded = query::definitions(self.conn, &sym.qualified())?.iter().filter(|d| d.container == sym.container && d.kind == sym.kind).count() > 1;
+                let overloaded = self.definitions(&sym.qualified())?.iter().filter(|d| d.container == sym.container && d.kind == sym.kind).count() > 1;
                 let rows: Vec<SymbolRow> =
                     stmt.query_map(rusqlite::params![sym.name, sym.kind, short, sym.id, overloaded], symbol_row)?.collect::<rusqlite::Result<_>>()?;
                 for r in rows {
@@ -907,7 +915,7 @@ impl Tracer<'_> {
                     // the interface's `Find(query)`, and calls of that one don't reach it. Of several taking as many
                     // (`Find(query, bool)`, `Find(query, parents)`), the members below tell them apart by type.
                     let mut reqs = Vec::new();
-                    for d in query::definitions(self.conn, &format!("{p}.{}", sym.name))? {
+                    for d in self.definitions(&format!("{p}.{}", sym.name))? {
                         if d.kind == sym.kind && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}"))) {
                             let theirs = arity(d.id)?;
                             if query::same_parameters(theirs, own) {
@@ -916,7 +924,7 @@ impl Tracer<'_> {
                         }
                     }
                     let Some(req) = reqs.pop().filter(|_| reqs.is_empty()) else { continue };
-                    let is_protocol = query::definitions(self.conn, &p)?.iter().any(|d| d.kind == "protocol");
+                    let is_protocol = self.definitions(&p)?.iter().any(|d| d.kind == "protocol");
                     if !is_protocol {
                         continue;
                     }
@@ -934,7 +942,7 @@ impl Tracer<'_> {
                 // of: `IOrders.Get` through `IRepo<Order>.Get` reaches it, `IPlans.Get` (another `IRepo<Plan>`) doesn't.
                 let mut is_a = supertype_names(self.conn, &short)?;
                 is_a.insert(short.clone());
-                for m in query::implemented_members(self.conn, sym)? {
+                for m in query::implemented_members_with(self.conn, sym, &mut self.defs)? {
                     if !through.insert(m.id) {
                         continue;
                     }
@@ -1067,6 +1075,8 @@ fn ambiguous_all(hits: Vec<RefHit>) -> Vec<RefHit> {
 #[derive(Default)]
 pub struct EdgeCache {
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
+    defs: query::DefinitionsMemo,
+    res: query::Resolution,
     bindings: HashMap<i64, String>,
     precise: HashSet<(i64, String)>,
     evidence: HashMap<(i64, String), Evidence>,
@@ -1100,6 +1110,8 @@ impl EdgeCache {
         let mut t = Tracer {
             conn,
             refs_by_name: std::mem::take(&mut self.refs_by_name),
+            defs: std::mem::take(&mut self.defs),
+            res: std::mem::take(&mut self.res),
             bindings: std::mem::take(&mut self.bindings),
             precise: std::mem::take(&mut self.precise),
             evidence: std::mem::take(&mut self.evidence),
@@ -1108,6 +1120,8 @@ impl EdgeCache {
         };
         let out = f(&mut t);
         self.refs_by_name = t.refs_by_name;
+        self.defs = t.defs;
+        self.res = t.res;
         self.bindings = t.bindings;
         self.precise = t.precise;
         self.evidence = t.evidence;

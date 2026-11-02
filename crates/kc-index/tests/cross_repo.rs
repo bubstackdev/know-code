@@ -336,7 +336,7 @@ fn http_routes_link_frontend_contracts_to_backend_actions() {
     assert_eq!(callers, [("ApiGetFilters".to_string(), "exact")]);
 
     // A summary written by an older build (no `routes`, same index stamps) must not be trusted.
-    let path = base.parent().unwrap().join("cache/workspace.json");
+    let path = kc_index::tree_dir().unwrap().join("workspace.json");
     let current: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let repos = current.get("repos").cloned().unwrap_or(current);
     let mut old = serde_json::Map::new();

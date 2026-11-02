@@ -343,6 +343,24 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
     Ok(Found { hits: ranked.into_iter().take(limit).map(|(_, h)| h).collect(), total, capped })
 }
 
+/// [`definitions`] remembered by query, for one connection reading one snapshot: a walk asks for the same type and
+/// member names at every node it expands (the owner of each member, each protocol a type conforms to), and a lookup
+/// that misses runs several fallbacks. The answer is a function of the snapshot alone, so remembering it changes no
+/// answer; a memo must not outlive the snapshot or move to another connection.
+#[derive(Debug, Default)]
+pub struct DefinitionsMemo(HashMap<String, Vec<SymbolRow>>);
+
+impl DefinitionsMemo {
+    pub fn get(&mut self, conn: &Connection, query: &str) -> Result<Vec<SymbolRow>> {
+        if let Some(rows) = self.0.get(query) {
+            return Ok(rows.clone());
+        }
+        let rows = definitions(conn, query)?;
+        self.0.insert(query.to_string(), rows.clone());
+        Ok(rows)
+    }
+}
+
 /// Definitions with exactly this name (case-sensitive), optionally inside a container, best kind first, then live
 /// code before tests and before copies (backups, old versions, template variants: see [`crate::path_rank`]).
 ///
@@ -4080,7 +4098,14 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
         return vec![Err(format!("its route group is passed through more than {GROUP_DEPTH} helpers"))];
     }
     let none = vec![Ok(String::new())];
-    let prefixes = groups.get(key).filter(|p| !p.is_empty()).unwrap_or(&none);
+    // A method's parameter (`pkg.Type.Method#i`) no caller keys exactly takes the groups passed to a method of that
+    // name on a value whose type the caller's syntax doesn't give (`?.Method#i`, as Go's extractor records them).
+    let loose = key.split_once('#').and_then(|(f, i)| (f.matches('.').count() >= 2).then(|| format!("?.{}#{i}", f.rsplit('.').next().unwrap_or(f))));
+    let prefixes = groups
+        .get(key)
+        .filter(|p| !p.is_empty())
+        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()))
+        .unwrap_or(&none);
     let mut out = Vec::new();
     for p in prefixes {
         match p {
@@ -5254,7 +5279,12 @@ fn scoped_out_type(
 }
 
 pub(crate) fn resolve_all(conn: &Connection, hits: &mut [RefHit]) -> Result<()> {
-    resolve_hits(conn, hits, true, &mut Resolution::default())
+    resolve_all_in(conn, hits, &mut Resolution::default())
+}
+
+/// [`resolve_all`], reading what resolution needs about the repo through `shared` (kept for `conn`'s snapshot).
+pub(crate) fn resolve_all_in(conn: &Connection, hits: &mut [RefHit], shared: &mut Resolution) -> Result<()> {
+    resolve_hits(conn, hits, true, shared)
 }
 
 /// [`resolve_all`] by the heuristics alone, ignoring any SCIP index: for comparing the two.
@@ -5275,6 +5305,7 @@ pub struct Resolution {
     py_modules: crate::py::Modules,
     go_modules: crate::go::Modules,
     precise: Option<crate::scip::Precise>,
+    swift_scoped: SwiftScoped,
 }
 
 /// Rivals an edge's evidence lists at most (`rivals_total` counts them all).
@@ -5406,7 +5437,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let go_modules = &mut shared.go_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
-    let mut swift_scoped = SwiftScoped::default();
+    let swift_scoped = &mut shared.swift_scoped;
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -6329,6 +6360,12 @@ fn is_zero_usize(n: &usize) -> bool {
 /// References to a name, resolved. `kinds` filters by reference kind (`call`, `instantiate`, `type_ref`).
 pub fn refs(conn: &Connection, query: &str, kinds: &[&str], limit: usize) -> Result<(Vec<RefHit>, RefSummary)> {
     refs_with(conn, query, kinds, limit, &[])
+}
+
+/// Every reference to `query` of `kinds`, as [`refs`] gives them uncut, reading what resolution needs about the repo
+/// through `shared` (kept for `conn`'s snapshot): a walk resolves many names on one snapshot.
+pub(crate) fn refs_in_resolution(conn: &Connection, query: &str, kinds: &[&str], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, &[], false, shared)?.0)
 }
 
 /// [`refs`], also resolving references that leave the repo against `deps`.
@@ -7346,10 +7383,15 @@ impl Implemented {
 /// members it overrides: same-named members of the same kind, taking the same arguments, in the type's supertypes,
 /// transitively.
 pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Implemented>> {
+    implemented_members_with(conn, sym, &mut DefinitionsMemo::default())
+}
+
+/// [`implemented_members`], looking definitions up through `defs` (kept for `conn`'s snapshot).
+pub fn implemented_members_with(conn: &Connection, sym: &SymbolRow, defs: &mut DefinitionsMemo) -> Result<Vec<Implemented>> {
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let parents = supertypes(conn, &short)?;
-    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false)
+    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false, defs)
 }
 
 /// Whether a member taking `a` (min_args, max_args) and one taking `b` take the same parameters, as an
@@ -7367,7 +7409,7 @@ pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolR
     if outside.is_empty() {
         return Ok(Vec::new());
     }
-    implemented_in(conn, dep, sym, outside, seen, true)
+    implemented_in(conn, dep, sym, outside, seen, true, &mut DefinitionsMemo::default())
 }
 
 /// Whether `sym`'s type names a supertype, directly or through its own repo's types, that its repo (`conn`) doesn't
@@ -7512,6 +7554,8 @@ fn implemented_in(
     start: Vec<String>,
     mut seen: HashSet<String>,
     dependency: bool,
+    // Definitions in `types`, remembered.
+    defs: &mut DefinitionsMemo,
 ) -> Result<Vec<Implemented>> {
     let same_repo = !dependency;
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
@@ -7534,11 +7578,12 @@ fn implemented_in(
                 continue;
             }
             queue.push(p.clone());
-            let interface = definitions(types, &p)?.iter().any(|d| d.kind == "protocol");
+            let interface = defs.get(types, &p)?.iter().any(|d| d.kind == "protocol");
             if !interface && !overrides {
                 continue;
             }
-            let mut members: Vec<SymbolRow> = definitions(types, &format!("{p}.{}", sym.name))?
+            let mut members: Vec<SymbolRow> = defs
+                .get(types, &format!("{p}.{}", sym.name))?
                 .into_iter()
                 .filter(|d| {
                     !(same_repo && d.id == sym.id)
@@ -8102,6 +8147,22 @@ mod tests {
         let lone = ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!Get}").unwrap();
         assert!(lone.as_ref().is_err_and(|why| why.contains("src/Lone")), "{lone:?}");
         assert_eq!(ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!*Help}").unwrap(), ok(&[]));
+    }
+
+    #[test]
+    fn a_method_no_caller_keys_takes_groups_passed_to_its_name() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> = [
+            ("?.Register#0".to_string(), vec![Ok("api".to_string())]),
+            ("orchard.Picker.Mount#0".to_string(), vec![Ok("v2".to_string())]),
+            ("?.Mount#0".to_string(), vec![Ok("other".to_string())]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(under_groups("{@orchard.Picker.Register#0}trees", &groups, 0), [Ok("api/trees".to_string())]);
+        // An exactly keyed caller wins over the name.
+        assert_eq!(under_groups("{@orchard.Picker.Mount#0}trees", &groups, 0), [Ok("v2/trees".to_string())]);
+        // A function (`pkg.F`) is always keyed exactly by its callers.
+        assert_eq!(under_groups("{@orchard.Register#0}trees", &groups, 0), [Ok("trees".to_string())]);
     }
 
     #[test]

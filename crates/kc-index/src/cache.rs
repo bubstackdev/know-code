@@ -1,4 +1,9 @@
 //! Bounded, disposable index storage. Never walk or remove unrelated cache subdirectories or durable notes.
+//!
+//! The cache holds one data tree per build that reads different data (see [`crate::data_dir`]): this build's, other
+//! versions' under `v/`, and the top-level files of 0.6.1 and older. The budget counts them all. Maintenance evicts the
+//! other trees' files first, least recently used first, and only deletes them, never rewrites them: the build that
+//! owns one indexes it again if it needs it.
 
 use std::fs::{self, OpenOptions, TryLockError};
 use std::io::Write;
@@ -108,7 +113,7 @@ pub fn maintain_and_report(protect: &[PathBuf]) {
 }
 
 fn entries() -> Result<Vec<Entry>> {
-    let dir = crate::cache_dir()?.join("repos");
+    let dir = crate::tree_dir()?.join("repos");
     let mut out = Vec::new();
     let items = match fs::read_dir(dir) {
         Ok(items) => items,
@@ -191,7 +196,7 @@ fn private_size(path: &Path) -> Option<u64> {
 }
 
 fn global_bytes() -> Result<u64> {
-    let cache = crate::cache_dir()?;
+    let cache = crate::tree_dir()?;
     Ok(["workspace.json", "discovery.json"].iter().map(|name| fs::symlink_metadata(cache.join(name)).ok().filter(|m| m.is_file()).map_or(0, |m| m.len())).sum())
 }
 
@@ -229,11 +234,22 @@ fn remove_payload(db: &Path) -> Result<()> {
 }
 
 fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
-    let cache = crate::cache_dir()?;
+    let cache = crate::tree_dir()?;
     let limit = if mode == Mode::Maintain { Some(config::max_cache_size()?.0).filter(|n| *n > 0) } else { None };
     let mut report = Report { limit, ..Default::default() };
+    // The lock every build takes, 0.6.1 included, at the cache's top: one cleaner at a time across all trees.
+    let top = crate::cache_dir()?;
+    fs::create_dir_all(top.join("locks"))?;
+    let lock = writer::lock_file(&top.join("locks/maintenance.lock"))?;
+    match lock.try_lock() {
+        Ok(()) => {},
+        Err(TryLockError::WouldBlock) => { report.deferred = true; return Ok(report); },
+        Err(TryLockError::Error(e)) => return Err(e.into()),
+    }
+    let mine = if cache.join("repos").is_dir() { entries()?.iter().map(|e| e.bytes).sum::<u64>() } else { 0 } + bases_bytes()? + global_bytes()?;
+    let others = other_trees(mode, limit, mine, &mut report)?;
     if !cache.join("repos").is_dir() {
-        report.bytes_before = Some(global_bytes()?);
+        report.bytes_before = Some(global_bytes()? + others);
         if mode == Mode::Purge { crate::light::clear()?; } else { crate::light::prune_missing()?; }
         if mode == Mode::Purge {
             for (path, _, _) in crate::base::all()? { crate::base::remove(&path)?; }
@@ -243,22 +259,15 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
             if mode == Mode::Purge { crate::workspace::clear_orphan_summary()?; }
             else { crate::workspace::prune_missing_summaries()?; }
         }
-        report.bytes_after = Some(global_bytes()?);
+        report.bytes_after = Some(global_bytes()? + others);
         return Ok(report);
-    }
-    fs::create_dir_all(cache.join("locks"))?;
-    let lock = writer::lock_file(&cache.join("locks/maintenance.lock"))?;
-    match lock.try_lock() {
-        Ok(()) => {},
-        Err(TryLockError::WouldBlock) => { report.deferred = true; return Ok(report); },
-        Err(TryLockError::Error(e)) => return Err(e.into()),
     }
     let Some(_metadata) = writer::workspace(false)? else { report.deferred = true; return Ok(report); };
     if mode == Mode::Purge { crate::light::clear()?; } else { crate::light::prune_missing()?; }
     leftovers(&cache);
     let entries = entries()?;
     let bases = bases(mode)?;
-    let mut total: u64 = entries.iter().map(|e| e.bytes).sum::<u64>() + bases.kept + global_bytes()?;
+    let mut total: u64 = entries.iter().map(|e| e.bytes).sum::<u64>() + bases.kept + global_bytes()? + others;
     report.bytes_before = Some(total);
     // Shared bases are evicted like indexes, in the same least-recently-used order and only while the cache is over
     // its budget, but never one a worktree still uses (see `crate::base::in_use`).
@@ -321,8 +330,146 @@ fn run(mode: Mode, protect: &[PathBuf]) -> Result<Report> {
     }
     let _ = fs::remove_dir(cache.join("repos")); // only if empty; unknown files and subdirectories stay
     let _ = fs::remove_dir(cache.join(crate::base::DIR));
-    report.bytes_after = Some(self::entries()?.iter().map(|e| e.bytes).sum::<u64>() + bases_bytes()? + global_bytes()?);
+    report.bytes_after = Some(self::entries()?.iter().map(|e| e.bytes).sum::<u64>() + bases_bytes()? + global_bytes()? + others);
     Ok(report)
+}
+
+/// Whether maintenance may evict the indexes of 0.6.1 and older, at the cache's top, when the cache is over budget.
+const EVICT_LEGACY: bool = true;
+
+/// The data trees of other builds: other versions' under `v/`, and the top level's (0.6.1 and older) when it holds
+/// indexes.
+fn other_tree_dirs() -> Result<Vec<(PathBuf, bool)>> {
+    let top = crate::cache_dir()?;
+    let mine = crate::tree_dir()?;
+    let mut out = Vec::new();
+    if let Ok(items) = fs::read_dir(top.join(crate::DATA_TREES)) {
+        for item in items.flatten() {
+            if item.path() != mine && item.file_type().is_ok_and(|t| t.is_dir()) {
+                out.push((item.path(), false));
+            }
+        }
+    }
+    out.sort();
+    if EVICT_LEGACY && top.join("repos").is_dir() {
+        out.push((top, true));
+    }
+    Ok(out)
+}
+
+/// An index or a base in another build's tree, with what eviction weighs.
+struct Foreign { path: PathBuf, base: bool, root: Option<PathBuf>, bytes: u64, used: u128 }
+
+/// The indexes and bases in the tree at `dir`, read without opening any for writing.
+fn foreign(dir: &Path) -> Vec<Foreign> {
+    let mut out = Vec::new();
+    for (sub, base) in [("repos", false), (crate::base::DIR, true)] {
+        let Ok(items) = fs::read_dir(dir.join(sub)) else { continue };
+        for item in items.flatten() {
+            let path = item.path();
+            if path.extension().is_none_or(|e| e != "sqlite") || !item.file_type().is_ok_and(|t| t.is_file()) { continue; }
+            // Only KnowCode's own files: an index records its root and is named for it as every version names it
+            // (`<name>-<12 hex>.sqlite`); a base has the metadata it is published with. Anything else stays.
+            let Ok(conn) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) else { continue };
+            let meta = |k: &str| conn.query_row("SELECT value FROM meta WHERE key = ?1", [k], |r| r.get::<_, String>(0)).ok();
+            let root = if base {
+                if meta(crate::base::META_BUILD).is_none() { continue; }
+                None
+            } else {
+                let Some(root) = meta("root").map(PathBuf::from).filter(|r| r.is_absolute()) else { continue };
+                if Some(path.file_name()) != Some(index_name(&root).as_deref().map(std::ffi::OsStr::new)) { continue; }
+                Some(root)
+            };
+            drop(conn);
+            let files = if base { vec![path.clone()] } else { family(&path) };
+            let bytes = files.iter().filter_map(|p| Some(own_bytes(p, fs::symlink_metadata(p).ok()?.len()))).sum();
+            out.push(Foreign { used: access_stamp(&path), path, base, root, bytes });
+        }
+    }
+    out
+}
+
+/// The file name every version gives the index of `root`: `<name>-<12 hex digits of its path's hash>.sqlite`.
+fn index_name(root: &Path) -> Option<String> {
+    crate::db_path(root).ok()?.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
+/// The bytes a tree's summary and discovery files hold.
+fn tree_globals(dir: &Path) -> u64 {
+    ["workspace.json", "discovery.json"].iter().filter_map(|n| fs::symlink_metadata(dir.join(n)).ok().filter(|m| m.is_file())).map(|m| m.len()).sum()
+}
+
+/// Evicts other builds' indexes and bases: all of them with a purge, those of deleted checkouts with a prune, and
+/// with maintenance those of deleted checkouts and then the least recently used while the whole cache (this build's
+/// `mine` bytes included) is over `limit`. An index or base another process holds is kept. A tree under `v/` left
+/// with neither goes whole. Returns the bytes the other trees still hold.
+fn other_trees(mode: Mode, limit: Option<u64>, mine: u64, report: &mut Report) -> Result<u64> {
+    let trees = other_tree_dirs()?;
+    let mut items: Vec<(usize, Foreign)> = trees.iter().enumerate().flat_map(|(i, (dir, _))| foreign(dir).into_iter().map(move |f| (i, f))).collect();
+    items.sort_by(|a, b| a.1.used.cmp(&b.1.used).then_with(|| a.1.path.cmp(&b.1.path)));
+    let globals: u64 = trees.iter().map(|(dir, _)| tree_globals(dir)).sum();
+    let mut total = mine + globals + items.iter().map(|(_, f)| f.bytes).sum::<u64>();
+    let notes = notes_paths()?;
+    let mut kept = 0u64;
+    for (_, f) in items {
+        let gone = f.root.as_deref().is_some_and(gone);
+        let evict = match mode {
+            Mode::Purge => true,
+            Mode::Prune => gone,
+            Mode::Maintain => gone || limit.is_some_and(|n| total > n),
+        };
+        let label = f.root.clone().unwrap_or_else(|| f.path.clone());
+        if !evict || evict_foreign(&f, &notes)?.is_none() {
+            if evict { report.kept.push(Kept { root: label, reason: "in_use" }); }
+            kept += f.bytes;
+            continue;
+        }
+        total = total.saturating_sub(f.bytes);
+        report.removed.push(Removed { root: label, reason: if gone { "deleted" } else if mode == Mode::Purge { "purge" } else { "other_version" } });
+    }
+    for (dir, legacy) in &trees {
+        if !legacy { remove_empty_tree(dir); }
+    }
+    Ok(kept + other_tree_dirs()?.iter().map(|(dir, _)| tree_globals(dir)).sum::<u64>())
+}
+
+/// Removes another build's index (with the writer lock and no reader, as that build names them) or base. `None`
+/// when it is in use or overlaps durable notes, and is kept.
+fn evict_foreign(f: &Foreign, notes: &[PathBuf]) -> Result<Option<()>> {
+    if f.base {
+        crate::base::remove(&f.path)?;
+        return Ok(Some(()));
+    }
+    if family(&f.path).iter().any(|p| fs::symlink_metadata(p).is_ok_and(|m| m.is_symlink()) || (p.exists() && is_notes(p, notes))) {
+        return Ok(None);
+    }
+    let Some(_writer) = writer::WriterLock::try_acquire_db(&f.path)? else { return Ok(None) };
+    let Some(_idle) = writer::idle(&f.path)? else { return Ok(None) };
+    remove_payload(&f.path)?;
+    Ok(Some(()))
+}
+
+/// Removes a tree under `v/` that holds no index or base any more: its summary and discovery files, the lock files
+/// no process holds, and its directories once empty. Anything else in it stays.
+fn remove_empty_tree(dir: &Path) {
+    if !foreign(dir).is_empty() { return; }
+    for name in ["workspace.json", "discovery.json"] {
+        let _ = fs::remove_file(dir.join(name));
+    }
+    for sub in ["locks", "repos"] {
+        if let Ok(items) = fs::read_dir(dir.join(sub)) {
+            for item in items.flatten() {
+                let path = item.path();
+                let lock = path.extension().is_some_and(|e| e == "lock" || e == "use");
+                if lock && writer::lock_file(&path).is_ok_and(|f| f.try_lock().is_ok()) {
+                    let _ = fs::remove_file(&path);
+                }
+            }
+        }
+        let _ = fs::remove_dir(dir.join(sub));
+    }
+    let _ = fs::remove_dir(dir.join(crate::base::DIR));
+    let _ = fs::remove_dir(dir);
 }
 
 /// The shared bases after [`run`] removed what `mode` removes outright: every base with a purge, else those no
@@ -413,6 +560,13 @@ pub fn remove_owned_state() -> Result<OwnedState> {
         }
         let _ = fs::remove_dir(&locks); // only if empty
     }
+    // Every build's tree (see `crate::tree_dir`): the locks it holds no more, then the tree once empty.
+    if let Ok(items) = fs::read_dir(cache.join(crate::DATA_TREES)) {
+        for tree in items.flatten().filter(|t| t.file_type().is_ok_and(|t| t.is_dir())) {
+            remove_empty_tree(&tree.path());
+        }
+        let _ = fs::remove_dir(cache.join(crate::DATA_TREES));
+    }
     let updates = cache.join("updates");
     let state = updates.join("state.json");
     let check = updates.join("check.lock");
@@ -461,7 +615,8 @@ pub fn room_for_background() -> Result<bool> {
     {
         return Ok(*room);
     }
-    let total = entries()?.iter().map(|e| e.bytes).sum::<u64>() + global_bytes()?;
+    let others: u64 = other_tree_dirs()?.iter().map(|(dir, _)| foreign(dir).iter().map(|f| f.bytes).sum::<u64>() + tree_globals(dir)).sum();
+    let total = entries()?.iter().map(|e| e.bytes).sum::<u64>() + global_bytes()? + others;
     let room = total < limit / 10 * 9;
     *memo = Some((cache, limit, std::time::Instant::now(), room));
     Ok(room)
@@ -470,4 +625,12 @@ pub fn room_for_background() -> Result<bool> {
 /// Prune missing checkouts, then evict idle least-recently-used indexes until the configured budget is met.
 pub fn maintain(protect: &[PathBuf]) -> Result<Report> { run(Mode::Maintain, protect) }
 pub fn prune() -> Result<Report> { run(Mode::Prune, &[]) }
-pub fn purge() -> Result<Report> { run(Mode::Purge, &[]) }
+pub fn purge() -> Result<Report> {
+    let report = run(Mode::Purge, &[])?;
+    // This build's own tree too, now that its locks are let go of.
+    if !report.deferred {
+        remove_empty_tree(&crate::tree_dir()?);
+        let _ = fs::remove_dir(crate::cache_dir()?.join(crate::DATA_TREES));
+    }
+    Ok(report)
+}

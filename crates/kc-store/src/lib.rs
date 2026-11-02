@@ -42,7 +42,7 @@ use kc_extract::{FileFacts, Lang};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 /// Bumped when query-time resolution changes, so cached derived results (file edges, hotspots, maps) are recomputed.
-pub const RESOLVER_VERSION: u32 = 42;
+pub const RESOLVER_VERSION: u32 = 43;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].
@@ -945,7 +945,15 @@ impl Store {
     /// Reclaims space after large deletions (for example, a new ignore rule dropping hundreds of files).
     pub fn vacuum(&self) -> Result<()> {
         let resnap = self.end_snapshot()?;
-        self.conn.execute_batch("VACUUM;")?;
+        // VACUUM builds a whole copy of the database in the temp store before writing it back: in memory, under this
+        // connection's `temp_store = MEMORY`, that is the index's size in RAM: re-indexing bitwarden/server after
+        // 1,364 of its files were removed peaked at 426 MB footprint, where a cold index of it peaks at 106 MB (macOS,
+        // `MallocLargeCache=0`). With the copy in a temp file it peaks at 108 MB, for 7% more instructions. The
+        // connection's setting is put back whatever VACUUM returns.
+        self.conn.execute_batch("PRAGMA temp_store = FILE;")?;
+        let vacuumed = self.conn.execute_batch("VACUUM;");
+        self.conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
+        vacuumed?;
         if resnap {
             self.begin_snapshot()?;
         }
@@ -1479,6 +1487,21 @@ mod tests {
         store.limit_cache(128).unwrap();
         assert_eq!(size(store.side().unwrap()), -128);
         store.end_snapshot().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vacuum_puts_the_memory_temp_store_back() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-vacuum-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir.join("index.sqlite")).unwrap();
+        store.set_meta("root", "/x").unwrap();
+        // 2 is MEMORY: VACUUM ran with the copy in a file, and later sorts and temp b-trees are in memory again.
+        let temp_store = || store.conn().query_row("PRAGMA temp_store", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(temp_store(), 2);
+        store.vacuum().unwrap();
+        assert_eq!(temp_store(), 2);
+        assert_eq!(store.meta("root").unwrap().as_deref(), Some("/x"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

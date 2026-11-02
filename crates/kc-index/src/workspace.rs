@@ -21,7 +21,7 @@ use kc_store::manifests::{self, PackageOwners, PackageRow};
 use kc_store::query;
 use serde::{Deserialize, Serialize};
 
-use crate::{cache_dir, git};
+use crate::git;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RepoSummary {
@@ -122,7 +122,7 @@ fn format() -> String {
 }
 
 pub(crate) fn has_saved_index(root: &Path) -> Result<bool> {
-    let path = cache_dir()?.join("workspace.json");
+    let path = crate::tree_dir()?.join("workspace.json");
     Ok(std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok())
         .filter(|f| f.format == format()).is_some_and(|f| f.repos.values().any(|s| s.root == root && !s.light && !s.generation.is_empty())))
 }
@@ -254,8 +254,8 @@ type Shared = Arc<Vec<RepoSummary>>;
 fn load(focus: &[PathBuf]) -> Result<(Shared, Shared)> {
     crate::light::ensure_discovered()?;
     let key = view_key(focus)?;
-    let dir = cache_dir()?.join("repos");
-    let summary_path = cache_dir()?.join("workspace.json");
+    let dir = crate::tree_dir()?.join("repos");
+    let summary_path = crate::tree_dir()?.join("workspace.json");
     let summary_stamp = format!("{}|{}", git::stamp(&summary_path), crate::light::stamp()?);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries.collect::<std::io::Result<Vec<_>>>()?,
@@ -316,7 +316,7 @@ fn load(focus: &[PathBuf]) -> Result<(Shared, Shared)> {
 /// summary returned.
 fn refresh(stamps: HashMap<String, (PathBuf, String)>) -> Result<(Vec<RepoSummary>, HashMap<String, String>)> {
     let _metadata = crate::writer::workspace(true)?;
-    let cache_path = cache_dir()?.join("workspace.json");
+    let cache_path = crate::tree_dir()?.join("workspace.json");
     let file: Option<SummaryFile> = std::fs::read(&cache_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let mut cached: HashMap<String, RepoSummary> = file.filter(|f| f.format == format()).map(|f| f.repos).unwrap_or_default();
     let mut fresh: HashMap<String, RepoSummary> = HashMap::new();
@@ -376,7 +376,7 @@ fn refresh(stamps: HashMap<String, (PathBuf, String)>) -> Result<(Vec<RepoSummar
 /// purged (see `crate::purge_blocked`) stays on disk until the next refresh.
 pub fn forget_summary(db: &Path) -> Result<()> {
     let _metadata = crate::writer::workspace(true)?;
-    let cache_path = cache_dir()?.join("workspace.json");
+    let cache_path = crate::tree_dir()?.join("workspace.json");
     let Some(mut file) = std::fs::read(&cache_path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok()) else { return Ok(()) };
     let key = db.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     if file.repos.remove(&key).is_none() {
@@ -387,7 +387,7 @@ pub fn forget_summary(db: &Path) -> Result<()> {
 
 /// Drop only a recognized summary file whose indexes no longer exist. Never remove an unrelated cache file.
 pub(crate) fn clear_orphan_summary() -> Result<()> {
-    let cache = cache_dir()?;
+    let cache = crate::tree_dir()?;
     let path = cache.join("workspace.json");
     if crate::cache::durable_file(&path)? { return Ok(()); }
     if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) { return Ok(()); }
@@ -400,7 +400,7 @@ pub(crate) fn clear_orphan_summary() -> Result<()> {
 }
 
 pub(crate) fn prune_missing_summaries() -> Result<()> {
-    let cache = cache_dir()?;
+    let cache = crate::tree_dir()?;
     let path = cache.join("workspace.json");
     if crate::cache::durable_file(&path)? { return Ok(()); }
     if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) { return Ok(()); }
@@ -428,7 +428,7 @@ pub(crate) fn preserve_summary(db: &Path) -> Result<()> {
     let store = Store::open(db)?;
     let Some(mut summary) = read_store(db, String::new(), store)? else { anyhow::bail!("cannot preserve index identity before eviction"); };
     summary.stamp.clear();
-    let path = cache_dir()?.join("workspace.json");
+    let path = crate::tree_dir()?.join("workspace.json");
     let mut file = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok())
         .filter(|f| f.format == format()).unwrap_or_else(|| SummaryFile { format: format(), repos: HashMap::new() });
     let key = db.file_name().ok_or_else(|| anyhow::anyhow!("index has no file name"))?.to_string_lossy().into_owned();

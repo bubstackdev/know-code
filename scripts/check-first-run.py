@@ -105,9 +105,10 @@ def check(binary: Path) -> None:
                 assert "apiHandler" in json.dumps(cold["items"]), cold
                 assert not any("from its last sync" in p for p in cold.get("provenance", [])), cold
 
-                indexes = list((base / "cache" / "repos").glob("*.sqlite"))
+                # In the build's own tree (`cache/v/<key>/repos`), or at the top level for 0.6.1 and older.
+                indexes = list((base / "cache").glob("v/*/repos/*.sqlite")) + list((base / "cache" / "repos").glob("*.sqlite"))
                 assert len(indexes) == 1, indexes
-                writer_lock = base / "cache" / "locks" / (indexes[0].stem + ".lock")
+                writer_lock = indexes[0].parent.parent / "locks" / (indexes[0].stem + ".lock")  # beside the index's repos/
                 with writer_lock.open("r+") as writer:
                     fcntl.flock(writer, fcntl.LOCK_EX)
                     source.write_text("export function changedApiHandler() { return 4242; }\n")

@@ -10,7 +10,9 @@
 # (programs.txt). Only IO/out is writable: the listing and the log come
 # out there, as IO/out/routes-REPO.jsonl and IO/out/REPO.log. The container is removed afterwards.
 #
-# The image is pinned by digest; CPUS (default 4) and MEMORY (default 8g) limit the container.
+# The image is pinned by digest; CPUS (default 4) and MEMORY (default 8g) limit the container. REPO may also be one of
+# routes-v1.1's held-out repositories (repos-heldout.txt). SITES=1 records each route's registration site for
+# routes-v1.1 (sites.sh), and also lists the program's configuration-dependent regions (excl/) as IO/out/excl-REPO.jsonl.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,7 +24,7 @@ MEMORY=${MEMORY:-8g}
 
 GO_IMAGE=golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9
 
-read -r _ FAMILY URL SHA < <(grep -E "^$REPO " "$HERE/repos.txt") || { echo "run.sh: $REPO is not in repos.txt" >&2; exit 2; }
+read -r _ FAMILY URL SHA < <(grep -hE "^$REPO " "$HERE/repos.txt" "$HERE/repos-heldout.txt") || { echo "run.sh: $REPO is not in repos.txt" >&2; exit 2; }
 if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
   echo "run.sh: $CLONE is not at $SHA" >&2
   exit 2
@@ -36,6 +38,7 @@ rm -rf "$IO/in" && mkdir -p "$IO/in" "$IO/out"
 (cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -cf "$IO/in/src.tar" -T -)
 cp -R "$HERE/$FAMILY" "$IO/in/tools"
 grep -E "^$REPO " "$HERE/$FAMILY/programs.txt" | cut -d' ' -f2- > "$IO/in/programs.txt"
+if [ "${SITES:-0}" = 1 ]; then : > "$IO/in/sites"; fi
 
 NAME=kc-routes-$REPO-$$
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
@@ -52,6 +55,7 @@ LOG=/out/$REPO.log
 run "mkdir -p /work/src /work/ov && tar -xf /in/src.tar -C /work/src && cp -R /in/tools /work/tools && : > $LOG
      go version >> $LOG
      if [ -f /work/tools/harness/$REPO/prepare.sh ]; then (cd /work/src && sh /work/tools/harness/$REPO/prepare.sh) >>$LOG 2>&1; fi
+     if [ -f /in/sites ]; then (cd /work/tools/excl && go mod download >>$LOG 2>&1 && go build -o /work/excl . >>$LOG 2>&1); fi
      for m in \$(cut -d' ' -f1 /in/programs.txt | sort -u); do
        (cd /work/src/\$m && go mod download >>$LOG 2>&1 && go list -test -deps ./... >/dev/null 2>>$LOG) || echo \"restore failed in \$m\" >>$LOG
      done"
@@ -69,6 +73,12 @@ run "sh /work/tools/patch.sh >>$LOG 2>&1
        fi
        for p in \$pkgs; do
          sh /work/tools/list.sh $REPO \"\$mod\" \"\$p\" \$args >> /out/routes-$REPO.jsonl 2>>$LOG
+         if [ -f /in/sites ]; then
+           case \$p in
+             test:*) (cd /work/src/\$mod && /work/excl -module . -package \${p#test:} -test -overlay /work/ov/overlay.json) ;;
+             *) (cd /work/src/\$mod && /work/excl -module . -package \$p -overlay /work/ov/overlay.json) ;;
+           esac | sed \"s#^{#{\\\"repo\\\": \\\"$REPO\\\", \\\"module\\\": \\\"\$mod\\\", \\\"program\\\": \\\"\$p\\\", #\" >> /out/excl-$REPO.jsonl 2>>$LOG
+         fi
        done
      done < /in/programs.txt"
 echo "run.sh: $REPO: $(grep -c '"t": "route"' "$IO/out/routes-$REPO.jsonl") routes from $(grep -c '"status": "listed"' "$IO/out/routes-$REPO.jsonl") of $(grep -c '"t": "program"' "$IO/out/routes-$REPO.jsonl") programs"

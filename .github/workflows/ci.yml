@@ -284,6 +284,10 @@ jobs:
             --out "$RUNNER_TEMP/replay.md" || status=$?
           { echo "## Release replay gate (fast subset)"; echo; cat "$RUNNER_TEMP/replay.md"; } >> "$GITHUB_STEP_SUMMARY"
           exit $status
+      # The latest release and this change take turns on one cache: both answer every time, and neither changes the
+      # other's data (docs/architecture.md, "Versions sharing a cache").
+      - name: the latest release and this change share a cache
+        run: python scripts/check-cache-compat.py "$RUNNER_TEMP/knowcode-x86_64-unknown-linux-gnu/knowcode" target/debug/knowcode
 
   # One check that always reports, for the main branch's ruleset to require: it fails if any job above failed or was
   # cancelled, and passes when the rest passed or were skipped (macOS and size on prose-only changes, replay on pushes).
