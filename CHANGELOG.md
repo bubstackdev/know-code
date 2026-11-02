@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- TypeScript: a member reached through a property of a value whose type isn't known (`c.req.header(…)`, `c` a
+  handler's untyped parameter) is resolved among the candidates that some type's property of that name can hold
+  (`req: HonoRequest` makes it `HonoRequest.header`), rather than every `header` in the repo. The call stays
+  `ambiguous`, since the value may be of a type the repo doesn't declare, but it no longer lists a same-named
+  `Context.header` among its targets or makes the caller one of that method's. On jellyfin-web and hono's sampled
+  `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
+  `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
 - A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
   list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
   sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
