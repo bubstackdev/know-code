@@ -1111,6 +1111,24 @@ pub fn unused(p: &UnusedParams, args: &Scope) -> Result<Out<Vec<UnusedRepo>>> {
     Ok(Out { env, data: repos })
 }
 
+/// A reference to a candidate's name as [`unused_in`] reads it: where it is, how it was resolved, and the targets it
+/// counts for (`ids` with its confidence, `any` as one of several providers).
+struct Use {
+    file: String,
+    line: u32,
+    col: u32,
+    name: String,
+    kind: String,
+    receiver: bool,
+    receiver_type: Option<String>,
+    from: Option<i64>,
+    confidence: &'static str,
+    /// Resolved exactly, or to a framework member: it explains its occurrence in the text.
+    explains: bool,
+    ids: Vec<i64>,
+    any: Vec<i64>,
+}
+
 fn unused_in(o: &Opened, files: &[String], kinds: &[&str], no_sync: bool) -> Result<UnusedRepo> {
     let conn = o.store.conn();
     let m = Model::load(conn)?;
@@ -1141,7 +1159,44 @@ fn unused_in(o: &Opened, files: &[String], kinds: &[&str], no_sync: bool) -> Res
     ref_names.extend(m.syms.iter().filter(|x| x.parent.is_some_and(|p| type_ids.contains(&p)) && !x.is_type()).map(|x| x.name.as_str()));
     ref_names.sort();
     ref_names.dedup();
-    let hits = query::refs_named(conn, &ref_names)?;
+    // Names of the repo's C# extension methods: a call on a receiver of any type, a framework's too, may mean one.
+    let extensions: HashSet<&str> =
+        m.syms.iter().filter(|x| x.csharp() && x.signature.contains("(this ")).map(|x| x.name.as_str()).collect();
+    // Each reference as far as the verdicts below read it, kept only when it can count for or against a candidate.
+    let hits = query::refs_named_map(
+        conn,
+        &ref_names,
+        |h| {
+            // Through a receiver of a framework type: a framework member, resolved elsewhere (unless the repo extends
+            // it).
+            let foreign = h.receiver_type.as_deref().is_some_and(|t| m.resolve_type(t.rsplit('.').next().unwrap_or(t)).is_empty())
+                && !(h.confidence == "unresolved" && extensions.contains(h.name.as_str()));
+            // Only a reference resolved exactly (or to a framework member) explains its occurrence; one bound to
+            // another definition by name alone might have meant a candidate the resolver's rules left out.
+            let explains = matches!(h.confidence, "exact" | "external_likely") || foreign;
+            let mut ids = h.target_ids;
+            if let Some(b) = &h.via_di {
+                ids.push(b.target.id);
+            }
+            let any: Vec<i64> = h.via_di_any.iter().map(|b| b.target.id).collect();
+            let counted = matches!(h.confidence, "exact" | "unique_name" | "ambiguous") && !ids.is_empty();
+            (explains || h.receiver.is_some() || counted || !any.is_empty()).then(|| Use {
+                file: h.file,
+                line: h.line,
+                col: h.col,
+                name: h.name,
+                kind: h.kind,
+                receiver: h.receiver.is_some(),
+                receiver_type: h.receiver_type,
+                from: h.from.map(|f| f.id),
+                confidence: h.confidence,
+                explains,
+                ids: if counted { ids } else { Vec::new() },
+                any,
+            })
+        },
+        |u| (u.file.as_str(), u.line),
+    )?;
 
     // Resolved uses per target id; and, per (file, line, name), that a reference there was resolved at all.
     let mut confident: HashMap<i64, Vec<usize>> = HashMap::new();
@@ -1151,35 +1206,22 @@ fn unused_in(o: &Opened, files: &[String], kinds: &[&str], no_sync: bool) -> Res
     let mut ref_lines: HashSet<(&str, u32, u32, &str)> = HashSet::new();
     // Unresolved references that could still mean a candidate, by name.
     let mut unresolved: HashMap<&str, Vec<usize>> = HashMap::new();
-    // Names of the repo's C# extension methods: a call on a receiver of any type, a framework's too, may mean one.
-    let extensions: HashSet<&str> =
-        m.syms.iter().filter(|x| x.csharp() && x.signature.contains("(this ")).map(|x| x.name.as_str()).collect();
     for (hi, h) in hits.iter().enumerate() {
-        // Through a receiver of a framework type: a framework member, resolved elsewhere (unless the repo extends it).
-        let foreign = h.receiver_type.as_deref().is_some_and(|t| m.resolve_type(t.rsplit('.').next().unwrap_or(t)).is_empty())
-            && !(h.confidence == "unresolved" && extensions.contains(h.name.as_str()));
-        // Only a reference resolved exactly (or to a framework member) explains its occurrence; one bound to another
-        // definition by name alone might have meant a candidate the resolver's rules left out.
-        if matches!(h.confidence, "exact" | "external_likely") || foreign {
+        if h.explains {
             ref_lines.insert((h.file.as_str(), h.line, h.col, h.name.as_str()));
-        } else if h.receiver.is_some() {
+        } else if h.receiver {
             // Through a receiver of a repo type that lacks the member (the resolver's guess may be wrong), or of an
             // unknown one (`ns.member` through a namespace import never reaches a free symbol).
             unresolved.entry(h.name.as_str()).or_default().push(hi);
         }
-        let mut ids: Vec<i64> = h.target_ids.clone();
-        if let Some(b) = &h.via_di {
-            ids.push(b.target.id);
-        }
         // One of several providers: a candidate, never certain.
-        for b in &h.via_di_any {
-            ambiguous.entry(b.target.id).or_default().push(hi);
+        for &id in &h.any {
+            ambiguous.entry(id).or_default().push(hi);
         }
-        for id in ids {
+        for &id in &h.ids {
             match h.confidence {
                 "exact" | "unique_name" => confident.entry(id).or_default().push(hi),
-                "ambiguous" => ambiguous.entry(id).or_default().push(hi),
-                _ => {}
+                _ => ambiguous.entry(id).or_default().push(hi),
             }
         }
     }
@@ -1197,7 +1239,7 @@ fn unused_in(o: &Opened, files: &[String], kinds: &[&str], no_sync: bool) -> Res
     let mut evidence: HashMap<i64, Evidence> = HashMap::new();
     for s in &candidates {
         let mut ev = Evidence::default();
-        let self_use = |h: &RefHit| h.from.as_ref().is_some_and(|fr| fr.id == s.id) || s.contains(&h.file, h.line);
+        let self_use = |h: &Use| h.from == Some(s.id) || s.contains(&h.file, h.line);
         for &hi in confident.get(&s.id).into_iter().flatten() {
             let h = &hits[hi];
             if self_use(h) {

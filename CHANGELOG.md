@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `unused` holds far less memory on a large repo: it resolves the references to its candidates' names a chunk at a
+  time and keeps only what its verdicts read, rather than every resolved reference at once. On bitwarden/server peak
+  memory fell from 1,650 MB to 468 MB, with the same answer and about the same instructions. Callers in `context` and
+  the removed definitions `impact --diff` reports keep only the references they use as they resolve them too, and the
+  factory constructions kept for the process are bounded to the four most recently used indexes.
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
