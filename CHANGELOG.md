@@ -20,6 +20,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
   member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
   protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
+- `tests` and `impact` are faster again on code reached through protocols or interfaces. Collecting a member's callers
+  copied every reference to its name, most of which reach another member of that name, and looked up a requirement
+  in each supertype before asking whether it was a protocol at all; it now copies only the references that may reach
+  the member and skips supertypes that aren't protocols. On swift-nio, `tests Sources/NIOCore/ChannelPipeline.swift`
+  takes about a third fewer instructions; on Alamofire, `tests Source/Core/Session.swift` about two thirds fewer.
+  Answers are unchanged.
 - Indexing Swift packages and walking their code is faster. Which names each SwiftPM target imports by name from
   outside the repo was read again for every name resolved; it is now read once per target, both when the file
   ranking is built after indexing (on swift-nio, 209 G instructions down to 14 G) and in a walk, which now also keeps

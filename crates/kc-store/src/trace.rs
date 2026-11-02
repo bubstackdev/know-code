@@ -608,16 +608,13 @@ impl Tracer<'_> {
         self.defs.get(self.conn, query)
     }
 
-    fn refs_named(&mut self, name: &str, kinds: Vec<&'static str>) -> Result<Vec<RefHit>> {
-        let key = (name.to_string(), kinds.clone());
-        if !self.refs_by_name.contains_key(&key) {
-            let hits = query::refs_in_resolution(self.conn, name, &kinds, &mut self.res)?;
-            self.refs_by_name.insert(key.clone(), hits);
-        }
-        Ok(self.refs_by_name[&key].clone())
+    /// The references to `name` of `kinds` that may reach `want`, as callers of it: only those are copied out of the
+    /// memo, since most references to a common name (`write`, `init`) reach another of its definitions.
+    fn refs_named(&mut self, name: &str, kinds: Vec<&'static str>, want: Option<i64>) -> Result<Vec<RefHit>> {
+        self.refs_named_where(name, kinds, |h| h.confidence != "external_likely" && want.is_some_and(|id| h.may_target(id)))
     }
 
-    /// [`Self::refs_named`]'s references that `keep` keeps, without copying the rest.
+    /// The references to `name` of `kinds` that `keep` keeps, without copying the rest.
     fn refs_named_where(&mut self, name: &str, kinds: Vec<&'static str>, keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
         let key = (name.to_string(), kinds.clone());
         if !self.refs_by_name.contains_key(&key) {
@@ -825,17 +822,17 @@ impl Tracer<'_> {
             }
             Ok(())
         };
-        let hits = self.refs_named(&name, kinds.clone())?;
+        let hits = self.refs_named(&name, kinds.clone(), target_id)?;
         push_callers(self, hits, target_id, "")?;
         // A TypeScript class component is rendered by its JSX tag, which the extractor records as a call: rendering
         // it creates it.
         if sym.kind == "class" && crate::ts::is_ts_path(&sym.file) {
-            let hits = self.refs_named(&name, vec!["call"])?;
+            let hits = self.refs_named(&name, vec!["call"], target_id)?;
             push_callers(self, hits, target_id, "instantiates")?;
         }
         // A constructor chaining to it: `: base(…)`, `: this(…)`, Swift's `super.init(…)`.
         if sym.kind == "init" {
-            let hits = self.refs_named("init", vec!["call"])?;
+            let hits = self.refs_named("init", vec!["call"], Some(sym.id))?;
             push_callers(self, hits, Some(sym.id), "")?;
         }
         // An Ansible task runs when what holds it runs: its block, play, role or task file; a play, when its playbook
@@ -911,6 +908,13 @@ impl Tracer<'_> {
                 };
                 let own = arity(sym.id)?;
                 for p in protocols {
+                    // Much of what a type conforms to or extends is no protocol of this repo's (a base class, a
+                    // library's `Sendable`): asked first, the protocol check, remembered by name, spares looking up a
+                    // requirement in each such type for each member.
+                    let is_protocol = self.definitions(&p)?.iter().any(|d| d.kind == "protocol");
+                    if !is_protocol {
+                        continue;
+                    }
                     // The requirement taking the arguments it does: a `Find(query, parent)` overload doesn't implement
                     // the interface's `Find(query)`, and calls of that one don't reach it. Of several taking as many
                     // (`Find(query, bool)`, `Find(query, parents)`), the members below tell them apart by type.
@@ -924,14 +928,10 @@ impl Tracer<'_> {
                         }
                     }
                     let Some(req) = reqs.pop().filter(|_| reqs.is_empty()) else { continue };
-                    let is_protocol = self.definitions(&p)?.iter().any(|d| d.kind == "protocol");
-                    if !is_protocol {
-                        continue;
-                    }
                     if !through.insert(req.id) {
                         continue;
                     }
-                    let hits = self.refs_named(&sym.name, kinds.clone())?;
+                    let hits = self.refs_named(&sym.name, kinds.clone(), Some(req.id))?;
                     let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
@@ -948,7 +948,7 @@ impl Tracer<'_> {
                     }
                     let Some(req) = self.symbol(m.id)? else { continue };
                     let hits: Vec<RefHit> = self
-                        .refs_named(&req.name, kinds.clone())?
+                        .refs_named(&req.name, kinds.clone(), Some(req.id))?
                         .into_iter()
                         .filter(|h| h.receiver_type.as_deref().is_none_or(|r| is_a.contains(bare_type(r))))
                         .collect();
@@ -963,7 +963,7 @@ impl Tracer<'_> {
                         continue;
                     }
                     let Some(req) = self.symbol(base)? else { continue };
-                    let hits = self.refs_named(&req.name, kinds.clone())?;
+                    let hits = self.refs_named(&req.name, kinds.clone(), Some(req.id))?;
                     let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
@@ -972,7 +972,7 @@ impl Tracer<'_> {
                 // on a receiver of that type, passing arguments this member takes, may run it. Another implementation
                 // may run instead, the library's own or another type's, so each is `ambiguous`. With the library
                 // indexed, they resolve into it and `impact` lists them across repos instead.
-                let unresolved: Vec<RefHit> = if matches!(sym.kind.as_str(), "method" | "property") {
+                let mut unresolved: Vec<RefHit> = if matches!(sym.kind.as_str(), "method" | "property") {
                     self.refs_named_where(&sym.name, kinds.clone(), |h| {
                         h.confidence == "unresolved" && h.target_ids.is_empty() && h.receiver.is_some() && h.receiver_type.is_some()
                     })?
@@ -982,10 +982,14 @@ impl Tracer<'_> {
                 if !unresolved.is_empty() {
                     let library: HashSet<String> =
                         query::outside_supertype_names(self.conn, container)?.iter().map(|t| bare_type(t).to_string()).collect();
+                    unresolved.retain(|h| h.receiver_type.as_deref().is_some_and(|r| library.contains(bare_type(r))));
+                }
+                // The overloads are read only for a call on a library type's receiver: most members have none.
+                if !unresolved.is_empty() {
                     let mut overloads = query::Overloads::named(self.conn, &sym.name)?;
                     let mut hits = Vec::new();
                     for mut h in unresolved {
-                        if !h.receiver_type.as_deref().is_some_and(|r| library.contains(bare_type(r))) || !overloads.may_call(&h, sym.id)? {
+                        if !overloads.may_call(&h, sym.id)? {
                             continue;
                         }
                         h.confidence = "ambiguous";
