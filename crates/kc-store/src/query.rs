@@ -343,6 +343,24 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
     Ok(Found { hits: ranked.into_iter().take(limit).map(|(_, h)| h).collect(), total, capped })
 }
 
+/// [`definitions`] remembered by query, for one connection reading one snapshot: a walk asks for the same type and
+/// member names at every node it expands (the owner of each member, each protocol a type conforms to), and a lookup
+/// that misses runs several fallbacks. The answer is a function of the snapshot alone, so remembering it changes no
+/// answer; a memo must not outlive the snapshot or move to another connection.
+#[derive(Debug, Default)]
+pub struct DefinitionsMemo(HashMap<String, Vec<SymbolRow>>);
+
+impl DefinitionsMemo {
+    pub fn get(&mut self, conn: &Connection, query: &str) -> Result<Vec<SymbolRow>> {
+        if let Some(rows) = self.0.get(query) {
+            return Ok(rows.clone());
+        }
+        let rows = definitions(conn, query)?;
+        self.0.insert(query.to_string(), rows.clone());
+        Ok(rows)
+    }
+}
+
 /// Definitions with exactly this name (case-sensitive), optionally inside a container, best kind first, then live
 /// code before tests and before copies (backups, old versions, template variants: see [`crate::path_rank`]).
 ///
@@ -7353,10 +7371,15 @@ impl Implemented {
 /// members it overrides: same-named members of the same kind, taking the same arguments, in the type's supertypes,
 /// transitively.
 pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Implemented>> {
+    implemented_members_with(conn, sym, &mut DefinitionsMemo::default())
+}
+
+/// [`implemented_members`], looking definitions up through `defs` (kept for `conn`'s snapshot).
+pub fn implemented_members_with(conn: &Connection, sym: &SymbolRow, defs: &mut DefinitionsMemo) -> Result<Vec<Implemented>> {
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let parents = supertypes(conn, &short)?;
-    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false)
+    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false, defs)
 }
 
 /// Whether a member taking `a` (min_args, max_args) and one taking `b` take the same parameters, as an
@@ -7374,7 +7397,7 @@ pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolR
     if outside.is_empty() {
         return Ok(Vec::new());
     }
-    implemented_in(conn, dep, sym, outside, seen, true)
+    implemented_in(conn, dep, sym, outside, seen, true, &mut DefinitionsMemo::default())
 }
 
 /// Whether `sym`'s type names a supertype, directly or through its own repo's types, that its repo (`conn`) doesn't
@@ -7519,6 +7542,8 @@ fn implemented_in(
     start: Vec<String>,
     mut seen: HashSet<String>,
     dependency: bool,
+    // Definitions in `types`, remembered.
+    defs: &mut DefinitionsMemo,
 ) -> Result<Vec<Implemented>> {
     let same_repo = !dependency;
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
@@ -7541,11 +7566,12 @@ fn implemented_in(
                 continue;
             }
             queue.push(p.clone());
-            let interface = definitions(types, &p)?.iter().any(|d| d.kind == "protocol");
+            let interface = defs.get(types, &p)?.iter().any(|d| d.kind == "protocol");
             if !interface && !overrides {
                 continue;
             }
-            let mut members: Vec<SymbolRow> = definitions(types, &format!("{p}.{}", sym.name))?
+            let mut members: Vec<SymbolRow> = defs
+                .get(types, &format!("{p}.{}", sym.name))?
                 .into_iter()
                 .filter(|d| {
                     !(same_repo && d.id == sym.id)

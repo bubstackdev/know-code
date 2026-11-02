@@ -4,6 +4,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
+  member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
+  protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
 - Versions of KnowCode can share one cache. Each index schema now has its own part of the cache (`v/s<schema>/`), with
   its indexes, shared bases, summary and discovery files and their locks, and a version never opens, rebuilds or
   rewrites another schema's. Before, a newer build rebuilt an older build's indexes in place for its own schema, and the
