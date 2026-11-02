@@ -139,6 +139,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
   ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
   Go test files too (`foo_test.go` for `foo.go`).
+- Re-indexing after many files were removed (more than 200, which compacts the index) no longer holds a copy of the
+  whole index in memory: the compaction's copy goes to a temporary file. Re-indexing bitwarden/server after 1,364 of
+  its files were removed peaked at 430 MB footprint and now peaks at 166 MB, for 7% more instructions; the index is
+  the same.
 
 ## 0.6.1 (2026-10-28)
 
