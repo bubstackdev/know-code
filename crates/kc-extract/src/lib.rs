@@ -83,11 +83,15 @@ pub enum Lang {
     Go,
     /// Go `go.mod`.
     GoMod,
+    /// Maven `pom.xml`.
+    Maven,
+    /// Gradle `build.gradle`, `build.gradle.kts`, `settings.gradle` and `settings.gradle.kts`.
+    Gradle,
 }
 
 impl Lang {
     /// Every language this build indexes.
-    pub const ALL: [Lang; 24] = [
+    pub const ALL: [Lang; 26] = [
         Lang::Swift,
         Lang::Python,
         Lang::Rust,
@@ -112,6 +116,8 @@ impl Lang {
         Lang::HostConfig,
         Lang::Go,
         Lang::GoMod,
+        Lang::Maven,
+        Lang::Gradle,
     ];
 
     /// `as_str` of the languages with symbols (not manifests).
@@ -128,6 +134,8 @@ impl Lang {
             "Cargo.toml" => Some(Lang::Cargo),
             "package.json" => Some(Lang::PackageJson),
             "go.mod" => Some(Lang::GoMod),
+            "pom.xml" => Some(Lang::Maven),
+            "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts" => Some(Lang::Gradle),
             "jsconfig.json" => Some(Lang::TsConfig),
             f if f.starts_with("tsconfig") && f.ends_with(".json") => Some(Lang::TsConfig),
             _ if hosts::is_host_config(path) => Some(Lang::HostConfig),
@@ -180,11 +188,16 @@ impl Lang {
             Lang::HostConfig => "hostconfig",
             Lang::Go => "go",
             Lang::GoMod => "gomod",
+            Lang::Maven => "maven",
+            Lang::Gradle => "gradle",
         }
     }
 
     pub fn is_manifest(self) -> bool {
-        matches!(self, Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson | Lang::GoMod)
+        matches!(
+            self,
+            Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson | Lang::GoMod | Lang::Maven | Lang::Gradle
+        )
     }
 
     /// Bumped whenever the extractor's output changes, so indexed files of this language get re-extracted. The
@@ -212,9 +225,14 @@ impl Lang {
             Lang::HostConfig => hosts::VERSION,
             Lang::Go => go::VERSION,
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => typescript::VERSION,
-            Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson | Lang::GoMod => {
-                manifest::VERSION
-            }
+            Lang::SwiftPackage
+            | Lang::XcodeGen
+            | Lang::Cargo
+            | Lang::CsProj
+            | Lang::PackageJson
+            | Lang::GoMod
+            | Lang::Maven
+            | Lang::Gradle => manifest::VERSION,
         }
     }
 }
@@ -579,7 +597,7 @@ pub struct TargetFact {
 /// A package (SwiftPM package, XcodeGen project, Cargo package/workspace or Go module) declared by a manifest.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageFact {
-    /// `swiftpm`, `xcodegen`, `cargo` or `gomod`.
+    /// `swiftpm`, `xcodegen`, `cargo`, `csproj`, `npm`, `gomod`, `maven` or `gradle`.
     pub kind: &'static str,
     pub name: String,
     pub line: u32,
@@ -1046,6 +1064,11 @@ pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
         Lang::HostConfig => hosts::extract(path, source),
         Lang::Go => go::extract(path, source),
         Lang::GoMod => manifest::gomod(source),
+        Lang::Maven => manifest::maven(source),
+        Lang::Gradle => {
+            let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
+            manifest::gradle(source, file.starts_with("settings."), dir.rsplit('/').next().unwrap_or(dir))
+        }
     }
 }
 
