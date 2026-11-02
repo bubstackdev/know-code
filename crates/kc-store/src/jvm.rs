@@ -94,7 +94,8 @@ pub struct Resolver {
     packages: HashSet<String>,
     /// Shared, so a resolution can keep a file's scope while it reads other types through `self`.
     files: HashMap<String, Rc<FileScope>>,
-    /// Per type id: the simple names of its direct supertypes, as written.
+    /// Per type id: the names of its direct supertypes, as written (`Annotatable.Builder`, `Base`): a qualified one is
+    /// looked up as qualified, never by its last name, which may be the type's own (`class Builder : Tagged.Builder`).
     supers: HashMap<i64, Vec<String>>,
     /// By id: the type's declaration, for reading its supertypes where it is declared.
     by_id: HashMap<i64, (String, JavaType)>,
@@ -143,7 +144,7 @@ impl Resolver {
             self.types.entry(name.clone()).or_default().push((name, t));
         }
         let mut stmt = conn.prepare(
-            "SELECT r.from_id, r.target_name FROM relations r JOIN files f ON f.id = r.file_id
+            "SELECT r.from_id, r.target FROM relations r JOIN files f ON f.id = r.file_id
              WHERE f.lang IN ('java', 'kotlin') AND r.kind = 'inherits'",
         )?;
         for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
@@ -271,6 +272,16 @@ impl Resolver {
         Found::Unreached(all.iter().map(|(_, t)| t.id).collect())
     }
 
+    /// A supertype as written (`Base`, `a.b.C`, `Annotatable.Builder<T>`): the type, without its arguments, by simple or
+    /// qualified name.
+    fn find_written(&self, file: &FileScope, at: (&str, u32), nest: &[String], written: &str) -> Found {
+        let s = written.split('<').next().unwrap_or(written).trim();
+        match s.rsplit_once('.') {
+            Some((q, n)) => self.find_qualified(file, at, nest, q, n).unwrap_or(Found::Outside),
+            None => self.find_type(file, at, nest, s),
+        }
+    }
+
     /// A qualified name's type: `a.b.C` (a package and a type), `Outer.Inner` (a type and its member type), or a
     /// mix. `None` when the qualifier isn't a type or package name at all (an expression).
     fn find_qualified(&self, file: &FileScope, at: (&str, u32), nest: &[String], qualifier: &str, name: &str) -> Option<Found> {
@@ -344,7 +355,7 @@ impl Resolver {
                 out.insert(n.clone());
             }
             for s in self.supers.get(&id).into_iter().flatten() {
-                if let Found::Inside(ids) = self.find_type(file, ("", 0), nest, s) {
+                if let Found::Inside(ids) = self.find_written(file, ("", 0), nest, s) {
                     queue.extend(ids);
                 }
             }
@@ -386,16 +397,18 @@ impl Resolver {
     }
 
     /// The member the reference names among the supertypes of `own` alone (`super.m()`), nearest level first, as
-    /// [`Self::declared_member`] reads them; and whether a supertype on the way couldn't be followed (a library's).
+    /// [`Self::declared_member`] reads them; and whether a supertype on the way couldn't be followed and may be the
+    /// repository's.
     fn inherited_member(&mut self, conn: &Connection, hit: &RefHit, own: i64) -> rusqlite::Result<(Option<(&'static str, Vec<i64>)>, bool)> {
         let mut seen = HashSet::from([own]);
         let mut level = vec![own];
-        let mut unsure = false;
+        let (mut unsure, mut unknown) = (false, false);
         while !level.is_empty() {
             let mut next = Vec::new();
             for id in level {
-                let (supers, unfollowed) = self.supertypes(conn, id)?;
+                let (supers, unfollowed, maybe_inside) = self.supertypes(conn, id)?;
                 unsure |= unfollowed;
+                unknown |= maybe_inside;
                 next.extend(supers.into_iter().filter(|s| seen.insert(*s)));
             }
             let mut found = Vec::new();
@@ -403,38 +416,37 @@ impl Resolver {
                 found.extend(members_of(conn, hit, *id)?);
             }
             if !found.is_empty() {
-                return Ok((Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }), unsure));
+                return Ok((Some(if found.len() == 1 && !unsure { ("exact", found) } else { ("ambiguous", found) }), unknown));
             }
             level = next;
         }
-        Ok((None, unsure))
+        Ok((None, unknown))
     }
 
-    /// A repository type's direct supertypes the repository declares, read by the imports of the file declaring it, and
-    /// whether any it names couldn't be followed to one declaration.
-    fn supertypes(&mut self, conn: &Connection, id: i64) -> rusqlite::Result<(Vec<i64>, bool)> {
-        let Some((name, t)) = self.by_id.get(&id).cloned() else { return Ok((Vec::new(), true)) };
+    /// A repository type's direct supertypes the repository declares, read by the imports of the file declaring it;
+    /// whether any it names couldn't be followed to one declaration; and whether any of those may still be the
+    /// repository's (one that is plainly outside, a library's import, isn't).
+    fn supertypes(&mut self, conn: &Connection, id: i64) -> rusqlite::Result<(Vec<i64>, bool, bool)> {
+        let Some((name, t)) = self.by_id.get(&id).cloned() else { return Ok((Vec::new(), true, true)) };
         let written = self.supers.get(&id).cloned().unwrap_or_default();
         if written.is_empty() {
-            return Ok((Vec::new(), false));
+            return Ok((Vec::new(), false, false));
         }
         self.scope(conn, &t.file)?;
         let file = &self.files[&t.file];
         let inner = t.container.as_ref().map_or_else(|| name.clone(), |c| format!("{c}.{name}"));
         let parts: Vec<&str> = inner.split('.').collect();
         let nest: Vec<String> = (1..parts.len()).map(|n| parts[..n].join(".")).collect();
-        let (mut out, mut unfollowed) = (Vec::new(), false);
+        let (mut out, mut unfollowed, mut unknown) = (Vec::new(), false, false);
         for s in &written {
-            let found = match s.rsplit_once('.') {
-                Some((q, n)) => self.find_qualified(file, (t.file.as_str(), 0), &nest, q, n).unwrap_or(Found::Outside),
-                None => self.find_type(file, (t.file.as_str(), 0), &nest, s),
-            };
+            let found = self.find_written(file, (t.file.as_str(), 0), &nest, s);
             match found {
                 Found::Inside(ids) if ids.len() == 1 => out.push(ids[0]),
-                _ => unfollowed = true,
+                Found::Outside => unfollowed = true,
+                _ => (unfollowed, unknown) = (true, true),
             }
         }
-        Ok((out, unfollowed))
+        Ok((out, unfollowed, unknown))
     }
 
     /// The repository type a path names, step by step: each step is the current type's own member (or one a repository
@@ -495,7 +507,7 @@ impl Resolver {
             self.scope(conn, &file)?;
             let nest = nest_of(container.as_deref(), self.names.get(&t).map(String::as_str));
             for s in self.supers.get(&t).cloned().unwrap_or_default() {
-                if let Found::Inside(ids) = self.find_type(&self.files[&file], (file.as_str(), 0), &nest, &s)
+                if let Found::Inside(ids) = self.find_written(&self.files[&file], (file.as_str(), 0), &nest, &s)
                     && let [one] = ids.as_slice()
                 {
                     queue.push(*one);
@@ -598,8 +610,24 @@ impl Resolver {
             let package = self.files.get(&hit.file).and_then(|f| f.package.clone());
             let own = nest.last().and_then(|n| self.qualified.get(&package.as_ref().map_or_else(|| n.clone(), |p| format!("{p}.{n}"))).copied());
             if let Some(own) = own {
-                let (found, _) = self.inherited_member(conn, hit, own)?;
-                return Ok(Some(found.unwrap_or(("unresolved", Vec::new()))));
+                let (found, unknown) = self.inherited_member(conn, hit, own)?;
+                if let Some(found) = found {
+                    return Ok(Some(found));
+                }
+                if !unknown {
+                    return Ok(Some(("unresolved", Vec::new())));
+                }
+                // A supertype the rules couldn't follow may be the repository's: any other declaration of the name is
+                // a candidate, never the caller type's own.
+                let mut others = Vec::new();
+                for id in named_in_family(conn, hit)? {
+                    let parent: Option<i64> =
+                        conn.query_row("SELECT parent_id FROM symbols WHERE id = ?1", params![id], |r| r.get(0)).optional()?.flatten();
+                    if parent != Some(own) {
+                        others.push(id);
+                    }
+                }
+                return Ok(Some(if others.is_empty() { ("unresolved", others) } else { ("ambiguous", others) }));
             }
         }
         // `this` in a Kotlin extension's body is the extension's receiver. On the repository's type its own member

@@ -392,3 +392,26 @@ fn super_reaches_only_the_supertypes_members() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn super_reads_a_generic_qualified_supertype() {
+    let root = scratch("kt-super-generic");
+    write(
+        &root,
+        "src/spec/Tagged.kt",
+        "package spec\n\ninterface Tagged {\n  interface Builder<out T : Builder<T>> {\n    fun tag(t: String): T = this as T\n  }\n}\n",
+    );
+    write(
+        &root,
+        "src/spec/Fun.kt",
+        "package spec\n\nclass Fun {\n  class Builder :\n    Tagged.Builder<Builder> {\n    override fun tag(t: String): Builder = super.tag(t)\n  }\n}\n",
+    );
+    let store = index(&root);
+    let c = store.conn();
+    assert_eq!(
+        answer(&refs_in(c, "tag", "call", "src/spec/Fun.kt")[0]),
+        ("exact", vec!["src/spec/Tagged.kt:5".to_string()]),
+        "the generic, qualified supertype's member"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
