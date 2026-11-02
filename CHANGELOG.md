@@ -10,6 +10,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   autofac, jellyfin, jellyfin-web, hono), 18 of 60 sampled `find` answers were cut with no cursor. Following the
   cursors, the declarations of the name asked for that are found go from 135 to 145 of 145 compiler-labelled ones in
   C#, and from 64 to 67 of 78 in TypeScript.
+- C#: a call's overloads are told apart by the number of arguments it passes in the form it is called. An extension
+  method called on a value (`rack.Stack<int>(pick)`) takes no argument for its receiver, and one called as a static
+  method (`RackExtensions.Stack<int, string>(rack)`) passes it as its first; either was counted both ways before, so
+  an overload that couldn't be the one called stayed among an ambiguous call's candidates, and impact listed the
+  call's method among that overload's callers. On identity-v1's C# labels, 17 more references are linked `exact`, all
+  of them right (`exact` precision stays 0.998), and ambiguous answers fall from 203 to 185.
 - Building the file reference graph (behind rankings, `overview`, `hotspots` and `areas`, and most of a cold index
   of a large repo) is faster. A TypeScript type reference read the namespaces of each candidate's file again for
   every candidate, a Go import scanned every Go file to find the package it names, and two free functions of one name

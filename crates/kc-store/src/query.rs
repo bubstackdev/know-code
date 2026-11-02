@@ -596,11 +596,14 @@ impl Def {
             None => true,
             Some(r) => self.declaring.as_deref().is_some_and(|c| last_segment(c) == last_segment(r)),
         };
-        if self.extension && !as_static {
-            let Some(min) = self.min_args else { return true };
-            return args >= min && self.max_args.is_none_or(|m| args <= m);
+        let Some(min) = self.min_args else { return true };
+        let fits = |n: u32| n >= min && self.max_args.is_none_or(|m| n <= m);
+        match (self.extension, as_static) {
+            (true, false) => fits(args),
+            // Called as a static method, an extension method's first argument is its receiver.
+            (true, true) => args > 0 && fits(args - 1),
+            (false, _) => fits(args),
         }
-        self.accepts(args)
     }
 }
 
@@ -2433,9 +2436,10 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
     if hit.kind == "call"
         && let Some(n) = hit.args
     {
-        // Narrowed as either call form allows: the receiver-aware fit only rules a call out (see `takes_none`), never
-        // picks among overloads, as an outside type's own method may be the one a value's call reaches.
-        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
+        // Narrowed as the call's form allows: an extension method called on a value takes no argument for its
+        // receiver, so an overload taking one fewer can't be the one called (`builder.Register<T>(f)` is no call of
+        // `Register<T, U>(this Builder b)`).
+        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| if hit.file.ends_with(".cs") { d.accepts_call(hit, n) } else { d.accepts(n) }).collect();
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
