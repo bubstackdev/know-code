@@ -259,7 +259,9 @@ generic or `object` parameter passed on) is the helper's caller's, at the call; 
 file (`Publish(Build(…))`) has that method's return type. Consumers include MassTransit state machines (their
 `Event<X>` and `Schedule<…, X>` properties) and registrations closing a generic consumer over a message
 (`AddConsumer<MailConsumer<X>>()`, `AddMailConsumer<X>()`), at the registration. Each link is exact (both sides name
-the same declared message type) or ambiguous (the bare name only)."#,
+the same declared message type) or ambiguous (the bare name only). For a message type, `callers` holds only the uses
+inside its publishers and consumers, each with `bus` (publisher, consumer); its other uses (a construction in a mapper
+or a test builder, a type mention) are `users`, with `users_total` and their own `users_cursor`."#,
     },
     Topic {
         name: "kc_context.sql",

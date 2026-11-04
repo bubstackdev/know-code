@@ -60,6 +60,8 @@ mod refs_target_tests;
 mod ts_local_scope_tests;
 #[cfg(test)]
 mod table_context_tests;
+#[cfg(test)]
+mod bus_context_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;

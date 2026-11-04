@@ -7063,7 +7063,7 @@ pub fn refs_named_map<T>(
     Ok(out)
 }
 
-fn summarize(hits: &[RefHit]) -> RefSummary {
+pub fn summarize(hits: &[RefHit]) -> RefSummary {
     let mut s = RefSummary { total: hits.len(), ..Default::default() };
     for h in hits {
         *s.by_confidence.entry(h.confidence).or_default() += 1;

@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The context of a bus message type separates its publishers and consumers from its other uses. Its `callers` now holds
+  only the uses inside a publisher or consumer the bus section links, each with `bus` (`publisher` or `consumer`); the
+  rest (a `new X()` in a mapper or a test builder, a type mention) move to a new `users` list, with `users_total`,
+  `users_note` and their own cursor. Nothing is dropped: a reader of `callers` for a message type finds the moved rows
+  in `users`. The context of any other symbol is unchanged.
 - `refs` asked by a place (`file:line`) answers for that declaration alone. Rows bound only to another declaration
   of the name (another overload, a same-named member) are no longer listed among its references. They are counted per
   declaration in `elsewhere`, with how to list them. Uses that can't be placed (unresolved, or ambiguous with no
