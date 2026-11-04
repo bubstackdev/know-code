@@ -179,6 +179,27 @@ runs beyond class loading.
 Two labelling passes, each in a container of its own, must build identical labels. The labels are committed and
 frozen before KnowCode's routes on these repositories are read.
 
+### The Spring set
+
+[jvm/labels.jsonl](jvm/labels.jsonl): 119 routes, one row per repository, method and path, with the handlers Spring
+gives (`pkg.Class#method`); [jvm/programs.json](jvm/programs.json): each module listed and the directories of its main
+code. Every listed module listed its mappings; none of the routes has a `${…}` placeholder.
+
+| Repository | Routes |
+| --- | ---: |
+| jhipster/jhipster-sample-app | 38 |
+| spring-petclinic/spring-petclinic-rest | 37 |
+| spring-petclinic/spring-petclinic-kotlin (Kotlin) | 18 |
+| spring-petclinic/spring-petclinic-microservices | 16 |
+| sqshq/piggymetrics | 10 |
+
+Two labelling passes, each in a container of its own, built identical labels and program records;
+[jvm/listings.sha256](jvm/listings.sha256) holds each listing's digest over its sorted lines. Two labeller fixes were
+made before the passes, while no label existed: spring-petclinic-kotlin's build asks for a Java 17 toolchain, so its
+image is Java 17's (not 21's); and Spring 5.0's logging in piggymetrics writes to standard output, so only the listers'
+rows are kept from it (`label.sh`). These labels were committed before KnowCode's routes on these repositories were
+read.
+
 ## routes-v1.1: configuration-dependent registrations, and echo's placeholders
 
 routes-v1's rule above is unchanged, and its gate figures are scored under it. routes-v1.1 is a second rule, written

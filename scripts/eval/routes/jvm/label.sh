@@ -72,7 +72,7 @@ run "cd /work/src && : > /out/routes-$REPO.jsonl
          if javac -nowarn -cp \"\$cp\" -d \$out /work/tools/\$cls.java >>$LOG 2>&1 \
             && java -cp \"\$cp:\$out\" \$cls \$(echo \$classes | tr ':' ' ') > \$out/rows 2>>$LOG; then
            found=1
-           sed \"s#^{#{\\\"t\\\": \\\"route\\\", \\\"repo\\\": \\\"$REPO\\\", \\\"framework\\\": \\\"spring\\\", \\\"module\\\": \\\"\$mod\\\", \\\"package\\\": \\\"\$mod\\\", #\" \$out/rows >> /out/routes-$REPO.jsonl
+           { grep '^{\"method\": ' \$out/rows || true; } | sed \"s#^{#{\\\"t\\\": \\\"route\\\", \\\"repo\\\": \\\"$REPO\\\", \\\"framework\\\": \\\"spring\\\", \\\"module\\\": \\\"\$mod\\\", \\\"package\\\": \\\"\$mod\\\", #\"  >> /out/routes-$REPO.jsonl
          else
            status=failed; echo \"listing \$mod with \$cls failed\" >> $LOG
          fi
