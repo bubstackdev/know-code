@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Spring routes, in Java and Kotlin: a handler method's `@RequestMapping` or `@GetMapping` (and the other verbs'
+  shortcuts) is a route it serves, under its controller's `@RequestMapping`, with paths written as strings, constants or
+  their concatenation (Kotlin string templates included). `context` on a handler lists what it serves. A mapping KnowCode can't read is reported as
+  `unsupported`, never given a wrong path. Java and Kotlin files are indexed again on the first query after
+  upgrading.
 - TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
   is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
   one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of

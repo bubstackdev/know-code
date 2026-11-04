@@ -17,6 +17,7 @@ mod kotlin;
 mod manifest;
 mod python;
 mod rust;
+mod spring;
 pub mod sql;
 mod swift;
 pub mod terraform;
