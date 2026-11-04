@@ -29,6 +29,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `Context.header` among its targets or makes the caller one of that method's. On jellyfin-web and hono's sampled
   `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
   `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
+- Maven and Gradle projects are test targets: `knowcode test-targets` (`kc_test_targets`) lists each project with
+  JUnit or TestNG test methods in its Java and Kotlin files, and runs each test alone from the build's root:
+  `mvn test -pl cart -Dtest='org.example.cart.CartTest#adds'` or `./gradlew :juice:test --tests
+  'org.example.juice.JuiceTest.pours'`, with the build's wrapper when it has one. Kotlin methods annotated
+  `@TestFactory` or `@TestTemplate` are tagged `test` too, as Java's are, so Kotlin files are indexed again on the
+  first query after upgrading.
 - Maven and Gradle builds are read. A `pom.xml` is a package named by its coordinates (`groupId:artifactId`), with
   its modules and dependencies; a Gradle build script is its project, with the dependencies it writes as coordinates
   and the projects it depends on, and a settings script names the build's projects. Each project is a declared module

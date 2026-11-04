@@ -1,7 +1,8 @@
 //! Declared test targets: what a repo's manifests say runs its tests, with the tests in each and the command to run
 //! them. SwiftPM test targets (`.testTarget` in `Package.swift`), .NET test projects (a project referencing a test
-//! SDK or framework), `package.json` test scripts (`test`, `test:…`) and Go modules (each `go.mod`, whose packages'
-//! `_test.go` files `go test` runs). Read from the index and the manifests as
+//! SDK or framework), `package.json` test scripts (`test`, `test:…`), Go modules (each `go.mod`, whose packages'
+//! `_test.go` files `go test` runs) and Maven and Gradle projects (their JUnit and TestNG test methods). Read from the
+//! index and the manifests as
 //! declared, never ranked: which tests matter for a change is `test_select`'s question, kept apart from this one.
 
 use std::collections::{HashMap, HashSet};
@@ -32,7 +33,7 @@ pub struct TestCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TestTarget {
-    /// `swiftpm`, `dotnet`, `npm` or `go`.
+    /// `swiftpm`, `dotnet`, `npm`, `go`, `maven` or `gradle`.
     pub kind: &'static str,
     /// The target, project or script name.
     pub name: String,
@@ -57,6 +58,7 @@ pub fn list(root: &Path, store: &Store) -> Result<Vec<TestTarget>> {
     out.extend(dotnet(&tests)?);
     out.extend(npm(root, store, &privacy)?);
     out.extend(go(&tests)?);
+    out.extend(jvm(root, &privacy, &tests)?);
     out.sort_by(|a, b| (&a.manifest, a.line, &a.name).cmp(&(&b.manifest, b.line, &b.name)));
     Ok(out)
 }
@@ -80,7 +82,8 @@ fn quote(s: &str) -> String {
     }
 }
 
-/// A test function or method: container, name, file, line, and its C# namespace when the index knows it.
+/// A test function or method: container, name, file, line, and its C# namespace, or the Java or Kotlin package of its
+/// class, when the index knows it.
 type Found = (Option<String>, String, String, u32, Option<String>);
 
 /// The repo's functions and methods tagged `test`, read from the index once for all its targets: a read per target
@@ -100,7 +103,9 @@ impl Tests<'_> {
         "SELECT s.container, s.name, f.path, s.start_line,
                 CASE WHEN f.lang = 'csharp' THEN coalesce(
                   CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
-                  CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END
+                  CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END)
+                WHEN f.lang IN ('java', 'kotlin') THEN
+                  CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END END
            FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id
           WHERE s.kind IN ('function', 'method') AND (',' || s.tags || ',') LIKE '%,test,%'
           ORDER BY f.path, s.start_line",
@@ -283,6 +288,85 @@ fn go(tests: &Tests) -> Result<Vec<TestTarget>> {
             manifest,
             line,
             dir,
+            tests,
+            tests_total: found.len(),
+        });
+    }
+    Ok(out)
+}
+
+/// Maven and Gradle projects (see [`crate::jvm_builds::projects`]) with test methods: the methods tagged `test` (JUnit 4
+/// and 5's `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory` and `@TestTemplate`; TestNG's `@Test`) in
+/// Java and Kotlin files whose nearest project it is, as with Go modules. Each runs from its build's root, with the
+/// build's wrapper when it has one: `mvn test -pl web -Dtest='org.example.CartTest#adds'`, or
+/// `./gradlew :web:test --tests 'org.example.CartTest.adds'`. A nested class is named by its binary name
+/// (`Outer$Inner`), as both tools match it. A project with no test methods isn't listed: every module of a build would
+/// be, most of them with nothing to run.
+fn jvm(root: &Path, privacy: &Privacy, tests: &Tests) -> Result<Vec<TestTarget>> {
+    let packages = kc_store::manifests::packages(tests.store.conn())?;
+    let projects = crate::jvm_builds::projects(&packages);
+    if projects.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Each test to the project nearest it, of either tool: a nested project's tests are its own.
+    let dirs: HashSet<&str> = projects.iter().map(|p| p.dir.as_str()).collect();
+    let nearest = |file: &str| {
+        let mut dir = dir_of(file);
+        loop {
+            if dirs.contains(dir.as_str()) {
+                return Some(dir);
+            }
+            if dir.is_empty() {
+                return None;
+            }
+            dir = dir_of(&dir);
+        }
+    };
+    let mut by_dir: HashMap<String, Vec<&Found>> = HashMap::new();
+    for t in tests.all()?.iter().filter(|t| t.2.ends_with(".java") || t.2.ends_with(".kt")) {
+        if let Some(d) = nearest(&t.2) {
+            by_dir.entry(d).or_default().push(t);
+        }
+    }
+    // The build's wrapper script beside its root, unless the privacy file blocks it.
+    let wrapper = |dir: &str, script: &str, tool: &str| {
+        let file = under(dir, script);
+        if !privacy.blocks(&file) && root.join(&file).is_file() { format!("./{script}") } else { tool.to_string() }
+    };
+    let mut out = Vec::new();
+    for p in &projects {
+        let Some(found) = by_dir.get(&p.dir) else { continue };
+        let cd = if p.root.is_empty() { String::new() } else { format!("cd {} && ", quote(&p.root)) };
+        let (run, select): (String, fn(&str, &str) -> String) = if p.kind == "maven" {
+            let pl = if p.path.is_empty() { String::new() } else { format!(" -pl {}", quote(&p.path)) };
+            // `-N`: the reactor root alone, not its modules too, where `-Dtest` would fail on each one lacking the test.
+            let only = if p.path.is_empty() && packages.iter().any(|m| m.file == p.manifest && m.targets.iter().any(|t| t.kind == "module")) { " -N" } else { "" };
+            (format!("{cd}{} test{pl}{only}", wrapper(&p.root, "mvnw", "mvn")), |class, method| format!("-Dtest={}", quote(&format!("{class}#{method}"))))
+        } else {
+            let task = if p.path == ":" { ":test".to_string() } else { format!("{}:test", p.path) };
+            (format!("{cd}{} {task}", wrapper(&p.root, "gradlew", "gradle")), |class, method| format!("--tests {}", quote(&format!("{class}.{method}"))))
+        };
+        let tests = found
+            .iter()
+            .take(MAX_TESTS)
+            .map(|(container, test, file, line, package)| {
+                let method = test.trim_matches('`');
+                let class = container.as_deref().unwrap_or_default().replace('.', "$");
+                let class = match package.as_deref().filter(|p| !p.is_empty()) {
+                    Some(pkg) => format!("{pkg}.{class}"),
+                    None => class,
+                };
+                let name = container.as_ref().map_or(method.to_string(), |c| format!("{c}.{method}"));
+                TestCase { name, file: file.clone(), line: *line, command: format!("{run} {}", select(&class, method)) }
+            })
+            .collect();
+        out.push(TestTarget {
+            kind: p.kind,
+            name: p.name.clone(),
+            manifest: p.manifest.clone(),
+            line: p.line,
+            dir: p.dir.clone(),
+            command: run,
             tests,
             tests_total: found.len(),
         });

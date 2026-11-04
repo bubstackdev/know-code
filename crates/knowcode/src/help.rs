@@ -825,6 +825,9 @@ itself. `sections` says for each list whether it is whole (`complete`) and the c
   run with the package manager its lockfile names.
 - Go modules (each `go.mod`): the test functions (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx`) in the
   module's `_test.go` files, `go test ./...` and `go test ./pkg -run '^TestXxx$'` from the module's directory.
+- Maven and Gradle projects with test methods (JUnit 4 and 5, TestNG) in their Java and Kotlin files, from the build's
+  root: `mvn test -pl <module> -Dtest='pkg.Class#method'`, or `gradle :project:test --tests 'pkg.Class.method'`
+  (`./mvnw`, `./gradlew` when the build has a wrapper).
 
 Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
 200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change
