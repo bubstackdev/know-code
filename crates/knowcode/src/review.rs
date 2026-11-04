@@ -118,7 +118,12 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     let ip = ops::ImpactParams { diff: Some(p.diff.clone()), depth: 1, limit: WALK_LIMIT, ..Default::default() };
     let imp = ops::impact_on(&ip, scope, &o, &mut g)?;
     let tp = ops::TestsParams { targets: Vec::new(), diff: Some(p.diff.clone()), limit: p.tests, evidence: String::new() };
-    let tests = ops::tests_on(&tp, &o, &mut g);
+    // Code calling a changed method as it was before (`via_removed` at hop 1) doesn't build against the change: the tests
+    // reaching it are walked to as well.
+    let old_callers: Vec<i64> = imp.data.first().map_or_else(Vec::new, |r| {
+        r.impact.affected.iter().filter(|a| a.via_removed && a.hop == 1 && a.repo.is_none()).map(|a| a.id).collect()
+    });
+    let tests = ops::tests_on_also(&tp, &o, &mut g, &old_callers);
     drop(g);
 
     let mut unsettled: Vec<String> = Vec::new();
@@ -166,7 +171,8 @@ pub fn review(p: &ReviewParams, scope: &Scope) -> Result<Out<Value>> {
     for s in &r.impact.scope {
         symbols.entry(s.file.clone()).or_default().push(symbol_row(&s.qualified, &s.kind, s.line, false));
     }
-    for d in &r.removed {
+    // A method kept with other parameters is among the changed symbols already; only what the change removed is added.
+    for d in r.removed.iter().filter(|d| d.old_signature.is_none()) {
         symbols.entry(d.file.clone()).or_default().push(symbol_row(&d.qualified, d.kind, d.line, true));
     }
     for (file, row) in &mut by_file {

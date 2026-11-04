@@ -6642,8 +6642,9 @@ fn impact_repo(
     let mut impact = crate::tree::impact(g, &ids, p.depth, p.limit)?;
     // The diff's pre-change side: code still naming a definition the change removed.
     let gone = crate::removed::removed(conn, &old_defs, &ids)?;
+    let resigned = crate::removed::resigned(conn, &old_defs, &gone)?;
     let mut removed = Vec::new();
-    if !gone.is_empty() {
+    if !gone.is_empty() || !resigned.is_empty() {
         let mut seen = trace::Reached::default();
         for s in &impact.scope {
             seen.root(s.id);
@@ -6657,7 +6658,7 @@ fn impact_repo(
         let room = p.limit.saturating_sub(impact.affected.len());
         let depth = p.depth.clamp(1, trace::MAX_IMPACT_DEPTH);
         let mut onward = |from: &[i64], room: usize, seen: &mut trace::Reached| crate::tree::dependents(g, 0, from, 1, depth, room, seen);
-        let (more, list, cut) = crate::removed::dependents(conn, &gone, &mut seen, edges, depth, room, &mut onward)?;
+        let (more, list, cut) = crate::removed::dependents(conn, &crate::removed::PreChange { gone: &gone, resigned: &resigned }, &mut seen, edges, depth, room, &mut onward)?;
         // A better way to a symbol listed already replaces its row; each row's class by its nearest way.
         let mut at: HashMap<i64, usize> = impact.affected.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
         for a in more {
@@ -7351,7 +7352,7 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
-        let r = tests_repo(p, &o, &mut g)?;
+        let r = tests_repo(p, &o, &mut g, &[])?;
         drop(g);
         found.extend(r);
         opened.push(o);
@@ -7362,11 +7363,18 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
 /// [`tests`] of one repo the caller has open, walked on a symbol graph it holds under the tests' own evidence policy
 /// (see [`impact_on`]). The answer is `tests`'s for that repo.
 pub(crate) fn tests_on(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Out<Vec<TestsRepo>>> {
+    tests_on_also(p, o, g, &[])
+}
+
+/// [`tests_on`] walking from the symbols `also` too, as if they were changed: for `review`, the code calling a method
+/// as it was before the change, which `impact --diff` reads from the base commit (see [`crate::removed`]). That code no
+/// longer builds against the change, so the tests reaching it are among the tests to run.
+pub(crate) fn tests_on_also(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph, also: &[i64]) -> Result<Out<Vec<TestsRepo>>> {
     let _memo = kc_index::memo_changes();
     let edges = tests_edges(p)?;
     let before = o.consulted.list();
     g.begin_walk(edges.clone());
-    let out = tests_repo(p, o, g).and_then(|found| tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges));
+    let out = tests_repo(p, o, g, also).and_then(|found| tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges));
     o.consulted.reset(before);
     out
 }
@@ -7380,7 +7388,7 @@ fn tests_edges(p: &TestsParams) -> Result<trace::EdgeFilter> {
 }
 
 /// One repo's part of [`tests`], walked on `g` (whose home is `o`); none when no target is in it.
-fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Option<TestsRepo>> {
+fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph, also: &[i64]) -> Result<Option<TestsRepo>> {
     let root = o.root.as_path();
     let conn = o.store.conn();
     let mut ids: Vec<i64> = Vec::new();
@@ -7406,6 +7414,7 @@ fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result
             }
         }
     }
+    ids.extend_from_slice(also);
     changed.sort();
     changed.dedup();
     ids.sort_unstable();
@@ -9488,7 +9497,7 @@ public class OrderStore\n{\n    private readonly ShopContext _db;\n    private r
     }
 
     /// Commits everything in `dir` with a fixed author.
-    fn commit(dir: &Path, msg: &str) {
+    pub(crate) fn commit(dir: &Path, msg: &str) {
         let git = |args: &[&str]| {
             let out = std::process::Command::new("git")
                 .arg("-C")

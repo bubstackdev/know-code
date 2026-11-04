@@ -4,6 +4,18 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `review` and `impact --diff` reach the callers a C# signature change breaks. A call written for a method's old
+  parameters no longer binds to it in the changed tree, so the review listed nothing depending on the change: on
+  serilog, giving `Casing.Format` a third required parameter showed 0 dependent files and 2 tests, where `impact` on the
+  unchanged method finds 2 direct callers (27 near, 16 far). The method's old signature is now read from the base
+  commit, as removed definitions are: the calls passing a number of arguments only it took are affected through it
+  (`removed` lists it with `old_signature`; `via_removed` on the rows), and review lists them as dependents and walks
+  to their tests. That serilog change now reviews with 4 dependent files (the 2 callers `unique_name`, 3 calls of other
+  `Format`s through untyped receivers `ambiguous`) and 43 tests. A call an overload the change left alone also takes
+  is `ambiguous`, never `exact`: adding a parameter to `Padding.Apply(TextWriter, string, …)` lists its 2 callers so,
+  since `Apply(TextWriter, StringBuilder, …)` takes three arguments too (review: 0 to 2 dependent files, 0 to 36
+  tests). A parameter added with a default still takes the old calls, which bind as before.
+
 - C# overloads split between a type and its base types are one set: a call no overload of the receiver's own type can
   take (by the argument types it gives) goes to a base type's overload that can. A lambda or anonymous method is now
   known to be no `string`, number, array or repo class, so `books.Fetch(b => b.Id == 1)` on an `IBooks : IStore<Book>`
