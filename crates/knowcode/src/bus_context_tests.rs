@@ -87,3 +87,74 @@ fn a_message_types_publishers_are_its_callers_and_its_other_uses_are_users() {
     assert!(plain["items"][0].get("users").is_none(), "{plain}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A workspace answer's cursors name every repo it read, so each list the size cap cuts gains a cursor many times the
+/// size of a row; the cap measures them as their handles. A message type's bus links (the answer) stay whole while
+/// its side lists (callers, members, users) are cut and continue by cursor.
+#[test]
+fn cutting_a_side_list_of_a_workspace_answer_keeps_the_bus_links() {
+    use serde_json::json;
+    let link = |i: usize| json!({"confidence": "exact", "file": format!("src/Consumer{i}/Consumers/InvoiceIssuedConsumer.cs"), "line": 20, "repo": format!("Shop.Service{i}"), "role": "consumer", "symbol": "InvoiceIssuedConsumer.Consume"});
+    let used = |i: usize| json!({"cite": {"check": "verified", "text": "await _bus.Publish(new InvoiceIssued(_mapper.Map<Ledgerd.Models.Entities.Invoice>(entity)));"}, "confidence": "unique_name", "evidence": "name_unique", "file": format!("src/Service/Billing{i}.cs"), "from": {"name": "Issue"}, "kind": "instantiate", "line": 54});
+    let mut env = json!({"complete": true, "repo": "workspace", "items": [{
+        "bus": [{"file": "src/Models/Events/InvoiceIssued.cs", "line": 6, "links": (0..8).map(link).collect::<Vec<_>>(), "message": "Ledgerd.Models.Events.InvoiceIssued", "queue": "Billing", "resolution": "exact", "role": "message", "symbol": "InvoiceIssued"}],
+        "callers": (0..5).map(used).collect::<Vec<_>>(), "callers_summary": {"by_confidence": {"unique_name": 5}, "total": 5},
+        "members": (0..10).map(|i| json!({"file": "src/Models/Events/InvoiceIssued.cs", "kind": "property", "line": 7 + i, "name": format!("Field{i}")})).collect::<Vec<_>>(), "members_total": 10,
+        "users": (0..8).map(used).collect::<Vec<_>>(), "users_total": 8,
+        "repo": "Ledgerd", "source": "public record InvoiceIssued(Invoice Invoice);", "source_mode": "full",
+        "symbol": {"file": "src/Models/Events/InvoiceIssued.cs", "kind": "class", "line": 6, "name": "InvoiceIssued"}}]});
+    // A workspace of 300 checkouts, each with a long path: every cursor names them all.
+    let repos: Vec<std::path::PathBuf> = (0..300).map(|i| format!("/home/someone/src/shop/checkouts/a-fairly-long-folder-name/Shop.Service{i}").into()).collect();
+    let scope = Scope { repos, no_sync: false };
+    let lists = ["callers", "users", "members", "bus/0/links"].iter().map(|l| crate::cursor::List::new(format!("/items/0/{l}"), 25, false)).collect();
+    let req = crate::cursor::Request::Context { symbol: "InvoiceIssued".into(), budget: 6000, source: "full".into(), limit: None };
+    crate::cursor::offer(&mut env, req, &scope, lists, &[]);
+    let out = crate::mcp::cap_full(env, 6000);
+    let item = &out["items"][0];
+    assert_eq!(item["bus"][0]["links"].as_array().map(Vec::len), Some(8), "{out}");
+    // The side lists were cut, and continue.
+    assert!(item["users"].as_array().is_some_and(|u| u.len() < 8) && item["users_cursor"].is_string(), "{out}");
+}
+
+/// Cut to fit, a message type's bus links (its publishers and consumers in other repos) continue by `links_cursor`
+/// to exactly the links cut, and `users_note` goes before any of them.
+#[test]
+fn a_message_types_bus_links_cut_to_fit_continue_by_cursor() {
+    const CONSUMERS: usize = 6;
+    let cache = test_cache();
+    let base = cache.dir("bus-links");
+    let l = ledgerd();
+    let mut roots = vec![repo(&base, "ledgerd", &as_refs(&l))];
+    for k in 0..CONSUMERS {
+        let mut m = mailer();
+        m[1].1 = m[1].1.replace("namespace Mailer.Consumers", &format!("namespace Mailer{k}.Consumers"));
+        roots.push(repo(&base, &format!("mailer{k}"), &as_refs(&m)));
+    }
+    let scope = Scope { repos: roots, no_sync: false };
+    let whole = ops::context("InvoiceIssued", 40_000, Default::default(), &scope).unwrap().env;
+    let link_rows = |v: &Value| v.as_array().map(|a| a.iter().map(|r| format!("{}:{}:{}", r["repo"].as_str().unwrap_or(""), r["file"].as_str().unwrap_or(""), r["line"])).collect::<Vec<_>>()).unwrap_or_default();
+    let all = link_rows(&whole["items"][0]["bus"][0]["links"]);
+    assert_eq!(all.iter().filter(|r| r.starts_with("mailer")).count(), CONSUMERS, "{whole}");
+    assert!(whole["items"][0]["users_note"].is_string(), "{whole}");
+    // Small enough that the side lists go and the links are cut.
+    let max = 1_200;
+    let out = crate::mcp::cap_full(whole, max);
+    let item = &out["items"][0];
+    let shown = link_rows(&item["bus"][0]["links"]);
+    assert!(!shown.is_empty() && shown.len() < all.len(), "{out}");
+    assert!(item.get("users_note").is_none(), "{out}");
+    // Cut, the answer says so, and the rest is one cursor away: exactly the links cut, in order.
+    assert_eq!(out["complete"], false, "{out}");
+    let mut got = shown;
+    let mut next = item["bus"][0]["links_cursor"].as_str().map(str::to_string);
+    assert!(next.is_some(), "{out}");
+    while let Some(c) = next {
+        let page = crate::cursor::more(&c).unwrap();
+        assert_eq!(page["list"], "items[0].bus[0].links", "{page}");
+        got.extend(link_rows(&page["items"]));
+        next = page["cursor"].as_str().map(str::to_string);
+        assert!(got.len() <= all.len(), "{page}");
+    }
+    assert_eq!(got, all);
+    let _ = std::fs::remove_dir_all(&base);
+}

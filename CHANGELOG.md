@@ -9,6 +9,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   rest (a `new X()` in a mapper or a test builder, a type mention) move to a new `users` list, with `users_total`,
   `users_note` and their own cursor. Nothing is dropped: a reader of `callers` for a message type finds the moved rows
   in `users`. The context of any other symbol is unchanged.
+- A message type's bus links (its publishers and consumers, in any repo) cut to fit `max_chars` now continue by
+  `links_cursor`, named in the `incomplete` entry's hint and in `size.continue`, as `callers` and `users` do. They were
+  cut with no way to get the rest, and since `users` was added a workspace context could show 1 of 8 links. The size
+  cap also drops `users_note` (the same text in every answer; `kc_help` describes `users`) before it cuts any row.
 - `refs` asked by the place of a member also lists, in `unplaced`, its name's uses on a receiver whose type isn't known
   (`Fetch().Seal()`). They were in no list before: the member's references keep only those that can point at it, and
   these may.

@@ -4065,11 +4065,16 @@ pub fn context_raised(
             lists.push(cursor::List::new(format!("/items/{i}/ansible/{k}"), page, deploy_cut.contains(&(i, *k))));
         }
     }
-    for (i, (_, c, ..)) in found.iter().enumerate() {
+    for (i, (_, c, _, _, bus)) in found.iter().enumerate() {
         let at = format!("/items/{}", repo_items_n + i);
         lists.push(cursor::List::new(format!("{at}/callers"), limits.callers, c.callers_summary.total > c.callers.len()));
         if let Some(u) = &bus_users[i] {
             lists.push(cursor::List::new(format!("{at}/users"), limits.callers, u.total > u.rows.len()));
+        }
+        // A message type's bus links are its publishers and consumers in other repos: whole here, and when the size
+        // cap cuts them they continue by `links_cursor` like any other list, rather than being lost to the answer.
+        for j in 0..bus.len() {
+            lists.push(cursor::List::new(format!("{at}/bus/{j}/links"), limits.callers, false));
         }
         lists.push(cursor::List::new(format!("{at}/callees"), limits.callees, c.callees_total > c.callees.len()));
         lists.push(cursor::List::new(format!("{at}/members"), limits.members, c.members_total > c.members.len()));
