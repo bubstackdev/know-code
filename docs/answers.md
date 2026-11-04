@@ -174,7 +174,8 @@ split three ways, each said by the answer itself:
   an ambiguity between others. `elsewhere_note` says how many and how to list them (`refs` on that declaration's
   place). Nothing about the declaration asked for is missing, so this isn't an `incomplete` entry.
 - `unplaced`: uses of the name the answer can't place (unresolved, or ambiguous with no candidate listed), as rows,
-  with `unplaced_total` and their own `unplaced_cursor`. An `unsupported` entry says some may be the declaration's:
+  with `unplaced_total` and their own `unplaced_cursor`. For a member, these include uses on a receiver whose type
+  isn't known (`Fetch().Seal()`), which the member's `Type.member` references leave out. An `unsupported` entry says some may be the declaration's:
   a reader counting its references can check them, and one that wants only certain rows can leave them out.
 
 A `refs` asked by a name answers for every use of the name, all in `items`, as before.

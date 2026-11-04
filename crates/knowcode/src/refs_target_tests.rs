@@ -81,3 +81,25 @@ fn a_placed_declarations_unplaceable_uses_are_listed_apart_and_continue() {
     assert_eq!(rows, [6, 7]);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A member asked by its place is asked as `Type.member`, which keeps only references that can point at it: a use on a
+/// receiver whose type isn't known (`Fetch().Seal()`) is still said, in `unplaced`, since it may be the member's.
+#[test]
+fn a_placed_members_uses_on_unknown_receivers_are_unplaced() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target-receivers");
+    let mut files = FILES.to_vec();
+    files.push(("src/Loader.cs", "namespace Shop;\npublic class Loader\n{\n    public void Run()\n    {\n        Fetch().Seal();\n        Fetch().Seal();\n    }\n}\n"));
+    let root = repo(&base, "shop", &files);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    let env = ops::refs("src/Crate.cs:4", &[], 50, &scope).unwrap().env;
+    // The member's own rows and the other overload's count are as before.
+    assert_eq!((lines(&env, "items"), env["elsewhere"][0]["rows"].as_u64()), (vec![6], Some(2)), "{env}");
+    let unplaced: Vec<(String, u64)> =
+        env["unplaced"].as_array().unwrap_or_else(|| panic!("{env}")).iter().map(|r| (r["file"].as_str().unwrap().to_string(), r["line"].as_u64().unwrap())).collect();
+    assert_eq!(unplaced, [("src/Loader.cs".to_string(), 6), ("src/Loader.cs".to_string(), 7)], "{env}");
+    assert_eq!(env["unplaced_total"], 2, "{env}");
+    // `p.Seal()` on a `Parcel` is another type's member, known: not among them.
+    assert!(!unplaced.iter().any(|(f, _)| f == "src/Packer.cs"), "{env}");
+    let _ = std::fs::remove_dir_all(&base);
+}
