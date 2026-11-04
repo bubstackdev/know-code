@@ -1,0 +1,13 @@
+// Added with -I by the jvm labeller (eval/routes-v1/README.md, "Java and Kotlin"): writes each project's main runtime
+// classpath and main class directories, for listing its request mappings offline. Never committed into a clone.
+allprojects {
+    tasks.register("kcClasspath") {
+        doLast {
+            def sets = project.extensions.findByName("sourceSets")
+            if (sets != null && sets.findByName("main") != null) {
+                project.file("kc-cp.txt").text = sets.main.runtimeClasspath.files.join(":")
+                project.file("kc-classes.txt").text = sets.main.output.classesDirs.files.join(":")
+            }
+        }
+    }
+}

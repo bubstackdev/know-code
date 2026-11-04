@@ -17,6 +17,7 @@ mod kotlin;
 mod manifest;
 mod python;
 mod rust;
+mod spring;
 pub mod sql;
 mod swift;
 pub mod terraform;
@@ -821,7 +822,8 @@ pub struct FileFacts {
     pub ansible: Vec<AnsibleFact>,
     /// Per call reference (by index in `refs`), its arguments' types as far as the call site tells them, as JSON: an
     /// encoded type or `null` per argument, a named one as `{"n": name, "t": type}` (`["string", {"n": "id", "t":
-    /// null}]`). Absent when an argument is passed `out` or `ref`. Swift: the call's argument labels instead
+    /// null}]`). Absent when an argument is passed `out` or `ref`. A C# call writing type arguments (`Get<Order>(id)`) is
+    /// `{"a": <those types, or null>, "g": <how many type arguments>}`. Swift: the call's argument labels instead
     /// (`{"l": [null, "from"], "t": [null]}`, see `swift::call_labels`).
     pub arg_types: std::collections::BTreeMap<usize, String>,
     /// The member references (by index in `refs`) that assign the member: `x.P = …`, `P = …` in the class declaring
@@ -833,7 +835,8 @@ pub struct FileFacts {
     pub usages: std::collections::BTreeMap<usize, String>,
     /// Per method (by index in `symbols`), its parameters as JSON: their declared types, an encoded type or `null` for
     /// a type parameter of the method or its type, and their names (`{"types": ["string", null], "names": ["s", "x"]}`).
-    /// An extension method's `this` isn't one. C# only.
+    /// An extension method's `this` isn't one. A generic method also has `g`, its own type parameters' number (said
+    /// even without parameters). C# only.
     pub param_types: std::collections::BTreeMap<usize, String>,
     /// Number of ERROR or MISSING nodes tree-sitter produced.
     pub parse_errors: u32,

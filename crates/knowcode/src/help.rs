@@ -102,8 +102,8 @@ Asked by a place (`file:line`, `path#name`), the answer is that declaration's re
 `by_confidence`, `callers` and the cursor count only rows bound to it (its own, or ambiguous with it among the
 candidates). Rows the answer binds only to another declaration of the name (another overload, a same-named member) are
 counted per declaration in `elsewhere` (`qualified`, `file`, `line`, `rows`; `among` for an ambiguity between others),
-with `elsewhere_note`; kc_refs on that file:line lists them. Uses it can't place (unresolved, or ambiguous with no
-candidate listed) are listed apart in `unplaced` (`unplaced_total`, its own `unplaced_cursor`), with an `unsupported`
+with `elsewhere_note`; kc_refs on that file:line lists them. Uses it can't place (unresolved, ambiguous with no
+candidate listed, or for a member a use on a receiver whose type isn't known) are listed apart in `unplaced` (`unplaced_total`, its own `unplaced_cursor`), with an `unsupported`
 entry: some may be the declaration's. A name asked as a name answers for every use of it, as before.
 
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,
@@ -842,6 +842,9 @@ itself. `sections` says for each list whether it is whole (`complete`) and the c
   run with the package manager its lockfile names.
 - Go modules (each `go.mod`): the test functions (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx`) in the
   module's `_test.go` files, `go test ./...` and `go test ./pkg -run '^TestXxx$'` from the module's directory.
+- Maven and Gradle projects with test methods (JUnit 4 and 5, TestNG) in their Java and Kotlin files, from the build's
+  root (`./mvnw`, `./gradlew` when the build has a wrapper): `mvn test -pl <module> -Dtest='pkg.Class#method+method[*]'`,
+  or `gradle :project:test --tests 'pkg.Class.method'` (`jvmTest` for a Kotlin Multiplatform project's tests).
 
 Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
 200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change

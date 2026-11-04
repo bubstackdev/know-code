@@ -31,6 +31,8 @@ if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
 fi
 case $FAMILY in
   go) IMAGE=$GO_IMAGE ;;
+  # Spring: its own labeller (jvm/label.sh), with an image per repository.
+  jvm) exec "$HERE/jvm/label.sh" "$REPO" "$CLONE" "$IO" ;;
   *) echo "run.sh: no labeller for $FAMILY" >&2; exit 2 ;;
 esac
 

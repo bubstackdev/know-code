@@ -359,3 +359,68 @@ fn parameter_types_stored_without_rest_resolve_as_before() {
     assert_eq!(at_line(conn, "Info", 20), [("exact", vec![19])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const LOOKUP: &str = r#"namespace App;
+
+public class Lookup
+{
+    public object Find(object key) => key;
+    public T Find<T>(object key) => default;
+    public TOut Find<TIn, TOut>(object key) => default;
+    public void Use(object k)
+    {
+        Find<Order>(k);
+        this.Find<Order, Product>(k);
+        Find(k);
+        Find<Order, Product, Product>(k);
+    }
+}
+"#;
+
+/// A call writing type arguments (`Find<Order>(k)`) binds only an overload declaring that many type parameters of its
+/// own, which its argument count and types can't tell (`k`'s type isn't known). One writing none may infer them, so
+/// every overload stays; one no overload fits in number was misread, and they all stay too.
+#[test]
+fn type_arguments_written_pick_the_overload_with_as_many_type_parameters() {
+    let root = scratch("overload-type-args");
+    write(&root, "src/App/Lookup.cs", LOOKUP);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    assert_eq!(at_line(conn, "Find", 10), [("exact", vec![6])]);
+    assert_eq!(at_line(conn, "Find", 11), [("exact", vec![7])]);
+    assert_eq!(at_line(conn, "Find", 12), [("ambiguous", vec![5, 6, 7])]);
+    assert_eq!(at_line(conn, "Find", 13), [("ambiguous", vec![5, 6, 7])]);
+    // Rows stored before the count was (no `g`): as before, every overload a candidate.
+    conn.execute("UPDATE symbols SET param_types = json_remove(param_types, '$.g') WHERE param_types LIKE '%\"g\"%'", []).unwrap();
+    assert_eq!(at_line(conn, "Find", 10), [("ambiguous", vec![5, 6, 7])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+const TRACERS: &str = r#"namespace App;
+
+public class Tracer { }
+public interface IContainer { }
+public static class ContainerExtensions
+{
+    public static void Subscribe(this IContainer c, Tracer t) { }
+    public static T Subscribe<T>(this IContainer c) where T : Tracer, new()
+    {
+        var t = new T();
+        c.Subscribe(t);
+        return t;
+    }
+}
+"#;
+
+/// A generic overload without parameters (`Subscribe<T>(this IContainer c)`) records its type parameters' number and
+/// no parameter type: it never stands in for one whose parameters an argument's type is checked against.
+#[test]
+fn a_generic_overload_without_parameters_leaves_argument_types_to_the_others() {
+    let root = scratch("overload-type-args-none");
+    write(&root, "src/App/Tracers.cs", TRACERS);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    assert_eq!(at_line(store.conn(), "Subscribe", 11), [("exact", vec![7])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
