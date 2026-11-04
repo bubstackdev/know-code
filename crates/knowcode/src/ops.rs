@@ -3224,6 +3224,60 @@ impl BusOut {
     }
 }
 
+/// Whether `s` is a message type the bus carries (a `message` bus fact).
+fn is_message_type(o: &Opened, s: &query::SymbolRow) -> Result<bool> {
+    Ok(o.store.conn().query_row("SELECT EXISTS(SELECT 1 FROM bus_facts WHERE symbol_id = ?1 AND kind = 'message')", [s.id], |r| r.get(0))?)
+}
+
+/// A message type's uses that neither publish nor consume it (see [`bus_split`]), cut at the page.
+pub struct BusUsers {
+    pub rows: Vec<RefHit>,
+    /// How many there are in all.
+    pub total: usize,
+    /// The callers kept, each as (repo name, file, line), with the bus role (`publisher`, `consumer`) of the link it
+    /// is.
+    roles: Vec<((String, String, u32), &'static str)>,
+}
+
+/// Splits a message type's callers (fix 4): those inside one of its bus links (the publishing method, or the
+/// consumer: its class or a member of it, in the link's repo and file) stay in `callers`, tagged with the link's role;
+/// the rest (a `new X()` in a mapper or a test builder, a type mention) are its users. Each list is cut at `page`, in
+/// the callers' order, so a cursor's raised page lists a longer prefix of both. `here` is the context's repo name.
+fn bus_split(ctx: &mut Context, bus: &[BusOut], here: &str, page: usize) -> BusUsers {
+    let links: Vec<&BusLinkOut> = bus.iter().filter(|b| b.role == "message").flat_map(|b| b.links.iter()).collect();
+    let role_of = |h: &RefHit| -> Option<&'static str> {
+        let repo = h.repo.as_deref().unwrap_or(here);
+        let from = h.from.as_ref().map(|f| f.container.as_ref().map_or_else(|| f.name.clone(), |c| format!("{c}.{}", f.name)))?;
+        links.iter().find_map(|l| {
+            if l.repo != repo || l.file != h.file {
+                return None;
+            }
+            let class = l.symbol.rsplit_once('.').map_or(l.symbol.as_str(), |(c, _)| c);
+            let inside = from == l.symbol || (l.role == "consumer" && (from == class || from.starts_with(&format!("{class}."))));
+            inside.then_some(l.role)
+        })
+    };
+    let (mut kept, mut rest): (Vec<RefHit>, Vec<RefHit>) = (Vec::new(), Vec::new());
+    let mut roles = Vec::new();
+    for h in std::mem::take(&mut ctx.callers) {
+        match role_of(&h) {
+            Some(role) => {
+                if kept.len() < page {
+                    roles.push(((h.repo.clone().unwrap_or_else(|| here.to_string()), h.file.clone(), h.line), role));
+                }
+                kept.push(h);
+            }
+            None => rest.push(h),
+        }
+    }
+    ctx.callers_summary = query::summarize(&kept);
+    kept.truncate(page);
+    ctx.callers = kept;
+    let total = rest.len();
+    rest.truncate(page);
+    BusUsers { rows: rest, total, roles }
+}
+
 /// The bus facts about a context's symbol. The workspace summary is read only when the repo has a bus fact for it.
 fn bus_for(o: &Opened, ctx: &Context) -> Result<(Vec<BusOut>, Vec<kc_store::unsupported::Site>)> {
     let s = &ctx.symbol;
@@ -3601,6 +3655,8 @@ pub fn context_raised(
     }
     let mut named_like = Vec::new();
     let mut found = Vec::new();
+    // Per found symbol, for a bus message type: the uses of it that neither publish nor consume it (see `bus_split`).
+    let mut bus_users: Vec<Option<BusUsers>> = Vec::new();
     let mut tables = Vec::new();
     let mut table_hits = Vec::new();
     let mut sql = Vec::new();
@@ -3623,7 +3679,21 @@ pub fn context_raised(
         }
         let mut imported = query::context_imports(o.store.conn(), symbol)?;
         let mut deps = open_dependencies_importing(&o, Some(&imported), args.no_sync)?;
-        let mut found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &limits, &dependency_refs(&deps))?;
+        // A bus message type (fix 4): its callers are split into those publishing or consuming it and the rest, each
+        // cut at the page, so the one read keeps every caller (the context builds them all before cutting anyway).
+        let message = match query::definitions(o.store.conn(), symbol)?.first() {
+            Some(s) => is_message_type(&o, s)?,
+            None => false,
+        };
+        let read_limits = ContextLimits {
+            source_chars: limits.source_chars,
+            members: limits.members,
+            callers: if message { usize::MAX } else { limits.callers },
+            callees: limits.callees,
+            conformers: limits.conformers,
+            source: limits.source,
+        };
+        let mut found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &read_limits, &dependency_refs(&deps))?;
         // The file's content differs from the index although its stat didn't move (an edit keeping mtime and size):
         // index it again and answer from that.
         if !args.no_sync && !o.refresh_pending && let Some(file) = found_ctx.as_ref().filter(|c| c.source_changed).map(|c| c.symbol.file.clone()) {
@@ -3635,7 +3705,7 @@ pub fn context_raised(
             }
             imported = query::context_imports(o.store.conn(), symbol)?;
             deps = open_dependencies_importing(&o, Some(&imported), args.no_sync)?;
-            found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &limits, &dependency_refs(&deps))?;
+            found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &read_limits, &dependency_refs(&deps))?;
         }
         // A stored procedure (or table) the repo's code calls but another repo defines: its definition there.
         if found_ctx.is_none()
@@ -3660,6 +3730,9 @@ pub fn context_raised(
             }
         }
         if let Some(mut ctx) = found_ctx {
+            // The message type read uncut above is the one found (a symbol found elsewhere was read at the page).
+            let message = message && ctx.callers_summary.total == ctx.callers.len() && is_message_type(&o, &ctx.symbol)?;
+            let caller_cap = if message { usize::MAX } else { limits.callers };
             // Callers in repos that depend on this one.
             let s = &ctx.symbol;
             let (name, kinds): (String, Vec<&str>) = if s.kind == "init" {
@@ -3718,11 +3791,13 @@ pub fn context_raised(
                 if target_id.is_some() {
                     *ctx.callers_summary.by_confidence.entry(h.confidence).or_default() += 1;
                     ctx.callers_summary.total += 1;
-                    if ctx.callers.len() < limits.callers {
+                    if ctx.callers.len() < caller_cap {
                         ctx.callers.push(h);
                     }
                 }
             }
+            let (bus, mut unknown_publishes) = bus_for(&o, &ctx)?;
+            let mut users = if message { Some(bus_split(&mut ctx, &bus, &repo_name(&o.root), limits.callers)) } else { None };
             // A library's interface or base class: its implementations and subclasses in the repos using it.
             ctx.conformers_elsewhere = dependent_conformers(&o, &ctx.symbol, None, args.no_sync)?;
             let n = ctx.conformers_elsewhere.len();
@@ -3754,17 +3829,23 @@ pub fn context_raised(
                 own.cut = None;
                 ctx.cite = Some(own);
                 citer.refs(&o.root, ctx.callers.iter_mut());
+                if let Some(u) = users.as_mut() {
+                    citer.refs(&o.root, u.rows.iter_mut());
+                }
                 // A callee's statement is in the symbol's source when the answer quotes those lines.
                 let shown = source_shows(&ctx);
                 citer.refs_in_source(&o.root, ctx.callees.iter_mut(), |line| shown.iter().any(|r| r.contains(&line)));
                 unread.extend(citer.incomplete());
-                for h in &mut ctx.callers {
+                for h in ctx.callers.iter_mut().chain(users.iter_mut().flat_map(|u| u.rows.iter_mut())) {
                     if h.cite.as_ref().is_some_and(|c| c.text.is_some()) {
                         h.code = None;
                     }
                 }
             } else if source != kc_store::skeleton::SourceMode::None {
                 fill_call_lines(&o.root, &mut ctx.callers);
+                if let Some(u) = users.as_mut() {
+                    fill_call_lines(&o.root, &mut u.rows);
+                }
             }
             // No resolved caller of a callable: say so, and how many references by its name resolve elsewhere.
             let callable = matches!(ctx.symbol.kind.as_str(), "method" | "function" | "init" | "property");
@@ -3786,7 +3867,6 @@ pub fn context_raised(
             let t = db::for_symbol(o.store.conn(), &model, &ctx.symbol, limits.callers)?;
             sql.push(sql_facts(&o, &ctx, &t, limits.callers, args.no_sync)?);
             tables.push(t);
-            let (bus, mut unknown_publishes) = bus_for(&o, &ctx)?;
             unknown_publishes.extend(unplaced);
             let di_found = ctx.di.as_ref().is_some_and(|d| !d.registrations.is_empty() || !d.registered_as.is_empty() || d.injection_sites > 0)
                 || !ctx.di_implementers.is_empty();
@@ -3809,6 +3889,7 @@ pub fn context_raised(
                 Vec::new()
             });
             found.push((o.root.clone(), ctx, http, angular, bus));
+            bus_users.push(users);
         } else if let Some(file) = indexed_file(&o, symbol)? {
             // A file: its top-level declarations, its area, and the notes on its symbols.
             let page = raise.map_or(FILE_DECLARATIONS, |r| r.max(FILE_DECLARATIONS));
@@ -3884,6 +3965,24 @@ pub fn context_raised(
             }
             if !bus.is_empty() {
                 v["bus"] = json!(bus);
+            }
+            if let Some(u) = &bus_users[i] {
+                if let Some(rows) = v["callers"].as_array_mut() {
+                    for r in rows {
+                        let here = repo_name(root);
+                        let at = (r["repo"].as_str().unwrap_or(&here).to_string(), r["file"].as_str().unwrap_or("").to_string(), r["line"].as_u64().unwrap_or(0) as u32);
+                        if let Some((_, role)) = u.roles.iter().find(|(k, _)| *k == at) {
+                            r["bus"] = json!(role);
+                        }
+                    }
+                }
+                if u.total > 0 {
+                    v["users"] = json!(u.rows);
+                    v["users_total"] = json!(u.total);
+                    v["users_note"] = json!(
+                        "uses of the message type that neither publish nor consume it (constructions, mappings, type mentions); `callers` holds those that do"
+                    );
+                }
             }
             if let Some(a) = angular {
                 v["angular"] = json!(a);
@@ -3969,6 +4068,9 @@ pub fn context_raised(
     for (i, (_, c, ..)) in found.iter().enumerate() {
         let at = format!("/items/{}", repo_items_n + i);
         lists.push(cursor::List::new(format!("{at}/callers"), limits.callers, c.callers_summary.total > c.callers.len()));
+        if let Some(u) = &bus_users[i] {
+            lists.push(cursor::List::new(format!("{at}/users"), limits.callers, u.total > u.rows.len()));
+        }
         lists.push(cursor::List::new(format!("{at}/callees"), limits.callees, c.callees_total > c.callees.len()));
         lists.push(cursor::List::new(format!("{at}/members"), limits.members, c.members_total > c.members.len()));
         lists.push(cursor::List::new(format!("{at}/conformers"), limits.conformers, c.conformers_total.is_some()));
