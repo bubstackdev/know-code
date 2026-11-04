@@ -7,7 +7,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - C#: a call writing type arguments (`Find<Order>(key)`, `x.Get<A, B>()`) is linked only to the overloads declaring
   that many type parameters of their own, when some do. Before, `Find<Order>(key)` was an ambiguous candidate of every
   `Find` taking one argument whose type the call site didn't tell, `Find(object)` included. A call writing none is
-  unchanged (its type arguments may be inferred). C# files are extracted again on the first query after upgrading.
+  unchanged (its type arguments may be inferred). On identity-v1's C# labels (serilog, autofac, jellyfin-server; 1,931
+  labels), 10 references go from ambiguous to the right `exact` link and none gets worse: recall (linked) goes from
+  0.768 to 0.776 (987 to 997 of 1,285 labels inside the repositories), ambiguous answers fall from 185 to 175, and
+  `exact` precision stays 0.998 (879 of 881). C# files are extracted again on the first query after upgrading.
 - TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
   is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
   one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
