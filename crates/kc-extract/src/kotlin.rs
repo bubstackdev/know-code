@@ -17,7 +17,7 @@ use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// How many enclosing lambdas' functions a reference keeps, innermost first.
 const LAMBDAS_KEPT: usize = 4;
@@ -320,7 +320,7 @@ impl<'a> Cx<'a> {
         let signature = collapse(self.src[node.start_byte()..end].trim_end_matches(['=', ' ', '{']), SIGNATURE_CAP);
         let attrs = annotations(self.src, node);
         let mut tags = Vec::new();
-        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest")) {
+        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest" | "TestFactory" | "TestTemplate")) {
             tags.push("test");
         }
         if kind == SymbolKind::Function && name == "main" {
