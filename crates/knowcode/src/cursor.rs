@@ -858,6 +858,16 @@ pub fn more(cursor: &str) -> Result<Value> {
             out[k] = v.clone();
         }
     }
+    // A workspace-wide answer's nested list (`items[0].callers`) belongs to its item's repo, and its rows name a repo
+    // only when it is another: the page says the item's repo, as the first answer's item did, so a reader can place
+    // the rows. The rows themselves are untouched (their hash continues the cursor).
+    if env["repo"] == "workspace"
+        && let Some((parent, _)) = c.l.rsplit_once('/')
+        && !parent.is_empty()
+        && let Some(owner) = env.pointer(parent).and_then(|o| o.get("repo")).and_then(Value::as_str)
+    {
+        out["repo"] = Value::from(owner);
+    }
     // What made the request's answer partial besides its own cuts (unreadable files, stale data) holds for the page.
     let carried: Vec<kc_store::answer::Incomplete> = crate::contract::incomplete_of(&env)
         .into_iter()

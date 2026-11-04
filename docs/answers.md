@@ -185,7 +185,8 @@ A `refs` asked by a name answers for every use of the name, all in `items`, as b
 A list that was cut and can be continued carries a cursor: `cursor` for the answer's own `items`, `<list>_cursor`
 beside a nested list (`items[0].callers_cursor`). Pass it unchanged to `knowcode more <cursor>` or `kc_more`. Each
 page is `{list, items, offset, total, cursor}` and has its own cursor until the list ends; its rows are the list's
-own (over MCP, a search's hits are text rows there too).
+own (over MCP, a search's hits are text rows there too). A page of a workspace answer's nested list says the repo of
+the item the list belongs to as its `repo`, and its rows name a repo only when it is another, as on the first page.
 
 - Following every cursor gives each row of the full list exactly once. For a walk's ranked list (impact's
   `affected`, a path search's `paths`), the rows shown first come first, then the rest of the walk, ranked the

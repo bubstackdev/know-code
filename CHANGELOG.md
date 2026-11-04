@@ -8,6 +8,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   a repo holding rows of the list moving on (or the rows delivered changing) refuses it. In a workspace that is still
   indexing, paging through `impact`, `refs` or a context's callers used to fail on the first `more` whenever any repo
   the answer had looked into for cross-repo links moved on. A cursor made by an earlier build is refused once (ask again).
+- A page of a workspace answer's nested list (`items[0].callers`, `.users`, `.members`) says the repo of the item it
+  belongs to as its `repo`, where it said `workspace`, which left rows without their own `repo` unplaceable.
 - C# overloads split between a type and its base types are one set: a call no overload of the receiver's own type can
   take (by the argument types it gives) goes to a base type's overload that can. A lambda or anonymous method is now
   known to be no `string`, number, array or repo class, so `books.Fetch(b => b.Id == 1)` on an `IBooks : IStore<Book>`
