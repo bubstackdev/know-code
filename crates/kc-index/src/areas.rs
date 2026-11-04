@@ -211,7 +211,15 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
     let files: Vec<&str> = areas.areas.iter().flat_map(|a| a.files.iter()).chain(&areas.ungrouped).map(String::as_str).collect();
     let under = |dir: &str, f: &str| dir.is_empty() || f.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'));
     let mut modules: Vec<Module> = Vec::new();
-    for p in kc_store::manifests::packages(store.conn())? {
+    // Gradle settings scripts last: a project's own build script names it first, and an `include` only adds the
+    // projects that have none.
+    let mut packages = kc_store::manifests::packages(store.conn())?;
+    let is_settings = crate::jvm_builds::is_gradle_settings;
+    packages.sort_by_key(is_settings);
+    // A build script is a project only of a build that includes it (see `GradleBuilds::build_of`).
+    let builds = crate::jvm_builds::GradleBuilds::new(&packages);
+    let in_its_build = |dir: &str| builds.build_of(dir).is_some();
+    for p in packages {
         let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
         let join = |parts: &[&str]| parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("/");
         let mut add = |name: &str, kind: &str, dir: String| {
@@ -231,7 +239,17 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
                     add(&t.name, &t.kind, join(&[base, sub, &t.name]));
                 }
             }
-            "csproj" | "npm" | "cargo" | "gomod" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
+            "csproj" | "npm" | "cargo" | "gomod" | "maven" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
+            // A Gradle project is its build script's directory; a settings script's `include`s name the build's
+            // projects (`:web:admin` is `web/admin`), which may have no build script of their own.
+            "gradle" => {
+                for t in p.targets.iter().filter(|t| t.kind == "module") {
+                    add(&t.name, &p.kind, join(&[base, &t.name.replace(':', "/")]));
+                }
+                if !p.name.is_empty() && p.name != "(workspace)" && !is_settings(&p) && in_its_build(base) {
+                    add(&p.name, &p.kind, base.to_string());
+                }
+            }
             _ => {}
         }
     }

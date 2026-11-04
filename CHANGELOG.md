@@ -13,6 +13,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   their concatenation (Kotlin string templates included). `context` on a handler lists what it serves. A mapping KnowCode can't read is reported as
   `unsupported`, never given a wrong path. Java and Kotlin files are indexed again on the first query after
   upgrading.
+- Kotlin: in a lambda with a receiver (`x.apply { … }`, `with(x) { … }`, a lambda passed to a function of the repo's
+  taking a `T.() -> R`), a bare name is the receiver type's member or extension when that type is the repo's, and the
+  enclosing code's when the receiver has none of that name. Before, every such name was only a candidate. A trailing
+  lambda after arguments (`with(x) { … }`, `transaction(db) { … }`) is now read as passed to that function too; there,
+  a name on a receiver whose type can't be told is a candidate. On identity-v2's Kotlin labels, 20 more references are
+  linked `exact`, all of them right (`exact` precision stays 1.000, recall (linked) 0.492 to 0.514, no outside label
+  linked). Kotlin files are indexed again on the first query after upgrading.
+- C#: a call writing type arguments (`Find<Order>(key)`, `x.Get<A, B>()`) is linked only to the overloads declaring
+  that many type parameters of their own, when some do. Before, `Find<Order>(key)` was an ambiguous candidate of every
+  `Find` taking one argument whose type the call site didn't tell, `Find(object)` included. A call writing none is
+  unchanged (its type arguments may be inferred). On identity-v1's C# labels (serilog, autofac, jellyfin-server; 1,931
+  labels), 10 references go from ambiguous to the right `exact` link and none gets worse: recall (linked) goes from
+  0.768 to 0.776 (987 to 997 of 1,285 labels inside the repositories), ambiguous answers fall from 185 to 175, and
+  `exact` precision stays 0.998 (879 of 881). C# files are extracted again on the first query after upgrading.
 - TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
   is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
   one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
@@ -21,6 +35,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   label is newly wrong. The index schema moves to 25 (each declaration's scope), so the first query after upgrading
   indexes each repo again, at the same cost as a cold index (hono 15.6 G instructions, jellyfin 108 G); builds of
   schema 24 sharing the cache keep their own indexes.
+- An MCP answer is cut to its size in the call's own lane, and cutting stops when the call is cancelled (its
+  client gone, or its deadline passed): a cancelled call no longer keeps a core busy cutting an answer nobody reads.
 - An answer naming many files no longer takes time growing with their square to say which of them have parse
   errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
   workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of
@@ -38,6 +54,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `Context.header` among its targets or makes the caller one of that method's. On jellyfin-web and hono's sampled
   `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
   `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
+- Maven and Gradle projects are test targets: `knowcode test-targets` (`kc_test_targets`) lists each project with
+  JUnit or TestNG test methods in its Java and Kotlin files, and runs each test alone from the build's root: `mvn test
+  -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` or `./gradlew :juice:test --tests
+  org.example.juice.JuiceTest.pours --tests 'org.example.juice.JuiceTest.pours[*]'` (a JUnit 4 parameterized method's
+  cases included; a Kotlin Multiplatform project's tests in `jvmTest`), with the build's wrapper when it has one. The
+  commands were run in a container on google/gson and square/kotlinpoet: each ran exactly its test. Kotlin methods
+  annotated `@TestFactory` or `@TestTemplate` are tagged `test` too, as Java's are, so Kotlin files are indexed again
+  on the first query after upgrading.
+- Maven and Gradle builds are read. A `pom.xml` is a package named by its coordinates (`groupId:artifactId`), with
+  its modules and dependencies; a Gradle build script is its project, with the dependencies it writes as coordinates
+  and the projects it depends on, and a settings script names the build's projects. Each project is a declared module
+  in `areas`, and a dependency on a package another indexed repo builds links the two repos, as other manifests'
+  registry dependencies do. The files are read as text, never run: plugins, properties, profiles and version
+  catalogs aren't resolved.
 - A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
   list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
   sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
