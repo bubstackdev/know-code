@@ -2028,6 +2028,22 @@ fn refs_in_for(
             }
         }
         if let Some(d) = target {
+            // A member asked as `Type.member` keeps only the references that can point at it, which leaves out uses
+            // on a receiver whose type isn't known (`Fetch().Seal()`): those can't be placed, and some may be `d`'s,
+            // so they go to `unplaced` too, after the rest the answer can't place.
+            let mut unknown_receivers = Vec::new();
+            if name.contains('.') {
+                let seen: HashSet<(String, u32, u32)> = hits.iter().map(|h| (h.file.clone(), h.line, h.col)).collect();
+                let (all, _) = query::refs_with(o.store.conn(), bare, &kinds, usize::MAX, &dep_refs)?;
+                for h in all {
+                    if !seen.contains(&(h.file.clone(), h.line, h.col))
+                        && h.confidence != "external_likely"
+                        && matches!(binding(&o.root, &h, d), Binding::Unplaced)
+                    {
+                        unknown_receivers.push((o.root.clone(), h));
+                    }
+                }
+            }
             let mut kept = Vec::with_capacity(hits.len());
             for h in hits {
                 match binding(&o.root, &h, d) {
@@ -2054,6 +2070,7 @@ fn refs_in_for(
                     }
                 }
             }
+            unplaced.extend(unknown_receivers);
             hits = kept;
             summary.total = hits.len();
             summary.by_confidence = BTreeMap::new();

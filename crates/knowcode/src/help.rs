@@ -102,8 +102,8 @@ Asked by a place (`file:line`, `path#name`), the answer is that declaration's re
 `by_confidence`, `callers` and the cursor count only rows bound to it (its own, or ambiguous with it among the
 candidates). Rows the answer binds only to another declaration of the name (another overload, a same-named member) are
 counted per declaration in `elsewhere` (`qualified`, `file`, `line`, `rows`; `among` for an ambiguity between others),
-with `elsewhere_note`; kc_refs on that file:line lists them. Uses it can't place (unresolved, or ambiguous with no
-candidate listed) are listed apart in `unplaced` (`unplaced_total`, its own `unplaced_cursor`), with an `unsupported`
+with `elsewhere_note`; kc_refs on that file:line lists them. Uses it can't place (unresolved, ambiguous with no
+candidate listed, or for a member a use on a receiver whose type isn't known) are listed apart in `unplaced` (`unplaced_total`, its own `unplaced_cursor`), with an `unsupported`
 entry: some may be the declaration's. A name asked as a name answers for every use of it, as before.
 
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,

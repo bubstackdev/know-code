@@ -4,6 +4,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `refs` asked by the place of a member also lists, in `unplaced`, its name's uses on a receiver whose type isn't known
+  (`Fetch().Seal()`). They were in no list before: the member's references keep only those that can point at it, and
+  these may.
 - `refs` asked by a place (`file:line`) answers for that declaration alone. Rows bound only to another declaration
   of the name (another overload, a same-named member) are no longer listed among its references. They are counted per
   declaration in `elsewhere`, with how to list them. Uses that can't be placed (unresolved, or ambiguous with no
