@@ -88,6 +88,25 @@ fn a_message_types_publishers_are_its_callers_and_its_other_uses_are_users() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A page of a workspace answer's nested list says the repo of the item the list belongs to, not "workspace": its rows
+/// name a repo only when it is another, as on the first page.
+#[test]
+fn a_page_of_a_workspace_answers_nested_list_says_its_items_repo() {
+    let cache = test_cache();
+    let base = cache.dir("bus-context-page-repo");
+    let ledger = repo(&base, "ledgerd", &as_refs(&ledgerd()));
+    let mailer = repo(&base, "mailer", &as_refs(&mailer()));
+    let scope = Scope { repos: vec![ledger, mailer], no_sync: false };
+    let first = ops::context("InvoiceIssued", 360, Default::default(), &scope).unwrap().env;
+    assert_eq!(first["repo"], "workspace", "{first}");
+    let item = &first["items"][0];
+    assert_eq!(item["repo"], "ledgerd", "{first}");
+    let c = item["users_cursor"].as_str().unwrap_or_else(|| panic!("{first}"));
+    let page = crate::cursor::more(c).unwrap();
+    assert_eq!((page["list"].as_str(), page["repo"].as_str()), (Some("items[0].users"), Some("ledgerd")), "{page}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A workspace answer's cursors name every repo it read, so each list the size cap cuts gains a cursor many times the
 /// size of a row; the cap measures them as their handles. A message type's bus links (the answer) stay whole while
 /// its side lists (callers, members, users) are cut and continue by cursor.
