@@ -195,10 +195,10 @@ own (over MCP, a search's hits are text rows there too).
   statement, holds none of its rows.
 - Over MCP a cursor is a short handle (`kc~1f`) that the server maps to the full cursor, for its last 4096 cursors.
 - Lists that continue: definitions found (`find`), references (and a placed `refs` answer's `unplaced`), a context's
-  callers, callees, members, conformers and table accessors, a trace's nodes, impact's `affected`, `coupled` and
-  `cross_repo`, every list of a repo's deploy answer (`deploy_chains`, `deployed_by`, `own`, `ci_templates`,
-  `ci_includes`, `ci_skipped`), a path search's paths and candidate ends, rename sites, and `search` and `grep-ast`
-  hits.
+  callers, callees, members, conformers, table accessors and a SQL definition's `used_by`, a trace's nodes, impact's
+  `affected`, `coupled` and `cross_repo`, every list of a repo's deploy answer (`deploy_chains`, `deployed_by`, `own`,
+  `ci_templates`, `ci_includes`, `ci_skipped`), a path search's paths and candidate ends, rename sites, and `search`
+  and `grep-ast` hits.
 - `search` and `grep-ast` also page with `--offset` and `next_offset`.
 - A rename preview cut by the size cap is `refused`: a partial preview can't be applied as it is.
 

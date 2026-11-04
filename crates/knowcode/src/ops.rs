@@ -1457,6 +1457,12 @@ pub struct SqlFacts {
     pub section: kc_store::sql::SqlSection,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub used_by: Vec<SqlUseOut>,
+    /// `used_by` read only some of the repos naming the definition (see [`HttpCrossing::sql_uses_upto`]): its cursor
+    /// reads on, and `used_by_note` says how many were read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub used_by_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_by_note: Option<String>,
     /// Definitions and databases of the context's `tables`, in order.
     #[serde(skip)]
     pub tables: Vec<TableSql>,
@@ -1482,8 +1488,15 @@ fn sql_facts(o: &Opened, ctx: &Context, tables: &SymbolTables, max_accessors: us
         if kc_store::sql::is_object(s) {
             let summaries = full_summaries(o)?;
             let mut crossing = HttpCrossing::new(o, no_sync);
-            for u in crossing.sql_uses(&o.root, s, &summaries)? {
+            // A table a whole workspace uses: each repo read builds its database model, so a page reads as many repos
+            // as it lists rows at most, and the cursor reads on (fix 5(b): 120 repos took 119 G instructions).
+            let (uses, read, naming) = crossing.sql_uses_upto(&o.root, s, &summaries, Some(max_accessors))?;
+            for u in uses {
                 out.used_by.push(u.out(max_accessors));
+            }
+            if read < naming {
+                out.used_by_truncated = true;
+                out.used_by_note = Some(format!("read {read} of the {naming} repos naming {}; the cursor reads on", s.name));
             }
         }
         return Ok(out);
@@ -3948,6 +3961,9 @@ pub fn context_raised(
             let cut = t.accessors_total.is_some_and(|n| n > t.accessors.len());
             lists.push(cursor::List::new(format!("{at}/tables/{j}/accessors"), limits.callers, cut));
         }
+        if !sql[i].is_empty() {
+            lists.push(cursor::List::new(format!("{at}/sql/used_by"), limits.callers, sql[i].used_by_truncated));
+        }
     }
     // A file's declarations continue too.
     for (i, f) in file_hits.iter().enumerate() {
@@ -5436,6 +5452,18 @@ impl<'a> HttpCrossing<'a> {
     /// tables mapped to it (with their accessors), and calls running it. Only code whose name links to this definition
     /// (see `kc_index::sql`) counts.
     pub(crate) fn sql_uses(&mut self, root: &Path, sym: &query::SymbolRow, summaries: &[kc_index::workspace::RepoSummary]) -> Result<Vec<SqlUse>> {
+        Ok(self.sql_uses_upto(root, sym, summaries, None)?.0)
+    }
+
+    /// [`Self::sql_uses`] reading at most `max_repos` of the repos naming `sym` (in the summaries' order, which a
+    /// cursor relies on), with how many it read and how many name it. A cancelled call stops before the next repo.
+    pub(crate) fn sql_uses_upto(
+        &mut self,
+        root: &Path,
+        sym: &query::SymbolRow,
+        summaries: &[kc_index::workspace::RepoSummary],
+        max_repos: Option<usize>,
+    ) -> Result<(Vec<SqlUse>, usize, usize)> {
         let relation = kc_store::sql::is_relation(sym);
         let kinds = if relation { kc_index::sql::TABLE_KINDS } else { kc_index::sql::ROUTINE_KINDS };
         let sql = kc_index::sql::Sql::new(summaries, Some(&self.home.root));
@@ -5443,7 +5471,15 @@ impl<'a> HttpCrossing<'a> {
         let me = key(&sym.kind, sym.container.as_deref(), &sym.name);
         let name = sym.name.to_lowercase();
         let mut out = Vec::new();
-        for repo in sql.users(&name) {
+        let users = sql.users(&name);
+        let naming = users.len();
+        let mut read = 0;
+        for repo in users {
+            if max_repos.is_some_and(|m| read >= m) {
+                break;
+            }
+            read += 1;
+            kc_store::limits::check()?;
             if !repo.join(".git").exists() {
                 continue;
             }
@@ -5473,7 +5509,7 @@ impl<'a> HttpCrossing<'a> {
                 }
             }
         }
-        Ok(out)
+        Ok((out, read, naming))
     }
 
     /// The code depending on `sym`, a SQL table, view or routine: the methods reading or writing an entity mapped to
