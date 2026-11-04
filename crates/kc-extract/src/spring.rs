@@ -1,7 +1,9 @@
 //! Spring MVC and WebFlux request mappings, shared by the Java and Kotlin extractors: each handler method's routes,
 //! from `@RequestMapping` and its shortcuts (`@GetMapping`, …) on the method, joined with its type's
-//! `@RequestMapping` as Spring joins them. The extractors read the annotations' arguments in their own syntax into
-//! [`Mapping`]s; this module decides which types hold handlers and what routes a method serves.
+//! `@RequestMapping` as Spring joins them; and the requests a declarative client's methods send, a `@FeignClient`'s
+//! (the same annotations, under its `path`) or an `@HttpExchange` interface's (`@GetExchange`, …). The extractors
+//! read the annotations' arguments in their own syntax into [`Mapping`]s; this module decides which types hold
+//! handlers or requests and what routes a method maps.
 //!
 //! A path is stored as the stored-route encoding reads it (`kc_store::query::http_routes`): segments without leading
 //! or trailing `/`, a constant as `{=Name}` (resolved at query time against the repo's string constants), and
@@ -16,23 +18,50 @@ pub struct Mapping {
     pub verbs: Vec<String>,
 }
 
-/// The verb a mapping annotation fixes: `Some(None)` for `@RequestMapping` (its `method` argument says), `Some(verb)`
-/// for a shortcut, `None` for any other annotation.
+/// The verb a mapping annotation fixes: `Some(None)` for `@RequestMapping` and `@HttpExchange` (their `method`
+/// argument says), `Some(verb)` for a shortcut, `None` for any other annotation.
 pub fn annotation_verb(name: &str) -> Option<Option<&'static str>> {
     Some(match name {
-        "RequestMapping" => None,
-        "GetMapping" => Some("GET"),
-        "PostMapping" => Some("POST"),
-        "PutMapping" => Some("PUT"),
-        "DeleteMapping" => Some("DELETE"),
-        "PatchMapping" => Some("PATCH"),
+        "RequestMapping" | "HttpExchange" => None,
+        "GetMapping" | "GetExchange" => Some("GET"),
+        "PostMapping" | "PostExchange" => Some("POST"),
+        "PutMapping" | "PutExchange" => Some("PUT"),
+        "DeleteMapping" | "DeleteExchange" => Some("DELETE"),
+        "PatchMapping" | "PatchExchange" => Some("PATCH"),
         _ => return None,
     })
 }
 
-/// The verb a `method` argument's value names: `RequestMethod.GET`, or `GET` statically imported.
+/// Whether a type's mappings are routes it serves or requests it sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Serves,
+    Requests,
+}
+
+impl Side {
+    /// The stored route's side.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Side::Serves => "server",
+            Side::Requests => "client",
+        }
+    }
+}
+
+/// What a type's mappings are (see [`serves`] and [`is_client`]), if anything.
+pub fn side(annotations: &[String], abstract_type: bool) -> Option<Side> {
+    if is_client(annotations) {
+        Some(Side::Requests)
+    } else {
+        serves(annotations, abstract_type).then_some(Side::Serves)
+    }
+}
+
+/// The verb a `method` argument's value names: `RequestMethod.GET`, `GET` statically imported, or `"GET"` (an
+/// `@HttpExchange`'s).
 pub fn request_method(written: &str) -> Option<String> {
-    let verb = written.rsplit('.').next()?.trim();
+    let verb = written.trim().trim_matches('"').rsplit('.').next()?.trim();
     matches!(verb, "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "TRACE").then(|| verb.to_string())
 }
 
@@ -54,10 +83,11 @@ fn trim(path: &str) -> &str {
     path.trim_matches('/')
 }
 
-/// The routes a handler method serves, as (verb, path): each of its type's paths joined with each of its own, for
-/// each of its methods. Spring combines a type's and a method's `method` conditions by union, and a mapping with none
-/// answers every method (`*`). A path written absolute on the method is still under the type's path, as in Spring.
-pub fn routes(ty: Option<&Mapping>, method: &Mapping, fixed: Option<&str>) -> Vec<(String, String)> {
+/// The routes a handler method serves, or a client method requests, as (verb, path): each of its type's paths joined
+/// with each of its own, for each of its methods. Spring combines a type's and a method's `method` conditions by
+/// union; a handler mapping with none answers every method (`*`), and a client's sends `GET`, as Feign does. A path
+/// written absolute on the method is still under the type's path, as in Spring.
+pub fn routes(side: Side, ty: Option<&Mapping>, method: &Mapping, fixed: Option<&str>) -> Vec<(String, String)> {
     let empty = Mapping::default();
     let ty = ty.unwrap_or(&empty);
     let mut verbs: Vec<String> = fixed.map(str::to_string).into_iter().chain(method.verbs.iter().cloned()).collect();
@@ -67,7 +97,8 @@ pub fn routes(ty: Option<&Mapping>, method: &Mapping, fixed: Option<&str>) -> Ve
         }
     }
     if verbs.is_empty() {
-        verbs = if ty.verbs.is_empty() { vec!["*".to_string()] } else { ty.verbs.clone() };
+        let any = if side == Side::Requests { "GET" } else { "*" };
+        verbs = if ty.verbs.is_empty() { vec![any.to_string()] } else { ty.verbs.clone() };
     }
     let one = [String::new()];
     let prefixes = if ty.paths.is_empty() { &one[..] } else { &ty.paths[..] };
@@ -101,21 +132,21 @@ mod tests {
 
     #[test]
     fn a_method_mapping_is_joined_under_each_type_path() {
-        assert_eq!(routes(Some(&m(&["/api/orders"], &[])), &m(&["/{id}"], &[]), Some("GET")), r(&[("GET", "api/orders/{id}")]));
-        assert_eq!(routes(Some(&m(&["/api/orders/"], &[])), &m(&[], &[]), Some("POST")), r(&[("POST", "api/orders")]));
+        assert_eq!(routes(Side::Serves, Some(&m(&["/api/orders"], &[])), &m(&["/{id}"], &[]), Some("GET")), r(&[("GET", "api/orders/{id}")]));
+        assert_eq!(routes(Side::Serves, Some(&m(&["/api/orders/"], &[])), &m(&[], &[]), Some("POST")), r(&[("POST", "api/orders")]));
         assert_eq!(
-            routes(Some(&m(&["a", "/b"], &[])), &m(&["x", "y/"], &[]), Some("PUT")),
+            routes(Side::Serves, Some(&m(&["a", "/b"], &[])), &m(&["x", "y/"], &[]), Some("PUT")),
             r(&[("PUT", "a/x"), ("PUT", "a/y"), ("PUT", "b/x"), ("PUT", "b/y")])
         );
-        assert_eq!(routes(None, &m(&["/"], &[]), Some("GET")), r(&[("GET", "")]));
+        assert_eq!(routes(Side::Serves, None, &m(&["/"], &[]), Some("GET")), r(&[("GET", "")]));
     }
 
     #[test]
     fn request_mapping_methods_combine_and_default_to_every_method() {
-        assert_eq!(routes(None, &m(&["/x"], &[]), None), r(&[("*", "x")]));
-        assert_eq!(routes(None, &m(&["/x"], &["GET", "POST"]), None), r(&[("GET", "x"), ("POST", "x")]));
-        assert_eq!(routes(Some(&m(&[], &["GET"])), &m(&["/x"], &[]), None), r(&[("GET", "x")]));
-        assert_eq!(routes(Some(&m(&[], &["GET"])), &m(&["/x"], &[]), Some("POST")), r(&[("POST", "x"), ("GET", "x")]));
+        assert_eq!(routes(Side::Serves, None, &m(&["/x"], &[]), None), r(&[("*", "x")]));
+        assert_eq!(routes(Side::Serves, None, &m(&["/x"], &["GET", "POST"]), None), r(&[("GET", "x"), ("POST", "x")]));
+        assert_eq!(routes(Side::Serves, Some(&m(&[], &["GET"])), &m(&["/x"], &[]), None), r(&[("GET", "x")]));
+        assert_eq!(routes(Side::Serves, Some(&m(&[], &["GET"])), &m(&["/x"], &[]), Some("POST")), r(&[("POST", "x"), ("GET", "x")]));
     }
 
     #[test]
@@ -128,5 +159,8 @@ mod tests {
         assert!(!serves(&a(&["FeignClient"]), true));
         assert_eq!(request_method("RequestMethod.DELETE").as_deref(), Some("DELETE"));
         assert_eq!(request_method("FOO"), None);
+        assert_eq!(request_method("\"PUT\"").as_deref(), Some("PUT"));
+        assert_eq!(side(&a(&["FeignClient"]), true), Some(Side::Requests));
+        assert_eq!(routes(Side::Requests, None, &m(&["/x"], &[]), None), r(&[("GET", "x")]));
     }
 }
