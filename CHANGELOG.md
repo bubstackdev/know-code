@@ -101,6 +101,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
   shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
   answer left out as comments.
+- Go HTTP routes and clients (net/http, chi, gin, echo) are a preview in 0.7: on the frozen route labels chi and
+  `net/http` fell short of the 0.95 precision gate and the held-out repositories scored unevenly
+  ([0.7 release gate](eval/release-gate/0.7.0.md#routes)). A fresh held-out round in 0.8 decides whether the label
+  comes off. Go's identity resolution is not a preview.
 - Spring clients: each method of a `@FeignClient` or `@HttpExchange` interface, a `RestTemplate` call and a `WebClient`
   or `RestClient` request (`client.get().uri(…)`) are requests of the method making them, linked to the routes they
   reach in the workspace's indexed repos by their paths, as Go's and TypeScript's are. `RestTemplate` and the
