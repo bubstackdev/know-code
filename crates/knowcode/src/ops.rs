@@ -905,6 +905,9 @@ pub struct FindData {
     /// Other names' matches, one line each, when `items` holds only the declarations named exactly as asked: never
     /// counted among the items.
     pub similar: Vec<String>,
+    /// The same find with a higher limit lists more in `items`: what a cursor continues to. Not so for matches cut
+    /// from `similar`, which `items` never holds.
+    pub more: bool,
 }
 
 /// Every client route (request contract) in the selected repos, with the actions serving it. Reads the workspace
@@ -1711,6 +1714,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         exact_cut |= items.iter().skip(limit).any(|(_, h)| h.matched == "exact");
     }
     items.truncate(limit);
+    let more = if apart { name_cut } else { total > items.len() };
     // A declaration of the name asked for quotes the line naming it, read from the working tree now and checked
     // against the index: what an agent would otherwise open the file to see. The first few only, so that none is
     // left with its place alone under `cite: brief`.
@@ -1771,7 +1775,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         env["manifests_total"] = json!(manifests_total);
     }
     finish(&mut env);
-    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared, similar } })
+    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared, similar, more } })
 }
 
 pub struct LocateData {
