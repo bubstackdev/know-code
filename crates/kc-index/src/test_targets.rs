@@ -298,8 +298,10 @@ fn go(tests: &Tests) -> Result<Vec<TestTarget>> {
 /// Maven and Gradle projects (see [`crate::jvm_builds::projects`]) with test methods: the methods tagged `test` (JUnit 4
 /// and 5's `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory` and `@TestTemplate`; TestNG's `@Test`) in
 /// Java and Kotlin files whose nearest project it is, as with Go modules. Each runs from its build's root, with the
-/// build's wrapper when it has one: `mvn test -pl web -Dtest='org.example.CartTest#adds'`, or
-/// `./gradlew :web:test --tests 'org.example.CartTest.adds'`. A nested class is named by its binary name
+/// build's wrapper when it has one: `mvn test -pl web -Dtest='org.example.CartTest#adds+adds[*]'` (the method, or its
+/// parameterized cases), or
+/// `./gradlew :web:test --tests 'org.example.CartTest.adds'`, the Gradle task its source set's (a Kotlin
+/// Multiplatform project's JVM tests are `jvmTest`'s). A nested class is named by its binary name
 /// (`Outer$Inner`), as both tools match it. A project with no test methods isn't listed: every module of a build would
 /// be, most of them with nothing to run.
 fn jvm(root: &Path, privacy: &Privacy, tests: &Tests) -> Result<Vec<TestTarget>> {
@@ -337,14 +339,33 @@ fn jvm(root: &Path, privacy: &Privacy, tests: &Tests) -> Result<Vec<TestTarget>>
     for p in &projects {
         let Some(found) = by_dir.get(&p.dir) else { continue };
         let cd = if p.root.is_empty() { String::new() } else { format!("cd {} && ", quote(&p.root)) };
-        let (run, select): (String, fn(&str, &str) -> String) = if p.kind == "maven" {
+        let tool = |name: &str, script: &str| format!("{cd}{}", wrapper(&p.root, script, name));
+        // The Gradle test task running a test file: its source set's (`src/test` is `test`, a Kotlin Multiplatform
+        // `src/jvmTest` is `jvmTest`, and `src/commonTest` runs there too), taken per file, as one project may hold
+        // several.
+        let task_of = |file: &str| -> String {
+            let rel = file.strip_prefix(&format!("{}/", p.dir)).unwrap_or(file);
+            let set = rel.strip_prefix("src/").and_then(|r| r.split('/').next()).filter(|s| s.ends_with("Test") || *s == "test");
+            let set = match set {
+                Some("commonTest") => "jvmTest",
+                Some(s) => s,
+                None => "test",
+            };
+            if p.path == ":" { format!(":{set}") } else { format!("{}:{set}", p.path) }
+        };
+        let maven = || {
             let pl = if p.path.is_empty() { String::new() } else { format!(" -pl {}", quote(&p.path)) };
             // `-N`: the reactor root alone, not its modules too, where `-Dtest` would fail on each one lacking the test.
             let only = if p.path.is_empty() && packages.iter().any(|m| m.file == p.manifest && m.targets.iter().any(|t| t.kind == "module")) { " -N" } else { "" };
-            (format!("{cd}{} test{pl}{only}", wrapper(&p.root, "mvnw", "mvn")), |class, method| format!("-Dtest={}", quote(&format!("{class}#{method}"))))
+            format!("{} test{pl}{only}", tool("mvn", "mvnw"))
+        };
+        let run = if p.kind == "maven" {
+            maven()
         } else {
-            let task = if p.path == ":" { ":test".to_string() } else { format!("{}:test", p.path) };
-            (format!("{cd}{} {task}", wrapper(&p.root, "gradlew", "gradle")), |class, method| format!("--tests {}", quote(&format!("{class}.{method}"))))
+            let mut tasks: Vec<String> = found.iter().map(|t| task_of(&t.2)).collect();
+            tasks.sort();
+            tasks.dedup();
+            format!("{} {}", tool("gradle", "gradlew"), tasks.join(" "))
         };
         let tests = found
             .iter()
@@ -357,7 +378,16 @@ fn jvm(root: &Path, privacy: &Privacy, tests: &Tests) -> Result<Vec<TestTarget>>
                     None => class,
                 };
                 let name = container.as_ref().map_or(method.to_string(), |c| format!("{c}.{method}"));
-                TestCase { name, file: file.clone(), line: *line, command: format!("{run} {}", select(&class, method)) }
+                let command = if p.kind == "maven" {
+                    // The method, or its cases as a JUnit 4 parameterized runner names them (`adds[0]`), and no other
+                    // method whose name starts with it.
+                    format!("{} -Dtest={}", maven(), quote(&format!("{class}#{method}+{method}[*]")))
+                } else {
+                    // The method, and its cases as a JUnit 4 parameterized runner names them (`adds[0]`).
+                    let one = format!("{class}.{method}");
+                    format!("{} {} --tests {} --tests {}", tool("gradle", "gradlew"), task_of(file), quote(&one), quote(&format!("{one}[*]")))
+                };
+                TestCase { name, file: file.clone(), line: *line, command }
             })
             .collect();
         out.push(TestTarget {

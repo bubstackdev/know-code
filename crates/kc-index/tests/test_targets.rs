@@ -122,11 +122,15 @@ let package = Package(
         "package org.example.cart;\n\nimport org.junit.jupiter.api.*;\n\nclass CartTest {\n    @Test void adds() {}\n    void helper() {}\n    @Nested class Empty {\n        @ParameterizedTest void totals() {}\n    }\n}\n",
     );
     // A Gradle build (no wrapper): the root project and an included one, Kotlin tests in each.
-    write(&jvm, "press/settings.gradle.kts", "rootProject.name = \"press\"\ninclude(\":juice\")\n");
+    write(&jvm, "press/settings.gradle.kts", "rootProject.name = \"press\"\ninclude(\":juice\", \":pulp\")\n");
     write(&jvm, "press/build.gradle.kts", "plugins { kotlin(\"jvm\") }\n");
     write(&jvm, "press/src/test/kotlin/PressTest.kt", "package org.example.press\n\nimport kotlin.test.Test\n\nclass PressTest {\n    @Test fun `squeezes twice`() {}\n}\n");
     write(&jvm, "press/juice/build.gradle.kts", "dependencies { implementation(project(\":\")) }\n");
     write(&jvm, "press/juice/src/test/kotlin/JuiceTest.kt", "package org.example.juice\n\nimport org.junit.jupiter.api.Test\n\nclass JuiceTest {\n    @Test fun pours() {}\n}\n");
+    // A Kotlin Multiplatform project: its JVM tests are `jvmTest`'s, and its common tests run there too.
+    write(&jvm, "press/pulp/build.gradle.kts", "plugins { kotlin(\"multiplatform\") }\n");
+    write(&jvm, "press/pulp/src/jvmTest/kotlin/PulpTest.kt", "package org.example.pulp\n\nimport kotlin.test.Test\n\nclass PulpTest {\n    @Test fun strains() {}\n}\n");
+    write(&jvm, "press/pulp/src/commonTest/kotlin/SeedTest.kt", "package org.example.pulp\n\nimport kotlin.test.Test\n\nclass SeedTest {\n    @Test fun sprouts() {}\n}\n");
     let root = kc_index::repo_root(&jvm).unwrap();
     let mut store = kc_index::open(&root).unwrap();
     sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
@@ -145,14 +149,24 @@ let package = Package(
                 "press",
                 "press/build.gradle.kts",
                 "cd press && gradle :test",
-                vec![("PressTest.squeezes twice", "cd press && gradle :test --tests 'org.example.press.PressTest.squeezes twice'")]
+                vec![("PressTest.squeezes twice", "cd press && gradle :test --tests 'org.example.press.PressTest.squeezes twice' --tests 'org.example.press.PressTest.squeezes twice[*]'")]
             ),
             (
                 "gradle",
                 "juice",
                 "press/juice/build.gradle.kts",
                 "cd press && gradle :juice:test",
-                vec![("JuiceTest.pours", "cd press && gradle :juice:test --tests org.example.juice.JuiceTest.pours")]
+                vec![("JuiceTest.pours", "cd press && gradle :juice:test --tests org.example.juice.JuiceTest.pours --tests 'org.example.juice.JuiceTest.pours[*]'")]
+            ),
+            (
+                "gradle",
+                "pulp",
+                "press/pulp/build.gradle.kts",
+                "cd press && gradle :pulp:jvmTest",
+                vec![
+                    ("SeedTest.sprouts", "cd press && gradle :pulp:jvmTest --tests org.example.pulp.SeedTest.sprouts --tests 'org.example.pulp.SeedTest.sprouts[*]'"),
+                    ("PulpTest.strains", "cd press && gradle :pulp:jvmTest --tests org.example.pulp.PulpTest.strains --tests 'org.example.pulp.PulpTest.strains[*]'"),
+                ]
             ),
             (
                 "maven",
@@ -160,8 +174,8 @@ let package = Package(
                 "shop/cart/pom.xml",
                 "cd shop && ./mvnw test -pl cart",
                 vec![
-                    ("CartTest.adds", "cd shop && ./mvnw test -pl cart -Dtest='org.example.cart.CartTest#adds'"),
-                    ("CartTest.Empty.totals", "cd shop && ./mvnw test -pl cart -Dtest='org.example.cart.CartTest$Empty#totals'"),
+                    ("CartTest.adds", "cd shop && ./mvnw test -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'"),
+                    ("CartTest.Empty.totals", "cd shop && ./mvnw test -pl cart -Dtest='org.example.cart.CartTest$Empty#totals+totals[*]'"),
                 ]
             ),
         ],

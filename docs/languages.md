@@ -427,10 +427,12 @@ build of its own.
 
 Each project with test methods (JUnit 4 and 5, TestNG: the methods tagged `test`) in its Java and Kotlin files is a test
 target in `knowcode test-targets`, run from its build's root with the build's wrapper when it has one: `mvn test -pl
-cart -Dtest='org.example.cart.CartTest#adds'` from the reactor root (the outermost `pom.xml` listing it among its
+cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` from the reactor root (the outermost `pom.xml` listing it among its
 modules), or `./gradlew :juice:test --tests 'org.example.juice.JuiceTest.pours'` from the settings script's directory.
-A nested test class is named by its binary name (`CartTest$Empty`). Kotlin Multiplatform test tasks (`jvmTest`) and
-test source sets other than `test` aren't read.
+A nested test class is named by its binary name (`CartTest$Empty`), and a JUnit 4 parameterized method's cases are
+selected with it (`adds[*]`). A Gradle test runs in its source set's task: `test` for `src/test`, `jvmTest` for a Kotlin
+Multiplatform project's `src/jvmTest` and `src/commonTest`, a custom set's own name otherwise. Android's unit test
+tasks aren't read.
 
 ## Configurable conventions
 

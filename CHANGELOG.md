@@ -31,7 +31,7 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
 - Maven and Gradle projects are test targets: `knowcode test-targets` (`kc_test_targets`) lists each project with
   JUnit or TestNG test methods in its Java and Kotlin files, and runs each test alone from the build's root:
-  `mvn test -pl cart -Dtest='org.example.cart.CartTest#adds'` or `./gradlew :juice:test --tests
+  `mvn test -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` or `./gradlew :juice:test --tests
   'org.example.juice.JuiceTest.pours'`, with the build's wrapper when it has one. Kotlin methods annotated
   `@TestFactory` or `@TestTemplate` are tagged `test` too, as Java's are, so Kotlin files are indexed again on the
   first query after upgrading.
