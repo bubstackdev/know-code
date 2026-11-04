@@ -885,8 +885,13 @@ impl Tracer<'_> {
                 // Overloads of the requirement: only the implementations taking the same parameters (see
                 // [`query::same_parameters`]).
                 let overloaded = self.definitions(&sym.qualified())?.iter().filter(|d| d.container == sym.container && d.kind == sym.kind).count() > 1;
-                let rows: Vec<SymbolRow> =
+                let mut rows: Vec<SymbolRow> =
                     stmt.query_map(rusqlite::params![sym.name, sym.kind, short, sym.id, overloaded], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+                // And, of several taking as many, the ones taking its parameter types.
+                if overloaded && !rows.is_empty() {
+                    let keep = query::same_parameter_types(self.conn, sym.id, rows.iter().map(|r| r.id).collect())?;
+                    rows.retain(|r| keep.contains(&r.id));
+                }
                 for r in rows {
                     out.push((r, "witness", "exact", None));
                 }

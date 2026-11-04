@@ -4,6 +4,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- C# overloads split between a type and its base types are one set: a call no overload of the receiver's own type can
+  take (by the argument types it gives) goes to a base type's overload that can. A lambda or anonymous method is now
+  known to be no `string`, number, array or repo class, so `books.Fetch(b => b.Id == 1)` on an `IBooks : IStore<Book>`
+  calls `IStore<Book>.Fetch(Expression<…>)`, not `IBooks.Fetch(string)`. And an interface member's implementations
+  are matched by parameter types as well as count: `impact` and `refs` of `IStore.Fetch(int)` no longer list
+  `Books.Fetch(string)`, nor a derived interface's same-named `Fetch(string)`, as `exact` dependents. C# files are
+  re-extracted on the next query (extractor version 39). Public measurements are unchanged: identity-v1 C# `exact`
+  precision 0.998 (879/881 to 881/883), recall linked 0.776 to 0.777 of 1,931 labels; compare-v1's 106 C# `refs`
+  questions identical (precision 0.938, 2,543 of 2,710; recall 0.889 of 2,861).
 - The context of a bus message type separates its publishers and consumers from its other uses. Its `callers` now holds
   only the uses inside a publisher or consumer the bus section links, each with `bus` (`publisher` or `consumer`); the
   rest (a `new X()` in a mapper or a test builder, a type mention) move to a new `users` list, with `users_total`,
