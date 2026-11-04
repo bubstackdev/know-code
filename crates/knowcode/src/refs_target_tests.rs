@@ -47,3 +47,37 @@ fn a_placed_declarations_references_keep_other_declarations_rows_apart() {
     assert!(all.get("elsewhere").is_none() && all.get("unplaced").is_none(), "{all}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Uses of a free function's name the answer can't place (`box.seal()` on a value of no known type) aren't the
+/// declaration's references, nor another's: listed apart in `unplaced`, continuable with their own cursor, and said
+/// in an `unsupported` entry, since some may be the declaration's.
+#[test]
+fn a_placed_declarations_unplaceable_uses_are_listed_apart_and_continue() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target-unplaced");
+    let files: &[(&str, &str)] = &[
+        ("pack/seal.py", "def seal():\n    pass\n"),
+        ("pack/wrap.py", "def seal():\n    pass\n"),
+        ("pack/run.py", "from pack.seal import seal\n\ndef run(box):\n    seal()\n    box.seal()\n    box.seal()\n    box.seal()\n"),
+    ];
+    let root = repo(&base, "shop", files);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    let env = ops::refs("pack/seal.py:1", &[], 1, &scope).unwrap().env;
+    assert_eq!((lines(&env, "items"), env["total"].as_u64()), (vec![4], Some(1)), "{env}");
+    assert_eq!((lines(&env, "unplaced"), env["unplaced_total"].as_u64()), (vec![5], Some(3)), "{env}");
+    let unsupported = crate::contract::incomplete_of(&env).into_iter().filter(|i| i.reason == kc_store::answer::Reason::Unsupported).count();
+    assert_eq!(unsupported, 1, "{env}");
+    // The rest of `unplaced`, page by page, from its own cursor.
+    let mut rows = Vec::new();
+    let mut next = env["unplaced_cursor"].as_str().map(str::to_string);
+    while let Some(c) = next {
+        let page = crate::cursor::more(&c).unwrap();
+        // A page holds the list it continues in `items`, named in `list`.
+        assert_eq!(page["list"], "unplaced", "{page}");
+        rows.extend(lines(&page, "items"));
+        next = page["cursor"].as_str().map(str::to_string);
+        assert!(rows.len() <= 3, "{page}");
+    }
+    assert_eq!(rows, [6, 7]);
+    let _ = std::fs::remove_dir_all(&base);
+}
