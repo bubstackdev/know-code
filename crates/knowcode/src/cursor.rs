@@ -6,8 +6,9 @@
 //! the same index as the first, and for lists a walk cuts (impact's dependents, a path search's paths) the rest is
 //! not a slice of a longer run. A cursor carries what the next page needs and checks both: the request itself (so a
 //! nested list is continued without restating the call), the list, how far it was delivered, the index generation
-//! of every repo the answer read (a cursor from an older generation is refused, "stale cursor; start again", never
-//! mixed into a newer answer), and a hash of the rows delivered so far (so a list whose order changed meanwhile, a
+//! of every repo the answer read (a cursor from an older generation of a repo holding rows of the list is refused,
+//! "stale cursor; start again", never mixed into a newer answer; other repos re-indexing in the background don't
+//! refuse it, see [`check_gens`]), and a hash of the rows delivered so far (so a list whose order changed meanwhile, a
 //! ranking recomputed say, is refused too). `search` and `grep-ast` keep their `offset` as well.
 //!
 //! How each list continues ([`Mode`]): most lists are cut as a prefix of their order (references, a context's callers,
@@ -420,15 +421,16 @@ pub fn find(env: &Value, value: &str) -> Option<String> {
 }
 
 /// The generations an answer was computed at: each repo it read (`provenance`), its index generation and HEAD,
-/// hashed short.
+/// hashed short, as `r<repo>.<generation>` so that a page can tell which repo moved (see [`check_gens`]).
 fn gens(env: &Value) -> Vec<String> {
     let mut out: Vec<String> = env["provenance"]
         .as_array()
         .map(|list| {
             list.iter()
                 .map(|p| {
-                    let s = format!("{}|{}|{}", p["repo"].as_str().unwrap_or(""), p["generation"].as_str().unwrap_or(""), p["commit"].as_str().unwrap_or(""));
-                    format!("{:08x}", fnv(FNV_BASIS, s.as_bytes()) as u32)
+                    let repo = p["repo"].as_str().unwrap_or("");
+                    let s = format!("{}|{}|{}", repo, p["generation"].as_str().unwrap_or(""), p["commit"].as_str().unwrap_or(""));
+                    format!("r{}.{:08x}", repo_key(repo), fnv(FNV_BASIS, s.as_bytes()) as u32)
                 })
                 .collect()
         })
@@ -752,10 +754,43 @@ fn gens_of(env: &Value) -> Vec<String> {
     env[FIELD]["g"].as_array().map(|a| a.iter().filter_map(|g| g.as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
-/// Refuses a cursor whose answer was computed at another generation than `now`'s.
-fn check_gens(c: &Cursor, now: &Value) -> Result<()> {
+/// A repo's name, hashed short: the part of a generation that says whose it is. Provenance names a repo by its path
+/// and rows by its name (the path's last component, [`ops::repo_name`]); both are taken to the name, so two checkouts
+/// sharing a name count as one, which only makes more cursors stale, never fewer.
+fn repo_key(repo: &str) -> String {
+    let name = std::path::Path::new(repo).file_name().map_or_else(|| repo.to_string(), |n| n.to_string_lossy().into_owned());
+    format!("{:08x}", fnv(FNV_BASIS, name.as_bytes()) as u32)
+}
+
+/// The repos whose rows the list at `ptr` of `env` holds (as [`repo_key`]s): each row's own `repo`, else the repo of
+/// the item the list belongs to (or the answer's). None when a row's repo can't be told (a workspace-wide answer's
+/// row without one), so that every repo the answer read counts.
+fn holders(env: &Value, ptr: &str) -> Option<std::collections::HashSet<String>> {
+    let owner = ptr.rsplit_once('/').and_then(|(parent, _)| env.pointer(parent)).and_then(|o| o.get("repo")).and_then(Value::as_str);
+    let fallback = owner.or_else(|| env["repo"].as_str()).filter(|r| *r != "workspace");
+    let mut out = std::collections::HashSet::new();
+    for row in rows_at(env, ptr) {
+        let repo = row.get("repo").and_then(Value::as_str).filter(|r| !r.is_empty()).or(fallback)?;
+        out.insert(repo_key(repo));
+    }
+    Some(out)
+}
+
+/// Refuses a cursor whose answer was computed at another generation than `now`'s, for the repos that matter to its
+/// list: those whose rows the list holds (`holders`, from the list as `now` computes it). The caller has checked, or
+/// checks, that the rows delivered so far are `now`'s first rows (their hash), so a repo that holds none of the list's
+/// rows (read for a cross-repo link that led nowhere, a workspace summary consulted) moving on can't put a row of
+/// another snapshot in the list: following the cursor still gives `now`'s list, each row once. A repo that holds rows
+/// moving on is refused even when the rows delivered are unchanged, as before. `holders` None, a search's content files
+/// (`c…`) and a cursor made before generations said their repo count every one (such a cursor's generations are in the
+/// old form, which no answer has now, so it is refused).
+fn check_gens(c: &Cursor, now: &Value, holders: Option<&std::collections::HashSet<String>>) -> Result<()> {
     let have = gens_of(now);
-    if let Some(gone) = c.g.iter().find(|g| !have.contains(g)) {
+    let matters = |g: &String| match (holders, g.strip_prefix('r').and_then(|k| k.split_once('.'))) {
+        (Some(h), Some((repo, _))) => h.contains(repo),
+        _ => true,
+    };
+    if let Some(gone) = c.g.iter().filter(|g| matters(g)).find(|g| !have.contains(g)) {
         let what = if gone.starts_with('c') { "a searched file" } else { "a repo the answer read" };
         bail!(Refusal::new(
             Code::StaleCursor,
@@ -790,17 +825,19 @@ pub fn more(cursor: &str) -> Result<Value> {
     let (env, full, total) = match m {
         Mode::Prefix => {
             let env = run(&c.q, Raise::Upto(c.o + c.n + 1))?;
-            check_gens(&c, &env)?;
+            check_gens(&c, &env, holders(&env, &c.l).as_ref())?;
             let full = rows_at(&env, &c.l);
             let total = known_total(&env, &c.l);
             (env, full, total)
         }
         _ => {
             let first = run(&c.q, Raise::None)?;
-            check_gens(&c, &first)?;
             let shown: Vec<Value> = rows_at(&first, &c.l).into_iter().take(c.k).collect();
             let env = run(&c.q, Raise::All)?;
-            check_gens(&c, &env)?;
+            // The list is the first answer's rows then the walk's others: the repos either holds rows of matter.
+            let held = holders(&first, &c.l).zip(holders(&env, &c.l)).map(|(a, b)| a.union(&b).cloned().collect());
+            check_gens(&c, &first, held.as_ref())?;
+            check_gens(&c, &env, held.as_ref())?;
             let seen: std::collections::HashSet<String> = shown.iter().map(subject).collect();
             let mut full = shown;
             full.extend(rows_at(&env, &c.l).into_iter().filter(|r| !seen.contains(&subject(r))));
@@ -858,7 +895,9 @@ fn window(c: &Cursor) -> Result<Value> {
     let Request::Path { from_skip, to_skip, .. } = &c.q.req else { bail!("not a path search's cursor") };
     let skips = if c.l.ends_with("from_candidates") { (c.o, *to_skip) } else { (*from_skip, c.o) };
     let mut env = run(&c.q, Raise::Skip(skips.0, skips.1))?;
-    check_gens(c, &env)?;
+    // A window's rows are whole searches between ends anywhere in the workspace, with no delivered rows to check
+    // against: every repo the search read counts.
+    check_gens(c, &env, None)?;
     env["list"] = Value::from(readable(&c.l));
     env["offset"] = json!(c.o);
     crate::contract::finish(&mut env);
@@ -1189,6 +1228,33 @@ mod tests {
         let env = crate::walk::path("Hub.Fan", "Hub.Ping", None, &opts(1), &s).unwrap().env;
         assert_eq!(env["policy"]["evidence"], json!(policy));
         pages(&env, "/items/0/paths");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Another repo the answer read moving on doesn't stale a cursor whose list holds none of its rows: a busy
+    /// workspace re-indexes in the background, and every page would otherwise be refused. A repo holding rows moving
+    /// on still refuses it.
+    #[test]
+    fn a_cursor_outlives_a_repo_that_holds_none_of_its_rows() {
+        let cache = test_cache();
+        let base = cache.dir("cursor-stale-scope");
+        let app = fixture(&base);
+        let other = repo(&base, "ledgerbook", &[("src/Book.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"), ("src/Page.cs", "namespace L;\npublic class Page { public void Ping() { } }\n")]);
+        let s = Scope { repos: vec![app.clone(), other.clone()], no_sync: false };
+        let env = ops::refs("Ping", &[], 5, &s).unwrap().env;
+        let read: Vec<&str> = env["provenance"].as_array().unwrap().iter().filter_map(|p| p["repo"].as_str()).collect();
+        assert_eq!(read.len(), 2, "both repos read: {env}");
+        let c = env["cursor"].as_str().unwrap().to_string();
+        let rows = rows_at(&env, "/items");
+        assert!(rows.iter().all(|r| r.get("repo").is_none_or(|x| x.as_str() != Some("ledgerbook"))), "{env}");
+        // The other repo re-indexes: the list holds none of its rows, so the next page still comes.
+        std::fs::write(other.join("src/Note.cs"), "namespace L;\npublic class Note { }\n").unwrap();
+        let page = more(&c).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page["offset"], json!(rows.len()), "{page}");
+        // A change to the repo holding the rows refuses it, as before.
+        std::fs::write(app.join("src/T0.cs"), "namespace N;\npublic class T0 : IThing\n{\n    public void Go() { Hub.Ping(); Hub.Ping(); }\n}\n").unwrap();
+        let err = format!("{:#}", more(&c).unwrap_err());
+        assert!(err.starts_with("stale cursor"), "{err}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -1101,8 +1101,8 @@ refs answer's references), `<list>_cursor` beside a nested list (`items[0].calle
 `cursor` until the list ends; the `incomplete` entry for the cut list names the call. Following every cursor gives each
 row of the full list exactly once: in the list's order for lists cut as a prefix, and for a walk's ranked list
 (impact's `affected`, a path search's `paths`), the rows shown first and then the rest of the walk, ranked the same
-way. A cursor is refused when the index, HEAD or the rows delivered so far changed since (`stale cursor`): ask the
-original question again.
+way. A cursor is refused when the rows delivered so far, or the index or HEAD of a repo holding rows of the list,
+changed since (`stale cursor`): ask the original question again. Other repos the answer read re-indexing don't refuse it.
 
 Over MCP a cursor is a short handle (`kc~1f`) the server maps to the full cursor; it lasts while the server runs, for
 the last 4096 cursors. `kc_search` and `kc_grep_ast` also page with `offset` and `next_offset`."#,
