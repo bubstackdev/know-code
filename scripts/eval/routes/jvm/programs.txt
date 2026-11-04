@@ -1,0 +1,23 @@
+# The Spring modules whose request mappings are listed (eval/routes-v1/README.md, "Java and Kotlin"): repo, the build
+# (`maven` or `gradle`), and the module's directory, relative to the repository (`.` for the root). A Maven module is
+# built from the repository's root with `-pl`; a Gradle project is the root project.
+jhipster-sample-app maven .
+spring-petclinic-rest maven .
+spring-petclinic-microservices maven spring-petclinic-admin-server
+spring-petclinic-microservices maven spring-petclinic-api-gateway
+spring-petclinic-microservices maven spring-petclinic-config-server
+spring-petclinic-microservices maven spring-petclinic-customers-service
+spring-petclinic-microservices maven spring-petclinic-discovery-server
+spring-petclinic-microservices maven spring-petclinic-genai-service
+spring-petclinic-microservices maven spring-petclinic-vets-service
+spring-petclinic-microservices maven spring-petclinic-visits-service
+piggymetrics maven account-service
+piggymetrics maven auth-service
+piggymetrics maven config
+piggymetrics maven gateway
+piggymetrics maven monitoring
+piggymetrics maven notification-service
+piggymetrics maven registry
+piggymetrics maven statistics-service
+piggymetrics maven turbine-stream-service
+spring-petclinic-kotlin gradle .
