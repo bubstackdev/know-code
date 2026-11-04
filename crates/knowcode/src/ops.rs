@@ -10766,9 +10766,10 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
             ],
         );
         // One module's `const` and `type` of one name are one declaration; same-named types local to two callbacks
-        // aren't.
+        // aren't, and each callback names its own.
         assert_eq!(at(&web, "Kind", "src/kind.test.ts", 5), ("exact", vec![1, 2]));
-        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 5).0, "ambiguous");
+        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 5), ("exact", vec![4]));
+        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 9), ("exact", vec![8]));
         let _ = std::fs::remove_dir_all(&base);
     }
 

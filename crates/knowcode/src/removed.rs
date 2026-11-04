@@ -139,34 +139,38 @@ pub fn dependents(
         let owner = d.container.as_deref().map(|c| c.rsplit('.').next().unwrap_or(c));
         let via = qualified(d);
         let mut named_by: Vec<NamedBy> = Vec::new();
-        for h in query::refs(conn, &d.name, kinds, usize::MAX)?.0 {
-            let Some(from) = &h.from else { continue };
+        // What a reference has before resolution rules most out (a common name's other languages, constructor
+        // chaining in other types), and those are never resolved; of the rest, only those the loop below may take
+        // are kept as they are resolved.
+        let named = |h: &query::RefHit| {
+            let Some(from) = &h.from else { return false };
             let lang: Option<String> = lang_of.query_row([&h.file], |r| r.get(0)).ok();
             if h.name != d.name || lang.as_deref().map(family) != Some(family(d.lang)) {
-                continue;
+                return false;
             }
             // A C# constructor chaining (`: this(…)`) names `init` of its own type only: another type's never meant
             // this one.
-            if d.name == "init" && h.file.ends_with(".cs") && from.container.as_deref().map(|c| c.rsplit('.').next().unwrap_or(c)) != owner {
-                continue;
-            }
-            let typed = match (h.receiver_type.as_deref(), owner) {
-                (Some(rt), Some(o)) if rt.rsplit('.').next() != Some(o) => continue,
-                (Some(_), Some(_)) => true,
-                _ => false,
-            };
+            !(d.name == "init" && h.file.ends_with(".cs") && from.container.as_deref().map(|c| c.rsplit('.').next().unwrap_or(c)) != owner)
+        };
+        let edge_of = |h: &query::RefHit| match h.kind.as_str() {
+            "call" => "calls",
+            "instantiate" => "instantiates",
+            _ => "uses",
+        };
+        let may_mean = |h: &query::RefHit| {
+            // Through a receiver of another type.
+            let other_type = matches!((h.receiver_type.as_deref(), owner), (Some(rt), Some(o)) if rt.rsplit('.').next() != Some(o));
             // Bound for certain to something else of the name: it never meant the removed one.
-            if !h.target_ids.is_empty() && (h.confidence == "exact" || h.precise) {
-                continue;
-            }
-            let edge = match h.kind.as_str() {
-                "call" => "calls",
-                "instantiate" => "instantiates",
-                _ => "uses",
-            };
+            let bound_elsewhere = !h.target_ids.is_empty() && (h.confidence == "exact" || h.precise);
+            !other_type && !bound_elsewhere && filter.allows(edge_of(h))
+        };
+        for h in query::refs_kept(conn, &d.name, kinds, named, may_mean)? {
+            let Some(from) = &h.from else { continue };
+            let typed = h.receiver_type.is_some() && owner.is_some();
+            let edge = edge_of(&h);
             let site = format!("{}:{}", h.file, h.line);
             // One entry per occurrence: a same-line use through another receiver is judged on its own.
-            if !filter.allows(edge) || named_by.iter().any(|n| n.site == site && (n.col == h.col || n.col == 0 || h.col == 0)) {
+            if named_by.iter().any(|n| n.site == site && (n.col == h.col || n.col == 0 || h.col == 0)) {
                 continue;
             }
             let Some(sym) = trace::symbol(conn, from.id)? else { continue };

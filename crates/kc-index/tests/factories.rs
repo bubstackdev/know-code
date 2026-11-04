@@ -309,3 +309,32 @@ public class Billing(Func<ShopContext> contexts, IDbContextFactory<ShopContext> 
     assert_eq!(hits[0].targets[0].file, "src/Data.cs");
 }
 
+
+/// Keeping references as they are read gives what keeping them after resolution gives, in the same order: each
+/// reference resolves on its own, and the factory constructions (resolved apart, then sorted into place) are kept
+/// by the same test.
+#[test]
+fn references_kept_as_read_resolve_as_they_do_among_all() {
+    let root = scratch("factories-kept");
+    write(&root, "src/Shop.cs", SHOP);
+    write(&root, "src/Module.cs", MODULE);
+    let store = index(&root);
+    let conn = store.conn();
+    let names = ["Get", "Spin", "Widget", "Repo"];
+    let all = query::refs_named(conn, &names).unwrap();
+    let shown = |hits: &[RefHit]| -> Vec<String> { hits.iter().map(|h| serde_json::to_string(h).unwrap()).collect() };
+    type Keep = fn(&RefHit) -> bool;
+    let tests: [(&str, Keep); 4] = [
+        ("calls", |h| h.kind == "call"),
+        ("constructions", |h| h.kind == "instantiate"),
+        ("past line 50", |h| h.line > 50),
+        ("none", |_| false),
+    ];
+    for (what, keep) in tests {
+        let expected: Vec<RefHit> = all.iter().filter(|h| keep(h)).cloned().collect();
+        let kept = query::refs_named_where(conn, &names, keep).unwrap();
+        assert_eq!(shown(&kept), shown(&expected), "{what}");
+    }
+    // The constructions found through factories are among them, so their path is covered.
+    assert!(all.iter().any(|h| h.kind == "instantiate" && h.via_di.is_some()));
+}

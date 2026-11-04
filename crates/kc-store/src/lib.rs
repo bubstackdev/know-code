@@ -42,11 +42,11 @@ use kc_extract::{FileFacts, Lang};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 /// Bumped when query-time resolution changes, so cached derived results (file edges, hotspots, maps) are recomputed.
-pub const RESOLVER_VERSION: u32 = 49;
+pub const RESOLVER_VERSION: u32 = 50;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].
-pub const SCHEMA_VERSION: u32 = 24;
+pub const SCHEMA_VERSION: u32 = 25;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -98,7 +98,11 @@ CREATE TABLE IF NOT EXISTS symbols (
     -- for none), and the most &&/|| operators in one branch condition with that condition's line.
     bumps       TEXT,
     cond_ops    INTEGER NOT NULL DEFAULT 0,
-    cond_line   INTEGER
+    cond_line   INTEGER,
+    -- For a declaration inside a function body (TypeScript): the lines of the innermost body holding it, where alone
+    -- its name can be used; NULL at module and type level.
+    scope_start INTEGER,
+    scope_end   INTEGER
 );
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
@@ -1371,8 +1375,8 @@ impl Batch<'_> {
         let mut sym_stmt = self.tx.prepare_cached(
             "INSERT INTO symbols(file_id, parent_id, name, kind, container, signature, doc, attrs, tags, start_line,
              end_line, start_byte, end_byte, complexity, type_name, nesting, min_args, max_args, lambda_types, bumps, cond_ops, cond_line,
-             param_types)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+             param_types, scope_start, scope_end)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         )?;
         let mut fts_stmt = self.tx.prepare_cached("INSERT INTO symbols_fts(rowid, tokens) VALUES (?1, ?2)")?;
         for (i, s) in rec.facts.symbols.iter().enumerate() {
@@ -1400,7 +1404,9 @@ impl Batch<'_> {
                 (!s.bumps.is_empty()).then(|| s.bumps.iter().map(|(a, b)| format!("{a}-{b}")).collect::<Vec<_>>().join(",")),
                 s.cond_ops,
                 (s.cond_ops > 0).then_some(s.cond_line),
-                rec.facts.param_types.get(&i)
+                rec.facts.param_types.get(&i),
+                s.scope.map(|r| r.0),
+                s.scope.map(|r| r.1)
             ])?;
             let id = self.tx.last_insert_rowid();
             fts_stmt.execute(params![id, rec.prepared.tokens[i]])?;
@@ -1644,8 +1650,9 @@ pub fn summary_key(lang: Lang, facts: &FileFacts) -> String {
                 type_name: _,
                 arity: _,
                 lambda_types: _,
+                scope,
             } = s;
-            (parent, name, kind, container, signature, attrs, tags, start_line, end_line)
+            (parent, name, kind, container, signature, attrs, tags, start_line, end_line, scope)
         })
         .collect();
     let refs: Vec<_> = refs
@@ -1726,8 +1733,9 @@ pub fn surface_key(lang: Lang, facts: &FileFacts, positions: bool) -> String {
                 type_name,
                 arity,
                 lambda_types,
+                scope,
             } = s;
-            (parent, name, kind, container, signature, attrs, tags, (start_line, end_line, start_byte, end_byte), type_name, arity, lambda_types)
+            (parent, name, kind, container, signature, attrs, tags, (start_line, end_line, start_byte, end_byte), type_name, arity, lambda_types, scope)
         })
         .collect();
     let mut v = serde_json::to_value((
@@ -2014,6 +2022,29 @@ mod tests {
         assert_eq!(store.meta("schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
         let side: bool = store.conn().query_row("SELECT 1 FROM sqlite_master WHERE name = 'side_cache'", [], |_| Ok(true)).optional().unwrap().unwrap_or(false);
         assert!(!side);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An index from before declarations had scopes (schema 24, its symbols without `scope_start`/`scope_end`) is
+    /// rebuilt as this schema's, so a TypeScript local's scope is read wherever it is resolved.
+    #[test]
+    fn a_schema_24_index_without_scopes_is_rebuilt_with_them() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-schema24-{}", std::process::id()));
+        let path = dir.join("i.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let store = Store::open(&path).unwrap();
+            store.conn().execute_batch("ALTER TABLE symbols DROP COLUMN scope_start; ALTER TABLE symbols DROP COLUMN scope_end;").unwrap();
+            store.set_meta("schema_version", "24").unwrap();
+            store.set_meta("root", "/old").unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.meta("schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
+        assert_eq!(store.meta("root").unwrap(), None, "rebuilt from scratch");
+        let cols: Vec<String> =
+            store.conn().prepare("SELECT name FROM pragma_table_info('symbols')").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert!(cols.iter().any(|c| c == "scope_start") && cols.iter().any(|c| c == "scope_end"), "{cols:?}");
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

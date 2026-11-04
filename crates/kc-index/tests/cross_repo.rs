@@ -212,6 +212,38 @@ fn npm_dependencies_see_exported_members_only() {
 }
 
 #[test]
+fn maven_and_gradle_coordinates_link_repos() {
+    let turn = turn();
+    let base = turn.dir("jvm");
+    // A Gradle library: its `core` project publishes `org.example:core`.
+    let lib = scratch(&base, "lib");
+    std::fs::create_dir_all(lib.join("core/src/main/java/org/example")).unwrap();
+    write(&lib, "settings.gradle.kts", "rootProject.name = \"lib\"\ninclude(\":core\")\n");
+    write(&lib, "core/build.gradle.kts", "group = \"org.example\"\n");
+    write(&lib, "core/src/main/java/org/example/Cart.java", "package org.example;\n\npublic class Cart {}\n");
+    // A Maven app depending on it by those coordinates.
+    let app = scratch(&base, "app");
+    write(
+        &app,
+        "pom.xml",
+        "<project>\n  <groupId>org.example.app</groupId>\n  <artifactId>app</artifactId>\n  <dependencies>\n    <dependency><groupId>org.example</groupId><artifactId>core</artifactId><version>1.0</version></dependency>\n    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>\n  </dependencies>\n</project>\n",
+    );
+    std::fs::create_dir_all(app.join("src/main/java/org/example/app")).unwrap();
+    write(&app, "src/main/java/org/example/app/App.java", "package org.example.app;\n\nclass App {}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots = [kc_index::repo_root(&lib).unwrap(), kc_index::repo_root(&app).unwrap()];
+    let mut stores: Vec<_> = roots.iter().map(|r| kc_index::open(r).unwrap()).collect();
+    for (r, s) in roots.iter().zip(stores.iter_mut()) {
+        sync(r, s, &opts).unwrap();
+    }
+    let owners = kc_index::package_owners(&roots).unwrap();
+    let edges = manifests::repo_edges(&manifests::packages(stores[1].conn()).unwrap(), &roots[1].to_string_lossy(), &roots[1].to_string_lossy(), &owners);
+    // The library the repo builds links; junit, which no indexed repo builds, doesn't.
+    assert_eq!(edges.iter().map(|e| e.dependency.as_str()).collect::<Vec<_>>(), ["org.example:core"]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn npm_references_resolve_in_the_dependency_their_import_names() {
     let turn = turn();
     let base = turn.dir("npm-import");
