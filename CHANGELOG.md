@@ -4,6 +4,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Kotlin: in a lambda with a receiver (`x.apply { … }`, `with(x) { … }`, a lambda passed to a function of the repo's
+  taking a `T.() -> R`), a bare name is the receiver type's member or extension when that type is the repo's, and the
+  enclosing code's when the receiver has none of that name. Before, every such name was only a candidate. A trailing
+  lambda after arguments (`with(x) { … }`, `transaction(db) { … }`) is now read as passed to that function too; there,
+  a name on a receiver whose type can't be told is a candidate. On identity-v2's Kotlin labels, 20 more references are
+  linked `exact`, all of them right (`exact` precision stays 1.000, recall (linked) 0.492 to 0.514, no outside label
+  linked). Kotlin files are indexed again on the first query after upgrading.
 - TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
   is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
   one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
