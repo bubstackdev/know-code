@@ -18,7 +18,7 @@ use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::spring::{self, Mapping};
 use crate::{FileFacts, HttpRoute, Import, Ref, RefKind, Relation, RelationKind, StringConst, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 10;
 
 /// How many enclosing lambdas' functions a reference keeps, innermost first.
 const LAMBDAS_KEPT: usize = 4;
@@ -169,7 +169,15 @@ struct Cx<'a> {
     /// The file's member types: per type (dotted, within the package), the simple names declared in it.
     nested: HashMap<String, HashSet<String>>,
     /// The functions whose lambda argument the code being read is in, outermost first (`apply` in `x.apply { … }`).
-    lambdas: Vec<String>,
+    lambdas: Vec<Lambda>,
+}
+
+/// A lambda the code is in: the function it is passed to, and what that call is on (see [`Cx::call`]): `None` when
+/// the call has no receiver written (`run { … }`, `html { … }`); the receiver's type as a reference's receiver type is
+/// stored (`""` when it can't be told) for `x.apply { … }` and `with(x) { … }`.
+struct Lambda {
+    callee: String,
+    receiver: Option<String>,
 }
 
 impl<'a> Cx<'a> {
@@ -315,7 +323,7 @@ impl<'a> Cx<'a> {
         let signature = collapse(self.src[node.start_byte()..end].trim_end_matches(['=', ' ', '{']), SIGNATURE_CAP);
         let attrs = annotations(self.src, node);
         let mut tags = Vec::new();
-        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest")) {
+        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest" | "TestFactory" | "TestTemplate")) {
             tags.push("test");
         }
         if kind == SymbolKind::Function && name == "main" {
@@ -722,9 +730,26 @@ impl<'a> Cx<'a> {
         let args = children(node).find(|c| c.kind() == "value_arguments").map(arg_count);
         let lambda = children(node).any(|c| c.kind() == "annotated_lambda");
         let args = args.map(|a| a + u32::from(lambda)).or(lambda.then_some(1));
-        let callee_name = match callee.kind() {
-            "identifier" => Some(self.text(callee).to_string()),
-            "navigation_expression" => children(callee).filter(|c| c.is_named()).last().filter(|l| l.kind() == "identifier").map(|l| self.text(l).to_string()),
+        // A trailing lambda after arguments (`with(x) { … }`) is read as a call of the call with the arguments: the
+        // function it is passed to is that call's.
+        let (head, head_call) = match callee.kind() {
+            "call_expression" => (children(callee).find(|c| c.is_named()).unwrap_or(callee), callee),
+            _ => (callee, node),
+        };
+        let callee_name = match head.kind() {
+            "identifier" => Some(self.text(head).to_string()),
+            "navigation_expression" => children(head).filter(|c| c.is_named()).last().filter(|l| l.kind() == "identifier").map(|l| self.text(l).to_string()),
+            _ => None,
+        };
+        // What the call's lambda may take as its receiver: the value the call is on (`x.apply { … }`), or `with`'s
+        // first argument.
+        let lambda_receiver = match head.kind() {
+            "navigation_expression" => children(head).find(|c| c.is_named()).map(|o| self.receiver_of(o).1.unwrap_or_default()),
+            "identifier" if self.text(head) == "with" => children(head_call)
+                .find(|c| c.kind() == "value_arguments")
+                .and_then(|a| children(a).find(|c| c.kind() == "value_argument"))
+                .and_then(|a| children(a).filter(|c| c.is_named()).last())
+                .map(|e| self.expr_type(e).map(|t| t.encode()).unwrap_or_default()),
             _ => None,
         };
         match callee.kind() {
@@ -757,11 +782,11 @@ impl<'a> Cx<'a> {
             // A lambda argument, trailing or in the parentheses: the code in it is read knowing which function it is
             // passed to, which may give it a receiver (`apply`, `with`, a `T.() -> R` parameter).
             match c.kind() {
-                "annotated_lambda" => self.in_lambda(callee_name.as_deref(), c),
+                "annotated_lambda" => self.in_lambda(callee_name.as_deref(), lambda_receiver.clone(), c),
                 "value_arguments" => {
                     for a in children(c) {
                         if a.kind() == "value_argument" && children(a).any(|l| matches!(l.kind(), "lambda_literal" | "annotated_lambda")) {
-                            self.in_lambda(callee_name.as_deref(), a);
+                            self.in_lambda(callee_name.as_deref(), lambda_receiver.clone(), a);
                         } else {
                             self.visit(a);
                         }
@@ -772,8 +797,8 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn in_lambda(&mut self, callee: Option<&str>, node: Node) {
-        self.lambdas.push(callee.unwrap_or_default().to_string());
+    fn in_lambda(&mut self, callee: Option<&str>, receiver: Option<String>, node: Node) {
+        self.lambdas.push(Lambda { callee: callee.unwrap_or_default().to_string(), receiver });
         self.visit(node);
         self.lambdas.pop();
     }
@@ -965,8 +990,14 @@ impl<'a> Cx<'a> {
             && receiver.as_deref().is_none_or(|r| r == "this")
             && !self.lambdas.is_empty()
         {
-            let inner: Vec<&String> = self.lambdas.iter().rev().filter(|l| !l.is_empty()).take(LAMBDAS_KEPT).collect();
-            self.facts.arg_types.insert(self.facts.refs.len(), serde_json::json!({ "lambdas": inner }).to_string());
+            let inner: Vec<&Lambda> = self.lambdas.iter().rev().filter(|l| !l.callee.is_empty()).take(LAMBDAS_KEPT).collect();
+            if inner.is_empty() {
+                self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: ln, col, args });
+                return;
+            }
+            let names: Vec<&str> = inner.iter().map(|l| l.callee.as_str()).collect();
+            let receivers: Vec<Option<&str>> = inner.iter().map(|l| l.receiver.as_deref()).collect();
+            self.facts.arg_types.insert(self.facts.refs.len(), serde_json::json!({ "lambdas": names, "receivers": receivers }).to_string());
         }
         self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: ln, col, args });
     }

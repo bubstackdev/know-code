@@ -1,5 +1,6 @@
-//! Package manifests: SwiftPM `Package.swift`, XcodeGen `project.yml`, Cargo `Cargo.toml` and Go `go.mod`, parsed
-//! into packages, targets and products, and the dependencies between them.
+//! Package manifests: SwiftPM `Package.swift`, XcodeGen `project.yml`, Cargo `Cargo.toml`, Go `go.mod`, Maven
+//! `pom.xml` and Gradle build and settings scripts, parsed into packages, targets and products, and the dependencies
+//! between them.
 //!
 //! Only literal manifest content is understood. A `Package.swift` that builds its arrays in variables or loops
 //! yields what is written inline.
@@ -576,6 +577,338 @@ pub fn gomod(source: &str) -> FileFacts {
     facts
 }
 
+/// A Maven `pom.xml`, read as text and never evaluated: no parent POM, property, profile or BOM is resolved. The
+/// package is `groupId:artifactId`, the coordinates another build depends on it by (the groupId is the parent's when
+/// the project doesn't set its own); its `<modules>` are targets of kind `module`, each a directory under the POM's;
+/// and each `<dependency>` of its own `<dependencies>` (not `dependencyManagement`'s, a plugin's or a profile's) is a
+/// `Registry` dependency named `groupId:artifactId`, its version as written the requirement, with a scope other than
+/// `compile` after it.
+pub fn maven(source: &str) -> FileFacts {
+    let mut facts = FileFacts::default();
+    if !source.contains("<project") {
+        facts.parse_errors = 1;
+        return facts;
+    }
+    let src = xml_without_comments(source);
+    let parent = xml_block(&src, "parent").map(|(a, b)| &src[a..b]);
+    // The project's own coordinates and modules: what is left with the blocks naming other coordinates blanked out.
+    let own = blank_blocks(
+        &src,
+        &["build", "profiles", "reporting", "dependencyManagement", "dependencies", "parent", "distributionManagement", "repositories", "pluginRepositories"],
+    );
+    let Some(artifact) = element_text(&own, "artifactId") else {
+        facts.parse_errors = 1;
+        return facts;
+    };
+    let group = element_text(&own, "groupId").or_else(|| parent.and_then(|p| element_text(p, "groupId")));
+    let mut pkg = PackageFact {
+        kind: "maven",
+        name: group.map_or_else(|| artifact.clone(), |g| format!("{g}:{artifact}")),
+        line: own.find("<artifactId>").map_or(1, |b| line_of(source, b)),
+        targets: Vec::new(),
+        deps: Vec::new(),
+    };
+    for (at, tag) in elements(&own, &["module"]) {
+        let start = at + tag.len();
+        if let Some(end) = own[start..].find("</module>") {
+            let name = own[start..start + end].trim();
+            if !name.is_empty() {
+                pkg.targets.push(TargetFact { name: name.to_string(), kind: "module".into(), line: line_of(source, at), deps: Vec::new() });
+            }
+        }
+    }
+    let deps_src = blank_blocks(&src, &["build", "profiles", "reporting", "dependencyManagement", "parent"]);
+    for (at, tag) in elements(&deps_src, &["dependency"]) {
+        let start = at + tag.len();
+        let Some(end) = deps_src[start..].find("</dependency>") else { continue };
+        let body = &deps_src[start..start + end];
+        let (Some(g), Some(a)) = (element_text(body, "groupId"), element_text(body, "artifactId")) else { continue };
+        let version = element_text(body, "version");
+        let requirement = match element_text(body, "scope").filter(|s| s != "compile") {
+            Some(scope) => Some(version.map_or_else(|| format!("({scope})"), |v| format!("{v} ({scope})"))),
+            None => version,
+        };
+        pkg.deps.push(PackageDep {
+            name: format!("{g}:{a}"),
+            source: DepSource::Registry,
+            location: String::new(),
+            requirement,
+            line: line_of(source, at),
+            resolved_repo: None,
+        });
+    }
+    facts.packages.push(pkg);
+    facts
+}
+
+/// `source` with each `<!-- … -->` replaced by spaces (line breaks kept), so offsets and lines stay the file's.
+fn xml_without_comments(source: &str) -> String {
+    let mut out = source.to_string();
+    let mut i = 0;
+    while let Some(off) = out[i..].find("<!--") {
+        let at = i + off;
+        let end = out[at..].find("-->").map_or(out.len(), |e| at + e + 3);
+        let blank: String = out[at..end].chars().map(|c| if c == '\n' { '\n' } else { ' ' }).collect();
+        out.replace_range(at..end, &blank);
+        i = at + blank.len();
+    }
+    out
+}
+
+/// The byte range of the first `<name>…</name>` element, its own nested elements of that name included.
+fn xml_block(src: &str, name: &str) -> Option<(usize, usize)> {
+    let starts = |at: usize| {
+        src[at + 1..].starts_with(name)
+            && src.get(at + 1 + name.len()..).is_some_and(|rest| rest.starts_with(['>', ' ', '\t', '\n', '\r', '/']))
+    };
+    let mut i = 0;
+    let open = loop {
+        let at = i + src[i..].find('<')?;
+        if starts(at) {
+            break at;
+        }
+        i = at + 1;
+    };
+    let close = format!("</{name}>");
+    let (mut depth, mut i) = (0usize, open);
+    loop {
+        let at = i + src[i..].find('<')?;
+        if starts(at) {
+            let tag_end = at + src[at..].find('>')?;
+            if src.as_bytes()[tag_end - 1] != b'/' {
+                depth += 1;
+            } else if depth == 0 {
+                return Some((open, tag_end + 1));
+            }
+        } else if src[at..].starts_with(&close) {
+            depth -= 1;
+            if depth == 0 {
+                return Some((open, at + close.len()));
+            }
+        }
+        i = at + 1;
+    }
+}
+
+/// `src` with every element of the given names replaced by spaces (line breaks kept), outermost names first.
+fn blank_blocks(src: &str, names: &[&str]) -> String {
+    let mut out = src.to_string();
+    for name in names {
+        while let Some((a, b)) = xml_block(&out, name) {
+            let blank: String = out[a..b].chars().map(|c| if c == '\n' { '\n' } else { ' ' }).collect();
+            out.replace_range(a..b, &blank);
+        }
+    }
+    out
+}
+
+/// A Gradle build script (`build.gradle`, `build.gradle.kts`) or settings script (`settings.gradle[.kts]`), read as
+/// text and never evaluated: no plugin, version catalog (`libs.x`), property or `allprojects` block is resolved.
+///
+/// A settings script is the build's root package, named by `rootProject.name` (else its directory's name), with each
+/// project it `include`s a target of kind `module` (`:core:api` names the directory `core/api` under it). A build
+/// script is its project, named as Gradle names a project, by its directory (`group:directory` when the script sets a
+/// literal `group`); the root's is the build itself, `(workspace)`. Each dependency written with coordinates
+/// (`implementation("g:a:v")`, `testImplementation 'g:a'`) is a `Registry` dependency named `g:a`, its version the
+/// requirement, with the configuration after it when that isn't a main one; `project(":x")` is a `Workspace`
+/// dependency on the build's project `:x`.
+pub fn gradle(source: &str, settings: bool, dir_name: &str) -> FileFacts {
+    let mut facts = FileFacts::default();
+    let src = gradle_without_comments(source);
+    if settings {
+        let name = gradle_assigned(&src, "rootProject.name").map(|(v, _)| v).unwrap_or_else(|| {
+            if dir_name.is_empty() { "(workspace)".to_string() } else { dir_name.to_string() }
+        });
+        let mut pkg = PackageFact { kind: "gradle", name, line: 1, targets: Vec::new(), deps: Vec::new() };
+        for (at, args) in gradle_calls(&src, "include") {
+            for module in args {
+                let module = module.trim_start_matches(':').to_string();
+                if !module.is_empty() {
+                    pkg.targets.push(TargetFact { name: module, kind: "module".into(), line: line_of(source, at), deps: Vec::new() });
+                }
+            }
+        }
+        facts.packages.push(pkg);
+        return facts;
+    }
+    let name = if dir_name.is_empty() {
+        "(workspace)".to_string()
+    } else {
+        match gradle_assigned(&src, "group") {
+            Some((g, _)) => format!("{g}:{dir_name}"),
+            None => dir_name.to_string(),
+        }
+    };
+    let mut pkg = PackageFact { kind: "gradle", name, line: 1, targets: Vec::new(), deps: Vec::new() };
+    for (at, config, value, project) in gradle_dependencies(&src) {
+        let line = line_of(source, at);
+        if project {
+            pkg.deps.push(PackageDep { name: value, source: DepSource::Workspace, location: String::new(), requirement: None, line, resolved_repo: None });
+            continue;
+        }
+        let mut parts = value.split(':');
+        let (Some(g), Some(a)) = (parts.next(), parts.next()) else { continue };
+        if g.is_empty() || a.is_empty() {
+            continue;
+        }
+        let version = parts.next().filter(|v| !v.is_empty()).map(str::to_string);
+        let main = matches!(config.as_str(), "implementation" | "api" | "compile" | "compileOnly" | "runtimeOnly" | "compileOnlyApi");
+        let requirement = match (main, version) {
+            (true, v) => v,
+            (false, Some(v)) => Some(format!("{v} ({config})")),
+            (false, None) => Some(format!("({config})")),
+        };
+        pkg.deps.push(PackageDep { name: format!("{g}:{a}"), source: DepSource::Registry, location: String::new(), requirement, line, resolved_repo: None });
+    }
+    facts.packages.push(pkg);
+    facts
+}
+
+/// `source` with `//` and `/* */` comments replaced by spaces (line breaks kept), strings left as they are.
+fn gradle_without_comments(source: &str) -> String {
+    let b = source.as_bytes();
+    let mut out = b.to_vec();
+    let mut i = 0;
+    let mut quote: Option<u8> = None;
+    while i < b.len() {
+        match quote {
+            Some(q) => {
+                if b[i] == b'\\' {
+                    i += 1;
+                } else if b[i] == q {
+                    quote = None;
+                }
+                i += 1;
+            }
+            None if b[i] == b'"' || b[i] == b'\'' => {
+                quote = Some(b[i]);
+                i += 1;
+            }
+            None if b[i..].starts_with(b"//") => {
+                while i < b.len() && b[i] != b'\n' {
+                    out[i] = b' ';
+                    i += 1;
+                }
+            }
+            None if b[i..].starts_with(b"/*") => {
+                let end = source[i..].find("*/").map_or(b.len(), |e| i + e + 2);
+                for c in &mut out[i..end] {
+                    if *c != b'\n' {
+                        *c = b' ';
+                    }
+                }
+                i = end;
+            }
+            None => i += 1,
+        }
+    }
+    // Only ASCII bytes were replaced, by ASCII spaces.
+    String::from_utf8(out).unwrap_or_else(|_| source.to_string())
+}
+
+/// The string literal `key = "v"` (or Groovy's `key "v"`, `key 'v'`) assigns, at the start of a line, with its offset.
+fn gradle_assigned(src: &str, key: &str) -> Option<(String, usize)> {
+    let mut offset = 0;
+    for line in src.split_inclusive('\n') {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix(key) {
+            let rest = rest.trim_start();
+            let rest = rest.strip_prefix('=').map_or(rest, str::trim_start);
+            if let Some(v) = string_at(rest) {
+                return Some((v, offset + line.len() - t.len()));
+            }
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// The string literal `s` starts with (`"v"` or `'v'`), when it has no interpolation.
+fn string_at(s: &str) -> Option<String> {
+    let q = s.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let end = s[1..].find(q)? + 1;
+    let v = &s[1..end];
+    (!v.contains('$')).then(|| v.to_string())
+}
+
+/// Each call of `name` as a word (`include("a", ":b")`, `include 'a', 'b'`): its offset and string arguments, to its
+/// closing parenthesis or, unparenthesized, to the end of the line (or the next line, after a trailing comma).
+fn gradle_calls(src: &str, name: &str) -> Vec<(usize, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(off) = src[i..].find(name) {
+        let at = i + off;
+        i = at + name.len();
+        let before = src[..at].chars().next_back();
+        let after = src[i..].chars().next();
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') || after.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let rest = &src[i..];
+        let paren = rest.trim_start().starts_with('(');
+        let mut args = Vec::new();
+        let mut j = 0;
+        let bytes = rest.as_bytes();
+        while j < bytes.len() {
+            let c = bytes[j];
+            if paren && c == b')' {
+                break;
+            }
+            if !paren && c == b'\n' && !rest[..j].trim_end().ends_with(',') {
+                break;
+            }
+            if (c == b'"' || c == b'\'')
+                && let Some(v) = string_at(&rest[j..])
+            {
+                j += v.len() + 2;
+                args.push(v);
+                continue;
+            }
+            j += 1;
+        }
+        out.push((at, args));
+    }
+    out
+}
+
+/// Each dependency declaration in a `dependencies` block: its offset, configuration, and either the coordinates
+/// string (`"g:a:v"`) or, for `project(":x")`, the project path (with `true`).
+fn gradle_dependencies(src: &str) -> Vec<(usize, String, String, bool)> {
+    let mut out = Vec::new();
+    let mut offset = 0;
+    for line in src.split_inclusive('\n') {
+        let t = line.trim_start();
+        let at = offset + line.len() - t.len();
+        offset += line.len();
+        let word: String = t.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if !is_configuration(&word) {
+            continue;
+        }
+        let rest = t[word.len()..].trim_start();
+        let rest = rest.strip_prefix('(').map_or(rest, str::trim_start);
+        let rest = ["platform(", "enforcedPlatform(", "testFixtures("].iter().find_map(|p| rest.strip_prefix(p)).map_or(rest, str::trim_start);
+        if let Some(r) = rest.strip_prefix("project(") {
+            let r = r.trim_start();
+            let r = r.strip_prefix("path").map_or(r, |r| r.trim_start().trim_start_matches([':', '=']).trim_start());
+            if let Some(p) = string_at(r) {
+                out.push((at, word, p, true));
+            }
+        } else if let Some(v) = string_at(rest) {
+            out.push((at, word, v, false));
+        }
+    }
+    out
+}
+
+/// A Gradle dependency configuration's name: Java's (`implementation`, `testRuntimeOnly`, …), an annotation
+/// processor's (`kapt`, `ksp`, `annotationProcessor`), or a source set's (`integrationTestImplementation`).
+fn is_configuration(word: &str) -> bool {
+    matches!(word, "implementation" | "api" | "compile" | "compileOnly" | "compileOnlyApi" | "runtimeOnly" | "kapt" | "ksp" | "annotationProcessor")
+        || ["Implementation", "Api", "CompileOnly", "RuntimeOnly", "AnnotationProcessor"]
+            .iter()
+            .any(|s| word.len() > s.len() && word.ends_with(s) && word.starts_with(|c: char| c.is_ascii_lowercase()))
+}
+
 /// Finds 1-based lines of YAML keys and TOML sections by text, since the parsers drop positions.
 struct LineFinder<'a> {
     lines: Vec<&'a str>,
@@ -977,4 +1310,85 @@ let package = Package(
         );
         assert_eq!(gomod("go 1.22\n").parse_errors, 1);
     }
+
+    #[test]
+    fn maven_coordinates_modules_and_dependencies() {
+        let pom = r#"<?xml version="1.0"?>
+<project>
+  <parent>
+    <groupId>org.example.shop</groupId>
+    <artifactId>shop-parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>shop-core</artifactId>
+  <!-- <artifactId>commented-out</artifactId> -->
+  <modules>
+    <module>api</module>
+    <module>web/admin</module>
+  </modules>
+  <dependencyManagement>
+    <dependencies>
+      <dependency><groupId>org.example</groupId><artifactId>managed-only</artifactId><version>9</version></dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.example.shop</groupId>
+      <artifactId>shop-model</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin><groupId>org.example</groupId><artifactId>a-plugin</artifactId>
+        <dependencies><dependency><groupId>x</groupId><artifactId>plugin-dep</artifactId></dependency></dependencies>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+"#;
+        let f = maven(pom);
+        let p = &f.packages[0];
+        assert_eq!((p.kind, p.name.as_str(), p.line), ("maven", "org.example.shop:shop-core", 8));
+        let modules: Vec<(&str, u32)> = p.targets.iter().map(|t| (t.name.as_str(), t.line)).collect();
+        assert_eq!(modules, [("api", 11), ("web/admin", 12)]);
+        let deps: Vec<(&str, Option<&str>)> = p.deps.iter().map(|d| (d.name.as_str(), d.requirement.as_deref())).collect();
+        assert_eq!(deps, [("org.example.shop:shop-model", Some("${project.version}")), ("org.junit.jupiter:junit-jupiter", Some("(test)"))]);
+        assert!(p.deps.iter().all(|d| d.source == DepSource::Registry));
+        assert_eq!(maven("<html></html>").parse_errors, 1);
+    }
+
+    #[test]
+    fn gradle_settings_and_build_scripts() {
+        let settings = "rootProject.name = \"orchard\"\n// include(\"old\")\ninclude(\":core\", \":web:admin\")\ninclude 'cli',\n    'tools'\nincludeBuild(\"build-logic\")\n";
+        let f = gradle(settings, true, "");
+        let p = &f.packages[0];
+        assert_eq!((p.kind, p.name.as_str()), ("gradle", "orchard"));
+        let modules: Vec<(&str, u32)> = p.targets.iter().map(|t| (t.name.as_str(), t.line)).collect();
+        assert_eq!(modules, [("core", 3), ("web:admin", 3), ("cli", 4), ("tools", 4)]);
+        assert_eq!(gradle("include(\"a\")\n", true, "").packages[0].name, "(workspace)");
+
+        let build = "plugins { kotlin(\"jvm\") }\ngroup = \"org.example\"\ndependencies {\n    implementation(project(\":core\"))\n    api(\"com.squareup.okio:okio:3.9.0\")\n    implementation(libs.kotlinx.coroutines)\n    testImplementation 'org.junit.jupiter:junit-jupiter'\n    kapt(\"com.google.dagger:dagger-compiler:2.51\") // a processor\n    implementation(platform(\"org.example:bom:1.0\"))\n    implementation(\"x:y:$version\")\n}\n";
+        let f = gradle(build, false, "web");
+        let p = &f.packages[0];
+        assert_eq!(p.name, "org.example:web");
+        let deps: Vec<(&str, DepSource, Option<&str>, u32)> = p.deps.iter().map(|d| (d.name.as_str(), d.source, d.requirement.as_deref(), d.line)).collect();
+        assert_eq!(
+            deps,
+            [
+                (":core", DepSource::Workspace, None, 4),
+                ("com.squareup.okio:okio", DepSource::Registry, Some("3.9.0"), 5),
+                ("org.junit.jupiter:junit-jupiter", DepSource::Registry, Some("(testImplementation)"), 7),
+                ("com.google.dagger:dagger-compiler", DepSource::Registry, Some("2.51 (kapt)"), 8),
+                ("org.example:bom", DepSource::Registry, Some("1.0"), 9),
+            ]
+        );
+        assert_eq!(gradle("dependencies {}\n", false, "").packages[0].name, "(workspace)");
+    }
+
 }

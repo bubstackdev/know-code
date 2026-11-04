@@ -1454,16 +1454,28 @@ fn note(recording: &Recording, env: &Value) {
 
 /// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
 async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
-    let env = blocking(false, with_cuts(f)).await?;
-    note(&recording(), &env);
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
+    // Cut to size in the lane, as the call's operation: a client gone away stops the cutting too.
+    let (rec, max) = (recording(), max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS));
+    let f = with_cuts(f);
+    blocking(false, move || {
+        let env = f()?;
+        note(&rec, &env);
+        Ok(cap(env, max))
+    })
+    .await
 }
 
 /// [`run`] for an operation that runs a child process (a search): in the children's lane.
 async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
-    let env = blocking(true, with_cuts(f)).await?;
-    note(&recording(), &env);
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
+    // Cut to size in the lane, as the call's operation: a client gone away stops the cutting too.
+    let (rec, max) = (recording(), max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS));
+    let f = with_cuts(f);
+    blocking(true, move || {
+        let env = f()?;
+        note(&rec, &env);
+        Ok(cap(env, max))
+    })
+    .await
 }
 
 /// `f`, with the child processes cut while it ran said in its envelope (see [`ops::add_cuts`]). Runs on the blocking
@@ -2023,6 +2035,10 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
     let mut unstamped = false;
     while len > max && guard < 10_000 {
         guard += 1;
+        // A call cancelled (its client gone, its deadline passed) wants no answer: cutting it further is wasted work.
+        if kc_store::limits::cancelled() {
+            break;
+        }
         // Far over the size (a workspace answer can be thousands of times it), rows go many at a time: each list cut
         // loses up to half its rows, and while the answer is large nothing is measured, finished or stamped again; the
         // size is the full form's less the rows removed, counted as they go. Cutting one row at a time, each followed
@@ -3918,6 +3934,23 @@ mod tests {
         // As many rows as fit are kept: the one repo left keeps more than a handful of its accessors.
         assert_eq!(v["items"].as_array().map(Vec::len), Some(1), "{out}");
         assert!(v["items"][0]["table"]["accessors"].as_array().map_or(0, Vec::len) > 20, "{out}");
+    }
+
+    #[test]
+    fn a_cancelled_call_stops_cutting_its_answer() {
+        let items: Vec<Value> = (0..150)
+            .map(|r| {
+                let rows: Vec<Value> = (0..300).map(|k| json!({ "file": format!("svc{r}/src/Reader{k}.cs"), "line": k + 1 })).collect();
+                json!({ "repo": format!("svc{r}"), "rows": rows })
+            })
+            .collect();
+        let env = json!({ "repo": "workspace", "items": items, "total": 150, "truncated": false });
+        let op = kc_store::limits::Operation::new();
+        op.cancel();
+        let _entered = kc_store::limits::enter(op);
+        MEASURED_BYTES.with(|n| n.set(0));
+        let _ = cap(env, 8_000);
+        assert_eq!(MEASURED_BYTES.with(std::cell::Cell::get), 0, "a cancelled call's answer is cut no further");
     }
 
     #[test]

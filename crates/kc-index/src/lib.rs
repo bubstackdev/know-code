@@ -33,6 +33,7 @@ pub mod line_history;
 pub mod machine;
 pub mod meter;
 pub mod http;
+pub mod jvm_builds;
 pub mod notes;
 pub mod revision;
 pub mod ownership;
