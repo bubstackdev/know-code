@@ -2299,6 +2299,10 @@ fn tier(path: &str) -> u8 {
     }
 }
 
+/// Notes an answer's items carry about one of their lists, the same text in every answer: the size cap drops them
+/// before it cuts a row.
+const NOTES: &[&str] = &["users_note"];
+
 /// Detail an answer list's rows can do without, dropped before a row of one is cut: the row keeps its name, kind and
 /// `file:line`.
 const ROW_DETAIL: &[&str] = &["signature", "doc", "attrs", "start_line", "end_line", "complexity", "cite"];
@@ -2458,6 +2462,12 @@ fn shrink(v: &mut Value, keep: f64) -> Option<Cut> {
             _ => None,
         }
     }
+    // The answer's items' notes about their lists (see [`NOTES`]), dropped all at once; false when there are none.
+    fn drop_notes(v: &mut Value) -> bool {
+        v.get_mut("items").and_then(Value::as_array_mut).is_some_and(|items| {
+            items.iter_mut().filter_map(Value::as_object_mut).fold(false, |any, item| NOTES.iter().fold(false, |d, k| item.remove(*k).is_some() | d) | any)
+        })
+    }
     // The rest of a site's statement goes before any row.
     // A string shortened counts as one item cut, as it always has in `omitted`; detail dropped isn't counted.
     let other = |path: &str| Some(Cut { path: path.to_string(), rows: u64::from(!path.is_empty()), bytes: None });
@@ -2476,6 +2486,11 @@ fn shrink(v: &mut Value, keep: f64) -> Option<Cut> {
         return other("/…");
     }
     if slim(v, false) {
+        return other("");
+    }
+    // A note saying what a list is, the same in every answer (`users_note`; `kc_help` describes the list), goes before
+    // any row: of a side list, or of a list the answer is about.
+    if drop_notes(v) {
         return other("");
     }
     // A page of one list (`kc_more`) is that list's rows only.

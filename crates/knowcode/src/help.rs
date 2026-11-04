@@ -261,7 +261,8 @@ file (`Publish(Build(…))`) has that method's return type. Consumers include Ma
 (`AddConsumer<MailConsumer<X>>()`, `AddMailConsumer<X>()`), at the registration. Each link is exact (both sides name
 the same declared message type) or ambiguous (the bare name only). For a message type, `callers` holds only the uses
 inside its publishers and consumers, each with `bus` (publisher, consumer); its other uses (a construction in a mapper
-or a test builder, a type mention) are `users`, with `users_total` and their own `users_cursor`."#,
+or a test builder, a type mention) are `users`, with `users_total` and their own `users_cursor`. Links cut to fit
+`max_chars` continue by the bus entry's `links_cursor`."#,
     },
     Topic {
         name: "kc_context.sql",
