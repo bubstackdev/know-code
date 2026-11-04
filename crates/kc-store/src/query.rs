@@ -6898,6 +6898,15 @@ fn injected_member(conn: &Connection, oracle: &mut TypeOracle, caller: Option<&s
 /// Every reference using one of `names`, resolved in one pass that shares its caches: for whole-repo questions
 /// (unused symbols) that would otherwise resolve name by name.
 pub fn refs_named(conn: &Connection, names: &[&str]) -> Result<Vec<RefHit>> {
+    refs_named_where(conn, names, |_| true)
+}
+
+/// [`refs_named`], keeping only the references `keep` accepts, tested on each row as read and before any is resolved:
+/// for a caller that wants a few of a common name's references (`Id`, `Name`), which would otherwise resolve, and hold
+/// at once, every one in the repo. `keep` may read only what a row holds unresolved (its kind, `assigns`, `from`,
+/// file and line), never a confidence or targets. Each reference resolves on its own (see [`refs_in_chunks`]), so the
+/// ones kept come out as [`refs_named`] gives them.
+pub fn refs_named_where(conn: &Connection, names: &[&str], keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
     let sql = format!(
         "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
          WHERE r.name = ?1 ORDER BY f.path, r.line"
@@ -6905,12 +6914,20 @@ pub fn refs_named(conn: &Connection, names: &[&str]) -> Result<Vec<RefHit>> {
     let mut stmt = conn.prepare_cached(&sql)?;
     let mut hits = Vec::new();
     for name in names {
-        hits.extend(stmt.query_map([name], ref_row)?.collect::<rusqlite::Result<Vec<_>>>()?);
+        for h in stmt.query_map([name], ref_row)? {
+            let h = h?;
+            if keep(&h) {
+                hits.push(h);
+            }
+        }
     }
     resolve_all(conn, &mut hits)?;
     for name in names {
         add_factory_constructions(conn, name, &mut hits)?;
     }
+    // The factory constructions come resolved, and few: tested once added. Their stable sort into place leaves the
+    // rest in the order filtering after it would.
+    hits.retain(&keep);
     Ok(hits)
 }
 
