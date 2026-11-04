@@ -348,7 +348,9 @@ Resolved as the compiler scopes names, and never by a name alone:
 - **The default build.** Linux, any architecture, cgo on, no custom tags. A file another build compiles
   (`x_windows.go`, `//go:build nomsgpack`) is read, but its declarations give way to the default build's.
 
-HTTP routes:
+HTTP routes (**a preview in 0.7**: on the frozen route labels chi and `net/http` fell short of the 0.95 precision
+gate, and the held-out repositories scored unevenly; a fresh held-out round in 0.8 decides whether it stays one, see
+the [0.7 release gate](../eval/release-gate/0.7.0.md#routes)):
 
 - **Servers.** `net/http`'s `Handle` and `HandleFunc` on a `ServeMux` or the default one, with method patterns
   (`"GET /items/{id}"`); gin, echo and chi verbs, `Any`/`Match`/`Handle`/`Add`/`Method`, static files, groups
