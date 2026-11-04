@@ -2896,9 +2896,12 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
     let Some(args) = args else {
         return Ok(defs);
     };
+    // Overloads listing parameters: a generic one without any has `param_types` only for its type parameters' number,
+    // which says nothing of the arguments (and it takes none, so the argument count rules it out).
+    let lists = |d: &Def| d.params.as_deref().and_then(Params::decode).is_some_and(|p| !p.types.is_empty() || p.rest.is_some());
     let mut groups: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
     for (i, d) in defs.iter().enumerate() {
-        if d.params.is_some() {
+        if lists(d) {
             groups.entry(d.container.as_deref()).or_default().push(i);
         }
     }

@@ -396,3 +396,31 @@ fn type_arguments_written_pick_the_overload_with_as_many_type_parameters() {
     assert_eq!(at_line(conn, "Find", 10), [("ambiguous", vec![5, 6, 7])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const TRACERS: &str = r#"namespace App;
+
+public class Tracer { }
+public interface IContainer { }
+public static class ContainerExtensions
+{
+    public static void Subscribe(this IContainer c, Tracer t) { }
+    public static T Subscribe<T>(this IContainer c) where T : Tracer, new()
+    {
+        var t = new T();
+        c.Subscribe(t);
+        return t;
+    }
+}
+"#;
+
+/// A generic overload without parameters (`Subscribe<T>(this IContainer c)`) records its type parameters' number and
+/// no parameter type: it never stands in for one whose parameters an argument's type is checked against.
+#[test]
+fn a_generic_overload_without_parameters_leaves_argument_types_to_the_others() {
+    let root = scratch("overload-type-args-none");
+    write(&root, "src/App/Tracers.cs", TRACERS);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    assert_eq!(at_line(store.conn(), "Subscribe", 11), [("exact", vec![7])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
