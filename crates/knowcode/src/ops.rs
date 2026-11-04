@@ -3662,7 +3662,21 @@ pub fn context_raised(
         }
         let mut imported = query::context_imports(o.store.conn(), symbol)?;
         let mut deps = open_dependencies_importing(&o, Some(&imported), args.no_sync)?;
-        let mut found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &limits, &dependency_refs(&deps))?;
+        // A bus message type (fix 4): its callers are split into those publishing or consuming it and the rest, each
+        // cut at the page, so the one read keeps every caller (the context builds them all before cutting anyway).
+        let message = match query::definitions(o.store.conn(), symbol)?.first() {
+            Some(s) => is_message_type(&o, s)?,
+            None => false,
+        };
+        let read_limits = ContextLimits {
+            source_chars: limits.source_chars,
+            members: limits.members,
+            callers: if message { usize::MAX } else { limits.callers },
+            callees: limits.callees,
+            conformers: limits.conformers,
+            source: limits.source,
+        };
+        let mut found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &read_limits, &dependency_refs(&deps))?;
         // The file's content differs from the index although its stat didn't move (an edit keeping mtime and size):
         // index it again and answer from that.
         if !args.no_sync && !o.refresh_pending && let Some(file) = found_ctx.as_ref().filter(|c| c.source_changed).map(|c| c.symbol.file.clone()) {
@@ -3674,7 +3688,7 @@ pub fn context_raised(
             }
             imported = query::context_imports(o.store.conn(), symbol)?;
             deps = open_dependencies_importing(&o, Some(&imported), args.no_sync)?;
-            found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &limits, &dependency_refs(&deps))?;
+            found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &read_limits, &dependency_refs(&deps))?;
         }
         // A stored procedure (or table) the repo's code calls but another repo defines: its definition there.
         if found_ctx.is_none()
@@ -3699,19 +3713,9 @@ pub fn context_raised(
             }
         }
         if let Some(mut ctx) = found_ctx {
-            // A bus message type (fix 4): its callers are split below into those publishing or consuming it and the
-            // rest, each cut at the page, so both need every caller first.
-            let message = is_message_type(&o, &ctx.symbol)?;
+            // The message type read uncut above is the one found (a symbol found elsewhere was read at the page).
+            let message = message && ctx.callers_summary.total == ctx.callers.len() && is_message_type(&o, &ctx.symbol)?;
             let caller_cap = if message { usize::MAX } else { limits.callers };
-            if message && ctx.callers_summary.total > ctx.callers.len() {
-                let every = ContextLimits { callers: usize::MAX, source: limits.source, ..ContextLimits::from_budget(budget) };
-                if let Some(all) = query::context_with(o.store.conn(), &o.root, symbol, &every, &dependency_refs(&deps))?
-                    && all.symbol.id == ctx.symbol.id
-                {
-                    ctx.callers = all.callers;
-                    ctx.callers_summary = all.callers_summary;
-                }
-            }
             // Callers in repos that depend on this one.
             let s = &ctx.symbol;
             let (name, kinds): (String, Vec<&str>) = if s.kind == "init" {
