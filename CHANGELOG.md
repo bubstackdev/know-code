@@ -112,6 +112,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   memory fell from 1,650 MB to 468 MB, with the same answer and about the same instructions. Callers in `context` and
   the removed definitions `impact --diff` reports keep only the references they use as they resolve them too, and the
   factory constructions kept for the process are bounded to the four most recently used indexes.
+- Workspace-wide questions hold less memory and, when indexes have been evicted from the cache, do half the work.
+  Checking which repos have a saved index read and fully parsed the whole workspace summary file once per repo; it
+  now reads only the fields it needs, once per check. The summaries last read are released before new ones are read,
+  and the file is written through a buffer rather than built whole first. Answers are unchanged. On 111 public repos,
+  a workspace-wide `refs` peaked at 76 to 81 MB instead of 95 to 106 MB; with the indexes evicted, at 35 to 38 MB
+  instead of 43 to 44 MB, with 11 G instructions instead of 21 G.
 - `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
   but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
   unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of

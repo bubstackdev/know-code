@@ -121,10 +121,50 @@ fn format() -> String {
     format!("{SUMMARY_FORMAT}.{}", kc_store::SCHEMA_VERSION)
 }
 
-pub(crate) fn has_saved_index(root: &Path) -> Result<bool> {
+/// The summary file as [`saved_index_roots`] reads it: only the fields it asks about. The others are skipped while
+/// parsing, not built, so a large workspace's file costs its bytes, not every summary built from them. The fields
+/// [`RepoSummary`] requires are still required, so a file the full parse would refuse is refused here too.
+#[derive(Deserialize)]
+struct SavedFile {
+    format: String,
+    repos: HashMap<String, SavedRepo>,
+}
+
+#[derive(Deserialize)]
+struct SavedRepo {
+    root: PathBuf,
+    #[serde(default)]
+    generation: String,
+    #[serde(default)]
+    light: bool,
+    #[allow(dead_code)]
+    packages: serde::de::IgnoredAny,
+    #[allow(dead_code)]
+    modules: serde::de::IgnoredAny,
+    #[allow(dead_code)]
+    stamp: serde::de::IgnoredAny,
+}
+
+/// The roots whose full index has a summary saved in the summary file (one read from a complete sync, not a
+/// discovery placeholder), whether or not the index itself is still in the cache. Callers asking about many roots
+/// read this once rather than once per root.
+pub(crate) fn saved_index_roots() -> Result<std::collections::HashSet<PathBuf>> {
     let path = crate::tree_dir()?.join("workspace.json");
-    Ok(std::fs::read(path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok())
-        .filter(|f| f.format == format()).is_some_and(|f| f.repos.values().any(|s| s.root == root && !s.light && !s.generation.is_empty())))
+    Ok(std::fs::read(path).map(|b| saved_roots(&b)).unwrap_or_default())
+}
+
+fn saved_roots(json: &[u8]) -> std::collections::HashSet<PathBuf> {
+    let file = serde_json::from_slice::<SavedFile>(json).ok();
+    file.filter(|f| f.format == format()).map(|f| f.repos.into_values().filter(|s| !s.light && !s.generation.is_empty()).map(|s| s.root).collect()).unwrap_or_default()
+}
+
+/// The summary file, if it parses. Its bytes are dropped as soon as they are parsed. Not parsed through a reader,
+/// which would spare holding the bytes during the parse: the file is read again whenever an index moved, many times
+/// in one workspace-wide query, and parsing through a reader took about 20% more instructions over that query
+/// (60 G rather than 50 G on 111 public repos).
+fn read_summary_file(path: &Path) -> Option<SummaryFile> {
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// The last summaries this process read, with the stamps they were read at. A query asks for the summary from
@@ -285,7 +325,10 @@ fn load(focus: &[PathBuf]) -> Result<(Shared, Shared)> {
         let flags: Vec<bool> = m.full.iter().map(gone).collect();
         let moved = m.full.iter().zip(&flags).any(|(s, g)| s.gone != *g);
         if moved {
-            m.full = Arc::new(m.full.iter().zip(flags).map(|(s, gone)| RepoSummary { gone, ..s.clone() }).collect());
+            // Marked in place when no caller still holds these summaries, else on a copy, as before.
+            for (s, gone) in Arc::make_mut(&mut m.full).iter_mut().zip(flags) {
+                s.gone = gone;
+            }
         }
         if moved || m.view != key {
             m.all = view(&m.full, &key, focus)?;
@@ -294,6 +337,9 @@ fn load(focus: &[PathBuf]) -> Result<(Shared, Shared)> {
         }
         return Ok((m.full.clone(), m.all.clone()));
     }
+    // The last summaries are no use once any index has moved: let them go before the new ones are read, so a large
+    // workspace doesn't hold both at once (callers still holding them keep their own references).
+    *memo = None;
     let (mut full, read_stamps) = refresh(stamps)?;
     for summary in crate::light::summaries()? {
         if !full.iter().any(|s| s.root == summary.root && !s.light) {
@@ -317,7 +363,7 @@ fn load(focus: &[PathBuf]) -> Result<(Shared, Shared)> {
 fn refresh(stamps: HashMap<String, (PathBuf, String)>) -> Result<(Vec<RepoSummary>, HashMap<String, String>)> {
     let _metadata = crate::writer::workspace(true)?;
     let cache_path = crate::tree_dir()?.join("workspace.json");
-    let file: Option<SummaryFile> = std::fs::read(&cache_path).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let file = read_summary_file(&cache_path);
     let mut cached: HashMap<String, RepoSummary> = file.filter(|f| f.format == format()).map(|f| f.repos).unwrap_or_default();
     let mut fresh: HashMap<String, RepoSummary> = HashMap::new();
     let mut stale = Vec::new();
@@ -377,7 +423,7 @@ fn refresh(stamps: HashMap<String, (PathBuf, String)>) -> Result<(Vec<RepoSummar
 pub fn forget_summary(db: &Path) -> Result<()> {
     let _metadata = crate::writer::workspace(true)?;
     let cache_path = crate::tree_dir()?.join("workspace.json");
-    let Some(mut file) = std::fs::read(&cache_path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok()) else { return Ok(()) };
+    let Some(mut file) = read_summary_file(&cache_path) else { return Ok(()) };
     let key = db.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     if file.repos.remove(&key).is_none() {
         return Ok(());
@@ -392,7 +438,7 @@ pub(crate) fn clear_orphan_summary() -> Result<()> {
     if crate::cache::durable_file(&path)? { return Ok(()); }
     if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) { return Ok(()); }
     let _metadata = crate::writer::workspace(true)?;
-    let Some(mut file) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok()) else { return Ok(()) };
+    let Some(mut file) = read_summary_file(&path) else { return Ok(()) };
     file.repos.retain(|name, _| cache.join("repos").join(name).exists());
     if file.repos.is_empty() { std::fs::remove_file(path)?; }
     else { write_summary_file(&path, &file)?; }
@@ -405,7 +451,7 @@ pub(crate) fn prune_missing_summaries() -> Result<()> {
     if crate::cache::durable_file(&path)? { return Ok(()); }
     if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) { return Ok(()); }
     let _metadata = crate::writer::workspace(true)?;
-    let Some(mut file) = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok()) else { return Ok(()) };
+    let Some(mut file) = read_summary_file(&path) else { return Ok(()) };
     let before = file.repos.len();
     file.repos.retain(|name, s| cache.join("repos").join(name).exists() || s.root.join(".git").exists());
     if before == file.repos.len() { return Ok(()); }
@@ -417,7 +463,12 @@ pub(crate) fn prune_missing_summaries() -> Result<()> {
 fn write_summary_file(path: &Path, file: &SummaryFile) -> Result<()> {
     if crate::cache::durable_file(path)? { anyhow::bail!("workspace summary path overlaps durable notes: {}", path.display()); }
     let tmp = path.with_extension(format!("json.{}", std::process::id()));
-    std::fs::write(&tmp, serde_json::to_vec(file)?)?;
+    // Streamed into the temporary file rather than built as one buffer first; the rename still publishes it whole.
+    // A large buffer keeps the writes few: the file is rewritten whenever a summary changes.
+    let mut out = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&tmp)?);
+    serde_json::to_writer(&mut out, file)?;
+    std::io::Write::flush(&mut out)?;
+    drop(out);
     std::fs::rename(tmp, path)?;
     Ok(())
 }
@@ -429,7 +480,7 @@ pub(crate) fn preserve_summary(db: &Path) -> Result<()> {
     let Some(mut summary) = read_store(db, String::new(), store)? else { anyhow::bail!("cannot preserve index identity before eviction"); };
     summary.stamp.clear();
     let path = crate::tree_dir()?.join("workspace.json");
-    let mut file = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<SummaryFile>(&b).ok())
+    let mut file = read_summary_file(&path)
         .filter(|f| f.format == format()).unwrap_or_else(|| SummaryFile { format: format(), repos: HashMap::new() });
     let key = db.file_name().ok_or_else(|| anyhow::anyhow!("index has no file name"))?.to_string_lossy().into_owned();
     file.repos.insert(key, summary);
@@ -944,6 +995,32 @@ impl RepoSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_roots_reads_what_the_whole_file_would_say() {
+        let summary = |root: &str, generation: &str, light: bool| RepoSummary {
+            root: root.into(), generation: generation.into(), light, stamp: "s".into(), modules: vec!["M".into()], ..RepoSummary::default()
+        };
+        let repos = [summary("/full", "g", false), summary("/light", "g", true), summary("/unsynced", "", false)];
+        let file = SummaryFile { format: format(), repos: repos.into_iter().enumerate().map(|(i, s)| (format!("{i}.sqlite"), s)).collect() };
+        let json = serde_json::to_vec(&file).unwrap();
+        // What the whole parse said, as the summary file is read elsewhere.
+        let whole = |json: &[u8]| -> std::collections::HashSet<PathBuf> {
+            serde_json::from_slice::<SummaryFile>(json).ok().filter(|f| f.format == format())
+                .map(|f| f.repos.into_values().filter(|s| !s.light && !s.generation.is_empty()).map(|s| s.root).collect()).unwrap_or_default()
+        };
+        assert_eq!(saved_roots(&json), [PathBuf::from("/full")].into());
+        assert_eq!(saved_roots(&json), whole(&json));
+        // Another format, a summary missing a field the whole parse requires, or a cut file: nothing is saved.
+        let other = serde_json::to_vec(&SummaryFile { format: "0.0".into(), repos: file.repos.clone() }).unwrap();
+        let mut value = serde_json::to_value(&file).unwrap();
+        value["repos"]["0.sqlite"].as_object_mut().unwrap().remove("stamp");
+        let missing = serde_json::to_vec(&value).unwrap();
+        for json in [&other[..], &missing[..], &json[..json.len() / 2]] {
+            assert!(saved_roots(json).is_empty());
+            assert_eq!(saved_roots(json), whole(json));
+        }
+    }
 
     #[test]
     fn filters_rule_out_names_a_repo_neither_uses_defines_nor_maps() {

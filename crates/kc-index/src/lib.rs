@@ -1106,12 +1106,17 @@ pub fn memo_changes() -> ChangeMemo {
 /// on a few threads. One no longer on disk isn't (nothing there to sync).
 pub fn changed_repos(roots: &[PathBuf]) -> HashSet<PathBuf> {
     use kc_store::limits::Change;
+    // Read once, by whichever thread first meets a root whose index is gone, not once per such root: on a large
+    // workspace the summary file is tens of megabytes.
+    let saved: std::sync::OnceLock<Option<HashSet<PathBuf>>> = std::sync::OnceLock::new();
     let check = |root: &PathBuf| -> Change {
         if !root.join(".git").exists() {
             return Change { changed: false, proof: None };
         }
         if !db_path(root).is_ok_and(|p| p.exists()) {
-            return Change { changed: workspace::has_saved_index(root).unwrap_or(true) || !light::unchanged(root), proof: None };
+            let saved = saved.get_or_init(|| workspace::saved_index_roots().ok());
+            let changed = saved.as_ref().is_none_or(|s| s.contains(root)) || !light::unchanged(root);
+            return Change { changed, proof: None };
         }
         let proof = fresh::unchanged(root, &db_path(root).expect("checked above"));
         Change { changed: proof.is_none(), proof }
