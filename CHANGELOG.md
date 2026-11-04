@@ -4,6 +4,20 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Kotlin: in a lambda with a receiver (`x.apply { … }`, `with(x) { … }`, a lambda passed to a function of the repo's
+  taking a `T.() -> R`), a bare name is the receiver type's member or extension when that type is the repo's, and the
+  enclosing code's when the receiver has none of that name. Before, every such name was only a candidate. A trailing
+  lambda after arguments (`with(x) { … }`, `transaction(db) { … }`) is now read as passed to that function too; there,
+  a name on a receiver whose type can't be told is a candidate. On identity-v2's Kotlin labels, 20 more references are
+  linked `exact`, all of them right (`exact` precision stays 1.000, recall (linked) 0.492 to 0.514, no outside label
+  linked). Kotlin files are indexed again on the first query after upgrading.
+- C#: a call writing type arguments (`Find<Order>(key)`, `x.Get<A, B>()`) is linked only to the overloads declaring
+  that many type parameters of their own, when some do. Before, `Find<Order>(key)` was an ambiguous candidate of every
+  `Find` taking one argument whose type the call site didn't tell, `Find(object)` included. A call writing none is
+  unchanged (its type arguments may be inferred). On identity-v1's C# labels (serilog, autofac, jellyfin-server; 1,931
+  labels), 10 references go from ambiguous to the right `exact` link and none gets worse: recall (linked) goes from
+  0.768 to 0.776 (987 to 997 of 1,285 labels inside the repositories), ambiguous answers fall from 185 to 175, and
+  `exact` precision stays 0.998 (879 of 881). C# files are extracted again on the first query after upgrading.
 - TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
   is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
   one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
@@ -12,6 +26,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   label is newly wrong. The index schema moves to 25 (each declaration's scope), so the first query after upgrading
   indexes each repo again, at the same cost as a cold index (hono 15.6 G instructions, jellyfin 108 G); builds of
   schema 24 sharing the cache keep their own indexes.
+- An MCP answer is cut to its size in the call's own lane, and cutting stops when the call is cancelled (its
+  client gone, or its deadline passed): a cancelled call no longer keeps a core busy cutting an answer nobody reads.
 - An answer naming many files no longer takes time growing with their square to say which of them have parse
   errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
   workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of
@@ -30,11 +46,13 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
   `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
 - Maven and Gradle projects are test targets: `knowcode test-targets` (`kc_test_targets`) lists each project with
-  JUnit or TestNG test methods in its Java and Kotlin files, and runs each test alone from the build's root:
-  `mvn test -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` or `./gradlew :juice:test --tests
-  'org.example.juice.JuiceTest.pours'`, with the build's wrapper when it has one. Kotlin methods annotated
-  `@TestFactory` or `@TestTemplate` are tagged `test` too, as Java's are, so Kotlin files are indexed again on the
-  first query after upgrading.
+  JUnit or TestNG test methods in its Java and Kotlin files, and runs each test alone from the build's root: `mvn test
+  -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` or `./gradlew :juice:test --tests
+  org.example.juice.JuiceTest.pours --tests 'org.example.juice.JuiceTest.pours[*]'` (a JUnit 4 parameterized method's
+  cases included; a Kotlin Multiplatform project's tests in `jvmTest`), with the build's wrapper when it has one. The
+  commands were run in a container on google/gson and square/kotlinpoet: each ran exactly its test. Kotlin methods
+  annotated `@TestFactory` or `@TestTemplate` are tagged `test` too, as Java's are, so Kotlin files are indexed again
+  on the first query after upgrading.
 - Maven and Gradle builds are read. A `pom.xml` is a package named by its coordinates (`groupId:artifactId`), with
   its modules and dependencies; a Gradle build script is its project, with the dependencies it writes as coordinates
   and the projects it depends on, and a settings script names the build's projects. Each project is a declared module
@@ -112,6 +130,24 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
   (by file path, then line).
+- The first question that reads a C# repo's database model (`impact`, `context`, `tables`, `overview` or a walk on
+  an EF Core repo) takes far less memory and time to build it. Finding which accessors assign an entity's properties
+  resolved every reference in the repo to each property name (`Id`, `Name`, …) before keeping the few made in those
+  accessors; it now keeps them as they are read. The model and answers are unchanged. The first `impact` after an
+  `index` peaked at 82 MB instead of 316 MB on bitwarden/server (29.8 G instructions instead of 47.3 G), and at 36 to
+  37 MB instead of 90 to 91 MB on jellyfin (7.7 G instead of 10.6 G).
+
+- `unused` holds far less memory on a large repo: it resolves the references to its candidates' names a chunk at a
+  time and keeps only what its verdicts read, rather than every resolved reference at once. On bitwarden/server peak
+  memory fell from 1,650 MB to 468 MB, with the same answer and about the same instructions. Callers in `context` and
+  the removed definitions `impact --diff` reports keep only the references they use as they resolve them too, and the
+  factory constructions kept for the process are bounded to the four most recently used indexes.
+- Workspace-wide questions hold less memory and, when indexes have been evicted from the cache, do half the work.
+  Checking which repos have a saved index read and fully parsed the whole workspace summary file once per repo; it
+  now reads only the fields it needs, once per check. The summaries last read are released before new ones are read,
+  and the file is written through a buffer rather than built whole first. Answers are unchanged. On 111 public repos,
+  a workspace-wide `refs` peaked at 76 to 81 MB instead of 95 to 106 MB; with the indexes evicted, at 35 to 38 MB
+  instead of 43 to 44 MB, with 11 G instructions instead of 21 G.
 - `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
   but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
   unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of

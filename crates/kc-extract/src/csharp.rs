@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 37;
+pub const VERSION: u32 = 38;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -862,7 +862,7 @@ impl<'a> Cx<'a> {
             // of the constructors it declares.
             let (arity, _) = parameters(self.src, node, params);
             self.facts.symbols[sym].arity = Some(arity);
-            if let Some(types) = parameter_types(self.src, node, params) {
+            if let Some(types) = parameter_types(self.src, node, params, 0) {
                 self.facts.param_types.insert(sym, types);
             }
             for p in children(params).filter(|c| c.kind() == "parameter") {
@@ -1037,7 +1037,10 @@ impl<'a> Cx<'a> {
             let (arity, lambda_types) = parameters(self.src, node, params);
             self.facts.symbols[sym].arity = Some(arity);
             self.facts.symbols[sym].lambda_types = lambda_types;
-            if let Some(types) = parameter_types(self.src, node, params) {
+            // A generic method's own type parameters, which a call writing type arguments (`Get<T>()`) must match in
+            // number.
+            let generic = if matches!(node.kind(), "method_declaration" | "local_function_statement") { type_params_of(self.src, node).len() } else { 0 };
+            if let Some(types) = parameter_types(self.src, node, params, generic) {
                 self.facts.param_types.insert(sym, types);
             }
         }
@@ -2892,7 +2895,16 @@ impl<'a> Cx<'a> {
     }
 
     fn call(&mut self, node: Node) {
-        self.pending_arg_types = node.child_by_field_name("arguments").and_then(|a| self.argument_types(a));
+        let types = node.child_by_field_name("arguments").and_then(|a| self.argument_types(a));
+        // `Get<Order>(id)`: the type arguments written pick among overloads by their number of type parameters, so
+        // their count goes with the argument types (see [`FileFacts::arg_types`]).
+        let written = node.child_by_field_name("function").map_or(0, written_type_args);
+        self.pending_arg_types = if written > 0 {
+            let a: Option<serde_json::Value> = types.and_then(|t| serde_json::from_str(&t).ok());
+            Some(serde_json::json!({ "a": a, "g": written }).to_string())
+        } else {
+            types
+        };
         self.call_ref(node);
         self.pending_arg_types = None;
     }
@@ -5036,16 +5048,17 @@ fn params_array(list: Node) -> Option<(Node, Node)> {
     None
 }
 
-/// A method's parameters' declared types (see [`FileFacts::param_types`]), as JSON; `None` without parameters. A type
-/// parameter of the method or of an enclosing type is `null`, and so is any type built on one. A `params` array isn't
-/// among them: its type, when it is no type parameter's, is `rest`.
-fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
+/// A method's parameters' declared types (see [`FileFacts::param_types`]), as JSON; `None` without parameters or type
+/// parameters of its own (`generic_count`, said as `g`). A type parameter of the method or of an enclosing type is
+/// `null`, and so is any type built on one. A `params` array isn't among them: its type, when it is no type
+/// parameter's, is `rest`.
+fn parameter_types(src: &str, decl: Node, list: Node, generic_count: usize) -> Option<String> {
     let mut ps: Vec<Node> = children(list).filter(|c| c.kind() == "parameter").collect();
     if ps.first().is_some_and(|p| has_modifier(src, *p, "this")) {
         ps.remove(0);
     }
     let rest = params_array(list).map(|(_, t)| t);
-    if ps.is_empty() && rest.is_none() {
+    if ps.is_empty() && rest.is_none() && generic_count == 0 {
         return None;
     }
     let mut generic = type_params_of(src, decl);
@@ -5068,10 +5081,26 @@ fn parameter_types(src: &str, decl: Node, list: Node) -> Option<String> {
         })
         .collect();
     let names: Vec<&str> = ps.iter().map(|p| p.child_by_field_name("name").map_or("", |n| &src[n.byte_range()])).collect();
-    match rest.and_then(|t| type_expr(src, t)).filter(|t| !mentions_generic(t)) {
-        Some(rest) => Some(serde_json::json!({ "types": types, "names": names, "rest": rest.encode() }).to_string()),
-        None => Some(serde_json::json!({ "types": types, "names": names }).to_string()),
+    let mut out = serde_json::json!({ "types": types, "names": names });
+    if let Some(rest) = rest.and_then(|t| type_expr(src, t)).filter(|t| !mentions_generic(t)) {
+        out["rest"] = serde_json::json!(rest.encode());
     }
+    if generic_count > 0 {
+        out["g"] = serde_json::json!(generic_count);
+    }
+    Some(out.to_string())
+}
+
+/// How many type arguments a call's function writes on the name it calls (`Get<A, B>` in `x.Get<A, B>(…)`): 0 when
+/// none.
+fn written_type_args(f: Node) -> usize {
+    let name = match f.kind() {
+        "member_access_expression" => f.child_by_field_name("name"),
+        "conditional_access_expression" => conditional_member(f).map(|(_, n)| n),
+        _ => Some(f),
+    };
+    name.filter(|n| n.kind() == "generic_name")
+        .map_or(0, |n| children(n).filter(|c| c.kind() == "type_argument_list").flat_map(children).filter(|c| c.is_named()).count())
 }
 
 /// The input types of a delegate type, encoded: `Func<A, B, R>` → A, B; `Action<A>` and `Predicate<A>` → A;

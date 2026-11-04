@@ -100,8 +100,11 @@ pub fn discover_roots() -> Result<usize> {
     let mut catalog = read()?;
     let before: Vec<_> = catalog.entries.keys().cloned().collect();
     catalog.entries.retain(|root, _| roots.contains(root) && !crate::db_path(root).is_ok_and(|p| p.exists()));
+    let mut saved = None;
     for root in &roots {
-        if crate::db_path(root)?.exists() || workspace::has_saved_index(root)? { continue; }
+        if crate::db_path(root)?.exists() { continue; }
+        if saved.is_none() { saved = Some(workspace::saved_index_roots()?); }
+        if saved.as_ref().is_some_and(|s| s.contains(root)) { continue; }
         catalog.entries.entry(root.clone()).or_insert_with(|| Entry {
             summary: RepoSummary::discovery(root.clone(), Vec::new(), Vec::new(), &[], &[], String::new()), snapshot: None,
         });
@@ -207,7 +210,7 @@ pub fn scan_until(root: &Path, mut should_yield: impl FnMut() -> bool) -> Result
     let mut catalog = read()?;
     // A query may have indexed, pruned, or unregistered this checkout while the source scan was running.
     if !catalog.entries.contains_key(root) { return Ok(true); }
-    if crate::db_path(root)?.exists() || workspace::has_saved_index(root)? {
+    if crate::db_path(root)?.exists() || workspace::saved_index_roots()?.contains(root) {
         catalog.entries.remove(root);
     } else if crate::privacy::Privacy::load(root).key() != privacy.key() {
         catalog.entries.insert(root.to_path_buf(), Entry { summary: RepoSummary::discovery(root.to_path_buf(), Vec::new(), Vec::new(), &[], &[], String::new()), snapshot: None });

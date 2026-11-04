@@ -104,6 +104,8 @@ pub struct Resolver {
     by_id: HashMap<i64, (String, JavaType)>,
     /// Per function name: whether a repository declaration of it takes a lambda with a receiver (`T.() -> R`).
     receiver_lambda_fns: HashMap<String, bool>,
+    /// Per repository function taking a `T.() -> R`, the repository type `T` names (None when it can't be told as one).
+    receiver_param_types: HashMap<String, Option<i64>>,
 }
 
 impl Resolver {
@@ -562,32 +564,128 @@ impl Resolver {
             }
             other => other,
         };
-        Ok(match found {
-            Some((confidence, ids)) => Some(self.in_receiver_lambda(conn, hit, (confidence, ids))?),
-            None => None,
-        })
+        // In a lambda with a receiver, the receiver's members come first: one the receiver's type declares is the
+        // name's, whatever the enclosing code would offer.
+        match self.receiver_lambdas(conn, hit)? {
+            Lambdas::Member(found) => Ok(Some(found)),
+            Lambdas::Unsure => Ok(found.map(|(confidence, ids)| if matches!(confidence, "exact" | "unique_name") { ("ambiguous", ids) } else { (confidence, ids) })),
+            Lambdas::Outer => Ok(found),
+        }
     }
 
-    /// A bare Kotlin name (or one on `this`) in a lambda that may have a receiver: the lambda passed to one of Kotlin's
-    /// scope functions that give it one (`x.apply { close() }`), or to a repository function taking a `T.() -> R`.
-    /// The receiver's members come before the enclosing code's, and the receiver isn't typed here, so what the rules
-    /// found is a candidate, never a link.
-    fn in_receiver_lambda(
-        &mut self,
-        conn: &Connection,
-        hit: &RefHit,
-        (confidence, ids): (&'static str, Vec<i64>),
-    ) -> rusqlite::Result<(&'static str, Vec<i64>)> {
-        if !matches!(confidence, "exact" | "unique_name") || !hit.file.ends_with(".kt") {
-            return Ok((confidence, ids));
+    /// What the receivers of the lambdas a bare Kotlin name (or one on `this`) is in say of it, innermost first (see
+    /// [`Lambdas`]). A lambda passed to `apply`, `run`, `with` or `runCatching` on a value has that value as its
+    /// receiver, typed as the extractor recorded it; one passed to a repository function taking a `T.() -> R` has a
+    /// `T`; one passed to `buildString` and its kind a library builder; any other lambda has none.
+    fn receiver_lambdas(&mut self, conn: &Connection, hit: &RefHit) -> rusqlite::Result<Lambdas> {
+        if !hit.file.ends_with(".kt") || !matches!(hit.kind.as_str(), "call" | "member") {
+            return Ok(Lambdas::Outer);
         }
-        let Some(lambdas) = lambdas_of(hit) else { return Ok((confidence, ids)) };
-        for f in &lambdas {
-            if RECEIVER_SCOPE_FUNCTIONS.contains(&f.as_str()) || self.takes_receiver_lambda(conn, f)? {
-                return Ok(("ambiguous", ids));
+        let Some((lambdas, receivers)) = lambdas_of(hit) else { return Ok(Lambdas::Outer) };
+        for (i, f) in lambdas.iter().enumerate() {
+            // The receiver's type as recorded: absent in an index the extractor wrote before it recorded them.
+            let recorded = receivers.as_ref().map(|r| r.get(i).cloned().flatten());
+            let ty = if LIBRARY_BUILDERS.contains(&f.as_str()) {
+                return Ok(Lambdas::Unsure);
+            } else if RECEIVER_SCOPE_FUNCTIONS.contains(&f.as_str()) {
+                match recorded {
+                    None => return Ok(Lambdas::Unsure),
+                    // `run { … }` and `apply { … }` on nothing written are on `this`: as the enclosing code reads names.
+                    Some(None) => continue,
+                    Some(Some(t)) if t.is_empty() => return Ok(Lambdas::Unsure),
+                    Some(Some(t)) => match self.recorded_type(conn, hit, &t)? {
+                        Some(id) => id,
+                        None => return Ok(Lambdas::Unsure),
+                    },
+                }
+            } else if self.takes_receiver_lambda(conn, f)? {
+                match self.receiver_param_type(conn, f)? {
+                    Some(id) => id,
+                    None => return Ok(Lambdas::Unsure),
+                }
+            } else {
+                continue;
+            };
+            let members = members_of(conn, hit, ty)?;
+            match members.len() {
+                0 => {}
+                1 => return Ok(Lambdas::Member(("exact", members))),
+                _ => return Ok(Lambdas::Member(("ambiguous", members))),
+            }
+            match self.inherited_member(conn, hit, ty)? {
+                (Some(found), _) => return Ok(Lambdas::Member(found)),
+                // A supertype that couldn't be followed may declare it.
+                (None, true) => return Ok(Lambdas::Unsure),
+                (None, false) => {}
+            }
+            // After its members, the receiver's extensions (by its simple name, as extensions are matched elsewhere).
+            if let Some(name) = self.names.get(&ty).cloned() {
+                let ext: Vec<i64> = extensions_named(conn, hit)?.into_iter().filter(|(_, r)| *r == name).map(|(id, _)| id).collect();
+                match ext.len() {
+                    0 => {}
+                    1 => return Ok(Lambdas::Member(("exact", ext))),
+                    _ => return Ok(Lambdas::Member(("ambiguous", ext))),
+                }
+            }
+            // The receiver has no such member: the name is an outer receiver's or the enclosing code's.
+        }
+        Ok(Lambdas::Outer)
+    }
+
+    /// The repository type a recorded receiver type names in the reference's file: a path followed through the
+    /// repository's declarations, or a type written by name.
+    fn recorded_type(&mut self, conn: &Connection, hit: &RefHit, encoded: &str) -> rusqlite::Result<Option<i64>> {
+        match kc_extract::TypeExpr::decode(encoded) {
+            Some(kc_extract::TypeExpr::Path { root, segs }) => self.path_type(conn, hit, &root, &segs),
+            Some(kc_extract::TypeExpr::Named(_)) => {
+                let Some(name) = base_type(encoded) else { return Ok(None) };
+                self.scope(conn, &hit.file)?;
+                let file = Rc::clone(&self.files[&hit.file]);
+                let nest = Self::nest(hit);
+                let at = (hit.file.as_str(), hit.line);
+                let found = match name.rsplit_once('.') {
+                    Some((q, n)) => self.find_qualified(&file, at, &nest, q, n),
+                    None => Some(self.find_type(&file, at, &nest, &name)),
+                };
+                Ok(match found {
+                    Some(Found::Inside(ids)) if ids.len() == 1 => Some(ids[0]),
+                    _ => None,
+                })
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// The repository type `T` of the `T.() -> R` parameters of the repository's Kotlin functions named `function`,
+    /// when they all name the same one.
+    fn receiver_param_type(&mut self, conn: &Connection, function: &str) -> rusqlite::Result<Option<i64>> {
+        if let Some(known) = self.receiver_param_types.get(function) {
+            return Ok(*known);
+        }
+        let mut stmt = conn.prepare_cached(
+            "SELECT s.signature, f.path, s.container FROM symbols s JOIN files f ON f.id = s.file_id
+             WHERE f.lang = 'kotlin' AND s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('function', 'method')",
+        )?;
+        let rows: Vec<(String, String, Option<String>)> =
+            stmt.query_map(params![function], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).and_then(|r| r.collect())?;
+        let mut found: Option<i64> = None;
+        let mut settled = true;
+        for (signature, file, container) in rows {
+            let types = receiver_function_types(&signature);
+            if types.is_empty() {
+                continue;
+            }
+            for t in types {
+                match (self.declared_in(conn, &t, &file, container.as_deref())?, found) {
+                    (Some(id), None) => found = Some(id),
+                    (Some(id), Some(f)) if id == f => {}
+                    _ => settled = false,
+                }
             }
         }
-        Ok((confidence, ids))
+        let out = if settled { found } else { None };
+        self.receiver_param_types.insert(function.to_string(), out);
+        Ok(out)
     }
 
     fn takes_receiver_lambda(&mut self, conn: &Connection, function: &str) -> rusqlite::Result<bool> {
@@ -945,7 +1043,11 @@ impl Resolver {
         if confidence == "unique_name" && receiver.is_some() && !self_like && !receiver_known {
             return Ok(("ambiguous", ids));
         }
-        self.in_receiver_lambda(conn, hit, (confidence, ids))
+        Ok(match self.receiver_lambdas(conn, hit)? {
+            Lambdas::Member(found) => found,
+            Lambdas::Unsure if matches!(confidence, "exact" | "unique_name") => ("ambiguous", ids),
+            Lambdas::Unsure | Lambdas::Outer => (confidence, ids),
+        })
     }
 }
 
@@ -1066,18 +1168,50 @@ fn members_with_container(conn: &Connection, hit: &RefHit, container: &str) -> r
 }
 
 /// Kotlin's standard functions whose lambda argument has a receiver: `x.apply { … }`, `with(x) { … }`,
-/// `buildString { append(…) }`.
-const RECEIVER_SCOPE_FUNCTIONS: &[&str] =
-    &["apply", "run", "with", "runCatching", "buildString", "buildList", "buildSet", "buildMap"];
+/// `x.runCatching { … }`; on nothing written, they are on `this`.
+const RECEIVER_SCOPE_FUNCTIONS: &[&str] = &["apply", "run", "with", "runCatching"];
 
-/// The functions whose lambda argument a Kotlin reference is in, innermost first, as the extractor recorded them.
-fn lambdas_of(hit: &RefHit) -> Option<Vec<String>> {
+/// What the lambdas a Kotlin name is in say of it (see [`Resolver::receiver_lambdas`]).
+enum Lambdas {
+    /// A receiver's member: the name's, before anything the enclosing code offers.
+    Member(Resolved),
+    /// A receiver whose members can't be told (a library type's, or one not typed): what the enclosing code offers
+    /// is a candidate, never a link.
+    Unsure,
+    /// No receiver has it: the enclosing code's reading stands.
+    Outer,
+}
+
+/// Kotlin's standard builders whose lambda's receiver is a library type (`StringBuilder`, a `MutableList`).
+const LIBRARY_BUILDERS: &[&str] = &["buildString", "buildList", "buildSet", "buildMap"];
+
+/// The functions whose lambda argument a Kotlin reference is in, innermost first, and what each call was on, as the
+/// extractor recorded them (`None` from an extractor that recorded only the functions).
+#[allow(clippy::type_complexity)]
+fn lambdas_of(hit: &RefHit) -> Option<(Vec<String>, Option<Vec<Option<String>>>)> {
     if hit.receiver.as_deref().is_some_and(|r| r != "this") {
         return None;
     }
     let v: serde_json::Value = serde_json::from_str(hit.arg_types.as_deref()?).ok()?;
     let names: Vec<String> = v.get("lambdas")?.as_array()?.iter().filter_map(|n| n.as_str().map(str::to_string)).collect();
-    (!names.is_empty()).then_some(names)
+    let receivers = v.get("receivers").and_then(|r| r.as_array()).map(|r| r.iter().map(|t| t.as_str().map(str::to_string)).collect());
+    (!names.is_empty()).then_some((names, receivers))
+}
+
+/// The receiver types of the function types with a receiver a Kotlin signature declares (`body: Html.() -> Unit` →
+/// `Html`), as written.
+fn receiver_function_types(signature: &str) -> Vec<String> {
+    signature
+        .match_indices(".(")
+        .filter_map(|(i, _)| {
+            let before = &signature[..i];
+            let start = before.rfind(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.' | '<' | '>' | '?' | '*' | ',' | ' '))).map_or(0, |j| j + 1);
+            // Back to the parameter's `:`, over a generic's arguments.
+            let t = before[start..].trim();
+            let t = t.rsplit(':').next().unwrap_or(t).trim();
+            (!t.is_empty() && t.chars().next().is_some_and(char::is_alphabetic)).then(|| t.trim_end_matches('?').to_string())
+        })
+        .collect()
 }
 
 /// Whether a Kotlin signature declares a function type with a receiver (`body: DatabaseMetaData.() -> T`,
