@@ -270,7 +270,10 @@ candidate. Fields and functions are separate names, as in Java.
 
 The grammar can't read one shape kotlinc does: a nested class whose primary constructor starts on the line after its
 name (`class Builder` / `internal constructor(…) : Supers {`). Where an error covers exactly that shape, the file is
-read again without that line break, every position as written. Other parse errors (Kotlin 2.2's `$$"…"` strings, a
+read again without that line break, every position as written. The grammar also reads some annotated declarations
+as expressions without an error: a class or object whose annotations are split off before it, and a class with two
+annotations, the second taking arguments, followed by another declaration, read whole as an expression; each is counted
+as one of the file's parse errors, so answers about the file say what they may miss. Other parse errors (Kotlin 2.2's `$$"…"` strings, a
 nested declaration written on one line, `class A { object B { val x = 1 } }`) are reported as the file's parse errors.
 
 Known gaps: types inferred beyond a local's initializer (`it`, a lambda's parameters, a generic call's result), members

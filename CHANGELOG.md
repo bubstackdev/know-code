@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Kotlin: a class the grammar reads as an expression with no error (its annotations split off before it, or a
+  class with two annotations, the second taking arguments, followed by another declaration, read whole as one) counts
+  as a parse error of its file, so answers about the file report that they may miss what it declares, instead of
+  answering as if it were read. Kotlin files are indexed again on the first query after upgrading.
 - Kotlin: in a lambda with a receiver (`x.apply { … }`, `with(x) { … }`, a lambda passed to a function of the repo's
   taking a `T.() -> R`), a bare name is the receiver type's member or extension when that type is the repo's, and the
   enclosing code's when the receiver has none of that name. Before, every such name was only a candidate. A trailing
