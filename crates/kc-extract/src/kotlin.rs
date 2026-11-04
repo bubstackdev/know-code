@@ -18,7 +18,7 @@ use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
 use crate::spring::{self, Mapping};
 use crate::{FileFacts, HttpRoute, Import, Ref, RefKind, Relation, RelationKind, StringConst, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 13;
 
 /// How many enclosing lambdas' functions a reference keeps, innermost first.
 const LAMBDAS_KEPT: usize = 4;
@@ -59,7 +59,53 @@ pub fn extract(source: &str) -> FileFacts {
     member_types(source, tree.root_node(), None, &mut nested);
     let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested, lambdas: Vec::new() };
     cx.visit(tree.root_node());
+    cx.facts.parse_errors += misread_declarations(source, tree.root_node());
     cx.facts
+}
+
+fn has_infix_class(src: &str, node: Node) -> bool {
+    let mut stack = vec![node];
+    while let Some(x) = stack.pop() {
+        if x.kind() == "infix_expression" && children(x).next().is_some_and(|f| matches!(&src[f.byte_range()], "class" | "interface" | "object")) {
+            return true;
+        }
+        stack.extend(children(x));
+    }
+    false
+}
+
+/// Declarations tree-sitter-kotlin-ng reads as expressions, with no error node to say so: a class or object whose
+/// annotations end up in an `annotated_expression` before it, and a `class X { … }` read, with its annotations, as an
+/// infix expression (a class with two annotations, the second taking arguments, followed by another declaration). The declaration's annotations, or the whole class, are lost, so each
+/// counts as a parse error and the file's answers say they may miss what it declares.
+fn misread_declarations(src: &str, root: Node) -> u32 {
+    let mut n = 0;
+    let mut stack = vec![root];
+    while let Some(x) = stack.pop() {
+        match x.kind() {
+            // `class Name { … }` as `class` infix `Name` with a lambda.
+            "infix_expression" if children(x).next().is_some_and(|f| f.kind() == "identifier" && matches!(&src[f.byte_range()], "class" | "interface" | "object")) => {
+                n += 1;
+            }
+            // Annotations split off the declaration that follows them, in a file or a type's body.
+            // (Unless the class itself went into the expression, counted above.)
+            "annotated_expression"
+                if x.parent().is_some_and(|p| matches!(p.kind(), "source_file" | "class_body"))
+                    && !has_infix_class(src, x)
+                    && x.next_named_sibling().is_some_and(|d| {
+                        // A type's: what the type is (a controller, a test class, a serializable) is in them. A function's
+                        // split annotation (a top-level `@Suppress`, `@JvmName`) loses nothing KnowCode reads.
+                        matches!(d.kind(), "class_declaration" | "object_declaration")
+                            && children(d).find(|c| c.kind() == "modifiers").is_none_or(|m| !children(m).any(|a| a.kind() == "annotation"))
+                    }) =>
+            {
+                n += 1;
+            }
+            _ => {}
+        }
+        stack.extend(children(x));
+    }
+    n
 }
 
 /// The newlines that split a class name from its primary constructor (`class Builder` / `internal constructor(`), inside
@@ -1343,5 +1389,16 @@ mod tests {
         // A Feign client's mappings are requests it sends, never routes it serves.
         let client = extract("package org.example.shop\n\n@FeignClient(\"orders\")\ninterface OrderClient {\n    @GetMapping(\"/api/orders/{id}\")\n    fun find(id: Long): Order\n}\n");
         assert!(client.http_routes.is_empty());
+    }
+
+    #[test]
+    fn declarations_the_grammar_reads_as_expressions_are_parse_errors() {
+        // Two annotations, the second with arguments, then another annotated declaration: the grammar reads the first
+        // class's annotations, or the class itself, as expressions, with no error node.
+        let swallowed = extract("package x\n\n@RestController\n@RequestMapping(\"/api\")\nclass A {\n}\n\ninterface B {\n}\n");
+        assert_eq!(swallowed.parse_errors, 1);
+        assert!(!swallowed.symbols.iter().any(|s| s.name == "A"), "the grammar loses the class");
+        let fine = extract("package x\n\n@RequestMapping(\"/api\")\nclass A {\n}\n\nclass B\n");
+        assert_eq!(fine.parse_errors, 0);
     }
 }
