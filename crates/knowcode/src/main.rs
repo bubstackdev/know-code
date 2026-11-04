@@ -56,6 +56,8 @@ mod overload_tests;
 mod receiver_path_tests;
 #[cfg(test)]
 mod ts_local_scope_tests;
+#[cfg(test)]
+mod table_context_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;

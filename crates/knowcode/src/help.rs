@@ -263,7 +263,8 @@ indexed repo using it, either an Entity Framework entity mapped to the table (wi
 procedure call (EXEC, MySQL CALL, CommandType.StoredProcedure), each with a link confidence: exact (the repo defines it,
 or both sides name the schema), unique_name (one schema in the workspace defines it), dominant (several schemas do; for
 an EF table, the one its DbContext is named for or that defines most of the context's tables, else the one defining
-most of the repo's tables), ambiguous. A procedure name passed to a wrapper method (`ExecuteStoredProcedureAsync("p",
+most of the repo's tables), ambiguous. `used_by` reads as many of the repos naming it as the page lists callers; when it read
+fewer than all, `used_by_truncated` and `used_by_note` say so and `used_by_cursor` reads on. A procedure name passed to a wrapper method (`ExecuteStoredProcedureAsync("p",
 …)`) counts as a call when a procedure of that name is defined."#,
     },
     Topic {

@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The context of a SQL table, view or routine used across a large workspace reads only as many of the repos naming it
+  as its page lists callers, and continues: `used_by` says when it read fewer than all (`used_by_truncated`,
+  `used_by_note`), and `used_by_cursor` reads on, reaching every repo once. Before, every repo's database model was
+  built and every use listed in one answer. A table used by no more repos than the page lists answers as before.
 - `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
   `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
   target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,
