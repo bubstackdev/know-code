@@ -211,7 +211,30 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
     let files: Vec<&str> = areas.areas.iter().flat_map(|a| a.files.iter()).chain(&areas.ungrouped).map(String::as_str).collect();
     let under = |dir: &str, f: &str| dir.is_empty() || f.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'));
     let mut modules: Vec<Module> = Vec::new();
-    for p in kc_store::manifests::packages(store.conn())? {
+    // Gradle settings scripts last: a project's own build script names it first, and an `include` only adds the
+    // projects that have none.
+    let mut packages = kc_store::manifests::packages(store.conn())?;
+    let is_settings = |p: &kc_store::manifests::PackageRow| p.kind == "gradle" && p.file.rsplit('/').next().is_some_and(|f| f.starts_with("settings."));
+    packages.sort_by_key(|p| is_settings(p));
+    // Each Gradle settings script's directory and the project directories it includes: a build script is a project
+    // of the build whose settings script is nearest above it only if that script includes it (or is beside it).
+    let builds: Vec<(String, Vec<String>)> = packages
+        .iter()
+        .filter(|p| is_settings(p))
+        .map(|p| {
+            let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
+            let projects = p.targets.iter().filter(|t| t.kind == "module").map(|t| {
+                let dir = t.name.replace(':', "/");
+                if base.is_empty() { dir } else { format!("{base}/{dir}") }
+            });
+            (base.to_string(), projects.collect())
+        })
+        .collect();
+    let in_its_build = |dir: &str| {
+        let nearest = builds.iter().filter(|(b, _)| under(b, dir) || b == dir).max_by_key(|(b, _)| b.len());
+        nearest.is_none_or(|(b, projects)| b == dir || projects.iter().any(|p| p == dir))
+    };
+    for p in packages {
         let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
         let join = |parts: &[&str]| parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("/");
         let mut add = |name: &str, kind: &str, dir: String| {
@@ -231,7 +254,17 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
                     add(&t.name, &t.kind, join(&[base, sub, &t.name]));
                 }
             }
-            "csproj" | "npm" | "cargo" | "gomod" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
+            "csproj" | "npm" | "cargo" | "gomod" | "maven" if !p.name.is_empty() && p.name != "(workspace)" => add(&p.name, &p.kind, base.to_string()),
+            // A Gradle project is its build script's directory; a settings script's `include`s name the build's
+            // projects (`:web:admin` is `web/admin`), which may have no build script of their own.
+            "gradle" => {
+                for t in p.targets.iter().filter(|t| t.kind == "module") {
+                    add(&t.name, &p.kind, join(&[base, &t.name.replace(':', "/")]));
+                }
+                if !p.name.is_empty() && p.name != "(workspace)" && !is_settings(&p) && in_its_build(base) {
+                    add(&p.name, &p.kind, base.to_string());
+                }
+            }
             _ => {}
         }
     }

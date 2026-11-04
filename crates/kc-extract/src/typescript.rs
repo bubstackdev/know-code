@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 28;
+pub const VERSION: u32 = 29;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -180,6 +180,30 @@ const EAGER_CALLS: &[&str] = &[
     "toSignal", "effect", "computed", "linkedSignal", "subscribe", "afterNextRender", "afterRender", "resource",
     "rxResource", "createEffect",
 ];
+
+/// The lines of the innermost function body holding the declaration at `outer` (an arrow function's or a function
+/// expression's too, such as a test's `it(() => …)` callback): where alone its name can be used. `None` at module,
+/// namespace and type level, and for a function's parameters.
+fn body_scope(outer: Node) -> Option<(u32, u32)> {
+    let mut at = outer.parent();
+    while let Some(p) = at {
+        if matches!(
+            p.kind(),
+            "arrow_function" | "function_expression" | "function" | "function_declaration" | "generator_function" | "generator_function_declaration" | "method_definition"
+        ) {
+            // Only a declaration in the body: a constructor's parameter property (`constructor(private store: Store)`)
+            // is its class's member.
+            if let Some(body) = p.child_by_field_name("body")
+                && body.start_byte() <= outer.start_byte()
+                && outer.end_byte() <= body.end_byte()
+            {
+                return Some((line(body), body.end_position().row as u32 + 1));
+            }
+        }
+        at = p.parent();
+    }
+    None
+}
 
 /// The namespaces enclosing `node`, outermost first, joined by `.` (`Outer.Inner`); `None` at a module's top.
 fn namespaces_around(src: &str, node: Node) -> Option<String> {
@@ -628,6 +652,7 @@ impl<'a> Cx<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: body_scope(outer),
         });
         self.facts.symbols.len() - 1
     }

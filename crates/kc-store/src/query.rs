@@ -577,6 +577,8 @@ struct Def {
     on_actor: bool,
     /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
     alias_member: bool,
+    /// For a declaration inside a function body: the lines of that body, where alone its name can be used.
+    scope: Option<(u32, u32)>,
 }
 
 impl Def {
@@ -3202,7 +3204,7 @@ const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' 
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
      f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
-     p.kind IS 'typealias'";
+     p.kind IS 'typealias', s.scope_start, s.scope_end";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -3230,6 +3232,10 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
         alias_member: r.get(20)?,
+        scope: match (r.get::<_, Option<u32>>(21)?, r.get::<_, Option<u32>>(22)?) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        },
     })
 }
 
@@ -5494,6 +5500,23 @@ fn why_not(hit: &RefHit, recv: &Receiver, self_chain: &[String], d: &Def) -> &'s
 }
 
 fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: &mut Resolution) -> Result<()> {
+    let mut oracle = TypeOracle::new(conn);
+    // Kept for the next call; an error leaves `shared` without them, to be read again.
+    oracle.vis = std::mem::take(&mut shared.vis);
+    resolve_hits_with(conn, hits, use_scip, shared, &mut oracle)?;
+    shared.vis = oracle.vis;
+    Ok(())
+}
+
+/// [`resolve_hits`] with the type oracle `oracle`, whose caches (what types members have, what code sees) are a
+/// function of the index alone: one oracle can serve successive chunks of one list as it serves the whole list at once.
+fn resolve_hits_with<'c>(
+    conn: &'c Connection,
+    hits: &mut [RefHit],
+    use_scip: bool,
+    shared: &mut Resolution,
+    oracle: &mut TypeOracle<'c>,
+) -> Result<()> {
     let mut precise = match (use_scip, shared.precise.take()) {
         (false, _) => None,
         (true, Some(p)) => Some(p),
@@ -5501,9 +5524,6 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     };
     let mut defs: HashMap<String, Vec<Def>> = HashMap::new();
     let mut targets: HashMap<i64, Target> = HashMap::new();
-    let mut oracle = TypeOracle::new(conn);
-    // Kept for the next call; an error leaves `shared` without them, to be read again.
-    oracle.vis = std::mem::take(&mut shared.vis);
     // Per caller type, or per C# extension method's declaring class: the types an unqualified name is looked up in.
     // The caller's type, whether it is a C# extension method's extended type, and whether the code is in a Swift
     // extension's body.
@@ -5561,7 +5581,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         } else if crate::sql::is_sql_path(&hit.file) {
             Some((sql.resolve(conn, hit)?, Mechanism::SqlName))
         } else if hit.kind == "call" && hit.name == "init" && hit.file.ends_with(".cs") {
-            chained_constructor(conn, &mut oracle, hit, &mut ctor_sets)?.map(|r| (r, Mechanism::ReceiverType))
+            chained_constructor(conn, oracle, hit, &mut ctor_sets)?.map(|r| (r, Mechanism::ReceiverType))
         } else {
             None
         };
@@ -5635,14 +5655,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             oracle.here = cs.then(|| hit.file.clone());
             oracle.caller = hit.caller_type();
             let mut recv = if cs && !cs_type {
-                let (recv, ns) = cs_receiver(hit, &mut oracle)?;
+                let (recv, ns) = cs_receiver(hit, oracle)?;
                 seen_ns = ns;
                 recv
             } else {
-                receiver(hit, &mut oracle)?
+                receiver(hit, oracle)?
             };
             if ts {
-                recv = ts_receiver(conn, hit, recv, &mut oracle, modules)?;
+                recv = ts_receiver(conn, hit, recv, oracle, modules)?;
             }
             // A Swift receiver typed by a name its module imports from a package by name: the package's type.
             if let Receiver::Known(chain) = &recv
@@ -5752,7 +5772,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             let before = if explain { usable.clone() } else { Vec::new() };
             // Overloads the argument types rule out.
             let usable = if cs && hit.kind == "call" && hit.arg_types.is_some() && usable.len() > 1 {
-                narrow_by_argument_types(&mut oracle, hit, usable)?
+                narrow_by_argument_types(oracle, hit, usable)?
             } else {
                 usable
             };
@@ -5796,6 +5816,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 .filter(|d| !(d.lang == "swift" && d.external_container && in_tests(&d.file) && in_sources(&hit.file)))
                 .collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
+            let before = if explain { usable.clone() } else { Vec::new() };
+            let usable = in_block(hit, usable);
+            dropped_by(&mut dropped, explain, &before, &usable, "scope");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
             // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
             // which no type or module the lookup reads declares: the namespace's own declarations of the name.
@@ -5811,7 +5834,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // ambiguous: the value may be of a type the repo doesn't declare.
             let (confidence, ids) = match hit.receiver.as_deref() {
                 Some(r) if ts && confidence == "ambiguous" && hit.kind != "type_ref" && matches!(recv, Receiver::Unknown) => {
-                    match through_property(&mut oracle, r, named, &ids)? {
+                    match through_property(oracle, r, named, &ids)? {
                         Some(kept) if !kept.is_empty() && kept.len() < ids.len() => (confidence, kept),
                         _ => (confidence, ids),
                     }
@@ -6004,7 +6027,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 };
                 hit.ctors = Some(match precise_ctor {
                     Some(c) => vec![c],
-                    None => constructors_called(&mut oracle, hit, set)?,
+                    None => constructors_called(oracle, hit, set)?,
                 });
             }
         }
@@ -6018,7 +6041,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             let service = service.rsplit('.').next().unwrap_or(service).to_string();
             // A generic service is one service per type arguments (`IHandler<Order>`, `IHandler<Invoice>`), and
             // same-named services in two namespaces are two services.
-            let args = service_args(&mut oracle, hit, written_receiver.as_deref(), &service)?;
+            let args = service_args(oracle, hit, written_receiver.as_deref(), &service)?;
             let ns = named.iter().find(|d| d.id == hit.target_ids[0]).and_then(|d| d.ns.clone());
             let identity = match &args {
                 Some(a) => format!("{service}<{}>@{}", a.iter().map(|a| a.as_deref().unwrap_or("?")).collect::<Vec<_>>().join(","), ns.as_deref().unwrap_or("")),
@@ -6045,7 +6068,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 let b = match crate::di::single(registered[&identity].clone(), &service) {
                     Some(reg) => {
                         let reg = near.clone().unwrap_or(reg);
-                        bound_member(conn, &mut oracle, &reg, &service, &hit.name, hit.args, hit.target_ids[0])?
+                        bound_member(conn, oracle, &reg, &service, &hit.name, hit.args, hit.target_ids[0])?
                     }
                     None => None,
                 };
@@ -6074,7 +6097,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 let at = format!("{}:{} {}", reg.file, reg.line, reg.implementation.as_deref().unwrap_or(""));
                 let key = (service.clone(), hit.name.clone(), hit.args, Some(at));
                 if !bound.contains_key(&key) {
-                    let b = bound_member(conn, &mut oracle, &reg, &key.0, &hit.name, hit.args, hit.target_ids.first().copied().unwrap_or(-1))?;
+                    let b = bound_member(conn, oracle, &reg, &key.0, &hit.name, hit.args, hit.target_ids.first().copied().unwrap_or(-1))?;
                     bound.insert(key.clone(), b);
                 }
                 if let Some(mut b) = bound[&key].clone().filter(|b| !members.iter().any(|m| m.target.id == b.target.id)) {
@@ -6098,7 +6121,6 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             }
         }
     }
-    shared.vis = oracle.vis;
     if use_scip {
         shared.precise = precise;
     }
@@ -6312,7 +6334,7 @@ fn ts_scoped(
             }))
         }
         None if hit.receiver.is_none() && hit.kind != "member" => {
-            let own: Vec<i64> = defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).map(|d| d.id).collect();
+            let own: Vec<i64> = in_block(hit, defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).collect()).iter().map(|d| d.id).collect();
             if !own.is_empty() {
                 return Ok(Some(("exact", own)));
             }
@@ -6329,6 +6351,24 @@ fn ts_scoped(
             Ok(None)
         }
         None => Ok(None),
+    }
+}
+
+/// Of `defs`, those `hit` can name where it is. A declaration inside a function body (a `const` or `type` in a test's
+/// callback) is named only there, and never through a value (`x.name`) unless it is a local type's member; of those
+/// holding the reference, the innermost shadows the others and every declaration outside it, as a block's own
+/// declaration does.
+fn in_block<'d>(hit: &RefHit, defs: Vec<&'d Def>) -> Vec<&'d Def> {
+    let visible: Vec<&Def> = defs
+        .into_iter()
+        .filter(|d| match d.scope {
+            None => true,
+            Some((a, b)) => d.file == hit.file && (a..=b).contains(&hit.line) && (hit.receiver.is_none() || d.container.is_some()),
+        })
+        .collect();
+    match visible.iter().filter(|d| d.container.is_none()).filter_map(|d| d.scope.map(|(a, b)| b - a)).min() {
+        Some(w) if hit.receiver.is_none() => visible.into_iter().filter(|d| d.container.is_some() || d.scope.is_some_and(|(a, b)| b - a == w)).collect(),
+        _ => visible,
     }
 }
 
@@ -6568,6 +6608,61 @@ pub fn refs_in_chunks(
     Ok(())
 }
 
+/// References resolved at a time by [`refs_kept`] and [`refs_named_map`]: a few megabytes of them. Resolution's
+/// caches other than the type oracle start afresh each chunk, so a smaller chunk reads more again (2,048 cost 2% more
+/// instructions on bitwarden/server's unused symbols, and saved no memory).
+const KEPT_CHUNK: usize = 16_384;
+
+/// [`refs`] of `kinds` with no limit, keeping only the references `pre` keeps before resolution and `keep` keeps
+/// after, in the same order. For callers that ask for every reference to a common name (a member called `Id`,
+/// constructor chaining's `init`) and then keep a few: references `pre` drops are never resolved, and the rest are
+/// resolved a chunk at a time and dropped as each chunk is done, so the name's references are never all held.
+///
+/// The answer is what filtering [`refs`] gives: each reference resolves on its own (the caches resolution keeps only
+/// spare reading again; see [`refs_in_chunks`]), filtering commutes with the stable sort placing factory
+/// constructions, and `pre` may read only what a reference has before resolution (its name, kind, receiver, file,
+/// line and referencing symbol; never its confidence or targets, nor `receiver_type`, which resolution narrows).
+pub fn refs_kept(
+    conn: &Connection,
+    query: &str,
+    kinds: &[&str],
+    mut pre: impl FnMut(&RefHit) -> bool,
+    mut keep: impl FnMut(&RefHit) -> bool,
+) -> Result<Vec<RefHit>> {
+    let (container, name) = ref_query(conn, query)?;
+    if container.is_some() {
+        // `Type.member` keeps references by their targets after the whole list is resolved: rare, and filtered as is.
+        let (mut hits, _) = refs(conn, query, kinds, usize::MAX)?;
+        hits.retain(|h| keep(h));
+        return Ok(hits);
+    }
+    let mut out = Vec::new();
+    {
+        let mut stmt = conn.prepare_cached(&refs_named_sql(true))?;
+        let lower = name.to_lowercase();
+        let mut rows = stmt
+            .query_map([name, &lower], ref_row)?
+            .filter(|r| r.as_ref().map_or(true, |h| (kinds.is_empty() || kinds.contains(&h.kind.as_str())) && pre(h)));
+        let mut shared = Resolution::default();
+        let mut oracle = TypeOracle::new(conn);
+        loop {
+            let mut hits: Vec<RefHit> = rows.by_ref().take(KEPT_CHUNK).collect::<rusqlite::Result<_>>()?;
+            if hits.is_empty() {
+                break;
+            }
+            resolve_hits_with(conn, &mut hits, true, &mut shared, &mut oracle)?;
+            out.extend(hits.into_iter().filter(|h| keep(h)));
+        }
+    }
+    if (kinds.is_empty() || kinds.contains(&"instantiate"))
+        && let Some(more) = factory_constructions(conn)?.get(name)
+    {
+        out.extend(more.iter().filter(|h| pre(h) && keep(h)).cloned());
+        out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    }
+    Ok(out)
+}
+
 fn refs_filtered(
     conn: &Connection,
     query: &str,
@@ -6644,23 +6739,35 @@ fn add_factory_constructions(conn: &Connection, name: &str, hits: &mut Vec<RefHi
     Ok(())
 }
 
+/// Indexes whose factory constructions [`factory_constructions`] keeps: a server answering across a workspace opens
+/// every repo's index in turn, and would otherwise keep one map per repo for as long as it runs.
+const FACTORY_CACHED: usize = 4;
+
 pub(crate) fn factory_constructions(conn: &Connection) -> Result<std::sync::Arc<HashMap<String, Vec<RefHit>>>> {
-    type Cache = HashMap<(String, String), std::sync::Arc<HashMap<String, Vec<RefHit>>>>;
-    static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
+    // Most recently used last.
+    type Cache = Vec<((String, String), std::sync::Arc<HashMap<String, Vec<RefHit>>>)>;
+    static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(Vec::new());
     let generation: String =
         conn.query_row("SELECT value FROM meta WHERE key = 'tree_gen'", [], |r| r.get(0)).optional()?.unwrap_or_default();
     let key = (conn.path().unwrap_or_default().to_string(), generation);
-    if !key.0.is_empty()
-        && let Some(v) = CACHE.lock().expect("cache lock").as_ref().and_then(|c| c.get(&key))
-    {
-        return Ok(v.clone());
+    if !key.0.is_empty() {
+        let mut cache = CACHE.lock().expect("cache lock");
+        if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache.remove(i);
+            let v = entry.1.clone();
+            cache.push(entry);
+            return Ok(v);
+        }
     }
     let v = std::sync::Arc::new(factory_constructions_uncached(conn)?);
     if !key.0.is_empty() {
         let mut cache = CACHE.lock().expect("cache lock");
-        let c = cache.get_or_insert_with(HashMap::new);
-        c.retain(|(path, _), _| *path != key.0);
-        c.insert(key, v.clone());
+        // An index's earlier generations are never asked for again.
+        cache.retain(|((path, _), _)| *path != key.0);
+        if cache.len() >= FACTORY_CACHED {
+            cache.remove(0);
+        }
+        cache.push((key, v.clone()));
     }
     Ok(v)
 }
@@ -6871,6 +6978,15 @@ fn injected_member(conn: &Connection, oracle: &mut TypeOracle, caller: Option<&s
 /// Every reference using one of `names`, resolved in one pass that shares its caches: for whole-repo questions
 /// (unused symbols) that would otherwise resolve name by name.
 pub fn refs_named(conn: &Connection, names: &[&str]) -> Result<Vec<RefHit>> {
+    refs_named_where(conn, names, |_| true)
+}
+
+/// [`refs_named`], keeping only the references `keep` accepts, tested on each row as read and before any is resolved:
+/// for a caller that wants a few of a common name's references (`Id`, `Name`), which would otherwise resolve, and hold
+/// at once, every one in the repo. `keep` may read only what a row holds unresolved (its kind, `assigns`, `from`,
+/// file and line), never a confidence or targets. Each reference resolves on its own (see [`refs_in_chunks`]), so the
+/// ones kept come out as [`refs_named`] gives them.
+pub fn refs_named_where(conn: &Connection, names: &[&str], keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
     let sql = format!(
         "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
          WHERE r.name = ?1 ORDER BY f.path, r.line"
@@ -6878,13 +6994,73 @@ pub fn refs_named(conn: &Connection, names: &[&str]) -> Result<Vec<RefHit>> {
     let mut stmt = conn.prepare_cached(&sql)?;
     let mut hits = Vec::new();
     for name in names {
-        hits.extend(stmt.query_map([name], ref_row)?.collect::<rusqlite::Result<Vec<_>>>()?);
+        for h in stmt.query_map([name], ref_row)? {
+            let h = h?;
+            if keep(&h) {
+                hits.push(h);
+            }
+        }
     }
     resolve_all(conn, &mut hits)?;
     for name in names {
         add_factory_constructions(conn, name, &mut hits)?;
     }
+    // The factory constructions come resolved, and few: tested once added. Their stable sort into place leaves the
+    // rest in the order filtering after it would.
+    hits.retain(&keep);
     Ok(hits)
+}
+
+/// [`refs_named`], handing each reference to `f` as it is resolved and keeping what `f` makes of it, in the order
+/// [`refs_named`] gives (`at` is where a kept value's reference is, for placing the factory constructions). The
+/// references are resolved a chunk at a time and dropped once `f` has seen them: over every candidate's name in a
+/// repo (unused symbols) they run to a million, and a resolved one carries its targets.
+///
+/// Each reference resolves on its own (see [`refs_in_chunks`]), and the stable sort placing factory constructions
+/// keeps what `f` keeps in the order it has among the rest, so the values are those of mapping [`refs_named`].
+pub fn refs_named_map<T>(
+    conn: &Connection,
+    names: &[&str],
+    mut f: impl FnMut(RefHit) -> Option<T>,
+    at: impl Fn(&T) -> (&str, u32),
+) -> Result<Vec<T>> {
+    let sql = format!(
+        "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
+         WHERE r.name = ?1 ORDER BY f.path, r.line"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let mut shared = Resolution::default();
+    let mut out = Vec::new();
+    let mut pending: Vec<RefHit> = Vec::new();
+    let mut oracle = TypeOracle::new(conn);
+    let mut flush = |pending: &mut Vec<RefHit>, out: &mut Vec<T>, f: &mut dyn FnMut(RefHit) -> Option<T>| -> Result<()> {
+        resolve_hits_with(conn, pending, true, &mut shared, &mut oracle)?;
+        out.extend(pending.drain(..).filter_map(f));
+        Ok(())
+    };
+    for name in names {
+        for row in stmt.query_map([name], ref_row)? {
+            pending.push(row?);
+            if pending.len() >= KEPT_CHUNK {
+                flush(&mut pending, &mut out, &mut f)?;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        flush(&mut pending, &mut out, &mut f)?;
+    }
+    let made = factory_constructions(conn)?;
+    let mut placed = false;
+    for name in names {
+        if let Some(more) = made.get(*name) {
+            out.extend(more.iter().cloned().filter_map(&mut f));
+            placed = true;
+        }
+    }
+    if placed {
+        out.sort_by(|a, b| at(a).cmp(&at(b)));
+    }
+    Ok(out)
 }
 
 fn summarize(hits: &[RefHit]) -> RefSummary {
@@ -7327,18 +7503,24 @@ pub fn context_with(
     } else {
         (symbol.name.clone(), &["call", "member"])
     };
-    let (all_callers, _) = refs(conn, &caller_name, caller_kinds, usize::MAX)?;
     let target_id = if symbol.kind == "init" {
         definitions(conn, symbol.container.as_deref().unwrap_or(""))?.first().map(|d| d.id)
     } else {
         Some(symbol.id)
     };
-    let mut callers: Vec<RefHit> = all_callers
-        .iter()
-        .filter(|h| h.confidence != "external_likely")
-        .filter(|h| target_id.is_some_and(|id| h.may_target(id)))
-        .cloned()
-        .collect();
+    // An implementation is also called through the interface member it implements, or the base member it overrides.
+    let implemented = if matches!(symbol.kind.as_str(), "method" | "property") && symbol.container.is_some() {
+        implemented_members(conn, &symbol)?
+    } else {
+        Vec::new()
+    };
+    // Only references reaching the symbol, directly or through one of `implemented`, are ever read: a member named `Id`
+    // has thousands of others, not kept while they are resolved.
+    let all_callers = refs_kept(conn, &caller_name, caller_kinds, |_| true, |h| {
+        h.confidence != "external_likely"
+            && (target_id.is_some_and(|id| h.may_target(id)) || implemented.iter().any(|m| m.through(h, symbol.id).is_some()))
+    })?;
+    let mut callers: Vec<RefHit> = all_callers.iter().filter(|h| target_id.is_some_and(|id| h.may_target(id))).cloned().collect();
     if symbol.kind == "init" {
         // A constructor's callers are the creations its arguments pick, and the constructors chaining to it.
         let several = definitions(conn, &symbol.qualified())?.iter().filter(|d| d.kind == "init").count() > 1;
@@ -7357,21 +7539,17 @@ pub fn context_with(
                 true
             }
         });
-        let (chained, _) = refs(conn, "init", &["call"], usize::MAX)?;
-        callers.extend(chained.into_iter().filter(|h| h.may_target(symbol.id)));
+        // Every constructor chaining in the repo is a call of `init`: only those reaching this one are kept.
+        callers.extend(refs_kept(conn, "init", &["call"], |_| true, |h| h.may_target(symbol.id))?);
     }
-    // An implementation is also called through the interface member it implements, or the base member it overrides.
-    if matches!(symbol.kind.as_str(), "method" | "property") && symbol.container.is_some() {
-        let members = implemented_members(conn, &symbol)?;
-        if !members.is_empty() {
-            let direct: HashSet<(&str, u32)> = callers.iter().map(|c| (c.file.as_str(), c.line)).collect();
-            let through: Vec<RefHit> = all_callers
-                .iter()
-                .filter(|h| h.confidence != "external_likely" && !direct.contains(&(h.file.as_str(), h.line)))
-                .filter_map(|h| members.iter().find_map(|m| m.through(h, symbol.id)))
-                .collect();
-            callers.extend(through);
-        }
+    if !implemented.is_empty() {
+        let direct: HashSet<(&str, u32)> = callers.iter().map(|c| (c.file.as_str(), c.line)).collect();
+        let through: Vec<RefHit> = all_callers
+            .iter()
+            .filter(|h| h.confidence != "external_likely" && !direct.contains(&(h.file.as_str(), h.line)))
+            .filter_map(|h| implemented.iter().find_map(|m| m.through(h, symbol.id)))
+            .collect();
+        callers.extend(through);
     }
     // Most certain first, then by location.
     callers.sort_by_key(|h| (confidence_rank(h.confidence), h.file.clone(), h.line));

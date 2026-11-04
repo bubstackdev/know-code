@@ -516,6 +516,7 @@ impl<'a> Ex<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         self.f.symbols.len() - 1
     }

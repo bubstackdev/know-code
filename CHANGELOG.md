@@ -46,6 +46,16 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 - `path`, `flow` and `areas` answer as Mermaid diagrams with `--format mermaid` (`format: mermaid` on MCP). A diagram
   shows exactly the answer's edges, each walk edge with its confidence, ambiguous ones dashed, and carries what the
   answer left out as comments.
+- TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
+  is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
+  one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
+  every other's uses. On identity-v1's TypeScript labels, 30 more references are linked `exact`, all of them right
+  (`exact` precision 0.998), ambiguous answers fall from 139 to 108, recall (linked) goes from 0.597 to 0.636, and no
+  label is newly wrong. The index schema moves to 25 (each declaration's scope), so the first query after upgrading
+  indexes each repo again, at the same cost as a cold index (hono 15.6 G instructions, jellyfin 108 G); builds of
+  schema 24 sharing the cache keep their own indexes.
+- An MCP answer is cut to its size in the call's own lane, and cutting stops when the call is cancelled (its
+  client gone, or its deadline passed): a cancelled call no longer keeps a core busy cutting an answer nobody reads.
 - An answer naming many files no longer takes time growing with their square to say which of them have parse
   errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
   workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of
@@ -63,6 +73,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   `Context.header` among its targets or makes the caller one of that method's. On jellyfin-web and hono's sampled
   `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
   `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
+- Maven and Gradle builds are read. A `pom.xml` is a package named by its coordinates (`groupId:artifactId`), with
+  its modules and dependencies; a Gradle build script is its project, with the dependencies it writes as coordinates
+  and the projects it depends on, and a settings script names the build's projects. Each project is a declared module
+  in `areas`, and a dependency on a package another indexed repo builds links the two repos, as other manifests'
+  registry dependencies do. The files are read as text, never run: plugins, properties, profiles and version
+  catalogs aren't resolved.
 - A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
   list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
   sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
@@ -134,6 +150,24 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
   files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
   (by file path, then line).
+- The first question that reads a C# repo's database model (`impact`, `context`, `tables`, `overview` or a walk on
+  an EF Core repo) takes far less memory and time to build it. Finding which accessors assign an entity's properties
+  resolved every reference in the repo to each property name (`Id`, `Name`, …) before keeping the few made in those
+  accessors; it now keeps them as they are read. The model and answers are unchanged. The first `impact` after an
+  `index` peaked at 82 MB instead of 316 MB on bitwarden/server (29.8 G instructions instead of 47.3 G), and at 36 to
+  37 MB instead of 90 to 91 MB on jellyfin (7.7 G instead of 10.6 G).
+
+- `unused` holds far less memory on a large repo: it resolves the references to its candidates' names a chunk at a
+  time and keeps only what its verdicts read, rather than every resolved reference at once. On bitwarden/server peak
+  memory fell from 1,650 MB to 468 MB, with the same answer and about the same instructions. Callers in `context` and
+  the removed definitions `impact --diff` reports keep only the references they use as they resolve them too, and the
+  factory constructions kept for the process are bounded to the four most recently used indexes.
+- Workspace-wide questions hold less memory and, when indexes have been evicted from the cache, do half the work.
+  Checking which repos have a saved index read and fully parsed the whole workspace summary file once per repo; it
+  now reads only the fields it needs, once per check. The summaries last read are released before new ones are read,
+  and the file is written through a buffer rather than built whole first. Answers are unchanged. On 111 public repos,
+  a workspace-wide `refs` peaked at 76 to 81 MB instead of 95 to 106 MB; with the indexes evicted, at 35 to 38 MB
+  instead of 43 to 44 MB, with 11 G instructions instead of 21 G.
 - `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
   but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
   unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of

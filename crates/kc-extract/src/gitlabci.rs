@@ -186,6 +186,7 @@ impl Ex<'_> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         let id = Some(self.f.symbols.len() - 1);
         for (e, l) in &extends {
