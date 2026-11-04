@@ -2797,6 +2797,29 @@ const KEYWORD_TYPES: &[&str] =
     &["string", "bool", "char", "sbyte", "byte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "@int"];
 
 impl TypeOracle<'_> {
+    /// Whether a lambda or anonymous method may be passed for a parameter declared `param`: never for an array, a
+    /// keyword type or one of the repo's classes, structs, interfaces or enums; a delegate, an expression tree, a type
+    /// parameter, `object` or `Delegate` (C# 10 lambdas have a natural type) can't be told here.
+    fn accepts_lambda(&mut self, param: &TypeExpr) -> Result<Option<bool>> {
+        let name = match param {
+            TypeExpr::Array(_) => return Ok(Some(false)),
+            TypeExpr::Named(n) => keyword_type(last_segment(n)).to_string(),
+            TypeExpr::Generic { name, .. } => keyword_type(last_segment(name)).to_string(),
+            _ => return Ok(None),
+        };
+        if KEYWORD_TYPES.contains(&name.as_str()) {
+            return Ok(Some(false));
+        }
+        // A delegate is extracted as a `typealias`: a name the repo declares only as a class, struct, interface or
+        // enum takes no lambda.
+        let kinds: Vec<String> = self
+            .conn
+            .prepare_cached("SELECT DISTINCT kind FROM symbols WHERE name = ?1 AND name = ?1 COLLATE BINARY AND kind IN ('class', 'struct', 'protocol', 'enum', 'typealias')")?
+            .query_map([&name], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok((!kinds.is_empty() && kinds.iter().all(|k| k != "typealias")).then_some(false))
+    }
+
     /// Whether an argument of type `arg` (evaluated) may be passed for a parameter declared `param`: `Some(false)`
     /// only when C# certainly rejects it (a `string` for an `int`, an unrelated repo type, a repo type for a
     /// `string`); `Some(true)` when it certainly accepts it; `None` when it can't be told (library types whose
@@ -2805,6 +2828,9 @@ impl TypeOracle<'_> {
         // A collection expression converts to any collection type, which isn't told here.
         if matches!(arg, TypeExpr::Named(n) if n == "@collection") {
             return Ok(None);
+        }
+        if matches!(arg, TypeExpr::Named(n) if n == "@lambda") {
+            return self.accepts_lambda(param);
         }
         let name = |t: &TypeExpr| match t {
             TypeExpr::Named(n) => Some(keyword_type(last_segment(n)).to_string()),
@@ -2905,7 +2931,9 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
             groups.entry(d.container.as_deref()).or_default().push(i);
         }
     }
-    if !groups.values().any(|g| g.len() > 1) {
+    // Overloads in one type are told apart below; a lone overload in each of several types, only where the types are
+    // related (see the end).
+    if !groups.values().any(|g| g.len() > 1) && groups.len() < 2 {
         return Ok(defs);
     }
     // Each argument: its name when written `name: value`, and its type evaluated.
@@ -2924,37 +2952,37 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
         };
         evaluated.push((name, t));
     }
-    let mut drop = vec![false; defs.len()];
-    for members in groups.values().filter(|g| g.len() > 1) {
-        let mut rejected = Vec::new();
-        for &i in members {
-            let Some(params) = defs[i].params.as_deref().and_then(Params::decode) else { continue };
-            let mut fits = true;
-            for (k, (name, arg)) in evaluated.iter().enumerate() {
-                // A named argument goes to the parameter of that name, which the overload must have.
-                let at = match name {
-                    Some(n) => match params.names.iter().position(|p| p == n) {
-                        Some(at) => at,
-                        None => {
-                            fits = false;
-                            break;
-                        }
-                    },
-                    None => k,
-                };
-                // Past the declared parameters: a `params` array's elements, which aren't read. The array itself is
-                // never among them (the extractor's `parameter_types` leaves it out), so each one listed is checked.
-                let Some(Some(p)) = params.types.get(at) else { continue };
-                let (Some(arg), Some(p)) = (arg, TypeExpr::decode(p)) else { continue };
-                if oracle.accepts_arg(arg, &p)? == Some(false) {
-                    fits = false;
-                    break;
-                }
-            }
-            if !fits {
-                rejected.push(i);
+    // Which overloads the argument types rule out.
+    let mut out_by_type = vec![false; defs.len()];
+    for &i in groups.values().flatten() {
+        let Some(params) = defs[i].params.as_deref().and_then(Params::decode) else { continue };
+        let mut fits = true;
+        for (k, (name, arg)) in evaluated.iter().enumerate() {
+            // A named argument goes to the parameter of that name, which the overload must have.
+            let at = match name {
+                Some(n) => match params.names.iter().position(|p| p == n) {
+                    Some(at) => at,
+                    None => {
+                        fits = false;
+                        break;
+                    }
+                },
+                None => k,
+            };
+            // Past the declared parameters: a `params` array's elements, which aren't read. The array itself is
+            // never among them (the extractor's `parameter_types` leaves it out), so each one listed is checked.
+            let Some(Some(p)) = params.types.get(at) else { continue };
+            let (Some(arg), Some(p)) = (arg, TypeExpr::decode(p)) else { continue };
+            if oracle.accepts_arg(arg, &p)? == Some(false) {
+                fits = false;
+                break;
             }
         }
+        out_by_type[i] = !fits;
+    }
+    let mut drop = vec![false; defs.len()];
+    for members in groups.values().filter(|g| g.len() > 1) {
+        let rejected: Vec<usize> = members.iter().copied().filter(|&i| out_by_type[i]).collect();
         // When every overload is rejected the types are misread: keep them all.
         if rejected.len() < members.len() {
             for &i in &rejected {
@@ -2976,7 +3004,39 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
             }
         }
     }
+    // Overloads declared in a type and in its supertypes are one set to C# (`IOrders : IRepo<Order>`, each declaring
+    // `Get`): one the types rule out goes when a related type's overload still takes the call, so a lambda passed to
+    // `Get` on `IOrders` calls `IRepo<Order>.Get(Expression<…>)`, not `IOrders.Get(string)`. When every overload of
+    // the related types is ruled out, the types are misread, as above, and they all stay.
+    if groups.len() > 1 {
+        let mut chains: HashMap<&str, Vec<String>> = HashMap::new();
+        for c in groups.keys().flatten() {
+            let chain = oracle.chain(c)?.iter().map(|t| type_base_name(t).to_string()).collect();
+            chains.insert(c, chain);
+        }
+        let related = |a: &str, b: &str| {
+            let (ba, bb) = (type_base_name(a), type_base_name(b));
+            chains.get(a).is_some_and(|ch| ch.iter().any(|t| t == bb)) || chains.get(b).is_some_and(|ch| ch.iter().any(|t| t == ba))
+        };
+        for i in 0..defs.len() {
+            let Some(c) = defs[i].container.as_deref() else { continue };
+            if !out_by_type[i] || drop[i] {
+                continue;
+            }
+            let taken = groups.values().flatten().any(|&j| {
+                j != i && !out_by_type[j] && !drop[j] && defs[j].container.as_deref().is_some_and(|d| d != c && related(c, d))
+            });
+            if taken {
+                drop[i] = true;
+            }
+        }
+    }
     Ok(defs.into_iter().zip(drop).filter(|(_, d)| !d).map(|(d, _)| d).collect())
+}
+
+/// A type's name without its namespace or type arguments: `IRepo` for `Data.IRepo<Order>`.
+fn type_base_name(t: &str) -> &str {
+    last_segment(t.split('<').next().unwrap_or(t))
 }
 
 /// A C# call's arguments as its site gives them (`RefHit::arg_types`, see `FileFacts::arg_types`): their types, when
@@ -3195,7 +3255,8 @@ fn pair_loser(defs: &[&Def], g: usize, n: usize, args: &[(Option<String>, Option
     if args.len() == fixed {
         return Some(n);
     }
-    let tail: Vec<String> = args[fixed..].iter().map(|(_, t)| t.as_ref().and_then(norm_type)).collect::<Option<_>>()?;
+    // A lambda's type isn't compared (see [`TypeOracle::accepts_lambda`]).
+    let tail: Vec<String> = args[fixed..].iter().map(|(_, t)| t.as_ref().and_then(norm_type).filter(|t| t != "@lambda")).collect::<Option<_>>()?;
     // An integer literal is an `int` as is.
     let elem_as_is = |t: &String| t == elem || (t == "@int" && elem == "int");
     match &tail[..] {
@@ -7867,6 +7928,26 @@ pub fn conformers_named(conn: &Connection, name: &str, ns: Option<&str>) -> Resu
     Ok(out)
 }
 
+/// Of `candidates` (implementations of overloaded member `of`, all taking as many arguments), those taking its
+/// parameter types, where both declare them (see [`params_match`]): `OrderRepo.Get(string)` implements
+/// `IOrderRepo.Get(string)`, not `IOrderRepo.Get(int)`. When several take as many and none takes them by type, the
+/// types are misread: all stay (as in `implemented_in`).
+pub(crate) fn same_parameter_types(conn: &Connection, of: i64, candidates: Vec<i64>) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached("SELECT param_types FROM symbols WHERE id = ?1")?;
+    let mut types = |id: i64| -> Result<Option<Vec<Option<String>>>> {
+        let enc: Option<String> = stmt.query_row([id], |r| r.get(0))?;
+        Ok(enc.as_deref().and_then(Params::decode).map(|p| p.types))
+    };
+    let Some(mine) = types(of)? else { return Ok(candidates) };
+    let mut typed = Vec::new();
+    for &c in &candidates {
+        if types(c)?.is_none_or(|theirs| params_match(&mine, &theirs)) {
+            typed.push(c);
+        }
+    }
+    Ok(if typed.is_empty() && candidates.len() > 1 { candidates } else { typed })
+}
+
 /// The names of the supertypes types named `ty` declare in `conn`.
 fn supertypes(conn: &Connection, ty: &str) -> Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
@@ -7966,7 +8047,7 @@ fn implemented_in(
 
 /// Whether two methods' declared parameter types (encoded, `None` for a type parameter) agree: the same count, and
 /// the same type by its last name wherever both are known.
-fn params_match(a: &[Option<String>], b: &[Option<String>]) -> bool {
+pub(crate) fn params_match(a: &[Option<String>], b: &[Option<String>]) -> bool {
     let name = |enc: &str| TypeExpr::decode(enc).map(|t| t.map_names(&|n: &str| last_segment(n).to_string()).encode());
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| match (x, y) {

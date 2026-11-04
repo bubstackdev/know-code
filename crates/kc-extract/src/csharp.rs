@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 38;
+pub const VERSION: u32 = 39;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -2979,7 +2979,10 @@ impl<'a> Cx<'a> {
             {
                 named("string")
             }
-            "null_literal" | "default_expression" | "lambda_expression" | "anonymous_method_expression" => None,
+            "null_literal" | "default_expression" => None,
+            // A lambda or anonymous method has no type of its own: it converts to a delegate or expression tree type,
+            // never to `string`, a number or a class, which tells `Get(Func<Order, bool>)` from `Get(string)`.
+            "lambda_expression" | "anonymous_method_expression" => named("@lambda"),
             // `[a, b]` (C# 12) has no type of its own: it takes the parameter's, and no type parameter is inferred
             // from it.
             "collection_expression" => named("@collection"),
