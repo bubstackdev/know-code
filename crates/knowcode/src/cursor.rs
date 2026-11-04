@@ -285,7 +285,9 @@ fn offer_at(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, g: V
 /// cursor (the declared statement's tests, refresh checks) keep the plain answer.
 pub fn find_definitions(q: &str, kind: Option<&str>, limit: usize, scope: &Scope) -> Result<ops::Out<ops::FindData>> {
     let mut out = ops::find(q, kind, limit, scope)?;
-    let more = out.data.total > out.data.items.len();
+    // Only rows a higher limit adds to `items`: when `items` holds the declarations named exactly as asked, the other
+    // names' matches (in `similar`, or cut from it) are never among them, and a cursor to them would continue to nothing.
+    let more = out.data.more;
     let req = Request::Find { query: q.to_string(), kind: kind.map(str::to_string), limit };
     // The rows come from the repos asked about alone: the rest of the workspace, read for `declared`, changing under
     // the cursor doesn't change them, so it doesn't make the cursor stale.
@@ -956,6 +958,42 @@ mod tests {
         }
         let files: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         repo(base, "app", &files)
+    }
+
+    /// A find answering with the declarations named exactly as asked continues only when some of those were cut: the
+    /// other names' matches, shown in `similar` or cut from it, are never in `items`, so a cursor to them would
+    /// continue to nothing.
+    #[test]
+    fn find_with_similar_continues_only_to_declarations_named_so() {
+        let cache = test_cache();
+        let base = cache.dir("cursor-find-similar");
+        let root = repo(
+            &base,
+            "app",
+            &[
+                ("a.py", "class Ledger:\n    pass\n"),
+                ("b.py", "class Ledger:\n    pass\n"),
+                ("c.py", "class LedgerRow:\n    pass\nclass LedgerTotal:\n    pass\nclass LedgerView:\n    pass\n"),
+                ("d.py", "class Book:\n    def ledger(self):\n        pass\n"),
+            ],
+        );
+        let s = scope(&root);
+        // Both named so listed, 2 of the 4 others in `similar` and 2 cut from it: no cursor.
+        let env = find_definitions("Ledger", None, 4, &s).unwrap().env;
+        assert_eq!((env["items"].as_array().unwrap().len(), env["similar"].as_array().unwrap().len()), (2, 2), "{env}");
+        assert!(env.get("cursor").is_none(), "{env}");
+        // Every match shown, in `items` or `similar`: nothing cut, no cursor, complete.
+        let env = find_definitions("Ledger", None, 10, &s).unwrap().env;
+        assert_eq!((env.get("cursor"), env["complete"].clone()), (None, json!(true)), "{env}");
+        // One of the two named so cut: a cursor, to exactly the declarations named so.
+        let env = find_definitions("Ledger", None, 1, &s).unwrap().env;
+        capped_hints_continue(&env);
+        assert!(env["cursor"].as_str().is_some(), "{env}");
+        let (rows, pages) = follow(&env, "/items");
+        assert_eq!(pages, 1);
+        let all = rows_at(&ops::find("Ledger", None, 10_000, &s).unwrap().env, "/items");
+        assert_eq!((keys(&rows), all.len()), (keys(&all), 2));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
