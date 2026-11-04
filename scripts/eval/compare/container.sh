@@ -4,7 +4,7 @@
 #     container.sh LANGUAGE REPO CLONE IO [run.py arguments ...]
 #     container.sh LANGUAGE probe - IO                     # the fixture probe (probe.py), before the freeze
 #
-# The clone's tracked files and the harness (scripts/eval) are copied into IO/in, which the container mounts
+# The clone's tracked files and the harness (scripts/eval/compare and scripts/kc_env.py) are copied into IO/in, which the container mounts
 # read-only; only IO/out is writable. With the network up, the repository's dependencies are restored (as identity-v1's
 # labeller restores them) and every tool indexes it. The container is then disconnected, the run checks that names no
 # longer resolve, and the questions are asked. The container is removed afterwards, whatever happens.
@@ -28,7 +28,9 @@ if [ "$REPO" != probe ]; then
   cp "${QUESTIONS:-$HERE/../../../eval/compare-v1/questions.jsonl}" "$IO/in/questions.jsonl"
   (cd "$CLONE" && git -c core.hooksPath=/dev/null ls-files -z | COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --null -cf "$IO/in/src.tar" -T -)
 fi
-(cd "$HERE/.." && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude __pycache__ -cf "$IO/in/harness.tar" compare)
+# tools.py starts KnowCode through scripts/kc_env.py, so it goes in beside the package (PYTHONPATH is /work/harness).
+(cd "$HERE/.." && COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude __pycache__ -cf "$IO/in/harness.tar" \
+  compare -C .. kc_env.py)
 
 NAME=kc-compare-$LANGUAGE-$$
 cleanup() { docker rm -f -v "$NAME" >/dev/null 2>&1 || true; }
