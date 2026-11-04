@@ -1,0 +1,235 @@
+{
+ "binary": "d91429836d69e433",
+ "context_check": {
+  "spring": {
+   "confirmed": 50,
+   "sampled": 50
+  }
+ },
+ "frameworks": {
+  "spring": {
+   "gated": true,
+   "macro": {
+    "precision": 1.0,
+    "recall": 0.8054
+   },
+   "passed": false,
+   "precision": {
+    "high": 1.0,
+    "k": 82,
+    "low": 0.9552,
+    "n": 82,
+    "value": 1.0
+   },
+   "recall": {
+    "high": 0.7728,
+    "k": 83,
+    "low": 0.6098,
+    "n": 119,
+    "value": 0.6975
+   },
+   "repos": {
+    "jhipster-sample-app": {
+     "precision": {
+      "high": 1.0,
+      "k": 38,
+      "low": 0.9082,
+      "n": 38,
+      "value": 1.0
+     },
+     "recall": {
+      "high": 1.0,
+      "k": 38,
+      "low": 0.9082,
+      "n": 38,
+      "value": 1.0
+     }
+    },
+    "piggymetrics": {
+     "precision": {
+      "high": 1.0,
+      "k": 9,
+      "low": 0.7008,
+      "n": 9,
+      "value": 1.0
+     },
+     "recall": {
+      "high": 1.0,
+      "k": 10,
+      "low": 0.7225,
+      "n": 10,
+      "value": 1.0
+     }
+    },
+    "spring-petclinic-kotlin": {
+     "precision": {
+      "high": 1.0,
+      "k": 18,
+      "low": 0.8241,
+      "n": 18,
+      "value": 1.0
+     },
+     "recall": {
+      "high": 1.0,
+      "k": 18,
+      "low": 0.8241,
+      "n": 18,
+      "value": 1.0
+     }
+    },
+    "spring-petclinic-microservices": {
+     "precision": {
+      "high": 1.0,
+      "k": 16,
+      "low": 0.8064,
+      "n": 16,
+      "value": 1.0
+     },
+     "recall": {
+      "high": 1.0,
+      "k": 16,
+      "low": 0.8064,
+      "n": 16,
+      "value": 1.0
+     }
+    },
+    "spring-petclinic-rest": {
+     "precision": {
+      "high": 1.0,
+      "k": 1,
+      "low": 0.2065,
+      "n": 1,
+      "value": 1.0
+     },
+     "recall": {
+      "high": 0.1382,
+      "k": 1,
+      "low": 0.0048,
+      "n": 37,
+      "value": 0.027
+     }
+    }
+   }
+  }
+ },
+ "labels": "eval/routes-v1/jvm/labels.jsonl",
+ "per_repo": {
+  "jhipster-sample-app": {
+   "spring": {
+    "false": [],
+    "labels": 38,
+    "labels_matched": 38,
+    "missed": [],
+    "routes": 38,
+    "routes_matched": 38
+   }
+  },
+  "piggymetrics": {
+   "spring": {
+    "false": [],
+    "labels": 10,
+    "labels_matched": 10,
+    "missed": [],
+    "routes": 9,
+    "routes_matched": 9
+   }
+  },
+  "spring-petclinic-kotlin": {
+   "spring": {
+    "false": [],
+    "labels": 18,
+    "labels_matched": 18,
+    "missed": [],
+    "routes": 18,
+    "routes_matched": 18
+   }
+  },
+  "spring-petclinic-microservices": {
+   "spring": {
+    "false": [],
+    "labels": 16,
+    "labels_matched": 16,
+    "missed": [],
+    "routes": 16,
+    "routes_matched": 16
+   }
+  },
+  "spring-petclinic-rest": {
+   "spring": {
+    "false": [],
+    "labels": 37,
+    "labels_matched": 1,
+    "missed": [
+     "DELETE /api/owners/{ownerId} (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#deleteOwner)",
+     "DELETE /api/pets/{petId} (org.springframework.samples.petclinic.rest.controller.v1.PetRestControllerV1#deletePet)",
+     "DELETE /api/pettypes/{petTypeId} (org.springframework.samples.petclinic.rest.controller.v1.PetTypeRestControllerV1#deletePetType)",
+     "DELETE /api/specialties/{specialtyId} (org.springframework.samples.petclinic.rest.controller.v1.SpecialtyRestControllerV1#deleteSpecialty)",
+     "DELETE /api/vets/{vetId} (org.springframework.samples.petclinic.rest.controller.v1.VetRestControllerV1#deleteVet)",
+     "DELETE /api/visits/{visitId} (org.springframework.samples.petclinic.rest.controller.v1.VisitRestControllerV1#deleteVisit)",
+     "GET /api/owners (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#listOwners)",
+     "GET /api/owners/{ownerId} (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#getOwner)",
+     "GET /api/owners/{ownerId}/pets/{petId} (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#getOwnersPet)",
+     "GET /api/pets (org.springframework.samples.petclinic.rest.controller.v1.PetRestControllerV1#listPets)",
+     "GET /api/pets/{petId} (org.springframework.samples.petclinic.rest.controller.v1.PetRestControllerV1#getPet)",
+     "GET /api/pettypes (org.springframework.samples.petclinic.rest.controller.v1.PetTypeRestControllerV1#listPetTypes)",
+     "GET /api/pettypes/{petTypeId} (org.springframework.samples.petclinic.rest.controller.v1.PetTypeRestControllerV1#getPetType)",
+     "GET /api/specialties (org.springframework.samples.petclinic.rest.controller.v1.SpecialtyRestControllerV1#listSpecialties)",
+     "GET /api/specialties/{specialtyId} (org.springframework.samples.petclinic.rest.controller.v1.SpecialtyRestControllerV1#getSpecialty)",
+     "GET /api/v2/owners (org.springframework.samples.petclinic.rest.controller.v2.OwnerRestControllerV2#listOwnersPage)",
+     "GET /api/v2/pets (org.springframework.samples.petclinic.rest.controller.v2.PetRestControllerV2#listPetsPage)",
+     "GET /api/vets (org.springframework.samples.petclinic.rest.controller.v1.VetRestControllerV1#listVets)",
+     "GET /api/vets/{vetId} (org.springframework.samples.petclinic.rest.controller.v1.VetRestControllerV1#getVet)",
+     "GET /api/visits (org.springframework.samples.petclinic.rest.controller.v1.VisitRestControllerV1#listVisits)",
+     "GET /api/visits/{visitId} (org.springframework.samples.petclinic.rest.controller.v1.VisitRestControllerV1#getVisit)",
+     "POST /api/owners (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#addOwner)",
+     "POST /api/owners/{ownerId}/pets (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#addPetToOwner)",
+     "POST /api/owners/{ownerId}/pets/{petId}/visits (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#addVisitToOwner)",
+     "POST /api/pettypes (org.springframework.samples.petclinic.rest.controller.v1.PetTypeRestControllerV1#addPetType)",
+     "POST /api/specialties (org.springframework.samples.petclinic.rest.controller.v1.SpecialtyRestControllerV1#addSpecialty)",
+     "POST /api/users (org.springframework.samples.petclinic.rest.controller.v1.UserRestControllerV1#addUser)",
+     "POST /api/vets (org.springframework.samples.petclinic.rest.controller.v1.VetRestControllerV1#addVet)",
+     "POST /api/visits (org.springframework.samples.petclinic.rest.controller.v1.VisitRestControllerV1#addVisit)",
+     "PUT /api/owners/{ownerId} (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#updateOwner)",
+     "PUT /api/owners/{ownerId}/pets/{petId} (org.springframework.samples.petclinic.rest.controller.v1.OwnerRestControllerV1#updateOwnersPet)",
+     "PUT /api/pets/{petId} (org.springframework.samples.petclinic.rest.controller.v1.PetRestControllerV1#updatePet)",
+     "PUT /api/pettypes/{petTypeId} (org.springframework.samples.petclinic.rest.controller.v1.PetTypeRestControllerV1#updatePetType)",
+     "PUT /api/specialties/{specialtyId} (org.springframework.samples.petclinic.rest.controller.v1.SpecialtyRestControllerV1#updateSpecialty)",
+     "PUT /api/vets/{vetId} (org.springframework.samples.petclinic.rest.controller.v1.VetRestControllerV1#updateVet)",
+     "PUT /api/visits/{visitId} (org.springframework.samples.petclinic.rest.controller.v1.VisitRestControllerV1#updateVisit)"
+    ],
+    "routes": 1,
+    "routes_matched": 1
+   }
+  }
+ },
+ "placeholders": {
+  "jhipster-sample-app": {
+   "labels": 0,
+   "routes": 0
+  },
+  "piggymetrics": {
+   "labels": 0,
+   "routes": 0
+  },
+  "spring-petclinic-kotlin": {
+   "labels": 0,
+   "routes": 0
+  },
+  "spring-petclinic-microservices": {
+   "labels": 0,
+   "routes": 0
+  },
+  "spring-petclinic-rest": {
+   "labels": 0,
+   "routes": 0
+  }
+ },
+ "rule": "routes-v1",
+ "served": {
+  "jhipster-sample-app": 38,
+  "piggymetrics": 11,
+  "spring-petclinic-kotlin": 18,
+  "spring-petclinic-microservices": 16,
+  "spring-petclinic-rest": 1
+ }
+}

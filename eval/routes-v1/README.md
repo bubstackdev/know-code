@@ -200,6 +200,35 @@ image is Java 17's (not 21's); and Spring 5.0's logging in piggymetrics writes t
 rows are kept from it (`label.sh`). These labels were committed before KnowCode's routes on these repositories were
 read.
 
+### Spring results
+
+Scored against KnowCode at `w2/spring-routes` `8814a9c` (#343, integration/0.7 with the Spring server routes) after the
+labels above were frozen ([jvm/score.json](jvm/score.json)); no `${…}` placeholder was left out on either side, and 50
+of 50 sampled routes were confirmed through `context` on the handler owning them.
+
+| Repository | Labels | Precision | Recall |
+| --- | ---: | --- | --- |
+| jhipster/jhipster-sample-app | 38 | 1.000 (38/38, 0.908–1.000) | 1.000 (38/38, 0.908–1.000) |
+| spring-petclinic/spring-petclinic-rest | 37 | 1.000 (1/1, 0.206–1.000) | 0.027 (1/37, 0.005–0.138) |
+| spring-petclinic/spring-petclinic-kotlin (Kotlin) | 18 | 1.000 (18/18, 0.824–1.000) | 1.000 (18/18, 0.824–1.000) |
+| spring-petclinic/spring-petclinic-microservices | 16 | 1.000 (16/16, 0.806–1.000) | 1.000 (16/16, 0.806–1.000) |
+| sqshq/piggymetrics | 10 | 1.000 (9/9, 0.701–1.000) | 1.000 (10/10, 0.723–1.000) |
+| **Spring, pooled** | 119 | **1.000 (82/82, 0.955–1.000)** | **0.698 (83/119, 0.610–0.773)** |
+
+Macro-averaged over the repositories: precision 1.000, recall 0.805. Every KnowCode route matched a label. Every miss
+is spring-petclinic-rest's: its controllers implement interfaces (`VetsApi`, `OwnersApi`, …) that the build's
+openapi-generator writes from `src/main/resources/openapi.yml`, so the mappings Spring reads are on generated sources
+the repository doesn't hold; 36 of its 37 routes are mapped there. The rule above counts them, as stated before
+scoring. The Kotlin repository's 18 routes are all matched, so the grammar's misread annotations (#348) cost no
+Spring route here.
+
+**Verdict: Spring passes 0.7's gate, by precision.** The plan's gate item for server routes is "precision of at least
+0.95 per framework, with recall reported" ([plan](../../docs/plans/0.7.md#gate)); this README's general rule, above,
+asks for precision and recall of 0.95 or more. They disagree, and the user ruled (2026-11-04) that the plan's reading
+decides 0.7's gate: Spring's pooled precision is 1.000 (82/82, interval 0.955–1.000), and its recall, 0.698, is
+published with its cause, generated sources, rather than gated. The rule above is unchanged, and under it Spring's
+recall is below 0.95.
+
 ## routes-v1.1: configuration-dependent registrations, and echo's placeholders
 
 routes-v1's rule above is unchanged, and its gate figures are scored under it. routes-v1.1 is a second rule, written
