@@ -1,0 +1,83 @@
+//! References to one declaration (asked by its place): its own rows in `items`, rows the answer binds to another
+//! declaration of the name counted apart in `elsewhere`, rows it can't place listed apart in `unplaced`.
+
+use crate::ops::tests::{repo, test_cache};
+use crate::ops::{self, Scope};
+use serde_json::Value;
+
+const FILES: &[(&str, &str)] = &[
+    ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+    ("src/Crate.cs", "namespace Shop;\npublic class Crate\n{\n    public void Seal() { }\n    public void Seal(int times) { }\n}\n"),
+    ("src/Parcel.cs", "namespace Shop;\npublic class Parcel\n{\n    public void Seal() { }\n}\n"),
+    (
+        "src/Packer.cs",
+        "namespace Shop;\npublic class Packer\n{\n    public void Pack(Crate c, Parcel p)\n    {\n        c.Seal();\n        c.Seal(2);\n        c.Seal(3);\n        p.Seal();\n    }\n}\n",
+    ),
+];
+
+fn lines(v: &Value, list: &str) -> Vec<u64> {
+    v[list].as_array().map(|a| a.iter().filter_map(|r| r["line"].as_u64()).collect()).unwrap_or_default()
+}
+
+#[test]
+fn a_placed_declarations_references_keep_other_declarations_rows_apart() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target");
+    let root = repo(&base, "shop", FILES);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    let env = ops::refs("src/Crate.cs:4", &[], 50, &scope).unwrap().env;
+    // The parameterless overload's own reference only, counted alone.
+    assert_eq!(lines(&env, "items"), [6], "{env}");
+    assert_eq!(env["total"], 1, "{env}");
+    // The other overload's two, counted under that declaration (Parcel.Seal is another name, and isn't asked).
+    let elsewhere = env["elsewhere"].as_array().unwrap_or_else(|| panic!("{env}"));
+    assert_eq!(elsewhere.len(), 1, "{env}");
+    assert_eq!((elsewhere[0]["qualified"].as_str(), elsewhere[0]["line"].as_u64(), elsewhere[0]["rows"].as_u64()), (Some("Crate.Seal"), Some(5), Some(2)), "{env}");
+    assert!(env["elsewhere_note"].as_str().is_some_and(|n| n.contains("kc_refs")), "{env}");
+    assert!(env.get("unplaced").is_none(), "{env}");
+    // A page of a placed declaration's references continues its own rows, not the name's.
+    let first = ops::refs("src/Crate.cs:5", &[], 1, &scope).unwrap().env;
+    assert_eq!(lines(&first, "items"), [7], "{first}");
+    let page = crate::cursor::more(first["cursor"].as_str().unwrap_or_else(|| panic!("{first}"))).unwrap();
+    assert_eq!(lines(&page, "items"), [8], "{page}");
+    assert!(page.get("cursor").is_none(), "{page}");
+    // A bare name's references are every use of the name, as before.
+    let all = ops::refs("Seal", &[], 50, &scope).unwrap().env;
+    assert_eq!(lines(&all, "items").len(), 4, "{all}");
+    assert!(all.get("elsewhere").is_none() && all.get("unplaced").is_none(), "{all}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Uses of a free function's name the answer can't place (`box.seal()` on a value of no known type) aren't the
+/// declaration's references, nor another's: listed apart in `unplaced`, continuable with their own cursor, and said
+/// in an `unsupported` entry, since some may be the declaration's.
+#[test]
+fn a_placed_declarations_unplaceable_uses_are_listed_apart_and_continue() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target-unplaced");
+    let files: &[(&str, &str)] = &[
+        ("pack/seal.py", "def seal():\n    pass\n"),
+        ("pack/wrap.py", "def seal():\n    pass\n"),
+        ("pack/run.py", "from pack.seal import seal\n\ndef run(box):\n    seal()\n    box.seal()\n    box.seal()\n    box.seal()\n"),
+    ];
+    let root = repo(&base, "shop", files);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    let env = ops::refs("pack/seal.py:1", &[], 1, &scope).unwrap().env;
+    assert_eq!((lines(&env, "items"), env["total"].as_u64()), (vec![4], Some(1)), "{env}");
+    assert_eq!((lines(&env, "unplaced"), env["unplaced_total"].as_u64()), (vec![5], Some(3)), "{env}");
+    let unsupported = crate::contract::incomplete_of(&env).into_iter().filter(|i| i.reason == kc_store::answer::Reason::Unsupported).count();
+    assert_eq!(unsupported, 1, "{env}");
+    // The rest of `unplaced`, page by page, from its own cursor.
+    let mut rows = Vec::new();
+    let mut next = env["unplaced_cursor"].as_str().map(str::to_string);
+    while let Some(c) = next {
+        let page = crate::cursor::more(&c).unwrap();
+        // A page holds the list it continues in `items`, named in `list`.
+        assert_eq!(page["list"], "unplaced", "{page}");
+        rows.extend(lines(&page, "items"));
+        next = page["cursor"].as_str().map(str::to_string);
+        assert!(rows.len() <= 3, "{page}");
+    }
+    assert_eq!(rows, [6, 7]);
+    let _ = std::fs::remove_dir_all(&base);
+}

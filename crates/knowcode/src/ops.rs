@@ -841,14 +841,67 @@ pub fn repo_name(root: &Path) -> String {
 
 /// The qualified name of the definition `place` (`file:line`, `path#name`) names in the first of `roots` having it;
 /// an error saying what didn't resolve (see [`unresolved_place`]) when none does.
-fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> {
+/// The declaration a place names, for a references answer about it alone (see [`refs`]).
+pub struct Placed {
+    root: PathBuf,
+    id: i64,
+    file: String,
+    line: u32,
+    qualified: String,
+    kind: String,
+}
+
+/// The declaration a place (`file:line`, `path#name`) names; a place naming none is refused, saying why.
+fn placed_target(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<Placed> {
     for root in roots {
         let Some(o) = open_member(roots, root, no_sync)? else { continue };
         if let Some(s) = query::definitions(o.store.conn(), place)?.into_iter().next() {
-            return Ok(s.qualified());
+            return Ok(Placed { root: root.clone(), id: s.id, file: s.file.clone(), line: s.line, qualified: s.qualified(), kind: s.kind.clone() });
         }
     }
     bail!(crate::pending::unresolved(place, roots, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
+}
+
+/// Where a reference found from the repo at `root` binds, for a references answer about the declaration `d`.
+#[derive(PartialEq)]
+enum Binding {
+    /// To `d`: one of its candidates is `d`, or it has none of its own (it was found as `d`'s).
+    Target,
+    /// Only to other declarations of the name.
+    Elsewhere,
+    /// Nowhere the answer can say: unresolved, or ambiguous with no candidate listed.
+    Unplaced,
+}
+
+/// Kinds of declaration whose parts (a partial class, a merged interface) are one declaration however many places
+/// declare them; a callable's same-named declarations are overloads, each its own.
+fn one_declaration(kind: &str) -> bool {
+    !matches!(kind, "method" | "function" | "init" | "constructor" | "subscript" | "macro")
+}
+
+fn binding(root: &Path, h: &RefHit, d: &Placed) -> Binding {
+    let here = root == d.root.as_path() && h.repo.is_none();
+    let ctors = match &h.ctors {
+        Some(c) if h.kind == "instantiate" => c.as_slice(),
+        _ => &[],
+    };
+    if here && (h.target_ids.contains(&d.id) || ctors.contains(&d.id)) {
+        return Binding::Target;
+    }
+    let d_repo = repo_name(&d.root);
+    let is_d = |t: &query::Target| {
+        let same_repo = t.repo.as_deref().map_or(here || root == d.root.as_path(), |r| r == d_repo);
+        same_repo && ((t.file == d.file && t.line == d.line) || (t.qualified == d.qualified && t.kind == d.kind && one_declaration(&d.kind)))
+    };
+    if h.targets.iter().any(is_d) {
+        return Binding::Target;
+    }
+    if h.targets.is_empty() && h.target_ids.is_empty() && ctors.is_empty() {
+        // A reference with no candidate of its own that resolution still placed (`exact`, `unique_name`) is `d`'s:
+        // it was found as a reference to `d`'s name.
+        return if matches!(h.confidence, "exact" | "unique_name") { Binding::Target } else { Binding::Unplaced };
+    }
+    Binding::Elsewhere
 }
 
 /// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos
@@ -1858,24 +1911,48 @@ pub struct RefsData {
 /// that definition's qualified name, said as `name`. A place naming no definition is refused, saying why.
 pub fn refs(name: &str, kinds: &[String], limit: usize, args: &Scope) -> Result<Out<RefsData>> {
     let (roots, workspace) = scope_repos(&args.repos)?;
+    let asked = name;
     let placed = match query::place(name) {
-        Some(_) => Some(placed_name(name, &roots, args.no_sync)?),
+        Some(_) => Some(placed_target(name, &roots, args.no_sync)?),
         None => None,
     };
-    let name = placed.as_deref().unwrap_or(name);
-    let mut out = refs_in(name, kinds, limit, roots, workspace, args.no_sync)?;
+    let name = placed.as_ref().map_or(name, |p| p.qualified.as_str());
+    let mut out = refs_in_for(name, kinds, limit, roots, workspace, args.no_sync, placed.as_ref())?;
     if placed.is_some() {
         out.env["name"] = json!(name);
     }
     let more = out.data.total > out.data.items.len();
-    let req = cursor::Request::Refs { name: name.to_string(), kinds: kinds.to_vec(), limit };
-    cursor::offer(&mut out.env, req, args, vec![cursor::List::new("/items", limit, more)], &[]);
+    // A place is asked again as a place: a page of its references is of that declaration's alone.
+    let req = cursor::Request::Refs { name: (if placed.is_some() { asked } else { name }).to_string(), kinds: kinds.to_vec(), limit };
+    let mut lists = vec![cursor::List::new("/items", limit, more)];
+    if out.env.get("unplaced").is_some() {
+        let n = out.env["unplaced_total"].as_u64().unwrap_or(0) as usize;
+        let shown = out.env["unplaced"].as_array().map_or(0, Vec::len);
+        lists.push(cursor::List::new("/unplaced", limit, n > shown));
+    }
+    cursor::offer(&mut out.env, req, args, lists, &[]);
     finish(&mut out.env);
     Ok(out)
 }
 
 /// [`refs`] over `roots`; `workspace` when they are every indexed repo (the query names no repo and runs outside one).
-fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, workspace: bool, no_sync: bool) -> Result<Out<RefsData>> {
+#[cfg(test)]
+fn refs_in(name: &str, kinds: &[String], limit: usize, roots: Vec<PathBuf>, workspace: bool, no_sync: bool) -> Result<Out<RefsData>> {
+    refs_in_for(name, kinds, limit, roots, workspace, no_sync, None)
+}
+
+/// [`refs_in`]; with `target`, the references of that declaration alone in `items`: those the answer binds only to
+/// another declaration of the name are counted per declaration in `elsewhere`, and those it can't place are listed
+/// apart in `unplaced` (see docs/answers.md, "References to one declaration").
+fn refs_in_for(
+    name: &str,
+    kinds: &[String],
+    limit: usize,
+    mut roots: Vec<PathBuf>,
+    workspace: bool,
+    no_sync: bool,
+    target: Option<&Placed>,
+) -> Result<Out<RefsData>> {
     // Each repo's change since its summary is checked once for the whole query.
     let _memo = kc_index::memo_changes();
     let args = &Scope { repos: Vec::new(), no_sync };
@@ -1896,6 +1973,9 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     let mut callers = crate::whole::Callers::default();
     let mut overloads = crate::whole::Overloads::default();
     let mut hierarchy = None;
+    // Rows bound only elsewhere, per declaration (its place, as the answer names it), and rows that can't be placed.
+    let mut elsewhere: BTreeMap<String, (Value, usize)> = BTreeMap::new();
+    let mut unplaced: Vec<(PathBuf, RefHit)> = Vec::new();
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let (_, bare) = query::split_dotted(name.trim());
@@ -1932,6 +2012,40 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
                 *summary.by_confidence.entry(h.confidence).or_default() += 1;
                 summary.total += 1;
                 hits.push(h);
+            }
+        }
+        if let Some(d) = target {
+            let mut kept = Vec::with_capacity(hits.len());
+            for h in hits {
+                match binding(&o.root, &h, d) {
+                    Binding::Target => kept.push(h),
+                    Binding::Unplaced => unplaced.push((o.root.clone(), h)),
+                    Binding::Elsewhere => {
+                        let shown: Vec<&query::Target> = h.targets.iter().collect();
+                        let key = shown.iter().map(|t| format!("{}:{}:{}", t.repo.as_deref().unwrap_or(""), t.file, t.line)).collect::<Vec<_>>().join(" ");
+                        let entry = elsewhere.entry(key).or_insert_with(|| {
+                            let place = |t: &query::Target| {
+                                let mut v = json!({ "qualified": t.qualified, "file": t.file, "line": t.line });
+                                if let Some(r) = t.repo.as_ref().or(multi.then(|| repo_name(&o.root)).as_ref()) {
+                                    v["repo"] = json!(r);
+                                }
+                                v
+                            };
+                            let v = match shown.as_slice() {
+                                [one] => place(one),
+                                many => json!({ "among": many.iter().map(|t| place(t)).collect::<Vec<_>>() }),
+                            };
+                            (v, 0)
+                        });
+                        entry.1 += 1;
+                    }
+                }
+            }
+            hits = kept;
+            summary.total = hits.len();
+            summary.by_confidence = BTreeMap::new();
+            for h in &hits {
+                *summary.by_confidence.entry(h.confidence).or_default() += 1;
             }
         }
         if let Some(g) = order_refs(&o.store, name, &mut hits)? {
@@ -2064,6 +2178,47 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     if precise > 0 {
         env["precise"] = json!(precise);
         env["corrected"] = json!(corrected);
+    }
+    if let Some(d) = target {
+        let (_, bare) = query::split_dotted(name.trim());
+        if !elsewhere.is_empty() {
+            let mut rows: Vec<(Value, usize)> = elsewhere.into_values().collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_string().cmp(&b.0.to_string())));
+            let n: usize = rows.iter().map(|r| r.1).sum();
+            env["elsewhere"] = json!(rows.into_iter().map(|(mut v, k)| { v["rows"] = json!(k); v }).collect::<Vec<_>>());
+            env["elsewhere_note"] = json!(format!(
+                "{n} reference{} named {bare} bound to other declarations of the name, not {}: kc_refs on one's file:line lists them",
+                if n == 1 { " is" } else { "s are" },
+                d.qualified
+            ));
+        }
+        if !unplaced.is_empty() {
+            let n = unplaced.len();
+            unplaced.truncate(limit);
+            let rows: Vec<Value> = unplaced
+                .iter()
+                .map(|(root, h)| {
+                    let mut v = tag_repo(h, root, multi);
+                    if let Some(r) = &h.repo {
+                        v["repo"] = json!(r);
+                    }
+                    v
+                })
+                .collect();
+            env["unplaced"] = json!(rows);
+            env["unplaced_total"] = json!(n);
+            push_incomplete(
+                &mut env,
+                Incomplete::new(
+                    Reason::Unsupported,
+                    format!(
+                        "unplaced: {n} use{} of the name {bare} couldn't be placed (unresolved, or ambiguous with no candidate listed); listed apart in `unplaced`, and some may be {}'s",
+                        if n == 1 { "" } else { "s" },
+                        d.qualified
+                    ),
+                ),
+            );
+        }
     }
     finish(&mut env);
     Ok(Out { env, data: RefsData { items, total, by_confidence: by_conf, multi, callers: said, overloads: overloads.list, hierarchy } })

@@ -302,6 +302,35 @@ pub fn refs(name: &str, d: &crate::ops::RefsData) {
     }
 }
 
+/// What a references answer about one declaration keeps apart from its own rows: rows bound to other declarations of
+/// the name, per declaration, and uses it couldn't place.
+pub fn refs_apart(env: &serde_json::Value) {
+    let place = |v: &serde_json::Value| {
+        let repo = v["repo"].as_str().map(|r| format!("{r}/")).unwrap_or_default();
+        format!("{}  {repo}{}:{}", v["qualified"].as_str().unwrap_or(""), v["file"].as_str().unwrap_or(""), v["line"])
+    };
+    if let (Some(note), Some(rows)) = (env["elsewhere_note"].as_str(), env["elsewhere"].as_array()) {
+        println!("elsewhere: {note}");
+        for r in rows {
+            let at = match r["among"].as_array() {
+                Some(many) => format!("ambiguous among {}", many.iter().map(place).collect::<Vec<_>>().join(", ")),
+                None => place(r),
+            };
+            println!("  {at}  ({} rows)", r["rows"]);
+        }
+    }
+    if let Some(rows) = env["unplaced"].as_array() {
+        let n = env["unplaced_total"].as_u64().unwrap_or(rows.len() as u64);
+        println!("unplaced: {n} uses of the name couldn't be placed (unresolved, or ambiguous with no candidate listed):");
+        for r in rows {
+            println!("  {}:{}  [{}]", r["file"].as_str().unwrap_or(""), r["line"], r["confidence"].as_str().unwrap_or(""));
+        }
+        if n > rows.len() as u64 {
+            println!("  … {} more (raise --limit)", n - rows.len() as u64);
+        }
+    }
+}
+
 pub fn context(root: &Path, c: &Context, multi: bool) {
     let s = &c.symbol;
     let r = multi.then_some(root);

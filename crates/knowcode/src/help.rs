@@ -98,6 +98,14 @@ list empty is said in `none_found` with what was searched. An assembly scan that
 instead); one that can't (in test code, or exposing only other services) is counted in that line. Razor and other files KnowCode doesn't read as code are checked as text for the name: the lines naming it
 are in `incomplete`; when none does, `checked` says so.
 
+Asked by a place (`file:line`, `path#name`), the answer is that declaration's references alone: `items`, `total`,
+`by_confidence`, `callers` and the cursor count only rows bound to it (its own, or ambiguous with it among the
+candidates). Rows the answer binds only to another declaration of the name (another overload, a same-named member) are
+counted per declaration in `elsewhere` (`qualified`, `file`, `line`, `rows`; `among` for an ambiguity between others),
+with `elsewhere_note`; kc_refs on that file:line lists them. Uses it can't place (unresolved, or ambiguous with no
+candidate listed) are listed apart in `unplaced` (`unplaced_total`, its own `unplaced_cursor`), with an `unsupported`
+entry: some may be the declaration's. A name asked as a name answers for every use of it, as before.
+
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,
 member; SQL read, write) or `edges` (the same filter named as kc_trace names edges: calls, instantiates, uses, member,
 reads, writes). Several names at once with `names` (at most 20), one result per name. SCIP, TypeScript imports, SQL,
