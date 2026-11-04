@@ -175,6 +175,11 @@ The preparation scripts (`scripts/prepare-public-eval.py`, `scripts/census-publi
 [first-run-acceptance.md](first-run-acceptance.md) checks installation, `knowcode setup claude` and the first
 correct answer on pinned public repositories. These are acceptance cases, not an evaluation.
 
+A release gate's update from the published release runs with no network: the published release, installed by its own
+installer, updates itself to the release candidate through
+[release_standin.py](../scripts/acceptance/release_standin.py), a `curl` put first on `PATH` that answers only
+bubstackdev/know-code's release URLs, from local copies of both releases' files, and logs every request.
+
 ## Other tools
 
 - `run.py mine`, `replay` and `report`: the history replay above. Scorers are defined in
