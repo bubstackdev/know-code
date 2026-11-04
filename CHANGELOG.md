@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- C#: a call writing type arguments (`Find<Order>(key)`, `x.Get<A, B>()`) is linked only to the overloads declaring
+  that many type parameters of their own, when some do. Before, `Find<Order>(key)` was an ambiguous candidate of every
+  `Find` taking one argument whose type the call site didn't tell, `Find(object)` included. A call writing none is
+  unchanged (its type arguments may be inferred). C# files are extracted again on the first query after upgrading.
 - TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
   is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
   one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of

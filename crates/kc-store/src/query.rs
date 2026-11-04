@@ -2891,7 +2891,9 @@ impl TypeOracle<'_> {
 /// call site gives, when some do; overloads the types can't decide stay. Definitions in different containers are
 /// left to receiver resolution.
 fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec<&'d Def>) -> Result<Vec<&'d Def>> {
-    let Some(args) = hit.arg_types.as_deref().and_then(|a| serde_json::from_str::<Vec<serde_json::Value>>(a).ok()) else {
+    let (args, written) = cs_call_args(hit.arg_types.as_deref());
+    let defs = if written > 0 { by_type_parameters(defs, written) } else { defs };
+    let Some(args) = args else {
         return Ok(defs);
     };
     let mut groups: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
@@ -2972,6 +2974,41 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
         }
     }
     Ok(defs.into_iter().zip(drop).filter(|(_, d)| !d).map(|(d, _)| d).collect())
+}
+
+/// A C# call's arguments as its site gives them (`RefHit::arg_types`, see `FileFacts::arg_types`): their types, when
+/// it gives any, and how many type arguments it writes (`Get<A, B>(…)`), 0 when none.
+fn cs_call_args(enc: Option<&str>) -> (Option<Vec<serde_json::Value>>, usize) {
+    match enc.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()) {
+        Some(serde_json::Value::Array(a)) => (Some(a), 0),
+        Some(serde_json::Value::Object(o)) => {
+            (o.get("a").and_then(|a| a.as_array()).cloned(), o.get("g").and_then(serde_json::Value::as_u64).map_or(0, |g| g as usize))
+        }
+        _ => (None, 0),
+    }
+}
+
+/// Of a C# call's overloads that write `written` type arguments (`Get<Order>()`), per container, those declaring as
+/// many type parameters of their own, when some do: C# binds such a call only to a method with that many. When none
+/// does, the call was misread (or names a delegate or a type), and they all stay.
+fn by_type_parameters(defs: Vec<&Def>, written: usize) -> Vec<&Def> {
+    let own = |d: &Def| d.params.as_deref().and_then(Params::decode).map_or(0, |p| p.g);
+    let method = |d: &Def| matches!(d.kind.as_str(), "method" | "function");
+    let mut groups: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
+    for (i, d) in defs.iter().enumerate() {
+        if method(d) {
+            groups.entry(d.container.as_deref()).or_default().push(i);
+        }
+    }
+    let mut drop = vec![false; defs.len()];
+    for members in groups.values().filter(|g| g.len() > 1) {
+        if members.iter().any(|&i| own(defs[i]) == written) {
+            for &i in members {
+                drop[i] = own(defs[i]) != written;
+            }
+        }
+    }
+    defs.into_iter().zip(drop).filter(|(_, d)| !d).map(|(d, _)| d).collect()
 }
 
 /// The constructors a C# type declares, for telling which one a creation calls (see [`constructors_called`]).
@@ -3178,7 +3215,8 @@ fn norm_type(t: &TypeExpr) -> Option<String> {
 }
 
 /// A C# method's parameters as stored (see `FileFacts::param_types`): each one's declared type, encoded (`None` for a
-/// type parameter), and name; and a `params` array's type, `rest`, which `types` leaves out.
+/// type parameter), and name; a `params` array's type, `rest`, which `types` leaves out; and a generic method's
+/// number of type parameters, `g`.
 #[derive(serde::Deserialize)]
 struct Params {
     types: Vec<Option<String>>,
@@ -3186,6 +3224,9 @@ struct Params {
     names: Vec<String>,
     #[serde(default)]
     rest: Option<String>,
+    /// A generic method's own type parameters' number.
+    #[serde(default)]
+    g: usize,
 }
 
 impl Params {
