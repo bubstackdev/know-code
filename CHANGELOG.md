@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Spring clients: each method of a `@FeignClient` or `@HttpExchange` interface, a `RestTemplate` call and a `WebClient`
+  or `RestClient` request (`client.get().uri(…)`) are requests of the method making them, linked to the routes they
+  reach in the workspace's indexed repos by their paths, as Go's and TypeScript's are. `RestTemplate` and the
+  `WebClient`/`RestClient` chains are read in Java; Feign and `@HttpExchange` interfaces in Java and Kotlin.
 - Spring routes, in Java and Kotlin: a handler method's `@RequestMapping` or `@GetMapping` (and the other verbs'
   shortcuts) is a route it serves, under its controller's `@RequestMapping`, with paths written as strings, constants or
   their concatenation (Kotlin string templates included). `context` on a handler lists what it serves. A mapping KnowCode can't read is reported as

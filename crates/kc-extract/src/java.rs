@@ -13,10 +13,11 @@ use tree_sitter::{Node, Parser};
 
 use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
-use crate::spring::{self, Mapping};
+use crate::urls::{self, Piece};
+use crate::spring::{self, Mapping, Side};
 use crate::{FileFacts, HttpRoute, Import, Ref, RefKind, Relation, RelationKind, StringConst, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -48,8 +49,9 @@ pub fn extract(source: &str) -> FileFacts {
     };
     let mut nested = HashMap::new();
     member_types(source, tree.root_node(), None, &mut nested);
+    let fields = field_types(source, tree.root_node());
     let mut cx =
-        Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested };
+        Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested, fields };
     cx.visit(tree.root_node());
     cx.facts
 }
@@ -61,8 +63,9 @@ struct Scope {
     /// A method, constructor or initializer: its locals and parameters, with their declared types where written.
     callable: bool,
     locals: HashMap<String, Option<String>>,
-    /// A type serving Spring handler methods: its own `@RequestMapping`, or why it can't be read.
-    handlers: Option<Result<Option<Mapping>, String>>,
+    /// A type whose methods' Spring mappings are routes it serves or requests it sends (a controller's, a Feign
+    /// client's): its own mapping (`@RequestMapping`, a Feign client's `path`), or why it can't be read.
+    spring: Option<(Side, Result<Option<Mapping>, String>)>,
 }
 
 struct Cx<'a> {
@@ -73,6 +76,8 @@ struct Cx<'a> {
     seen: HashSet<(Option<usize>, String, RefKind, u32, u32)>,
     /// The file's member types: per type (dotted, within the package), the simple names of the types declared in it.
     nested: HashMap<String, HashSet<String>>,
+    /// The file's fields' declared types (simple names), by field name, for telling an HTTP client's calls.
+    fields: HashMap<String, String>,
 }
 
 impl<'a> Cx<'a> {
@@ -241,7 +246,7 @@ impl<'a> Cx<'a> {
         let sym = sym.or_else(|| self.current());
         match sym {
             Some(sym) => {
-                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new(), handlers: None });
+                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new(), spring: None });
                 f(self);
                 self.scopes.pop();
             }
@@ -353,13 +358,8 @@ impl<'a> Cx<'a> {
         }
         let abstract_type = node.kind() == "interface_declaration"
             || children(node).find(|c| c.kind() == "modifiers").is_some_and(|m| children(m).any(|c| c.kind() == "abstract"));
-        let handlers = spring::serves(&self.facts.symbols[sym].attrs, abstract_type).then(|| {
-            match self.mappings(node).into_iter().find(|(_, verb, _)| verb.is_none()) {
-                Some((_, _, m)) => m.map(Some),
-                None => Ok(None),
-            }
-        });
-        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new(), handlers });
+        let spring = spring::side(&self.facts.symbols[sym].attrs, abstract_type).map(|side| (side, self.type_mapping(node)));
+        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new(), spring });
         if let Some(tp) = node.child_by_field_name("type_parameters") {
             self.visit(tp);
         }
@@ -475,6 +475,39 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// A type's own mapping, its methods' prefix: its `@RequestMapping` (or `@HttpExchange`) under a Feign client's
+    /// `path`, each path of one joined with each of the other's.
+    fn type_mapping(&self, node: Node) -> Result<Option<Mapping>, String> {
+        let own = match self.mappings(node).into_iter().find(|(_, verb, _)| verb.is_none()) {
+            Some((_, _, m)) => Some(m?),
+            None => None,
+        };
+        let Some(feign) = self.feign_path(node)? else { return Ok(own) };
+        let mut m = own.unwrap_or_default();
+        let under = if m.paths.is_empty() { vec![String::new()] } else { std::mem::take(&mut m.paths) };
+        m.paths = under.iter().map(|p| format!("{}/{}", feign.trim_end_matches('/'), p.trim_start_matches('/'))).collect();
+        Ok(Some(m))
+    }
+
+    /// A `@FeignClient`'s `path`, the prefix of its methods' paths (its `value` and `name` are the service's).
+    fn feign_path(&self, node: Node) -> Result<Option<String>, String> {
+        let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Ok(None) };
+        for a in children(mods).filter(|c| c.kind() == "annotation") {
+            if a.child_by_field_name("name").is_none_or(|n| self.text(n).rsplit('.').next() != Some("FeignClient")) {
+                continue;
+            }
+            let Some(args) = a.child_by_field_name("arguments") else { return Ok(None) };
+            for pair in children(args).filter(|c| c.kind() == "element_value_pair") {
+                if let (Some(k), Some(v)) = (pair.child_by_field_name("key"), pair.child_by_field_name("value"))
+                    && self.text(k) == "path"
+                {
+                    return self.path_expr(v).map(Some);
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// The request mappings annotating a declaration: each annotation's name, the verb it fixes (`None` for
     /// `@RequestMapping`) and what its arguments say, or why they can't be read.
     fn mappings<'t>(&self, node: Node<'t>) -> Vec<(Node<'t>, Option<&'static str>, Result<Mapping, String>)> {
@@ -505,7 +538,7 @@ impl<'a> Cx<'a> {
                 ("value", arg)
             };
             match key {
-                "value" | "path" => {
+                "value" | "path" | "url" => {
                     for p in items(value) {
                         m.paths.push(self.path_expr(p)?);
                     }
@@ -544,12 +577,12 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// A handler method's routes (see [`spring::routes`]), when its type serves them; a mapping that can't be read is
-    /// `unsupported`, never a route with a wrong path.
+    /// A handler method's routes, or a client method's requests (see [`spring::routes`]); a mapping that can't be read
+    /// is `unsupported`, never a route with a wrong path.
     fn spring_routes(&mut self, node: Node, sym: usize) {
-        let Some(handlers) = self.scopes.last().filter(|s| !s.callable).and_then(|s| s.handlers.clone()) else { return };
+        let Some((side, of_type)) = self.scopes.last().filter(|s| !s.callable).and_then(|s| s.spring.clone()) else { return };
         for (at, verb, mapping) in self.mappings(node) {
-            let ty = match &handlers {
+            let ty = match &of_type {
                 Ok(ty) => ty.as_ref(),
                 Err(why) => {
                     self.facts.unsupported.push(Unsupported { area: "http", construct: format!("RequestMapping on the type: {why}"), line: line(at) });
@@ -558,8 +591,8 @@ impl<'a> Cx<'a> {
             };
             match mapping {
                 Ok(m) => {
-                    for (verb, path) in spring::routes(ty, &m, verb) {
-                        let route = HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
+                    for (verb, path) in spring::routes(side, ty, &m, verb) {
+                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
                         if !self.facts.http_routes.contains(&route) {
                             self.facts.http_routes.push(route);
                         }
@@ -593,12 +626,119 @@ impl<'a> Cx<'a> {
             Some(o) => self.receiver_of(o),
             None => (None, None),
         };
+        self.client_call(node, n, &name, object);
         self.record(n, name, receiver, receiver_type, RefKind::Call, args);
         if let Some(o) = object {
             self.visit(o);
         }
         for c in children(node).filter(|c| matches!(c.kind(), "argument_list" | "type_arguments")) {
             self.visit(c);
+        }
+    }
+
+    /// A Spring HTTP client's request, as a client route of the calling method: a `RestTemplate` method
+    /// (`getForObject(url, …)`, `exchange(url, HttpMethod.PUT, …)`) on a receiver of that type (or named for it), or
+    /// the `uri(url, …)` after a verb in a `WebClient` or `RestClient` chain (`client.get().uri(…)`,
+    /// `.method(HttpMethod.PATCH).uri(…)`), at the verb's line.
+    fn client_call(&mut self, call: Node, name_node: Node, name: &str, object: Option<Node>) {
+        let args: Vec<Node> = call.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named() && !c.kind().ends_with("comment")).collect()).unwrap_or_default();
+        let (verb, url, at) = if name == "uri" {
+            // The verb call before `.uri(…)`: `get()`, …, or `method(HttpMethod.X)`.
+            let Some(inner) = object.filter(|o| o.kind() == "method_invocation") else { return };
+            let Some(m) = inner.child_by_field_name("name") else { return };
+            let inner_args: Vec<Node> =
+                inner.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named()).collect()).unwrap_or_default();
+            let verb = match (self.text(m), inner_args.as_slice()) {
+                ("method", [v]) => Err(*v),
+                (v @ ("get" | "post" | "put" | "patch" | "delete" | "head" | "options"), []) => Ok(v.to_ascii_uppercase()),
+                _ => return,
+            };
+            let Some(url) = args.first() else { return };
+            (verb, *url, m)
+        } else {
+            let verb = match name {
+                "getForObject" | "getForEntity" => Ok("GET".to_string()),
+                "postForObject" | "postForEntity" | "postForLocation" => Ok("POST".to_string()),
+                "put" => Ok("PUT".to_string()),
+                "delete" => Ok("DELETE".to_string()),
+                "patchForObject" => Ok("PATCH".to_string()),
+                "headForHeaders" => Ok("HEAD".to_string()),
+                "optionsForAllow" => Ok("OPTIONS".to_string()),
+                "exchange" | "execute" if args.len() >= 2 => Err(args[1]),
+                _ => return,
+            };
+            if !object.is_some_and(|o| self.is_rest_template(o)) {
+                return;
+            }
+            let Some(url) = args.first() else { return };
+            (verb, *url, name_node)
+        };
+        let verb = match verb {
+            Ok(v) => Some(v),
+            Err(e) => self.text(e).rsplit('.').next().and_then(urls::verb),
+        };
+        let Some(verb) = verb else {
+            self.facts.unsupported.push(Unsupported { area: "http", construct: "a request whose method is chosen at run time".to_string(), line: line(at) });
+            return;
+        };
+        let mut pieces = self.url_pieces(url);
+        // A call first is the base address a method gives (`serviceUri() + "/owners"`), not a path segment.
+        if let Some(first @ Piece::Call) = pieces.first_mut() {
+            *first = Piece::Unknown;
+        }
+        let path = urls::encode(&pieces, true).filter(|p| urls::looks_like_path(p)).unwrap_or_default();
+        self.facts.http_routes.push(HttpRoute { sym: self.current(), side: "client", verb, path, path_ref: None, service: None, service_ref: None, line: line(at) });
+    }
+
+    /// Whether a receiver is a `RestTemplate` (or `RestOperations`, `TestRestTemplate`): by its declared type when a
+    /// local, parameter or field of the file says it, by its name otherwise (`restTemplate`, `getRestTemplate()`).
+    fn is_rest_template(&self, o: Node) -> bool {
+        let simple = |t: &str| matches!(t.rsplit('.').next().unwrap_or(t), "RestTemplate" | "RestOperations" | "TestRestTemplate" | "OAuth2RestTemplate");
+        let name = match o.kind() {
+            "identifier" => self.text(o),
+            "field_access" if o.child_by_field_name("object").is_some_and(|x| x.kind() == "this") => o.child_by_field_name("field").map_or("", |f| self.text(f)),
+            _ => "",
+        };
+        if !name.is_empty() {
+            let declared = match self.local(name) {
+                Some(local) => local,
+                None => self.fields.get(name).cloned(),
+            };
+            if let Some(t) = declared {
+                return simple(&t);
+            }
+        }
+        let lower = self.text(o).to_ascii_lowercase();
+        lower.contains("resttemplate") || lower.contains("restoperations")
+    }
+
+    /// A request URL's pieces (see [`urls`]): string literals (a URI template's `{var}` a value), constants, `+`.
+    fn url_pieces(&self, e: Node) -> Vec<Piece> {
+        match e.kind() {
+            "string_literal" => {
+                let t = self.text(e);
+                let body = t.trim_start_matches('"').trim_end_matches('"');
+                let mut out = Vec::new();
+                let mut rest = body;
+                while let Some(i) = rest.find('{') {
+                    let Some(j) = rest[i..].find('}') else { break };
+                    out.push(Piece::Text(rest[..i].to_string()));
+                    out.push(Piece::Unknown);
+                    rest = &rest[i + j + 1..];
+                }
+                out.push(Piece::Text(rest.to_string()));
+                out
+            }
+            "parenthesized_expression" => children(e).find(|c| c.is_named()).map(|c| self.url_pieces(c)).unwrap_or_default(),
+            "binary_expression" if e.child_by_field_name("operator").is_some_and(|o| self.text(o) == "+") => {
+                let mut out = e.child_by_field_name("left").map(|l| self.url_pieces(l)).unwrap_or_default();
+                out.extend(e.child_by_field_name("right").map(|r| self.url_pieces(r)).unwrap_or_default());
+                out
+            }
+            "identifier" if self.local(self.text(e)).is_none() => vec![Piece::Ref(self.text(e).to_string())],
+            "field_access" => vec![Piece::Ref(self.text(e).trim_start_matches("this.").split_whitespace().collect())],
+            "method_invocation" => vec![Piece::Call],
+            _ => vec![Piece::Unknown],
         }
     }
 
@@ -887,6 +1027,26 @@ fn arg_count(list: Node) -> u32 {
     children(list).filter(|c| c.is_named() && !matches!(c.kind(), "line_comment" | "block_comment")).count() as u32
 }
 
+/// Every field's declared type in the file, by the field's name: the type's base name (`RestTemplate`).
+fn field_types(src: &str, root: Node) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "field_declaration" {
+            if let Some(t) = n.child_by_field_name("type").and_then(|t| base_name(src, t)) {
+                for d in children(n).filter(|c| c.kind() == "variable_declarator") {
+                    if let Some(name) = d.child_by_field_name("name") {
+                        out.insert(src[name.byte_range()].to_string(), t.clone());
+                    }
+                }
+            }
+            continue;
+        }
+        stack.extend(children(n));
+    }
+    out
+}
+
 /// Annotation names on a declaration, without `@` and qualifiers: `Override`, `Test`, `GetMapping`.
 fn annotations(src: &str, node: Node) -> Vec<String> {
     let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Vec::new() };
@@ -1092,7 +1252,7 @@ mod tests {
                    class NotAController { @GetMapping(\"/no\") void no() {} }\n";
         let f = extract(src);
         let routes: Vec<(String, &str, &str)> =
-            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.verb.as_str(), r.path.as_str())).collect();
+            f.http_routes.iter().filter(|r| r.side == "server").map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.verb.as_str(), r.path.as_str())).collect();
         assert_eq!(
             routes,
             [
@@ -1105,10 +1265,69 @@ mod tests {
                 ("any".to_string(), "*", "{=Paths.API}/orders/any"),
             ]
         );
-        assert!(f.http_routes.iter().all(|r| r.side == "server" && r.line == f.symbols[r.sym.unwrap()].start_line));
+        assert!(f.http_routes.iter().filter(|r| r.side == "server").all(|r| r.line == f.symbols[r.sym.unwrap()].start_line));
         assert_eq!(f.unsupported.len(), 1, "{:?}", f.unsupported);
         assert!(f.unsupported[0].construct.contains("pathOf"));
         let consts: Vec<(&str, &str)> = f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect();
         assert_eq!(consts, [("OrderController.ITEMS", "/{id}/items"), ("Paths.API", "/api")]);
+    }
+
+    #[test]
+    fn spring_clients_request_routes() {
+        let src = "package org.example.shop;\n\
+                   \n\
+                   @FeignClient(name = \"orders\", path = \"/api\")\n\
+                   interface OrderClient {\n\
+                       @RequestMapping(method = RequestMethod.PUT, value = \"/orders/{id}\")\n\
+                       void update(long id);\n\
+                       @GetMapping(\"/orders\")\n\
+                       List<Order> all();\n\
+                       @RequestMapping(\"/plain\")\n\
+                       void plain();\n\
+                   }\n\
+                   @HttpExchange(\"/stock\")\n\
+                   interface StockClient {\n\
+                       @GetExchange(\"/{sku}\")\n\
+                       Stock find(String sku);\n\
+                       @HttpExchange(method = \"PATCH\", url = \"/{sku}\")\n\
+                       void patch(String sku);\n\
+                   }\n\
+                   class Calls {\n\
+                       static final String OWNERS = \"/owners\";\n\
+                       private final RestTemplate rest;\n\
+                       private final Map<String, String> cache;\n\
+                       private final WebClient web;\n\
+                       void run(String base, long id) {\n\
+                           rest.getForObject(\"http://customers/owners/{id}\", Owner.class, id);\n\
+                           rest.exchange(base + \"/pets\", HttpMethod.DELETE, null, Void.class);\n\
+                           cache.put(\"/not/a/request\", \"x\");\n\
+                           web.get()\n\
+                               .uri(OWNERS + \"/{id}\", id)\n\
+                               .retrieve();\n\
+                           web.method(HttpMethod.PATCH).uri(serviceUri() + \"/visits\").retrieve();\n\
+                           rest.exchange(\"/x\", method, null, Void.class);\n\
+                       }\n\
+                   }\n";
+        let f = extract(src);
+        let routes: Vec<(String, &str, &str, &str, u32)> = f
+            .http_routes
+            .iter()
+            .map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.side, r.verb.as_str(), r.path.as_str(), r.line))
+            .collect();
+        assert_eq!(
+            routes,
+            [
+                ("update".to_string(), "client", "PUT", "api/orders/{id}", 5),
+                ("all".to_string(), "client", "GET", "api/orders", 7),
+                ("plain".to_string(), "client", "GET", "api/plain", 9),
+                ("find".to_string(), "client", "GET", "stock/{sku}", 14),
+                ("patch".to_string(), "client", "PATCH", "stock/{sku}", 16),
+                ("run".to_string(), "client", "GET", "http://customers/owners/{}", 25),
+                ("run".to_string(), "client", "DELETE", "/pets", 26),
+                ("run".to_string(), "client", "GET", "{=OWNERS}/{}", 28),
+                ("run".to_string(), "client", "PATCH", "/visits", 31),
+            ]
+        );
+        assert_eq!(f.unsupported.len(), 1, "{:?}", f.unsupported);
     }
 }

@@ -1518,3 +1518,49 @@ fn go_routes_and_clients_link_across_repos() {
     assert_eq!(link(2, "fruit"), one("listFruit"));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn spring_routes_and_clients_link_across_repos() {
+    let turn = turn();
+    let base = turn.dir("spring-http");
+    let api = scratch(&base, "orders-api");
+    write(
+        &api,
+        "src/OrderController.java",
+        "package org.example.orders;\n\n@RestController\n@RequestMapping(\"/api/orders\")\npublic class OrderController {\n\
+         \x20   @GetMapping(\"/{id}\")\n    public Order find(@PathVariable long id) { return null; }\n\n\
+         \x20   @PutMapping(\"/{id}\")\n    public void update(@PathVariable long id) {}\n\n\
+         \x20   @GetMapping(\"/{id}/lines\")\n    public List<Line> lines(@PathVariable long id) { return null; }\n}\n",
+    );
+    let shop = scratch(&base, "shop");
+    write(
+        &shop,
+        "src/OrderClient.java",
+        "package org.example.shop;\n\n@FeignClient(name = \"orders\", path = \"/api/orders\")\npublic interface OrderClient {\n\
+         \x20   @RequestMapping(method = RequestMethod.PUT, value = \"/{id}\")\n    void update(@PathVariable(\"id\") long id);\n}\n",
+    );
+    write(
+        &shop,
+        "src/Orders.java",
+        "package org.example.shop;\n\npublic class Orders {\n    private final RestTemplate rest;\n    private final WebClient web;\n    private String base;\n\n\
+         \x20   Order find(long id) { return rest.getForObject(base + \"/api/orders/{id}\", Order.class, id); }\n\n\
+         \x20   void lines(long id) { web.get().uri(\"http://orders/api/orders/{id}/lines\", id).retrieve(); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &shop].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let link = |i: usize, symbol: &str| -> Vec<(String, &'static str)> {
+        let r = routes(i).into_iter().find(|r| r.symbol == symbol && r.side == "client").unwrap_or_else(|| panic!("{symbol}"));
+        kc_index::http::handlers(&r, &roots[i], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    let one = |sym: &str| vec![(sym.to_string(), "exact")];
+    // A Feign method under its client's path, a RestTemplate call after its base address, and a WebClient chain.
+    assert_eq!(link(1, "OrderClient.update"), one("OrderController.update"));
+    assert_eq!(link(1, "Orders.find"), one("OrderController.find"));
+    assert_eq!(link(1, "Orders.lines"), one("OrderController.lines"));
+    let _ = std::fs::remove_dir_all(&base);
+}

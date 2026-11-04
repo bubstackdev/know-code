@@ -15,10 +15,10 @@ use tree_sitter::{Node, Parser};
 
 use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
-use crate::spring::{self, Mapping};
+use crate::spring::{self, Mapping, Side};
 use crate::{FileFacts, HttpRoute, Import, Ref, RefKind, Relation, RelationKind, StringConst, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// How many enclosing lambdas' functions a reference keeps, innermost first.
 const LAMBDAS_KEPT: usize = 4;
@@ -156,8 +156,9 @@ struct Scope {
     type_name: Option<String>,
     callable: bool,
     locals: HashMap<String, Option<String>>,
-    /// A type serving Spring handler methods: its own `@RequestMapping`, or why it can't be read.
-    handlers: Option<Result<Option<Mapping>, String>>,
+    /// A type whose methods' Spring mappings are routes it serves or requests it sends (a controller's, a Feign
+    /// client's): its own mapping (`@RequestMapping`, a Feign client's `path`), or why it can't be read.
+    spring: Option<(Side, Result<Option<Mapping>, String>)>,
 }
 
 struct Cx<'a> {
@@ -272,7 +273,7 @@ impl<'a> Cx<'a> {
     fn with_callable(&mut self, sym: Option<usize>, f: impl FnOnce(&mut Self)) {
         match sym.or_else(|| self.current()) {
             Some(sym) => {
-                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new(), handlers: None });
+                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new(), spring: None });
                 f(self);
                 self.scopes.pop();
             }
@@ -395,20 +396,15 @@ impl<'a> Cx<'a> {
                 }
                 // Arguments to the superclass constructor are code in the class.
                 if let Some(args) = descendant_of_kind(spec, "value_arguments") {
-                    self.scopes.push(Scope { sym, type_name: Some(full.clone()), callable: false, locals: HashMap::new(), handlers: None });
+                    self.scopes.push(Scope { sym, type_name: Some(full.clone()), callable: false, locals: HashMap::new(), spring: None });
                     self.with_callable(Some(sym), |cx| cx.visit(args));
                     self.scopes.pop();
                 }
             }
         }
         let abstract_type = keyword_interface || modifiers.split_whitespace().any(|m| m == "abstract");
-        let handlers = spring::serves(&self.facts.symbols[sym].attrs, abstract_type).then(|| {
-            match self.mappings(node).into_iter().find(|(_, verb, _)| verb.is_none()) {
-                Some((_, _, m)) => m.map(Some),
-                None => Ok(None),
-            }
-        });
-        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new(), handlers });
+        let spring = spring::side(&self.facts.symbols[sym].attrs, abstract_type).map(|side| (side, self.type_mapping(node)));
+        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new(), spring });
         for c in children(node).filter(|c| matches!(c.kind(), "modifiers" | "type_parameters" | "type_constraints")) {
             self.visit(c);
         }
@@ -520,6 +516,40 @@ impl<'a> Cx<'a> {
         self.facts.constants.push(StringConst { qualified, value: v, line: line(node) });
     }
 
+    /// A type's own mapping, its methods' prefix: its `@RequestMapping` (or `@HttpExchange`) under a Feign client's
+    /// `path`, each path of one joined with each of the other's.
+    fn type_mapping(&self, node: Node) -> Result<Option<Mapping>, String> {
+        let own = match self.mappings(node).into_iter().find(|(_, verb, _)| verb.is_none()) {
+            Some((_, _, m)) => Some(m?),
+            None => None,
+        };
+        let Some(feign) = self.feign_path(node)? else { return Ok(own) };
+        let mut m = own.unwrap_or_default();
+        let under = if m.paths.is_empty() { vec![String::new()] } else { std::mem::take(&mut m.paths) };
+        m.paths = under.iter().map(|p| format!("{}/{}", feign.trim_end_matches('/'), p.trim_start_matches('/'))).collect();
+        Ok(Some(m))
+    }
+
+    /// A `@FeignClient`'s `path`, the prefix of its methods' paths (its `value` and `name` are the service's).
+    fn feign_path(&self, node: Node) -> Result<Option<String>, String> {
+        let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Ok(None) };
+        for a in children(mods).filter(|c| c.kind() == "annotation") {
+            let Some(t) = descendant_of_kind(a, "user_type") else { continue };
+            if children(t).filter(|c| c.kind() == "identifier").last().is_none_or(|n| self.text(n) != "FeignClient") {
+                continue;
+            }
+            let Some(args) = descendant_of_kind(a, "value_arguments") else { return Ok(None) };
+            for arg in children(args).filter(|c| c.kind() == "value_argument" && children(*c).any(|x| x.kind() == "=")) {
+                if children(arg).find(|c| c.kind() == "identifier").is_some_and(|k| self.text(k) == "path")
+                    && let Some(v) = children(arg).filter(|c| c.is_named()).last()
+                {
+                    return self.path_expr(v).map(Some);
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// The request mappings annotating a declaration: each annotation's name, the verb it fixes (`None` for
     /// `@RequestMapping`) and what its arguments say, or why they can't be read.
     fn mappings<'t>(&self, node: Node<'t>) -> Vec<(Node<'t>, Option<&'static str>, Result<Mapping, String>)> {
@@ -558,7 +588,7 @@ impl<'a> Cx<'a> {
             let named = children(arg).any(|c| c.kind() == "=");
             let key = if named { children(arg).find(|c| c.kind() == "identifier").map_or("", |k| self.text(k)) } else if i == 0 { "value" } else { "" };
             match key {
-                "value" | "path" => {
+                "value" | "path" | "url" => {
                     for p in items(value) {
                         m.paths.push(self.path_expr(p)?);
                     }
@@ -619,12 +649,12 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// A handler method's routes (see [`spring::routes`]), when its type serves them; a mapping that can't be read is
-    /// `unsupported`, never a route with a wrong path.
+    /// A handler method's routes, or a client method's requests (see [`spring::routes`]); a mapping that can't be read
+    /// is `unsupported`, never a route with a wrong path.
     fn spring_routes(&mut self, node: Node, sym: usize) {
-        let Some(handlers) = self.scopes.last().filter(|s| !s.callable).and_then(|s| s.handlers.clone()) else { return };
+        let Some((side, of_type)) = self.scopes.last().filter(|s| !s.callable).and_then(|s| s.spring.clone()) else { return };
         for (at, verb, mapping) in self.mappings(node) {
-            let ty = match &handlers {
+            let ty = match &of_type {
                 Ok(ty) => ty.as_ref(),
                 Err(why) => {
                     self.facts.unsupported.push(Unsupported { area: "http", construct: format!("RequestMapping on the type: {why}"), line: line(at) });
@@ -633,8 +663,8 @@ impl<'a> Cx<'a> {
             };
             match mapping {
                 Ok(m) => {
-                    for (verb, path) in spring::routes(ty, &m, verb) {
-                        let route = HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
+                    for (verb, path) in spring::routes(side, ty, &m, verb) {
+                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
                         if !self.facts.http_routes.contains(&route) {
                             self.facts.http_routes.push(route);
                         }
@@ -1294,7 +1324,7 @@ mod tests {
         let f = extract(src);
         assert_eq!(f.parse_errors, 0);
         let routes: Vec<(String, &str, &str)> =
-            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.verb.as_str(), r.path.as_str())).collect();
+            f.http_routes.iter().filter(|r| r.side == "server").map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.verb.as_str(), r.path.as_str())).collect();
         assert_eq!(
             routes,
             [
@@ -1311,6 +1341,6 @@ mod tests {
         assert_eq!(consts, [("API", "/api"), ("OrderController.ITEMS", "/items")]);
         // A Feign client's mappings are requests it sends, never routes it serves.
         let client = extract("package org.example.shop\n\n@FeignClient(\"orders\")\ninterface OrderClient {\n    @GetMapping(\"/api/orders/{id}\")\n    fun find(id: Long): Order\n}\n");
-        assert!(client.http_routes.is_empty());
+        assert!(client.http_routes.iter().all(|r| r.side == "client"));
     }
 }
