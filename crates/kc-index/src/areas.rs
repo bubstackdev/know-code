@@ -214,26 +214,11 @@ pub fn declared(store: &Store, areas: &Areas) -> Result<Declared> {
     // Gradle settings scripts last: a project's own build script names it first, and an `include` only adds the
     // projects that have none.
     let mut packages = kc_store::manifests::packages(store.conn())?;
-    let is_settings = |p: &kc_store::manifests::PackageRow| p.kind == "gradle" && p.file.rsplit('/').next().is_some_and(|f| f.starts_with("settings."));
-    packages.sort_by_key(|p| is_settings(p));
-    // Each Gradle settings script's directory and the project directories it includes: a build script is a project
-    // of the build whose settings script is nearest above it only if that script includes it (or is beside it).
-    let builds: Vec<(String, Vec<String>)> = packages
-        .iter()
-        .filter(|p| is_settings(p))
-        .map(|p| {
-            let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
-            let projects = p.targets.iter().filter(|t| t.kind == "module").map(|t| {
-                let dir = t.name.replace(':', "/");
-                if base.is_empty() { dir } else { format!("{base}/{dir}") }
-            });
-            (base.to_string(), projects.collect())
-        })
-        .collect();
-    let in_its_build = |dir: &str| {
-        let nearest = builds.iter().filter(|(b, _)| under(b, dir) || b == dir).max_by_key(|(b, _)| b.len());
-        nearest.is_none_or(|(b, projects)| b == dir || projects.iter().any(|p| p == dir))
-    };
+    let is_settings = crate::jvm_builds::is_gradle_settings;
+    packages.sort_by_key(is_settings);
+    // A build script is a project only of a build that includes it (see `GradleBuilds::build_of`).
+    let builds = crate::jvm_builds::GradleBuilds::new(&packages);
+    let in_its_build = |dir: &str| builds.build_of(dir).is_some();
     for p in packages {
         let base = p.file.rsplit_once('/').map_or("", |(d, _)| d);
         let join = |parts: &[&str]| parts.iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("/");
