@@ -106,3 +106,44 @@ A seeded 20% of the sites, chosen by the SHA-256 of their id, is labelled a seco
 rules, by a second labeller who never sees the first labels. The **agreement** is the share of double-labelled sites
 whose two target sets are identical, published with every disagreement and how it was settled. The settled label is
 the one scored.
+
+## Results (Spring clients)
+
+Scored with `route_links.py score` (#320) against KnowCode at `w2/spring-clients` `9f67bb9` (#344, the Spring clients
+over #343's server routes); the labels were frozen in #239, before any Spring client was read.
+[jvm/score.json](jvm/score.json) holds every site with its links, misses and wrong links. The reader's links agree
+with the `routes` answer's on 44 of 44 requesting symbols. Every match used the route clause.
+
+| Slice | Sites | Precision | Recall |
+| --- | ---: | --- | --- |
+| Java and Kotlin | 12 | 1.000 (4/4, 0.510–1.000) | 0.364 (4/11, 0.152–0.646) |
+| TypeScript and JavaScript | 91 | 1.000 (7/7, 0.646–1.000) | 0.090 (7/78, 0.044–0.174) |
+| jhipster | 52 | 1.000 (7/7, 0.646–1.000) | 0.167 (7/42, 0.083–0.306) |
+| petclinic-microservices | 7 | 1.000 (4/4, 0.510–1.000) | 0.667 (4/6, 0.300–0.903) |
+| petclinic-rest | 31 | – (no links) | 0.000 (0/31, 0.000–0.110) |
+| piggymetrics | 13 | – (no links) | 0.000 (0/10, 0.000–0.278) |
+| **all** | 103 | **1.000 (11/11, 0.741–1.000)** | **0.124 (11/89, 0.070–0.208)** |
+
+The figures without `dynamic_name` sites are the same. The gate's bar is precision of at least 0.95: the point figure is
+1.000, but on 11 links its Wilson interval's lower bound is 0.741, so the set has too few links to show 0.95 with
+confidence. It is published as scored.
+
+This is the second scoring run. The first, at `dbcb472` (binary `916273d7`), linked the same requests but placed each
+WebClient request at its verb call's line (`.get()`) and each Feign method at its annotation's line, while this set's
+sites are the `uri(…)` call and the method's name (fixed before any label, above), and the scorer reads a site's links
+at its line: 7/7 links (all TypeScript) were credited, recall 0.079. `9f67bb9` moves the requests to those lines,
+which is where the `routes` answer shows them too; nothing it links changed.
+
+Where the misses come from:
+
+- **petclinic-rest (31, TypeScript)**: the server's routes are on interfaces its build generates from an OpenAPI
+  document, which the repository doesn't hold (routes-v1's Spring results), so the Angular client's requests have
+  nothing to link to.
+- **jhipster (35, TypeScript)**: the Angular services build URLs with `applicationConfigService.getEndpointFor('api/…')`,
+  a function of the repository KnowCode doesn't read.
+- **piggymetrics (5 Java, and its jQuery client's)**: every Feign path includes the target service's
+  `server.servlet.context-path` (`/uaa/users`, `/statistics/{accountName}`), which is configuration KnowCode doesn't read;
+  the `routes` answer names the nearest route by path (`POST /users`).
+- **petclinic-microservices (2 Java)**: `http://customers-service/owners/{ownerId}` and `http://vets-service/vets` name
+  another service by host, and a request to another host doesn't link the requesting repository's own routes (#326);
+  here the services share one repository.

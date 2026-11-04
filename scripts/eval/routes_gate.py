@@ -250,7 +250,7 @@ def run(args):
     repos = sorted(set(args.repos.split(',')) if args.repos else {l['repo'] for l in labels})
     work = Path(args.work).resolve()
     binary, reader = Path(args.knowcode).resolve(), Path(args.reader).resolve()
-    per_repo, served, sample_pool, excluded = {}, {}, defaultdict(list), {}
+    per_repo, served, sample_pool, excluded, placeholders = {}, {}, defaultdict(list), {}, {}
     # routes-v1.1: the exclusion tool's regions, one JSON line each with its repository (run.sh SITES=1's excl output).
     regions = [x for path in args.exclusions for x in jsonl(path)] if args.exclusions else None
     for repo in repos:
@@ -263,6 +263,11 @@ def run(args):
         mine = [l for l in labels if l['repo'] == repo]
         if regions is not None:
             mine, rows, excluded[repo] = exclude(mine, rows, [x for x in regions if x['repo'] == repo])
+        # Spring (the README's "Java and Kotlin"): a path with a `${…}` placeholder is configuration's, out of both sides.
+        if any(l['framework'] == 'spring' for l in mine):
+            kept, kept_rows = [l for l in mine if '${' not in l['path']], [r for r in rows if '${' not in (r['path'] or '')]
+            placeholders[repo] = dict(labels=len(mine) - len(kept), routes=len(rows) - len(kept_rows))
+            mine, rows = kept, kept_rows
         per_repo[repo] = score_repo(mine, rows)
         served[repo] = len(rows)
         for r in rows:
@@ -281,6 +286,8 @@ def run(args):
                    context_check=checks, per_repo=per_repo, rule='routes-v1.2' if regions is not None else 'routes-v1')
     if regions is not None:
         summary['excluded'] = excluded
+    if placeholders:
+        summary['placeholders'] = placeholders
     text = json.dumps(summary, indent=1, sort_keys=True) + '\n'
     if args.out:
         Path(args.out).write_text(text)
