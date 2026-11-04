@@ -672,7 +672,13 @@ impl<'a> Cx<'a> {
             match mapping {
                 Ok(m) => {
                     for (verb, path) in spring::routes(side, ty, &m, verb) {
-                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
+                        // A handler's route is at the method (its owner's line, annotations included); a client's request at the
+                        // method's name, where callers call it.
+                        let at = match side {
+                            Side::Serves => line(node),
+                            Side::Requests => node.child_by_field_name("name").map_or(line(node), line),
+                        };
+                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: at };
                         if !self.facts.http_routes.contains(&route) {
                             self.facts.http_routes.push(route);
                         }

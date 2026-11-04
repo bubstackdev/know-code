@@ -592,7 +592,13 @@ impl<'a> Cx<'a> {
             match mapping {
                 Ok(m) => {
                     for (verb, path) in spring::routes(side, ty, &m, verb) {
-                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
+                        // A handler's route is at the method (its owner's line, annotations included); a client's request at the
+                        // method's name, where callers call it.
+                        let at = match side {
+                            Side::Serves => line(node),
+                            Side::Requests => node.child_by_field_name("name").map_or(line(node), line),
+                        };
+                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: at };
                         if !self.facts.http_routes.contains(&route) {
                             self.facts.http_routes.push(route);
                         }
@@ -639,7 +645,7 @@ impl<'a> Cx<'a> {
     /// A Spring HTTP client's request, as a client route of the calling method: a `RestTemplate` method
     /// (`getForObject(url, …)`, `exchange(url, HttpMethod.PUT, …)`) on a receiver of that type (or named for it), or
     /// the `uri(url, …)` after a verb in a `WebClient` or `RestClient` chain (`client.get().uri(…)`,
-    /// `.method(HttpMethod.PATCH).uri(…)`), at the verb's line.
+    /// `.method(HttpMethod.PATCH).uri(…)`), at the `uri` call's line.
     fn client_call(&mut self, call: Node, name_node: Node, name: &str, object: Option<Node>) {
         let args: Vec<Node> = call.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named() && !c.kind().ends_with("comment")).collect()).unwrap_or_default();
         let (verb, url, at) = if name == "uri" {
@@ -654,7 +660,7 @@ impl<'a> Cx<'a> {
                 _ => return,
             };
             let Some(url) = args.first() else { return };
-            (verb, *url, m)
+            (verb, *url, name_node)
         } else {
             let verb = match name {
                 "getForObject" | "getForEntity" => Ok("GET".to_string()),
@@ -1317,14 +1323,14 @@ mod tests {
         assert_eq!(
             routes,
             [
-                ("update".to_string(), "client", "PUT", "api/orders/{id}", 5),
-                ("all".to_string(), "client", "GET", "api/orders", 7),
-                ("plain".to_string(), "client", "GET", "api/plain", 9),
-                ("find".to_string(), "client", "GET", "stock/{sku}", 14),
-                ("patch".to_string(), "client", "PATCH", "stock/{sku}", 16),
+                ("update".to_string(), "client", "PUT", "api/orders/{id}", 6),
+                ("all".to_string(), "client", "GET", "api/orders", 8),
+                ("plain".to_string(), "client", "GET", "api/plain", 10),
+                ("find".to_string(), "client", "GET", "stock/{sku}", 15),
+                ("patch".to_string(), "client", "PATCH", "stock/{sku}", 17),
                 ("run".to_string(), "client", "GET", "http://customers/owners/{}", 25),
                 ("run".to_string(), "client", "DELETE", "/pets", 26),
-                ("run".to_string(), "client", "GET", "{=OWNERS}/{}", 28),
+                ("run".to_string(), "client", "GET", "{=OWNERS}/{}", 29),
                 ("run".to_string(), "client", "PATCH", "/visits", 31),
             ]
         );
