@@ -258,10 +258,15 @@ initializer, `this` and `this@Outer`, and chains of fields and calls type a rece
 
 Resolved as kotlinc scopes names: a bare name is a local, then the caller's own or inherited member, then its class's
 companion object's, then a top-level declaration an import names, then one of the file's own package, then of a
-star-imported package; anything else is Kotlin's default imports' (`require`, `listOf`) or another library's, and stays
-`unresolved`. A top-level `private` declaration is seen only in its file. In an extension's body a bare name is first
-the receiver's member. A member always wins over an extension, so an extension is linked only on a receiver of a type
-the repo declares; on a library type it is a candidate. Fields and functions are separate names, as in Java.
+star-imported package; anything else is Kotlin's default imports' (`require`, `listOf`) or another library's, and
+stays `unresolved`. A top-level `private` declaration is seen only in its file. In an extension's body a bare name is
+first the receiver's member. In a lambda with a receiver (`x.apply { … }`, `x.run { … }`, `with(x) { … }`, or a lambda
+passed to a repository function's `T.() -> R` parameter), a bare name is first a member of the receiver's type, then
+an extension of it, when that type is the repository's and the receiver's type is written or follows from
+declarations; a receiver that has no member of that name leaves it to the enclosing code. On a library receiver
+(`buildString { … }`) or one whose type can't be told, the name is a candidate, never a link. A member always wins
+over an extension, so an extension is linked only on a receiver of a type the repo declares; on a library type it is a
+candidate. Fields and functions are separate names, as in Java.
 
 The grammar can't read one shape kotlinc does: a nested class whose primary constructor starts on the line after its
 name (`class Builder` / `internal constructor(…) : Supers {`). Where an error covers exactly that shape, the file is

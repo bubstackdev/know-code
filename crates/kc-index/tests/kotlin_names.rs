@@ -188,24 +188,38 @@ fn inherited_members_by_declaration_and_receiver_lambdas() {
         "a/src/shop/a/Mixed.kt",
         "package shop.a\n\nimport org.lib.Remote\n\ninterface Named {\n  fun label(): String = \"\"\n}\n\nclass Mixed : Remote(), Named {\n  fun t() = label()\n}\n",
     );
-    // In a lambda with a receiver, the receiver's members come first: the enclosing class's are candidates only.
+    // In a lambda with a receiver, the receiver's members (then its extensions) come first; a receiver that has none
+    // of that name leaves it to the enclosing code, and one whose members can't be told makes it a candidate.
     write(
         &root,
         "a/src/shop/a/Svc.kt",
         "package shop.a\n\
          \n\
+         import org.lib.Remote\n\
+         \n\
          class Conn\n\
          class Meta\n\
+         class Pool {\n\
+           fun close() {}\n\
+         }\n\
+         fun Meta.label(): String = \"\"\n\
          \n\
          fun <T> meta(body: Meta.() -> T): T = TODO()\n\
          \n\
          class Svc {\n\
            val url: String = \"\"\n\
            fun close() {}\n\
-           fun go(c: Conn) {\n\
+           fun label(): String = \"\"\n\
+           fun go(c: Conn, p: Pool, r: Remote) {\n\
              c.apply { close() }\n\
              meta { url }\n\
              listOf(1).forEach { close() }\n\
+             p.apply { close() }\n\
+             with(p) { close() }\n\
+             r.run { close() }\n\
+             meta { label() }\n\
+             buildString { close() }\n\
+             run { close() }\n\
            }\n\
          }\n",
     );
@@ -216,9 +230,17 @@ fn inherited_members_by_declaration_and_receiver_lambdas() {
     assert_eq!(answer(&refs_in(c, "label", "call", "a/src/shop/a/Mixed.kt")[0]).0, "ambiguous", "an unfollowed supertype");
     let svc = "a/src/shop/a/Svc.kt";
     let closes = refs_in(c, "close", "call", svc);
-    assert_eq!(answer(&closes[0]).0, "ambiguous", "in `apply`");
-    assert_eq!(answer(&closes[1]), ("exact", vec![format!("{svc}:10")]), "a lambda without a receiver");
-    assert_eq!(answer(&refs_in(c, "url", "member", svc)[0]).0, "ambiguous", "a repo function's `Meta.() -> T`");
+    let own = ("exact", vec![format!("{svc}:16")]);
+    let pool = ("exact", vec![format!("{svc}:8")]);
+    assert_eq!(answer(&closes[0]), own, "`apply` on a receiver without `close`");
+    assert_eq!(answer(&closes[1]), own, "a lambda without a receiver");
+    assert_eq!(answer(&closes[2]), pool, "`apply` on a receiver with `close`");
+    assert_eq!(answer(&closes[3]), pool, "`with`");
+    assert_eq!(answer(&closes[4]).0, "ambiguous", "`run` on a library receiver");
+    assert_eq!(answer(&closes[5]).0, "ambiguous", "`buildString`");
+    assert_eq!(answer(&closes[6]), own, "`run` on nothing written");
+    assert_eq!(answer(&refs_in(c, "url", "member", svc)[0]), ("exact", vec![format!("{svc}:15")]), "`Meta.() -> T` without `url`");
+    assert_eq!(answer(&refs_in(c, "label", "call", svc)[0]), ("exact", vec![format!("{svc}:10")]), "an extension of the receiver");
     let _ = std::fs::remove_dir_all(&root);
 }
 
