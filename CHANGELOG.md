@@ -4,7 +4,7 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
-- Kotlin: a declaration the grammar reads as an expression with no error (its annotations split off before it, or a
+- Kotlin: a class the grammar reads as an expression with no error (its annotations split off before it, or a
   class with two annotations, the second taking arguments, followed by another declaration, read whole as one) counts
   as a parse error of its file, so answers about the file report that they may miss what it declares, instead of
   answering as if it were read. Kotlin files are indexed again on the first query after upgrading.
