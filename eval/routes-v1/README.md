@@ -115,6 +115,120 @@ Two labelling passes, each in a container of its own, build identical labels and
 themselves list a route's methods in the order a map gives (chi, echo), so
 [go/listings.sha256](go/listings.sha256) holds each listing's digest over its sorted lines.
 
+## Java and Kotlin (Spring)
+
+Spring is one framework here: Spring MVC and WebFlux request mappings (`@RequestMapping`, `@GetMapping` and their
+relatives), in Java and in Kotlin. Its figures are pooled over the repositories below and reported per repository; the
+Kotlin repository's figures are also reported on their own, so Kotlin isn't a footnote to Java.
+
+| Repository | Commit | Build | Programs (modules) |
+| --- | --- | --- | --- |
+| jhipster/jhipster-sample-app | `6b000b5d` | Maven | the application (`.`) |
+| spring-petclinic/spring-petclinic-rest | `afc8fc1d` | Maven | the application (`.`) |
+| spring-petclinic/spring-petclinic-microservices | `e8b747ab` | Maven | every module (`spring-petclinic-*`) |
+| sqshq/piggymetrics | `6bb2cf9d` | Maven | every module |
+| spring-petclinic/spring-petclinic-kotlin | `817dba3b` | Gradle | the application (`.`), in Kotlin |
+
+The four Java repositories are route-links-v1's Spring servers ([route-links-v1](../route-links-v1/README.md)), pinned
+at the same commits, so one set of server routes serves both gates; spring-petclinic-kotlin is pinned at identity-v2's
+commit. They were chosen, and this section committed, before any of them was labelled and before any KnowCode route on
+them was read. Pins and families are in [repos.txt](../../scripts/eval/routes/repos.txt) (family `jvm`), the modules in
+[jvm/programs.txt](../../scripts/eval/routes/jvm/programs.txt).
+
+### What a Spring route is
+
+A method and a path Spring's own handler mapping gives a handler method: for each type in a listed module's main code
+(`src/main/java`, `src/main/kotlin`, compiled) that Spring's `RequestMappingHandlerMapping` (MVC's, or WebFlux's for a
+reactive module) takes for a handler (`isHandler`: a `@Controller` or `@RestController`, and on Spring 5 a type
+mapped by `@RequestMapping`), each method Spring's `getMappingForMethod` maps, read as Spring reads them
+(`MethodIntrospector`, so a mapping a controller inherits from an interface or superclass counts for it). Each of a
+mapping's path patterns is a route for each of its HTTP methods, a mapping with none is one route with method `*`.
+Abstract types and interfaces aren't handlers themselves; the concrete types inheriting their mappings are.
+
+Spring computes the mappings from the compiled classes and the module's own runtime classpath (its Spring version),
+with no application started: no database, network, profile or configuration is read. So:
+
+- a path pattern with a `${…}` placeholder is configuration's: such a route is left out of both sides (a label whose
+  pattern has one, and a KnowCode route whose path does), and the counts left out are published;
+- a handler type every module declares is listed whether or not a running application would create its bean (a
+  `@ConditionalOn…` or a profile isn't read, on either side);
+- a servlet context path (`server.servlet.context-path`), a path prefix configured in code (`addPathPrefix`) and
+  routes that aren't request mappings (Spring Cloud Gateway's configured routes, functional `RouterFunction`s, static
+  resources, actuator endpoints) aren't handler mappings, and are in neither side.
+
+A route matches a KnowCode server route as routes-v1's rule says (methods equal or either `*`; paths equal without
+case and leading or trailing slashes, every parameter alike), and scoring is the same, per repository, pooled and
+macro-averaged with Wilson intervals: over the listed modules' main code, so KnowCode's routes in test code or in an
+unlisted module are out of the set. Generated sources a build writes (an OpenAPI generator's interfaces) are part of
+what Spring maps and not of the repository, so they are labels KnowCode may miss; how many is published.
+
+### Labelling
+
+[run.sh](../../scripts/eval/routes/run.sh)'s `jvm` arm ([jvm/label.sh](../../scripts/eval/routes/jvm/label.sh)) copies the pinned clone's tracked files into a throwaway Linux
+container (a Maven or JDK image pinned by digest per repository, in [jvm/images.txt](../../scripts/eval/routes/jvm/images.txt):
+a repository built on Java 8 gets a Java 8 JDK), and with the network up compiles each listed module's main code and
+writes its runtime classpath, by the repository's own build (Maven's `compile` and `dependency:build-classpath`, or
+Gradle's `classes` and a classpath task added by an init script; a front-end build a Maven profile runs is skipped).
+Then it disconnects (and checks that the container no longer resolves names), and for each module compiles and runs
+[KcMappings.java](../../scripts/eval/routes/jvm/KcMappings.java) (Spring MVC) or
+[KcFluxMappings.java](../../scripts/eval/routes/jvm/KcFluxMappings.java) (WebFlux), whichever the module's classpath
+holds, on that classpath: a subclass of the module's `RequestMappingHandlerMapping` that lists every handler type's mappings as above, one row per method and pattern, with
+the handler (`pkg.Class#method`). Nothing of the repositories' is built or run on the host, and no repository code
+runs beyond class loading.
+
+Two labelling passes, each in a container of its own, must build identical labels. The labels are committed and
+frozen before KnowCode's routes on these repositories are read.
+
+### The Spring set
+
+[jvm/labels.jsonl](jvm/labels.jsonl): 119 routes, one row per repository, method and path, with the handlers Spring
+gives (`pkg.Class#method`); [jvm/programs.json](jvm/programs.json): each module listed and the directories of its main
+code. Every listed module listed its mappings; none of the routes has a `${…}` placeholder.
+
+| Repository | Routes |
+| --- | ---: |
+| jhipster/jhipster-sample-app | 38 |
+| spring-petclinic/spring-petclinic-rest | 37 |
+| spring-petclinic/spring-petclinic-kotlin (Kotlin) | 18 |
+| spring-petclinic/spring-petclinic-microservices | 16 |
+| sqshq/piggymetrics | 10 |
+
+Two labelling passes, each in a container of its own, built identical labels and program records;
+[jvm/listings.sha256](jvm/listings.sha256) holds each listing's digest over its sorted lines. Two labeller fixes were
+made before the passes, while no label existed: spring-petclinic-kotlin's build asks for a Java 17 toolchain, so its
+image is Java 17's (not 21's); and Spring 5.0's logging in piggymetrics writes to standard output, so only the listers'
+rows are kept from it (`label.sh`). These labels were committed before KnowCode's routes on these repositories were
+read.
+
+### Spring results
+
+Scored against KnowCode at `w2/spring-routes` `8814a9c` (#343, integration/0.7 with the Spring server routes) after the
+labels above were frozen ([jvm/score.json](jvm/score.json)); no `${…}` placeholder was left out on either side, and 50
+of 50 sampled routes were confirmed through `context` on the handler owning them.
+
+| Repository | Labels | Precision | Recall |
+| --- | ---: | --- | --- |
+| jhipster/jhipster-sample-app | 38 | 1.000 (38/38, 0.908–1.000) | 1.000 (38/38, 0.908–1.000) |
+| spring-petclinic/spring-petclinic-rest | 37 | 1.000 (1/1, 0.206–1.000) | 0.027 (1/37, 0.005–0.138) |
+| spring-petclinic/spring-petclinic-kotlin (Kotlin) | 18 | 1.000 (18/18, 0.824–1.000) | 1.000 (18/18, 0.824–1.000) |
+| spring-petclinic/spring-petclinic-microservices | 16 | 1.000 (16/16, 0.806–1.000) | 1.000 (16/16, 0.806–1.000) |
+| sqshq/piggymetrics | 10 | 1.000 (9/9, 0.701–1.000) | 1.000 (10/10, 0.723–1.000) |
+| **Spring, pooled** | 119 | **1.000 (82/82, 0.955–1.000)** | **0.698 (83/119, 0.610–0.773)** |
+
+Macro-averaged over the repositories: precision 1.000, recall 0.805. Every KnowCode route matched a label. Every miss
+is spring-petclinic-rest's: its controllers implement interfaces (`VetsApi`, `OwnersApi`, …) that the build's
+openapi-generator writes from `src/main/resources/openapi.yml`, so the mappings Spring reads are on generated sources
+the repository doesn't hold; 36 of its 37 routes are mapped there. The rule above counts them, as stated before
+scoring. The Kotlin repository's 18 routes are all matched, so the grammar's misread annotations (#348) cost no
+Spring route here.
+
+**Verdict: Spring passes 0.7's gate, by precision.** The plan's gate item for server routes is "precision of at least
+0.95 per framework, with recall reported" ([plan](../../docs/plans/0.7.md#gate)); this README's general rule, above,
+asks for precision and recall of 0.95 or more. They disagree, and the user ruled (2026-11-04) that the plan's reading
+decides 0.7's gate: Spring's pooled precision is 1.000 (82/82, interval 0.955–1.000), and its recall, 0.698, is
+published with its cause, generated sources, rather than gated. The rule above is unchanged, and under it Spring's
+recall is below 0.95.
+
 ## routes-v1.1: configuration-dependent registrations, and echo's placeholders
 
 routes-v1's rule above is unchanged, and its gate figures are scored under it. routes-v1.1 is a second rule, written

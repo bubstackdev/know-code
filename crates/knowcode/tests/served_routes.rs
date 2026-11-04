@@ -1,7 +1,6 @@
 //! routes-v1's reader agrees with the answers: the routes a repo serves, as the workspace summary holds them
 //! (crates/kc-index/examples/served_routes.rs reads them the same way), are exactly the "serves" rows `context` gives
-//! for their owners (eval/routes-v1/README.md, Scoring). One fixture per extractor the routes gate measures; Java's is
-//! added with its route extraction.
+//! for their owners (eval/routes-v1/README.md, Scoring). One fixture per extractor the routes gate measures.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -118,5 +117,35 @@ fn the_summarys_served_routes_are_contexts() {
         ],
     );
     assert_eq!(agree(&go), 2);
+    // Spring: each handler method owns its routes, under its controller's `@RequestMapping`.
+    let spring = repo(
+        &base,
+        "orders-api",
+        &[
+        (
+            "src/main/java/org/example/orders/OrderController.java",
+            "package org.example.orders;\n\nimport org.springframework.web.bind.annotation.*;\n\n@RestController\n@RequestMapping(\"/api/orders\")\n\
+             public class OrderController {\n    @GetMapping(\"/{id}\")\n    public Order find(@PathVariable long id) { return null; }\n\n\
+                 @PostMapping\n    public Order create(@RequestBody Order order) { return order; }\n}\n",
+        ),
+        // Kotlin, with the path's prefix in constants of another file: a top-level one and a companion's.
+        ("src/main/kotlin/org/example/orders/Paths.kt", "package org.example.orders\n\nconst val API = \"/api\"\n\nclass Paths {\n    companion object {\n        const val ITEMS = \"items\"\n    }\n}\n"),
+        (
+            "src/main/kotlin/org/example/orders/ItemController.kt",
+            "package org.example.orders\n\nimport org.springframework.web.bind.annotation.*\n\n@RestController\n@RequestMapping(\"$API/${Paths.ITEMS}\")\n\
+             class ItemController {\n    @DeleteMapping(\"/{id}\")\n    fun remove(@PathVariable id: Long) {}\n}\n",
+        )],
+    );
+    assert_eq!(agree(&spring), 3);
+    let mut routes: Vec<(String, String, u32)> = summary_routes(&spring).into_iter().map(|(v, p, _, line)| (v, p, line)).collect();
+    routes.sort();
+    assert_eq!(
+        routes,
+        [
+            ("DELETE".to_string(), "api/items/{id}".to_string(), 8),
+            ("GET".to_string(), "api/orders/{id}".to_string(), 8),
+            ("POST".to_string(), "api/orders".to_string(), 11)
+        ]
+    );
     let _ = fs::remove_dir_all(&base);
 }

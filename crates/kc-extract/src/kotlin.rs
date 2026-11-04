@@ -15,9 +15,10 @@ use tree_sitter::{Node, Parser};
 
 use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
-use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
+use crate::spring::{self, Mapping, Side};
+use crate::{FileFacts, HttpRoute, Import, Ref, RefKind, Relation, RelationKind, StringConst, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 14;
 
 /// How many enclosing lambdas' functions a reference keeps, innermost first.
 const LAMBDAS_KEPT: usize = 4;
@@ -58,7 +59,53 @@ pub fn extract(source: &str) -> FileFacts {
     member_types(source, tree.root_node(), None, &mut nested);
     let mut cx = Cx { src: source, facts: FileFacts::default(), package: None, scopes: Vec::new(), seen: HashSet::new(), nested, lambdas: Vec::new() };
     cx.visit(tree.root_node());
+    cx.facts.parse_errors += misread_declarations(source, tree.root_node());
     cx.facts
+}
+
+fn has_infix_class(src: &str, node: Node) -> bool {
+    let mut stack = vec![node];
+    while let Some(x) = stack.pop() {
+        if x.kind() == "infix_expression" && children(x).next().is_some_and(|f| matches!(&src[f.byte_range()], "class" | "interface" | "object")) {
+            return true;
+        }
+        stack.extend(children(x));
+    }
+    false
+}
+
+/// Declarations tree-sitter-kotlin-ng reads as expressions, with no error node to say so: a class or object whose
+/// annotations end up in an `annotated_expression` before it, and a `class X { … }` read, with its annotations, as an
+/// infix expression (a class with two annotations, the second taking arguments, followed by another declaration). The declaration's annotations, or the whole class, are lost, so each
+/// counts as a parse error and the file's answers say they may miss what it declares.
+fn misread_declarations(src: &str, root: Node) -> u32 {
+    let mut n = 0;
+    let mut stack = vec![root];
+    while let Some(x) = stack.pop() {
+        match x.kind() {
+            // `class Name { … }` as `class` infix `Name` with a lambda.
+            "infix_expression" if children(x).next().is_some_and(|f| f.kind() == "identifier" && matches!(&src[f.byte_range()], "class" | "interface" | "object")) => {
+                n += 1;
+            }
+            // Annotations split off the declaration that follows them, in a file or a type's body.
+            // (Unless the class itself went into the expression, counted above.)
+            "annotated_expression"
+                if x.parent().is_some_and(|p| matches!(p.kind(), "source_file" | "class_body"))
+                    && !has_infix_class(src, x)
+                    && x.next_named_sibling().is_some_and(|d| {
+                        // A type's: what the type is (a controller, a test class, a serializable) is in them. A function's
+                        // split annotation (a top-level `@Suppress`, `@JvmName`) loses nothing KnowCode reads.
+                        matches!(d.kind(), "class_declaration" | "object_declaration")
+                            && children(d).find(|c| c.kind() == "modifiers").is_none_or(|m| !children(m).any(|a| a.kind() == "annotation"))
+                    }) =>
+            {
+                n += 1;
+            }
+            _ => {}
+        }
+        stack.extend(children(x));
+    }
+    n
 }
 
 /// The newlines that split a class name from its primary constructor (`class Builder` / `internal constructor(`), inside
@@ -155,6 +202,9 @@ struct Scope {
     type_name: Option<String>,
     callable: bool,
     locals: HashMap<String, Option<String>>,
+    /// A type whose methods' Spring mappings are routes it serves or requests it sends (a controller's, a Feign
+    /// client's): its own mapping (`@RequestMapping`, a Feign client's `path`), or why it can't be read.
+    spring: Option<(Side, Result<Option<Mapping>, String>)>,
 }
 
 struct Cx<'a> {
@@ -166,7 +216,15 @@ struct Cx<'a> {
     /// The file's member types: per type (dotted, within the package), the simple names declared in it.
     nested: HashMap<String, HashSet<String>>,
     /// The functions whose lambda argument the code being read is in, outermost first (`apply` in `x.apply { … }`).
-    lambdas: Vec<String>,
+    lambdas: Vec<Lambda>,
+}
+
+/// A lambda the code is in: the function it is passed to, and what that call is on (see [`Cx::call`]): `None` when
+/// the call has no receiver written (`run { … }`, `html { … }`); the receiver's type as a reference's receiver type is
+/// stored (`""` when it can't be told) for `x.apply { … }` and `with(x) { … }`.
+struct Lambda {
+    callee: String,
+    receiver: Option<String>,
 }
 
 impl<'a> Cx<'a> {
@@ -269,7 +327,7 @@ impl<'a> Cx<'a> {
     fn with_callable(&mut self, sym: Option<usize>, f: impl FnOnce(&mut Self)) {
         match sym.or_else(|| self.current()) {
             Some(sym) => {
-                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new() });
+                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new(), spring: None });
                 f(self);
                 self.scopes.pop();
             }
@@ -312,7 +370,7 @@ impl<'a> Cx<'a> {
         let signature = collapse(self.src[node.start_byte()..end].trim_end_matches(['=', ' ', '{']), SIGNATURE_CAP);
         let attrs = annotations(self.src, node);
         let mut tags = Vec::new();
-        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest")) {
+        if kind == SymbolKind::Method && attrs.iter().any(|a| matches!(a.as_str(), "Test" | "ParameterizedTest" | "RepeatedTest" | "TestFactory" | "TestTemplate")) {
             tags.push("test");
         }
         if kind == SymbolKind::Function && name == "main" {
@@ -392,13 +450,15 @@ impl<'a> Cx<'a> {
                 }
                 // Arguments to the superclass constructor are code in the class.
                 if let Some(args) = descendant_of_kind(spec, "value_arguments") {
-                    self.scopes.push(Scope { sym, type_name: Some(full.clone()), callable: false, locals: HashMap::new() });
+                    self.scopes.push(Scope { sym, type_name: Some(full.clone()), callable: false, locals: HashMap::new(), spring: None });
                     self.with_callable(Some(sym), |cx| cx.visit(args));
                     self.scopes.pop();
                 }
             }
         }
-        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new() });
+        let abstract_type = keyword_interface || modifiers.split_whitespace().any(|m| m == "abstract");
+        let spring = spring::side(&self.facts.symbols[sym].attrs, abstract_type).map(|side| (side, self.type_mapping(node)));
+        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new(), spring });
         for c in children(node).filter(|c| matches!(c.kind(), "modifiers" | "type_parameters" | "type_constraints")) {
             self.visit(c);
         }
@@ -485,6 +545,9 @@ impl<'a> Cx<'a> {
             // infers it. Left unset, the query would take another function's of the same name.
             self.facts.symbols[sym].type_name = self.constructed(call);
         }
+        if kind == SymbolKind::Method {
+            self.spring_routes(node, sym);
+        }
         self.with_callable(Some(sym), |cx| {
             for c in children(node) {
                 if Some(c) != node.child_by_field_name("name") {
@@ -492,6 +555,184 @@ impl<'a> Cx<'a> {
                 }
             }
         });
+    }
+
+    /// A `const val` holding a string, as a constant a request mapping may name: `Type.NAME` (a companion's under its
+    /// class), or the bare name at top level; its value encoded as a mapping's path is.
+    fn string_const(&mut self, node: Node, name: &str) {
+        let is_const = children(node).find(|c| c.kind() == "modifiers").is_some_and(|m| self.text(m).split_whitespace().any(|w| w == "const"));
+        let Some(value) = children(node).find(|c| c.kind() == "string_literal").filter(|_| is_const) else { return };
+        let Ok(v) = self.path_expr(value) else { return };
+        let qualified = match self.enclosing_type() {
+            Some(t) => format!("{}.{name}", t.strip_suffix(".Companion").unwrap_or(&t)),
+            None => name.to_string(),
+        };
+        self.facts.constants.push(StringConst { qualified, value: v, line: line(node) });
+    }
+
+    /// A type's own mapping, its methods' prefix: its `@RequestMapping` (or `@HttpExchange`) under a Feign client's
+    /// `path`, each path of one joined with each of the other's.
+    fn type_mapping(&self, node: Node) -> Result<Option<Mapping>, String> {
+        let own = match self.mappings(node).into_iter().find(|(_, verb, _)| verb.is_none()) {
+            Some((_, _, m)) => Some(m?),
+            None => None,
+        };
+        let Some(feign) = self.feign_path(node)? else { return Ok(own) };
+        let mut m = own.unwrap_or_default();
+        let under = if m.paths.is_empty() { vec![String::new()] } else { std::mem::take(&mut m.paths) };
+        m.paths = under.iter().map(|p| format!("{}/{}", feign.trim_end_matches('/'), p.trim_start_matches('/'))).collect();
+        Ok(Some(m))
+    }
+
+    /// A `@FeignClient`'s `path`, the prefix of its methods' paths (its `value` and `name` are the service's).
+    fn feign_path(&self, node: Node) -> Result<Option<String>, String> {
+        let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Ok(None) };
+        for a in children(mods).filter(|c| c.kind() == "annotation") {
+            let Some(t) = descendant_of_kind(a, "user_type") else { continue };
+            if children(t).filter(|c| c.kind() == "identifier").last().is_none_or(|n| self.text(n) != "FeignClient") {
+                continue;
+            }
+            let Some(args) = descendant_of_kind(a, "value_arguments") else { return Ok(None) };
+            for arg in children(args).filter(|c| c.kind() == "value_argument" && children(*c).any(|x| x.kind() == "=")) {
+                if children(arg).find(|c| c.kind() == "identifier").is_some_and(|k| self.text(k) == "path")
+                    && let Some(v) = children(arg).filter(|c| c.is_named()).last()
+                {
+                    return self.path_expr(v).map(Some);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The request mappings annotating a declaration: each annotation's name, the verb it fixes (`None` for
+    /// `@RequestMapping`) and what its arguments say, or why they can't be read.
+    fn mappings<'t>(&self, node: Node<'t>) -> Vec<(Node<'t>, Option<&'static str>, Result<Mapping, String>)> {
+        let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Vec::new() };
+        let mut out = Vec::new();
+        for a in children(mods).filter(|c| c.kind() == "annotation") {
+            let Some(t) = descendant_of_kind(a, "user_type") else { continue };
+            let Some(name) = children(t).filter(|c| c.kind() == "identifier").last().map(|n| self.text(n)) else { continue };
+            let Some(verb) = spring::annotation_verb(name) else { continue };
+            out.push((a, verb, self.mapping(a)));
+        }
+        out
+    }
+
+    /// A mapping annotation's paths (`value`, `path`, or its first unnamed argument) and methods (`method`), each
+    /// one value, an array literal (`["/a", "/b"]`) or `arrayOf(…)`.
+    fn mapping<'t>(&self, annotation: Node<'t>) -> Result<Mapping, String> {
+        let mut m = Mapping::default();
+        let Some(args) = children(annotation).find(|c| c.kind() == "constructor_invocation").and_then(|ci| children(ci).find(|c| c.kind() == "value_arguments"))
+        else {
+            return Ok(m);
+        };
+        let value_of = |arg: Node<'t>| children(arg).filter(|c| c.is_named() && !c.kind().ends_with("comment")).last();
+        let items = |v: Node<'t>| -> Vec<Node<'t>> {
+            match v.kind() {
+                "collection_literal" => children(v).filter(|c| c.is_named() && !c.kind().ends_with("comment")).collect(),
+                "call_expression" if children(v).next().is_some_and(|f| matches!(self.text(f), "arrayOf" | "listOf")) => children(v)
+                    .find(|c| c.kind() == "value_arguments")
+                    .map(|a| children(a).filter(|c| c.kind() == "value_argument").filter_map(value_of).collect())
+                    .unwrap_or_default(),
+                _ => vec![v],
+            }
+        };
+        for (i, arg) in children(args).filter(|c| c.kind() == "value_argument").enumerate() {
+            let Some(value) = value_of(arg) else { continue };
+            let named = children(arg).any(|c| c.kind() == "=");
+            let key = if named { children(arg).find(|c| c.kind() == "identifier").map_or("", |k| self.text(k)) } else if i == 0 { "value" } else { "" };
+            match key {
+                "value" | "path" | "url" => {
+                    for p in items(value) {
+                        m.paths.push(self.path_expr(p)?);
+                    }
+                }
+                "method" => {
+                    for v in items(value) {
+                        m.verbs.push(spring::request_method(self.text(v)).ok_or_else(|| format!("method `{}`", self.text(v)))?);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(m)
+    }
+
+    /// A path written in a mapping or a constant: a string (its `$NAME` and `${Paths.API}` templates as constants,
+    /// `{=NAME}`), a constant, and their concatenation with `+`.
+    fn path_expr(&self, e: Node) -> Result<String, String> {
+        let unread = || Err(format!("path `{}`", collapse(self.text(e), 60)));
+        match e.kind() {
+            "string_literal" => {
+                let t = self.text(e);
+                if t.starts_with("\"\"\"") || t.contains('\\') || t.len() < 2 {
+                    return unread();
+                }
+                let body = &t[1..t.len() - 1];
+                let mut out = String::new();
+                let mut rest = body;
+                while let Some(i) = rest.find('$') {
+                    out.push_str(&rest[..i]);
+                    let after = &rest[i + 1..];
+                    let (name, len) = if let Some(inner) = after.strip_prefix('{') {
+                        let Some(j) = inner.find('}') else { return unread() };
+                        (inner[..j].trim(), j + 2)
+                    } else {
+                        let j = after.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(after.len());
+                        (&after[..j], j)
+                    };
+                    if name.is_empty() || !name.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_')) {
+                        return unread();
+                    }
+                    out.push_str(&format!("{{={name}}}"));
+                    rest = &after[len..];
+                }
+                out.push_str(rest);
+                Ok(out)
+            }
+            "identifier" | "navigation_expression" => {
+                let t: String = self.text(e).split_whitespace().collect();
+                if t.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_')) { Ok(format!("{{={t}}}")) } else { unread() }
+            }
+            "binary_expression" if children(e).any(|c| !c.is_named() && self.text(c) == "+") => {
+                let (Some(l), Some(r)) = (e.child_by_field_name("left"), e.child_by_field_name("right")) else { return unread() };
+                Ok(self.path_expr(l)? + &self.path_expr(r)?)
+            }
+            "parenthesized_expression" => children(e).find(|c| c.is_named()).map_or_else(unread, |c| self.path_expr(c)),
+            _ => unread(),
+        }
+    }
+
+    /// A handler method's routes, or a client method's requests (see [`spring::routes`]); a mapping that can't be read
+    /// is `unsupported`, never a route with a wrong path.
+    fn spring_routes(&mut self, node: Node, sym: usize) {
+        let Some((side, of_type)) = self.scopes.last().filter(|s| !s.callable).and_then(|s| s.spring.clone()) else { return };
+        for (at, verb, mapping) in self.mappings(node) {
+            let ty = match &of_type {
+                Ok(ty) => ty.as_ref(),
+                Err(why) => {
+                    self.facts.unsupported.push(Unsupported { area: "http", construct: format!("RequestMapping on the type: {why}"), line: line(at) });
+                    continue;
+                }
+            };
+            match mapping {
+                Ok(m) => {
+                    for (verb, path) in spring::routes(side, ty, &m, verb) {
+                        // A handler's route is at the method (its owner's line, annotations included); a client's request at the
+                        // method's name, where callers call it.
+                        let at = match side {
+                            Side::Serves => line(node),
+                            Side::Requests => node.child_by_field_name("name").map_or(line(node), line),
+                        };
+                        let route = HttpRoute { sym: Some(sym), side: side.as_str(), verb, path, path_ref: None, service: None, service_ref: None, line: at };
+                        if !self.facts.http_routes.contains(&route) {
+                            self.facts.http_routes.push(route);
+                        }
+                    }
+                }
+                Err(why) => self.facts.unsupported.push(Unsupported { area: "http", construct: format!("request mapping: {why}"), line: line(at) }),
+            }
+        }
     }
 
     fn secondary_constructor(&mut self, node: Node) {
@@ -541,6 +782,7 @@ impl<'a> Cx<'a> {
         let _ = in_type;
         let ty = children(v).find(|c| is_type_node(c.kind())).and_then(|t| self.declared_type(t));
         self.facts.symbols[sym].type_name = ty;
+        self.string_const(node, &self.facts.symbols[sym].name.clone());
         self.with_callable(Some(sym), |cx| {
             for c in children(node) {
                 if c != v {
@@ -570,9 +812,26 @@ impl<'a> Cx<'a> {
         let args = children(node).find(|c| c.kind() == "value_arguments").map(arg_count);
         let lambda = children(node).any(|c| c.kind() == "annotated_lambda");
         let args = args.map(|a| a + u32::from(lambda)).or(lambda.then_some(1));
-        let callee_name = match callee.kind() {
-            "identifier" => Some(self.text(callee).to_string()),
-            "navigation_expression" => children(callee).filter(|c| c.is_named()).last().filter(|l| l.kind() == "identifier").map(|l| self.text(l).to_string()),
+        // A trailing lambda after arguments (`with(x) { … }`) is read as a call of the call with the arguments: the
+        // function it is passed to is that call's.
+        let (head, head_call) = match callee.kind() {
+            "call_expression" => (children(callee).find(|c| c.is_named()).unwrap_or(callee), callee),
+            _ => (callee, node),
+        };
+        let callee_name = match head.kind() {
+            "identifier" => Some(self.text(head).to_string()),
+            "navigation_expression" => children(head).filter(|c| c.is_named()).last().filter(|l| l.kind() == "identifier").map(|l| self.text(l).to_string()),
+            _ => None,
+        };
+        // What the call's lambda may take as its receiver: the value the call is on (`x.apply { … }`), or `with`'s
+        // first argument.
+        let lambda_receiver = match head.kind() {
+            "navigation_expression" => children(head).find(|c| c.is_named()).map(|o| self.receiver_of(o).1.unwrap_or_default()),
+            "identifier" if self.text(head) == "with" => children(head_call)
+                .find(|c| c.kind() == "value_arguments")
+                .and_then(|a| children(a).find(|c| c.kind() == "value_argument"))
+                .and_then(|a| children(a).filter(|c| c.is_named()).last())
+                .map(|e| self.expr_type(e).map(|t| t.encode()).unwrap_or_default()),
             _ => None,
         };
         match callee.kind() {
@@ -605,11 +864,11 @@ impl<'a> Cx<'a> {
             // A lambda argument, trailing or in the parentheses: the code in it is read knowing which function it is
             // passed to, which may give it a receiver (`apply`, `with`, a `T.() -> R` parameter).
             match c.kind() {
-                "annotated_lambda" => self.in_lambda(callee_name.as_deref(), c),
+                "annotated_lambda" => self.in_lambda(callee_name.as_deref(), lambda_receiver.clone(), c),
                 "value_arguments" => {
                     for a in children(c) {
                         if a.kind() == "value_argument" && children(a).any(|l| matches!(l.kind(), "lambda_literal" | "annotated_lambda")) {
-                            self.in_lambda(callee_name.as_deref(), a);
+                            self.in_lambda(callee_name.as_deref(), lambda_receiver.clone(), a);
                         } else {
                             self.visit(a);
                         }
@@ -620,8 +879,8 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn in_lambda(&mut self, callee: Option<&str>, node: Node) {
-        self.lambdas.push(callee.unwrap_or_default().to_string());
+    fn in_lambda(&mut self, callee: Option<&str>, receiver: Option<String>, node: Node) {
+        self.lambdas.push(Lambda { callee: callee.unwrap_or_default().to_string(), receiver });
         self.visit(node);
         self.lambdas.pop();
     }
@@ -813,8 +1072,14 @@ impl<'a> Cx<'a> {
             && receiver.as_deref().is_none_or(|r| r == "this")
             && !self.lambdas.is_empty()
         {
-            let inner: Vec<&String> = self.lambdas.iter().rev().filter(|l| !l.is_empty()).take(LAMBDAS_KEPT).collect();
-            self.facts.arg_types.insert(self.facts.refs.len(), serde_json::json!({ "lambdas": inner }).to_string());
+            let inner: Vec<&Lambda> = self.lambdas.iter().rev().filter(|l| !l.callee.is_empty()).take(LAMBDAS_KEPT).collect();
+            if inner.is_empty() {
+                self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: ln, col, args });
+                return;
+            }
+            let names: Vec<&str> = inner.iter().map(|l| l.callee.as_str()).collect();
+            let receivers: Vec<Option<&str>> = inner.iter().map(|l| l.receiver.as_deref()).collect();
+            self.facts.arg_types.insert(self.facts.refs.len(), serde_json::json!({ "lambdas": names, "receivers": receivers }).to_string());
         }
         self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: ln, col, args });
     }
@@ -1104,5 +1369,72 @@ mod tests {
         assert_eq!(arity("both"), Some((1, Some(2))));
         assert_eq!(arity("none"), Some((0, Some(0))));
         assert_eq!(arity("many"), Some((0, None)));
+    }
+
+    #[test]
+    fn spring_handler_methods_serve_their_mappings() {
+        let src = "package org.example.shop\n\
+                   \n\
+                   import org.springframework.web.bind.annotation.*\n\
+                   \n\
+                   const val API = \"/api\"\n\
+                   \n\
+                   @RestController\n\
+                   @RequestMapping(\"$API/orders\")\n\
+                   class OrderController(private val orders: Orders) {\n\
+                       @GetMapping(\"/{id}\")\n\
+                       fun find(id: Long): Order = orders.find(id)\n\
+                   \n\
+                       @PostMapping\n\
+                       fun create(): Order = orders.create()\n\
+                   \n\
+                       @RequestMapping(value = [\"a\", \"${Paths.ITEMS}/b\"], method = [RequestMethod.PUT])\n\
+                       fun update() {}\n\
+                   \n\
+                       @DeleteMapping(path = arrayOf(ITEMS))\n\
+                       fun remove() {}\n\
+                   \n\
+                       @GetMapping(\"/x\" + \"/y\")\n\
+                       fun joined() {}\n\
+                   \n\
+                       @GetMapping(pathOf())\n\
+                       fun computed() {}\n\
+                   \n\
+                       companion object {\n\
+                           const val ITEMS = \"/items\"\n\
+                       }\n\
+                   }\n";
+        let f = extract(src);
+        assert_eq!(f.parse_errors, 0);
+        let routes: Vec<(String, &str, &str)> =
+            f.http_routes.iter().filter(|r| r.side == "server").map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("find".to_string(), "GET", "{=API}/orders/{id}"),
+                ("create".to_string(), "POST", "{=API}/orders"),
+                ("update".to_string(), "PUT", "{=API}/orders/a"),
+                ("update".to_string(), "PUT", "{=API}/orders/{=Paths.ITEMS}/b"),
+                ("remove".to_string(), "DELETE", "{=API}/orders/{=ITEMS}"),
+                ("joined".to_string(), "GET", "{=API}/orders/x/y"),
+            ]
+        );
+        assert_eq!(f.unsupported.len(), 1, "{:?}", f.unsupported);
+        let consts: Vec<(&str, &str)> = f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect();
+        assert_eq!(consts, [("API", "/api"), ("OrderController.ITEMS", "/items")]);
+        // A Feign client's mappings are requests it sends, never routes it serves.
+        let client = extract("package org.example.shop\n\n@FeignClient(\"orders\")\ninterface OrderClient {\n    @GetMapping(\"/api/orders/{id}\")\n    fun find(id: Long): Order\n}\n");
+        assert!(client.http_routes.iter().all(|r| r.side == "client"));
+    }
+
+    #[test]
+    fn declarations_the_grammar_reads_as_expressions_are_parse_errors() {
+        // Two annotations, the second with arguments, then another annotated declaration: the grammar reads the first
+        // class's annotations, or the class itself, as expressions, with no error node.
+        let swallowed = extract("package x\n\n@RestController\n@RequestMapping(\"/api\")\nclass A {\n}\n\ninterface B {\n}\n");
+        assert_eq!(swallowed.parse_errors, 1);
+        assert!(!swallowed.symbols.iter().any(|s| s.name == "A"), "the grammar loses the class");
+        let fine = extract("package x\n\n@RequestMapping(\"/api\")\nclass A {\n}\n\nclass B\n");
+        assert_eq!(fine.parse_errors, 0);
     }
 }
