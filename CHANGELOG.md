@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Spring routes, in Java and Kotlin: a handler method's `@RequestMapping` or `@GetMapping` (and the other verbs'
+  shortcuts) is a route it serves, under its controller's `@RequestMapping`, with paths written as strings, constants or
+  their concatenation (Kotlin string templates included). `context` on a handler lists what it serves. A mapping KnowCode can't read is reported as
+  `unsupported`, never given a wrong path. Java and Kotlin files are indexed again on the first query after
+  upgrading.
 - Kotlin: a class the grammar reads as an expression with no error (its annotations split off before it, or a
   class with two annotations, the second taking arguments, followed by another declaration, read whole as one) counts
   as a parse error of its file, so answers about the file report that they may miss what it declares, instead of

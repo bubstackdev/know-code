@@ -13,9 +13,10 @@ use tree_sitter::{Node, Parser};
 
 use crate::swift::{children, collapse, line, name_col};
 use crate::types::{PathRoot, Seg, TypeDecl, TypeExpr};
-use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
+use crate::spring::{self, Mapping};
+use crate::{FileFacts, HttpRoute, Import, Ref, RefKind, Relation, RelationKind, StringConst, Symbol, SymbolKind, Unsupported};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -60,6 +61,8 @@ struct Scope {
     /// A method, constructor or initializer: its locals and parameters, with their declared types where written.
     callable: bool,
     locals: HashMap<String, Option<String>>,
+    /// A type serving Spring handler methods: its own `@RequestMapping`, or why it can't be read.
+    handlers: Option<Result<Option<Mapping>, String>>,
 }
 
 struct Cx<'a> {
@@ -238,7 +241,7 @@ impl<'a> Cx<'a> {
         let sym = sym.or_else(|| self.current());
         match sym {
             Some(sym) => {
-                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new() });
+                self.scopes.push(Scope { sym, type_name: None, callable: true, locals: HashMap::new(), handlers: None });
                 f(self);
                 self.scopes.pop();
             }
@@ -348,7 +351,15 @@ impl<'a> Cx<'a> {
         if let Some(ext) = children(node).find(|c| c.kind() == "extends_interfaces") {
             self.supertypes(sym, ext);
         }
-        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new() });
+        let abstract_type = node.kind() == "interface_declaration"
+            || children(node).find(|c| c.kind() == "modifiers").is_some_and(|m| children(m).any(|c| c.kind() == "abstract"));
+        let handlers = spring::serves(&self.facts.symbols[sym].attrs, abstract_type).then(|| {
+            match self.mappings(node).into_iter().find(|(_, verb, _)| verb.is_none()) {
+                Some((_, _, m)) => m.map(Some),
+                None => Ok(None),
+            }
+        });
+        self.scopes.push(Scope { sym, type_name: Some(full), callable: false, locals: HashMap::new(), handlers });
         if let Some(tp) = node.child_by_field_name("type_parameters") {
             self.visit(tp);
         }
@@ -411,6 +422,9 @@ impl<'a> Cx<'a> {
         if let Some(t) = node.child_by_field_name("type") {
             self.facts.symbols[sym].type_name = self.declared_type(t);
         }
+        if kind == SymbolKind::Method {
+            self.spring_routes(node, sym);
+        }
         self.with_callable(Some(sym), |cx| {
             for c in children(node) {
                 if Some(c) != node.child_by_field_name("name") {
@@ -440,6 +454,118 @@ impl<'a> Cx<'a> {
             self.facts.symbols[sym].type_name = ty.clone();
             if let Some(v) = d.child_by_field_name("value") {
                 self.with_callable(Some(sym), |cx| cx.visit(v));
+                self.string_const(node, d, v);
+            }
+        }
+    }
+
+    /// A `static final String` field (any `String` field of an interface, which is one), as a constant a request
+    /// mapping may name: `Container.NAME`, its value encoded as a mapping's path is.
+    fn string_const(&mut self, field: Node, declarator: Node, value: Node) {
+        let mods: Vec<&str> = children(field).filter(|c| c.kind() == "modifiers").flat_map(children).map(|c| c.kind()).collect();
+        let in_interface = self.scopes.last().is_some_and(|s| !s.callable && self.facts.symbols[s.sym].kind == SymbolKind::Protocol);
+        let is_string = field.child_by_field_name("type").is_some_and(|t| self.text(t) == "String");
+        if !is_string || !(in_interface || mods.contains(&"static") && mods.contains(&"final")) {
+            return;
+        }
+        let (Some(container), Some(n)) = (self.enclosing_type(), declarator.child_by_field_name("name")) else { return };
+        if let Ok(v) = self.path_expr(value) {
+            let qualified = format!("{container}.{}", self.text(n));
+            self.facts.constants.push(StringConst { qualified, value: v, line: line(declarator) });
+        }
+    }
+
+    /// The request mappings annotating a declaration: each annotation's name, the verb it fixes (`None` for
+    /// `@RequestMapping`) and what its arguments say, or why they can't be read.
+    fn mappings<'t>(&self, node: Node<'t>) -> Vec<(Node<'t>, Option<&'static str>, Result<Mapping, String>)> {
+        let Some(mods) = children(node).find(|c| c.kind() == "modifiers") else { return Vec::new() };
+        let mut out = Vec::new();
+        for a in children(mods).filter(|c| matches!(c.kind(), "marker_annotation" | "annotation")) {
+            let Some(name) = a.child_by_field_name("name").map(|n| self.text(n).rsplit('.').next().unwrap_or_default()) else { continue };
+            let Some(verb) = spring::annotation_verb(name) else { continue };
+            out.push((a, verb, self.mapping(a)));
+        }
+        out
+    }
+
+    /// A mapping annotation's paths (`value`, `path`, or its one unnamed argument) and methods (`method`).
+    fn mapping<'t>(&self, annotation: Node<'t>) -> Result<Mapping, String> {
+        let mut m = Mapping::default();
+        let Some(args) = annotation.child_by_field_name("arguments") else { return Ok(m) };
+        let items = |v: Node<'t>| -> Vec<Node<'t>> {
+            if v.kind() == "element_value_array_initializer" { children(v).filter(|c| c.is_named() && !c.kind().ends_with("comment")).collect() } else { vec![v] }
+        };
+        for arg in children(args).filter(|c| c.is_named() && !c.kind().ends_with("comment")) {
+            let (key, value) = if arg.kind() == "element_value_pair" {
+                match (arg.child_by_field_name("key"), arg.child_by_field_name("value")) {
+                    (Some(k), Some(v)) => (self.text(k), v),
+                    _ => continue,
+                }
+            } else {
+                ("value", arg)
+            };
+            match key {
+                "value" | "path" => {
+                    for p in items(value) {
+                        m.paths.push(self.path_expr(p)?);
+                    }
+                }
+                "method" => {
+                    for v in items(value) {
+                        m.verbs.push(spring::request_method(self.text(v)).ok_or_else(|| format!("method `{}`", self.text(v)))?);
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(m)
+    }
+
+    /// A path written in a mapping or a constant: string literals, constants (`{=NAME}`, `{=Paths.API}`) and their
+    /// concatenation with `+`.
+    fn path_expr(&self, e: Node) -> Result<String, String> {
+        match e.kind() {
+            "string_literal" => {
+                let t = self.text(e);
+                if t.starts_with("\"\"\"") || t.contains('\\') {
+                    return Err(format!("path `{}`", collapse(t, 60)));
+                }
+                Ok(t.trim_matches('"').to_string())
+            }
+            "identifier" | "field_access" => Ok(format!("{{={}}}", self.text(e).split_whitespace().collect::<String>())),
+            "binary_expression" if e.child_by_field_name("operator").is_some_and(|o| self.text(o) == "+") => {
+                let (Some(l), Some(r)) = (e.child_by_field_name("left"), e.child_by_field_name("right")) else {
+                    return Err("path expression".to_string());
+                };
+                Ok(self.path_expr(l)? + &self.path_expr(r)?)
+            }
+            "parenthesized_expression" => children(e).find(|c| c.is_named()).map_or(Err("path expression".to_string()), |c| self.path_expr(c)),
+            _ => Err(format!("path `{}`", collapse(self.text(e), 60))),
+        }
+    }
+
+    /// A handler method's routes (see [`spring::routes`]), when its type serves them; a mapping that can't be read is
+    /// `unsupported`, never a route with a wrong path.
+    fn spring_routes(&mut self, node: Node, sym: usize) {
+        let Some(handlers) = self.scopes.last().filter(|s| !s.callable).and_then(|s| s.handlers.clone()) else { return };
+        for (at, verb, mapping) in self.mappings(node) {
+            let ty = match &handlers {
+                Ok(ty) => ty.as_ref(),
+                Err(why) => {
+                    self.facts.unsupported.push(Unsupported { area: "http", construct: format!("RequestMapping on the type: {why}"), line: line(at) });
+                    continue;
+                }
+            };
+            match mapping {
+                Ok(m) => {
+                    for (verb, path) in spring::routes(ty, &m, verb) {
+                        let route = HttpRoute { sym: Some(sym), side: "server", verb, path, path_ref: None, service: None, service_ref: None, line: line(node) };
+                        if !self.facts.http_routes.contains(&route) {
+                            self.facts.http_routes.push(route);
+                        }
+                    }
+                }
+                Err(why) => self.facts.unsupported.push(Unsupported { area: "http", construct: format!("request mapping: {why}"), line: line(at) }),
             }
         }
     }
@@ -937,5 +1063,52 @@ mod tests {
         assert!(types.contains(&("Test".into(), None)));
         assert!(types.contains(&("Disabled".into(), Some("org.junit.jupiter.api".into()))));
         assert!(refs(&f, RefKind::Call).contains(&("level".into(), Some("Mark".into()))));
+    }
+
+    #[test]
+    fn spring_handler_methods_serve_their_mappings() {
+        let src = "package org.example.shop;\n\
+                   \n\
+                   @RestController\n\
+                   @RequestMapping(Paths.API + \"/orders\")\n\
+                   class OrderController {\n\
+                       static final String ITEMS = \"/{id}/items\";\n\
+                       @GetMapping(\"/{id}\")\n\
+                       Order find(long id) { return null; }\n\
+                       @PostMapping\n\
+                       Order create() { return null; }\n\
+                       @RequestMapping(value = {\"a\", ITEMS}, method = {RequestMethod.PUT, RequestMethod.PATCH})\n\
+                       void update() {}\n\
+                       @RequestMapping(\"/any\")\n\
+                       void any() {}\n\
+                       @GetMapping(path = pathOf(\"x\"))\n\
+                       void computed() {}\n\
+                       void helper() {}\n\
+                   }\n\
+                   interface Paths { String API = \"/api\"; }\n\
+                   @FeignClient(\"orders\")\n\
+                   interface OrderClient { @GetMapping(\"/api/orders/{id}\") Order find(long id); }\n\
+                   @Service\n\
+                   class NotAController { @GetMapping(\"/no\") void no() {} }\n";
+        let f = extract(src);
+        let routes: Vec<(String, &str, &str)> =
+            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.clone(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("find".to_string(), "GET", "{=Paths.API}/orders/{id}"),
+                ("create".to_string(), "POST", "{=Paths.API}/orders"),
+                ("update".to_string(), "PUT", "{=Paths.API}/orders/a"),
+                ("update".to_string(), "PATCH", "{=Paths.API}/orders/a"),
+                ("update".to_string(), "PUT", "{=Paths.API}/orders/{=ITEMS}"),
+                ("update".to_string(), "PATCH", "{=Paths.API}/orders/{=ITEMS}"),
+                ("any".to_string(), "*", "{=Paths.API}/orders/any"),
+            ]
+        );
+        assert!(f.http_routes.iter().all(|r| r.side == "server" && r.line == f.symbols[r.sym.unwrap()].start_line));
+        assert_eq!(f.unsupported.len(), 1, "{:?}", f.unsupported);
+        assert!(f.unsupported[0].construct.contains("pathOf"));
+        let consts: Vec<(&str, &str)> = f.constants.iter().map(|c| (c.qualified.as_str(), c.value.as_str())).collect();
+        assert_eq!(consts, [("OrderController.ITEMS", "/{id}/items"), ("Paths.API", "/api")]);
     }
 }
