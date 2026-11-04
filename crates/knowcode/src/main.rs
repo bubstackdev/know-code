@@ -53,6 +53,8 @@ mod jsx_impact_tests;
 #[cfg(test)]
 mod overload_tests;
 #[cfg(test)]
+mod resigned_tests;
+#[cfg(test)]
 mod receiver_path_tests;
 #[cfg(test)]
 mod refs_target_tests;

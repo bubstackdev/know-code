@@ -217,6 +217,13 @@ pub struct OldDefinition {
     /// The language of its file (`Lang::as_str`).
     #[serde(skip)]
     pub lang: &'static str,
+    /// Its declaration line before the change, as the extractor reads it (`Symbol::signature`).
+    #[serde(skip)]
+    pub signature: String,
+    /// How many arguments a call to it passed before the change, as (fewest, most), where the extractor knows it
+    /// (`Symbol::arity`: C# methods).
+    #[serde(skip)]
+    pub arity: Option<(u32, Option<u32>)>,
 }
 
 /// Kinds of definition whose removal can break code naming them: types, members and functions. Others (SQL, Ansible,
@@ -272,6 +279,8 @@ pub fn old_definitions(root: &Path, diff: &Diff) -> Result<Vec<OldDefinition>> {
                 now: (!c.deleted).then(|| c.file.clone()),
                 line: s.start_line,
                 lang: lang.as_str(),
+                signature: s.signature.clone(),
+                arity: s.arity,
             });
         }
     }

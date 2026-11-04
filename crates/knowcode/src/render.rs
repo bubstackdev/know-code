@@ -942,6 +942,16 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
             children.entry((a.via.as_str(), a.hop.saturating_sub(1))).or_default().push(k);
         }
         let mut shown = vec![false; i.affected.len()];
+        // A method the change kept with other parameters isn't removed: its old calls are named as calls of what it was.
+        let resigned: std::collections::HashSet<&str> = r.removed.iter().filter(|g| g.old_signature.is_some()).map(|g| g.qualified.as_str()).collect();
+        let line_of = |a: &kc_store::trace::Affected| {
+            let line = affected_line(root, a);
+            if a.via_removed && resigned.contains(a.via.as_str()) {
+                line.replace(&format!("(names {}, which the change removes)", a.via), &format!("(calls {} as it was before the change)", a.via))
+            } else {
+                line
+            }
+        };
         let tree = |out: &mut String, start: &str, shown: &mut Vec<bool>, seen: &mut std::collections::HashSet<String>| {
             let mut stack: Vec<(usize, usize)> = Vec::new();
             let push = |stack: &mut Vec<(usize, usize)>, key: (&str, u8), depth: usize, shown: &[bool]| {
@@ -956,7 +966,7 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
                 }
                 shown[k] = true;
                 let a = &i.affected[k];
-                w!(out, "{}{}", "  ".repeat(d), affected_line(root, a));
+                w!(out, "{}{}", "  ".repeat(d), line_of(a));
                 if let Some(r) = rivals_line(a.evidence.as_ref()) {
                     w!(out, "{}  {r}", "  ".repeat(d));
                 }
@@ -976,7 +986,10 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         // Definitions the change removed, with the code still naming them under each.
         let at = r.base.as_deref().map(|b| &b[..b.len().min(10)]).unwrap_or("base");
         for g in &r.removed {
-            w!(out, "removed {} {}  {} at {at}  [{} still name it]", g.kind, g.qualified, loc(root, &g.file, g.line), g.named_by.len());
+            match &g.old_signature {
+                Some(sig) => w!(out, "changed signature of {} {}  {} at {at}: was `{}`  [{} still call it so]", g.kind, g.qualified, loc(root, &g.file, g.line), sig.trim(), g.named_by.len()),
+                None => w!(out, "removed {} {}  {} at {at}  [{} still name it]", g.kind, g.qualified, loc(root, &g.file, g.line), g.named_by.len()),
+            }
             tree(&mut out, &g.qualified, &mut shown, &mut seen);
             // Reached from a changed symbol first, so listed under it; named here too.
             for n in g.named_by.iter().filter(|n| !i.affected.iter().any(|a| a.via_removed && a.via == g.qualified && a.qualified == n.qualified)) {
@@ -993,7 +1006,7 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         // Reached from a symbol not in the tree (a crossing's landing, say): listed flat.
         for (k, a) in i.affected.iter().enumerate() {
             if !shown[k] {
-                w!(out, "  {}  (via {})", affected_line(root, a), a.via);
+                w!(out, "  {}  (via {})", line_of(a), a.via);
                 if let Some(r) = rivals_line(a.evidence.as_ref()) {
                     w!(out, "    {r}");
                 }
