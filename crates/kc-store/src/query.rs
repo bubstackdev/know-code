@@ -3074,6 +3074,32 @@ fn by_type_parameters(defs: Vec<&Def>, written: usize) -> Vec<&Def> {
     defs.into_iter().zip(drop).filter(|(_, d)| !d).map(|(d, _)| d).collect()
 }
 
+/// How many type arguments a C# type reference writes (`{"g": n}` in its `arg_types`, see `FileFacts::arg_types`),
+/// when the extractor recorded it.
+fn type_arity(hit: &RefHit) -> Option<usize> {
+    match serde_json::from_str::<serde_json::Value>(hit.arg_types.as_deref()?).ok()? {
+        serde_json::Value::Object(o) if !o.contains_key("a") => o.get("g")?.as_u64().map(|g| g as usize),
+        _ => None,
+    }
+}
+
+/// Of the types among `defs`, those declaring `written` type parameters, when some do (other definitions stay). When
+/// none does, the name was misread (or the type isn't the repo's), and they all stay.
+fn by_type_arity<'d>(conn: &Connection, defs: Vec<&'d Def>, written: usize) -> Result<Vec<&'d Def>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT coalesce(CASE WHEN json_valid(type_name) THEN json_array_length(type_name, '$.params') END, 0) FROM symbols WHERE id = ?1",
+    )?;
+    let mut own = Vec::with_capacity(defs.len());
+    for d in &defs {
+        let is_type = TYPE_KINDS.contains(&d.kind.as_str());
+        own.push(if is_type { Some(stmt.query_row([d.id], |r| r.get::<_, i64>(0))? as usize) } else { None });
+    }
+    if !own.contains(&Some(written)) {
+        return Ok(defs);
+    }
+    Ok(defs.into_iter().zip(own).filter(|(_, n)| n.is_none_or(|n| n == written)).map(|(d, _)| d).collect())
+}
+
 /// The constructors a C# type declares, for telling which one a creation calls (see [`constructors_called`]).
 pub(crate) struct CtorSet {
     /// The declared constructors, and a primary constructor (`class Order(int id)`) as the type itself.
@@ -3613,23 +3639,24 @@ fn target(conn: &Connection, id: i64) -> Result<Target> {
 }
 
 /// Whether two declarations with one qualified name may be parts of one declaration (a partial type's parts): in C#,
-/// only when they share a namespace and a project, since a qualified name here (`Tracker.IsDone`) carries no
-/// namespace and two projects may each declare their own. Other languages, or a declaration the index doesn't have,
-/// keep the qualified name's word.
+/// only when they share a namespace, a project and their own type parameters' number, since a qualified name here
+/// (`Tracker.IsDone`, `Handler`) carries neither namespace nor type parameters: two projects may each declare their
+/// own, and `Handler` and `Handler<T>` are two types. Other languages, or a declaration the index doesn't have, keep
+/// the qualified name's word.
 pub fn may_be_one_declaration(conn: &Connection, a: i64, b: i64) -> Result<bool> {
     let mut stmt = conn.prepare_cached(
         "SELECT f.path, f.lang, coalesce(CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
-                CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END)
+                CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END),
+                coalesce(CASE WHEN json_valid(s.type_name) THEN json_array_length(s.type_name, '$.params') END, 0)
          FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1",
     )?;
-    let mut row = |id: i64| -> Result<Option<(String, String, Option<String>)>> {
-        Ok(stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?)
-    };
-    let (Some((fa, la, na)), Some((fb, lb, nb))) = (row(a)?, row(b)?) else { return Ok(true) };
+    type Row = (String, String, Option<String>, i64);
+    let mut row = |id: i64| -> Result<Option<Row>> { Ok(stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?) };
+    let (Some((fa, la, na, ga)), Some((fb, lb, nb, gb))) = (row(a)?, row(b)?) else { return Ok(true) };
     if la != "csharp" || lb != "csharp" {
         return Ok(true);
     }
-    if na.filter(|n| !n.is_empty()) != nb.filter(|n| !n.is_empty()) {
+    if na.filter(|n| !n.is_empty()) != nb.filter(|n| !n.is_empty()) || ga != gb {
         return Ok(false);
     }
     let mut vis = crate::csharp::Visibility::default();
@@ -5496,6 +5523,23 @@ fn scoped_out_type(
     if ids.is_empty() || all.iter().filter(is_type).count() <= visible.iter().filter(is_type).count() {
         return Ok(false);
     }
+    seen_type(visible, ids, conn, hit, qualifier, vis)
+}
+
+/// Whether the types `ids` picks among `visible` are one top-level type (or its arities, `Request` and `Request<T>`)
+/// in one namespace, which the file sees (or names, qualified).
+fn seen_type(
+    visible: &[Def],
+    ids: &[i64],
+    conn: &Connection,
+    hit: &RefHit,
+    qualifier: Option<&str>,
+    vis: &mut crate::csharp::Visibility,
+) -> Result<bool> {
+    let is_type = |d: &&Def| TYPE_KINDS.contains(&d.kind.as_str()) || d.kind == "typealias";
+    if ids.is_empty() {
+        return Ok(false);
+    }
     // One type, or its arities (`Request`, `Request<T>`): top-level, in one namespace.
     let picked: Vec<&Def> = visible.iter().filter(|d| ids.contains(&d.id)).filter(is_type).collect();
     if picked.len() != ids.len() || picked.iter().any(|d| d.container.is_some() || d.ns != picked[0].ns) {
@@ -5768,6 +5812,8 @@ fn resolve_hits_with<'c>(
         let mut seen_ns: Option<Vec<String>> = None;
         let by_import = scoped.is_some();
         let mut receiver_known = false;
+        // A C# type reference whose type arguments ruled out a same-named type of another arity.
+        let mut by_arity = false;
         // Under `evidence: all`, why each same-named declaration was ruled out, by the first check that did (see
         // [`crate::answer::Rival`]).
         let explain = explaining();
@@ -5909,6 +5955,19 @@ fn resolve_hits_with<'c>(
             };
             dropped_by(&mut dropped, explain, &before, &usable, "argument_types");
             let before = if explain { usable.clone() } else { Vec::new() };
+            // A C# type written with n type arguments (none: `Handler`; one: `Handler<Command>`, `Handler<>`) names a
+            // type declaring n type parameters: `Handler` and `Handler<T>` are two types.
+            let usable = match type_arity(hit) {
+                Some(n) if cs_type && usable.len() > 1 => {
+                    let had = usable.len();
+                    let kept = by_type_arity(conn, usable, n)?;
+                    by_arity = kept.len() < had;
+                    kept
+                }
+                _ => usable,
+            };
+            dropped_by(&mut dropped, explain, &before, &usable, "arity");
+            let before = if explain { usable.clone() } else { Vec::new() };
             // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
             let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
                 swift_seen(conn, &hit.file, usable)?
@@ -6032,6 +6091,11 @@ fn resolve_hits_with<'c>(
         if cs_type && matches!(confidence, "unique_name" | "ambiguous") && scoped_out_type(&defs[&hit.name], named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
             confidence = "exact";
             exact_by = Mechanism::ProjectScope;
+        } else if by_arity && matches!(confidence, "unique_name" | "ambiguous") && seen_type(named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
+            // The type arguments written ruled out the other arities, and the file sees the one type left: the
+            // compiler's pick, as a namespace narrowing to one is.
+            confidence = "exact";
+            exact_by = Mechanism::LexicalScope;
         }
         // Members of same-named types in different namespaces (a receiver typed by a name its file's imports don't
         // settle): one of them, not every one.

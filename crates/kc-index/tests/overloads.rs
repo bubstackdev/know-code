@@ -424,3 +424,46 @@ fn a_generic_overload_without_parameters_leaves_argument_types_to_the_others() {
     assert_eq!(at_line(store.conn(), "Subscribe", 11), [("exact", vec![7])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const HANDLERS: &str = r#"namespace App;
+
+public interface IHandler { }
+public interface IHandler<TCommand> { }
+public class Command { }
+public class Plain : IHandler { }
+public class Typed : IHandler<Command> { }
+public class Setup
+{
+    public object Open = typeof(IHandler<>);
+    public string Named = nameof(IHandler);
+    public IHandler<IHandler> Nested;
+}
+"#;
+
+/// Each type reference's targets' lines on `line`, in column order.
+fn types_at(conn: &rusqlite::Connection, line: u32) -> Vec<(&'static str, Vec<u32>)> {
+    let (mut refs, _) = query::refs(conn, "IHandler", &["type_ref"], 50).unwrap();
+    refs.retain(|r| r.line == line);
+    refs.sort_by_key(|r| r.col);
+    refs.into_iter().map(|r| (r.confidence, lines(&r))).collect()
+}
+
+/// C# names a generic type only with its type arguments, so `IHandler` and `IHandler<TCommand>` are two types: a
+/// reference writing none is the non-generic one, `IHandler<Command>` and `typeof(IHandler<>)` the generic one.
+#[test]
+fn a_type_reference_names_the_type_with_as_many_type_parameters() {
+    let root = scratch("type-arity");
+    write(&root, "src/App/Handlers.cs", HANDLERS);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    assert_eq!(types_at(conn, 6), [("exact", vec![3])]);
+    assert_eq!(types_at(conn, 7), [("exact", vec![4])]);
+    assert_eq!(types_at(conn, 10), [("exact", vec![4])]);
+    assert_eq!(types_at(conn, 11), [("exact", vec![3])]);
+    assert_eq!(types_at(conn, 12), [("exact", vec![4]), ("exact", vec![3])]);
+    // Rows stored before the count was (no `arg_types`): as before, both types are candidates.
+    conn.execute("UPDATE refs SET arg_types = NULL WHERE name = 'IHandler'", []).unwrap();
+    assert_eq!(types_at(conn, 6), [("ambiguous", vec![3, 4])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
