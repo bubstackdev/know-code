@@ -3612,6 +3612,32 @@ fn target(conn: &Connection, id: i64) -> Result<Target> {
     })?)
 }
 
+/// Whether two declarations with one qualified name may be parts of one declaration (a partial type's parts): in C#,
+/// only when they share a namespace and a project, since a qualified name here (`Tracker.IsDone`) carries no
+/// namespace and two projects may each declare their own. Other languages, or a declaration the index doesn't have,
+/// keep the qualified name's word.
+pub fn may_be_one_declaration(conn: &Connection, a: i64, b: i64) -> Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT f.path, f.lang, coalesce(CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
+                CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END)
+         FROM symbols s JOIN files f ON f.id = s.file_id LEFT JOIN symbols p ON p.id = s.parent_id WHERE s.id = ?1",
+    )?;
+    let mut row = |id: i64| -> Result<Option<(String, String, Option<String>)>> {
+        Ok(stmt.query_row([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?)
+    };
+    let (Some((fa, la, na)), Some((fb, lb, nb))) = (row(a)?, row(b)?) else { return Ok(true) };
+    if la != "csharp" || lb != "csharp" {
+        return Ok(true);
+    }
+    if na.filter(|n| !n.is_empty()) != nb.filter(|n| !n.is_empty()) {
+        return Ok(false);
+    }
+    let mut vis = crate::csharp::Visibility::default();
+    let (pa, pb) = (vis.projects_of(conn, &fa)?, vis.projects_of(conn, &fb)?);
+    // A file in no project the index knows can't be told apart by project.
+    Ok(pa.is_empty() || pb.is_empty() || pa.iter().any(|p| pb.contains(p)))
+}
+
 /// A dependency repo's index, for resolving references that leave the repo.
 pub struct Dependency<'c> {
     pub repo: String,

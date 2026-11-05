@@ -879,7 +879,7 @@ fn one_declaration(kind: &str) -> bool {
     !matches!(kind, "method" | "function" | "init" | "constructor" | "subscript" | "macro")
 }
 
-fn binding(root: &Path, h: &RefHit, d: &Placed) -> Binding {
+fn binding(conn: &rusqlite::Connection, root: &Path, h: &RefHit, d: &Placed) -> Binding {
     let here = root == d.root.as_path() && h.repo.is_none();
     let ctors = match &h.ctors {
         Some(c) if h.kind == "instantiate" => c.as_slice(),
@@ -891,7 +891,12 @@ fn binding(root: &Path, h: &RefHit, d: &Placed) -> Binding {
     let d_repo = repo_name(&d.root);
     let is_d = |t: &query::Target| {
         let same_repo = t.repo.as_deref().map_or(here || root == d.root.as_path(), |r| r == d_repo);
-        same_repo && ((t.file == d.file && t.line == d.line) || (t.qualified == d.qualified && t.kind == d.kind && one_declaration(&d.kind)))
+        // Another place with `d`'s qualified name is another part of `d` (a partial type) only if it can be: a
+        // qualified name carries no namespace, so two projects' `Util.Tracker` share one (checked when both are in
+        // the index at hand; a failed check keeps the name's word).
+        let part = || !(here && t.repo.is_none()) || query::may_be_one_declaration(conn, t.id, d.id).unwrap_or(true);
+        same_repo
+            && ((t.file == d.file && t.line == d.line) || (t.qualified == d.qualified && t.kind == d.kind && one_declaration(&d.kind) && part()))
     };
     if h.targets.iter().any(is_d) {
         return Binding::Target;
@@ -2038,7 +2043,7 @@ fn refs_in_for(
                 for h in all {
                     if !seen.contains(&(h.file.clone(), h.line, h.col))
                         && h.confidence != "external_likely"
-                        && matches!(binding(&o.root, &h, d), Binding::Unplaced)
+                        && matches!(binding(o.store.conn(), &o.root, &h, d), Binding::Unplaced)
                     {
                         unknown_receivers.push((o.root.clone(), h));
                     }
@@ -2046,7 +2051,7 @@ fn refs_in_for(
             }
             let mut kept = Vec::with_capacity(hits.len());
             for h in hits {
-                match binding(&o.root, &h, d) {
+                match binding(o.store.conn(), &o.root, &h, d) {
                     Binding::Target => kept.push(h),
                     Binding::Unplaced => unplaced.push((o.root.clone(), h)),
                     Binding::Elsewhere => {
