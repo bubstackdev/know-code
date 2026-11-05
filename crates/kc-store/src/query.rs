@@ -703,7 +703,8 @@ pub struct RefHit {
     pub evidence: Option<crate::answer::Evidence>,
     /// How a type reference or creation uses the type, when it isn't a plain use (C#): `type_argument`
     /// (`Get<IOrders>()`, a DI registration's `AddScoped<IFoo, Foo>()`), `typeof`, `nameof`, `constraint` (`where T :
-    /// IFoo`), `target_typed` (`new(…)`).
+    /// IFoo`), `target_typed` (`new(…)`). For a C# call, `delegate_call`: a local or parameter called (`next(ctx)`),
+    /// its delegate's `Invoke`, which no source declares.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<String>,
     /// For a C# creation (`new T(…)`) of a type declaring constructors: the constructors it may call, told apart by
@@ -5757,6 +5758,11 @@ fn resolve_hits_with<'c>(
             Some((sql.resolve(conn, hit)?, Mechanism::SqlName))
         } else if hit.kind == "call" && hit.name == "init" && hit.file.ends_with(".cs") {
             chained_constructor(conn, oracle, hit, &mut ctor_sets)?.map(|r| (r, Mechanism::ReceiverType))
+        } else if hit.kind == "call" && hit.usage.as_deref() == Some("delegate_call") && hit.file.ends_with(".cs") {
+            // A local or parameter called invokes its delegate, through the `Invoke` the compiler makes for the
+            // delegate type: no declaration in source is it, however its type was or wasn't told, and a method someone
+            // named `Invoke` never is.
+            Some((("external_likely", Vec::new()), Mechanism::ReceiverType))
         } else {
             None
         };

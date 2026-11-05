@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# local or parameter called (`next(ctx)`) invokes its delegate: the row is a `call` of `Invoke` with
+  `usage: delegate_call`, `external_likely`, and no longer binds to a method the repo declares as `Invoke`. A lambda's
+  parameter whose type isn't known was linked by name: on autofac, 8 of its 210 delegate calls were listed as calls of
+  `IResolvePipeline.Invoke` (or another `Invoke`), and on jellyfin-server 4 of 52. The rest, unresolved before, are
+  `external_likely` now. C# files are re-extracted on the next query (C# extractor 41).
 - A C# type reference names the type declaring as many type parameters as it writes type arguments: `IHandler`
   (and `nameof(IHandler)`) is the non-generic `IHandler`, `IHandler<Command>` and `typeof(IHandler<>)` the generic
   `IHandler<T>`, where both were candidates (`ambiguous`). Asked by a place, the other arity's uses are in

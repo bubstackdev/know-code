@@ -832,7 +832,8 @@ pub struct FileFacts {
     pub assigns: std::collections::BTreeSet<usize>,
     /// Per type reference or creation (by index in `refs`), how it uses the type when that isn't a plain use (C#):
     /// `type_argument` (`Get<IOrders>()`, `AddScoped<IFoo, Foo>()`), `typeof`, `nameof`, `constraint` (`where T :
-    /// IFoo`), `target_typed` (a creation `new(…)` that doesn't write the type's name).
+    /// IFoo`), `target_typed` (a creation `new(…)` that doesn't write the type's name). And per C# call, `delegate_call`
+    /// for a local or parameter called (`next(ctx)`): its delegate's `Invoke`, recorded as a call of `Invoke`.
     pub usages: std::collections::BTreeMap<usize, String>,
     /// Per method (by index in `symbols`), its parameters as JSON: their declared types, an encoded type or `null` for
     /// a type parameter of the method or its type, and their names (`{"types": ["string", null], "names": ["s", "x"]}`).

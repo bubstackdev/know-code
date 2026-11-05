@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 40;
+pub const VERSION: u32 = 41;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -3016,10 +3016,11 @@ impl<'a> Cx<'a> {
         let args =
             node.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.kind() == "argument").count() as u32);
         match f.kind() {
-            // A local or parameter holding a delegate, called: the delegate invoked.
+            // A local or parameter holding a delegate, called: the delegate invoked, through the `Invoke` the compiler
+            // makes for it (`usage: delegate_call`), never a method someone declared with that name.
             "identifier" if !mocked_in_setup(self.src, f) && let Some(t) = self.local(self.text(f)) => {
                 let receiver = self.text(f).to_string();
-                self.add_call("Invoke".to_string(), Some(receiver), Some(t.encode()), f, args);
+                self.with_usage("delegate_call", |cx| cx.add_call("Invoke".to_string(), Some(receiver), Some(t.encode()), f, args));
             }
             "identifier" | "generic_name" => {
                 let name = name_text(self.src, f);
@@ -3507,7 +3508,7 @@ impl<'a> Cx<'a> {
         let (l, col) = (line(at), name_col(self.src, at, &name));
         if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry((from, name.clone(), kind, l, col)) {
             e.insert(self.facts.refs.len());
-            if let Some(u) = self.usage.filter(|_| matches!(kind, RefKind::TypeRef | RefKind::Instantiate)) {
+            if let Some(u) = self.usage.filter(|u| matches!(kind, RefKind::TypeRef | RefKind::Instantiate) || (*u == "delegate_call" && kind == RefKind::Call)) {
                 self.facts.usages.insert(self.facts.refs.len(), u.to_string());
             }
             self.facts.refs.push(Ref { from, name, receiver, receiver_type, kind, line: l, col, args: None });
@@ -7353,6 +7354,12 @@ public class C
         assert_eq!(rt("Invoke", 8), (Some("make".to_string()), named("Repo.Factory")));
         assert_eq!(rt("Get", 8).1, named("Repo.Factory").then(Seg::Call("Invoke".into())));
         assert!(!f.refs.iter().any(|r| r.name == "make"));
+        // Only the delegate called (`make(1)`) is its compiler-made `Invoke`; `make?.Invoke(3)` names the member.
+        let usage = |line: u32| {
+            let i = f.refs.iter().position(|r| r.name == "Invoke" && r.line == line).unwrap();
+            f.usages.get(&i).map(String::as_str)
+        };
+        assert_eq!((usage(6), usage(8)), (Some("delegate_call"), None));
     }
 
     #[test]
