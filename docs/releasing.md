@@ -101,8 +101,8 @@ Repository rulesets on bubstackdev/know-code protect what a release reads:
   Immutable releases also lock each published release's assets.
 
 The release path works within these rules: the release pull request merges with
-`gh pr merge N --squash --match-head-commit SHA`, the maintainer pushes the `v<version>` tag, and `release-gate.yml`
-reads `main`'s push CI for the tagged commit.
+`gh pr merge N --squash --match-head-commit SHA` (SHA in full, 40 characters: GitHub refuses an abbreviated one), the
+maintainer pushes the `v<version>` tag, and `release-gate.yml` reads `main`'s push CI for the tagged commit.
 
 ## Homebrew prerequisites
 
