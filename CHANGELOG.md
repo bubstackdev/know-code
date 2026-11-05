@@ -13,6 +13,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   no longer linked, `exact` links went from 468 to 470 (both right), linked recall from 0.636 to 0.639, and no label
   got worse; C#, Swift, Go, Java and Kotlin are unchanged. TypeScript files are re-extracted on the next query
   (TypeScript extractor 30).
+- The Homebrew formula passes the tap's own checks: its description no longer starts with an article or ends with a
+  full stop, it has a test (`knowcode --version` reports the formula's version), and it no longer repeats the version
+  its URLs carry.
 - A C# local or parameter called (`next(ctx)`) invokes its delegate: the row is a `call` of `Invoke` with
   `usage: delegate_call`, `external_likely`, and no longer binds to a method the repo declares as `Invoke`. A lambda's
   parameter whose type isn't known was linked by name: on autofac, 8 of its 210 delegate calls were listed as calls of
@@ -84,6 +87,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   made-up workspace of 400 repos each mapping the table (300 accessors each), one `context` on the table takes 2.6 G
   instructions instead of 12.0 G (3.7 G instead of 34.8 G on the first query) and answers in 87 KB instead of 2.1 MB;
   at 120 repos, 1.1 G instead of 3.6 G.
+- `review` lists the HTTP routes a diff removes or changes, each with the requests in other repos it served that no
+  route the repo serves now answers: `broken` when the request matched the old route exactly, `possible` when it was
+  linked by name or as one of several. A route whose old path can't be placed is said in `unsettled`. Bus messages and
+  table columns follow.
+
 - `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
   `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
   target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,

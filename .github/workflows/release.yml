@@ -353,6 +353,23 @@ jobs:
       # This is extra complex because you can make your Formula name not match your app name
       # so we need to find releases with a *.rb file, and publish with that filename.
       - name: Commit formula files
+        env:
+          FORMULA_FINISH: |
+            import re, sys
+            path = sys.argv[1]
+            text = open(path).read()
+            m = re.search(r'^  version "([^"]+)"\n', text, re.M)
+            urls = re.findall(r'url "([^"]+)"', text)
+            if m and urls and all(f"/v{m[1]}/" in u for u in urls):
+                text = text[:m.start()] + text[m.end():]
+            if "\n  test do\n" not in text:
+                assert text.endswith("\nend\n"), "unexpected formula layout"
+                text = text[:-len("end\n")] + (
+                    "\n  test do\n"
+                    '    ENV["KNOWCODE_UPDATE_CHECK"] = "0"\n'
+                    '    assert_match version.to_s, shell_output("#{bin}/knowcode --version")\n'
+                    "  end\nend\n")
+            open(path, "w").write(text)
         run: |
           git config --global user.name "${GITHUB_USER}"
           git config --global user.email "${GITHUB_EMAIL}"
@@ -366,6 +383,7 @@ jobs:
             brew update
             # We avoid reformatting user-provided data such as the app description and homepage.
             brew style --except-cops FormulaAudit/Homepage,FormulaAudit/Desc,FormulaAuditStrict --fix "Formula/${filename}" || true
+            python3 -c "$FORMULA_FINISH" "Formula/${filename}"
 
             git add "Formula/${filename}"
             GIT_AUTHOR_NAME="${GITHUB_USER}" GIT_AUTHOR_EMAIL="${GITHUB_EMAIL}" GIT_COMMITTER_NAME="${GITHUB_USER}" GIT_COMMITTER_EMAIL="${GITHUB_EMAIL}" git commit -m "${name} ${version}"

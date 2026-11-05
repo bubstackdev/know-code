@@ -47,4 +47,8 @@
 # extractor and resolver (132,192): 42658096, up 3599920 from integration/0.7 7c71d53's dist build (39058176).
 # integration/0.8 after merging 0.7 at its Kotlin budget: 0.7's 42658096 plus 0.8's rules growth 992688 = 43650784;
 # the size job measures it at the next 0.8 PR.
-43650784
+# Measured by CI's size job on integration/0.8 at 4a77971 (#368's run, macOS aarch64 dist): 44394800, 744016 over the
+# paper budget above. Against 0.7.0's shipped binary (43005344) that is +1389456: about 992688 from the rules engine
+# (ast-grep) as planned, and about 396768 from 0.8's other code (review, contracts, refs by place, C# resolution).
+# User-approved raise to the measured size.
+44394800
