@@ -489,3 +489,33 @@ with the fix; the crashed run's empty listing is not used.
 
 [go/heldout3](go/heldout3/): the labels with their registration sites, the program records, the exclusion tool's
 regions and the listings' digests. The score follows in its own commit, run once against integration/0.8.
+
+### Held-out results, round 3, scored once
+
+Scored once against KnowCode at integration/0.8 `8faf6c3` (the labels' commit), under routes-v1.2, the round's rule,
+with the figure under routes-v1's own rule (no exclusions) beside it. [score.json](go/heldout3/score.json) (v1.2) and
+[score-v1.json](go/heldout3/score-v1.json).
+
+| Framework | Labels (v1.2) | Precision, v1.2 | Recall, v1.2 | Precision, v1 | Pass (≥ 0.95, v1.2) |
+| --- | ---: | --- | --- | --- | --- |
+| gin | 81 | 1.000 (75/75, 0.951–1.000) | 1.000 (81/81, 0.955–1.000) | 0.904 (75/83) | yes |
+| net/http | 71 | 0.934 (71/76, 0.855–0.972) | 1.000 (71/71, 0.949–1.000) | 0.902 (74/82) | no |
+| chi | 95 | 0.073 (15/205, 0.045–0.117) | 0.147 (14/95, 0.090–0.232) | 0.069 (15/217) | no |
+| echo | 156 | – (no routes read) | 0.000 (0/156, 0.000–0.024) | 0.000 (0/1) | no |
+
+Per repository, v1.2: shiori 1.000 / 1.000, gokapi 0.844 (27/32) / 1.000, navidrome 0.014 (2/144) / 0.036 (1/28),
+wakapi 0.213 (13/61) / 0.194 (13/67), ollama 1.000 / 1.000, pgweb 1.000 / 1.000, hatchet – / 0.000 (0/156). The
+`context` check confirmed every sampled route it could sample (50/50 for chi, gin and net/http; echo had none).
+
+Gin passes; the other three fail, each on one cause read after scoring:
+
+- **chi**: both repositories build sub-routers in functions of their own and attach them with `Mount` (`r.Mount("/api",
+  …)`), and KnowCode doesn't carry the mount prefix into those functions: it serves `/link` where the program serves
+  `/api/lastfm/link`. Nearly every false and missed route is this one.
+- **echo**: every one of hatchet's routes is registered by oapi-codegen's generated `RegisterHandlers` wrapper, which
+  KnowCode reads no route from.
+- **net/http**: gokapi's 5 false routes are its setup wizard's, which the program serves only when it has no
+  configuration. The condition is more than one call away from the registrations, so v1.2's one-hop exclusion
+  doesn't cover them.
+
+These repositories have now been read, so a later score on them isn't out of sample.
