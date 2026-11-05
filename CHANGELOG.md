@@ -4,6 +4,10 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- Go HTTP routes on gin are no longer a preview: 0.8's fresh held-out round (routes-v1.2, round 3, scored once) gave gin
+  precision 1.000 (75/75) and recall 1.000 (81/81) over ollama and pgweb. `net/http` (0.934), chi (0.073) and echo (no
+  routes read from oapi-codegen's generated registrations) stay a preview; the round names each one's cause
+  ([eval/routes-v1/README.md](eval/routes-v1/README.md#held-out-results-round-3-scored-once)).
 - TypeScript: react-query's `data` is what the query function returns. A member read on a `useQuery` result whose
   fetcher returns a package's value (`getSystemApi(api).getLogEntries(…)`'s `data`) is the package's, and no longer
   links to the repo's same-named declaration; a fetcher casting to the repo's own model keeps its links. To get there,
