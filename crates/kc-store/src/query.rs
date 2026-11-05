@@ -3094,7 +3094,7 @@ fn by_type_arity<'d>(conn: &Connection, defs: Vec<&'d Def>, written: usize) -> R
         let is_type = TYPE_KINDS.contains(&d.kind.as_str());
         own.push(if is_type { Some(stmt.query_row([d.id], |r| r.get::<_, i64>(0))? as usize) } else { None });
     }
-    if !own.iter().any(|n| *n == Some(written)) {
+    if !own.contains(&Some(written)) {
         return Ok(defs);
     }
     Ok(defs.into_iter().zip(own).filter(|(_, n)| n.is_none_or(|n| n == written)).map(|(d, _)| d).collect())
