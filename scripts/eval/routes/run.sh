@@ -42,12 +42,17 @@ cp -R "$HERE/$FAMILY" "$IO/in/tools"
 grep -E "^$REPO " "$HERE/$FAMILY/programs.txt" | cut -d' ' -f2- > "$IO/in/programs.txt"
 if [ "${SITES:-0}" = 1 ]; then : > "$IO/in/sites"; fi
 
+# A program its own build compiles with build tags (navidrome's Makefile: `-tags netgo,sqlite_fts5`) names them in
+# harness/REPO/tags; every go command in the container, the exclusion tool's loading included, uses them.
+GOFLAGS_IN=-mod=mod
+if [ -f "$HERE/$FAMILY/harness/$REPO/tags" ]; then GOFLAGS_IN="$GOFLAGS_IN -tags=$(tr -d ' \n' < "$HERE/$FAMILY/harness/$REPO/tags")"; fi
+
 NAME=kc-routes-$REPO-$$
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 docker create --name "$NAME" --cpus "$CPUS" --memory "$MEMORY" --network bridge \
   -v "$(cd "$IO/in" && pwd):/in:ro" -v "$(cd "$IO/out" && pwd):/out" \
-  -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod -e CGO_ENABLED=1 \
+  -e GOTOOLCHAIN=local -e "GOFLAGS=$GOFLAGS_IN" -e CGO_ENABLED=1 \
   --entrypoint sleep "$IMAGE" infinity >/dev/null
 docker start "$NAME" >/dev/null
 run() { docker exec "$NAME" bash -euo pipefail -c "$1"; }
@@ -65,6 +70,9 @@ run "mkdir -p /work/src /work/ov && tar -xf /in/src.tar -C /work/src && cp -R /i
 # 2. Off the network: patch, build and list.
 docker network disconnect bridge "$NAME"
 run "! getent hosts github.com >/dev/null" || { echo "run.sh: the container still resolves names" >&2; exit 1; }
+# A program that needs a step of its own before it serves (gokapi creates its first user in a separate run) does it in
+# harness/REPO/setup.sh, here, offline, before the overlay build; it never serves.
+run "if [ -f /work/tools/harness/$REPO/setup.sh ]; then (cd /work/src && sh /work/tools/harness/$REPO/setup.sh) >>$LOG 2>&1; fi"
 run "sh /work/tools/patch.sh >>$LOG 2>&1
      : > /out/routes-$REPO.jsonl
      while read -r mod pkg args; do

@@ -412,3 +412,50 @@ An early return on configuration (`if !enabled { return }` before the registrati
 rule's conditions are the bodies of `if`, `switch` and `select`, so routes registered after such a return stay in, on
 both sides, although the listed program doesn't serve them. It accounts for 8 of vikunja's false routes and gin-vue-admin's 64. The rule is
 not changed for it now.
+
+### Held-out repositories, round 3
+
+Named for 0.8, to decide whether Go routes lose 0.7's "preview" label, after the fixes the second round showed
+(own-type router parameters, cross-package constant prefixes, echo's concatenated joins, struct-field routers).
+Chosen by their structure alone, before any KnowCode answer on them was read, and committed before any was labelled:
+none was used in developing KnowCode or in any earlier set. Open-source licences only. Pinned at their default
+branches' heads on 2026-11-05 ([repos-heldout.txt](../../scripts/eval/routes/repos-heldout.txt)):
+
+| Framework | Repository | Commit | Program |
+| --- | --- | --- | --- |
+| net/http | go-shiori/shiori | `aebb4021` | `shiori server`, with its defaults (SQLite in its data directory); Go 1.22 method patterns on one `ServeMux` |
+| net/http | Forceu/gokapi | `d0b47654` | `cmd/gokapi` over a configuration written as its setup wizard writes one (SQLite, username authentication, no TLS; [prepare.sh](../../scripts/eval/routes/go/harness/gokapi/prepare.sh)), after a run of its own non-interactive deployment mode creating its first user ([setup.sh](../../scripts/eval/routes/go/harness/gokapi/setup.sh)) |
+| chi | navidrome/navidrome | `7c1e68a1` | the program, with its defaults, over an empty music folder ([prepare.sh](../../scripts/eval/routes/go/harness/navidrome/prepare.sh)), built with the tags its Makefile gives (`netgo,sqlite_fts5`, [tags](../../scripts/eval/routes/go/harness/navidrome/tags)) |
+| gin | ollama/ollama | `84dc81db` | a harness test in `server` building the gin engine `ollama serve` mounts at `/` of `http.DefaultServeMux` (`GenerateRoutes`, as the package's own tests do); the program's served mux holds that one pattern, so the dump can't list it ([kc_routes_test.go](../../scripts/eval/routes/go/harness/ollama/kc_routes_test.go)) |
+| gin | sosedoff/pgweb | `e4858a16` | the program, started with no server to connect to |
+| echo | hatchet-dev/hatchet | `79f07e21` | a harness test in `api/v1/server/run` building the echo instance its API server serves (`getCoreEchoService`, as `Run` does), over a server configuration short of the database and other services ([kc_routes_test.go](../../scripts/eval/routes/go/harness/hatchet/kc_routes_test.go)) |
+
+routes-v1 gates no framework with fewer than 50 labelled routes. gin has two repositories for that reason, and so does
+net/http: a trial listing of shiori (made to check that each program lists its routes; no KnowCode answer was read, and
+the labels are made afresh after this section is merged) gave 47 routes, so a second repository was added. Its named
+fallback, openbao/openbao `70d18235` (`bao server -dev`), couldn't be listed under the rule: the handler it serves wraps
+its `ServeMux` in middleware, so the dump can't name the mux it serves and the program lists nothing. Forceu/gokapi
+(AGPL-3.0), chosen by its structure (about 28 registrations on one `ServeMux` its `http.Server` serves directly) and
+approved by the maintainer before anything was labelled, took its place; its trial listing gave 27 routes. Without a
+configuration it serves its setup wizard's routes instead, hence the configuration above. Had it not been listable,
+net/http would have been reported at shiori's count, not gated. A
+framework that still lists fewer than 50 adds its fallback below, after labelling and before any KnowCode answer on
+the round is read, and this section says so: muety/wakapi `aba6a447` (the program, with its SQLite defaults) for chi.
+A repository that can't be listed under the rule is replaced by its fallback, under the same condition.
+
+Two labeller additions, made for this round before any of it was labelled: a program built with build tags by its own
+build names them in its harness directory's `tags` file, which run.sh passes to every go command in the container, the
+exclusion tool's included; and a program needing a step of its own before it serves runs it from the harness
+directory's `setup.sh`, offline, before the listed build (gokapi's first user). Neither changes how any earlier
+repository is labelled: none has either file.
+
+echo's pick was knadh/listmonk (`517b4616`, echo v5); it was replaced, before anything was labelled, by its fallback,
+hatchet: listmonk's `main` package connects to PostgreSQL in its `init` function, so neither the program nor a test in
+that package can start without a database, which the rule doesn't allow.
+
+**The pass rule, stated before labelling:** per framework, pooled precision of at least 0.95 under routes-v1.2, the rule
+the earlier rounds were scored under, written before this round. Recall, the per-repository figures and the macro
+averages are reported with their counts and Wilson intervals, not gated, and the figure under routes-v1's own rule (no
+exclusions) is published beside each, on the same table. Each repository is labelled once, with run.sh and `SITES=1`,
+after this section is merged; the labels are committed before any KnowCode answer on them is read, and KnowCode is
+scored on them once, at the integration/0.8 commit the results name.
