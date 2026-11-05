@@ -4,6 +4,9 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- The Homebrew formula passes the tap's own checks: its description no longer starts with an article or ends with a
+  full stop, it has a test (`knowcode --version` reports the formula's version), and it no longer repeats the version
+  its URLs carry.
 - A C# local or parameter called (`next(ctx)`) invokes its delegate: the row is a `call` of `Invoke` with
   `usage: delegate_call`, `external_likely`, and no longer binds to a method the repo declares as `Invoke`. A lambda's
   parameter whose type isn't known was linked by name: on autofac, 8 of its 210 delegate calls were listed as calls of
