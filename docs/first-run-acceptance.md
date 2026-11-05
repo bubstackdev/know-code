@@ -81,7 +81,10 @@ work), then:
    that settings are unchanged entry by entry except KnowCode's own entries (`enabledPlugins` and
    `extraKnownMarketplaces` entries for `knowcode-local`); no other entry and no whole key may go.
 8. Pauses while the operator follows uninstall's printed removal steps, then checks `knowcode` is gone, no profile
-   line remains, and a new login shell starts without errors it did not print before installation.
+   line remains, and a new login shell starts without errors it did not print before installation. For an unattended
+   run, `--carry-out-removal` carries out the printed steps instead (exactly those profile lines and `rm`/`rmdir`
+   commands, refusing any path outside `$HOME` and changing nothing unless every step checks out); `removal.log`
+   records what it did, and the same checks follow.
 
 Every step is recorded in `report/steps.tsv` and `report/summary.md` under the work directory (default
 `~/knowcode-acceptance`), archived as `clean-machine-report.tar.gz`. The script exits non-zero when a gated step

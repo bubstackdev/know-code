@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Parsing helpers for clean-machine.sh: the machine record, the acceptance manifest, Claude Code's registration
-listings, per-entry settings comparison, session transcripts and the final summary.
+listings, per-entry settings comparison, session transcripts and the final summary, and, for an unattended run,
+uninstall's printed removal steps.
 
-Standard library only (Python 3.9+). Each subcommand reads files and writes JSON; none changes client state.
+Standard library only (Python 3.9+). Each subcommand reads files and writes JSON; none changes client state. The one
+exception is `remove`, which carries out the removal steps `knowcode uninstall` printed, inside one home directory.
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -276,6 +279,66 @@ def find_sessions(projects: str | Path, case_dir: str | Path, prompts: dict, sin
     return found
 
 
+# ------------------------------------------------------------------------------------------------------ removal
+
+PROFILE_LINE = re.compile(r"^\s+(/[^\n]+?):(\d+): (.+)$", re.M)
+STEP_COMMAND = re.compile(r"^\s+\d+\. ((?:rm|rmdir) .+)$", re.M)
+
+
+def removal_plan(text: str) -> tuple[list[tuple[str, int, str]], list[list[str]]]:
+    """Uninstall's printed removal steps: the profile lines to delete (file, 1-based line, text), then the `rm` and
+    `rmdir` commands, each split into its words as a shell would (uninstall quotes every path)."""
+    lines = [(path, int(n), line) for path, n, line in PROFILE_LINE.findall(text)]
+    commands = []
+    for cmdline in STEP_COMMAND.findall(text):
+        for part in cmdline.split(" && "):
+            words = shlex.split(part)
+            if words[0] not in ("rm", "rmdir") or any(w.startswith("-") for w in words[1:]):
+                raise ValueError(f"not a plain rm or rmdir: {part!r}")
+            commands.append(words)
+    return lines, commands
+
+
+def _inside(path: str, home: Path) -> Path:
+    resolved = Path(path).resolve()
+    if home != resolved and home not in resolved.parents:
+        raise ValueError(f"refusing a removal step outside {home}: {path}")
+    return resolved
+
+
+def carry_out_removal(text: str, home: Path) -> list[str]:
+    """Carries out exactly the printed steps, in order, as the operator would: each profile line is deleted only where
+    the file still has that text on that line, then the commands run. Every path must be inside HOME, checked before
+    anything is changed. Returns what was done."""
+    home = home.resolve()
+    lines, commands = removal_plan(text)
+    for path, _, _ in lines:
+        _inside(path, home)
+    for words in commands:
+        for w in words[1:]:
+            _inside(w, home)
+    by_file: dict[str, list[tuple[int, str]]] = {}
+    for path, n, line in lines:
+        by_file.setdefault(path, []).append((n, line))
+    edited = {}
+    for path, wanted in by_file.items():
+        kept = Path(path).read_text().splitlines(keepends=True)
+        for n, line in wanted:
+            if n > len(kept) or kept[n - 1].rstrip("\r\n") != line:
+                raise ValueError(f"{path}:{n} no longer reads {line!r}")
+        for n, _ in sorted(wanted, reverse=True):  # from the bottom, so earlier line numbers still hold
+            del kept[n - 1]
+        edited[path] = "".join(kept)
+    done = []
+    for path, text_after in edited.items():
+        Path(path).write_text(text_after)
+        done += [f"deleted {path}:{n}: {line}" for n, line in by_file[path]]
+    for words in commands:
+        subprocess.run(words, check=True)
+        done.append("ran: " + " ".join(shlex.quote(w) for w in words))
+    return done
+
+
 # -------------------------------------------------------------------------------------------------------- commands
 
 def main(argv: list[str] | None = None) -> int:
@@ -308,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("report_dir")
     p = sub.add_parser("use")
     p.add_argument("report_dir")
+    p = sub.add_parser("remove")
+    p.add_argument("uninstall_log")
+    p.add_argument("--home", required=True)
     args = parser.parse_args(argv)
 
     if args.command == "machine":
@@ -351,6 +417,13 @@ def main(argv: list[str] | None = None) -> int:
         print(summary(Path(args.report_dir)))
     elif args.command == "use":
         print(json.dumps(knowcode_use(Path(args.report_dir)), indent=2))
+    elif args.command == "remove":
+        try:
+            done = carry_out_removal(Path(args.uninstall_log).read_text(), Path(args.home))
+        except (ValueError, OSError, subprocess.CalledProcessError) as e:
+            print(f"removal not carried out: {e}", file=sys.stderr)
+            return 1
+        print("\n".join(done))
     return 0
 
 

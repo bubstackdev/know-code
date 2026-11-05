@@ -30,6 +30,7 @@ QUIET=""
 NOTES=""
 HIDE_LOCAL_BIN=0
 SKIP_SESSIONS=0
+CARRY_OUT_REMOVAL=0
 DRY_RUN=0
 
 usage() {
@@ -47,6 +48,8 @@ Usage: clean-machine.sh --commit SHA [options]
   --notes TEXT        operator notes: emulation, competing work, anything that affects timings
   --hide-local-bin    run the installer with ~/.local/bin removed from PATH, so it must add it to the profile
   --skip-sessions     skip the two client sessions per case (recorded as skipped)
+  --carry-out-removal carry out uninstall's printed removal steps instead of waiting for the operator: exactly the
+                      printed profile lines and rm/rmdir commands, every path inside $HOME (recorded in the report)
   --dry-run           record the machine and run the read-only clean-machine checks, then print the plan
   --self-test         run the tests of the transcript parser and the settings comparison, then exit
 EOF
@@ -64,6 +67,7 @@ while [ $# -gt 0 ]; do
     --notes) NOTES=${2:-}; shift 2 ;;
     --hide-local-bin) HIDE_LOCAL_BIN=1; shift ;;
     --skip-sessions) SKIP_SESSIONS=1; shift ;;
+    --carry-out-removal) CARRY_OUT_REMOVAL=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --self-test) exec python3 -B -m unittest discover -s "$HERE" -p 'test_clean_machine.py' -v ;;
     -h|--help) usage; exit 0 ;;
@@ -424,12 +428,22 @@ else step dirs-removed PASS "no KnowCode cache, configuration or data directory"
 
 heading "Removal steps"
 cat "$REPORT/uninstall.log"
-cat <<'EOF'
+if [ "$CARRY_OUT_REMOVAL" = 1 ]; then
+  # Unattended runs: the steps exactly as printed, by the helper, which refuses any path outside $HOME and changes
+  # nothing unless every step checks out. The checks below then judge the result as they judge an operator's.
+  if helper remove "$REPORT/uninstall.log" --home "$HOME" > "$REPORT/removal.log" 2>&1; then
+    step removal-steps INFO "carried out by --carry-out-removal; see removal.log"
+  else
+    step removal-steps FAIL "not carried out; see removal.log"
+  fi
+else
+  cat <<'EOF'
 
 Follow the removal steps printed above (profile lines first, then the binary, then the installer's directory),
 in another terminal.
 EOF
-ask "Press Enter here when done: "
+  ask "Press Enter here when done: "
+fi
 
 # --------------------------------------------------------------------------------------------------- after
 heading "After removal"
