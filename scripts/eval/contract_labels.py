@@ -267,7 +267,7 @@ def jellyfin_requests(clone, sha, src_dir):
         p = git_ok(clone, 'grep', '-n', '-I', *args, sha, '--', *(paths or [src_dir]))
         for l in p.splitlines():
             _, f, n, text = l.split(':', 3)
-            if f.endswith(('.ts', '.tsx', '.js', '.jsx')) and '/__tests__/' not in f and not re.search(r'\.(test|spec)\.', f):
+            if f.endswith(('.ts', '.tsx', '.js', '.jsx', '.vue')) and '/__tests__/' not in f and not re.search(r'\.(test|spec)\.', f):
                 yield f, int(n), text
     out = []
     sdk_files = {l.split(':', 1)[1] for l in git_ok(clone, 'grep', '-l', '-F', '@jellyfin/sdk', sha, '--', src_dir).splitlines()}
@@ -283,7 +283,7 @@ def jellyfin_requests(clone, sha, src_dir):
     methods = apiclient_methods(library, version) if version else {}
     if methods:
         for f, n, line in grep('-i', '-F', 'apiclient'):
-            for m in re.finditer(r'[Aa]pi[Cc]lient\)?\s*\.\s*(\w+)\s*\(', line):
+            for m in APICLIENT_CALL.finditer(line):
                 for verb, path in methods.get(m.group(1), []):
                     out.append(('wrap', f'{verb} {path}', f, n))
     for f, n, line in grep('-F', 'getUrl('):
@@ -295,6 +295,9 @@ def jellyfin_requests(clone, sha, src_dir):
 
 
 APICLIENT = 'jellyfin-apiclient'
+# A method called on an ApiClient: `ApiClient.m(`, `apiClient.m(`, `(apiClient).m(`, and one a call returns,
+# `ServerConnections.getApiClient(item.ServerId).m(`.
+APICLIENT_CALL = re.compile(r'[Aa]pi[Cc]lient(?:\([^()]*\))?\)?\s*\.\s*(\w+)\s*\(')
 METHOD_DEF = re.compile(r'^    (?:async\s+)?(\w+)\s*\(([^)]*)\)\s*\{', re.M)
 AJAX_TYPE = re.compile(r"""type:\s*['"](GET|POST|PUT|DELETE|PATCH)['"]""")
 
@@ -460,6 +463,14 @@ def relabel(work, pair, survey_rows):
     return out
 
 
+def set_rows(surveys):
+    """The set's rows from every pair's survey: each route a client's survey found gone in a commit the set holds (one
+    with a labelled consumer in any client), in a fixed order."""
+    rows = [r for rs in surveys for r in rs]
+    in_set = {r['commit'] for r in rows if r['consumers']}
+    return sorted((r for r in rows if r['commit'] in in_set), key=lambda r: (r['pair'], r['commit'], r['verb'], r['path']))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -469,7 +480,15 @@ def main():
     s.add_argument('--out')
     s.add_argument('--limit', type=int, help='only the first LIMIT server commits (newest first): for checks')
     s.add_argument('--from', dest='source', help="for a pair sharing a server (same_server_as): that pair's survey, reused")
+    s = sub.add_parser('rows', help="the set's rows from every pair's survey (eval/contract-v1/README.md#the-rows)")
+    s.add_argument('surveys', nargs='+')
+    s.add_argument('--out', required=True)
     args = ap.parse_args()
+    if args.cmd == 'rows':
+        rows = set_rows([json.loads(l) for l in Path(f).read_text().splitlines() if l.strip()] for f in args.surveys)
+        Path(args.out).write_text(''.join(json.dumps(r, sort_keys=True) + '\n' for r in rows))
+        print(f"{len(rows)} rows in {len({r['commit'] for r in rows})} commits")
+        return
     if args.source:
         rows = relabel(args.work, args.pair, [json.loads(l) for l in Path(args.source).read_text().splitlines() if l.strip()])
     else:

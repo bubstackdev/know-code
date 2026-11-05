@@ -59,6 +59,13 @@ class RequestsTest(unittest.TestCase):
         got = cl.consumers(('GET', 'api/items/{}'), 'GetItem', reqs)
         self.assertEqual([(c['file'], c['by']) for c in got], [('a.ts', 'sdk'), ('b.js', 'url')])
 
+    def test_an_apiclient_method_is_called_on_the_client_or_on_one_a_call_returns(self):
+        lines = ["ApiClient.uninstallPlugin(id).then(f);", "apiClient.requestSyncPlayStart();",
+                 "window.connectionManager.getApiClient(session.ServerId).sendPlayStateCommand(session.Id, 'Stop');",
+                 "ServerConnections.currentApiClient().getItem(userId, id);", "const apiClient = getClient();"]
+        got = [m.group(1) for l in lines for m in cl.APICLIENT_CALL.finditer(l)]
+        self.assertEqual(got, ['uninstallPlugin', 'requestSyncPlayStart', 'sendPlayStateCommand', 'getItem'])
+
 
 class SendTest(unittest.TestCase):
     def test_a_send_call_over_several_lines_is_its_verb_and_path(self):
