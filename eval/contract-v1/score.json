@@ -1,0 +1,79 @@
+{
+ "errors": {},
+ "gate": 0.95,
+ "knowcode": "knowcode 0.8.0-dev",
+ "line_slack": 4,
+ "passed": false,
+ "per_pair": {
+  "bitwarden": {
+   "broken": 26,
+   "broken_right": 24,
+   "commits": 23,
+   "labels": 24,
+   "labels_own": 24,
+   "matched": 24,
+   "matched_own": 24,
+   "possible": 0,
+   "possible_right": 0,
+   "precision": 0.9230769230769231,
+   "recall": 1.0,
+   "recall_own": 1.0
+  },
+  "bitwarden-dc": {
+   "broken": 8,
+   "broken_right": 8,
+   "commits": 23,
+   "labels": 8,
+   "labels_own": 8,
+   "matched": 8,
+   "matched_own": 8,
+   "possible": 0,
+   "possible_right": 0,
+   "precision": 1.0,
+   "recall": 1.0,
+   "recall_own": 1.0
+  },
+  "jellyfin": {
+   "broken": 3,
+   "broken_right": 3,
+   "commits": 10,
+   "labels": 26,
+   "labels_own": 21,
+   "matched": 3,
+   "matched_own": 3,
+   "possible": 0,
+   "possible_right": 0,
+   "precision": 1.0,
+   "recall": 0.11538461538461539,
+   "recall_own": 0.14285714285714285
+  },
+  "jellyfin-vue": {
+   "broken": 0,
+   "broken_right": 0,
+   "commits": 10,
+   "labels": 0,
+   "labels_own": 0,
+   "matched": 0,
+   "matched_own": 0,
+   "possible": 0,
+   "possible_right": 0,
+   "precision": null,
+   "recall": null,
+   "recall_own": null
+  }
+ },
+ "pooled": {
+  "broken": 37,
+  "broken_right": 35,
+  "commits": 66,
+  "labels": 58,
+  "labels_own": 53,
+  "matched": 35,
+  "matched_own": 35,
+  "possible": 0,
+  "possible_right": 0,
+  "precision": 0.9459459459459459,
+  "recall": 0.603448275862069,
+  "recall_own": 0.660377358490566
+ }
+}
