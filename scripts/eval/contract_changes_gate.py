@@ -106,6 +106,14 @@ def passed(pooled, errors):
     return not errors and pooled['precision'] is not None and pooled['precision'] >= GATE
 
 
+def client_commit(rows):
+    """The client commit a (pair, commit)'s rows were labelled at: the client's last commit before the server commit
+    (contract_labels.py). Empty when the client had no commit yet, as jellyfin-vue had none before some of jellyfin's
+    server commits: then there is no client to check out, and the server is reviewed alone, where none of that client's
+    consumers can be reported."""
+    return next((r['client_commit'] for r in rows if r.get('client_commit')), '')
+
+
 def checkout(clone, path, commit):
     cl.git(clone, 'worktree', 'add', '--quiet', '--detach', str(path), commit)
 
@@ -121,12 +129,14 @@ def answer(binary, work, pair, commit, rows):
     clones = work/'clones'
     try:
         checkout(clones/p['server'], server, commit)
-        checkout(clones/p['client'], client, rows[0]['client_commit'])
+        at = client_commit(rows)
+        if at:
+            checkout(clones/p['client'], client, at)
         env = replay_gate.build_env(base/'kc')
         cfg = Path(env['KNOWCODE_CONFIG_DIR'])
         cfg.mkdir(parents=True, exist_ok=True)
         (cfg/'config.toml').write_text(f'[workspace]\nroots = [{json.dumps(str(ws))}]\nmax_depth = 1\n')
-        for tree in (server, client):
+        for tree in (t for t in (server, client) if t.exists()):
             ix = subprocess.run([str(binary), 'index', str(tree)], env=env, cwd=tree, capture_output=True, text=True)
             if ix.returncode:
                 return {}, f'index {tree.name}: ' + (ix.stderr or ix.stdout)[:500]
