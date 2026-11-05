@@ -467,3 +467,39 @@ fn a_type_reference_names_the_type_with_as_many_type_parameters() {
     assert_eq!(types_at(conn, 6), [("ambiguous", vec![3, 4])]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const PIPELINE: &str = r#"namespace App;
+
+public interface IPipeline { void Invoke(int step); }
+public delegate void Step(int n);
+public class Runner
+{
+    public void Run(IPipeline pipeline, System.Action<int> next, Step step, Builder b)
+    {
+        next(1);
+        step(2);
+        b.Use((ctx, inner) => inner(ctx));
+        pipeline.Invoke(3);
+    }
+}
+"#;
+
+/// Calling a local or parameter (`next(1)`) invokes the delegate it holds: the delegate's own `Invoke`, which the
+/// compiler makes and no source declares, never a method someone named `Invoke`, whether the delegate's type is a
+/// framework one, the repo's, or not known (a lambda's parameter). An `Invoke` called on a receiver is resolved as
+/// any member is.
+#[test]
+fn a_delegate_called_is_no_call_of_a_method_named_invoke() {
+    let root = scratch("delegate-call");
+    write(&root, "src/App/Runner.cs", PIPELINE);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    let (refs, _) = query::refs(conn, "Invoke", &["call"], 50).unwrap();
+    let at = |line: u32| refs.iter().filter(|r| r.line == line).map(|r| (r.confidence, lines(r))).collect::<Vec<_>>();
+    assert_eq!(at(9), [("external_likely", vec![])]);
+    assert_eq!(at(10), [("external_likely", vec![])]);
+    assert_eq!(at(11), [("external_likely", vec![])]);
+    assert_eq!(at(12), [("exact", vec![3])]);
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -76,7 +76,9 @@ repos that depend on this one. Long lists come most certain first, then by how c
 
 In C#, a type named only as a generic argument (`AddBus<IOrders>()`, `Get<IOrders>()`, `AddScoped<IFoo, Foo>()`), in
 `typeof`, `nameof` or a generic constraint (`where T : IFoo`) is a `type_ref` with `usage` saying so (`type_argument`,
-`typeof`, `nameof`, `constraint`); a target-typed `new(…)` is an `instantiate` with `usage: target_typed`. A file sees
+`typeof`, `nameof`, `constraint`); a target-typed `new(…)` is an `instantiate` with `usage: target_typed`. A local or
+parameter called (`next(ctx)`) is a `call` of `Invoke` with `usage: delegate_call`: its delegate's own `Invoke`,
+`external_likely`, never a method declared `Invoke`. A file sees
 its own `using`s and what its project imports into every file: `global using` directives (GlobalUsings.cs), the
 .csproj's `<Using>` items, and the SDK's implicit usings (Microsoft.NET.Sdk, .Web, .Worker, MSTest.Sdk,
 Aspire.AppHost.Sdk) when ImplicitUsings is enabled; where those can't be read (a property sets ImplicitUsings, another SDK) nothing is ruled out by them.
