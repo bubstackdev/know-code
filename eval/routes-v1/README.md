@@ -459,3 +459,33 @@ averages are reported with their counts and Wilson intervals, not gated, and the
 exclusions) is published beside each, on the same table. Each repository is labelled once, with run.sh and `SITES=1`,
 after this section is merged; the labels are committed before any KnowCode answer on them is read, and KnowCode is
 scored on them once, at the integration/0.8 commit the results name.
+
+### Held-out labels, round 3
+
+Labelled once in the container ([run.sh](../../scripts/eval/routes/run.sh) with `SITES=1`, from integration/0.8
+`97b689c` with the fix below), and committed before any KnowCode answer on the round was read. Each repository's one
+program listed its routes:
+
+| Framework | Repository | Labels |
+| --- | --- | ---: |
+| net/http | go-shiori/shiori | 47 |
+| net/http | Forceu/gokapi | 27 |
+| chi | navidrome/navidrome | 39 |
+| chi | muety/wakapi | 67 |
+| gin | ollama/ollama | 49 |
+| gin | sosedoff/pgweb | 32 |
+| echo | hatchet-dev/hatchet | 158 |
+
+navidrome's 50 listing rows merged to 39 routes, under 50, so chi's named fallback, muety/wakapi `aba6a447` (the
+program with its SQLite defaults), was added and labelled before any answer was read, as the section above says. Every
+framework now has at least 50 labels: net/http 74, chi 106, gin 81, echo 158.
+
+One labeller fix was made during labelling. navidrome builds its routers on several goroutines at once, under an
+errgroup, and the registration-site hook's map ([sites.sh](../../scripts/eval/routes/go/sites.sh)) then stopped the
+program with Go's "concurrent map writes", so its first labelling listed nothing. The trial listing hadn't recorded
+sites, so it never ran the hook. The map's writes are now under a mutex. For a program that registers its routes on one
+goroutine, as every earlier repository does, the hook records exactly what it did before. navidrome was labelled again
+with the fix; the crashed run's empty listing is not used.
+
+[go/heldout3](go/heldout3/): the labels with their registration sites, the program records, the exclusion tool's
+regions and the listings' digests. The score follows in its own commit, run once against integration/0.8.
