@@ -170,7 +170,7 @@ split three ways, each said by the answer itself:
 - `items`: the rows bound to that declaration, either to it alone or ambiguously with it among the candidates
   (`confidence: ambiguous`). `total`, `by_confidence`, `callers` and `cursor` count these alone.
 - `elsewhere`: the rows the answer binds only to another declaration of the name (another overload, a same-named
-  member of another type), counted per declaration as `{qualified, file, line, rows}`, or `{among: [...], rows}` for
+  member of another type, a C# declaration with the same qualified name in another namespace or project), counted per declaration as `{qualified, file, line, rows}`, or `{among: [...], rows}` for
   an ambiguity between others. `elsewhere_note` says how many and how to list them (`refs` on that declaration's
   place). Nothing about the declaration asked for is missing, so this isn't an `incomplete` entry.
 - `unplaced`: uses of the name the answer can't place (unresolved, or ambiguous with no candidate listed), as rows,

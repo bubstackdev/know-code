@@ -103,3 +103,55 @@ fn a_placed_members_uses_on_unknown_receivers_are_unplaced() {
     assert!(!unplaced.iter().any(|(f, _)| f == "src/Packer.cs"), "{env}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Two test projects each declare a `Util.Tracker` (one qualified name, two namespaces, two projects). Asked by the
+/// place of one, the other's uses are another declaration's rows (`elsewhere`), not its own: a qualified name carries
+/// no namespace, so it alone doesn't make two declarations one.
+#[test]
+fn a_placed_declarations_twin_in_another_namespace_is_elsewhere() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target-twins");
+    let tracker = |ns: &str| format!("namespace {ns};\npublic class Tracker\n{{\n    public bool IsDone {{ get; set; }}\n}}\n");
+    let user = |ns: &str| format!("namespace {ns};\npublic class Check\n{{\n    public bool Run(Tracker t)\n    {{\n        return t.IsDone;\n    }}\n}}\n");
+    let (a, b, ua, ub) = (tracker("Spec.Util"), tracker("Unit.Util"), user("Spec.Util"), user("Unit.Util"));
+    let files: Vec<(&str, &str)> = vec![
+        ("spec/Spec.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("spec/Tracker.cs", &a),
+        ("spec/Check.cs", &ua),
+        ("unit/Unit.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("unit/Tracker.cs", &b),
+        ("unit/Check.cs", &ub),
+    ];
+    let root = repo(&base, "twins", &files);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    for (place, own, other) in [("spec/Tracker.cs:4", "spec/Check.cs", "unit/Tracker.cs"), ("unit/Tracker.cs:4", "unit/Check.cs", "spec/Tracker.cs")] {
+        let env = ops::refs(place, &[], 50, &scope).unwrap().env;
+        let items: Vec<&str> = env["items"].as_array().unwrap_or_else(|| panic!("{env}")).iter().filter_map(|r| r["file"].as_str()).collect();
+        assert_eq!(items, [own], "{env}");
+        let elsewhere = env["elsewhere"].as_array().unwrap_or_else(|| panic!("{env}"));
+        assert_eq!((elsewhere.len(), elsewhere[0]["file"].as_str()), (1, Some(other)), "{env}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A partial type's parts are one declaration: asked by the place of one part, a use bound to another part is its own.
+#[test]
+fn a_placed_partial_types_other_parts_rows_are_its_own() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target-partial");
+    let files: &[(&str, &str)] = &[
+        ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("src/Order.cs", "namespace Shop;\npublic partial class Order\n{\n    public int Id { get; set; }\n}\n"),
+        ("src/Order.Lines.cs", "namespace Shop;\npublic partial class Order\n{\n    public int Count { get; set; }\n}\n"),
+        ("src/Desk.cs", "namespace Shop;\npublic class Desk\n{\n    public Order Open(Order o)\n    {\n        return o;\n    }\n}\n"),
+    ];
+    let root = repo(&base, "shop", files);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    for place in ["src/Order.cs:2", "src/Order.Lines.cs:2"] {
+        let env = ops::refs(place, &[], 50, &scope).unwrap().env;
+        // The return type and the parameter's.
+        assert_eq!(lines(&env, "items"), [4, 4], "{place}: {env}");
+        assert!(env.get("elsewhere").is_none(), "{place}: {env}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

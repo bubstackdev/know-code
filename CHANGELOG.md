@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `refs` asked by a C# declaration's place no longer lists, as that declaration's own, the uses of another
+  declaration with the same qualified name in another namespace or project (two test projects' `DisposeTracker.IsDisposed`);
+  they are counted under that declaration in `elsewhere`. A partial type's parts still count as one. On compare-v1's
+  106 C# refs questions, precision went from 0.938 (2543/2710) to 0.951 (2543/2674), with recall unchanged at 0.889
+  (2543/2861).
 - A cursor is no longer refused as stale because some other repo the answer read re-indexed in the background: only
   a repo holding rows of the list moving on (or the rows delivered changing) refuses it. In a workspace that is still
   indexing, paging through `impact`, `refs` or a context's callers used to fail on the first `more` whenever any repo
