@@ -66,5 +66,12 @@ class RowsTest(unittest.TestCase):
                 g.read_rows(rows, readme)
 
 
+
+class ClientCommitTest(unittest.TestCase):
+    def test_a_commit_older_than_its_client_has_no_client_to_check_out(self):
+        self.assertEqual(g.client_commit([dict(client_commit='')]), '')
+        self.assertEqual(g.client_commit([dict(client_commit=''), dict(client_commit='abc')]), 'abc')
+
+
 if __name__ == '__main__':
     unittest.main()
