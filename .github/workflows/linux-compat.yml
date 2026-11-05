@@ -1,0 +1,46 @@
+# The release workflow's portability gate (dist-workspace.toml's global-artifacts-jobs): the Linux archives it just
+# built need no glibc newer than 2.28, and each binary starts, indexes and answers on the oldest supported
+# distributions (scripts/check-linux-compat.sh). The release job `host` waits for this, so a binary that would fail
+# on RHEL 8-family, Debian 10 or Ubuntu 20.04 is never published. Only the release workflow calls this one.
+# Actions are GitHub-owned and pinned to commit SHAs, as the repository's Actions policy requires.
+name: linux-compat
+
+on:
+  workflow_call:
+    inputs:
+      # dist passes its plan to every custom job; the targets here are fixed by dist-workspace.toml.
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux-compat:
+    name: linux-compat (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    # The distribution containers run natively, so each architecture runs on its own runner.
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Fetch the built archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v5
+        with:
+          name: artifacts-build-local-${{ matrix.target }}
+          path: target/distrib/
+      - name: No glibc symbol newer than 2.28
+        run: python3 scripts/check-glibc.py --max 2.28 "target/distrib/knowcode-${{ matrix.target }}.tar.gz"
+      - name: Start, index and answer on the oldest supported distributions
+        run: |
+          tar xzf "target/distrib/knowcode-${{ matrix.target }}.tar.gz" -C "$RUNNER_TEMP"
+          bash scripts/check-linux-compat.sh "$RUNNER_TEMP/knowcode-${{ matrix.target }}/knowcode"

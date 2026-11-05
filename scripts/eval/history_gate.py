@@ -44,6 +44,8 @@ import sys
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/: kc_env
+import kc_env  # noqa: E402
 import history_labels  # noqa: E402
 
 QUESTIONS = ROOT/'eval/history-v1/questions.jsonl'
@@ -286,9 +288,7 @@ def run(a):
                              'check the clone is at its pin and the git version')
         labels[q['id']] = lab
     base = work/'knowcode'
-    env = dict(os.environ, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'),
-               KNOWCODE_CONFIG_DIR=str(base/'config'), KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
-    (base/'home').mkdir(parents=True, exist_ok=True)
+    env = kc_env.knowcode_env(base)
     binary = Path(a.knowcode).resolve()
     subprocess.run([str(binary), 'index', *sorted(str(clones/n) for n in {q['repo'] for q in questions})], env=env,
                    check=True, capture_output=True)

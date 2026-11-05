@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 24;
+pub const VERSION: u32 = 29;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -181,6 +181,30 @@ const EAGER_CALLS: &[&str] = &[
     "rxResource", "createEffect",
 ];
 
+/// The lines of the innermost function body holding the declaration at `outer` (an arrow function's or a function
+/// expression's too, such as a test's `it(() => …)` callback): where alone its name can be used. `None` at module,
+/// namespace and type level, and for a function's parameters.
+fn body_scope(outer: Node) -> Option<(u32, u32)> {
+    let mut at = outer.parent();
+    while let Some(p) = at {
+        if matches!(
+            p.kind(),
+            "arrow_function" | "function_expression" | "function" | "function_declaration" | "generator_function" | "generator_function_declaration" | "method_definition"
+        ) {
+            // Only a declaration in the body: a constructor's parameter property (`constructor(private store: Store)`)
+            // is its class's member.
+            if let Some(body) = p.child_by_field_name("body")
+                && body.start_byte() <= outer.start_byte()
+                && outer.end_byte() <= body.end_byte()
+            {
+                return Some((line(body), body.end_position().row as u32 + 1));
+            }
+        }
+        at = p.parent();
+    }
+    None
+}
+
 /// The namespaces enclosing `node`, outermost first, joined by `.` (`Outer.Inner`); `None` at a module's top.
 fn namespaces_around(src: &str, node: Node) -> Option<String> {
     let mut names = Vec::new();
@@ -260,6 +284,10 @@ impl<'a> Cx<'a> {
             // (`Shapes.Circle`) is found among the declarations it spans. Its members keep their own containers: a
             // namespace scopes names, it is no type. `declare module "pkg"` names a module, not a namespace.
             "internal_module" | "module" => {
+                if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() == "string") {
+                    let module = self.text(n).trim_matches(['"', '\'', '`']).to_string();
+                    self.facts.augments.push(Import { module, line: line(node) });
+                }
                 if let Some(n) = node.child_by_field_name("name").filter(|n| n.kind() != "string") {
                     let container = namespaces_around(self.src, node);
                     self.push(node, outer, self.text(n).to_string(), SymbolKind::Module, container, None);
@@ -285,10 +313,20 @@ impl<'a> Cx<'a> {
                 let Some(n) = node.child_by_field_name("name") else { return };
                 let name = self.text(n).to_string();
                 let value = node.child_by_field_name("value");
-                let sym = self.push(node, outer, name, SymbolKind::Typealias, self.enclosing_type(), value);
+                let sym = self.push(node, outer, name.clone(), SymbolKind::Typealias, self.enclosing_type(), value);
                 self.facts.symbols[sym].type_name = value.and_then(|v| type_expr(self.src, v)).map(|t| t.encode());
                 if let Some(v) = value {
-                    self.in_scope(sym, None, false, HashMap::new(), |cx| cx.visit(v));
+                    // `type TaskProps = { task: TaskInfo }`: its properties are members of the alias, as an interface's
+                    // are, so a value of the type (`({ task }: TaskProps)`) has a known `task`.
+                    if v.kind() == "object_type" {
+                        self.in_scope(sym, Some(name.clone()), false, HashMap::new(), |cx| {
+                            for m in children(v) {
+                                cx.member(m, &name);
+                            }
+                        });
+                    } else {
+                        self.in_scope(sym, None, false, HashMap::new(), |cx| cx.visit(v));
+                    }
                 }
             }
             "function_declaration" | "generator_function_declaration" | "function_signature" => {
@@ -368,6 +406,18 @@ impl<'a> Cx<'a> {
                 }
                 if let Some(o) = node.child_by_field_name("object") {
                     self.visit(o);
+                }
+            }
+            // `<Page …>`, `</Page>`, `<Dialog.Title />`: rendering a component calls it, so its tag is a call (a member
+            // of its namespace for `Ns.Comp`), as the compiler binds it, and not the type reference a capitalised name
+            // used as a value is. Attributes and children are visited as before.
+            "jsx_opening_element" | "jsx_self_closing_element" | "jsx_closing_element" => {
+                let tag = node.child_by_field_name("name");
+                if let Some(t) = tag {
+                    self.jsx_tag(t);
+                }
+                for c in children(node).filter(|c| Some(c.id()) != tag.map(|t| t.id())) {
+                    self.visit(c);
                 }
             }
             // A class used as a value (`component: X`, `open(X)`, `declarations: [X]`): a type reference.
@@ -602,6 +652,7 @@ impl<'a> Cx<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: body_scope(outer),
         });
         self.facts.symbols.len() - 1
     }
@@ -908,6 +959,15 @@ impl<'a> Cx<'a> {
         let mut untyped = HashSet::new();
         if let Some(params) = f.child_by_field_name("parameters") {
             for p in children(params) {
+                // `({ task, item: it }: TaskProps)`: each name bound is the annotated type's property of its key.
+                if let Some(pattern) = p.child_by_field_name("pattern").filter(|n| n.kind() == "object_pattern")
+                    && let Some(t) = p.child_by_field_name("type").and_then(|t| type_expr(self.src, t))
+                {
+                    for (key, local) in destructured(self.src, pattern) {
+                        locals.insert(local, TypeExpr::root(PathRoot::Expr(Box::new(t.clone()))).then(Seg::Member(key)));
+                    }
+                    continue;
+                }
                 let Some(n) = p.child_by_field_name("pattern").or_else(|| p.child_by_field_name("name")).filter(|n| n.kind() == "identifier")
                 else {
                     continue;
@@ -1031,7 +1091,7 @@ impl<'a> Cx<'a> {
                     if let Some(val) = string_literal(self.src, v) {
                         self.facts.constants.push(StringConst { qualified: name.clone(), value: val, line: line(d) });
                     } else if matches!(v.kind(), "template_string" | "member_expression" | "binary_expression")
-                        && let Some(val) = urls::encode(&self.url_pieces(v), true)
+                        && let Some(val) = urls::encode(urls::without_glued_base(&self.url_pieces(v)), true)
                     {
                         // `const API = environment.apiUrl`, `` const BASE = `${environment.apiUrl}/v2` ``: a URL
                         // prefix, encoded as a request path is.
@@ -1241,6 +1301,22 @@ impl<'a> Cx<'a> {
         }
     }
 
+    /// A JSX tag's name: a component (`Page`) is called, a namespaced one (`Dialog.Title`) is a member of its
+    /// namespace; an intrinsic element (`div`) or a namespaced name (`svg:rect`) names no declaration.
+    fn jsx_tag(&mut self, tag: Node) {
+        match tag.kind() {
+            "identifier" if starts_upper(self.text(tag)) => self.add(self.text(tag).to_string(), None, None, RefKind::Call, tag),
+            "member_expression" => {
+                let (Some(o), Some(p)) = (tag.child_by_field_name("object"), tag.child_by_field_name("property")) else { return };
+                let receiver = Some(collapse(self.text(o), RECEIVER_CAP));
+                let rt = self.expr_type(o).map(|t| t.encode());
+                self.add(self.text(p).to_string(), receiver, rt, RefKind::Member, p);
+                self.visit(o);
+            }
+            _ => {}
+        }
+    }
+
     fn add(&mut self, name: String, receiver: Option<String>, receiver_type: Option<String>, kind: RefKind, at: Node) {
         let from = self.current();
         let (l, col) = (line(at), name_col(self.src, at, &name));
@@ -1325,15 +1401,17 @@ impl Cx<'_> {
         if !surely && !pieces.iter().any(named) {
             return self.operation_call(node, receiver.unwrap_or(f), &method);
         }
-        let Some(path) = urls::encode(&pieces, true) else {
+        let Some(path) = urls::encode(urls::without_glued_base(&pieces), true) else {
             // A request whose URL is only known at run time: kept with no path, so an answer can say it wasn't read.
             if surely {
                 self.facts.http_routes.push(HttpRoute { sym, side: "client", verb, path: String::new(), path_ref: None, service: None, service_ref: None, line: line(node) });
             }
             return;
         };
-        // A bare word (`api.get('orders')`) is a path only from a client that is surely HTTP.
-        let bare = !path.contains(['/', '?', '{']) && surely && path.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        // A bare word (`api.get('orders')`, or `message?since=…` once a glued base is dropped) is a path only from a
+        // client that is surely HTTP.
+        let word = path.split('?').next().unwrap_or_default();
+        let bare = !word.is_empty() && !word.contains(['/', '{']) && surely && word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
         if urls::looks_like_path(&path) || bare {
             // A URL read from a local: the local and its line, after the path (`{~url@44}`), for the query to name.
             let path = match local {
@@ -1475,7 +1553,7 @@ impl Cx<'_> {
                     return out.push(Piece::Unknown);
                 };
                 let (pa, pb) = (self.url_pieces(a), self.url_pieces(b));
-                let path = |p: &[Piece]| urls::encode(p, true).map(|u| u.split('?').next().unwrap_or_default().to_string());
+                let path = |p: &[Piece]| urls::encode(urls::without_glued_base(p), true).map(|u| u.split('?').next().unwrap_or_default().to_string());
                 match (path(&pa), path(&pb)) {
                     (Some(x), Some(y)) if x == y => {
                         // The pieces up to the query.
@@ -2254,6 +2332,37 @@ fn base_type_name(src: &str, t: Node) -> String {
     }
 }
 
+/// The names an object pattern binds, each with the property it takes (`{ task, item: it }`: `task` from `task`, `it`
+/// from `item`). A nested pattern, a rest element or a computed key binds nothing here.
+fn destructured(src: &str, pattern: Node) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for c in children(pattern) {
+        match c.kind() {
+            "shorthand_property_identifier_pattern" => {
+                let name = src[c.byte_range()].to_string();
+                out.push((name.clone(), name));
+            }
+            // `{ task = fallback }`: the left side names the property.
+            "object_assignment_pattern" => {
+                if let Some(l) = c.child_by_field_name("left").filter(|l| l.kind() == "shorthand_property_identifier_pattern") {
+                    let name = src[l.byte_range()].to_string();
+                    out.push((name.clone(), name));
+                }
+            }
+            "pair_pattern" => {
+                if let (Some(k), Some(v)) = (c.child_by_field_name("key"), c.child_by_field_name("value"))
+                    && k.kind() == "property_identifier"
+                    && v.kind() == "identifier"
+                {
+                    out.push((src[k.byte_range()].to_string(), src[v.byte_range()].to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn type_expr(src: &str, t: Node) -> Option<TypeExpr> {
     match t.kind() {
         "type_annotation" | "parenthesized_type" | "readonly_type" => children(t).find(|c| c.is_named()).and_then(|c| type_expr(src, c)),
@@ -2823,6 +2932,38 @@ export default function (view, params, tabContent) {
     /// fetch, axios (and instances), jQuery, superagent-style wrappers and URL builders, with composed URLs; a request
     /// whose URL is known only at run time is kept without a path; calls to generated API clients are operations.
     #[test]
+    fn a_value_glued_to_the_first_segment_is_the_base_address() {
+        // gotify's web client: a base read at run time (`config.get('url')`, ending in `/`) glued to the path.
+        let f = extract(
+            r#"
+const BASE = `${apiRoot()}api/v2`;
+export class AppStore {
+  remove(id: number) { return axios.delete(`${config.get('url')}application/${id}`); }
+  create() { return axios.post(`${config.get('url')}application`, {}); }
+  since(since: number) { return axios.get(`${config.get('url')}message?since=${since}`); }
+  health() { return axios.get(`${config.get('url')}/health`); }
+  viaConst() { return axios.get(`${BASE}/users`); }
+}
+"#,
+            false,
+        );
+        let routes: Vec<(&str, &str, &str)> =
+            f.http_routes.iter().map(|r| (f.symbols[r.sym.unwrap()].name.as_str(), r.verb.as_str(), r.path.as_str())).collect();
+        assert_eq!(
+            routes,
+            [
+                ("remove", "DELETE", "application/{}"),
+                ("create", "POST", "application"),
+                ("since", "GET", "message?since={}"),
+                // A value before a `/` computed by a call may build part of the path: a parameter, as before.
+                ("health", "GET", "{}/health"),
+                ("viaConst", "GET", "{=BASE}/users"),
+            ]
+        );
+        assert!(f.constants.iter().any(|c| c.qualified == "BASE" && c.value == "api/v2"), "{:?}", f.constants);
+    }
+
+    #[test]
     fn fetch_axios_jquery_wrappers_and_generated_clients_are_requests() {
         let f = extract(
             r#"
@@ -2971,6 +3112,22 @@ function direct(id) {
         assert_eq!(f.parse_errors, 0);
         assert!(f.symbols.iter().any(|s| s.name == "Cart" && s.kind == SymbolKind::Function));
         assert!(f.refs.iter().any(|r| r.name == "load" && r.kind == RefKind::Call));
+    }
+
+    #[test]
+    fn a_jsx_tag_calls_its_component() {
+        let src = "export function Shelf({ items }: Props) {\n    return <Panel title={<Badge />}>\n        <Dialog.Title>{items.length}</Dialog.Title>\n        <div>{render(items)}</div>\n    </Panel>;\n}\n";
+        let f = extract(src, true);
+        assert_eq!(f.parse_errors, 0);
+        let got: Vec<(&str, RefKind, Option<&str>, u32)> =
+            f.refs.iter().map(|r| (r.name.as_str(), r.kind, r.receiver.as_deref(), r.line)).collect();
+        // The opening and closing tags each call `Panel`, as the compiler binds both; `div` names nothing.
+        for want in [("Panel", RefKind::Call, None, 2), ("Badge", RefKind::Call, None, 2), ("Panel", RefKind::Call, None, 5),
+            ("Title", RefKind::Member, Some("Dialog"), 3), ("render", RefKind::Call, None, 4)]
+        {
+            assert!(got.contains(&want), "{want:?} in {got:?}");
+        }
+        assert!(!got.iter().any(|r| r.0 == "div" || (r.0 == "Panel" && r.1 == RefKind::TypeRef)), "{got:?}");
     }
 
     #[test]

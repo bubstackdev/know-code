@@ -1214,7 +1214,10 @@ fn entity_property_writes(conn: &Connection, tables: &[Table], accessors: &[i64]
         return Ok(out);
     }
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
-    for h in query::refs_named(conn, &names)? {
+    // Only assignments made in the accessors count: kept as read, so the repo's every use of a common property name
+    // (`Id`, `Name`) is never resolved (on bitwarden/server, 120 MB of references held at once).
+    let keep = |h: &RefHit| h.assigns && h.from.as_ref().is_some_and(|f| mine.contains(&f.id));
+    for h in query::refs_named_where(conn, &names, keep)? {
         let Some(from) = &h.from else { continue };
         if !h.assigns || !mine.contains(&from.id) || !matches!(h.confidence, "exact" | "unique_name") {
             continue;

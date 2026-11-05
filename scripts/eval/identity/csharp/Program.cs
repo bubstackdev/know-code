@@ -13,6 +13,8 @@ using Microsoft.CodeAnalysis.MSBuild;
 static class Labeller
 {
     static string repo = "", src = "";
+    // compare-v1 (eval/compare-v1/README.md) adds `in` to each reference row; identity-v1's output is unchanged without it.
+    static readonly bool enclosing = Environment.GetEnvironmentVariable("LABEL_ENCLOSING") == "1";
     static readonly Dictionary<string, string> properties = new() { ["Configuration"] = "Debug", ["NuGetAudit"] = "false" };
 
     static async Task<int> Main(string[] args)
@@ -173,7 +175,20 @@ static class Labeller
         {
             row["inside"] = false; row["locs"] = new List<object>(); row["origin"] = Origin(compilation, symbol);
         }
+        if (enclosing) row["in"] = Enclosing(model, node);
         return row;
+    }
+
+    // The key of the innermost declaration around a reference that identity-v1 counts (a type, method, property, field,
+    // event or enum member); constructors and accessors are inside theirs. Null at file level.
+    static string? Enclosing(SemanticModel model, SyntaxNode node)
+    {
+        for (var n = node.Parent; n != null; n = n.Parent)
+        {
+            var decl = Declared(model, n);
+            if (decl != null && Group(decl) != null) return Key(decl);
+        }
+        return null;
     }
 
     // `stdlib`: the .NET base class library (the Microsoft.NETCore.App reference pack); `sdk`: another shared

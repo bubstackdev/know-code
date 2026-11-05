@@ -26,6 +26,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = {"kc_store", "kc_index", "kc_extract"}
@@ -159,8 +162,7 @@ def contract_sets():
 def check(binary):
     problems = []
     with tempfile.TemporaryDirectory() as tmp:
-        env = dict(os.environ, KNOWCODE_CONFIG_DIR=f"{tmp}/config", KNOWCODE_CACHE_DIR=f"{tmp}/cache",
-                   KNOWCODE_DATA_DIR=f"{tmp}/data", KNOWCODE_UPDATE_CHECK="0")
+        env = kc_env.knowcode_env(tmp)
         env.pop("KNOWCODE_TOOLS", None)
         commands = cli(binary, env)
         tools, topics = mcp(binary, env, tmp)

@@ -1,3 +1,34 @@
+# `cargo deny check` (CI's deny job): advisories, bans, licenses and sources, over the platforms KnowCode ships for.
+[graph]
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+# A RustSec advisory (vulnerability, unsound, unmaintained) for a crate in the tree fails CI until the lock moves past
+# it, or until an `ignore` entry here records why it doesn't apply.
+[advisories]
+ignore = []
+
+# Every licence a dependency may be used under. Each crate's licence expression must be satisfiable from this list
+# alone (the permissive half of a dual licence suffices). Adding one is a reviewed decision, copyleft especially.
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",  # encoding_rs (with MIT OR Apache-2.0)
+    "Unicode-3.0",   # unicode-ident's Unicode data tables (with MIT OR Apache-2.0)
+    "Zlib",          # foldhash
+]
+# MPL-2.0 is file-level copyleft, so it's allowed for this one crate only: option-ext, used unmodified, pulled in by
+# dirs -> dirs-sys for the user cache, config and data directories. Decided by the maintainer on 2026-10-29.
+exceptions = [
+    { crate = "option-ext", allow = ["MPL-2.0"] },
+]
+
+# Dependencies come from crates.io only.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
 # Privacy guard: indexing and queries have no HTTP or TLS stack. `cargo deny check bans` fails if one sneaks
 # into the dependency tree. The isolated public-release checker invokes the system curl executable.
 [bans]

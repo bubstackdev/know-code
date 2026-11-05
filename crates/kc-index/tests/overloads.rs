@@ -286,3 +286,141 @@ fn extension_methods_are_found_by_the_static_class_declaring_them() {
     assert_eq!(lines_of("CollectionExtensions.RegisterDecorator"), vec![31]);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+const SINK: &str = r#"
+using System;
+
+namespace App;
+
+public enum Level { Info }
+
+public interface ISink
+{
+    private static readonly object[] Nothing = Array.Empty<object>();
+
+    void Emit(Level level, string template) => Emit(level, template, Nothing);
+    void Emit<T>(Level level, string template, T value) { }
+    void Emit(Level level, string template, params object?[]? values);
+    void Emit(Level level, Exception? error, string template) => Emit(level, error, template, Nothing);
+    void Emit<T>(Level level, Exception? error, string template, T value) { }
+    void Emit(Level level, Exception? error, string template, params object?[]? values);
+
+    void Info(Exception? error, string template, params object?[]? values) => Emit(Level.Info, error, template, values);
+    void Info(string template, params object?[]? values) => Info((Exception?)null, template, values);
+    void Count(Level level, string template) => Emit(level, template, 3);
+    void Wrap<T>(Level level, string template, T value) => Emit(level, template, [value]);
+    void Plain(Level level) => Emit(level, "plain");
+}
+"#;
+
+/// Each call of `name` on `line`: its confidence and its targets' lines.
+fn at_line(conn: &rusqlite::Connection, name: &str, line: u32) -> Vec<(&'static str, Vec<u32>)> {
+    let (refs, _) = query::refs(conn, name, &["call"], 50).unwrap();
+    refs.into_iter().filter(|r| r.line == line).map(|r| (r.confidence, lines(&r))).collect()
+}
+
+#[test]
+fn an_overload_taking_the_arguments_as_typed_beats_a_generic_one_and_one_they_dont_fit() {
+    let root = scratch("overload-ties");
+    write(&root, "src/App/Sink.cs", SINK);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    // An `object[]` field for the last parameter: the non-generic `params` overload, as C# prefers it to `Emit<T>`.
+    assert_eq!(at_line(conn, "Emit", 12), [("exact", vec![14])]);
+    assert_eq!(at_line(conn, "Emit", 15), [("exact", vec![17])]);
+    // A parameter typed `params object?[]?` passed on: the `Exception` overload taking it as is.
+    assert_eq!(at_line(conn, "Emit", 19), [("exact", vec![17])]);
+    // A cast argument has the type it's cast to.
+    assert_eq!(at_line(conn, "Info", 20), [("exact", vec![19])]);
+    // A value that isn't an `object`: the generic overload takes it as is, where `params` would box it.
+    assert_eq!(at_line(conn, "Emit", 21), [("exact", vec![13])]);
+    // A collection expression (C# 12) gives `T` no type: the `params` overload.
+    assert_eq!(at_line(conn, "Emit", 22), [("exact", vec![14])]);
+    // Nothing for the array: the overload without one, as C# prefers it to `params` expanded to nothing.
+    assert_eq!(at_line(conn, "Emit", 23), [("exact", vec![12])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Parameter types written before `rest` was recorded (no `rest` key) still parse, and the tie-break that needs it
+/// stays out: the generic and `params` overloads are left as candidates, as they were.
+#[test]
+fn parameter_types_stored_without_rest_resolve_as_before() {
+    let root = scratch("overload-ties-old-rows");
+    write(&root, "src/App/Sink.cs", SINK);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    let changed = conn.execute("UPDATE symbols SET param_types = json_remove(param_types, '$.rest') WHERE param_types LIKE '%\"rest\"%'", []).unwrap();
+    assert!(changed > 0, "the fixture has `params` overloads");
+    assert_eq!(at_line(conn, "Emit", 12), [("ambiguous", vec![13, 14])]);
+    assert_eq!(at_line(conn, "Emit", 22), [("ambiguous", vec![13, 14])]);
+    // Telling overloads apart by the types they list is unchanged.
+    assert_eq!(at_line(conn, "Info", 20), [("exact", vec![19])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+const LOOKUP: &str = r#"namespace App;
+
+public class Lookup
+{
+    public object Find(object key) => key;
+    public T Find<T>(object key) => default;
+    public TOut Find<TIn, TOut>(object key) => default;
+    public void Use(object k)
+    {
+        Find<Order>(k);
+        this.Find<Order, Product>(k);
+        Find(k);
+        Find<Order, Product, Product>(k);
+    }
+}
+"#;
+
+/// A call writing type arguments (`Find<Order>(k)`) binds only an overload declaring that many type parameters of its
+/// own, which its argument count and types can't tell (`k`'s type isn't known). One writing none may infer them, so
+/// every overload stays; one no overload fits in number was misread, and they all stay too.
+#[test]
+fn type_arguments_written_pick_the_overload_with_as_many_type_parameters() {
+    let root = scratch("overload-type-args");
+    write(&root, "src/App/Lookup.cs", LOOKUP);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let conn = store.conn();
+    assert_eq!(at_line(conn, "Find", 10), [("exact", vec![6])]);
+    assert_eq!(at_line(conn, "Find", 11), [("exact", vec![7])]);
+    assert_eq!(at_line(conn, "Find", 12), [("ambiguous", vec![5, 6, 7])]);
+    assert_eq!(at_line(conn, "Find", 13), [("ambiguous", vec![5, 6, 7])]);
+    // Rows stored before the count was (no `g`): as before, every overload a candidate.
+    conn.execute("UPDATE symbols SET param_types = json_remove(param_types, '$.g') WHERE param_types LIKE '%\"g\"%'", []).unwrap();
+    assert_eq!(at_line(conn, "Find", 10), [("ambiguous", vec![5, 6, 7])]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+const TRACERS: &str = r#"namespace App;
+
+public class Tracer { }
+public interface IContainer { }
+public static class ContainerExtensions
+{
+    public static void Subscribe(this IContainer c, Tracer t) { }
+    public static T Subscribe<T>(this IContainer c) where T : Tracer, new()
+    {
+        var t = new T();
+        c.Subscribe(t);
+        return t;
+    }
+}
+"#;
+
+/// A generic overload without parameters (`Subscribe<T>(this IContainer c)`) records its type parameters' number and
+/// no parameter type: it never stands in for one whose parameters an argument's type is checked against.
+#[test]
+fn a_generic_overload_without_parameters_leaves_argument_types_to_the_others() {
+    let root = scratch("overload-type-args-none");
+    write(&root, "src/App/Tracers.cs", TRACERS);
+    let mut store = Store::open(&root.join(".git/knowcode-test.sqlite")).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    assert_eq!(at_line(store.conn(), "Subscribe", 11), [("exact", vec![7])]);
+    let _ = std::fs::remove_dir_all(&root);
+}

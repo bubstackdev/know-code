@@ -59,7 +59,11 @@ pub fn is_razor(path: &str) -> bool {
 
 /// A source file in a language whose uses KnowCode would list if it read it.
 fn is_source(path: &str) -> bool {
-    is_razor(path) || matches!(search::content_lang(path), "swift" | "python" | "rust" | "csharp" | "javascript" | "typescript" | "cfml")
+    is_razor(path)
+        || matches!(
+            search::content_lang(path),
+            "swift" | "python" | "rust" | "csharp" | "javascript" | "typescript" | "java" | "cfml"
+        )
 }
 
 /// `name` as a regex matching it literally.

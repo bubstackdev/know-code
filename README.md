@@ -27,8 +27,8 @@ build your code, and it doesn't cover Go, Java or Kotlin.
 
 ## Quick start
 
-You need macOS (Apple silicon) or Linux (x86_64 or arm64), `git`, and the client you want to connect: Claude Code
-(its `claude` command), Codex or Cursor.
+You need macOS (Apple silicon) or Linux (x86_64 or arm64, glibc 2.28 or later: RHEL 8, Debian 10, Ubuntu 20.04 and
+newer), `git`, and the client you want to connect: Claude Code (its `claude` command), Codex or Cursor.
 
 1. Install:
 

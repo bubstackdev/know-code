@@ -159,7 +159,7 @@ pub fn constructor_written<'a>(file: &str, container: Option<&'a str>) -> Option
         "swift" => Some("init"),
         "py" => Some("__init__"),
         "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("constructor"),
-        "cs" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
+        "cs" | "java" | "kt" => container.map(|c| c.rsplit('.').next().unwrap_or(c)),
         _ => None,
     }
 }
@@ -341,6 +341,35 @@ fn find_unqualified(conn: &Connection, query: &str, kind: Option<&str>, limit: u
     });
     let total = ranked.len();
     Ok(Found { hits: ranked.into_iter().take(limit).map(|(_, h)| h).collect(), total, capped })
+}
+
+/// [`definitions`] remembered by query, for one connection reading one snapshot: a walk asks for the same type and
+/// member names at every node it expands (the owner of each member, each protocol a type conforms to), and a lookup
+/// that misses runs several fallbacks. The answer is a function of the snapshot alone, so remembering it changes no
+/// answer; a memo must not outlive the snapshot or move to another connection.
+///
+/// It also remembers each protocol member's running implementations ([`crate::db::running_implementations`]), which
+/// a walk asks for the same requirement at every implementation of it it reaches.
+#[derive(Debug, Default)]
+pub struct DefinitionsMemo(HashMap<String, Vec<SymbolRow>>, HashMap<i64, Vec<i64>>);
+
+impl DefinitionsMemo {
+    pub fn get(&mut self, conn: &Connection, query: &str) -> Result<Vec<SymbolRow>> {
+        if let Some(rows) = self.0.get(query) {
+            return Ok(rows.clone());
+        }
+        let rows = definitions(conn, query)?;
+        self.0.insert(query.to_string(), rows.clone());
+        Ok(rows)
+    }
+
+    /// [`crate::db::running_implementations`] of the member `id`, remembered.
+    pub fn running_implementations(&mut self, conn: &Connection, id: i64) -> Result<&[i64]> {
+        Ok(match self.1.entry(id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(crate::db::running_implementations(conn, id)?),
+        })
+    }
 }
 
 /// Definitions with exactly this name (case-sensitive), optionally inside a container, best kind first, then live
@@ -538,12 +567,18 @@ struct Def {
     swift_params: Option<Vec<SwiftParam>>,
     /// A Swift function declared `async` (or `reasync`).
     is_async: bool,
+    /// A Swift function declared `async` (not `reasync`): every call of it is awaited.
+    must_await: bool,
     /// Declared `export` (TypeScript): at a module's top level.
     exported: bool,
     /// Declared `private` or `fileprivate` (Swift): named only in its own file.
     file_private: bool,
     /// A Swift member of a type named like an actor: called from outside it, even a synchronous one is awaited.
     on_actor: bool,
+    /// A property of a TypeScript type alias's object type (`type Props = { task: TaskInfo }`).
+    alias_member: bool,
+    /// For a declaration inside a function body: the lines of that body, where alone its name can be used.
+    scope: Option<(u32, u32)>,
 }
 
 impl Def {
@@ -563,11 +598,14 @@ impl Def {
             None => true,
             Some(r) => self.declaring.as_deref().is_some_and(|c| last_segment(c) == last_segment(r)),
         };
-        if self.extension && !as_static {
-            let Some(min) = self.min_args else { return true };
-            return args >= min && self.max_args.is_none_or(|m| args <= m);
+        let Some(min) = self.min_args else { return true };
+        let fits = |n: u32| n >= min && self.max_args.is_none_or(|m| n <= m);
+        match (self.extension, as_static) {
+            (true, false) => fits(args),
+            // Called as a static method, an extension method's first argument is its receiver.
+            (true, true) => args > 0 && fits(args - 1),
+            (false, _) => fits(args),
         }
-        self.accepts(args)
     }
 }
 
@@ -779,6 +817,22 @@ const STDLIB_TYPES: &[&str] = &[
     "UInt8", "UInt16", "UInt32", "UInt64", "URL", "UUID",
 ];
 
+/// C library functions a Swift repo may wrap under its own name for one platform (`ioctl`, `unlink`): libc, POSIX and
+/// the Windows CRT.
+const C_LIBRARY_FUNCTIONS: &[&str] = &[
+    "accept", "access", "bind", "chdir", "chmod", "chown", "close", "closedir", "connect", "dup", "dup2", "fchmod", "fchown",
+    "fcntl", "flock", "fstat", "fstatat", "fsync", "ftruncate", "getcwd", "getenv", "getpid", "ioctl", "isatty", "kill",
+    "link", "listen", "lseek", "lstat", "mkdir", "mkdirat", "mmap", "munmap", "open", "openat", "opendir", "pipe", "poll",
+    "pread", "pwrite", "read", "readdir", "readlink", "realpath", "recv", "remove", "rename", "renameat", "rmdir", "send",
+    "setenv", "socket", "stat", "symlink", "sysconf", "truncate", "umask", "unlink", "unlinkat", "unsetenv", "write",
+];
+
+/// Swift standard-library generic types, named with their arguments (`MemoryLayout<T>`, `UnsafePointer<UInt8>`).
+const SWIFT_GENERIC_TYPES: &[&str] = &[
+    "ClosedRange", "KeyPath", "MemoryLayout", "Optional", "Range", "Result", "UnsafeBufferPointer", "UnsafeMutableBufferPointer",
+    "UnsafeMutablePointer", "UnsafeMutableRawBufferPointer", "UnsafePointer", "UnsafeRawBufferPointer",
+];
+
 /// Whether `d` is a member the repo adds to a standard-library type (`extension Int32 { var isFinite … }`). These are
 /// concrete types: no other type conforms to one, so its members are never another type's, and the library declares
 /// same-named members on its other types (`Float.isFinite`).
@@ -790,6 +844,32 @@ fn on_stdlib_type(d: &Def) -> bool {
 const DOTNET_SEQUENCES: &[&str] = &[
     "List", "IList", "ICollection", "IEnumerable", "IReadOnlyList", "IReadOnlyCollection", "IQueryable", "HashSet",
     "ISet",
+];
+
+/// Instance methods of the concrete .NET collections a sequence may be (`List<T>`, `HashSet<T>`, arrays), with the
+/// fewest and most arguments each takes: C# calls one of these before any extension method of the name that the
+/// arguments fit too.
+const DOTNET_COLLECTION_MEMBERS: &[(&str, u32, u32)] = &[
+    ("Add", 1, 1), ("AddRange", 1, 1), ("AsReadOnly", 0, 0), ("BinarySearch", 1, 4), ("Clear", 0, 0), ("Contains", 1, 1),
+    ("ConvertAll", 1, 1), ("CopyTo", 1, 4), ("ExceptWith", 1, 1), ("Exists", 1, 1), ("Find", 1, 1), ("FindAll", 1, 1),
+    ("FindIndex", 1, 3), ("FindLast", 1, 1), ("FindLastIndex", 1, 3), ("ForEach", 1, 1), ("GetRange", 2, 2),
+    ("IndexOf", 1, 3), ("Insert", 2, 2), ("InsertRange", 2, 2), ("IntersectWith", 1, 1), ("IsSubsetOf", 1, 1),
+    ("IsSupersetOf", 1, 1), ("LastIndexOf", 1, 3), ("Overlaps", 1, 1), ("Remove", 1, 1), ("RemoveAll", 1, 1),
+    ("RemoveAt", 1, 1), ("RemoveRange", 2, 2), ("RemoveWhere", 1, 1), ("Reverse", 0, 2), ("SetEquals", 1, 1),
+    ("Slice", 2, 2), ("Sort", 0, 3), ("SymmetricExceptWith", 1, 1), ("ToArray", 0, 0), ("TrimExcess", 0, 0),
+    ("TrueForAll", 1, 1), ("TryGetValue", 2, 2), ("UnionWith", 1, 1),
+];
+
+
+/// Sealed .NET types, with the interfaces each implements that a repo's extension methods may extend: an extension
+/// method declared on any other type never applies to a value of one of them.
+const CS_SEALED_INTERFACES: &[(&str, &[&str])] = &[
+    ("string", &["IEnumerable", "IComparable", "IConvertible", "IEquatable", "ICloneable", "IParsable", "ISpanParsable"]),
+    ("String", &["IEnumerable", "IComparable", "IConvertible", "IEquatable", "ICloneable", "IParsable", "ISpanParsable"]),
+    ("ReadOnlySpan", &[]),
+    ("Span", &[]),
+    ("ReadOnlyMemory", &["IEquatable"]),
+    ("Memory", &["IEquatable"]),
 ];
 
 /// LINQ, Entity Framework and `List<T>` methods returning a sequence of the same elements.
@@ -816,6 +896,8 @@ struct TypeOracle<'c> {
     /// The TypeScript file being resolved: a free function it calls is its own or an imported one, never another
     /// file's of the same name.
     file: Option<String>,
+    /// The Java or Kotlin file being resolved: a function `private` to another file never gives a call its type.
+    jvm_file: Option<String>,
     supers: HashMap<String, Vec<String>>,
     /// Per name, `None` when no type, extension or typealias has it, else its typealiases (see [`Self::alias`]).
     defined: HashMap<String, Option<Vec<Alias>>>,
@@ -872,7 +954,7 @@ type MemberKey = (String, String, bool, Option<String>);
 type TypeAt = (Option<String>, Option<String>);
 
 /// A call whose return type is looked up: owner, caller's type, name, and (TypeScript) the calling file.
-type ReturnKey = (Option<String>, Option<String>, String, Option<String>);
+type ReturnKey = (Option<String>, Option<String>, String, Option<String>, Option<String>);
 
 /// A method taking a delegate: its container, fewest and most arguments, and per parameter the delegate's input types.
 struct LambdaSig {
@@ -889,6 +971,7 @@ impl<'c> TypeOracle<'c> {
             members: HashMap::new(),
             returns: HashMap::new(),
             file: None,
+            jvm_file: None,
             supers: HashMap::new(),
             defined: HashMap::new(),
             lambdas: HashMap::new(),
@@ -1643,7 +1726,7 @@ impl<'c> TypeOracle<'c> {
     /// The declared return type of a function, as (its container, encoded type).
     fn return_type(&mut self, owner: Option<&str>, scope: Option<&str>, name: &str) -> Result<Option<(Option<String>, String)>> {
         let file = if owner.is_none() { self.file.clone() } else { None };
-        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone());
+        let key = (owner.map(str::to_string), scope.map(str::to_string), name.to_string(), file.clone(), self.jvm_file.clone());
         if let Some(v) = self.returns.get(&key) {
             let v = v.clone();
             return Ok(v.map(|(c, t, f)| {
@@ -1652,12 +1735,22 @@ impl<'c> TypeOracle<'c> {
             }));
         }
         let mut stmt = self.conn.prepare_cached(
-            "SELECT s.container, s.type_name, f.path FROM symbols s JOIN files f ON f.id = s.file_id
+            "SELECT s.container, s.type_name, f.path, s.id FROM symbols s JOIN files f ON f.id = s.file_id
              WHERE s.name = ?1 AND s.name = ?1 COLLATE BINARY AND s.kind IN ('function', 'method') AND s.type_name IS NOT NULL
              ORDER BY f.path, s.start_byte",
         )?;
-        let rows: Vec<(Option<String>, String, String)> =
-            stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut rows: Vec<(Option<String>, String, String)> = Vec::new();
+        for row in stmt.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?)))? {
+            let (container, ty, path, id) = row?;
+            // Java and Kotlin: a function `private` to another file can't be the one called here, so its type is
+            // never this call's.
+            if let Some(f) = self.jvm_file.as_deref()
+                && crate::jvm::hidden_from(self.conn, f, id)?
+            {
+                continue;
+            }
+            rows.push((container, ty, path));
+        }
         let own = file.as_ref().and_then(|f| rows.iter().find(|(c, _, p)| c.is_none() && p == f)).cloned();
         let defs = rows;
         let in_container = |c: &Option<String>, want: &str| c.as_deref().is_some_and(|c| c == want || c.ends_with(&format!(".{want}")));
@@ -1796,6 +1889,44 @@ fn receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<Receiver> {
         return Ok(Receiver::Foreign(vec![root]));
     }
     Ok(recv)
+}
+
+/// Of `ids` (of `named`), those declared on a type that a property named like the receiver's last segment holds:
+/// `c.req.header` reaches `header` on the type of some `req`. `None` when the receiver isn't a value's property
+/// (`c.req`, not `c`, `c.req()` or `c[k]`), or when some type's property of that name has no type written, so it
+/// may hold any.
+fn through_property(oracle: &mut TypeOracle, receiver: &str, named: &[Def], ids: &[i64]) -> Result<Option<Vec<i64>>> {
+    let Some((_, prop)) = receiver.rsplit_once('.') else { return Ok(None) };
+    if prop.is_empty() || !prop.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+        return Ok(None);
+    }
+    // Members of types only: a container-less property is a local or an object literal's key, which no other code
+    // reaches through a name.
+    let mut stmt = oracle.conn.prepare_cached("SELECT type_name FROM symbols WHERE name = ?1 AND kind = 'property' AND container IS NOT NULL")?;
+    let written: Vec<Option<String>> = stmt.query_map([prop], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    if written.is_empty() || written.iter().any(Option::is_none) {
+        return Ok(None);
+    }
+    let mut held: Vec<String> = Vec::new();
+    for t in written.into_iter().flatten() {
+        // The type's own name, without type arguments or array brackets (`HonoRequest<P, I>`, `Item[]`).
+        let base: String = t.chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.').collect();
+        let base = last_segment(&base).to_string();
+        if base.is_empty() {
+            return Ok(None);
+        }
+        for ty in oracle.chain(&base)? {
+            if !held.contains(&ty) {
+                held.push(ty);
+            }
+        }
+    }
+    let kept = ids
+        .iter()
+        .copied()
+        .filter(|id| named.iter().find(|d| d.id == *id).and_then(|d| d.container.as_deref()).is_some_and(|c| held.iter().any(|t| last_segment(c) == last_segment(t))))
+        .collect();
+    Ok(Some(kept))
 }
 
 /// In C#, a call chain off a name the repo doesn't define at all (`Policy.Handle<E>().RetryAsync(3).ExecuteAsync(…)`,
@@ -1975,20 +2106,20 @@ fn bare_name(receiver: &str) -> Option<&str> {
 /// Standard-library and Foundation members that in-repo types often also define. A call to one of these on a
 /// receiver of unknown type is far more likely to be the library's.
 const STDLIB_MEMBERS: &[&str] = &[
-    "append", "allSatisfy", "compactMap", "contains", "count", "decode", "dropFirst", "dropLast", "encode",
+    "allCases", "append", "allSatisfy", "compactMap", "contains", "count", "decode", "decodeIfPresent", "dropFirst", "dropLast", "encode", "endIndex",
     "enumerated", "filter", "first", "firstIndex", "flatMap", "forEach", "formUnion", "index", "insert",
-    "intersection", "isEmpty", "isFinite", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
+    "intersection", "isEmpty", "isFinite", "lowerBound", "isInfinite", "isNaN", "isNormal", "isSubnormal", "isZero", "joined",
     "last", "lastIndex", "lowercased", "magnitude", "map", "mapValues", "max", "merge", "min", "prefix", "reduce",
     "remove", "removeAll", "removeFirst", "removeLast", "removeValue", "replacingOccurrences", "reserveCapacity",
-    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "starts", "subtract", "suffix",
-    "trimmingCharacters", "ulp", "union", "updateValue", "uppercased", "write", "zip",
+    "reversed", "rounded", "signum", "sort", "sorted", "split", "squareRoot", "startIndex", "starts", "subtract", "suffix",
+    "trimmingCharacters", "ulp", "union", "updateValue", "upperBound", "uppercased", "write", "zip",
 ];
 
 /// .NET collection, string, LINQ and object members, for calls from C#.
 const DOTNET_MEMBERS: &[&str] = &[
     "Add", "AddRange", "Any", "All", "Clear", "Concat", "Contains", "ContainsKey", "Count", "Dispose", "Distinct",
-    "EndsWith", "Equals", "First", "FirstOrDefault", "ForEach", "Format", "GetHashCode", "GetType", "GetValueOrDefault",
-    "IndexOf", "Insert", "Join", "Last", "LastOrDefault", "Max", "Min", "OrderBy", "OrderByDescending", "Remove",
+    "EndsWith", "Equals", "First", "FirstOrDefault", "ForEach", "Format", "GetHashCode", "GetMethod", "GetType", "GetValueOrDefault",
+    "IndexOf", "Insert", "Join", "Last", "LastOrDefault", "Max", "Min", "OrderBy", "OrderByDescending", "QueryString", "Remove",
     "RemoveAll", "RemoveAt", "Replace", "Select", "SelectMany", "Single", "SingleOrDefault", "Skip", "Split",
     "StartsWith", "Substring", "Sum", "Take", "ToArray", "ToDictionary", "ToHashSet", "ToList", "ToLower",
     "ToLowerInvariant", "ToString", "ToUpper", "ToUpperInvariant", "Trim", "TryAdd", "TryGetValue", "Where",
@@ -1997,8 +2128,8 @@ const DOTNET_MEMBERS: &[&str] = &[
 /// JavaScript array, string, Map/Set, Promise and RxJS members, for calls from TypeScript.
 const JS_MEMBERS: &[&str] = &[
     "add", "catch", "clear", "complete", "concat", "delete", "emit", "endsWith", "entries", "every", "filter", "find",
-    "findIndex", "flatMap", "forEach", "get", "has", "includes", "indexOf", "join", "keys", "length", "map", "next", "pipe", "pop",
-    "push", "reduce", "replace", "set", "shift", "slice", "some", "sort", "splice", "split", "startsWith", "subscribe",
+    "findIndex", "flatMap", "forEach", "get", "has", "includes", "indexOf", "isError", "join", "keys", "left", "length", "map", "next", "pipe", "pop",
+    "push", "reduce", "replace", "set", "shift", "slice", "some", "sort", "splice", "split", "startsWith", "subscribe", "success",
     "then", "toLowerCase", "toString", "toUpperCase", "trim", "unshift", "unsubscribe", "values",
 ];
 
@@ -2036,7 +2167,7 @@ fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, fil
         Some(None) => return Ok(Vec::new()),
         None => (None, q.to_string()),
     };
-    let found = ts_namespace_declared(conn, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
+    let found = ts_namespace_declared(conn, &mut modules.namespace_spans, &q, defs.iter().copied().filter(|d| from.as_ref().is_none_or(|f| d.file == *f)))?;
     // Of a namespace declared in several places, the file's own shadows the others.
     if from.is_none() && found.iter().any(|(_, f)| f == file) {
         return Ok(found.into_iter().filter(|(_, f)| f == file).map(|(id, _)| id).collect());
@@ -2045,14 +2176,26 @@ fn ts_namespace_members(conn: &Connection, modules: &mut crate::ts::Modules, fil
 }
 
 /// Of `defs`, the ids and files of those whose innermost enclosing TypeScript namespace is named `q`.
-fn ts_namespace_declared<'a>(conn: &Connection, q: &str, defs: impl Iterator<Item = &'a Def>) -> Result<Vec<(i64, String)>> {
+fn ts_namespace_declared<'a>(
+    conn: &Connection,
+    cache: &mut HashMap<String, crate::ts::NamespaceSpans>,
+    q: &str,
+    defs: impl Iterator<Item = &'a Def>,
+) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare_cached(
         "SELECT CASE WHEN s.container IS NULL THEN s.name ELSE s.container || '.' || s.name END, s.start_line, s.end_line
            FROM symbols s JOIN files f ON f.id = s.file_id WHERE f.path = ?1 AND s.kind = 'module'",
     )?;
     let mut out = Vec::new();
     for d in defs.filter(|d| d.container.is_none() && crate::ts::is_ts_path(&d.file)) {
-        let spans: Vec<(String, u32, u32)> = stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let spans = match cache.get(&d.file) {
+            Some(spans) => spans.clone(),
+            None => {
+                let spans: Vec<(String, u32, u32)> =
+                    stmt.query_map([&d.file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+                cache.entry(d.file.clone()).or_insert(std::rc::Rc::new(spans)).clone()
+            }
+        };
         let innermost = spans.iter().filter(|(_, start, end)| *start <= d.line && d.line <= *end)
             // The tightest span; of nested ones on one line, the deeper.
             .min_by_key(|(name, start, end)| (end - start, std::cmp::Reverse(name.len())));
@@ -2333,9 +2476,10 @@ fn resolve(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&Def]) 
     if hit.kind == "call"
         && let Some(n) = hit.args
     {
-        // Narrowed as either call form allows: the receiver-aware fit only rules a call out (see `takes_none`), never
-        // picks among overloads, as an outside type's own method may be the one a value's call reaches.
-        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| d.accepts(n)).collect();
+        // Narrowed as the call's form allows: an extension method called on a value takes no argument for its
+        // receiver, so an overload taking one fewer can't be the one called (`builder.Register<T>(f)` is no call of
+        // `Register<T, U>(this Builder b)`).
+        let fitting: Vec<&Def> = defs.iter().copied().filter(|d| if hit.file.ends_with(".cs") { d.accepts_call(hit, n) } else { d.accepts(n) }).collect();
         if fitting.len() < all.len() {
             let (confidence, ids) = resolve_among(hit, recv, self_chain, &fitting);
             if !ids.is_empty() {
@@ -2356,6 +2500,8 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     // (`\.member`) only properties.
     let implicit = hit.receiver.as_deref() == Some(".");
     let key_path = hit.receiver.as_deref() == Some("\\");
+    let cs_member = hit.kind == "member" && hit.file.ends_with(".cs");
+    let unawaited = matches!(hit.kind.as_str(), "call" | "instantiate") && hit.file.ends_with(".swift") && SwiftCall::decode(hit.arg_types.as_deref()).is_some_and(|c| !c.a);
     let cands: Vec<&Def> = defs
         .iter()
         .copied()
@@ -2369,6 +2515,11 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
         .filter(|d| !d.in_script || d.file == hit.file)
         // Through a receiver (`x.f()`, `T.f()`) only members are reachable, never free functions or globals.
         .filter(|d| hit.receiver.is_none() || d.container.is_some() || matches!(hit.kind.as_str(), "instantiate" | "type_ref"))
+        // A C# member read without a call (`results.Count`) is a property or field: an extension method is only called.
+        .filter(|d| !(cs_member && d.extension))
+        // A Swift call no `await` covers can't call an `async` function (it can a `reasync` one): it calls a
+        // synchronous one of the name, the repo's or a library's (`XCTAssertThrowsError`).
+        .filter(|d| !(unawaited && d.must_await))
         .collect();
     // A member used without a call is a property or case; a method only when nothing else has the name, or when the
     // receiver's type has the method (passed or spied on: `service.load.mockReturnValue(…)`).
@@ -2435,6 +2586,29 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 found = later;
             }
         }
+        // A C# sequence's type is one type here (`List<T>`, `T[]` and `IEnumerable<T>` are each a sequence). Called as
+        // a concrete collection's instance method can be (`List<T>.AddRange(xs)`), which C# picks before any extension
+        // method, the repo's extension method is the target only when the sequence is an interface: it is listed, not
+        // linked.
+        if hit.file.ends_with(".cs")
+            && chain.first().is_some_and(|t| t == "Array")
+            && !found.is_empty()
+            && found.iter().all(|d| d.extension)
+            && DOTNET_COLLECTION_MEMBERS.iter().any(|(n, min, max)| *n == hit.name && hit.args.is_none_or(|a| (*min..=*max).contains(&a)))
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
+        // A member the repo adds to a library type in an extension, named like the library's own (`JSONDecoder`'s
+        // `decode(_:from:)`): the library's overloads take other argument types, which a Swift call's arguments aren't
+        // read for, so either may be the one called. Listed, not linked.
+        if hit.kind == "call"
+            && hit.file.ends_with(".swift")
+            && !found.is_empty()
+            && found.iter().all(|d| d.external_container && !on_stdlib_type(d))
+            && STDLIB_MEMBERS.contains(&hit.name.as_str())
+        {
+            return ("external_likely", found.iter().map(|d| d.id).collect());
+        }
         if hit.kind == "member" && found.iter().any(|d| d.kind != "method") {
             found.retain(|d| d.kind != "method");
         }
@@ -2445,7 +2619,15 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 && hit.receiver.as_deref().is_some_and(|r| CS_PREDEFINED_TYPES.contains(&r) || (type_like(r) && chain.first().is_some_and(|t| t == r)));
             if matches!(recv, Receiver::Foreign(_)) && !on_type {
                 // A framework type may conform to a framework protocol the repo extends, never be a library struct.
-                let ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
+                let mut ext: Vec<&Def> = cands.iter().copied().filter(|d| d.external_container && !on_stdlib_type(d)).collect();
+                // A C# extension method applies through the receiver's own type, its base types and its interfaces.
+                // Those of a sealed library type are known (`ReadOnlySpan<T>` has none), so one declared on any other
+                // type (`this IReadOnlyList<T>`) is never what it calls.
+                if hit.file.ends_with(".cs")
+                    && let Some((_, interfaces)) = chain.first().and_then(|t| CS_SEALED_INTERFACES.iter().find(|(s, _)| s == t))
+                {
+                    ext.retain(|d| !d.extension || d.container.as_deref().is_some_and(|c| interfaces.contains(&last_segment(c))));
+                }
                 return group_confidence(&ext);
             }
             // The receiver's type is known and nothing on it or its supertypes has this name: the member lives
@@ -2461,6 +2643,19 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
             // A type written through a qualifier (`Outer.Inner`, `Module.Type`, `Array<T>.Index`) is looked up there.
             Some(r) if hit.kind == "type_ref" && (hit.file.ends_with(".swift") || crate::ts::is_ts_path(&hit.file)) => {
                 return qualified_type(r, &hit.file, self_chain, &cands);
+            }
+            // A Swift standard-library generic type written with its arguments (`MemoryLayout<T>.size`): its own members
+            // are the library's; only an extension the repo declares on it is the repo's.
+            Some(r) if hit.file.ends_with(".swift")
+                && r.ends_with('>')
+                && let Some((head, _)) = r.split_once('<')
+                && (STDLIB_TYPES.contains(&head) || SWIFT_GENERIC_TYPES.contains(&head)) =>
+            {
+                let found = in_container(head);
+                if found.is_empty() {
+                    return ("unresolved", Vec::new());
+                }
+                found
             }
             Some(r) if type_like(r) => {
                 // `Type.member`, `Module.Type.member`, or `Type.shared.member` (a static instance of Type).
@@ -2484,6 +2679,12 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                 // A script's globals and free functions are visible only inside that script.
                 let free: Vec<&Def> =
                     cands.iter().copied().filter(|d| d.container.is_none() && (!d.in_script || d.file == hit.file)).collect();
+                // A Swift free function named like a C library function (a platform shim, `func unlink(_:)` for
+                // Windows) has the platform's own function beside it, which a call on another platform binds: listed,
+                // not linked.
+                if hit.file.ends_with(".swift") && !free.is_empty() && C_LIBRARY_FUNCTIONS.contains(&hit.name.as_str()) {
+                    return ("external_likely", free.iter().map(|d| d.id).collect());
+                }
                 if free.len() > 1 {
                     // Several free functions share the name (common across standalone scripts): one in the
                     // caller's own file wins, then one in the caller's module.
@@ -2492,7 +2693,9 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
                         return ("exact", same_file.iter().map(|d| d.id).collect());
                     }
                     let module = module_of(&hit.file);
-                    let same_module: Vec<&Def> = free.iter().copied().filter(|d| module_of(&d.file) == module).collect();
+                    // A file's module is a prefix of its path: the cheap test first, for names with many definitions.
+                    let same_module: Vec<&Def> =
+                        free.iter().copied().filter(|d| d.file.starts_with(module) && module_of(&d.file) == module).collect();
                     if same_module.len() == 1 {
                         return ("unique_name", vec![same_module[0].id]);
                     }
@@ -2508,9 +2711,24 @@ fn resolve_among(hit: &RefHit, recv: &Receiver, self_chain: &[String], defs: &[&
     if !narrowed.is_empty() {
         return ("exact", narrowed.iter().map(|d| d.id).collect());
     }
-    let instance_receiver = hit.receiver.as_deref().is_some_and(|r| r != "." && !type_like(r));
+    // A value, or a type the code can't name: a generic parameter (`Element.allCases`), or in C# a capitalised name left
+    // unknown (a property a library base class may declare, `Request.QueryString`: C# names a type it can't find as
+    // foreign instead).
+    let instance_receiver = hit.receiver.as_deref().is_some_and(|r| {
+        r != "."
+            && (!type_like(r)
+                || GENERIC_NAMES.contains(&r)
+                || (r.len() == 1 && r.starts_with(char::is_uppercase))
+                || hit.file.ends_with(".cs") && !r.contains('.'))
+    });
     if matches!(recv, Receiver::Unknown) && instance_receiver && stdlib_member(&hit.file, &hit.name) {
         return ("external_likely", cands.iter().map(|d| d.id).collect());
+    }
+    // A property of a type alias's object type is reached through a value known to be of that type, never by its
+    // name alone: such shapes (`type Item = { Id: string; Name: string }`) restate a package's types' fields.
+    let cands: Vec<&Def> = if matches!(recv, Receiver::Unknown) { cands.into_iter().filter(|d| !d.alias_member).collect() } else { cands };
+    if cands.is_empty() {
+        return ("unresolved", Vec::new());
     }
     let mut groups: Vec<Option<&str>> = cands.iter().map(|d| d.container.as_deref()).collect();
     groups.sort();
@@ -2584,6 +2802,10 @@ impl TypeOracle<'_> {
     /// `string`); `Some(true)` when it certainly accepts it; `None` when it can't be told (library types whose
     /// supertypes the repo doesn't declare, generics, delegates).
     fn accepts_arg(&mut self, arg: &TypeExpr, param: &TypeExpr) -> Result<Option<bool>> {
+        // A collection expression converts to any collection type, which isn't told here.
+        if matches!(arg, TypeExpr::Named(n) if n == "@collection") {
+            return Ok(None);
+        }
         let name = |t: &TypeExpr| match t {
             TypeExpr::Named(n) => Some(keyword_type(last_segment(n)).to_string()),
             TypeExpr::Generic { name, .. } => Some(keyword_type(last_segment(name)).to_string()),
@@ -2669,12 +2891,17 @@ impl TypeOracle<'_> {
 /// call site gives, when some do; overloads the types can't decide stay. Definitions in different containers are
 /// left to receiver resolution.
 fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec<&'d Def>) -> Result<Vec<&'d Def>> {
-    let Some(args) = hit.arg_types.as_deref().and_then(|a| serde_json::from_str::<Vec<serde_json::Value>>(a).ok()) else {
+    let (args, written) = cs_call_args(hit.arg_types.as_deref());
+    let defs = if written > 0 { by_type_parameters(defs, written) } else { defs };
+    let Some(args) = args else {
         return Ok(defs);
     };
+    // Overloads listing parameters: a generic one without any has `param_types` only for its type parameters' number,
+    // which says nothing of the arguments (and it takes none, so the argument count rules it out).
+    let lists = |d: &Def| d.params.as_deref().and_then(Params::decode).is_some_and(|p| !p.types.is_empty() || p.rest.is_some());
     let mut groups: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
     for (i, d) in defs.iter().enumerate() {
-        if d.params.is_some() {
+        if lists(d) {
             groups.entry(d.container.as_deref()).or_default().push(i);
         }
     }
@@ -2715,12 +2942,10 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
                     },
                     None => k,
                 };
-                // Past the declared parameters: a `params` array's elements, which aren't read.
+                // Past the declared parameters: a `params` array's elements, which aren't read. The array itself is
+                // never among them (the extractor's `parameter_types` leaves it out), so each one listed is checked.
                 let Some(Some(p)) = params.types.get(at) else { continue };
                 let (Some(arg), Some(p)) = (arg, TypeExpr::decode(p)) else { continue };
-                if defs[i].max_args.is_none() && at + 1 >= params.types.len() {
-                    continue;
-                }
                 if oracle.accepts_arg(arg, &p)? == Some(false) {
                     fits = false;
                     break;
@@ -2745,9 +2970,48 @@ fn narrow_by_argument_types<'d>(oracle: &mut TypeOracle, hit: &RefHit, defs: Vec
                     }
                 }
             }
+            let left: Vec<usize> = left.into_iter().filter(|&i| !drop[i]).collect();
+            if let Some(loser) = generic_or_params(&defs, &left, &evaluated) {
+                drop[loser] = true;
+            }
         }
     }
     Ok(defs.into_iter().zip(drop).filter(|(_, d)| !d).map(|(d, _)| d).collect())
+}
+
+/// A C# call's arguments as its site gives them (`RefHit::arg_types`, see `FileFacts::arg_types`): their types, when
+/// it gives any, and how many type arguments it writes (`Get<A, B>(…)`), 0 when none.
+fn cs_call_args(enc: Option<&str>) -> (Option<Vec<serde_json::Value>>, usize) {
+    match enc.and_then(|a| serde_json::from_str::<serde_json::Value>(a).ok()) {
+        Some(serde_json::Value::Array(a)) => (Some(a), 0),
+        Some(serde_json::Value::Object(o)) => {
+            (o.get("a").and_then(|a| a.as_array()).cloned(), o.get("g").and_then(serde_json::Value::as_u64).map_or(0, |g| g as usize))
+        }
+        _ => (None, 0),
+    }
+}
+
+/// Of a C# call's overloads that write `written` type arguments (`Get<Order>()`), per container, those declaring as
+/// many type parameters of their own, when some do: C# binds such a call only to a method with that many. When none
+/// does, the call was misread (or names a delegate or a type), and they all stay.
+fn by_type_parameters(defs: Vec<&Def>, written: usize) -> Vec<&Def> {
+    let own = |d: &Def| d.params.as_deref().and_then(Params::decode).map_or(0, |p| p.g);
+    let method = |d: &Def| matches!(d.kind.as_str(), "method" | "function");
+    let mut groups: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
+    for (i, d) in defs.iter().enumerate() {
+        if method(d) {
+            groups.entry(d.container.as_deref()).or_default().push(i);
+        }
+    }
+    let mut drop = vec![false; defs.len()];
+    for members in groups.values().filter(|g| g.len() > 1) {
+        if members.iter().any(|&i| own(defs[i]) == written) {
+            for &i in members {
+                drop[i] = own(defs[i]) != written;
+            }
+        }
+    }
+    defs.into_iter().zip(drop).filter(|(_, d)| !d).map(|(d, _)| d).collect()
 }
 
 /// The constructors a C# type declares, for telling which one a creation calls (see [`constructors_called`]).
@@ -2821,11 +3085,14 @@ fn chained_constructor(
     let ty = if receiver == "this" {
         Some(own)
     } else {
-        // The base class: the class among the bases any part of the type lists.
+        // The base class: the class among the bases any part of the type lists, the parts taken by file (a part's
+        // lines say nothing about another file's).
         let bases: Vec<String> = conn
             .prepare_cached(
                 "SELECT r.target_name FROM relations r JOIN symbols s ON s.id = r.from_id JOIN symbols o ON o.id = ?1
-                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct') ORDER BY r.line",
+                 JOIN files f ON f.id = r.file_id
+                 WHERE s.name = o.name AND s.container IS o.container AND s.kind IN ('class', 'struct')
+                 ORDER BY f.path, r.line, r.rowid",
             )?
             .query_map([own], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -2890,13 +3157,79 @@ fn identical_parameters(def: &Def, args: &[(Option<String>, Option<TypeExpr>)]) 
     })
 }
 
+/// Of an overload with a fixed number of parameters and a `params` one (`M(…, params E[] rest)`) that agree on the
+/// parameters before the array, the one C# calls, when the arguments' types tell. With no argument for the array, the
+/// fixed one: C# prefers a call's normal form to `params` expanded to nothing. Otherwise the fixed one must take type
+/// parameters there (`M<T>(…, T)`): the `params` one wins for an argument of its array type, taken as is either way
+/// (C# prefers the non-generic of two equally good), and for a collection expression, from which no type parameter
+/// is inferred; the generic one wins for values that aren't of type E, which `params` would convert. Returns the
+/// other, to drop; `None` when the types don't tell.
+fn generic_or_params(defs: &[&Def], left: &[usize], args: &[(Option<String>, Option<TypeExpr>)]) -> Option<usize> {
+    if args.iter().any(|(named, _)| named.is_some()) {
+        return None;
+    }
+    // One such pair among the overloads left (others the types didn't rule out stay as they are).
+    let mut losers = left.iter().flat_map(|&g| left.iter().map(move |&n| (g, n))).filter_map(|(g, n)| pair_loser(defs, g, n, args));
+    let loser = losers.next()?;
+    losers.next().is_none().then_some(loser)
+}
+
+/// [`generic_or_params`] for the fixed overload `g` and the `params` overload `n`.
+fn pair_loser(defs: &[&Def], g: usize, n: usize, args: &[(Option<String>, Option<TypeExpr>)]) -> Option<usize> {
+    if defs[g].max_args.is_none() || defs[n].max_args.is_some() {
+        return None;
+    }
+    let (gp, np) = (defs[g].params.as_deref().and_then(Params::decode)?, defs[n].params.as_deref().and_then(Params::decode)?);
+    let rest = norm_type(&TypeExpr::decode(np.rest.as_deref()?)?)?;
+    let elem = rest.strip_suffix("[]")?;
+    let fixed = np.types.len();
+    if gp.types.len() != args.len() || fixed > args.len() {
+        return None;
+    }
+    // The same parameters before the tail; only type parameters in it.
+    if (0..fixed).any(|k| gp.types[k].is_none() || gp.types[k] != np.types[k]) || gp.types[fixed..].iter().any(Option::is_some) {
+        return None;
+    }
+    // No argument for the array: C# prefers the overload taking the call in its normal form to `params` expanded
+    // to nothing.
+    if args.len() == fixed {
+        return Some(n);
+    }
+    let tail: Vec<String> = args[fixed..].iter().map(|(_, t)| t.as_ref().and_then(norm_type)).collect::<Option<_>>()?;
+    // An integer literal is an `int` as is.
+    let elem_as_is = |t: &String| t == elem || (t == "@int" && elem == "int");
+    match &tail[..] {
+        // A collection expression gives no type parameter a type: only the `params` overload takes it.
+        [one] if *one == rest || one == "@collection" => Some(g),
+        _ if tail.iter().all(elem_as_is) => Some(g),
+        _ if tail.iter().all(|t| !elem_as_is(t) && t != &rest) => Some(n),
+        _ => None,
+    }
+}
+
+/// A type as C# names it, for telling whether an argument is taken as is: a keyword type by its keyword, an array
+/// by its element's name and `[]`; `None` for any other form, which isn't compared.
+fn norm_type(t: &TypeExpr) -> Option<String> {
+    match t {
+        TypeExpr::Named(n) => Some(keyword_type(last_segment(n)).to_string()),
+        TypeExpr::Array(e) => Some(format!("{}[]", norm_type(e)?)),
+        _ => None,
+    }
+}
+
 /// A C# method's parameters as stored (see `FileFacts::param_types`): each one's declared type, encoded (`None` for a
-/// type parameter), and name.
+/// type parameter), and name; a `params` array's type, `rest`, which `types` leaves out; and a generic method's
+/// number of type parameters, `g`.
 #[derive(serde::Deserialize)]
 struct Params {
     types: Vec<Option<String>>,
     #[serde(default)]
     names: Vec<String>,
+    #[serde(default)]
+    rest: Option<String>,
+    /// A generic method's own type parameters' number.
+    #[serde(default)]
+    g: usize,
 }
 
 impl Params {
@@ -2909,12 +3242,13 @@ impl Params {
 const DEF_COLS: &str = "s.id, s.kind, s.container, s.signature LIKE '%static %' OR s.signature LIKE '%class func %', f.path,
      s.container IS NOT NULL AND NOT EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind IN ('class', 'struct', 'enum', 'actor', 'protocol', 'typealias')),
      f.script, s.min_args, s.max_args, REPLACE(s.signature, '( ', '(') LIKE '%(this %', p.name,
-     CASE WHEN f.lang = 'csharp' THEN coalesce(
+     CASE WHEN f.lang IN ('csharp', 'java', 'kotlin') THEN coalesce(
        CASE WHEN json_valid(s.type_name) THEN json_extract(s.type_name, '$.ns') END,
        CASE WHEN json_valid(p.type_name) THEN json_extract(p.type_name, '$.ns') END) END, s.param_types, f.lang,
      s.start_line, s.signature LIKE '%partial %', CASE WHEN f.lang = 'swift' AND s.kind IN ('method', 'function') THEN s.signature END, s.signature LIKE 'export %',
      f.lang = 'swift' AND (' ' || s.signature LIKE '% private %' OR ' ' || s.signature LIKE '% fileprivate %'),
-     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor')";
+     f.lang = 'swift' AND s.container IS NOT NULL AND EXISTS (SELECT 1 FROM symbols t WHERE t.name = substr(s.container, length(rtrim(s.container, replace(s.container, '.', ''))) + 1) AND t.kind = 'actor'),
+     p.kind IS 'typealias', s.scope_start, s.scope_end";
 
 fn def_row(r: &Row) -> rusqlite::Result<Def> {
     let extension: bool = r.get(9)?;
@@ -2937,19 +3271,30 @@ fn def_row(r: &Row) -> rusqlite::Result<Def> {
         partial: r.get(15)?,
         swift_params: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_params),
         is_async: r.get::<_, Option<String>>(16)?.as_deref().is_some_and(swift_async),
+        must_await: r.get::<_, Option<String>>(16)?.as_deref().and_then(swift_effects).is_some_and(|e| e.split_whitespace().any(|w| w == "async")),
         exported: r.get(17)?,
         file_private: r.get(18)?,
         on_actor: r.get(19)?,
+        alias_member: r.get(20)?,
+        scope: match (r.get::<_, Option<u32>>(21)?, r.get::<_, Option<u32>>(22)?) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        },
     })
 }
 
 /// Whether a Swift function's signature declares it `async` (or `reasync`): the effects after its parameter list,
 /// not a closure parameter's (`_ body: () async -> Void`).
 fn swift_async(signature: &str) -> bool {
-    let Some(at) = signature.find("func ") else { return false };
+    swift_effects(signature).is_some_and(|e| e.split_whitespace().any(|w| w == "async" || w == "reasync"))
+}
+
+/// The effects a Swift function's signature declares after its parameter list (`async throws`), before its result.
+fn swift_effects(signature: &str) -> Option<&str> {
+    let at = signature.find("func ")?;
     let after = &signature[at + 5..];
     let mut depth = 0i32;
-    let Some(open) = after.char_indices().find_map(|(i, c)| {
+    let open = after.char_indices().find_map(|(i, c)| {
         match c {
             '<' => depth += 1,
             '>' => depth -= 1,
@@ -2957,22 +3302,17 @@ fn swift_async(signature: &str) -> bool {
             _ => {}
         }
         None
-    }) else {
-        return false;
-    };
+    })?;
     let mut depth = 0i32;
-    let Some(close) = after[open..].char_indices().find_map(|(i, c)| {
+    let close = after[open..].char_indices().find_map(|(i, c)| {
         match c {
             '(' | '[' => depth += 1,
             ')' | ']' => depth -= 1,
             _ => {}
         }
         (depth == 0).then_some(open + i)
-    }) else {
-        return false;
-    };
-    let effects = after[close + 1..].split("->").next().unwrap_or("");
-    effects.split_whitespace().any(|w| w == "async" || w == "reasync")
+    })?;
+    after[close + 1..].split("->").next()
 }
 
 /// A Swift function's parameter, as its signature declares it: what a call has to write for it.
@@ -3890,8 +4230,25 @@ fn under_groups(path: &str, groups: &HashMap<String, Vec<std::result::Result<Str
     if depth >= GROUP_DEPTH {
         return vec![Err(format!("its route group is passed through more than {GROUP_DEPTH} helpers"))];
     }
+    // A marked key (`{@F#i?}`, Go's parameter of one of the repository's own types) may not be a router at all: its
+    // routes are kept only under prefixes a caller passes, never at the root.
+    let (key, marked) = match key.strip_suffix('?') {
+        Some(k) => (k, true),
+        None => (key, false),
+    };
     let none = vec![Ok(String::new())];
-    let prefixes = groups.get(key).filter(|p| !p.is_empty()).unwrap_or(&none);
+    // A method's parameter (`pkg.Type.Method#i`) no caller keys exactly takes the groups passed to a method of that
+    // name on a value whose type the caller's syntax doesn't give (`?.Method#i`, as Go's extractor records them).
+    let loose = key.split_once('#').and_then(|(f, i)| (f.matches('.').count() >= 2).then(|| format!("?.{}#{i}", f.rsplit('.').next().unwrap_or(f))));
+    let prefixes = groups
+        .get(key)
+        .filter(|p| !p.is_empty())
+        .or_else(|| loose.as_ref().and_then(|k| groups.get(k)).filter(|p| !p.is_empty()));
+    let prefixes = match prefixes {
+        Some(p) => p,
+        None if marked => return Vec::new(),
+        None => &none,
+    };
     let mut out = Vec::new();
     for p in prefixes {
         match p {
@@ -4892,6 +5249,61 @@ fn refines(conn: &Connection, name: &str, protocols: &[String]) -> Result<bool> 
 }
 
 /// The SwiftPM target a file is in: `<Name>` of `Sources/<Name>/…` or `Tests/<Name>/…`; `None` outside those layouts.
+/// Swift declarations a module imports by name from outside the repo (`@_exported import struct
+/// SystemPackage.FileDescriptor`), per SwiftPM target. Swift prefers a declaration imported by name over one of the
+/// same name from a module imported whole, so a type the repo declares in another module isn't what such a name
+/// means there.
+#[derive(Default)]
+struct SwiftScoped {
+    /// Per target directory, the names it imports by name from a module that isn't one of the repo's, with that module.
+    by_target: HashMap<String, HashMap<String, String>>,
+}
+
+impl SwiftScoped {
+    /// The module outside the repo that `file`'s target imports `name` from by name, if it does.
+    fn imported_from(&mut self, conn: &Connection, file: &str, name: &str) -> Result<Option<String>> {
+        let Some(target) = swiftpm_target(file) else { return Ok(None) };
+        // The target's directory, `…/Sources/<target>/`.
+        let end = target.as_ptr() as usize - file.as_ptr() as usize + target.len() + 1;
+        let prefix = &file[..end];
+        let target = prefix.to_string();
+        if !self.by_target.contains_key(&target) {
+            let rows: Vec<String> = conn
+                .prepare_cached(
+                    "SELECT DISTINCT i.module FROM imports i JOIN files f ON f.id = i.file_id
+                     WHERE f.lang = 'swift' AND substr(f.path, 1, length(?1)) = ?1 AND i.module LIKE '%.%'",
+                )?
+                .query_map([prefix], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let mut names = HashMap::new();
+            for m in rows {
+                let Some((module, n)) = m.rsplit_once('.') else { continue };
+                let module = module.split('.').next().unwrap_or(module);
+                let repo_module: bool = conn
+                    .prepare_cached(
+                        "SELECT EXISTS(SELECT 1 FROM files WHERE lang = 'swift' AND (path LIKE 'Sources/' || ?1 || '/%' OR path LIKE '%/Sources/' || ?1 || '/%'))",
+                    )?
+                    .query_row([module], |r| r.get(0))?;
+                if !repo_module {
+                    names.insert(n.to_string(), module.to_string());
+                }
+            }
+            self.by_target.insert(target.clone(), names);
+        }
+        Ok(self.by_target[&target].get(name).cloned())
+    }
+}
+
+/// Whether a path is under a SwiftPM `Tests/` directory.
+fn in_tests(path: &str) -> bool {
+    path.starts_with("Tests/") || path.contains("/Tests/")
+}
+
+/// Whether a path is under a SwiftPM `Sources/` directory.
+fn in_sources(path: &str) -> bool {
+    path.starts_with("Sources/") || path.contains("/Sources/")
+}
+
 fn swiftpm_target(path: &str) -> Option<&str> {
     ["Sources/", "Tests/"].iter().find_map(|root| {
         let rest = &path[path.find(root)? + root.len()..];
@@ -5010,7 +5422,12 @@ fn scoped_out_type(
 }
 
 pub(crate) fn resolve_all(conn: &Connection, hits: &mut [RefHit]) -> Result<()> {
-    resolve_hits(conn, hits, true, &mut Resolution::default())
+    resolve_all_in(conn, hits, &mut Resolution::default())
+}
+
+/// [`resolve_all`], reading what resolution needs about the repo through `shared` (kept for `conn`'s snapshot).
+pub(crate) fn resolve_all_in(conn: &Connection, hits: &mut [RefHit], shared: &mut Resolution) -> Result<()> {
+    resolve_hits(conn, hits, true, shared)
 }
 
 /// [`resolve_all`] by the heuristics alone, ignoring any SCIP index: for comparing the two.
@@ -5019,7 +5436,7 @@ pub(crate) fn resolve_heuristic(conn: &Connection, hits: &mut [RefHit]) -> Resul
 }
 
 /// What resolution reads about a repo whatever the name: files' languages and the C# projects they reach, what C#
-/// files see (their namespaces, `using`s and projects), TypeScript and Python imports and where their modules are,
+/// files see (their namespaces, `using`s and projects), TypeScript, Python and Go imports and where their modules are,
 /// which files a SCIP index covers. Each is a function of the index alone, so one `Resolution` serves every call of
 /// [`refs_in`] on one connection at one index state: the reference graph resolves every name in turn, and read each of
 /// these again per name (the repo's C# projects and its whole file list most of all).
@@ -5029,7 +5446,9 @@ pub struct Resolution {
     vis: crate::csharp::Visibility,
     modules: crate::ts::Modules,
     py_modules: crate::py::Modules,
+    go_modules: crate::go::Modules,
     precise: Option<crate::scip::Precise>,
+    swift_scoped: SwiftScoped,
 }
 
 /// Rivals an edge's evidence lists at most (`rivals_total` counts them all).
@@ -5075,11 +5494,16 @@ fn dropped_by(dropped: &mut HashMap<i64, &'static str>, on: bool, before: &[&Def
 
 /// Whether a declaration in `lang` is one code in `file` can name: TypeScript, TSX and JavaScript count as one.
 fn same_language(file: &str, lang: &str) -> bool {
-    let family = if matches!(lang, "typescript" | "tsx" | "javascript") { "ts" } else { lang };
+    let family = match lang {
+        "typescript" | "tsx" | "javascript" => "ts",
+        "java" | "kotlin" => "jvm",
+        l => l,
+    };
     let ext = file.rsplit_once('.').map_or("", |(_, e)| e);
     let of_file = match ext {
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("ts"),
         "cs" => Some("csharp"),
+        "java" | "kt" => Some("jvm"),
         "swift" => Some("swift"),
         "py" => Some("python"),
         "rs" => Some("rust"),
@@ -5120,6 +5544,23 @@ fn why_not(hit: &RefHit, recv: &Receiver, self_chain: &[String], d: &Def) -> &'s
 }
 
 fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: &mut Resolution) -> Result<()> {
+    let mut oracle = TypeOracle::new(conn);
+    // Kept for the next call; an error leaves `shared` without them, to be read again.
+    oracle.vis = std::mem::take(&mut shared.vis);
+    resolve_hits_with(conn, hits, use_scip, shared, &mut oracle)?;
+    shared.vis = oracle.vis;
+    Ok(())
+}
+
+/// [`resolve_hits`] with the type oracle `oracle`, whose caches (what types members have, what code sees) are a
+/// function of the index alone: one oracle can serve successive chunks of one list as it serves the whole list at once.
+fn resolve_hits_with<'c>(
+    conn: &'c Connection,
+    hits: &mut [RefHit],
+    use_scip: bool,
+    shared: &mut Resolution,
+    oracle: &mut TypeOracle<'c>,
+) -> Result<()> {
     let mut precise = match (use_scip, shared.precise.take()) {
         (false, _) => None,
         (true, Some(p)) => Some(p),
@@ -5127,9 +5568,6 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     };
     let mut defs: HashMap<String, Vec<Def>> = HashMap::new();
     let mut targets: HashMap<i64, Target> = HashMap::new();
-    let mut oracle = TypeOracle::new(conn);
-    // Kept for the next call; an error leaves `shared` without them, to be read again.
-    oracle.vis = std::mem::take(&mut shared.vis);
     // Per caller type, or per C# extension method's declaring class: the types an unqualified name is looked up in.
     // The caller's type, whether it is a C# extension method's extended type, and whether the code is in a Swift
     // extension's body.
@@ -5154,10 +5592,13 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
     let mut sql = crate::sql::Resolver::default();
     let mut ansible = crate::ansible::Resolver::default();
     let mut terraform = crate::terraform::Resolver::default();
+    let mut jvm = crate::jvm::Resolver::default();
     let modules = &mut shared.modules;
     let py_modules = &mut shared.py_modules;
+    let go_modules = &mut shared.go_modules;
     // Per C# type, the constructors a creation of it may call.
     let mut ctor_sets: HashMap<i64, Option<CtorSet>> = HashMap::new();
+    let swift_scoped = &mut shared.swift_scoped;
     for hit in hits.iter_mut() {
         hit.ctors = None;
         hit.via_di = None;
@@ -5184,7 +5625,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         } else if crate::sql::is_sql_path(&hit.file) {
             Some((sql.resolve(conn, hit)?, Mechanism::SqlName))
         } else if hit.kind == "call" && hit.name == "init" && hit.file.ends_with(".cs") {
-            chained_constructor(conn, &mut oracle, hit, &mut ctor_sets)?.map(|r| (r, Mechanism::ReceiverType))
+            chained_constructor(conn, oracle, hit, &mut ctor_sets)?.map(|r| (r, Mechanism::ReceiverType))
         } else {
             None
         };
@@ -5213,12 +5654,17 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
         }
         let ts = crate::ts::is_ts_path(&hit.file);
         let cs = hit.file.ends_with(".cs");
+        let java = crate::jvm::handles(&hit.file);
         // In TypeScript an imported name comes from its module, and a bare one from the file itself; in Python a name
         // `from m import`ed, or a member of an `import`ed module, comes from that module.
         let scoped = if ts {
             ts_scoped(conn, hit, modules, &mut defs)?
         } else if hit.file.ends_with(".py") {
             py_scoped(conn, hit, py_modules, &mut defs)?
+        } else if hit.file.ends_with(".go") {
+            Some(go_modules.resolve(conn, hit)?)
+        } else if java {
+            jvm.scoped(conn, hit)?
         } else {
             None
         };
@@ -5249,17 +5695,27 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             ("unresolved", Vec::new())
         } else {
             oracle.file = ts.then(|| hit.file.clone());
+            oracle.jvm_file = java.then(|| hit.file.clone());
             oracle.here = cs.then(|| hit.file.clone());
             oracle.caller = hit.caller_type();
             let mut recv = if cs && !cs_type {
-                let (recv, ns) = cs_receiver(hit, &mut oracle)?;
+                let (recv, ns) = cs_receiver(hit, oracle)?;
                 seen_ns = ns;
                 recv
             } else {
-                receiver(hit, &mut oracle)?
+                receiver(hit, oracle)?
             };
             if ts {
-                recv = ts_receiver(conn, hit, recv, &mut oracle, modules)?;
+                recv = ts_receiver(conn, hit, recv, oracle, modules)?;
+            }
+            // A Swift receiver typed by a name its module imports from a package by name: the package's type.
+            if let Receiver::Known(chain) = &recv
+                && hit.file.ends_with(".swift")
+                && let Some(ty) = chain.first().cloned()
+                && let Some(module) = swift_scoped.imported_from(conn, &hit.file, last_segment(&ty))?
+            {
+                // Named by its module, so the repo's same-named type's members aren't looked up for it.
+                recv = Receiver::Foreign(vec![format!("{module}.{}", last_segment(&ty))]);
             }
             hit.receiver_type = match &recv {
                 Receiver::Known(c) | Receiver::Foreign(c) => c.first().cloned(),
@@ -5360,7 +5816,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             let before = if explain { usable.clone() } else { Vec::new() };
             // Overloads the argument types rule out.
             let usable = if cs && hit.kind == "call" && hit.arg_types.is_some() && usable.len() > 1 {
-                narrow_by_argument_types(&mut oracle, hit, usable)?
+                narrow_by_argument_types(oracle, hit, usable)?
             } else {
                 usable
             };
@@ -5369,6 +5825,14 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             // A Swift type written through a qualifier: only the modules the file is in or imports declare it.
             let usable = if hit.kind == "type_ref" && hit.receiver.is_some() && hit.file.ends_with(".swift") {
                 swift_seen(conn, &hit.file, usable)?
+            } else if matches!(hit.kind.as_str(), "type_ref" | "instantiate")
+                && hit.receiver.is_none()
+                && hit.file.ends_with(".swift")
+                && swift_scoped.imported_from(conn, &hit.file, &hit.name)?.is_some()
+            {
+                // Imported by name from a package (`import struct SystemPackage.FileDescriptor`): that declaration wins
+                // over a same-named type of a module imported whole, so only a type nested where the code is remains.
+                usable.into_iter().filter(|d| d.container.is_some()).collect()
             } else {
                 usable
             };
@@ -5387,9 +5851,18 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             };
             dropped_by(&mut dropped, explain, &before, &usable, "receiver_type");
             let before = if explain { usable.clone() } else { Vec::new() };
-            // A Swift `private` or `fileprivate` declaration is named only in its own file.
-            let usable: Vec<&Def> = usable.into_iter().filter(|d| !d.file_private || d.file == hit.file).collect();
+            // A Swift `private` or `fileprivate` declaration is named only in its own file. A member a test target adds
+            // to a library type in an extension (`extension Deque { mutating func append(contentsOf:) }`) is never
+            // what code under `Sources/` calls: no product target depends on anything under `Tests/`.
+            let usable: Vec<&Def> = usable
+                .into_iter()
+                .filter(|d| !d.file_private || d.file == hit.file)
+                .filter(|d| !(d.lang == "swift" && d.external_container && in_tests(&d.file) && in_sources(&hit.file)))
+                .collect();
             dropped_by(&mut dropped, explain, &before, &usable, "visibility");
+            let before = if explain { usable.clone() } else { Vec::new() };
+            let usable = in_block(hit, usable);
+            dropped_by(&mut dropped, explain, &before, &usable, "scope");
             let (confidence, ids) = resolve(hit, &recv, &self_chains[&caller], &usable);
             // A TypeScript type named through a namespace (`Shapes.Circle`, `Express.Request` in `declare global`),
             // which no type or module the lookup reads declares: the namespace's own declarations of the name.
@@ -5398,6 +5871,18 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                     found if found.is_empty() => (confidence, ids),
                     found => (if found.len() == 1 { "exact" } else { "ambiguous" }, found),
                 },
+                _ => (confidence, ids),
+            };
+            // A TypeScript member reached through a property of a value whose type isn't known (`c.req.header(…)`, `c` a
+            // handler's untyped parameter): of the candidates, those a type's property of that name can hold. Kept
+            // ambiguous: the value may be of a type the repo doesn't declare.
+            let (confidence, ids) = match hit.receiver.as_deref() {
+                Some(r) if ts && confidence == "ambiguous" && hit.kind != "type_ref" && matches!(recv, Receiver::Unknown) => {
+                    match through_property(oracle, r, named, &ids)? {
+                        Some(kept) if !kept.is_empty() && kept.len() < ids.len() => (confidence, kept),
+                        _ => (confidence, ids),
+                    }
+                }
                 _ => (confidence, ids),
             };
             if explain {
@@ -5453,6 +5938,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             if before != "exact" && confidence == "exact" {
                 exact_by = Mechanism::Namespace;
             }
+        }
+        if java && !by_import {
+            (confidence, ids) = jvm.after(conn, hit, receiver_known, (confidence, ids))?;
         }
         if cs_type && matches!(confidence, "unique_name" | "ambiguous") && scoped_out_type(&defs[&hit.name], named, &ids, conn, hit, qualifier.as_deref(), &mut oracle.vis)? {
             confidence = "exact";
@@ -5511,7 +5999,9 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 }
             }
         }
-        if confidence == "exact" && !hit.precise && through_requirement(conn, hit, &ids)? {
+        // A Java call through an interface binds to the interface's method, as javac does; the requirement is the target.
+        // A Go answer is the Go rules' own, receivers included (see `crate::go`).
+        if confidence == "exact" && !hit.precise && !java && !hit.file.ends_with(".go") && through_requirement(conn, hit, &ids)? {
             if conformance_seen(conn, hit, &ids)? {
                 // The member that runs is the library type's own: the requirement is listed, not linked.
                 hit.basis = Some(VIA_PROTOCOL);
@@ -5581,7 +6071,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 };
                 hit.ctors = Some(match precise_ctor {
                     Some(c) => vec![c],
-                    None => constructors_called(&mut oracle, hit, set)?,
+                    None => constructors_called(oracle, hit, set)?,
                 });
             }
         }
@@ -5595,7 +6085,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             let service = service.rsplit('.').next().unwrap_or(service).to_string();
             // A generic service is one service per type arguments (`IHandler<Order>`, `IHandler<Invoice>`), and
             // same-named services in two namespaces are two services.
-            let args = service_args(&mut oracle, hit, written_receiver.as_deref(), &service)?;
+            let args = service_args(oracle, hit, written_receiver.as_deref(), &service)?;
             let ns = named.iter().find(|d| d.id == hit.target_ids[0]).and_then(|d| d.ns.clone());
             let identity = match &args {
                 Some(a) => format!("{service}<{}>@{}", a.iter().map(|a| a.as_deref().unwrap_or("?")).collect::<Vec<_>>().join(","), ns.as_deref().unwrap_or("")),
@@ -5622,7 +6112,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 let b = match crate::di::single(registered[&identity].clone(), &service) {
                     Some(reg) => {
                         let reg = near.clone().unwrap_or(reg);
-                        bound_member(conn, &mut oracle, &reg, &service, &hit.name, hit.args, hit.target_ids[0])?
+                        bound_member(conn, oracle, &reg, &service, &hit.name, hit.args, hit.target_ids[0])?
                     }
                     None => None,
                 };
@@ -5651,7 +6141,7 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
                 let at = format!("{}:{} {}", reg.file, reg.line, reg.implementation.as_deref().unwrap_or(""));
                 let key = (service.clone(), hit.name.clone(), hit.args, Some(at));
                 if !bound.contains_key(&key) {
-                    let b = bound_member(conn, &mut oracle, &reg, &key.0, &hit.name, hit.args, hit.target_ids.first().copied().unwrap_or(-1))?;
+                    let b = bound_member(conn, oracle, &reg, &key.0, &hit.name, hit.args, hit.target_ids.first().copied().unwrap_or(-1))?;
                     bound.insert(key.clone(), b);
                 }
                 if let Some(mut b) = bound[&key].clone().filter(|b| !members.iter().any(|m| m.target.id == b.target.id)) {
@@ -5675,7 +6165,6 @@ fn resolve_hits(conn: &Connection, hits: &mut [RefHit], use_scip: bool, shared: 
             }
         }
     }
-    shared.vis = oracle.vis;
     if use_scip {
         shared.precise = precise;
     }
@@ -5819,12 +6308,13 @@ fn cs_namespaces(
 }
 
 /// Whether a top-level TypeScript declaration of kind `def_kind` can be what a `ref_kind` reference names: a module's
-/// constants and functions are values (`SetCart(…)`, `ofType(SetCart)`, `inject(TOKEN)`) as much as its classes.
+/// constants and functions are values (`SetCart(…)`, `ofType(SetCart)`, `inject(TOKEN)`) as much as its classes. A
+/// class can't be called without `new`, so a call naming one is a JSX tag rendering a class component (`<Board />`).
 fn ts_top_level_compatible(ref_kind: &str, def_kind: &str) -> bool {
     match ref_kind {
         "type_ref" | "member" => !matches!(def_kind, "init" | "case" | "method"),
         "instantiate" => matches!(def_kind, "class" | "function" | "property"),
-        "call" => matches!(def_kind, "function" | "property"),
+        "call" => matches!(def_kind, "function" | "property" | "class"),
         _ => false,
     }
 }
@@ -5888,17 +6378,41 @@ fn ts_scoped(
             }))
         }
         None if hit.receiver.is_none() && hit.kind != "member" => {
-            let own: Vec<i64> = defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).map(|d| d.id).collect();
+            let own: Vec<i64> = in_block(hit, defs[&hit.name].iter().filter(|d| top(d, &hit.kind) && d.file == hit.file).collect()).iter().map(|d| d.id).collect();
             if !own.is_empty() {
                 return Ok(Some(("exact", own)));
             }
             // Neither declared here nor imported: a global, the repo's only when a script of its declares it.
-            if !is_js(&hit.file) && !modules.sees(conn, &hit.file, &hit.name)? {
+            // An interface or type alias comes only through an import or a global declaration, never a bundler's
+            // globals: a module naming one it doesn't import names the platform's (`Response`).
+            let type_only = hit.kind == "type_ref" && {
+                let mut decls = defs[&hit.name].iter().filter(|d| top(d, &hit.kind)).peekable();
+                decls.peek().is_some() && decls.all(|d| matches!(d.kind.as_str(), "protocol" | "typealias"))
+            };
+            if !is_js(&hit.file) && !modules.sees_as(conn, &hit.file, &hit.name, type_only)? {
                 return Ok(Some(("unresolved", Vec::new())));
             }
             Ok(None)
         }
         None => Ok(None),
+    }
+}
+
+/// Of `defs`, those `hit` can name where it is. A declaration inside a function body (a `const` or `type` in a test's
+/// callback) is named only there, and never through a value (`x.name`) unless it is a local type's member; of those
+/// holding the reference, the innermost shadows the others and every declaration outside it, as a block's own
+/// declaration does.
+fn in_block<'d>(hit: &RefHit, defs: Vec<&'d Def>) -> Vec<&'d Def> {
+    let visible: Vec<&Def> = defs
+        .into_iter()
+        .filter(|d| match d.scope {
+            None => true,
+            Some((a, b)) => d.file == hit.file && (a..=b).contains(&hit.line) && (hit.receiver.is_none() || d.container.is_some()),
+        })
+        .collect();
+    match visible.iter().filter(|d| d.container.is_none()).filter_map(|d| d.scope.map(|(a, b)| b - a)).min() {
+        Some(w) if hit.receiver.is_none() => visible.into_iter().filter(|d| d.container.is_some() || d.scope.is_some_and(|(a, b)| b - a == w)).collect(),
+        _ => visible,
     }
 }
 
@@ -6042,6 +6556,12 @@ pub fn refs(conn: &Connection, query: &str, kinds: &[&str], limit: usize) -> Res
     refs_with(conn, query, kinds, limit, &[])
 }
 
+/// Every reference to `query` of `kinds`, as [`refs`] gives them uncut, reading what resolution needs about the repo
+/// through `shared` (kept for `conn`'s snapshot): a walk resolves many names on one snapshot.
+pub(crate) fn refs_in_resolution(conn: &Connection, query: &str, kinds: &[&str], shared: &mut Resolution) -> Result<Vec<RefHit>> {
+    Ok(refs_filtered(conn, query, kinds, usize::MAX, &[], false, shared)?.0)
+}
+
 /// [`refs`], also resolving references that leave the repo against `deps`.
 pub fn refs_with(
     conn: &Connection,
@@ -6132,6 +6652,61 @@ pub fn refs_in_chunks(
     Ok(())
 }
 
+/// References resolved at a time by [`refs_kept`] and [`refs_named_map`]: a few megabytes of them. Resolution's
+/// caches other than the type oracle start afresh each chunk, so a smaller chunk reads more again (2,048 cost 2% more
+/// instructions on bitwarden/server's unused symbols, and saved no memory).
+const KEPT_CHUNK: usize = 16_384;
+
+/// [`refs`] of `kinds` with no limit, keeping only the references `pre` keeps before resolution and `keep` keeps
+/// after, in the same order. For callers that ask for every reference to a common name (a member called `Id`,
+/// constructor chaining's `init`) and then keep a few: references `pre` drops are never resolved, and the rest are
+/// resolved a chunk at a time and dropped as each chunk is done, so the name's references are never all held.
+///
+/// The answer is what filtering [`refs`] gives: each reference resolves on its own (the caches resolution keeps only
+/// spare reading again; see [`refs_in_chunks`]), filtering commutes with the stable sort placing factory
+/// constructions, and `pre` may read only what a reference has before resolution (its name, kind, receiver, file,
+/// line and referencing symbol; never its confidence or targets, nor `receiver_type`, which resolution narrows).
+pub fn refs_kept(
+    conn: &Connection,
+    query: &str,
+    kinds: &[&str],
+    mut pre: impl FnMut(&RefHit) -> bool,
+    mut keep: impl FnMut(&RefHit) -> bool,
+) -> Result<Vec<RefHit>> {
+    let (container, name) = ref_query(conn, query)?;
+    if container.is_some() {
+        // `Type.member` keeps references by their targets after the whole list is resolved: rare, and filtered as is.
+        let (mut hits, _) = refs(conn, query, kinds, usize::MAX)?;
+        hits.retain(|h| keep(h));
+        return Ok(hits);
+    }
+    let mut out = Vec::new();
+    {
+        let mut stmt = conn.prepare_cached(&refs_named_sql(true))?;
+        let lower = name.to_lowercase();
+        let mut rows = stmt
+            .query_map([name, &lower], ref_row)?
+            .filter(|r| r.as_ref().map_or(true, |h| (kinds.is_empty() || kinds.contains(&h.kind.as_str())) && pre(h)));
+        let mut shared = Resolution::default();
+        let mut oracle = TypeOracle::new(conn);
+        loop {
+            let mut hits: Vec<RefHit> = rows.by_ref().take(KEPT_CHUNK).collect::<rusqlite::Result<_>>()?;
+            if hits.is_empty() {
+                break;
+            }
+            resolve_hits_with(conn, &mut hits, true, &mut shared, &mut oracle)?;
+            out.extend(hits.into_iter().filter(|h| keep(h)));
+        }
+    }
+    if (kinds.is_empty() || kinds.contains(&"instantiate"))
+        && let Some(more) = factory_constructions(conn)?.get(name)
+    {
+        out.extend(more.iter().filter(|h| pre(h) && keep(h)).cloned());
+        out.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    }
+    Ok(out)
+}
+
 fn refs_filtered(
     conn: &Connection,
     query: &str,
@@ -6208,23 +6783,35 @@ fn add_factory_constructions(conn: &Connection, name: &str, hits: &mut Vec<RefHi
     Ok(())
 }
 
+/// Indexes whose factory constructions [`factory_constructions`] keeps: a server answering across a workspace opens
+/// every repo's index in turn, and would otherwise keep one map per repo for as long as it runs.
+const FACTORY_CACHED: usize = 4;
+
 pub(crate) fn factory_constructions(conn: &Connection) -> Result<std::sync::Arc<HashMap<String, Vec<RefHit>>>> {
-    type Cache = HashMap<(String, String), std::sync::Arc<HashMap<String, Vec<RefHit>>>>;
-    static CACHE: std::sync::Mutex<Option<Cache>> = std::sync::Mutex::new(None);
+    // Most recently used last.
+    type Cache = Vec<((String, String), std::sync::Arc<HashMap<String, Vec<RefHit>>>)>;
+    static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(Vec::new());
     let generation: String =
         conn.query_row("SELECT value FROM meta WHERE key = 'tree_gen'", [], |r| r.get(0)).optional()?.unwrap_or_default();
     let key = (conn.path().unwrap_or_default().to_string(), generation);
-    if !key.0.is_empty()
-        && let Some(v) = CACHE.lock().expect("cache lock").as_ref().and_then(|c| c.get(&key))
-    {
-        return Ok(v.clone());
+    if !key.0.is_empty() {
+        let mut cache = CACHE.lock().expect("cache lock");
+        if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+            let entry = cache.remove(i);
+            let v = entry.1.clone();
+            cache.push(entry);
+            return Ok(v);
+        }
     }
     let v = std::sync::Arc::new(factory_constructions_uncached(conn)?);
     if !key.0.is_empty() {
         let mut cache = CACHE.lock().expect("cache lock");
-        let c = cache.get_or_insert_with(HashMap::new);
-        c.retain(|(path, _), _| *path != key.0);
-        c.insert(key, v.clone());
+        // An index's earlier generations are never asked for again.
+        cache.retain(|((path, _), _)| *path != key.0);
+        if cache.len() >= FACTORY_CACHED {
+            cache.remove(0);
+        }
+        cache.push((key, v.clone()));
     }
     Ok(v)
 }
@@ -6435,6 +7022,15 @@ fn injected_member(conn: &Connection, oracle: &mut TypeOracle, caller: Option<&s
 /// Every reference using one of `names`, resolved in one pass that shares its caches: for whole-repo questions
 /// (unused symbols) that would otherwise resolve name by name.
 pub fn refs_named(conn: &Connection, names: &[&str]) -> Result<Vec<RefHit>> {
+    refs_named_where(conn, names, |_| true)
+}
+
+/// [`refs_named`], keeping only the references `keep` accepts, tested on each row as read and before any is resolved:
+/// for a caller that wants a few of a common name's references (`Id`, `Name`), which would otherwise resolve, and hold
+/// at once, every one in the repo. `keep` may read only what a row holds unresolved (its kind, `assigns`, `from`,
+/// file and line), never a confidence or targets. Each reference resolves on its own (see [`refs_in_chunks`]), so the
+/// ones kept come out as [`refs_named`] gives them.
+pub fn refs_named_where(conn: &Connection, names: &[&str], keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
     let sql = format!(
         "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
          WHERE r.name = ?1 ORDER BY f.path, r.line"
@@ -6442,13 +7038,73 @@ pub fn refs_named(conn: &Connection, names: &[&str]) -> Result<Vec<RefHit>> {
     let mut stmt = conn.prepare_cached(&sql)?;
     let mut hits = Vec::new();
     for name in names {
-        hits.extend(stmt.query_map([name], ref_row)?.collect::<rusqlite::Result<Vec<_>>>()?);
+        for h in stmt.query_map([name], ref_row)? {
+            let h = h?;
+            if keep(&h) {
+                hits.push(h);
+            }
+        }
     }
     resolve_all(conn, &mut hits)?;
     for name in names {
         add_factory_constructions(conn, name, &mut hits)?;
     }
+    // The factory constructions come resolved, and few: tested once added. Their stable sort into place leaves the
+    // rest in the order filtering after it would.
+    hits.retain(&keep);
     Ok(hits)
+}
+
+/// [`refs_named`], handing each reference to `f` as it is resolved and keeping what `f` makes of it, in the order
+/// [`refs_named`] gives (`at` is where a kept value's reference is, for placing the factory constructions). The
+/// references are resolved a chunk at a time and dropped once `f` has seen them: over every candidate's name in a
+/// repo (unused symbols) they run to a million, and a resolved one carries its targets.
+///
+/// Each reference resolves on its own (see [`refs_in_chunks`]), and the stable sort placing factory constructions
+/// keeps what `f` keeps in the order it has among the rest, so the values are those of mapping [`refs_named`].
+pub fn refs_named_map<T>(
+    conn: &Connection,
+    names: &[&str],
+    mut f: impl FnMut(RefHit) -> Option<T>,
+    at: impl Fn(&T) -> (&str, u32),
+) -> Result<Vec<T>> {
+    let sql = format!(
+        "SELECT {REF_COLS} FROM refs r JOIN files f ON f.id = r.file_id LEFT JOIN symbols fs ON fs.id = r.from_id
+         WHERE r.name = ?1 ORDER BY f.path, r.line"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let mut shared = Resolution::default();
+    let mut out = Vec::new();
+    let mut pending: Vec<RefHit> = Vec::new();
+    let mut oracle = TypeOracle::new(conn);
+    let mut flush = |pending: &mut Vec<RefHit>, out: &mut Vec<T>, f: &mut dyn FnMut(RefHit) -> Option<T>| -> Result<()> {
+        resolve_hits_with(conn, pending, true, &mut shared, &mut oracle)?;
+        out.extend(pending.drain(..).filter_map(f));
+        Ok(())
+    };
+    for name in names {
+        for row in stmt.query_map([name], ref_row)? {
+            pending.push(row?);
+            if pending.len() >= KEPT_CHUNK {
+                flush(&mut pending, &mut out, &mut f)?;
+            }
+        }
+    }
+    if !pending.is_empty() {
+        flush(&mut pending, &mut out, &mut f)?;
+    }
+    let made = factory_constructions(conn)?;
+    let mut placed = false;
+    for name in names {
+        if let Some(more) = made.get(*name) {
+            out.extend(more.iter().cloned().filter_map(&mut f));
+            placed = true;
+        }
+    }
+    if placed {
+        out.sort_by(|a, b| at(a).cmp(&at(b)));
+    }
+    Ok(out)
 }
 
 fn summarize(hits: &[RefHit]) -> RefSummary {
@@ -6891,18 +7547,24 @@ pub fn context_with(
     } else {
         (symbol.name.clone(), &["call", "member"])
     };
-    let (all_callers, _) = refs(conn, &caller_name, caller_kinds, usize::MAX)?;
     let target_id = if symbol.kind == "init" {
         definitions(conn, symbol.container.as_deref().unwrap_or(""))?.first().map(|d| d.id)
     } else {
         Some(symbol.id)
     };
-    let mut callers: Vec<RefHit> = all_callers
-        .iter()
-        .filter(|h| h.confidence != "external_likely")
-        .filter(|h| target_id.is_some_and(|id| h.may_target(id)))
-        .cloned()
-        .collect();
+    // An implementation is also called through the interface member it implements, or the base member it overrides.
+    let implemented = if matches!(symbol.kind.as_str(), "method" | "property") && symbol.container.is_some() {
+        implemented_members(conn, &symbol)?
+    } else {
+        Vec::new()
+    };
+    // Only references reaching the symbol, directly or through one of `implemented`, are ever read: a member named `Id`
+    // has thousands of others, not kept while they are resolved.
+    let all_callers = refs_kept(conn, &caller_name, caller_kinds, |_| true, |h| {
+        h.confidence != "external_likely"
+            && (target_id.is_some_and(|id| h.may_target(id)) || implemented.iter().any(|m| m.through(h, symbol.id).is_some()))
+    })?;
+    let mut callers: Vec<RefHit> = all_callers.iter().filter(|h| target_id.is_some_and(|id| h.may_target(id))).cloned().collect();
     if symbol.kind == "init" {
         // A constructor's callers are the creations its arguments pick, and the constructors chaining to it.
         let several = definitions(conn, &symbol.qualified())?.iter().filter(|d| d.kind == "init").count() > 1;
@@ -6921,21 +7583,17 @@ pub fn context_with(
                 true
             }
         });
-        let (chained, _) = refs(conn, "init", &["call"], usize::MAX)?;
-        callers.extend(chained.into_iter().filter(|h| h.may_target(symbol.id)));
+        // Every constructor chaining in the repo is a call of `init`: only those reaching this one are kept.
+        callers.extend(refs_kept(conn, "init", &["call"], |_| true, |h| h.may_target(symbol.id))?);
     }
-    // An implementation is also called through the interface member it implements, or the base member it overrides.
-    if matches!(symbol.kind.as_str(), "method" | "property") && symbol.container.is_some() {
-        let members = implemented_members(conn, &symbol)?;
-        if !members.is_empty() {
-            let direct: HashSet<(&str, u32)> = callers.iter().map(|c| (c.file.as_str(), c.line)).collect();
-            let through: Vec<RefHit> = all_callers
-                .iter()
-                .filter(|h| h.confidence != "external_likely" && !direct.contains(&(h.file.as_str(), h.line)))
-                .filter_map(|h| members.iter().find_map(|m| m.through(h, symbol.id)))
-                .collect();
-            callers.extend(through);
-        }
+    if !implemented.is_empty() {
+        let direct: HashSet<(&str, u32)> = callers.iter().map(|c| (c.file.as_str(), c.line)).collect();
+        let through: Vec<RefHit> = all_callers
+            .iter()
+            .filter(|h| h.confidence != "external_likely" && !direct.contains(&(h.file.as_str(), h.line)))
+            .filter_map(|h| implemented.iter().find_map(|m| m.through(h, symbol.id)))
+            .collect();
+        callers.extend(through);
     }
     // Most certain first, then by location.
     callers.sort_by_key(|h| (confidence_rank(h.confidence), h.file.clone(), h.line));
@@ -7057,10 +7715,15 @@ impl Implemented {
 /// members it overrides: same-named members of the same kind, taking the same arguments, in the type's supertypes,
 /// transitively.
 pub fn implemented_members(conn: &Connection, sym: &SymbolRow) -> Result<Vec<Implemented>> {
+    implemented_members_with(conn, sym, &mut DefinitionsMemo::default())
+}
+
+/// [`implemented_members`], looking definitions up through `defs` (kept for `conn`'s snapshot).
+pub fn implemented_members_with(conn: &Connection, sym: &SymbolRow, defs: &mut DefinitionsMemo) -> Result<Vec<Implemented>> {
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
     let short = container.rsplit('.').next().unwrap_or(container).to_string();
     let parents = supertypes(conn, &short)?;
-    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false)
+    implemented_in(conn, conn, sym, parents, HashSet::from([short]), false, defs)
 }
 
 /// Whether a member taking `a` (min_args, max_args) and one taking `b` take the same parameters, as an
@@ -7078,7 +7741,7 @@ pub fn implemented_members_in(conn: &Connection, dep: &Connection, sym: &SymbolR
     if outside.is_empty() {
         return Ok(Vec::new());
     }
-    implemented_in(conn, dep, sym, outside, seen, true)
+    implemented_in(conn, dep, sym, outside, seen, true, &mut DefinitionsMemo::default())
 }
 
 /// Whether `sym`'s type names a supertype, directly or through its own repo's types, that its repo (`conn`) doesn't
@@ -7223,6 +7886,8 @@ fn implemented_in(
     start: Vec<String>,
     mut seen: HashSet<String>,
     dependency: bool,
+    // Definitions in `types`, remembered.
+    defs: &mut DefinitionsMemo,
 ) -> Result<Vec<Implemented>> {
     let same_repo = !dependency;
     let Some(container) = sym.container.as_deref() else { return Ok(Vec::new()) };
@@ -7245,11 +7910,12 @@ fn implemented_in(
                 continue;
             }
             queue.push(p.clone());
-            let interface = definitions(types, &p)?.iter().any(|d| d.kind == "protocol");
+            let interface = defs.get(types, &p)?.iter().any(|d| d.kind == "protocol");
             if !interface && !overrides {
                 continue;
             }
-            let mut members: Vec<SymbolRow> = definitions(types, &format!("{p}.{}", sym.name))?
+            let mut members: Vec<SymbolRow> = defs
+                .get(types, &format!("{p}.{}", sym.name))?
                 .into_iter()
                 .filter(|d| {
                     !(same_repo && d.id == sym.id)
@@ -7285,7 +7951,7 @@ fn implemented_in(
                 // Implemented elsewhere too: by another type (this type's other overloads don't count, nor do test
                 // doubles beside one real implementation).
                 let mut shared = dependency || !interface;
-                for i in crate::db::running_implementations(types, m.id)? {
+                for &i in defs.running_implementations(types, m.id)? {
                     let c: Option<String> = types.prepare_cached("SELECT container FROM symbols WHERE id = ?1")?.query_row([i], |r| r.get(0))?;
                     shared |= c.as_deref() != Some(container);
                 }
@@ -7813,6 +8479,33 @@ mod tests {
         let lone = ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!Get}").unwrap();
         assert!(lone.as_ref().is_err_and(|why| why.contains("src/Lone")), "{lone:?}");
         assert_eq!(ctl.paths(&mut c, "LoneController", "src/Lone/LoneController.cs", "{^!*Help}").unwrap(), ok(&[]));
+    }
+
+    #[test]
+    fn a_method_no_caller_keys_takes_groups_passed_to_its_name() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> = [
+            ("?.Register#0".to_string(), vec![Ok("api".to_string())]),
+            ("orchard.Picker.Mount#0".to_string(), vec![Ok("v2".to_string())]),
+            ("?.Mount#0".to_string(), vec![Ok("other".to_string())]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(under_groups("{@orchard.Picker.Register#0}trees", &groups, 0), [Ok("api/trees".to_string())]);
+        // An exactly keyed caller wins over the name.
+        assert_eq!(under_groups("{@orchard.Picker.Mount#0}trees", &groups, 0), [Ok("v2/trees".to_string())]);
+        // A function (`pkg.F`) is always keyed exactly by its callers.
+        assert_eq!(under_groups("{@orchard.Register#0}trees", &groups, 0), [Ok("trees".to_string())]);
+    }
+
+    #[test]
+    fn a_marked_key_needs_a_caller_passing_a_router() {
+        let groups: HashMap<String, Vec<std::result::Result<String, String>>> =
+            [("api.Route#0".to_string(), vec![Ok(String::new()), Ok("1.0".to_string())])].into_iter().collect();
+        // A parameter of the repository's own type that a caller passes a router: under each prefix passed.
+        assert_eq!(under_groups("{@api.Route#0?}health", &groups, 0), [Ok("health".to_string()), Ok("1.0/health".to_string())]);
+        // One no caller passes a router (a cache's `Get`): no route, where an unmarked key would be at the root.
+        assert_eq!(under_groups("{@cache.Warm#0?}health", &groups, 0), Vec::<std::result::Result<String, String>>::new());
+        assert_eq!(under_groups("{@cache.Warm#0}health", &groups, 0), [Ok("health".to_string())]);
     }
 
     #[test]

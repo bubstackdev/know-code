@@ -1,0 +1,2273 @@
+{
+ "agreement": {
+  "differ": [],
+  "same": 139,
+  "symbols": 139
+ },
+ "binary": "d16effddd8bc70de",
+ "clauses": {
+  "route": 5
+ },
+ "figures": {
+  "all": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.436,
+      0.97
+     ],
+     "k": 5,
+     "n": 6
+    },
+    "recall": {
+     "ci": [
+      0.018,
+      0.095
+     ],
+     "k": 5,
+     "n": 118
+    },
+    "sites": 105,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.436,
+      0.97
+     ],
+     "k": 5,
+     "n": 6
+    },
+    "recall": {
+     "ci": [
+      0.018,
+      0.095
+     ],
+     "k": 5,
+     "n": 118
+    },
+    "sites": 101,
+    "uncertain": 0
+   }
+  },
+  "group:flipt": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "sites": 8,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "sites": 8,
+    "uncertain": 0
+   }
+  },
+  "group:gotify": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.143
+     ],
+     "k": 0,
+     "n": 23
+    },
+    "sites": 22,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.143
+     ],
+     "k": 0,
+     "n": 23
+    },
+    "sites": 22,
+    "uncertain": 0
+   }
+  },
+  "group:opengist": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.436,
+      0.97
+     ],
+     "k": 5,
+     "n": 6
+    },
+    "recall": {
+     "ci": [
+      0.177,
+      0.645
+     ],
+     "k": 5,
+     "n": 13
+    },
+    "sites": 14,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.436,
+      0.97
+     ],
+     "k": 5,
+     "n": 6
+    },
+    "recall": {
+     "ci": [
+      0.177,
+      0.645
+     ],
+     "k": 5,
+     "n": 13
+    },
+    "sites": 14,
+    "uncertain": 0
+   }
+  },
+  "group:sftpgo": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.045
+     ],
+     "k": 0,
+     "n": 82
+    },
+    "sites": 61,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.0
+     ],
+     "k": 0,
+     "n": 0
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.045
+     ],
+     "k": 0,
+     "n": 82
+    },
+    "sites": 57,
+    "uncertain": 0
+   }
+  },
+  "language:Go": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.793
+     ],
+     "k": 0,
+     "n": 1
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.041
+     ],
+     "k": 0,
+     "n": 90
+    },
+    "sites": 71,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.0,
+      0.793
+     ],
+     "k": 0,
+     "n": 1
+    },
+    "recall": {
+     "ci": [
+      0.0,
+      0.041
+     ],
+     "k": 0,
+     "n": 90
+    },
+    "sites": 67,
+    "uncertain": 0
+   }
+  },
+  "language:TypeScript and JavaScript": {
+   "all": {
+    "precision": {
+     "ci": [
+      0.566,
+      1.0
+     ],
+     "k": 5,
+     "n": 5
+    },
+    "recall": {
+     "ci": [
+      0.079,
+      0.356
+     ],
+     "k": 5,
+     "n": 28
+    },
+    "sites": 34,
+    "uncertain": 0
+   },
+   "without_dynamic": {
+    "precision": {
+     "ci": [
+      0.566,
+      1.0
+     ],
+     "k": 5,
+     "n": 5
+    },
+    "recall": {
+     "ci": [
+      0.079,
+      0.356
+     ],
+     "k": 5,
+     "n": 28
+    },
+    "sites": 34,
+    "uncertain": 0
+   }
+  }
+ },
+ "file_only": {
+  "figures": {
+   "all": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.39
+      ],
+      "k": 0,
+      "n": 6
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.033
+      ],
+      "k": 0,
+      "n": 113
+     },
+     "sites": 105,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.39
+      ],
+      "k": 0,
+      "n": 6
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.033
+      ],
+      "k": 0,
+      "n": 113
+     },
+     "sites": 101,
+     "uncertain": 0
+    }
+   },
+   "group:flipt": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "sites": 8,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "sites": 8,
+     "uncertain": 0
+    }
+   },
+   "group:gotify": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.143
+      ],
+      "k": 0,
+      "n": 23
+     },
+     "sites": 22,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.143
+      ],
+      "k": 0,
+      "n": 23
+     },
+     "sites": 22,
+     "uncertain": 0
+    }
+   },
+   "group:opengist": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.39
+      ],
+      "k": 0,
+      "n": 6
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.324
+      ],
+      "k": 0,
+      "n": 8
+     },
+     "sites": 14,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.39
+      ],
+      "k": 0,
+      "n": 6
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.324
+      ],
+      "k": 0,
+      "n": 8
+     },
+     "sites": 14,
+     "uncertain": 0
+    }
+   },
+   "group:sftpgo": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.045
+      ],
+      "k": 0,
+      "n": 82
+     },
+     "sites": 61,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.0
+      ],
+      "k": 0,
+      "n": 0
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.045
+      ],
+      "k": 0,
+      "n": 82
+     },
+     "sites": 57,
+     "uncertain": 0
+    }
+   },
+   "language:Go": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.793
+      ],
+      "k": 0,
+      "n": 1
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.041
+      ],
+      "k": 0,
+      "n": 90
+     },
+     "sites": 71,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.793
+      ],
+      "k": 0,
+      "n": 1
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.041
+      ],
+      "k": 0,
+      "n": 90
+     },
+     "sites": 67,
+     "uncertain": 0
+    }
+   },
+   "language:TypeScript and JavaScript": {
+    "all": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.434
+      ],
+      "k": 0,
+      "n": 5
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.143
+      ],
+      "k": 0,
+      "n": 23
+     },
+     "sites": 34,
+     "uncertain": 0
+    },
+    "without_dynamic": {
+     "precision": {
+      "ci": [
+       0.0,
+       0.434
+      ],
+      "k": 0,
+      "n": 5
+     },
+     "recall": {
+      "ci": [
+       0.0,
+       0.143
+      ],
+      "k": 0,
+      "n": 23
+     },
+     "sites": 34,
+     "uncertain": 0
+    }
+   }
+  }
+ },
+ "labels": "eval/route-links-go-v1/labels.jsonl",
+ "rule": "route-links-v1",
+ "sites": [
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/internal/server/authn/method/github/server.go:268",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/internal/server/authn/method/github/server.go:277",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/internal/server/authn/method/kubernetes/validator.go:155",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/internal/server/authn/method/kubernetes/validator.go:164",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/ui/src/app/auth/Login.tsx:66",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/ui/src/data/api.ts:171",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/ui/src/data/api.ts:96",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "flipt",
+   "id": "flipt/ui/src/utils/redux-rtk.ts:18",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/application/AppStore.ts:102",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /application"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/application/AppStore.ts:23",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "DELETE /application/:id"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/application/AppStore.ts:32",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /application/:id/image"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/application/AppStore.ts:40",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "PUT /application/:id/security"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/application/AppStore.ts:51",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "DELETE /application/:id/image"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/application/AppStore.ts:91",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "PUT /application/:id"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/client/ClientStore.ts:28",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "PUT /client/:id"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/client/ClientStore.ts:41",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /client"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/client/ClientStore.ts:58",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /client/:id/elevate"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/CurrentUser.ts:127",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /auth/logout"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/message/MessagesStore.ts:124",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "DELETE /message/:id"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/message/MessagesStore.ts:151",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /message"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/message/MessagesStore.ts:189",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "GET /message"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/message/MessagesStore.ts:191",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "GET /application/:id/message"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/message/MessagesStore.ts:86",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "DELETE /message"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/message/MessagesStore.ts:90",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "DELETE /application/:id/message"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/plugin/PluginStore.ts:16",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "GET /plugin/:id/config"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/plugin/PluginStore.ts:19",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "GET /plugin/:id/display"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/plugin/PluginStore.ts:36",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /plugin/:id/config"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/plugin/PluginStore.ts:45",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /plugin/:id/enable",
+    "POST /plugin/:id/disable"
+   ],
+   "required": 2,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/user/UserStore.ts:24",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /user"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "gotify",
+   "id": "gotify-server/ui/src/user/UserStore.ts:31",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [
+    "POST /user/:id"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/internal/auth/oauth/gitea.go:71",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/internal/auth/oauth/github.go:68",
+   "language": "Go",
+   "links": 1,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": [
+    "GET /:user at opengist/internal/web/server/router.go:188"
+   ]
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/internal/auth/oauth/gitlab.go:74",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/internal/auth/oauth/gitlab.go:90",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/internal/ipc/ipc.go:79",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/ipc/hook/pre-receive",
+    "POST /api/ipc/hook/post-receive",
+    "POST /api/ipc/ssh/keys",
+    "POST /api/ipc/ssh/command"
+   ],
+   "required": 4,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/internal/ipc/ipc.go:86",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/ipc/hook/pre-receive",
+    "POST /api/ipc/hook/post-receive",
+    "POST /api/ipc/ssh/keys",
+    "POST /api/ipc/ssh/command"
+   ],
+   "required": 4,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {
+    "route": 1
+   },
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 1,
+   "group": "opengist",
+   "id": "opengist/public/ts/editor.ts:166",
+   "language": "TypeScript and JavaScript",
+   "links": 1,
+   "missed": [],
+   "required": 1,
+   "right": 1,
+   "wrong": []
+  },
+  {
+   "clauses": {
+    "route": 1
+   },
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 1,
+   "group": "opengist",
+   "id": "opengist/public/ts/editor.ts:412",
+   "language": "TypeScript and JavaScript",
+   "links": 1,
+   "missed": [],
+   "required": 1,
+   "right": 1,
+   "wrong": []
+  },
+  {
+   "clauses": {
+    "route": 1
+   },
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 1,
+   "group": "opengist",
+   "id": "opengist/public/ts/editor.ts:468",
+   "language": "TypeScript and JavaScript",
+   "links": 1,
+   "missed": [],
+   "required": 1,
+   "right": 1,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/public/ts/gist-checkbox.ts:40",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/public/ts/webauthn.ts:102",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "opengist",
+   "id": "opengist/public/ts/webauthn.ts:129",
+   "language": "TypeScript and JavaScript",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {
+    "route": 1
+   },
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 1,
+   "group": "opengist",
+   "id": "opengist/public/ts/webauthn.ts:35",
+   "language": "TypeScript and JavaScript",
+   "links": 1,
+   "missed": [],
+   "required": 1,
+   "right": 1,
+   "wrong": []
+  },
+  {
+   "clauses": {
+    "route": 1
+   },
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 1,
+   "group": "opengist",
+   "id": "opengist/public/ts/webauthn.ts:60",
+   "language": "TypeScript and JavaScript",
+   "links": 1,
+   "missed": [],
+   "required": 1,
+   "right": 1,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/examples/OTP/authy/checkpwd/main.go:73",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/examples/OTP/authy/checkpwd/main.go:81",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/examples/OTP/authy/extauth/main.go:73",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/examples/OTP/authy/extauth/main.go:81",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/examples/OTP/authy/keyint/main.go:107",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/examples/OTP/authy/keyint/main.go:115",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "lower_bound",
+   "dynamic": true,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/common/eventmanager.go:1482",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "lower_bound",
+   "dynamic": true,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/common/eventmanager.go:1492",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/dataprovider/node.go:197",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/connections",
+    "DELETE /api/v2/connections/{connectionID}"
+   ],
+   "required": 2,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/dataprovider/node.go:222",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/connections"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/dataprovider/node.go:254",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/connections/{connectionID}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/httpclient/httpclient.go:208",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/httpclient/httpclient.go:216",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "lower_bound",
+   "dynamic": true,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/httpclient/httpclient.go:221",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "lower_bound",
+   "dynamic": true,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/httpclient/httpclient.go:230",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/vfs/httpfs.go:710",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "sftpgo/internal/vfs/httpfs.go:723",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/actions.go:360",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/dumpdata"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/actions.go:385",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/eventactions"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/actions.go:403",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/eventactions/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/actions.go:424",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/eventactions/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/actions.go:436",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/eventactions/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/admins.go:109",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/dumpdata"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/admins.go:133",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/admins"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/admins.go:151",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/admins/{username}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/admins.go:172",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/admins/{username}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/admins.go:184",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/admins/{username}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/auth.go:33",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/token"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/client.go:178",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/dumpdata",
+    "POST /api/v2/eventactions",
+    "GET /api/v2/eventactions/{name}",
+    "PUT /api/v2/eventactions/{name}",
+    "DELETE /api/v2/eventactions/{name}",
+    "POST /api/v2/admins",
+    "GET /api/v2/admins/{username}",
+    "PUT /api/v2/admins/{username}",
+    "DELETE /api/v2/admins/{username}",
+    "GET /api/v2/token",
+    "DELETE /api/v2/folders/{name}",
+    "POST /api/v2/folders",
+    "GET /api/v2/folders/{name}",
+    "PUT /api/v2/folders/{name}",
+    "DELETE /api/v2/groups/{name}",
+    "POST /api/v2/groups",
+    "GET /api/v2/groups/{name}",
+    "PUT /api/v2/groups/{name}",
+    "PUT /api/v2/iplists/{type}/{ipornet}",
+    "DELETE /api/v2/iplists/{type}/{ipornet}",
+    "GET /api/v2/iplists/{type}",
+    "POST /api/v2/iplists/{type}",
+    "GET /api/v2/iplists/{type}/{ipornet}",
+    "GET /api/v2/roles",
+    "POST /api/v2/roles",
+    "GET /api/v2/roles/{name}",
+    "PUT /api/v2/roles/{name}",
+    "DELETE /api/v2/roles/{name}",
+    "GET /api/v2/eventrules",
+    "POST /api/v2/eventrules",
+    "GET /api/v2/eventrules/{name}",
+    "PUT /api/v2/eventrules/{name}",
+    "DELETE /api/v2/eventrules/{name}",
+    "DELETE /api/v2/users/{username}",
+    "POST /api/v2/users",
+    "GET /api/v2/users/{username}",
+    "PUT /api/v2/users/{username}"
+   ],
+   "required": 37,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/folders.go:102",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/folders/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/folders.go:27",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/dumpdata"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/folders.go:51",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/folders"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/folders.go:69",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/folders/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/folders.go:90",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/folders/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/groups.go:102",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/groups/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/groups.go:27",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/dumpdata"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/groups.go:51",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/groups"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/groups.go:69",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/groups/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/groups.go:90",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/groups/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/iplists.go:119",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/iplists/{type}/{ipornet}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/iplists.go:131",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/iplists/{type}/{ipornet}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/iplists.go:52",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/iplists/{type}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/iplists.go:84",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/iplists/{type}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/iplists.go:99",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/iplists/{type}/{ipornet}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/license.go:47",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/license.go:70",
+   "language": "Go",
+   "links": 0,
+   "missed": [],
+   "required": 0,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/roles.go:163",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/roles"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/roles.go:193",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/roles"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/roles.go:210",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/roles/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/roles.go:230",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/roles/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/roles.go:242",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/roles/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/rules.go:114",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/eventrules"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/rules.go:145",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/eventrules"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/rules.go:162",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/eventrules/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/rules.go:182",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/eventrules/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/rules.go:194",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/eventrules/{name}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/users.go:111",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "DELETE /api/v2/users/{username}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/users.go:27",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/dumpdata"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/users.go:52",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "POST /api/v2/users"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/users.go:70",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "GET /api/v2/users/{username}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  },
+  {
+   "clauses": {},
+   "completeness": "exhaustive",
+   "dynamic": false,
+   "found": 0,
+   "group": "sftpgo",
+   "id": "terraform-provider-sftpgo/sftpgo/client/users.go:99",
+   "language": "Go",
+   "links": 0,
+   "missed": [
+    "PUT /api/v2/users/{username}"
+   ],
+   "required": 1,
+   "right": 0,
+   "wrong": []
+  }
+ ]
+}

@@ -1,0 +1,624 @@
+# Identity against a compiler: Go, Java and Kotlin
+
+References sampled from pinned public repositories, each labelled with the declaration the language's own toolchain
+binds it to. Neither KnowCode nor a model labels anything. The set is 0.7's gate item "Identity, Go, Java and Kotlin"
+([plan](../../docs/plans/0.7.md#gate)), per language:
+
+- **At least 1,000 labels**, over at least two repositories.
+- **Precision of `exact` links** is at least 0.99, and every wrong one is listed.
+- **No link to an indexed declaration** where the toolchain resolves outside the repository.
+- **Recall**, linked and among candidates, is reported.
+
+identity-v2 keeps [identity-v1](../identity-v1/README.md)'s rule: what a reference is, its kind, its target, the
+multiplicity buckets, the draw and the scoring. This file states only what v2 adds or reads differently, per language.
+Each language's section, with its labels, is committed before KnowCode's answers on that language are read, and it
+doesn't change to fit them. A change to the rule is a new set.
+
+Each language keeps its labels in its own directory: `labels.jsonl`, `strata.json` (per stratum, how many references
+there were and how many were drawn), `exclusions.json` (per reason, how many references the toolchain binds the rule
+leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in). A digest
+covers an enumeration's rows, not its bytes ([digest.py](../../scripts/eval/identity/digest.py)): each row with its keys
+sorted, the lines sorted. Two labelling runs of one pinned repository give the same rows, but scip-java writes its
+documents in an order that varies from build to build, and gzip's bytes vary from one compressor to another.
+
+## Java and Kotlin
+
+Java and Kotlin are one family, as KnowCode reads them: a name in one may bind to a declaration in the other. Each
+label records the language of the file it is in (`lang`), and a repository that mixes the two is drawn once per
+language, so each language's strata fill on their own. The labels are in [jvm/](jvm/labels.jsonl).
+
+### Repositories
+
+[repos.txt](../../scripts/eval/identity/repos.txt) pins them at their heads on 2026-10-29:
+
+| Repository | Labels from | Build |
+| --- | --- | --- |
+| [google/gson](https://github.com/google/gson) | Java | Maven |
+| [apache/commons-lang](https://github.com/apache/commons-lang) | Java | Maven |
+| [spring-projects/spring-petclinic](https://github.com/spring-projects/spring-petclinic) | Java | Maven |
+| [square/moshi](https://github.com/square/moshi) | Java and Kotlin | Gradle |
+| [square/kotlinpoet](https://github.com/square/kotlinpoet) | Kotlin | Gradle (Kotlin Multiplatform, its JVM targets) |
+| [spring-petclinic/spring-petclinic-kotlin](https://github.com/spring-petclinic/spring-petclinic-kotlin) | Kotlin | Gradle |
+
+square/javapoet was a candidate and was replaced by commons-lang before any label was drawn: its build compiles with
+an older javac that can't read the JDK 17 class files.
+
+Each repository is its own workspace, as in v1. A dependency that is itself a public repository is outside.
+
+### Labelling
+
+[run.sh](../../scripts/eval/identity/run.sh) copies the pinned clone into a throwaway Linux container, builds it once
+with the network up so that every dependency, plugin and compiler is fetched, throws that build's output away,
+disconnects from the network, and builds again offline (Maven `-o`, Gradle `--offline`). The offline build is the one
+labelled. [jvm/label.py](../../scripts/eval/identity/jvm/label.py) reads its index through
+[scip.py](../../scripts/eval/identity/scip.py), a reader of the SCIP format written with Python's standard library.
+
+| Toolchain | Image | Versions |
+| --- | --- | --- |
+| scip-java, with its javac plugin and its Kotlin compiler plugin (scip-kotlinc) | `ghcr.io/scip-code/scip-java:0.13.2` (`sha256:459c2fa0…`) | scip-java 0.13.2, Maven 3.9.1, each repository's own Gradle wrapper, and the JDKs below |
+
+The image doesn't hold the JDKs a build runs with: its `scip-java` command fetches them with coursier, during the
+restore, as the newest Temurin release of the JDK asked for. Each run's log records them (`java -version`); the set
+below was labelled with Temurin 17.0.20.1 (the Maven builds) and 21.0.12.1 (the Gradle builds, whose Java
+toolchains resolve to 17.0.20.1, 21.0.12.1 or the image's own 25.0.4.1).
+
+scip-java compiles each repository with its own build: it runs javac and kotlinc as the build configures them, with
+its plugins attached, so a name binds exactly where the compiler binds it. Main and test sources are both compiled.
+[builds.txt](../../scripts/eval/identity/jvm/builds.txt) gives each repository's JDK and build arguments, and why any
+differ from scip-java's defaults:
+
+- **gson:** the `proto` module needs a newer Maven than the image has, so it isn't built.
+- **commons-lang:** its parent POM compiles in-process unless told to fork, so scip-java's javac is passed to it
+  through the parent's own properties.
+- **moshi:** scip-kotlinc 0.13.2 runs inside Kotlin 2.4's compiler, and moshi pins Kotlin 2.3.21, so moshi is
+  compiled with Kotlin 2.4.21 through its own `MOSHI_KOTLIN_VERSION` setting. Under 2.4, one Java test calls an
+  internal Kotlin member by the name 2.3 gave it, so moshi's Java tests (`moshi/src/test/java`) aren't compiled. A
+  Gradle init script ([no-werror.gradle](../../scripts/eval/identity/jvm/no-werror.gradle)) turns off warnings as
+  errors, because Kotlin 2.4 warns about an option 2.3 needed. Warnings don't change what a name binds to.
+
+**Source files:** every `.java` and `.kt` file the build compiles, outside build output (`build`, `target`, `out`,
+`.gradle`) and generated sources (any `generated` directory: annotation processors' and KSP's output). A source file
+the build doesn't compile (a Kotlin Multiplatform source set for another platform, a module left out above) gives no
+references. label.py lists those files in its log.
+
+#### What a reference is
+
+As in v1. A Kotlin property that scip-kotlinc binds through its accessor (`rawType.get()`) is a reference to the
+property, since the token names it. A qualified name (`java.util.List`) whose range covers its qualifier is a reference
+at the name that ends it. For Java and Kotlin, left out also, each recorded in the enumeration with its reason (in
+parentheses) and counted below:
+
+- **Imports** (`import`): any occurrence on an `import` line. scip-java doesn't mark imports with SCIP's import role.
+- **Class literals** (`class_literal`): the `class` of `Foo.class`, a keyword. `Foo` is a `type` reference.
+- **Operators** (`operator`): a Kotlin operator's function, called with no token of its name (`!x` calls `not`,
+  `x[i]` calls `get`, `a < b` calls `compareTo`, a `for` loop calls `iterator`, `hasNext` and `next`).
+- **Constructors:** `<init>` (`new Foo(…)`, `Foo(…)` in Kotlin, `super(…)`, `this(…)`), and static initialisers.
+  In a Kotlin supertype list (`class Owner : Person()`), scip-kotlinc binds the supertype's name to the class, so
+  that name is a `type` reference.
+- **Packages, type parameters, parameters and locals:** SCIP namespace (`a/b/`), type-parameter (`[T]`),
+  parameter (`(x)`) and `local` symbols. A Kotlin named argument binds to its parameter, so it isn't labelled.
+- **Renamed references** (`renamed_or_implicit`): the token differs from the declaration's own name. A Kotlin property
+  read from Java through its getter (`getName()`), a Java getter read from Kotlin as a property (`name`), and an import
+  alias are left out, as is a reference with no token at all (a `vararg` parameter's implicit `Array`).
+- **Synthesised members** (`synthesised`): a member the compiler makes for one of the repository's types and declares
+  nowhere in source: an enum's `values()` and `valueOf`, a record's accessors, a Kotlin data class's `copy` and
+  `componentN`. A reference is one when its symbol has no definition and the type it belongs to is defined in the
+  repository.
+- **Unmatched overloads** (`overload_unmatched`): the symbol names a member the type declares, but under an overload
+  disambiguator no definition has. scip-kotlinc logs these ("methodDisambiguator … not found"); the toolchain names
+  no one declaration, so there is nothing to score against.
+- **Generated targets** (`generated_target`): the target is declared only in generated sources.
+- **References into the repository's own types from outside it** (`outside_own_type`): an outside symbol whose outermost
+  type the repository declares. That is a type declared in a file the build didn't compile, or a published build of the
+  repository's own code that a module depends on (moshi's `examples` module builds against moshi 1.14.0 from Maven
+  Central). Where such a name binds says which version of the code is used, not which declaration the name means, so
+  these references aren't labelled. The repository's declared types are read from every source file's text: its package,
+  every name after `class`, `interface`, `object`, `enum`, `record` or `typealias`, the file's name and its Kotlin
+  facade (`NameKt`, or its `@file:JvmName`).
+- **Sites bound two ways** (`bound_two_ways`): as in v1, the draw leaves out a place the toolchain binds to two
+  declarations.
+
+Per language, the references the toolchain binds in the source files, how many are references by the rule, and how
+many are left out by each reason ([exclusions.json](jvm/exclusions.json); `sample.py --exclusions` makes it from the
+enumerations):
+
+| Reason | Java | Kotlin |
+| --- | ---: | ---: |
+| References by the rule, the population the set is drawn from | 222031 | 40420 |
+| `import` | 7721 | 3430 |
+| `class_literal` | 6252 | 1 |
+| `operator` | 0 | 2534 |
+| `renamed_or_implicit` | 1 | 289 |
+| `synthesised` | 179 | 136 |
+| `overload_unmatched` | 10 | 400 |
+| `generated_target` | 16 | 1 |
+| `outside_own_type` | 2 | 7 |
+| `bound_two_ways` | 0 | 7 |
+
+#### Kinds
+
+The first that applies:
+
+1. `extension`: a Kotlin extension function or property, whose signature names a receiver type before its name
+   (`fun String.shout()`). Java has none.
+2. `dispatch`: an abstract member, a method declared by an interface (default methods included), or a property
+   declared by a Kotlin interface. A member is abstract when scip-java gives it the abstract-method kind or its
+   signature says `abstract` (scip-kotlinc gives Kotlin's abstract members no kind of their own). An annotation's
+   elements are abstract methods but aren't dispatched, and a Java interface's field is a constant, a `member`.
+3. `call`: a method or function, called or referenced (`Foo::bar`). An annotation's element named in a use
+   (`@Mark(level = 1)`) is a `call`.
+4. `member`: a field, enum constant or Kotlin property, read or written.
+5. `type`: a class, interface, enum, record, annotation, Kotlin object or type alias named.
+
+scip-java describes only the repository's own symbols. Outside the repository, a reference is classified by its
+symbol's form alone: a method is a `call`, a term a `member`, a type a `type`. So no outside reference is
+`dispatch` or `extension`.
+
+#### The target
+
+The declaration whose SCIP definition occurrence is the symbol's, at the line of its name token. An override is its
+own declaration. A declaration defined in more than one compiled file lists each place: a Kotlin `expect`
+declaration and its `actual` share one symbol, so both are listed.
+
+Outside targets have an origin: `stdlib` for the JDK and Kotlin's standard library, `package` for any other library.
+scip-java names a Java symbol's artifact, and the JDK's is `jdk`. It names no artifact for Kotlin symbols, so a
+Kotlin symbol under `java/`, `jdk/` or `kotlin/` is `stdlib`. The origin is descriptive: the scorer treats every
+outside label the same.
+
+#### Multiplicity
+
+As in v1: how many declarations in the repository, of both languages, have the target's simple name. Overloads are
+separate declarations. Types, methods and functions, fields, properties and enum constants count; constructors,
+type parameters, parameters and locals don't.
+
+### Sampling
+
+[sample.py](../../scripts/eval/identity/sample.py), as in v1, with strata per repository and language. Java has no
+`extension` kind, and neither language has an outside `dispatch` or `extension` reference, so those strata are
+empty.
+
+### The set
+
+2686 references: 1501 Java (1118 inside, 383 outside) over four repositories, 1185 Kotlin (899 inside, 286 outside)
+over three. Per repository: commons-lang 524, gson 481, moshi 280 Java and 452 Kotlin, spring-petclinic 216, kotlinpoet
+557, spring-petclinic-kotlin 176. Per language, kind and stratum (inside by bucket, outside by bucket):
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Java | dispatch | 31 | 62 | 80 | 0 | 0 | 173 |
+| Java | call | 80 | 124 | 120 | 40 | 152 | 516 |
+| Java | member | 80 | 141 | 143 | 40 | 64 | 468 |
+| Java | type | 80 | 94 | 83 | 40 | 47 | 344 |
+| Kotlin | extension | 40 | 80 | 51 | 0 | 0 | 171 |
+| Kotlin | dispatch | 19 | 44 | 49 | 0 | 0 | 112 |
+| Kotlin | call | 60 | 82 | 80 | 30 | 88 | 340 |
+| Kotlin | member | 60 | 90 | 120 | 30 | 80 | 380 |
+| Kotlin | type | 60 | 31 | 33 | 30 | 28 | 182 |
+
+A stratum short of its quota held fewer references, or fewer distinct targets under the spread limit. The six
+repositories were built twice, by two separate runs of run.sh, and the two builds' enumerations hold the same
+references, targets and origins. The committed enumerations' digests are of label.py's output over the second run's
+SCIP indexes.
+
+**Corrected after the first scoring run.** For 7 Java labels, scip-java marks the declared name's occurrence inside
+the declaration's own annotation as its definition (`@JsonAdapter(A.Adapter.class)` above `class A`, a field under
+`@Value("…")`), so their target was the annotation's line, not the name token's that the rule names. The first run
+over the set, with KnowCode's extraction and no Java resolver, judged those 7 rows wrong though KnowCode named the
+declaration the toolchain binds. label.py now takes a definition on a line that starts with an annotation to the next
+line, within 10, with the name as a word outside annotations. Re-run over the same SCIP indexes, it moved exactly
+those 7 labels' targets (gson's `A` ×3, `WithJsonDeserializer` and `DummyClass` ×2, spring-petclinic's `port`), each to
+the following line; the draw and every other label are unchanged.
+
+### Held out: jsoup
+
+KnowCode's Java resolver was developed against the labels above, so they no longer test it fresh. A held-out set
+does: [jhy/jsoup](https://github.com/jhy/jsoup), a Java repository nothing was tuned on, pinned at its head on
+2026-10-29 ([repos.txt](../../scripts/eval/identity/repos.txt)), labelled by the same rule, labeller and container,
+drawn by the same sampler, and committed in [jvm-holdout/](jvm-holdout/labels.jsonl) before any KnowCode answer on it
+was read. It is scored once, with the resolver as it stood, and reported beside the set above; a change made after
+reading it can't be measured on it again.
+
+465 references (343 inside, 122 outside), drawn from 66648 Java references by the rule (the exclusions, by reason,
+are in [jvm-holdout/exclusions.json](jvm-holdout/exclusions.json)):
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Java | dispatch | 3 | 40 | 40 | 0 | 0 | 83 |
+| Java | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Java | member | 20 | 40 | 40 | 10 | 20 | 130 |
+| Java | type | 20 | 40 | 0 | 10 | 32 | 102 |
+
+jsoup builds with Maven on JDK 17 by scip-java's defaults ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)).
+
+### Held out, second: jackson-core
+
+jsoup's single scoring found 2 outside labels linked: references to a library class's inherited field
+(`AbstractList.modCount`) linked to a same-named method the repository's subclass declares. The resolver gained a rule
+for it (fields and methods are separate namespaces, JLS 6.5), so jsoup no longer tests it fresh, and its pre-fix
+figure stands as scored. A second held-out set tests the resolver after that rule:
+[FasterXML/jackson-core](https://github.com/FasterXML/jackson-core) on its 3.x branch, pinned at its head on
+2026-10-29, labelled, drawn and committed in [jvm-holdout-2/](jvm-holdout-2/labels.jsonl) the same way before any
+KnowCode answer on it was read, and scored once.
+
+455 references (345 inside, 110 outside), drawn from 83478 Java references by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Java | dispatch | 5 | 40 | 40 | 0 | 0 | 85 |
+| Java | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Java | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Java | type | 20 | 40 | 0 | 10 | 0 | 70 |
+
+### Held out: ktlint (Kotlin)
+
+KnowCode's Kotlin resolver was developed against the Kotlin labels above, so a held-out set tests it fresh:
+[pinterest/ktlint](https://github.com/pinterest/ktlint), Kotlin only, pinned at its head on 2026-10-29, labelled,
+drawn and committed in [kotlin-holdout/](kotlin-holdout/labels.jsonl) the same way before any KnowCode answer on it was
+read, and scored once. Its build needs a Java 26 runtime and turns on Gradle's configuration cache, which scip-java's
+Gradle plugin doesn't support, so it is built on JDK 26 with `--no-configuration-cache`
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Its `build-logic` sources aren't compiled by the
+build and give no references.
+
+500 references (381 inside, 119 outside), drawn from 39727 Kotlin references by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 0 | 9 | 11 | 0 | 0 | 20 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 1 | 10 | 9 | 80 |
+
+### Held out, second: Exposed (Kotlin)
+
+ktlint's two outside links led to three resolver changes (an explicit import over a class's own name, no repository
+member on a library receiver's `this`, and `private` declarations unseen from other files), so ktlint no longer tests
+those fresh. [JetBrains/Exposed](https://github.com/JetBrains/Exposed) at its 1.6.0 tag, Kotlin only, is labelled,
+drawn and committed in [kotlin-holdout-2/](kotlin-holdout-2/labels.jsonl) the same way before any KnowCode answer on it
+is read, and scored once. Two build settings, neither changing a source file
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)): it pins Kotlin 2.3.20 in its version catalog, which the
+container's copy sets to 2.4.21 (scip-java's Kotlin plugin needs 2.4, as for moshi); and its Gradle 8.14 compiles
+`buildSrc` with an embedded Kotlin too old for that plugin, so `buildSrc`, build logic that gives no labels, compiles
+without it. It turns on Gradle's configuration cache, so it is built with `--no-configuration-cache`, as ktlint is.
+
+637 references (500 inside, 137 outside), drawn from the 125367 eligible Kotlin references counted in [strata.json](kotlin-holdout-2/strata.json) by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 27 | 137 |
+
+### Held out, third: MoshiX and misk (Kotlin)
+
+Exposed's four wrong links led to two more resolver changes, so a third held-out set tests them fresh: two
+repositories as one set, chosen and committed before any labelling, labelled by the same rule, labeller and sampler,
+committed before any KnowCode answer on them is read, and scored once.
+
+Two repositories chosen first couldn't be built for labelling, and nothing from either was enumerated:
+
+- [http4k](https://github.com/http4k/http4k) at 6.61.0.0: its build logic is an included build of precompiled script
+  plugins (`*.gradle.kts` under `src/main/kotlin`), and scip-java 0.13.2's Gradle plugin, which its init script applies
+  to every project of every build, reads each Kotlin compile's compiler arguments while the build is configured. Under
+  Gradle 9 those arguments come from a task that hasn't run yet, and Gradle refuses the read, so the build fails before
+  compiling anything.
+- [Netflix/dgs-framework](https://github.com/Netflix/dgs-framework) at v12.1.0: it pins Kotlin 2.2.20, and with the
+  container's copy raised to Kotlin 2.4 (scip-java's plugin needs it) its Kotlin compiles still load Kotlin's scripting
+  compiler plugin at a version the 2.4 compiler refuses, even with Kotlin's own artifacts held to 2.4 on the compiler's
+  classpaths; it was given up after a 30-minute limit.
+
+So the set is drawn from repositories already on, or near, Kotlin 2.4, with no precompiled build scripts:
+[ZacSweers/MoshiX](https://github.com/ZacSweers/MoshiX) at its 0.38.0 tag (Kotlin 2.4.20, Gradle 9.8.0), and
+[cashapp/misk](https://github.com/cashapp/misk) at its v2026.10.28.211731-46eb623 tag, which pins Kotlin 2.3.10 in its
+version catalog (the container's copy is set to 2.4.21, as for Exposed) and runs Gradle 9.3.0 through hermit without
+a wrapper (`GRADLE_WRAPPER` gives the container's copy one, for that version). Both turn on Gradle's configuration
+cache and are built with `--no-configuration-cache` ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). MoshiX's
+Gradle plugin build asks for a JDK 23 toolchain, fetched and checked against its published digest; misk's admin
+console's web front end, an npm build with no Kotlin, is left out of its build.
+
+1622 references in [kotlin-holdout-3/](kotlin-holdout-3/labels.jsonl): 1152 Kotlin (882 inside, 270 outside), drawn from
+the 139341 eligible Kotlin references counted in [strata.json](kotlin-holdout-3/strata.json), and 470 Java
+(333 inside, 137 outside) from 3310, which the same draw gives from the two repositories' Java sources. Kotlin is
+the held-out set; its Java references are scored and reported beside it.
+
+| Repository | Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| moshix | Kotlin | extension | 20 | 40 | 28 | 0 | 0 | 88 |
+| moshix | Kotlin | dispatch | 2 | 9 | 10 | 0 | 0 | 21 |
+| moshix | Kotlin | call | 20 | 17 | 40 | 10 | 40 | 127 |
+| moshix | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| moshix | Kotlin | type | 20 | 40 | 36 | 10 | 10 | 116 |
+| moshix | Java | extension | 1 | 0 | 0 | 0 | 0 | 1 |
+| moshix | Java | call | 4 | 0 | 10 | 10 | 19 | 43 |
+| moshix | Java | member | 2 | 3 | 11 | 1 | 0 | 17 |
+| moshix | Java | type | 20 | 20 | 23 | 10 | 4 | 77 |
+| misk | Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | type | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Java | call | 0 | 22 | 40 | 10 | 40 | 112 |
+| misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
+| misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
+
+### Held out, fourth and last: graphql-kotlin (Kotlin)
+
+MoshiX and misk's six wrong links led to three more resolver rules, so a fourth set tests them fresh, and it is the
+last for 0.7: whatever it scores is published as it is.
+[ExpediaGroup/graphql-kotlin](https://github.com/ExpediaGroup/graphql-kotlin) at its 11.0.0 tag, Kotlin on the JVM
+only, was chosen and committed before any labelling, with [kotlin-orm/ktorm](https://github.com/kotlin-orm/ktorm) at
+its v4.2.1 tag named as the reserve should it not build.
+
+Neither built at first, and nothing from either was enumerated then. Both keep their build logic in a buildSrc of
+precompiled script plugins (`*.gradle.kts` conventions). scip-java 0.13.2's init script applies its Gradle plugin to
+every project of every build, buildSrc's too, and the plugin reads each Kotlin compile's compiler arguments while the
+build is configured; for a precompiled script plugin those arguments come from a task that hasn't run yet, and Gradle
+refuses the read. graphql-kotlin (Gradle 9.4.0) failed so with and without jvm/skip-buildsrc.gradle; ktorm (Gradle
+8.9, with Kotlin 2.0.21 pinned in buildSrc's dependencies) failed the same way. This is http4k's failure above. The
+labeller now has a setting for it, `SCIP_ROOT_BUILD_ONLY`: a `gradlew` in front of the container's copy's own
+(jvm/gradlew-root-only.sh) keeps scip-java's init script to the root build, so build logic, which is never labelled,
+compiles without the plugin. Exposed, labelled again with the changed labeller, gives an enumeration of the same
+row digest as the one its labels were drawn from (a9c94f30…, [enumerations.sha256](kotlin-holdout-2/enumerations.sha256)).
+With that setting and its version catalog's Kotlin set to 2.4.21
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)), graphql-kotlin builds, and it is the set; ktorm wasn't
+needed.
+
+628 references in [kotlin-holdout-4/](kotlin-holdout-4/labels.jsonl), all Kotlin (479 inside, 149 outside), drawn from
+the 32845 eligible references counted in [strata.json](kotlin-holdout-4/strata.json), committed before any KnowCode
+answer on them is read, and scored once, by a build with every Kotlin rule above:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 19 | 0 | 0 | 79 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 39 | 149 |
+### Kotlin, scored
+
+Each held-out set was scored once, by the build of its day, and its figures stand as scored: a rule added after
+reading one can't be measured on it again. The set above, which the resolver was developed against, is re-scored after
+every change; it shows no regression, not accuracy on unseen code.
+
+| Set | Build | Labels | Inside | `exact` rows | `exact` precision | Recall, linked | Recall, among candidates | Outside linked |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| identity-v2 Kotlin (tuned on) | this change | 1185 | 899 | 433 | 1.000 | 0.482 | 0.848 | 0 |
+| ktlint, held out | before its rules | 500 | 381 | 165 | 0.994 (1 wrong) | 0.430 | 0.787 | 2 |
+| Exposed, held out | after ktlint's | 637 | 500 | 175 | 0.977 (4 wrong) | 0.342 | 0.606 | 1 |
+| MoshiX and misk, held out | after Exposed's | 1152 | 882 | 426 | 0.986 (6 wrong) | 0.476 | 0.780 | 0 |
+| MoshiX and misk, Java beside it | after Exposed's | 470 | 333 | 276 | 1.000 | 0.829 | 0.886 | 1 |
+| graphql-kotlin, held out, last | after MoshiX and misk's | 628 | 479 | 272 | 1.000 | 0.568 | 0.869 | 1 |
+
+None of the four held-out sets meets the gate at its single scoring. The last, graphql-kotlin, meets its `exact`
+precision (1.000 over 272 links) and falls short only on the outside label it links. What each found, and the rule each
+led to:
+
+- **ktlint** (1 wrong, 2 outside). An explicit import of a name inside a top-level class of that name was read as the
+  class (`import …EditorConfigLoader` in `class EditorConfigLoader`); kotlinc reads the import. `this.text` in an
+  extension on a library type was linked to a repository member named `text`; a library receiver's members aren't
+  known, so only a repository extension on that type is a candidate (that link's other target was a member of a
+  `private` nested class in another file). A `private` declaration, or one inside a `private` type, is now seen
+  only in its own file.
+- **Exposed** (4 wrong, 1 outside). A bare name in a lambda with a receiver (`lazyMetadata { url }`, `x.apply {
+  close() }`) was linked to the enclosing class's member; the receiver's members come first, and the receiver isn't
+  typed, so such a name is now a candidate only. And two same-named test classes in different modules pooled their
+  supertypes, so a bare call reached the other module's base class; members are now read through each type's own
+  declared supertypes.
+- **MoshiX and misk** (6 wrong; the 1 outside link is a Java reference). `factory.newQuery<Q>()` was linked to the
+  member `newQuery(queryClass)` rather than the extension `newQuery()` (3 wrong): every Kotlin function's minimum
+  argument count was taken as zero, so the member fit a call it can't take, and a member shadows an extension only
+  where it fits. `val transport = build()` was typed by another file's `private fun build()` (2 wrong); a function
+  `private` to another file never types a call, and an expression body that constructs a type gives that type.
+  `featureFlags.getDouble(…)` on wisp's `FeatureFlags`, which inherits it, was linked to misk's same-named
+  `FeatureFlags`, which declares it (1 wrong); a typed receiver's inherited member is now read through its own
+  declared supertypes. The Java outside link is `super.connect(…)` linked to the class's own override, which
+  `super` never reaches (JLS 15.12.1); that rule is Java resolution's, in its own change.
+- **graphql-kotlin** (0 wrong, 1 outside), scored by integration/0.7 at f3fc3a8, which doesn't hold that `super`
+  rule. `super.transform(…)` in `SynchronizedDataLoader`, whose supertype `DelegatingDataLoader` is a library's, was
+  linked (`unique_name`) to the class's own override of `transform`: the same cause as MoshiX and misk's Java outside
+  link, in Kotlin. That cause is fixed by the `super` rule of the Java change that follows MoshiX and misk (it covers
+  Kotlin's `super` too), which landed after this set was scored; the fix can't be re-measured on this set, the last
+  held-out set for 0.7.
+
+**Recall.** Linked recall on the held-out sets (0.430, 0.342, 0.476) is near the tuned set's (0.482), and below
+Java's (0.874) because much of Kotlin is written in lambdas with receivers: builder DSLs, `apply` and `with` blocks,
+and a repository's own `T.() -> R` parameters. A bare name in one is a candidate rather than a link, since the
+receiver isn't typed; on the tuned set that rule costs 26 links (recall 0.504 without it). Calls of extension
+functions are the other gap: on MoshiX and misk, 3 of 188 inside extension references are linked, and 136 have
+candidates instead.
+
+**Parse errors.** tree-sitter-kotlin-ng 1.1.0 can't read a nested class whose primary constructor starts on the line
+after its name; such a file is parsed again with those line breaks joined, every position kept (docs/languages.md).
+That recovers 9 files: 5 in kotlinpoet, 3 in misk and 1 in moshi, holding 86 of the tuned set's labels and 5 of
+MoshiX and misk's. Other files with parse errors are reported as such and indexed as far as they parse: 30 labels of
+the tuned set, 51 of ktlint's, 105 of Exposed's and 107 of MoshiX and misk's are in one. Most of MoshiX's 28 such
+files are its compiler plugin's test data, written with diagnostic markers that aren't Kotlin.
+
+### Scoring
+
+[identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:
+
+```sh
+python3 scripts/eval/identity_gate.py fetch --work WORK --repos gson,commons-lang,spring-petclinic,moshi,kotlinpoet,spring-petclinic-kotlin
+python3 scripts/eval/identity_gate.py run --knowcode BIN --work WORK --labels eval/identity-v2/jvm/labels.jsonl --out jvm.json
+python3 scripts/eval/identity_gate.py check jvm.json
+```
+
+### Running it
+
+```sh
+scripts/eval/identity/run.sh REPO CLONE IO      # each repository; Docker; the enumeration, log and SCIP index come out, in IO/out
+python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/identity-v2/jvm/labels.jsonl \
+  --strata eval/identity-v2/jvm/strata.json --exclusions eval/identity-v2/jvm/exclusions.json
+```
+
+## Go
+
+The labels are in [go/](go/labels.jsonl): 1,194 over three repositories (cobra 242, chi 418, gin 534), 705 inside and
+489 outside, per stratum in [go/strata.json](go/strata.json). Two runs of each repository give byte-identical
+enumerations ([go/enumerations.sha256](go/enumerations.sha256)). The digests were first recorded over the gzip
+bytes; a third run, whose files had those same byte digests, gave the row digests now recorded, and the labels, strata
+and exclusions drawn from it are byte-identical to the committed ones (the held-out set's too).
+
+### Repositories
+
+| Repository | Commit |
+| --- | --- |
+| spf13/cobra | `adbc8813901bba65827259daa8e22ff94ec1f30e` |
+| go-chi/chi | `9f8adb1aabaa8a91180a821111d3f8e668d1c0bf` |
+| gin-gonic/gin | `0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646` |
+
+Pinned in [repos.txt](../../scripts/eval/identity/repos.txt) at each default branch's head on 2026-10-29, before
+anything was labelled.
+
+### Labelling
+
+[go/label.go](../../scripts/eval/identity/go/label.go) loads every module in the repository (each `go.mod` outside
+`vendor`, `testdata` and hidden directories) with its tests, through `golang.org/x/tools/go/packages`, and reads
+`go/types`' `Uses` and `Defs`: the type checker that gopls and scip-go are both built on. scip-go was tried first and
+dropped because its index carries no information about outside symbols, so a call to an outside interface's method
+(`io.Writer.Write`) couldn't be told from a call to a function.
+
+| Image | Toolchain |
+| --- | --- |
+| `golang:1.27-bookworm` (`sha256:d9b6a1be…`) | Go 1.27.3, `golang.org/x/tools` v0.52.0 |
+
+The network is up while each module's dependencies (`go mod download`, then `go list -test -deps ./...`) and the
+labeller's own are fetched, and down while it type-checks (`GOPROXY=off`). Only the default build is read: Linux,
+`CGO_ENABLED=1`, and no build tags, so a file excluded by its build constraints is neither labelled nor scored.
+
+The source files are the repository's own `.go` files, tests included. Files under `vendor/` and files cgo produces
+are left out. Generated files (a `// Code generated … DO NOT EDIT.` header) give no references, but a declaration in
+one is inside.
+
+A repository may hold more than one module: go-chi/chi's `_examples/rest` and `_examples/versions` are modules of
+their own. Each is type-checked as `go build` would see it. Where such a module requires a released version of the
+repository's own module (`github.com/go-chi/chi/v5 v5.2.4`) without a `replace`, the toolchain binds its references
+to the module cache's copy, not the repository's code, so they are **outside** (`package`): linking them to the
+repository's declaration of the same name would be the wrong link this gate exists to catch. With a `replace` of the
+module by a directory of the repository (`=> ../`), they are inside. chi has 92 such outside references; cobra and gin
+have none, and the resolver's tests cover the `replace` case.
+
+The first version of this section (commit `7a46a8c`) left these 92 references out as neither inside nor outside. They
+were counted as outside on the maintainer's decision of 2026-10-29, after KnowCode's answers on the first draw had
+been read; the change can only add outside labels, which the gate requires KnowCode not to link.
+
+### What a reference is, in Go
+
+The rule above, with these Go cases:
+
+- **Left out:** package names (import specs and qualifiers such as the `http` in `http.Get`), builtins (`len`,
+  `error`, `nil`), labels, locals, parameters, results, type parameters, types declared inside a function and their
+  fields (a table test's cases), the blank identifier, and anything in the cgo pseudo-package `C`.
+- **A composite literal** `T{…}` is a reference to the type `T`. Go has no constructors.
+- **Embedded fields:** the type named in an embedding is a `type` reference. A promoted field or method used through
+  the outer type (`outer.Inner()`) binds to the embedded type's declaration, and that is the label.
+- **Generics:** an instantiated function, method or field (`Map[int]`, `List[T].Push`) is labelled with its generic
+  definition (`types.Func.Origin`, `types.Var.Origin`).
+- **A test package** (`package x_test`) and the package it tests are type-checked together, as `go test` does, so a
+  test's reference to the package under test is inside.
+
+### Kinds, in Go
+
+Go has no extensions, so `extension` never occurs.
+
+1. `dispatch`: a method declared in an interface. A call through an interface value binds to the interface's
+   method, never to a concrete type's.
+2. `call`: a function or a method declared on a concrete type, called or used as a value.
+3. `member`: a struct field, or a package-level variable or constant.
+4. `type`: a named type or type alias declared at package level.
+
+### Exclusions
+
+Every reference the checker binds that the rule leaves out of the repository's own references is written to the
+enumeration as an `excluded` row with its reason, and [go/exclusions.json](go/exclusions.json) counts them:
+`local_type_field` (a field of a struct type declared inside a function: 1,987), `generated` (a reference in a
+generated file) and `cgo` (a name in the pseudo-package `C`); the last two don't occur in these repositories. Locals,
+parameters, builtins and package names aren't bindings to a declaration the rule could label, and aren't counted.
+
+### Targets, origins and multiplicity
+
+A target is the declaration's name token: its file and line. The key is that token's file, line and column, which
+are the same in a package's test and non-test variants. An outside target's origin is `stdlib` when the first element
+of its package path has no dot (`net/http`, `context`), and `package` otherwise (a module dependency). Go has no
+`sdk`.
+
+Multiplicity counts the repository's declarations of the target's name that the checker saw: package-level types,
+functions and methods (interface methods included), fields of package-level struct types, and package-level variables
+and constants.
+
+### Cross-check against scip-go
+
+label.go is this project's own code, so its targets are checked against scip-go v0.2.9's, which reads the same type
+checker through code of its own. run.sh indexes every module with scip-go in the same container, offline, and
+[go/crosscheck.py](../../scripts/eval/identity/go/crosscheck.py) compares each reference both report at the same place.
+An inside target agrees when scip-go's symbol is defined at the same file and line; an outside one when scip-go's
+symbol isn't defined in the repository and names the same package and name.
+
+| Repository | References | Also reported by scip-go | Agree | Labels | Labels compared | Labels agreeing |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| cobra | 8,461 | 8,461 | 8,461 | 242 | 242 | 242 |
+| chi | 7,424 | 7,424 | 7,424 | 418 | 418 | 418 |
+| gin | 17,538 | 17,532 | 17,513 | 534 | 533 | 532 |
+| All | 33,423 | 33,417 | 33,398 (99.94%) | 1,194 | 1,193 | 1,192 |
+
+chi's 92 references to its released copy agree: scip-go binds them outside too.
+
+Every difference, all in gin, has one of two causes, and neither is a labelling error:
+
+- **19 references to gin's `testdata/protoexample/test.pb.go`** (`Test` and its fields): scip-go indexes `./...`,
+  which skips `testdata` directories, so it has no definition there. The file is the repository's own, so the
+  labeller's inside target stands. One of these is a label.
+- **6 references to `unsafe.Pointer`**: scip-go records no occurrence for the `unsafe` package's members. One is a
+  label.
+
+| Reference | Name | Labeller's target | scip-go |
+| --- | --- | --- | --- |
+| `binding/binding_test.go:1346:22` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:1351:30` | `Label` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:1353:21` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:1409:22` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:1424:21` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:715:24` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:716:3` | `Label` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:727:24` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/binding_test.go:728:3` | `Label` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `binding/json_test.go:133:40` | `Pointer` | `unsafe.Pointer` (stdlib) | no occurrence |
+| `binding/json_test.go:138:39` | `Pointer` | `unsafe.Pointer` (stdlib) | no occurrence |
+| `binding/json_test.go:147:39` | `Pointer` | `unsafe.Pointer` (stdlib) | no occurrence |
+| `binding/json_test.go:189:48` | `Pointer` | `unsafe.Pointer` (stdlib) | no occurrence |
+| `binding/json_test.go:194:47` | `Pointer` | `unsafe.Pointer` (stdlib) | no occurrence |
+| `binding/json_test.go:203:47` | `Pointer` | `unsafe.Pointer` (stdlib) | no occurrence |
+| `context_test.go:1736:20` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `context_test.go:1737:3` | `Label` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `context_test.go:1738:3` | `Reps` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `context_test.go:1902:20` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `context_test.go:1903:3` | `Label` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `context_test.go:1904:3` | `Reps` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `render/render_test.go:371:20` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `render/render_test.go:372:3` | `Label` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `render/render_test.go:373:3` | `Reps` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+| `render/render_test.go:390:20` | `Test` | `testdata/protoexample/test.pb.go` | no definition (testdata not indexed) |
+
+### Held out: labstack/echo
+
+The resolver was developed against the three repositories above, so it is also scored once on one it wasn't:
+labstack/echo at `4deac5da0714abbc2037a90067ea82c033a3f266`, the reserve chosen with them. Its labels
+([go/heldout/labels.jsonl](go/heldout/labels.jsonl): 508, 308 inside and 200 outside) were drawn by the same rule,
+labeller and sampler, and committed before KnowCode answered on them. They are scored once, by the build whose
+resolver was tuned on the three, and the result is reported as it is: no change to the resolver is made for them.
+Two runs give byte-identical enumerations; scip-go agrees on all 24,933 references both report.
+
+### Running it, Go
+
+```sh
+scripts/eval/identity/run.sh REPO CLONE IO      # cobra, chi, gin; the enumeration, log and scip-go indexes, in IO/out
+python3 scripts/eval/identity/go/crosscheck.py IO/out/enumeration-REPO.jsonl.gz IO/out/scip-REPO \
+  --labels eval/identity-v2/go/labels.jsonl --list
+python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/identity-v2/go/labels.jsonl \
+  --strata eval/identity-v2/go/strata.json --exclusions eval/identity-v2/go/exclusions.json
+python3 scripts/eval/identity_gate.py run --knowcode BIN --work WORK --labels eval/identity-v2/go/labels.jsonl \
+  --repos cobra,chi,gin --out go.json
+```

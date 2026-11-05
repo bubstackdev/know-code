@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-version = "0.6.1"
+version = "0.7.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bubstackdev/know-code"
 homepage = "https://github.com/bubstackdev/know-code"
@@ -39,6 +39,9 @@ tree-sitter-c-sharp = "0.23.5"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-cfml = "0.26.43"
 tree-sitter-hcl = "1.1.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-java = "0.23.5"
+tree-sitter-kotlin-ng = "1.1.0"
 yaml-rust2 = "0.13.0"
 
 [profile.dev]

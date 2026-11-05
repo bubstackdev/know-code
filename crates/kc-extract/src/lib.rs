@@ -9,17 +9,22 @@ pub mod cfml;
 pub mod conventions;
 mod csharp;
 pub mod gitlabci;
+mod go;
 pub mod hosts;
 pub mod html;
+mod java;
+mod kotlin;
 mod manifest;
 mod python;
 mod rust;
+mod spring;
 pub mod sql;
 mod swift;
 pub mod terraform;
 mod tsconfig;
 mod typescript;
 
+pub use go::package_name_guess as go_package_name_guess;
 pub use manifest::implicit_usings;
 pub use yaml::{MAX_BYTES as YAML_MAX_BYTES, check as check_yaml};
 pub use typescript::{action_name, api_tag, is_minified};
@@ -41,6 +46,10 @@ pub enum Lang {
     TypeScript,
     /// TypeScript with JSX (`.tsx`).
     Tsx,
+    /// Java (`.java`).
+    Java,
+    /// Kotlin (`.kt`); read with Java as one JVM family.
+    Kotlin,
     /// Plain JavaScript (`.js`, `.mjs`, `.cjs`, `.jsx`), read by the TypeScript extractor with the TSX grammar.
     /// Minified and bundled files are left out (see [`Lang::from_path`] and [`typescript::is_minified`]).
     JavaScript,
@@ -71,11 +80,19 @@ pub enum Lang {
     /// Configuration naming hosts: ASP.NET settings and launch profiles, .NET `*.config`, Docker Compose, ingress
     /// manifests, HAProxy and nginx configs (see [`hosts`]).
     HostConfig,
+    /// Go (`.go`).
+    Go,
+    /// Go `go.mod`.
+    GoMod,
+    /// Maven `pom.xml`.
+    Maven,
+    /// Gradle `build.gradle`, `build.gradle.kts`, `settings.gradle` and `settings.gradle.kts`.
+    Gradle,
 }
 
 impl Lang {
     /// Every language this build indexes.
-    pub const ALL: [Lang; 20] = [
+    pub const ALL: [Lang; 26] = [
         Lang::Swift,
         Lang::Python,
         Lang::Rust,
@@ -83,6 +100,8 @@ impl Lang {
         Lang::TypeScript,
         Lang::Tsx,
         Lang::JavaScript,
+        Lang::Java,
+        Lang::Kotlin,
         Lang::SwiftPackage,
         Lang::XcodeGen,
         Lang::Cargo,
@@ -96,11 +115,17 @@ impl Lang {
         Lang::Terraform,
         Lang::TsConfig,
         Lang::HostConfig,
+        Lang::Go,
+        Lang::GoMod,
+        Lang::Maven,
+        Lang::Gradle,
     ];
 
     /// `as_str` of the languages with symbols (not manifests).
-    pub const SOURCE: [&str; 11] =
-        ["swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "cfml", "sql", "ansible", "terraform"];
+    pub const SOURCE: [&str; 14] = [
+        "swift", "python", "rust", "csharp", "typescript", "tsx", "javascript", "java", "kotlin", "cfml", "sql", "ansible",
+        "terraform", "go",
+    ];
 
     pub fn from_path(path: &str) -> Option<Lang> {
         let file = path.rsplit('/').next().unwrap_or(path);
@@ -109,6 +134,9 @@ impl Lang {
             "project.yml" => Some(Lang::XcodeGen),
             "Cargo.toml" => Some(Lang::Cargo),
             "package.json" => Some(Lang::PackageJson),
+            "go.mod" => Some(Lang::GoMod),
+            "pom.xml" => Some(Lang::Maven),
+            "build.gradle" | "build.gradle.kts" | "settings.gradle" | "settings.gradle.kts" => Some(Lang::Gradle),
             "jsconfig.json" => Some(Lang::TsConfig),
             f if f.starts_with("tsconfig") && f.ends_with(".json") => Some(Lang::TsConfig),
             _ if hosts::is_host_config(path) => Some(Lang::HostConfig),
@@ -117,6 +145,8 @@ impl Lang {
                 Some("py") => Some(Lang::Python),
                 Some("rs") => Some(Lang::Rust),
                 Some("cs") => Some(Lang::CSharp),
+                Some("java") => Some(Lang::Java),
+                Some("kt") => Some(Lang::Kotlin),
                 Some("csproj") => Some(Lang::CsProj),
                 Some("html") => Some(Lang::Html),
                 Some("ts" | "mts" | "cts") => Some(Lang::TypeScript),
@@ -124,6 +154,7 @@ impl Lang {
                 Some("js" | "mjs" | "cjs" | "jsx") if !is_built_js(path) => Some(Lang::JavaScript),
                 Some("sql" | "SQL") => Some(Lang::Sql),
                 Some("tf") => Some(Lang::Terraform),
+                Some("go") => Some(Lang::Go),
                 _ if cfml::is_cfml_path(path) => Some(Lang::Cfml),
                 _ if ansible::place(path).is_some() => Some(Lang::Ansible),
                 _ if gitlabci::is_ci_path(path) => Some(Lang::GitlabCi),
@@ -141,6 +172,8 @@ impl Lang {
             Lang::TypeScript => "typescript",
             Lang::Tsx => "tsx",
             Lang::JavaScript => "javascript",
+            Lang::Java => "java",
+            Lang::Kotlin => "kotlin",
             Lang::SwiftPackage => "swiftpm",
             Lang::XcodeGen => "xcodegen",
             Lang::Cargo => "cargo",
@@ -154,11 +187,18 @@ impl Lang {
             Lang::Terraform => "terraform",
             Lang::TsConfig => "tsconfig",
             Lang::HostConfig => "hostconfig",
+            Lang::Go => "go",
+            Lang::GoMod => "gomod",
+            Lang::Maven => "maven",
+            Lang::Gradle => "gradle",
         }
     }
 
     pub fn is_manifest(self) -> bool {
-        matches!(self, Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson)
+        matches!(
+            self,
+            Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson | Lang::GoMod | Lang::Maven | Lang::Gradle
+        )
     }
 
     /// Bumped whenever the extractor's output changes, so indexed files of this language get re-extracted. The
@@ -174,6 +214,8 @@ impl Lang {
             Lang::Python => python::VERSION,
             Lang::Rust => rust::VERSION,
             Lang::CSharp => csharp::VERSION,
+            Lang::Java => java::VERSION,
+            Lang::Kotlin => kotlin::VERSION,
             Lang::Html => html::VERSION,
             Lang::Cfml => cfml::VERSION,
             Lang::Sql => sql::VERSION,
@@ -182,8 +224,16 @@ impl Lang {
             Lang::Terraform => terraform::VERSION,
             Lang::TsConfig => tsconfig::VERSION,
             Lang::HostConfig => hosts::VERSION,
+            Lang::Go => go::VERSION,
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => typescript::VERSION,
-            Lang::SwiftPackage | Lang::XcodeGen | Lang::Cargo | Lang::CsProj | Lang::PackageJson => manifest::VERSION,
+            Lang::SwiftPackage
+            | Lang::XcodeGen
+            | Lang::Cargo
+            | Lang::CsProj
+            | Lang::PackageJson
+            | Lang::GoMod
+            | Lang::Maven
+            | Lang::Gradle => manifest::VERSION,
         }
     }
 }
@@ -326,6 +376,11 @@ pub struct Symbol {
     /// there is typed from it at query time. C# only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lambda_types: Option<String>,
+    /// For a declaration inside a function, a callback or a function's block (a TypeScript `const` or `type` in a
+    /// test's `it(() => …)`): the first and last lines of the innermost function body holding it, the only place its
+    /// name can be used. `None` at module and type level. TypeScript only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -545,10 +600,10 @@ pub struct TargetFact {
     pub deps: Vec<TargetDep>,
 }
 
-/// A package (SwiftPM package, XcodeGen project or Cargo package/workspace) declared by a manifest.
+/// A package (SwiftPM package, XcodeGen project, Cargo package/workspace or Go module) declared by a manifest.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageFact {
-    /// `swiftpm`, `xcodegen` or `cargo`.
+    /// `swiftpm`, `xcodegen`, `cargo`, `csproj`, `npm`, `gomod`, `maven` or `gradle`.
     pub kind: &'static str,
     pub name: String,
     pub line: u32,
@@ -725,7 +780,8 @@ pub struct AnsibleFact {
 /// of complete. Stored in the index's `unsupported` table (see `kc_store::unsupported`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Unsupported {
-    /// `di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular` or `imports` (a C# project whose usings can't be read).
+    /// `di`, `bus`, `sql`, `ansible`, `terraform`, `ci`, `angular`, `imports` (a C# project whose usings can't be read),
+    /// `build` (a Go file the default build leaves out) or `cgo`.
     pub area: &'static str,
     /// What was met, in words: `assembly scan RegisterAssemblyTypes(…)`.
     pub construct: String,
@@ -740,6 +796,9 @@ pub struct FileFacts {
     pub refs: Vec<Ref>,
     pub relations: Vec<Relation>,
     pub imports: Vec<Import>,
+    /// Modules a TypeScript file augments (`declare module 'pkg' { … }`): declarations it adds to a package's module,
+    /// reached through that package's values.
+    pub augments: Vec<Import>,
     /// C# `global using` directives (see [`GlobalUsing`]).
     pub global_usings: Vec<GlobalUsing>,
     /// The names imports bind and re-exports pass on (TypeScript, Python).
@@ -763,7 +822,8 @@ pub struct FileFacts {
     pub ansible: Vec<AnsibleFact>,
     /// Per call reference (by index in `refs`), its arguments' types as far as the call site tells them, as JSON: an
     /// encoded type or `null` per argument, a named one as `{"n": name, "t": type}` (`["string", {"n": "id", "t":
-    /// null}]`). Absent when an argument is passed `out` or `ref`. Swift: the call's argument labels instead
+    /// null}]`). Absent when an argument is passed `out` or `ref`. A C# call writing type arguments (`Get<Order>(id)`) is
+    /// `{"a": <those types, or null>, "g": <how many type arguments>}`. Swift: the call's argument labels instead
     /// (`{"l": [null, "from"], "t": [null]}`, see `swift::call_labels`).
     pub arg_types: std::collections::BTreeMap<usize, String>,
     /// The member references (by index in `refs`) that assign the member: `x.P = …`, `P = …` in the class declaring
@@ -775,28 +835,84 @@ pub struct FileFacts {
     pub usages: std::collections::BTreeMap<usize, String>,
     /// Per method (by index in `symbols`), its parameters as JSON: their declared types, an encoded type or `null` for
     /// a type parameter of the method or its type, and their names (`{"types": ["string", null], "names": ["s", "x"]}`).
-    /// An extension method's `this` isn't one. C# only.
+    /// An extension method's `this` isn't one. A generic method also has `g`, its own type parameters' number (said
+    /// even without parameters). C# only.
     pub param_types: std::collections::BTreeMap<usize, String>,
     /// Number of ERROR or MISSING nodes tree-sitter produced.
     pub parse_errors: u32,
     /// The file runs top-level statements (a script or `main.swift`): its globals and free functions serve that
     /// file, not the rest of the repo.
     pub script: bool,
+    /// The package the file declares into, as written: Go's package clause (`chi`, `main`, `chi_test`). Resolution
+    /// joins it with the file's directory, since a Go package is the files of one directory sharing a clause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+}
+
+/// The nodes a visitor is inside, outermost first, each with its parent when it was visited as one of that node's
+/// children: parents read from here cost a short scan, where tree-sitter's `parent()` walks down from the root on
+/// every call (a fifth of Swift extraction when read per identifier).
+#[derive(Default)]
+pub(crate) struct Ancestry<'t> {
+    path: Vec<(tree_sitter::Node<'t>, Option<tree_sitter::Node<'t>>)>,
+    next: Option<tree_sitter::Node<'t>>,
+}
+
+impl<'t> Ancestry<'t> {
+    /// The visitor enters `node`: a child of the node [`Self::child_of`] named just before, if it did.
+    pub(crate) fn enter(&mut self, node: tree_sitter::Node<'t>) {
+        let parent = self.next.take();
+        self.path.push((node, parent));
+    }
+
+    pub(crate) fn leave(&mut self) {
+        self.path.pop();
+    }
+
+    /// The node entered next is one of `parent`'s children.
+    pub(crate) fn child_of(&mut self, parent: tree_sitter::Node<'t>) {
+        self.next = Some(parent);
+    }
+
+    /// `node`'s parent: the one it was entered as a child of, or the node entered around it when that is its parent
+    /// (a visitor can skip a level), else tree-sitter's.
+    pub(crate) fn parent(&self, node: tree_sitter::Node<'t>) -> Option<tree_sitter::Node<'t>> {
+        if let Some(k) = self.path.iter().rposition(|(n, _)| *n == node) {
+            if let Some(p) = self.path[k].1 {
+                return Some(p);
+            }
+            if let Some(&(p, _)) = k.checked_sub(1).and_then(|k| self.path.get(k))
+                && p.child_with_descendant(node) == Some(node)
+            {
+                return Some(p);
+            }
+        }
+        node.parent()
+    }
 }
 
 /// Depth of the control-flow block `node` within the callable spanning bytes `outer` (`node` itself is level 1):
 /// the number of `nest` kinds on the path up to the callable, not counting `else if` links.
 fn nesting_depth(node: tree_sitter::Node, nest: &[&str], outer: (u32, u32)) -> u32 {
+    nesting_depth_by(node, nest, outer, |n| n.parent())
+}
+
+/// [`nesting_depth`] with each node's parent given by `parent`, for an extractor that knows the parents without
+/// tree-sitter's `parent()`, which walks down from the root on every call.
+fn nesting_depth_by<'t>(
+    node: tree_sitter::Node<'t>, nest: &[&str], outer: (u32, u32), parent: impl Fn(tree_sitter::Node<'t>) -> Option<tree_sitter::Node<'t>>,
+) -> u32 {
     let mut depth = 0;
     let mut n = Some(node);
     while let Some(c) = n {
         if c.start_byte() as u32 <= outer.0 && c.end_byte() as u32 >= outer.1 {
             break;
         }
-        if nest.contains(&c.kind()) && !is_else_if(c) {
+        let p = parent(c);
+        if nest.contains(&c.kind()) && !is_else_if_in(c, p) {
             depth += 1;
         }
-        n = c.parent();
+        n = p;
     }
     depth
 }
@@ -852,7 +968,12 @@ fn record_condition(sym: &mut Symbol, node: tree_sitter::Node, src: &str) {
 /// An `if` that is the `else` branch of another `if`: an `else_clause` child, or a direct child of an `if` of the same
 /// kind that isn't its then-branch.
 fn is_else_if(node: tree_sitter::Node) -> bool {
-    let Some(p) = node.parent() else { return false };
+    is_else_if_in(node, node.parent())
+}
+
+/// [`is_else_if`] for `node` within `parent`.
+fn is_else_if_in(node: tree_sitter::Node, parent: Option<tree_sitter::Node>) -> bool {
+    let Some(p) = parent else { return false };
     p.kind() == "else_clause"
         || (p.kind() == node.kind() && node.kind().starts_with("if") && p.child_by_field_name("consequence") != Some(node))
 }
@@ -927,6 +1048,8 @@ pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
         Lang::Python => python::extract(source),
         Lang::Rust => rust::extract(source),
         Lang::CSharp => csharp::extract(source),
+        Lang::Java => java::extract(source),
+        Lang::Kotlin => kotlin::extract(source),
         Lang::TypeScript => typescript::extract(source, false),
         Lang::Tsx => typescript::extract(source, true),
         Lang::JavaScript if typescript::is_minified(source) || typescript::is_library(source) => FileFacts::default(),
@@ -947,6 +1070,13 @@ pub fn extract_file(lang: Lang, path: &str, source: &str) -> FileFacts {
         Lang::Terraform => terraform::extract(source),
         Lang::TsConfig => tsconfig::extract(source),
         Lang::HostConfig => hosts::extract(path, source),
+        Lang::Go => go::extract(path, source),
+        Lang::GoMod => manifest::gomod(source),
+        Lang::Maven => manifest::maven(source),
+        Lang::Gradle => {
+            let (dir, file) = path.rsplit_once('/').unwrap_or(("", path));
+            manifest::gradle(source, file.starts_with("settings."), dir.rsplit('/').next().unwrap_or(dir))
+        }
     }
 }
 
@@ -1020,6 +1150,9 @@ pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
         Lang::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Lang::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Lang::Tsx | Lang::JavaScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        Lang::Go => tree_sitter_go::LANGUAGE.into(),
+        Lang::Java => tree_sitter_java::LANGUAGE.into(),
+        Lang::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         _ => return None,
     })
 }
@@ -1027,6 +1160,40 @@ pub fn grammar(lang: Lang) -> Option<tree_sitter::Language> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whatever path a visitor takes down a tree (every child, a grandchild skipping its parent, a node entered
+    /// without saying whose child it is), [`Ancestry::parent`] names tree-sitter's parent, for nodes entered and not.
+    #[test]
+    fn ancestry_parents_are_tree_sitters() {
+        fn walk<'t>(path: &mut Ancestry<'t>, node: tree_sitter::Node<'t>, depth: usize, checked: &mut usize) {
+            path.enter(node);
+            assert_eq!(path.parent(node), node.parent());
+            *checked += 1;
+            let mut cursor = node.walk();
+            for (i, c) in node.children(&mut cursor).enumerate() {
+                assert_eq!(path.parent(c), c.parent());
+                match (depth + i) % 3 {
+                    0 => path.child_of(node),
+                    // Skips `c`: its children are entered under `node`.
+                    1 if c.child_count() > 0 => {
+                        let mut cursor = c.walk();
+                        for g in c.children(&mut cursor) {
+                            walk(path, g, depth + 1, checked);
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                walk(path, c, depth + 1, checked);
+            }
+            path.leave();
+        }
+        let src = "class A {\n  func f(x: Int) -> Int {\n    if x > 0 { return g(x) { $0 + 1 } }\n    for y in [1, 2] where y > x { print(y) }\n    return try await h(x).k()\n  }\n}\n";
+        let tree = swift::parse(src).unwrap();
+        let (mut path, mut checked) = (Ancestry::default(), 0);
+        walk(&mut path, tree.root_node(), 0, &mut checked);
+        assert!(checked > 50, "{checked}");
+    }
 
     #[test]
     fn javascript_is_read_unless_built() {

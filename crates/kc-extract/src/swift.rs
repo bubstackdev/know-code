@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 23;
+pub const VERSION: u32 = 26;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -61,6 +61,8 @@ pub fn extract(source: &str) -> FileFacts {
         seen_refs: HashSet::new(),
         closure_locals: HashMap::new(),
         seen_bare: HashSet::new(),
+        awaits: HashMap::new(),
+        path: crate::Ancestry::default(),
     };
     cx.visit(tree.root_node());
     // A file runs top-level statements: a script, or a target's `main.swift`. A build diagnostic (`#error(…)` in a
@@ -467,6 +469,10 @@ struct Cx<'a> {
     closure_locals: HashMap<usize, HashMap<String, TypeExpr>>,
     /// Bare identifiers already recorded per enclosing symbol.
     seen_bare: HashSet<(Option<usize>, String)>,
+    /// Per statement (by node id), where its first `await` outside a closure starts, if it has one.
+    awaits: HashMap<usize, Option<usize>>,
+    /// The nodes [`Cx::visit`] is inside, for [`Cx::parent`].
+    path: crate::Ancestry<'a>,
 }
 
 impl<'a> Cx<'a> {
@@ -474,7 +480,23 @@ impl<'a> Cx<'a> {
         &self.src[node.byte_range()]
     }
 
-    fn visit(&mut self, node: Node) {
+    fn visit(&mut self, node: Node<'a>) {
+        self.path.enter(node);
+        self.visit_node(node);
+        self.path.leave();
+    }
+
+    /// Visits `child`, one of `parent`'s children.
+    fn visit_child(&mut self, parent: Node<'a>, child: Node<'a>) {
+        self.path.child_of(parent);
+        self.visit(child);
+    }
+
+    fn parent(&self, node: Node<'a>) -> Option<Node<'a>> {
+        self.path.parent(node)
+    }
+
+    fn visit_node(&mut self, node: Node<'a>) {
         if is_parse_error(node) {
             self.facts.parse_errors += 1;
         }
@@ -484,8 +506,9 @@ impl<'a> Cx<'a> {
         if NEST_KINDS.contains(&node.kind())
             && let Some(s) = self.scopes.iter().rev().find(|s| s.callable)
         {
-            let sym = &mut self.facts.symbols[s.sym];
-            let depth = crate::nesting_depth(node, NEST_KINDS, (sym.start_byte, sym.end_byte));
+            let (i, outer) = (s.sym, (self.facts.symbols[s.sym].start_byte, self.facts.symbols[s.sym].end_byte));
+            let depth = crate::nesting_depth_by(node, NEST_KINDS, outer, |n| self.parent(n));
+            let sym = &mut self.facts.symbols[i];
             sym.nesting = sym.nesting.max(depth);
         }
         match node.kind() {
@@ -546,7 +569,7 @@ impl<'a> Cx<'a> {
                             }
                         }
                         (0, "prefix_expression" | "simple_identifier") => {}
-                        _ => self.visit(child),
+                        _ => self.visit_child(node, child),
                     }
                 }
             }
@@ -557,7 +580,8 @@ impl<'a> Cx<'a> {
                     && node.child_by_field_name("operation").is_some_and(|o| self.text(o) == ".")
                 {
                     let name = self.text(target).to_string();
-                    self.add_ref(name, Some(".".into()), RefKind::Member, target);
+                    let receiver = generic_owner(self.src, node.start_byte()).unwrap_or_else(|| ".".into());
+                    self.add_ref(name, Some(receiver), RefKind::Member, target);
                 } else {
                     self.visit_children(node);
                 }
@@ -601,9 +625,9 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn visit_children(&mut self, node: Node) {
+    fn visit_children(&mut self, node: Node<'a>) {
         for child in children(node) {
-            self.visit(child);
+            self.visit_child(node, child);
         }
     }
 
@@ -631,7 +655,14 @@ impl<'a> Cx<'a> {
             .find_map(|f| node.child_by_field_name(f))
             .or_else(|| first_named_of(node, "willset_didset_block"))
             .map_or(node.end_byte(), |b| b.start_byte());
-        let signature = collapse(&self.src[node.start_byte()..header_end], SIGNATURE_CAP);
+        let mut signature = collapse(&self.src[node.start_byte()..header_end], SIGNATURE_CAP);
+        // A header its attributes push past the cap (`@available(macOS 10.15, iOS 13.0, …) func f(…) async`) is
+        // shown from after them, as `attrs` names them: what the declaration takes and does is what the cap would cut.
+        if signature.ends_with('…')
+            && let Some(after) = attributes_end(node)
+        {
+            signature = collapse(&self.src[after..header_end], SIGNATURE_CAP);
+        }
         let attrs = attributes(self.src, node);
         let complexity = if matches!(kind, SymbolKind::Function | SymbolKind::Method | SymbolKind::Init) { 1 } else { 0 };
         self.facts.symbols.push(Symbol {
@@ -642,7 +673,9 @@ impl<'a> Cx<'a> {
             signature,
             doc: doc_comment(self.src, node),
             attrs,
-            tags: Vec::new(),
+            // A function or type declared in a function body: its uses belong to that function (see
+            // `kc_store::trace`), as the compiler's index reports them.
+            tags: if self.in_callable() { vec!["local"] } else { Vec::new() },
             start_line: line(node),
             end_line: node.end_position().row as u32 + 1,
             start_byte: node.start_byte() as u32,
@@ -655,11 +688,12 @@ impl<'a> Cx<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         self.facts.symbols.len() - 1
     }
 
-    fn type_decl(&mut self, node: Node) {
+    fn type_decl(&mut self, node: Node<'a>) {
         let kind = match node.child_by_field_name("declaration_kind").map(|k| self.text(k)) {
             Some("class") => SymbolKind::Class,
             Some("struct") => SymbolKind::Struct,
@@ -715,7 +749,8 @@ impl<'a> Cx<'a> {
             }
         }
         self.scopes.pop();
-        self.facts.symbols[sym].tags = type_tags(kind, &self.facts.symbols[sym].attrs, &targets);
+        let tags = type_tags(kind, &self.facts.symbols[sym].attrs, &targets);
+        self.facts.symbols[sym].tags.extend(tags);
 
         self.scopes.push(Scope { sym, type_name: Some(qualified), callable: false, locals: HashMap::new(), bound: HashSet::new() });
         if let Some(body) = node.child_by_field_name("body") {
@@ -724,7 +759,7 @@ impl<'a> Cx<'a> {
         self.scopes.pop();
     }
 
-    fn func_decl(&mut self, node: Node, kind: SymbolKind) {
+    fn func_decl(&mut self, node: Node<'a>, kind: SymbolKind) {
         let name = match kind {
             SymbolKind::Init => "init".to_string(),
             SymbolKind::Subscript => "subscript".to_string(),
@@ -851,7 +886,7 @@ impl<'a> Cx<'a> {
 
     /// Binds every identifier a pattern introduces, and visits expressions inside it (`case .a(x + 1)` is rare,
     /// `if let x = compute()` keeps its value outside the pattern node).
-    fn bind_pattern(&mut self, node: Node) {
+    fn bind_pattern(&mut self, node: Node<'a>) {
         let mut stack = vec![node];
         while let Some(n) = stack.pop() {
             for (i, c) in children(n).enumerate() {
@@ -886,7 +921,8 @@ impl<'a> Cx<'a> {
     /// Recorded once per enclosing symbol and name, to keep the index small.
     fn bare_identifier(&mut self, node: Node) {
         let name = self.text(node);
-        let field = node.parent().and_then(|p| {
+        let parent = self.parent(node);
+        let field = parent.and_then(|p| {
             let i = children(p).position(|c| c.id() == node.id())?;
             p.field_name_for_child(i as u32)
         });
@@ -897,7 +933,7 @@ impl<'a> Cx<'a> {
             Some("name") => return,
             _ => {}
         }
-        let parent = node.parent().map(|p| p.kind()).unwrap_or("");
+        let parent = parent.map(|p| p.kind()).unwrap_or("");
         let skip_parent = matches!(
             parent,
             "value_argument_label" | "parameter" | "lambda_parameter" | "navigation_suffix" | "statement_label"
@@ -1000,7 +1036,7 @@ impl<'a> Cx<'a> {
         self.current_sym().is_some_and(|p| self.facts.symbols[p].tags.contains(&"test"))
     }
 
-    fn property_decl(&mut self, node: Node) {
+    fn property_decl(&mut self, node: Node<'a>) {
         let in_type = self.scopes.last().is_some_and(|s| s.type_name.is_some());
         let container = if in_type { self.enclosing_type() } else { None };
         let mut first = None;
@@ -1032,7 +1068,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn enum_entry(&mut self, node: Node) {
+    fn enum_entry(&mut self, node: Node<'a>) {
         let container = self.enclosing_type();
         for (i, child) in children(node).enumerate() {
             if node.field_name_for_child(i as u32) == Some("name") {
@@ -1045,7 +1081,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn typealias_decl(&mut self, node: Node) {
+    fn typealias_decl(&mut self, node: Node<'a>) {
         let Some(n) = node.child_by_field_name("name") else { return };
         let name = type_name(self.src, n);
         let sym = self.push_symbol(node, name, SymbolKind::Typealias, self.enclosing_type());
@@ -1115,7 +1151,8 @@ impl<'a> Cx<'a> {
                 {
                     let name = self.text(target).to_string();
                     if name != "init" {
-                        let at = self.add_typed_ref(name, Some(".".into()), None, RefKind::Call, target);
+                        let receiver = generic_owner(self.src, callee.start_byte()).unwrap_or_else(|| ".".into());
+                        let at = self.add_typed_ref(name, Some(receiver), None, RefKind::Call, target);
                         self.label_call(at, RefKind::Call, node);
                     }
                 }
@@ -1135,7 +1172,7 @@ impl<'a> Cx<'a> {
     }
 
     /// `x.member` used as a value (not called): a member reference, typed like a call's receiver.
-    fn member_access(&mut self, node: Node) {
+    fn member_access(&mut self, node: Node<'a>) {
         let Some(suffix) = node.child_by_field_name("suffix").and_then(|s| s.child_by_field_name("suffix")) else {
             return self.visit_children(node);
         };
@@ -1212,13 +1249,64 @@ impl<'a> Cx<'a> {
         None
     }
 
-    /// A call's argument labels, which tell Swift overloads apart (see [`call_labels`]), recorded for call `at`.
+    /// Whether an `await` covers `call`. Swift's `await` marks every call in the expression to its right, to the end of
+    /// the statement (`try await a.f().h()` awaits `h` too, which the grammar puts outside the `await`), and never
+    /// reaches into a closure; `async let x = f()` awaits `f` where `x` is read. A call written before the `await`
+    /// (`f(await g())`) isn't covered.
+    fn awaited(&mut self, call: Node) -> bool {
+        let name_at = match call.named_child(0) {
+            Some(n) if n.kind() == "navigation_expression" => n.child_by_field_name("suffix").map_or(n.end_byte(), |s| s.start_byte()),
+            Some(n) => n.start_byte(),
+            None => call.start_byte(),
+        };
+        let mut stmt = call;
+        loop {
+            if stmt.kind() == "await_expression" {
+                return true;
+            }
+            match self.parent(stmt) {
+                Some(p) if !matches!(p.kind(), "statements" | "lambda_literal" | "function_body" | "class_body" | "computed_property" | "source_file") => {
+                    stmt = p
+                }
+                _ => break,
+            }
+        }
+        if stmt.kind() == "property_declaration" && self.src[..stmt.start_byte()].trim_end().ends_with("async")
+            || self.text(stmt).starts_with("async ")
+        {
+            return true;
+        }
+        // A closure in the statement has statements of its own, so the call isn't in one: its `await`s cover
+        // nothing here.
+        let first = *self.awaits.entry(stmt.id()).or_insert_with(|| {
+            let mut first: Option<usize> = None;
+            let mut stack = vec![stmt];
+            while let Some(n) = stack.pop() {
+                if n.kind() == "await_expression" {
+                    first = Some(first.map_or(n.start_byte(), |f| f.min(n.start_byte())));
+                } else if n.kind() != "lambda_literal" {
+                    stack.extend(children(n));
+                }
+            }
+            first
+        });
+        first.is_some_and(|f| f < name_at)
+    }
+
+    /// A call's argument labels, which tell Swift overloads apart (see [`call_labels`]), recorded for call `at`; also
+    /// for a capitalised one (`XCTAssertThrowsError(…)`, read as a creation), which may call a function.
     fn label_call(&mut self, at: Option<usize>, kind: RefKind, call: Node) {
-        if let Some(i) = at.filter(|_| kind == RefKind::Call)
-            && let Some(labels) = call_labels(self.src, call)
+        if let Some(i) = at.filter(|_| matches!(kind, RefKind::Call | RefKind::Instantiate))
+            && let Some(labels) = call_labels(self.src, call, self.wrapper(call), self.awaited(call))
         {
             self.facts.arg_types.insert(i, labels);
         }
+    }
+
+    /// The `try` or `await` around `call`, with that expression's parent.
+    fn wrapper(&self, call: Node<'a>) -> Option<(Node<'a>, Node<'a>)> {
+        let p = self.parent(call).filter(|p| matches!(p.kind(), "try_expression" | "await_expression"))?;
+        Some((p, self.parent(p)?))
     }
 }
 
@@ -1389,6 +1477,46 @@ fn attributes(src: &str, node: Node) -> Vec<String> {
     out
 }
 
+/// The generic type a member written right after it belongs to (`MemoryLayout<T>.size`, which the grammar reads as
+/// `MemoryLayout < T > .size`): the `Type<Arguments>` ending just before `at`, when the source there is one.
+fn generic_owner(src: &str, at: usize) -> Option<String> {
+    let before = src.get(..at)?.strip_suffix('>')?;
+    let mut depth = 1;
+    let open = before.char_indices().rev().find_map(|(i, c)| {
+        match c {
+            '>' => depth += 1,
+            '<' => depth -= 1,
+            '\n' | ';' | '{' | '}' | '=' => return Some(None),
+            _ => {}
+        }
+        (depth == 0).then_some(Some(i))
+    })??;
+    let head = &before[before[..open].rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + 1)..open];
+    let types = before[open + 1..].split(',').all(|a| a.trim().starts_with(|c: char| c.is_uppercase() || c == '[' || c == '('));
+    (head.starts_with(char::is_uppercase) && types).then(|| format!("{head}{}>", &before[open..]))
+}
+
+/// Where a declaration's leading attributes end (`@available(…) @MainActor`), if it has any.
+fn attributes_end(node: Node) -> Option<usize> {
+    let mut end = None;
+    for child in children(node) {
+        match child.kind() {
+            "attribute" => end = Some(child.end_byte()),
+            "modifiers" => {
+                for m in children(child) {
+                    if m.kind() != "attribute" {
+                        break;
+                    }
+                    end = Some(m.end_byte());
+                }
+                break;
+            }
+            _ => break,
+        }
+    }
+    end
+}
+
 /// First line of the `///` or `/** */` comment directly above a declaration.
 fn doc_comment(src: &str, node: Node) -> Option<String> {
     let mut lines = Vec::new();
@@ -1413,8 +1541,9 @@ fn doc_comment(src: &str, node: Node) -> Option<String> {
 
 /// A call's argument labels as JSON: `{"l": [...], "t": [...]}`, the labels of the arguments in parentheses and of the
 /// trailing closures, `null` for one without (`f(1, from: x) { }` is `{"l": [null, "from"], "t": [null]}`). `None`
-/// for a call without a suffix (a function reference) or with an argument tree-sitter couldn't read.
-fn call_labels(src: &str, call: Node) -> Option<String> {
+/// for a call without a suffix (a function reference) or with an argument tree-sitter couldn't read. `wrapper` is the
+/// `try` or `await` around the call and its parent ([`Cx::wrapper`]).
+fn call_labels(src: &str, call: Node, wrapper: Option<(Node, Node)>, awaited: bool) -> Option<String> {
     let suffix = children(call).find(|c| c.kind() == "call_suffix")?;
     let label = |n: Node| collapse(&src[n.byte_range()], 80);
     let mut args = Vec::new();
@@ -1432,10 +1561,9 @@ fn call_labels(src: &str, call: Node) -> Option<String> {
     let mut trailing = Vec::new();
     let mut pending = None;
     // `try f(x) { … }` reads as a call of `try f(x)` with the closure: the closure is `f`'s.
-    let outer = call
-        .parent()
-        .filter(|p| matches!(p.kind(), "try_expression" | "await_expression"))
-        .and_then(|p| p.parent().filter(|g| g.kind() == "call_expression" && g.named_child(0) == Some(p)))
+    let outer = wrapper
+        .filter(|(p, g)| g.kind() == "call_expression" && g.named_child(0) == Some(*p))
+        .map(|(_, g)| g)
         .and_then(|g| children(g).find(|c| c.kind() == "call_suffix"))
         .filter(|s| !children(*s).any(|c| c.kind() == "value_arguments"));
     for c in children(suffix).chain(outer.into_iter().flat_map(children)) {
@@ -1445,12 +1573,7 @@ fn call_labels(src: &str, call: Node) -> Option<String> {
             _ => {}
         }
     }
-    // `await f(…)`, `try await f(…)`, `await (f(…))`: the call is awaited.
-    let mut up = call.parent();
-    while let Some(p) = up.filter(|p| p.kind() == "tuple_expression" && p.named_child_count() == 1) {
-        up = p.parent();
-    }
-    if up.is_some_and(|p| p.kind() == "await_expression") {
+    if awaited {
         return Some(serde_json::json!({ "l": args, "t": trailing, "a": true }).to_string());
     }
     Some(serde_json::json!({ "l": args, "t": trailing }).to_string())
@@ -1508,6 +1631,40 @@ mod tests {
         assert_eq!(labels("option"), Some(r#"{"a":true,"l":[null],"t":[]}"#));
         assert_eq!(labels("load"), Some(r#"{"a":true,"l":[],"t":[]}"#));
         assert_eq!(labels("sync"), Some(r#"{"l":[null],"t":[]}"#));
+        // An `await` covers the calls to its right in its statement, never those before it or in a closure.
+        let g = extract(
+            "func g() async throws {\n    let a = try await p.first().second()\n    outer(await inner())\n    async let c = later()\n    run { inside() }\n}\n",
+        );
+        let awaited = |name: &str| -> bool {
+            let i = g.refs.iter().position(|r| r.name == name && r.kind == RefKind::Call).expect(name);
+            g.arg_types.get(&i).is_some_and(|l| l.contains(r#""a":true"#))
+        };
+        for (name, want) in
+            [("first", true), ("second", true), ("outer", false), ("inner", true), ("later", true), ("run", false), ("inside", false)]
+        {
+            assert_eq!(awaited(name), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_member_of_a_generic_type_written_with_its_arguments_names_it() {
+        let f = extract("func g() {\n    n &+= MemoryLayout<T2>.size\n    o = o &+ MemoryLayout<UInt32>.alignment\n    let c: Color = .red\n    let d = a < b ? .blue : .green\n}\n");
+        let receiver = |name: &str| f.refs.iter().find(|r| r.name == name).and_then(|r| r.receiver.clone());
+        assert_eq!(receiver("size").as_deref(), Some("MemoryLayout<T2>"));
+        assert_eq!(receiver("alignment").as_deref(), Some("MemoryLayout<UInt32>"));
+        for implicit in ["red", "blue", "green"] {
+            assert_eq!(receiver(implicit).as_deref(), Some("."), "{implicit}");
+        }
+    }
+
+    #[test]
+    fn a_header_cut_by_its_attributes_is_shown_after_them() {
+        let long = "@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)\n@available(swift, deprecated: 6.0, message: \"Use the throwing variant of this function, which takes the same arguments\")\n";
+        let f = extract(&format!("{long}internal func assertThrows<T>(_ expression: @autoclosure () async throws -> T, file: StaticString = #filePath, line: UInt = #line) async {{ }}\n@available(macOS 10.15, *)\nfunc short() {{ }}\n"));
+        let sig = |name: &str| f.symbols.iter().find(|s| s.name == name).map(|s| s.signature.clone()).unwrap();
+        assert!(sig("assertThrows").starts_with("internal func assertThrows<T>("), "{}", sig("assertThrows"));
+        assert!(sig("assertThrows").ends_with(") async"), "{}", sig("assertThrows"));
+        assert_eq!(sig("short"), "@available(macOS 10.15, *) func short()");
     }
 
     #[test]

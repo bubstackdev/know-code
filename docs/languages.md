@@ -15,8 +15,11 @@ edges: the gaps below are the places to check by hand.
 | C# | `.cs`, `.csproj` | types, members, calls, instantiations, type and member uses | namespaces, `using`s, project references, receiver types, DI |
 | TypeScript, TSX, JavaScript | `.ts`, `.mts`, `.cts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.jsx`, `tsconfig*.json`, `jsconfig.json`, `package.json` | the same, plus Angular templates (`.html`) | imports, tsconfig `paths`/`baseUrl`, receiver types, Angular DI |
 | Swift | `.swift`, `Package.swift`, XcodeGen `project.yml` | types, extensions, conformances, members, calls, attributes | receiver and caller types, supertypes, protocols |
+| Java | `.java`, `pom.xml`, Gradle scripts | types, members, calls, instantiations, type and member uses, imports, Spring routes | packages, single-type, on-demand and static imports, receiver types |
+| Kotlin | `.kt`, Gradle scripts | types, objects, companions, functions, extensions, properties, calls, type and member uses, imports, Spring routes | packages, imports and aliases, companions, extensions by receiver type, receiver types; one family with Java |
 | Python | `.py` | definitions, calls, imports | imports (relative and absolute) |
 | Rust | `.rs`, `Cargo.toml` | definitions, calls, uses | by name and receiver within the repo |
+| Go | `.go`, `go.mod` | types, functions, methods, fields, interface methods, calls, type and member uses, HTTP routes and clients | packages, imports through `go.mod`, receiver types, embedding |
 | ColdFusion (CFML) | `.cfm`, `.cfc`, `.cfs` | templates, components, functions, includes, queries | by path, as the engine resolves them |
 | SQL | `.sql` | tables, views, procedures, functions, triggers, events | by name, without case or quotes |
 | Terraform | `.tf` | resources, data sources, modules, variables, locals, outputs, providers | by address within a configuration directory |
@@ -24,12 +27,13 @@ edges: the gaps below are the places to check by hand.
 | GitLab CI | `.gitlab-ci.yml` and included files | jobs, includes, variables, deploy steps | includes across repos, `extends`, variable precedence |
 | Host configuration | `appsettings*.json`, `launchSettings.json`, `web.config`/`app.config`, Docker Compose files, `*ingress*.yaml`, HAProxy `.cfg`, nginx `.conf` | hosts only: which a repo serves, which its clients send to | links HTTP clients to backends (see [C#](#c), Hosts) |
 
-Not supported: Go, Java, Kotlin, Ruby, PHP, C, C++, Objective-C, Vue and Svelte single-file components, and any other
+Not supported: Ruby, PHP, C, C++, Objective-C, Vue and Svelte single-file components, and any other
 language not listed. Their files are still covered by `search` and by history (`coupled`, `hotspots`), but have no
 symbols. `unused` and `rename` cover C# and TypeScript only. `grep-ast` covers C#, TypeScript, JavaScript, Python,
 Rust and Swift.
 
-A name resolves only to definitions in its own language (TypeScript, TSX and JavaScript count as one). Edges between
+A name resolves only to definitions in its own language (TypeScript, TSX and JavaScript count as one, and so do Java and
+Kotlin). Edges between
 languages come only from HTTP routes, the message bus, SQL, dependency injection and templates.
 
 ## C#
@@ -215,6 +219,92 @@ repo-to-repo edges; an `import` of a module another indexed repo provides resolv
 Known gaps: no type inference beyond declared types, so a receiver whose type comes from an expression is resolved by
 name; a common standard-library member on an unknown receiver is `external_likely`. No compiler index store is read.
 
+## Java
+
+Extracted: classes, interfaces, enums, records and annotation types (an interface or annotation type is a protocol, a
+constructor an `init`), methods, fields, record components and enum constants; `extends` and `implements`; the package
+and every `import` (single-type, on-demand `a.b.*`, and `static`); calls with their receivers and argument counts,
+instantiations, method references (`Type::method`, `Type::new`), field and member uses, annotations and type uses. A
+parameter's or local's declared type (including a pattern variable's, `o instanceof Order placed`) types its receiver,
+and so does a chain of fields, calls and member uses on `this`, a field or a type written by name
+(`Report.builder().title(t).build()`, `this.store.items()`): each step is followed through the repo's declarations as
+Java reads them, a member type written inside its outer type (`Builder` in `Report`) included. Methods annotated `@Test`
+(and JUnit 5's other test annotations) are tagged `test`, `main` `entrypoint`.
+
+Resolved as javac scopes names: a simple type name is found in the types the code is nested in, then single-type
+imports, then the file's own package, then on-demand imports. A type a single-type import brings from another package,
+or a name no rule reaches, is outside the repo and stays `unresolved`, never linked to a same-named declaration of the
+repo's (`import java.util.List` next to a repo class `List`). A member named through an outside type (`BigInteger.ONE`,
+`Collections.emptyList()`) is unresolved too, and a bare call a static import brings from outside is unresolved unless
+the caller's own types declare or inherit the name. A local class is seen only in its method. On a receiver of a known
+repo type, the type's own member wins over a same-named one a supertype or interface declares, and overloads are told
+apart by argument count. Fields and methods are separate names, as in Java: a field access never resolves to a method of
+the same name, nor a call to a field. A member of a value whose type isn't written (a chained call's result) is listed
+as `ambiguous` candidates, never linked by its name alone.
+
+Spring routes and clients: a handler method's `@RequestMapping`, `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`
+or `@PatchMapping` is a server route of the method, joined under its type's `@RequestMapping` paths as Spring joins
+them: each of the type's paths with each of the method's, for each verb (a `@RequestMapping` with no `method` serves
+every verb, `*`). A type's methods serve routes when it is a `@Controller` or `@RestController`, is mapped by
+`@RequestMapping` itself, or is an interface or abstract class (whose mappings the controller implementing it serves);
+a `@FeignClient` or `@HttpExchange` interface's mappings are requests, never routes. A path may be a string, a
+constant (`Paths.API`, a `static final String` of the repo's, resolved when the routes are read) or a `+` of them; a
+mapping written any other way is `unsupported`, never a route with a wrong path. An inherited mapping is a route
+of the method declaring it, not of the controller's override. Not read: a mapping on a concrete superclass that isn't
+itself a controller, meta-annotations of the repo's own, functional routes (`RouterFunction`), and servlet or
+`server.servlet.context-path` prefixes.
+
+Spring clients: each method of a `@FeignClient` interface requests its mapping (the same annotations, under the
+client's `path`; with no `method`, `GET`), and so does each method of an `@HttpExchange` interface (`@GetExchange`,
+`@PostExchange`, …, under the interface's `@HttpExchange`). A `RestTemplate` call (`getForObject`, `postForEntity`,
+`put`, `delete`, `exchange(url, HttpMethod.PUT, …)`, …) on a receiver declared `RestTemplate` (or named for it) is a
+request of the calling method, and so is the `uri(…)` after a verb in a `WebClient` or `RestClient` chain
+(`client.get().uri(…)`, `.method(HttpMethod.PATCH).uri(…)`). Their URLs are read from strings (a URI template's
+`{id}` a parameter), constants and `+`; a base address first (`base + "/orders"`, `serviceUri() + "/owners"`, an
+absolute URL's host) is dropped. A Feign client's service name, a `@LoadBalanced` service, and a
+`server.servlet.context-path` aren't read, so a request is linked by its path alone; a method chosen at run time is
+`unsupported`. In Kotlin, only Feign and `@HttpExchange` clients are read.
+
+Known gaps: members generated by annotation processors (Lombok, AutoValue) and by records (`values()`, a record's
+accessors) aren't seen; a call's overload is told apart by its argument count only; generics are erased to their type's
+name. Maven and Gradle projects are areas' declared modules and test targets (see [Manifests](#manifests)).
+
+## Kotlin
+
+Read as Java is, and resolved with it as one family: a Kotlin class calls a Java one, and Java code a Kotlin one.
+Extracted: classes, interfaces, objects and companion objects, enums and type aliases; functions and properties, at
+the top level and in types (a primary constructor's `val`s and `var`s are properties); secondary constructors; enum
+entries; extension functions and properties, with the receiver type they declare; the package and every `import`
+(`a.b.C`, `a.b.*`, `a.b.C as D`); calls, constructor calls (`Cart(…)`), member uses, member and class references
+(`Item::price`, `Order::class`), annotations and type uses. A parameter's or local's declared type, a local's
+initializer, `this` and `this@Outer`, and chains of fields and calls type a receiver. Spring routes are read as in
+Java, from the same annotations; a path may also name constants in a string template (`"$API/orders"`,
+`"${Paths.ITEMS}/{id}"`), each a `const val` of the repo's.
+
+Resolved as kotlinc scopes names: a bare name is a local, then the caller's own or inherited member, then its class's
+companion object's, then a top-level declaration an import names, then one of the file's own package, then of a
+star-imported package; anything else is Kotlin's default imports' (`require`, `listOf`) or another library's, and
+stays `unresolved`. A top-level `private` declaration is seen only in its file. In an extension's body a bare name is
+first the receiver's member. In a lambda with a receiver (`x.apply { … }`, `x.run { … }`, `with(x) { … }`, or a lambda
+passed to a repository function's `T.() -> R` parameter), a bare name is first a member of the receiver's type, then
+an extension of it, when that type is the repository's and the receiver's type is written or follows from
+declarations; a receiver that has no member of that name leaves it to the enclosing code. On a library receiver
+(`buildString { … }`) or one whose type can't be told, the name is a candidate, never a link. A member always wins
+over an extension, so an extension is linked only on a receiver of a type the repo declares; on a library type it is a
+candidate. Fields and functions are separate names, as in Java.
+
+The grammar can't read one shape kotlinc does: a nested class whose primary constructor starts on the line after its
+name (`class Builder` / `internal constructor(…) : Supers {`). Where an error covers exactly that shape, the file is
+read again without that line break, every position as written. The grammar also reads some annotated declarations
+as expressions without an error: a class or object whose annotations are split off before it, and a class with two
+annotations, the second taking arguments, followed by another declaration, read whole as an expression; each is counted
+as one of the file's parse errors, so answers about the file say what they may miss. Other parse errors (Kotlin 2.2's `$$"…"` strings, a
+nested declaration written on one line, `class A { object B { val x = 1 } }`) are reported as the file's parse errors.
+
+Known gaps: types inferred beyond a local's initializer (`it`, a lambda's parameters, a generic call's result), members
+of library types (so an extension on one is never linked), members the compiler or its plugins generate (a data
+class's `copy` and `componentN`, Parcelize, kotlinx.serialization), and `.kts` scripts, which aren't read.
+
 ## Python
 
 Extracted: classes, functions, methods, imports, calls and member uses. Names imported with `from m import`, and
@@ -232,6 +322,54 @@ Extracted: structs, enums, traits, functions, methods, `impl` blocks, `use` decl
 
 Known gaps: no trait resolution or macro expansion; a method call on a receiver of unknown type resolves by name.
 For precise references, use a SCIP index from `rust-analyzer scip`.
+
+## Go
+
+Extracted: package-level types (structs, interfaces, defined types and aliases), functions, methods, struct fields,
+interface methods, package-level variables and constants, imports, calls, composite literals, and type and member
+uses. A method belongs to its receiver's type wherever it is declared; an embedded field or interface promotes its
+members to the type embedding it. Test functions in `_test.go` files (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`,
+`FuzzXxx`) are tests, and `main` in package `main` is an entry point.
+
+Resolved as the compiler scopes names, and never by a name alone:
+
+- **Packages.** A package is the files of one directory sharing a package clause; a bare name is a package-level
+  declaration of the caller's package. Only tests see a `_test.go` file's declarations, and a `_test` package is a
+  package of its own.
+- **Imports.** An import path is placed through the repo's `go.mod` files: under the caller's module root, or in
+  another module of the repo when the caller's `go.mod` replaces it with that directory. The standard library, a
+  dependency, and a released version of the repo's own module are outside the repo, so their names stay
+  `unresolved`.
+- **Receivers.** Locals, parameters and fields with a declared type, composite literals (`&T{}`), `new(T)`, a call's
+  declared result, ranges over typed values, type assertions and type switches; chains through fields and calls
+  (`s.cfg.Get()`). A member is the receiver type's own, else one promoted through embedding, nearest first; a receiver
+  whose type is outside the repo, or embeds an outside type, keeps the member outside. A receiver of unknown type lists
+  the repo's members of that name as `ambiguous` candidates, never one linked.
+- **The default build.** Linux, any architecture, cgo on, no custom tags. A file another build compiles
+  (`x_windows.go`, `//go:build nomsgpack`) is read, but its declarations give way to the default build's.
+
+HTTP routes (**a preview in 0.7**: on the frozen route labels chi and `net/http` fell short of the 0.95 precision
+gate, and the held-out repositories scored unevenly; a fresh held-out round in 0.8 decides whether it stays one, see
+the [0.7 release gate](../eval/release-gate/0.7.0.md#routes)):
+
+- **Servers.** `net/http`'s `Handle` and `HandleFunc` on a `ServeMux` or the default one, with method patterns
+  (`"GET /items/{id}"`); gin, echo and chi verbs, `Any`/`Match`/`Handle`/`Add`/`Method`, static files, groups
+  (`Group`, `Route`, `With`) and chi's `Mount`. A router is placed by its constructor, its type, or the group it was
+  made from; a router a function receives or returns takes the prefixes its callers give it, so a route registered in
+  a helper (`func api(r gin.IRouter)`) carries the prefix of every group it's registered under. A helper method called
+  on a value whose type the syntax doesn't give (`h.Register(v1)`) takes the groups passed to methods of that name
+  when no caller names its type; a group a test builds doesn't count toward a helper's prefixes. A function taking a
+  registration function (`handle func(string, http.Handler)`, which callers pass as `mux.Handle`) registers its calls'
+  patterns on that mux. A path may be a package constant. A registration under a run-time condition (`if cfg.OIDC { … }`) is listed: which configuration
+  serves it isn't known from source.
+- **Clients.** `net/http`'s `Get`, `Head`, `Post`, `PostForm`, `NewRequest` and `NewRequestWithContext`, on the
+  package, `http.DefaultClient` or an `http.Client`. The URL is read from literals, `+`, `fmt.Sprintf` and package
+  constants; a value before the path (`base + "/orders"`) is the base address and dropped.
+
+Known gaps: a type isn't matched to the interfaces it satisfies implicitly (a call through an interface resolves to
+the interface's method); a generic receiver resolves to its generic type's members; dot imports leave their names
+unresolved. Measured against the type checker on three public repositories in
+[identity-v2](../eval/identity-v2/README.md).
 
 ## ColdFusion (CFML)
 
@@ -305,10 +443,31 @@ at run time are reported as `unresolved`.
 
 ## Manifests
 
-SwiftPM, XcodeGen, Cargo, MSBuild (`.csproj`) and npm (`package.json`) manifests give packages and repo-to-repo
-edges. A path dependency links to the repo it lands in; a registry dependency (NuGet, npm, crates) links to the
+SwiftPM, XcodeGen, Cargo, MSBuild (`.csproj`), npm (`package.json`), Go (`go.mod`: the module, its requires and
+replaces), Maven (`pom.xml`) and Gradle (`build.gradle[.kts]`, `settings.gradle[.kts]`) manifests give packages and
+repo-to-repo edges. A path dependency links to the repo it lands in; a registry dependency (NuGet, npm, crates) links to the
 indexed repo declaring that package, with `revision_unverified` when the version can't be checked. Checkouts of one
 origin (a clone, a worktree, a second clone) count as one repo.
+
+Maven and Gradle files are read as text and never run, so a plugin, a property (`${project.version}`), a profile, a
+version catalog entry (`libs.okio`) or an `allprojects` block isn't resolved. A `pom.xml` is the package
+`groupId:artifactId` (the parent's groupId when it sets none), with its `<modules>` and its own `<dependency>`
+elements (not `dependencyManagement`'s or a plugin's) as `groupId:artifactId`. A Gradle build script is its project,
+named as Gradle names it, by its directory (`group:directory` when it sets a literal `group`), with each dependency
+written as coordinates (`implementation("g:a:v")`) and each `project(":x")`; a settings script names the build
+(`rootProject.name`) and its projects (`include`), so a project configured only from the root is a module too. Each
+project is a declared module in `knowcode areas`; a build script that the settings script nearest above it doesn't
+include isn't, since Gradle doesn't build it, while one beside its own settings script (a plugin's test fixture) is a
+build of its own.
+
+Each project with test methods (JUnit 4 and 5, TestNG: the methods tagged `test`) in its Java and Kotlin files is a test
+target in `knowcode test-targets`, run from its build's root with the build's wrapper when it has one: `mvn test -pl
+cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` from the reactor root (the outermost `pom.xml` listing it among its
+modules), or `./gradlew :juice:test --tests 'org.example.juice.JuiceTest.pours'` from the settings script's directory.
+A nested test class is named by its binary name (`CartTest$Empty`), and a JUnit 4 parameterized method's cases are
+selected with it (`adds[*]`). A Gradle test runs in its source set's task: `test` for `src/test`, `jvmTest` for a Kotlin
+Multiplatform project's `src/jvmTest` and `src/commonTest`, a custom set's own name otherwise. Android's unit test
+tasks aren't read.
 
 ## Configurable conventions
 
@@ -334,6 +493,9 @@ on them is incomplete with reason `unsupported`, naming the first few with `file
 | Terraform | `moved`, `import`, `removed` and `check` blocks | the addresses they name, as uses |
 | GitLab CI | an include or trigger in a form not read (kind `unknown` in `ci_includes`) | the jobs and includes it brings |
 | Angular | a lazy route in a form not read (a default export, a module string) | the routes it loads |
+| Go | a file the default build leaves out (`x_windows.go`, a `//go:build` constraint false without custom tags), area `build`; `import "C"` (cgo), area `cgo` | the declarations only another build compiles; the C code `C.name` refers to |
+| HTTP (Spring) | a request mapping whose path or `method` isn't a string, a constant or a `+` of them; a `RestTemplate` `exchange` or `execute` whose method is chosen at run time | the routes it maps, and the requests it sends |
+| HTTP (Go) | a registration whose path or method isn't a literal or a constant; a request whose method is chosen at run time | the routes it registers, and the requests it sends |
 | Razor | `.razor` and `.cshtml` files, which aren't parsed: a C# `refs` or `impact` answer from a repo holding any checks them as text for the name and names the lines that name it (`refs` says in `checked` when none does); with more than 20 names to check, it says the files exist, naming one | uses of C# code in their markup and `@code` blocks |
 | HTTP (C#) | an endpoint registration whose route can't be placed: a `Map*` template or `MapGroup` prefix that isn't a constant, `MapMethods` verbs that aren't, `Map` as a middleware branch, conventional routes whose template isn't a literal or names an area, an attribute request contract whose path isn't a constant | the routes it registers and their callers: in `routes` for the repo, in `context` on its handler, and on a controller action with no route and no callers where conventional routes may serve it |
 

@@ -327,6 +327,8 @@ pub fn candidates(store: &Store, files: Vec<CFile>, m: &AstMatcher, repo: usize)
         }
     }
     stats.candidates = out.len();
+    // In path order, as for a text search (see [`search::candidates`]): a scan cut at its limit keeps a prefix.
+    out.sort_by(|a, b| a.path.cmp(&b.path));
     Ok((out, stats))
 }
 

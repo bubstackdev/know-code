@@ -1,0 +1,430 @@
+{
+ "binary": "7aa236dbeba57056",
+ "context_check": {
+  "chi": {
+   "confirmed": 50,
+   "sampled": 50
+  },
+  "echo": {
+   "confirmed": 19,
+   "sampled": 19
+  },
+  "gin": {
+   "confirmed": 36,
+   "sampled": 36
+  }
+ },
+ "excluded": {
+  "echo-realworld": {
+   "disagree": [],
+   "labels": [],
+   "placeholders": [],
+   "routes": []
+  },
+  "gin-realworld": {
+   "disagree": [],
+   "labels": [],
+   "placeholders": [],
+   "routes": []
+  },
+  "goatcounter": {
+   "disagree": [],
+   "labels": [
+    "GET /*"
+   ],
+   "placeholders": [],
+   "routes": [
+    "GET /* at handlers/handlers.go:198",
+    "GET /.well-known/acme-challenge/{key} at handlers/backend.go:33"
+   ]
+  },
+  "pkgsite": {
+   "disagree": [],
+   "labels": [],
+   "placeholders": [],
+   "routes": [
+    "* /_/s/go at internal/frontend/links_test.go:62"
+   ]
+  }
+ },
+ "frameworks": {
+  "chi": {
+   "gated": true,
+   "macro": {
+    "precision": 0.959,
+    "recall": 1.0
+   },
+   "passed": true,
+   "precision": {
+    "high": 0.9824,
+    "k": 117,
+    "low": 0.9076,
+    "n": 122,
+    "value": 0.959
+   },
+   "recall": {
+    "high": 1.0,
+    "k": 135,
+    "low": 0.9723,
+    "n": 135,
+    "value": 1.0
+   },
+   "repos": {
+    "goatcounter": {
+     "precision": {
+      "high": 0.9824,
+      "k": 117,
+      "low": 0.9076,
+      "n": 122,
+      "value": 0.959
+     },
+     "recall": {
+      "high": 1.0,
+      "k": 135,
+      "low": 0.9723,
+      "n": 135,
+      "value": 1.0
+     }
+    }
+   }
+  },
+  "echo": {
+   "gated": true,
+   "macro": {
+    "precision": 0.0,
+    "recall": 0.0
+   },
+   "passed": false,
+   "precision": {
+    "high": 0.1682,
+    "k": 0,
+    "low": 0.0,
+    "n": 19,
+    "value": 0.0
+   },
+   "recall": {
+    "high": 0.0448,
+    "k": 0,
+    "low": 0.0,
+    "n": 82,
+    "value": 0.0
+   },
+   "repos": {
+    "echo-realworld": {
+     "precision": {
+      "high": 0.1682,
+      "k": 0,
+      "low": 0.0,
+      "n": 19,
+      "value": 0.0
+     },
+     "recall": {
+      "high": 0.0448,
+      "k": 0,
+      "low": 0.0,
+      "n": 82,
+      "value": 0.0
+     }
+    }
+   }
+  },
+  "gin": {
+   "gated": false,
+   "macro": {
+    "precision": 0.7308,
+    "recall": 0.963
+   },
+   "passed": true,
+   "precision": {
+    "high": 0.863,
+    "k": 19,
+    "low": 0.5392,
+    "n": 26,
+    "value": 0.7308
+   },
+   "recall": {
+    "high": 0.9934,
+    "k": 26,
+    "low": 0.8172,
+    "n": 27,
+    "value": 0.963
+   },
+   "repos": {
+    "gin-realworld": {
+     "precision": {
+      "high": 0.863,
+      "k": 19,
+      "low": 0.5392,
+      "n": 26,
+      "value": 0.7308
+     },
+     "recall": {
+      "high": 0.9934,
+      "k": 26,
+      "low": 0.8172,
+      "n": 27,
+      "value": 0.963
+     }
+    }
+   }
+  },
+  "net/http": {
+   "gated": false,
+   "macro": {
+    "precision": 0.0,
+    "recall": 0.0
+   },
+   "passed": true,
+   "precision": {
+    "high": 0.0,
+    "k": 0,
+    "low": 0.0,
+    "n": 0,
+    "value": null
+   },
+   "recall": {
+    "high": 0.0741,
+    "k": 0,
+    "low": 0.0,
+    "n": 48,
+    "value": 0.0
+   },
+   "repos": {
+    "pkgsite": {
+     "precision": {
+      "high": 0.0,
+      "k": 0,
+      "low": 0.0,
+      "n": 0,
+      "value": null
+     },
+     "recall": {
+      "high": 0.0741,
+      "k": 0,
+      "low": 0.0,
+      "n": 48,
+      "value": 0.0
+     }
+    }
+   }
+  }
+ },
+ "labels": "eval/routes-v1/go/heldout/labels.jsonl",
+ "per_repo": {
+  "echo-realworld": {
+   "echo": {
+    "false": [
+     "POST /users at handler/routes.go:12",
+     "POST /users/login at handler/routes.go:13",
+     "GET /user at handler/routes.go:16",
+     "PUT /user at handler/routes.go:17",
+     "GET /profiles/:username at handler/routes.go:20",
+     "POST /profiles/:username/follow at handler/routes.go:21",
+     "DELETE /profiles/:username/follow at handler/routes.go:22",
+     "POST /articles at handler/routes.go:35",
+     "GET /articles/feed at handler/routes.go:36",
+     "PUT /articles/:slug at handler/routes.go:37",
+     "DELETE /articles/:slug at handler/routes.go:38",
+     "POST /articles/:slug/comments at handler/routes.go:39",
+     "DELETE /articles/:slug/comments/:id at handler/routes.go:40",
+     "POST /articles/:slug/favorite at handler/routes.go:41",
+     "DELETE /articles/:slug/favorite at handler/routes.go:42",
+     "GET /articles at handler/routes.go:43",
+     "GET /articles/:slug at handler/routes.go:44",
+     "GET /articles/:slug/comments at handler/routes.go:45",
+     "GET /tags at handler/routes.go:48"
+    ],
+    "labels": 82,
+    "labels_matched": 0,
+    "missed": [
+     "CONNECT /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "CONNECT /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "CONNECT /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "CONNECT /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "CONNECT /api/user (github.com/labstack/echo/v4.init.func1)",
+     "CONNECT /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "DELETE /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "DELETE /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "DELETE /api/articles/:slug (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).DeleteArticle-fm)",
+     "DELETE /api/articles/:slug/comments/:id (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).DeleteComment-fm)",
+     "DELETE /api/articles/:slug/favorite (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Unfavorite-fm)",
+     "DELETE /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "DELETE /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "DELETE /api/profiles/:username/follow (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Unfollow-fm)",
+     "DELETE /api/user (github.com/labstack/echo/v4.init.func1)",
+     "DELETE /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "GET /api/articles (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Articles-fm)",
+     "GET /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "GET /api/articles/:slug (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).GetArticle-fm)",
+     "GET /api/articles/:slug/comments (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).GetComments-fm)",
+     "GET /api/articles/feed (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Feed-fm)",
+     "GET /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "GET /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "GET /api/profiles/:username (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).GetProfile-fm)",
+     "GET /api/tags (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Tags-fm)",
+     "GET /api/user (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).CurrentUser-fm)",
+     "GET /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "GET /swagger/* (github.com/swaggo/echo-swagger.EchoWrapHandler.func1)",
+     "HEAD /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "HEAD /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "HEAD /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "HEAD /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "HEAD /api/user (github.com/labstack/echo/v4.init.func1)",
+     "HEAD /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "OPTIONS /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "OPTIONS /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "OPTIONS /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "OPTIONS /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "OPTIONS /api/user (github.com/labstack/echo/v4.init.func1)",
+     "OPTIONS /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "PATCH /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "PATCH /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "PATCH /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "PATCH /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "PATCH /api/user (github.com/labstack/echo/v4.init.func1)",
+     "PATCH /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "POST /api/articles (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).CreateArticle-fm)",
+     "POST /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "POST /api/articles/:slug/comments (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).AddComment-fm)",
+     "POST /api/articles/:slug/favorite (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Favorite-fm)",
+     "POST /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "POST /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "POST /api/profiles/:username/follow (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Follow-fm)",
+     "POST /api/user (github.com/labstack/echo/v4.init.func1)",
+     "POST /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "POST /api/users (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).SignUp-fm)",
+     "POST /api/users/login (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).Login-fm)",
+     "PROPFIND /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "PROPFIND /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "PROPFIND /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "PROPFIND /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "PROPFIND /api/user (github.com/labstack/echo/v4.init.func1)",
+     "PROPFIND /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "PUT /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "PUT /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "PUT /api/articles/:slug (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).UpdateArticle-fm)",
+     "PUT /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "PUT /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "PUT /api/user (github.com/xesina/golang-echo-realworld-example-app/handler.(*Handler).UpdateUser-fm)",
+     "PUT /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "REPORT /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "REPORT /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "REPORT /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "REPORT /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "REPORT /api/user (github.com/labstack/echo/v4.init.func1)",
+     "REPORT /api/user/* (github.com/labstack/echo/v4.init.func1)",
+     "TRACE /api/articles (github.com/labstack/echo/v4.init.func1)",
+     "TRACE /api/articles/* (github.com/labstack/echo/v4.init.func1)",
+     "TRACE /api/profiles (github.com/labstack/echo/v4.init.func1)",
+     "TRACE /api/profiles/* (github.com/labstack/echo/v4.init.func1)",
+     "TRACE /api/user (github.com/labstack/echo/v4.init.func1)",
+     "TRACE /api/user/* (github.com/labstack/echo/v4.init.func1)"
+    ],
+    "routes": 19,
+    "routes_matched": 0
+   }
+  },
+  "gin-realworld": {
+   "gin": {
+    "false": [
+     "POST /users at users/routers.go:11",
+     "POST /users/login at users/routers.go:13",
+     "GET /user at users/routers.go:17",
+     "PUT /user at users/routers.go:19",
+     "GET /profiles/:username at users/routers.go:24",
+     "POST /profiles/:username/follow at users/routers.go:28",
+     "DELETE /profiles/:username/follow at users/routers.go:29"
+    ],
+    "labels": 27,
+    "labels_matched": 26,
+    "missed": [
+     "GET /api/ping/ (main.main.func1)"
+    ],
+    "routes": 26,
+    "routes_matched": 19
+   }
+  },
+  "goatcounter": {
+   "chi": {
+    "false": [
+     "GET /ads.txt at handlers/website.go:73",
+     "GET /signup at handlers/website.go:82",
+     "POST /signup at handlers/website.go:83",
+     "POST /user/forgot at handlers/website.go:87",
+     "GET /translating at handlers/website.go:92"
+    ],
+    "labels": 135,
+    "labels_matched": 135,
+    "missed": [],
+    "routes": 122,
+    "routes_matched": 117
+   }
+  },
+  "pkgsite": {
+   "net/http": {
+    "false": [],
+    "labels": 48,
+    "labels_matched": 0,
+    "missed": [
+     "* / (golang.org/x/pkgsite/internal/frontend.(*Server).errorHandler.func1)",
+     "* /_debug/info (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/ (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/allocs (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/block (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/cmdline (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/goroutine (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/heap (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/profile (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/symbol (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /_debug/pprof/trace (golang.org/x/pkgsite/internal/frontend.(*Server).installDebugHandlers.func1.func1)",
+     "* /opensearch.xml (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func9)",
+     "* /play/share (golang.org/x/pkgsite/internal/frontend.(*Server).proxyPlayground-fm)",
+     "* /robots.txt (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func10)",
+     "* /sitemap/ (net/http.StripPrefix.func1)",
+     "* /v1/ (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func8)",
+     "* /v1beta/ (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func7)",
+     "* GET /C (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func3)",
+     "* GET /_ah/ (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func1)",
+     "* GET /about (golang.org/x/pkgsite/internal/frontend.(*Server).staticPageHandler.func1)",
+     "* GET /api (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func4)",
+     "* GET /badge/ (golang.org/x/pkgsite/internal/frontend.(*Server).badgeHandler-fm)",
+     "* GET /favicon.ico (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func2)",
+     "* GET /files/ (net/http.StripPrefix.func1)",
+     "* GET /golang.org/x (golang.org/x/pkgsite/internal/frontend.(*Server).staticPageHandler.func1)",
+     "* GET /license-policy (golang.org/x/pkgsite/internal/frontend.(*Server).licensePolicyHandler.func1)",
+     "* GET /mod/ (golang.org/x/pkgsite/internal/frontend.(*Server).handleModuleDetailsRedirect-fm)",
+     "* GET /pkg/ (golang.org/x/pkgsite/internal/frontend.(*Server).handlePackageDetailsRedirect-fm)",
+     "* GET /search (golang.org/x/pkgsite/internal/frontend.(*Server).errorHandler.func1)",
+     "* GET /search-help (golang.org/x/pkgsite/internal/frontend.(*Server).staticPageHandler.func1)",
+     "* GET /static/ (net/http.StripPrefix.func1)",
+     "* GET /third_party/ (net/http.StripPrefix.func1)",
+     "* GET /v1 (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func5)",
+     "* GET /v1/api (golang.org/x/pkgsite/internal/frontend.(*Server).apiDocHandler.func1)",
+     "* GET /v1/imported-by/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/module/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/openapi.yaml (golang.org/x/pkgsite/internal/frontend.(*Server).openAPISpecHandler.func1)",
+     "* GET /v1/package/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/packages/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/search (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/symbols/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/versions/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1/vulns/ (golang.org/x/pkgsite/internal/frontend.(*Server).apiHandler.func1)",
+     "* GET /v1beta (golang.org/x/pkgsite/internal/frontend.(*Server).Install.func6)",
+     "* GET /vuln/ (golang.org/x/pkgsite/internal/frontend.(*Server).errorHandler.func1)",
+     "* POST /play/compile (golang.org/x/pkgsite/internal/frontend.(*Server).proxyPlayground-fm)",
+     "* POST /play/fmt (golang.org/x/pkgsite/internal/frontend.(*Server).handleFmt-fm)",
+     "* POST /search-click (golang.org/x/pkgsite/internal/frontend.(*Server).handleSearchClick-fm)"
+    ],
+    "routes": 0,
+    "routes_matched": 0
+   }
+  }
+ },
+ "rule": "routes-v1.2",
+ "served": {
+  "echo-realworld": 19,
+  "gin-realworld": 36,
+  "goatcounter": 125,
+  "pkgsite": 0
+ }
+}

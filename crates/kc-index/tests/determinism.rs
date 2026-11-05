@@ -310,7 +310,13 @@ fn ref_graph_one_name_at_a_time(store: &Store) -> kc_store::rank::RefGraph {
             }
         }
     }
-    kc_store::rank::RefGraph { files, edges: edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect() }
+    // The names DI factories file constructions under are what `ref_graph` keeps to update the graph by: compared
+    // without them.
+    kc_store::rank::RefGraph {
+        files,
+        edges: edges.into_iter().map(|((s, d), names)| (s, d, names.into_values().collect())).collect(),
+        factory_names: None,
+    }
 }
 
 #[test]
@@ -335,9 +341,10 @@ fn invariant_the_reference_graph_is_the_same_however_it_is_built() {
     assert!(before.contains("orders.service.ts") && before.contains("totals.py") && before.contains("OrderRepository.cs"), "{before}");
     for threads in [1, 3] {
         for chunk in [1, 2, 2048] {
-            let graph = kc_store::rank::with_workers(kc_store::rank::Workers { threads, init: None }, || {
+            let mut graph = kc_store::rank::with_workers(kc_store::rank::Workers { threads, init: None }, || {
                 kc_store::rank::ref_graph_chunked(store.conn(), chunk).unwrap()
             });
+            graph.factory_names = None;
             assert_eq!(json(&graph), before, "{threads} threads, {chunk} references at a time");
         }
     }

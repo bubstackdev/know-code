@@ -1,0 +1,6 @@
+# route-links-v1, Spring pairs: group, repository, URL and the commit labelled.
+jhipster jhipster-sample-app https://github.com/jhipster/jhipster-sample-app 6b000b5d23a36c45e01472471b84a44fa2464044
+petclinic-rest spring-petclinic-angular https://github.com/spring-petclinic/spring-petclinic-angular efe6c201a9a3eb6e8669cf65f1cbbbf5a3f1959e
+petclinic-rest spring-petclinic-rest https://github.com/spring-petclinic/spring-petclinic-rest afc8fc1d3b8ec8de69414482b3bd70a1da78cb95
+petclinic-microservices spring-petclinic-microservices https://github.com/spring-petclinic/spring-petclinic-microservices e8b747ab522721076cacb5cf688eb8a54ba8c5c9
+piggymetrics piggymetrics https://github.com/sqshq/piggymetrics 6bb2cf9ddbca980b664d3edbb6ff775d75369278

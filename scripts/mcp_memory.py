@@ -5,7 +5,9 @@ Usage: scripts/mcp_memory.py [--repo PATH] [--rounds N] [--limit-mb 50]
 
 Starts `knowcode serve` in the repo, sends `rounds` rounds of calls to every tool (search four ways, two of them
 over every indexed repo), and samples RSS after start, after each tool's calls, and after a short idle. Exits non-zero
-if the final idle RSS is over the limit. Reads the repo only; the index lives in the user cache as usual.
+if the final idle RSS is over the limit. Reads the repo only. The server runs with a home, cache, config and data
+directory of its own (`--cache`, default a new temporary one), and the repo is indexed there before the server
+starts, so the samples are the server's answering and not its first indexing.
 
 What counts: the server answers some calls by running child processes (git for history, blame and diffs), and their
 memory is the tool's too. Each sample is taken for the server alone and for its whole process tree (the server and
@@ -21,9 +23,13 @@ import json
 import resource
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target" / "release" / "knowcode"
@@ -63,9 +69,12 @@ def main():
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--limit-mb", type=float, default=50.0)
     ap.add_argument("--pipelined", action="store_true", help="send each tool's calls at once instead of one by one")
+    ap.add_argument("--cache", help="a directory for the server's home, cache, config and data (default: a new temporary one)")
     a = ap.parse_args()
 
-    proc = subprocess.Popen([str(BIN), "serve"], cwd=a.repo, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    env = kc_env.knowcode_env(Path(a.cache).resolve() if a.cache else tempfile.mkdtemp(prefix="knowcode-mcp-memory-"))
+    subprocess.run([str(BIN), "index"], cwd=a.repo, env=env, check=True, capture_output=True)
+    proc = subprocess.Popen([str(BIN), "serve"], cwd=a.repo, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     next_id = [0]
 
     def send_many(method, params, n):

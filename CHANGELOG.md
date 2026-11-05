@@ -4,6 +4,375 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+## 0.7.0 (2026-11-05)
+
+- Go HTTP routes and clients (net/http, chi, gin, echo) are a preview in 0.7: on the frozen route labels chi and
+  `net/http` fell short of the 0.95 precision gate and the held-out repositories scored unevenly
+  ([0.7 release gate](eval/release-gate/0.7.0.md#routes)). A fresh held-out round in 0.8 decides whether the label
+  comes off. Go's identity resolution is not a preview.
+- Spring clients: each method of a `@FeignClient` or `@HttpExchange` interface, a `RestTemplate` call and a `WebClient`
+  or `RestClient` request (`client.get().uri(…)`) are requests of the method making them, linked to the routes they
+  reach in the workspace's indexed repos by their paths, as Go's and TypeScript's are. `RestTemplate` and the
+  `WebClient`/`RestClient` chains are read in Java; Feign and `@HttpExchange` interfaces in Java and Kotlin.
+- Spring routes, in Java and Kotlin: a handler method's `@RequestMapping` or `@GetMapping` (and the other verbs'
+  shortcuts) is a route it serves, under its controller's `@RequestMapping`, with paths written as strings, constants or
+  their concatenation (Kotlin string templates included). `context` on a handler lists what it serves. A mapping KnowCode can't read is reported as
+  `unsupported`, never given a wrong path. Java and Kotlin files are indexed again on the first query after
+  upgrading.
+- Kotlin: a class the grammar reads as an expression with no error (its annotations split off before it, or a
+  class with two annotations, the second taking arguments, followed by another declaration, read whole as one) counts
+  as a parse error of its file, so answers about the file report that they may miss what it declares, instead of
+  answering as if it were read. Kotlin files are indexed again on the first query after upgrading.
+- Kotlin: in a lambda with a receiver (`x.apply { … }`, `with(x) { … }`, a lambda passed to a function of the repo's
+  taking a `T.() -> R`), a bare name is the receiver type's member or extension when that type is the repo's, and the
+  enclosing code's when the receiver has none of that name. Before, every such name was only a candidate. A trailing
+  lambda after arguments (`with(x) { … }`, `transaction(db) { … }`) is now read as passed to that function too; there,
+  a name on a receiver whose type can't be told is a candidate. On identity-v2's Kotlin labels, 20 more references are
+  linked `exact`, all of them right (`exact` precision stays 1.000, recall (linked) 0.492 to 0.514, no outside label
+  linked). Kotlin files are indexed again on the first query after upgrading.
+- C#: a call writing type arguments (`Find<Order>(key)`, `x.Get<A, B>()`) is linked only to the overloads declaring
+  that many type parameters of their own, when some do. Before, `Find<Order>(key)` was an ambiguous candidate of every
+  `Find` taking one argument whose type the call site didn't tell, `Find(object)` included. A call writing none is
+  unchanged (its type arguments may be inferred). On identity-v1's C# labels (serilog, autofac, jellyfin-server; 1,931
+  labels), 10 references go from ambiguous to the right `exact` link and none gets worse: recall (linked) goes from
+  0.768 to 0.776 (987 to 997 of 1,285 labels inside the repositories), ambiguous answers fall from 185 to 175, and
+  `exact` precision stays 0.998 (879 of 881). C# files are extracted again on the first query after upgrading.
+- TypeScript: a declaration inside a function body, a test's callback included (`it('…', () => { type Actual = … })`),
+  is named only there. Of several same-named ones, a reference is the innermost's that holds it, and a module-level
+  one only where no block shadows it. Before, every `Actual` in a file of type tests was an ambiguous candidate of
+  every other's uses. On identity-v1's TypeScript labels, 30 more references are linked `exact`, all of them right
+  (`exact` precision 0.998), ambiguous answers fall from 139 to 108, recall (linked) goes from 0.597 to 0.636, and no
+  label is newly wrong. The index schema moves to 25 (each declaration's scope), so the first query after upgrading
+  indexes each repo again, at the same cost as a cold index (hono 15.6 G instructions, jellyfin 108 G); builds of
+  schema 24 sharing the cache keep their own indexes.
+- An MCP answer is cut to its size in the call's own lane, and cutting stops when the call is cancelled (its
+  client gone, or its deadline passed): a cancelled call no longer keeps a core busy cutting an answer nobody reads.
+- An answer naming many files no longer takes time growing with their square to say which of them have parse
+  errors: only the first 64 are checked, as before, and the files past them are no longer gathered. On a made-up
+  workspace of 120 repos, a workspace-wide `context` on a table used in all of them takes 33 G instructions instead of
+  110 G from the CLI (58 G instead of 164 G over MCP), with the same answer.
+- An MCP answer far over its size (`max_chars`) is cut many rows at a time, and measured again only once it is
+  small: it used to be cut one row at a time, with the whole answer measured after each. A workspace-wide `context` on
+  a table used across many repos can build an answer of tens of MB, and cutting it grew with the rows cut times its
+  size. On a made-up workspace of 120 repos (one table, 400 readers and 30 procedures each), `kc_context` on the
+  table takes 121 G instructions instead of 473 G, nearly all of it building the answer, and
+  answers the same. An answer cut by a little is cut exactly as before.
+- TypeScript: a member reached through a property of a value whose type isn't known (`c.req.header(…)`, `c` a
+  handler's untyped parameter) is resolved among the candidates that some type's property of that name can hold
+  (`req: HonoRequest` makes it `HonoRequest.header`), rather than every `header` in the repo. The call stays
+  `ambiguous`, since the value may be of a type the repo doesn't declare, but it no longer lists a same-named
+  `Context.header` among its targets or makes the caller one of that method's. On jellyfin-web and hono's sampled
+  `refs` questions, precision goes from 0.732 to 0.754 and recall from 0.786 to 0.814. identity-v1's TypeScript
+  `exact` figures are unchanged, and its ambiguous answers name 4.86 candidates on average instead of 5.09.
+- Maven and Gradle projects are test targets: `knowcode test-targets` (`kc_test_targets`) lists each project with
+  JUnit or TestNG test methods in its Java and Kotlin files, and runs each test alone from the build's root: `mvn test
+  -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'` or `./gradlew :juice:test --tests
+  org.example.juice.JuiceTest.pours --tests 'org.example.juice.JuiceTest.pours[*]'` (a JUnit 4 parameterized method's
+  cases included; a Kotlin Multiplatform project's tests in `jvmTest`), with the build's wrapper when it has one. The
+  commands were run in a container on google/gson and square/kotlinpoet: each ran exactly its test. Kotlin methods
+  annotated `@TestFactory` or `@TestTemplate` are tagged `test` too, as Java's are, so Kotlin files are indexed again
+  on the first query after upgrading.
+- Maven and Gradle builds are read. A `pom.xml` is a package named by its coordinates (`groupId:artifactId`), with
+  its modules and dependencies; a Gradle build script is its project, with the dependencies it writes as coordinates
+  and the projects it depends on, and a settings script names the build's projects. Each project is a declared module
+  in `areas`, and a dependency on a package another indexed repo builds links the two repos, as other manifests'
+  registry dependencies do. The files are read as text, never run: plugins, properties, profiles and version
+  catalogs aren't resolved.
+- A `find` answer cut at its `limit`, or by the size cap over MCP, has a `cursor` to the rest, like every other cut
+  list: `kc_more` (or `knowcode more`) continues it. Before, the cut definitions were named only in the `declared`
+  sentence, and a reader listing `items` missed them. On five public C# and TypeScript repositories (serilog,
+  autofac, jellyfin, jellyfin-web, hono), 18 of 60 sampled `find` answers were cut with no cursor. Following the
+  cursors, the declarations of the name asked for that are found go from 135 to 145 of 145 compiler-labelled ones in
+  C#, and from 64 to 67 of 78 in TypeScript.
+- C#: a call's overloads are told apart by the number of arguments it passes in the form it is called. An extension
+  method called on a value (`rack.Stack<int>(pick)`) takes no argument for its receiver, and one called as a static
+  method (`RackExtensions.Stack<int, string>(rack)`) passes it as its first; either was counted both ways before, so
+  an overload that couldn't be the one called stayed among an ambiguous call's candidates, and impact listed the
+  call's method among that overload's callers. On identity-v1's C# labels, 17 more references are linked `exact`, all
+  of them right (`exact` precision stays 0.998), and ambiguous answers fall from 203 to 185.
+- Building the file reference graph (behind rankings, `overview`, `hotspots` and `areas`, and most of a cold index
+  of a large repo) is faster. A TypeScript type reference read the namespaces of each candidate's file again for
+  every candidate, a Go import scanned every Go file to find the package it names, and two free functions of one name
+  had the module of every candidate worked out from its path; each is now read or worked out once. The connections
+  resolving names keep a 16 MB page cache instead of 2 MB while they do. On microsoft/TypeScript (with its Go
+  sources), building the graph takes 392 G instructions instead of 691 G and a cold index 677 G instead of 976 G;
+  rust-analyzer, swift-nio and jellyfin build theirs in 7–10% fewer. Peak memory footprint is 3 MB higher. The
+  graph is byte for byte the same.
+- Go: a `Do` sending a request its function built (`req, err := http.NewRequest(…)`, then `client.Do(req)`) is a
+  request of its own, to the same route, so `routes` lists it and links it where the request is linked.
+- A request whose URL names another host (`https://github.com/{user}.keys`), one that isn't this machine and that no
+  indexed repo serves, is no longer linked to a route of its own repo that happens to share its path. Its links to
+  other repos' routes (a frontend naming its backend's public host) stay, as do requests on this machine
+  (`localhost`), relative ones, and those through a typed client's base address.
+- TypeScript and JavaScript requests whose base address is a value glued to the first path segment
+  (`` axios.delete(`${config.get('url')}application/${id}`) ``, the base ending in `/`) now read as `application/{}`
+  rather than `{}application/{}`, and link to the route that serves them; a bare word with a query
+  (`message?since=…`) is read too. On gotify/server's web UI, 30 requests now link to their gin handlers, where none
+  did; identity-v1's TypeScript figures are unchanged.
+- In Java and Kotlin, `super.m()` resolves to a supertype's member, never to the calling class's own override, as
+  javac and kotlinc bind it; when the repository's supertypes don't declare it, it is a library's and stays
+  unresolved. A member a typed receiver inherits is read through that type's own declared supertypes in Java too, so a
+  same-named type in another package is never taken for one. On jsoup's held-out labels, linked recall rises from
+  0.813 to 0.831, with `exact` precision 1.000 and no outside label linked.
+- Kotlin is read, with Java as one family. Classes, objects, companions, functions, extensions and properties in `.kt`
+  files are indexed, and names resolve as kotlinc scopes them: by package and imports (aliases included), a class's
+  companion, top-level declarations of the file's package, and extensions only on a receiver of the repo's own types.
+  Kotlin's default imports (`require`, `listOf`) and library members are never linked to the repo's declarations of
+  the same name. On identity-v2's 1,185 Kotlin labels (kotlinpoet, moshi, spring-petclinic-kotlin), `exact` precision
+  is 1.000 over 433 links, linked recall 0.482, and no outside label is linked; Java's linked recall rises to 0.874 as
+  Java calls into Kotlin resolve. Four held-out Kotlin sets, each scored once, fell short of the gate:
+  `exact` precision 0.994 on ktlint (2 outside labels linked), 0.977 on Exposed (1), 0.986 on MoshiX and misk (0),
+  and, last, 1.000 over 272 links on graphql-kotlin (1, a `super` call). Each cause is now a resolution rule;
+  `eval/identity-v2/README.md` lists them with the scores.
+- Go routes in three more forms: a router held in a struct field (`s.router.Get(…)` with `router *chi.Mux`; also
+  `*gin.Engine`, `*echo.Echo` and `*http.ServeMux`), a path joined from a constant and a literal
+  (`adminPath+"/{username}"`), and a group prefix that is a constant of another of the repository's packages
+  (`e.Group(apiv2.GroupPrefix)`). echo's paths are joined as echo joins them, by concatenation: `GET("s")` on a
+  `/user` group is `/users`, not `/user/s`. A function registering routes on a parameter of the repository's own
+  interface type (`func Route(r Router)`, with `r.MethodFunc("GET", "/health", …)`) serves them where a caller passes
+  it a router (`api.Route(chi.NewRouter())`), under that caller's prefix; with no such caller (a cache's `Get`), they
+  are not routes. Found on routes-v1's second round of held-out repositories; routes-v1's
+  development repositories score the same, since none uses these forms.
+- After an edit that changes only function bodies, `overview`, `hotspots`, `areas` and ranked answers no longer
+  resolve every reference in the repo again. A sync logs the reference names of the files it re-extracted when none
+  of them changed anything else (declarations, signatures, imports, packages; lines counted only by their order in
+  the file), and the file reference graph is then updated for those names only. Anything else (a file added or
+  removed, a declaration changed, more than 50 files or 5% of them, a repo with a SCIP index) rebuilds it as before;
+  so does the first edit of each file after upgrading, until this version has indexed it once. On the last
+  10 commits of rust-analyzer, the two that changed only bodies took `overview` from 49.1 G to 7.5 G and from 48.7 G
+  to 13.6 G instructions; across 1,201 recent commits of nine public repos, 28% change only bodies. Answers are
+  unchanged: after every edit of a random sequence on copies of nine public repos, the updated graph equals one built
+  afresh. A cold index costs about 1% more instructions (swift-nio), for the per-file key.
+- A C# class whose partial declarations in several files name different base classes takes its base class from the
+  parts in file order. The order was by line alone, mixing the files.
+- `unused` and `rename` name a type's outside interfaces in one order. "May implement IDisposable, IAsyncDisposable"
+  could read "IAsyncDisposable, IDisposable" after another index of the same code: a partial class declared in several
+  files listed its bases in the order indexing happened to write the files. They are now listed in declaration order
+  (by file path, then line).
+- The first question that reads a C# repo's database model (`impact`, `context`, `tables`, `overview` or a walk on
+  an EF Core repo) takes far less memory and time to build it. Finding which accessors assign an entity's properties
+  resolved every reference in the repo to each property name (`Id`, `Name`, …) before keeping the few made in those
+  accessors; it now keeps them as they are read. The model and answers are unchanged. The first `impact` after an
+  `index` peaked at 82 MB instead of 316 MB on bitwarden/server (29.8 G instructions instead of 47.3 G), and at 36 to
+  37 MB instead of 90 to 91 MB on jellyfin (7.7 G instead of 10.6 G).
+
+- `unused` holds far less memory on a large repo: it resolves the references to its candidates' names a chunk at a
+  time and keeps only what its verdicts read, rather than every resolved reference at once. On bitwarden/server peak
+  memory fell from 1,650 MB to 468 MB, with the same answer and about the same instructions. Callers in `context` and
+  the removed definitions `impact --diff` reports keep only the references they use as they resolve them too, and the
+  factory constructions kept for the process are bounded to the four most recently used indexes.
+- Workspace-wide questions hold less memory and, when indexes have been evicted from the cache, do half the work.
+  Checking which repos have a saved index read and fully parsed the whole workspace summary file once per repo; it
+  now reads only the fields it needs, once per check. The summaries last read are released before new ones are read,
+  and the file is written through a buffer rather than built whole first. Answers are unchanged. On 111 public repos,
+  a workspace-wide `refs` peaked at 76 to 81 MB instead of 95 to 106 MB; with the indexes evicted, at 35 to 38 MB
+  instead of 43 to 44 MB, with 11 G instructions instead of 21 G.
+- `knowcode serve` and `knowcode index` hold far less memory on macOS. Most of what they held was memory already freed
+  but kept by the system allocator's cache of large blocks; they now run with that cache off (`MallocLargeCache=0`,
+  unless set in the environment). On bitwarden/server (8,274 files) a cold `index` peaked at 92 to 94 MB instead of
+  254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls. On Linux the server
+  hands freed memory back to the system after each call and each background job (glibc's `malloc_trim`).
+- Indexing Swift is faster: on swift-nio, reading its files takes 20% fewer instructions (21.2 G down to 17.0 G). The
+  Swift extractor asked tree-sitter for the parent of nearly every identifier and call, and tree-sitter finds a
+  parent by walking down from the root of the file; the extractor now keeps the nodes it is inside and reads parents
+  from there. What is extracted is unchanged.
+- Indexing C# is faster: on Newtonsoft.Json, reading its files takes 20% fewer instructions (44.6 G down to 35.7 G),
+  for the same reason as Swift's: the C# extractor climbed tree-sitter parents from each identifier, reference and
+  call (to the member holding it, a type parameter's declaration, the call a method group is passed to), and now
+  reads them from the nodes it is inside. What is extracted is unchanged.
+- Indexing writes faster again: the parse workers now also compute what the writer used to work out from each
+  file's facts before inserting them (the file's search document, its symbols' search tokens and its summary key), so
+  the one writer thread only inserts rows. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's
+  instructions fell another 24–25%; the work moved to the parse workers, which run in parallel. The index is the same.
+- Indexing writes faster. The one thread that writes an index re-prepared most of its SQL statements for every file
+  (a file's facts take about 30 statements; the connection kept 16), and its 2 MB page cache spilled dirty pages to
+  the write-ahead log many times over during a cold index. The connection now keeps 64 statements, and a write batch
+  gets a 16 MB page cache. On cold indexes of swift-nio, jellyfin and rust-analyzer the writer's instructions fell
+  6–14%, for 11–22 MB more peak memory. The index is the same.
+- A workspace-wide query over a server checks each repo's freshness once. It checked the repos its workspace summary
+  could rule out, then checked again each one it opened; it now takes its own earlier proof that the repo is
+  unchanged, made after it started, for the same index file. Over microsoft/TypeScript and seven smaller public
+  repos, a workspace-wide `refs` takes 1.68 to 1.85 G instructions instead of 2.39 to 2.55 G. Answers are unchanged.
+- A server answering two calls at once no longer lets one rely on the other's freshness check. A workspace-wide
+  query checks by `stat` which repos changed since their summaries were written, and remembers the answers for its
+  length; the memory was the process's, shared by every query running, so a query that started after an edit could
+  take a check another query made before it, and rule the edited repo out by its old summary. Each query now
+  remembers only its own checks.
+- A server opens fewer SQLite connections per repo per query. Whether an index needs its schema created or migrated
+  is remembered for the server's lifetime once it is found current (a file at this build's schema stays so), and the
+  check for stale derived data reads through the query's own connection instead of opening a second one. A
+  workspace-wide `find` over microsoft/TypeScript and seven smaller public repos takes 5–8% fewer instructions.
+  Answers are unchanged.
+- A server's check that a repo is unchanged before answering is cheaper: which indexed files are there by their
+  content rather than their name is now settled when the freshness record is written, not worked out again for every
+  file at every query. On microsoft/TypeScript (32,112 indexed files) a `find` over MCP that needs no sync takes
+  0.64 G instructions instead of 0.97 G; across a workspace of it and seven smaller public repos, 0.86 G instead of
+  1.18 G. Answers are unchanged.
+- A server notices a regenerated SCIP index without waiting for a source file to change. Before answering, a server
+  checks by `stat` alone whether a repo changed since its last sync, and skips the sync when not; that check didn't
+  cover the files a sync reads outside the indexed ones, so rewriting `index.scip` (in place, or by renaming a new
+  file over it), editing a build file the SCIP facts depend on (`global.json`, `packages.lock.json`, a lock file),
+  installing another version of a declared client package in `node_modules`, or turning `index.node_modules` off
+  went unseen until an indexed file changed. They are now part of the check. The CLI, which syncs before every
+  answer, was not affected. Also, after an upgrade that changes resolution but no extractor, a repo's freshness
+  record is written again at the next sync; before, the old one was kept, and each server query on the repo synced
+  it until a file changed.
+- `tests` and `impact` are faster on types that implement protocols or interfaces. A walk looked up the same type and
+  member names again at every member it reached (the member's owner, each protocol its type conforms to, and the
+  protocol's member of that name); it now looks each name up once per walk. Answers are unchanged.
+- `tests` and `impact` are faster again on code reached through protocols or interfaces. Collecting a member's callers
+  copied every reference to its name, most of which reach another member of that name, and looked up a requirement
+  in each supertype before asking whether it was a protocol at all; it now copies only the references that may reach
+  the member and skips supertypes that aren't protocols. On swift-nio, `tests Sources/NIOCore/ChannelPipeline.swift`
+  takes about a third fewer instructions; on Alamofire, `tests Source/Core/Session.swift` about two thirds fewer.
+  Answers are unchanged.
+- A walk asks which implementations of a protocol member may run once per member, not again at every implementation
+  it reaches. On Alamofire, `tests Source/Core/Session.swift` takes about 40% fewer instructions again. Answers are
+  unchanged.
+- Indexing Swift packages and walking their code is faster. Which names each SwiftPM target imports by name from
+  outside the repo was read again for every name resolved; it is now read once per target, both when the file
+  ranking is built after indexing (on swift-nio, 209 G instructions down to 14 G) and in a walk, which now also keeps
+  what resolution reads about the repo from one name to the next. Answers are unchanged.
+- Versions of KnowCode can share one cache. Each index schema now has its own part of the cache (`v/s<schema>/`), with
+  its indexes, shared bases, summary and discovery files and their locks, and a version never opens, rebuilds or
+  rewrites another schema's. Before, a newer build rebuilt an older build's indexes in place for its own schema, and the
+  older build then refused them ("written by a newer knowcode"); and each rewrote the other's workspace summary.
+  0.6.1 and older keep their files at the cache's top level, untouched. Versions of one schema share their part, and
+  one with a changed extractor re-extracts that language, as before. The cache budget counts every version's files
+  and evicts other versions' first, least recently used first. After upgrading to a new schema, each repository is
+  indexed afresh on its first query; a downgrade finds its own indexes as it left them.
+- Go routes registered through helpers are found under their groups' prefixes in more programs: a helper method
+  called on a value whose type isn't written (`h.Register(v1)`) takes the groups passed to it, a group a test passes
+  a helper no longer adds a prefix-less copy of the helper's routes, and a function taking a `handle func(string,
+  http.Handler)` (passed `mux.Handle`) registers its patterns on that mux. Go files are read again once; HTTP links
+  are recomputed.
+- A C# minimal API mapped in top-level statements (`app.MapGet("/health", Health)` in `Program.cs`) has an owner in
+  answers. Such routes were in the workspace summary but in no `context` answer: top-level statements had no symbol,
+  and a local function passed as the handler wasn't taken for one. Top-level statements are now one symbol,
+  `Program.Main`, as the compiler's entry point is, which owns the routes its lambdas serve and the calls it makes;
+  a local function passed as the handler owns its route, as a method does. C# files are read again once.
+- C# calls tell more overloads apart. An overload with a `params` array had its last other parameter left unchecked,
+  so `Write(level, "x", e)` could still match `Write(LogEventLevel, string, params object[])` with an `Exception`
+  where a `string` goes. A method's own `params` array, a field passed by name and a collection expression (`[a, b]`)
+  now have types at the call; and of a generic overload (`M<T>(…, T)`) and a `params` one, the call picks the one C#
+  does: the `params` one for an array of its type or a collection expression, the generic one for any other value,
+  and with nothing for the array, the overload without one. C# files are read again once. On identity-v1's C# labels,
+  `exact` precision rises from 0.996 to 0.998 and linked recall from 0.730 to 0.754, with none newly wrong; on
+  impact-dev-v1, impact's recall rises from 0.816 to 0.828.
+- Go HTTP routes and clients. Routes registered with `net/http` (including method patterns such as
+  `"GET /items/{id}"`), gin, echo and chi are listed with their groups and mounts, and the requests Go code sends
+  with `net/http` link to the routes that serve them, across repos as other languages' do. Go files are read again
+  once.
+- In Swift, a use inside a function or type declared in a function body (a local `func check` in a test, a local
+  class's `deinit`) belongs to the enclosing function, as the compiler's index reports it. `impact`, `trace` and `tests`
+  reach that function in the same hop, rather than one hop later through the helper and the same-named helpers of
+  other functions, and no longer list the helper itself. Such declarations carry the tag `local`. Swift files are read
+  again once. On impact-dev-v1, labels found only at depth 3 fall from 33 to 4, with fewer rows.
+- A React component used only through JSX has dependents. A tag (`<Page …>`, `</Page>`) was recorded as a type
+  reference, which `impact`, `trace` and `tests` don't follow from a function, so a component rendered only that way
+  answered "nothing affected". A tag is now a call of its component, as the TypeScript compiler binds it (`<Ns.Comp>`
+  a member of `Ns`), and rendering a class component creates it; `refs` lists these uses as `call` instead of
+  `type_ref`. TypeScript and JavaScript files are read again once. On impact-dev-v1's 92 questions, impact's recall
+  rises from 0.816 to 0.858 (71 more labels found in 5 jellyfin-web questions, no other answer changed), and `tests`
+  for hono's `src/jsx/components.ts` reaches the tests that render its components.
+- `kc_more` continues a text answer as text. The pages after a text answer cut at its limit (an `impact` or `trace`
+  tree) came back as JSON envelopes, so a reader parsing the first page's lines missed every row after it. Each page
+  is now text, one row per line (impact rows in the tree's own line format), and a page cut to fit `max_chars` leaves
+  the rows it drops to the next page rather than skipping them. A cursor a JSON answer handed out still gives JSON
+  pages.
+- TypeScript: a member a repo adds to a package's module by augmenting it (`declare module 'pkg' { interface … }`) and
+  reaches through that package's values stays linked; members reached through other packages' values are still the
+  package's. The index records each module a file augments (index schema 24; TypeScript files are read again once).
+- A `file:line` place in a file on disk that the index doesn't hold yet (a repo's first index still running, or a file
+  added since, past the call's budget) is refused with the code `indexing` and says so, instead of `not_found` ("no
+  indexed file has the path"), which read as if there were no such file. Ask again after indexing finishes.
+
+- Java is read. Types, members, imports and references in `.java` files are indexed, and names resolve as javac
+  scopes them: packages and single-type, on-demand and static imports tell same-named types apart, and a type or
+  member from outside the repo (`java.util.List`, `BigInteger.ONE`, a static import of a test library's
+  `assertThat`) is never linked to the repo's declaration of the same name. On identity-v2's 1,501 Java labels (gson,
+  commons-lang, spring-petclinic, moshi), `exact` precision is 1.000 over 797 links, linked recall 0.713, and no
+  outside label is linked; on a held-out set nothing was tuned on (jackson-core, 455 labels), 1.000 over 248 links,
+  linked recall 0.719, and none linked.
+- Java calls and member uses on a chain (`Report.builder().title(t).build()`, `this.store.items()`, a field of an
+  imported type) resolve through the repo's declarations, so they link where they were left as candidates. On
+  identity-v2's Java labels linked recall rises from 0.713 to 0.826 (`exact` precision 1.000 over 923 links, no
+  outside label linked).
+- Two indexes of one tree give the same `tests`, `task` and `impact` answers. A reverse walk cut at its limit kept
+  the dependents it reached first, in the order the index happened to store files (which parallel indexing varies),
+  so two cold indexes of swift-nio could select 127 or 136 candidate tests for the same change. The walk now takes
+  each step's symbols in file, line and name order. A text or structural search cut at its line limit likewise reads
+  files in path order, so an index updated with new files keeps the same files as one built cold.
+
+- The Linux binaries run on glibc 2.28 and later (RHEL 8 and its rebuilds, Debian 10, Ubuntu 20.04 and newer).
+  0.5.1 to 0.6.1 needed glibc 2.39 and failed to start on Debian 12 with "GLIBC_2.39 not found". Each release now
+  checks its Linux binaries for newer glibc symbols and runs them on those distributions before publishing.
+- Fewer links to a repo declaration where the compiler binds a library's. On identity-v1, outside labels linked drop
+  from 6 to 2 in C#, 22 to 19 in Swift and 37 to 7 in TypeScript, with no label newly wrong:
+  - TypeScript: a member reached through a value a package gives (`getLibraryApi(api).getItems(…)`, `(await
+    getLibraryApi(api).getItems(…)).data`) is the package's, not a same-named member of the repo's declaration files.
+  - TypeScript: a bare import that no config maps (`import { createHash } from 'crypto'`) is never placed at a repo
+    file named like it when a tsconfig is in force, nor ever for Node's own modules.
+  - TypeScript: a module that exports but imports nothing names the platform's global types (`Response`), not a
+    repo module's export of the name.
+  - C#: an extension method is linked only where C# can call it. A property read (`results.Count`) is never one; a
+    sealed library type (`ReadOnlySpan<T>`, `string`) calls only extensions on itself and its interfaces; and a
+    sequence's call that a `List<T>` or `HashSet<T>` instance method takes (`list.AddRange(xs)`) lists the extension
+    without linking it.
+  - Swift: a call no `await` covers never links to an `async` function (XCTest's synchronous `XCTAssertThrowsError`,
+    not a repo's `async` overload). `await` covers every call to its right in its statement (`try await a.f().g()`).
+  - Swift: a declaration whose attributes push its signature past the length cap shows the signature from after the
+    attributes, so its parameters and effects aren't cut off.
+- A new worktree started from a shared base hashes only the files that may differ from the base on its first sync:
+  those changed since the base's commit, modified in the worktree, or untracked. Every other file git reports clean and
+  unchanged since that commit keeps the worktree's own stat when the base is cloned, so it isn't read. `--verify` still
+  hashes every file.
+- More standard-library members through a receiver of unknown type are listed as `external_likely` rather than linked
+  to the repo's one member of the name. On identity-v1, outside labels linked drop from 2 to 0 in C#, 19 to 8 in Swift
+  and 7 to 3 in TypeScript, with no label newly wrong:
+  - Swift: `startIndex`, `endIndex`, `lowerBound`, `upperBound`, `allCases` (also through a generic parameter,
+    `Element.allCases`) and `decodeIfPresent`; and a member of a standard-library generic type written with its
+    arguments (`MemoryLayout<T>.size`, which was read as an implicit member `.size`) is the library's unless the repo
+    extends that type.
+  - C#: `GetMethod` and `QueryString`, and the standard-library names through a capitalised receiver left unknown (a
+    property a library base class may declare, `Request.QueryString`).
+  - TypeScript: `success`, `isError` and `left`.
+- Swift: fewer links to a repo declaration where the compiler binds a package's or the platform's. On identity-v1,
+  Swift's outside labels linked drop from 8 to 0, with no label newly wrong:
+  - A type a module imports by name from a package (`@_exported import struct SystemPackage.FileDescriptor`) is the
+    package's in that module, as are its members, never a same-named type of a module imported whole.
+  - A member a test target adds to a library type in an extension isn't what code under `Sources/` calls.
+  - A member the repo adds to a library type, named like the library's own (`JSONDecoder`'s `decode(_:from:)`), is
+    listed rather than linked: the library's overloads take other argument types.
+  - A free function named like a C library function (a platform shim such as `unlink` for Windows) is listed rather
+    than linked: the platform's own function is the one called on other platforms.
+- TypeScript: a parameter destructured from an annotated type (`({ task }: TaskProps)`) has that type's property's type,
+  and a type alias's object type (`type TaskProps = { task: TaskInfo }`) has its properties indexed as members, as an
+  interface's are. A member reached through them is resolved by type: on identity-v1, TypeScript linked recall rises
+  from 0.578 to 0.597 and one more outside label is no longer linked (`task.LastExecutionResult.Status` on a package
+  type), leaving 2. A type alias's property is reached only through a value of that type, never by its name alone.
+- compare-v1's first results are published ([eval/compare-v1/results.md](eval/compare-v1/results.md)): KnowCode,
+  codebase-memory-mcp and Serena answer the same reference and impact questions on eight public repositories, scored
+  against labels from each language's toolchain, with every miss listed.
+- Go is read. Packages, types, functions, methods (merged onto their receiver's type), struct fields, interface
+  methods, imports, calls and type and member uses are extracted from `.go` files, and `go.mod` gives the module, its
+  requires and its replaces. A Go name resolves the way the compiler scopes it: within the caller's package, through
+  an import placed by the repo's `go.mod` files, or on its receiver's type and what that type embeds. A name from the
+  standard library, a dependency or a released copy of the repo's own module stays unresolved, and a receiver of
+  unknown type lists candidates, so a Go reference is never linked by its name alone. On identity-v2's 1,194 Go labels
+  (cobra, chi, gin, labelled by the Go type checker): `exact` precision 1.000 over 691 links, linked recall 0.980, and
+  no outside label linked; on 508 held-out labels from echo, scored once: 1.000 over 299 links, recall 0.971, none
+  outside linked. A file the default build leaves out (`x_windows.go`, `//go:build nomsgpack`) and cgo
+  imports are reported as `unsupported`.
+- Go test targets. `test_targets` lists each `go.mod` as a target, `go test ./...` from its directory, with its
+  `TestXxx`, `BenchmarkXxx`, `ExampleXxx` and `FuzzXxx` functions, each with the command that runs it alone (`go test
+  ./pkg -run '^TestXxx$'`; a benchmark with `-run '^$' -bench`). A nested module's tests are its own. `tests` ranks
+  Go test files too (`foo_test.go` for `foo.go`).
+- Re-indexing after many files were removed (more than 200, which compacts the index) no longer holds a copy of the
+  whole index in memory: the compaction's copy goes to a temporary file. Re-indexing bitwarden/server after 1,364 of
+  its files were removed peaked at 430 MB footprint and now peaks at 166 MB, for 7% more instructions; the index is
+  the same.
+
 ## 0.6.1 (2026-10-28)
 
 0.6.0 was tagged but never published: its release build couldn't get a macOS runner. 0.6.1 is the first published 0.6

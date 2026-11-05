@@ -36,7 +36,7 @@ fn format() -> String {
     let _ = crate::config::load();
     format!("1.{}.{}", kc_store::SCHEMA_VERSION, kc_extract::Lang::ALL.map(|l| l.extractor_version().to_string()).join("."))
 }
-pub fn path() -> Result<PathBuf> { Ok(crate::cache_dir()?.join("discovery.json")) }
+pub fn path() -> Result<PathBuf> { Ok(crate::tree_dir()?.join("discovery.json")) }
 pub(crate) fn stamp() -> Result<String> { Ok(git::stamp(&path()?)) }
 fn shared() -> Result<std::sync::Arc<Catalog>> {
     let path = path()?;
@@ -81,7 +81,7 @@ pub(crate) fn ensure_discovered() -> Result<()> {
     type Last = Option<(PathBuf, Vec<PathBuf>, usize, std::time::Instant, Vec<(PathBuf, String)>)>;
     static LAST: std::sync::Mutex<Last> = std::sync::Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-    let cache = crate::cache_dir()?;
+    let cache = crate::tree_dir()?;
     if path()?.exists() && last.as_ref().is_some_and(|(previous, dirs, d, at, stamps)| *previous == cache && *dirs == roots && *d == depth
         && at.elapsed() < std::time::Duration::from_secs(60) && stamps.iter().all(|(p, stamp)| git::stamp(p) == *stamp)) { return Ok(()); }
     discover_roots()?;
@@ -100,8 +100,11 @@ pub fn discover_roots() -> Result<usize> {
     let mut catalog = read()?;
     let before: Vec<_> = catalog.entries.keys().cloned().collect();
     catalog.entries.retain(|root, _| roots.contains(root) && !crate::db_path(root).is_ok_and(|p| p.exists()));
+    let mut saved = None;
     for root in &roots {
-        if crate::db_path(root)?.exists() || workspace::has_saved_index(root)? { continue; }
+        if crate::db_path(root)?.exists() { continue; }
+        if saved.is_none() { saved = Some(workspace::saved_index_roots()?); }
+        if saved.as_ref().is_some_and(|s| s.contains(root)) { continue; }
         catalog.entries.entry(root.clone()).or_insert_with(|| Entry {
             summary: RepoSummary::discovery(root.clone(), Vec::new(), Vec::new(), &[], &[], String::new()), snapshot: None,
         });
@@ -207,7 +210,7 @@ pub fn scan_until(root: &Path, mut should_yield: impl FnMut() -> bool) -> Result
     let mut catalog = read()?;
     // A query may have indexed, pruned, or unregistered this checkout while the source scan was running.
     if !catalog.entries.contains_key(root) { return Ok(true); }
-    if crate::db_path(root)?.exists() || workspace::has_saved_index(root)? {
+    if crate::db_path(root)?.exists() || workspace::saved_index_roots()?.contains(root) {
         catalog.entries.remove(root);
     } else if crate::privacy::Privacy::load(root).key() != privacy.key() {
         catalog.entries.insert(root.to_path_buf(), Entry { summary: RepoSummary::discovery(root.to_path_buf(), Vec::new(), Vec::new(), &[], &[], String::new()), snapshot: None });

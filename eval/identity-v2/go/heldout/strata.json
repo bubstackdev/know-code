@@ -1,0 +1,82 @@
+{
+ "echo/call/inside/1": {
+  "available": 2626,
+  "drawn": 20
+ },
+ "echo/call/inside/2-4": {
+  "available": 1696,
+  "drawn": 40
+ },
+ "echo/call/inside/5+": {
+  "available": 248,
+  "drawn": 40
+ },
+ "echo/call/outside/0": {
+  "available": 5191,
+  "drawn": 10
+ },
+ "echo/call/outside/1+": {
+  "available": 1232,
+  "drawn": 40
+ },
+ "echo/dispatch/inside/1": {
+  "available": 1,
+  "drawn": 1
+ },
+ "echo/dispatch/inside/2-4": {
+  "available": 101,
+  "drawn": 27
+ },
+ "echo/dispatch/inside/5+": {
+  "available": 64,
+  "drawn": 15
+ },
+ "echo/dispatch/outside/0": {
+  "available": 44,
+  "drawn": 10
+ },
+ "echo/dispatch/outside/1+": {
+  "available": 206,
+  "drawn": 40
+ },
+ "echo/member/inside/1": {
+  "available": 3149,
+  "drawn": 20
+ },
+ "echo/member/inside/2-4": {
+  "available": 1189,
+  "drawn": 40
+ },
+ "echo/member/inside/5+": {
+  "available": 782,
+  "drawn": 40
+ },
+ "echo/member/outside/0": {
+  "available": 2368,
+  "drawn": 10
+ },
+ "echo/member/outside/1+": {
+  "available": 1013,
+  "drawn": 40
+ },
+ "echo/type/inside/1": {
+  "available": 2429,
+  "drawn": 20
+ },
+ "echo/type/inside/2-4": {
+  "available": 553,
+  "drawn": 40
+ },
+ "echo/type/inside/5+": {
+  "available": 23,
+  "drawn": 5
+ },
+ "echo/type/outside/0": {
+  "available": 255,
+  "drawn": 10
+ },
+ "echo/type/outside/1+": {
+  "available": 1763,
+  "drawn": 40
+ }
+}

@@ -1,0 +1,86 @@
+{
+ "exposed/kotlin/call/inside/1": {
+  "available": 2366,
+  "drawn": 20
+ },
+ "exposed/kotlin/call/inside/2-4": {
+  "available": 7715,
+  "drawn": 40
+ },
+ "exposed/kotlin/call/inside/5+": {
+  "available": 9939,
+  "drawn": 40
+ },
+ "exposed/kotlin/call/outside/0": {
+  "available": 11786,
+  "drawn": 10
+ },
+ "exposed/kotlin/call/outside/1+": {
+  "available": 8094,
+  "drawn": 40
+ },
+ "exposed/kotlin/dispatch/inside/1": {
+  "available": 35,
+  "drawn": 20
+ },
+ "exposed/kotlin/dispatch/inside/2-4": {
+  "available": 707,
+  "drawn": 40
+ },
+ "exposed/kotlin/dispatch/inside/5+": {
+  "available": 1443,
+  "drawn": 40
+ },
+ "exposed/kotlin/extension/inside/1": {
+  "available": 813,
+  "drawn": 20
+ },
+ "exposed/kotlin/extension/inside/2-4": {
+  "available": 10300,
+  "drawn": 40
+ },
+ "exposed/kotlin/extension/inside/5+": {
+  "available": 5710,
+  "drawn": 40
+ },
+ "exposed/kotlin/member/inside/1": {
+  "available": 3009,
+  "drawn": 20
+ },
+ "exposed/kotlin/member/inside/2-4": {
+  "available": 9818,
+  "drawn": 40
+ },
+ "exposed/kotlin/member/inside/5+": {
+  "available": 12490,
+  "drawn": 40
+ },
+ "exposed/kotlin/member/outside/0": {
+  "available": 2088,
+  "drawn": 10
+ },
+ "exposed/kotlin/member/outside/1+": {
+  "available": 1799,
+  "drawn": 40
+ },
+ "exposed/kotlin/type/inside/1": {
+  "available": 11403,
+  "drawn": 20
+ },
+ "exposed/kotlin/type/inside/2-4": {
+  "available": 12279,
+  "drawn": 40
+ },
+ "exposed/kotlin/type/inside/5+": {
+  "available": 3673,
+  "drawn": 40
+ },
+ "exposed/kotlin/type/outside/0": {
+  "available": 9802,
+  "drawn": 10
+ },
+ "exposed/kotlin/type/outside/1+": {
+  "available": 98,
+  "drawn": 27
+ }
+}

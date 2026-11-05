@@ -1,0 +1,161 @@
+# compare-v1's question-to-tool mapping (README.md). Committed before any tool is run on the set; a change makes
+# compare-v2. For each question type and tool: the calls the tool's own documentation recommends for that question,
+# in order, or `no_counterpart`. `{…}` fields come from the question; `{qn}`, `{name_path}` and `{project}` come from
+# the tool's own lookup call (`lookup`). `source` cites the documentation each row follows, at the pinned version.
+#
+# Lookups: a question names a declaration by file, line and name, and each tool addresses it by the most precise
+# handle its documentation offers (README, "Lookup"). The lookup call returns candidates with their file and line
+# range; the adapter takes the one whose range holds the line and whose name is the name, and uses that candidate's
+# own name path or qualified name. None: `not_found`, reported apart, with scores also given on the questions whose
+# lookup succeeded.
+
+version = "compare-v1"
+
+[sources]
+knowcode = "docs/usage.md and the kc_help topics of the build under test"
+codebase-memory-mcp = "README.md (\"MCP Tools\", \"Troubleshooting\") and the server's instructions in src/mcp/mcp.c (MCP_SERVER_INSTRUCTIONS), at the pinned commit"
+serena = "docs/02-usage/040_workflow.md and the tool docstrings in src/serena/tools/symbol_tools.py, at the pinned commit"
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Lookup: from file, line and name to the tool's own handle for the declaration.
+
+[lookup.knowcode]
+calls = []                                # KnowCode takes `file:line` directly (docs/usage.md, "Picking one of several definitions")
+handle = "{file}:{line}"
+
+[lookup.codebase-memory-mcp]
+# "trace_path returns 0 results: use search_graph(name_pattern=...) first to find the exact name" (README, Troubleshooting).
+# The file (file_pattern, the repository-relative path) and the name narrow it to the declaration; its row's
+# `qn_prefix` and name give the qualified name (`<project>.<path_parts>.<name>`, README "Qualified Names"), which
+# trace_path takes as function_name (checked in the probe).
+calls = [{ tool = "search_graph", args = { project = "{project}", name_pattern = "^{name_re}$", file_pattern = "{file}", format = "json", limit = 50 } }]
+handle = "{qn}"
+# trace_path names callers by qualified name only; each is read back with the tool's own search to get its file and
+# line range (normalisation, not a further answer):
+normalise = [{ tool = "search_graph", args = { project = "{project}", qn_pattern = "^{caller_qn_re}$", format = "json", limit = 5 } }]
+
+[lookup.serena]
+# Serena runs with its classical tool interface (`--agent-interface tools`; docs/02-usage/050_configuration.md, "Agent
+# Interfaces"): one MCP tool per operation. v2's default REPL interface runs the same operations (its LspApi).
+# find_symbol with relative_path set to the file, as its docstring advises when the file is known.
+calls = [{ tool = "find_symbol", args = { name_path_pattern = "{name}", relative_path = "{file}", depth = 0 } }]
+handle = "{name_path}"
+
+# ---------------------------------------------------------------------------------------------------------------------
+# refs: every reference to declaration D. Normalised to file:line sites (or spans; README "Scoring").
+
+[refs.knowcode]
+calls = [{ tool = "kc_refs", args = { name = "{handle}" } }]
+
+[refs.codebase-memory-mcp]
+# No references tool. trace_path is the documented call for relationships; its rows count CALLS, USAGE and
+# CALL_REFERENCE (search_graph's description). Inbound, one hop, those edge types, tests included.
+calls = [{ tool = "trace_path", args = { project = "{project}", function_name = "{handle}", direction = "inbound", depth = 1, edge_types = ["CALLS", "CALL_REFERENCE", "USAGE"], include_tests = true, include_evidence = true, format = "json" } }]
+
+[refs.serena]
+calls = [{ tool = "find_referencing_symbols", args = { name_path = "{handle}", relative_path = "{file}" } }]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# callers: the declarations that call or use D directly. Normalised to declarations.
+
+[callers.knowcode]
+calls = [{ tool = "kc_impact", args = { symbol = "{handle}", depth = 1 } }]
+
+[callers.codebase-memory-mcp]
+calls = [{ tool = "trace_path", args = { project = "{project}", function_name = "{handle}", direction = "inbound", depth = 1, include_tests = true, format = "json" } }]
+
+[callers.serena]
+# find_referencing_symbols returns "the symbols referencing the requested symbol": the enclosing declarations.
+calls = [{ tool = "find_referencing_symbols", args = { name_path = "{handle}", relative_path = "{file}" } }]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# impact: the declarations that depend on D, up to two hops. Normalised to declarations.
+
+[impact.knowcode]
+calls = [{ tool = "kc_impact", args = { symbol = "{handle}", depth = 2 } }]
+
+[impact.codebase-memory-mcp]
+calls = [{ tool = "trace_path", args = { project = "{project}", function_name = "{handle}", direction = "inbound", depth = 2, include_tests = true, format = "json" } }]
+
+[impact.serena]
+# Serena documents no transitive or impact call; chaining find_referencing_symbols would be the adapter's
+# composition, not the tool's answer.
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
+# find: where is a declaration named N? Normalised to declarations. No lookup: the name is the question.
+
+[find.knowcode]
+calls = [{ tool = "kc_find", args = { query = "{name}" } }]
+
+[find.codebase-memory-mcp]
+calls = [{ tool = "search_graph", args = { project = "{project}", name_pattern = "^{name_re}$", format = "json", limit = 500 } }]
+
+[find.serena]
+calls = [{ tool = "find_symbol", args = { name_path_pattern = "{name}" } }]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# locate: which files does this task touch? The task's text is the question. Normalised to paths, in order.
+
+[locate.knowcode]
+calls = [{ tool = "kc_locate", args = { query = "{text}" } }]
+
+[locate.codebase-memory-mcp]
+# The semantic_query parameter of search_graph is its documented natural-language search (README, "Search").
+calls = [{ tool = "search_graph", args = { project = "{project}", semantic_query = ["{text}"], format = "json" } }]
+
+[locate.serena]
+# Serena's search is symbol names and regular expressions (find_symbol, search_for_pattern); it documents no search
+# by a task's description.
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
+# task: which files and tests does this task touch? Normalised to paths, in order.
+
+[task.knowcode]
+calls = [{ tool = "kc_task", args = { goal = "{text}" } }]
+
+[task.codebase-memory-mcp]
+# detect_changes maps a diff to what it affects; a task has no diff yet.
+no_counterpart = true
+
+[task.serena]
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
+# cochange (from 0.8): which files usually change with file F? Normalised to paths, in order. Labels from git.
+
+[cochange.knowcode]
+calls = [{ tool = "kc_coupled", args = { file = "{file}" } }]
+
+[cochange.codebase-memory-mcp]
+# FILE_CHANGES_WITH edges (README, "Edge Types"); query_graph is its documented call for edges by type.
+calls = [{ tool = "query_graph", args = { project = "{project}", query = "MATCH (a:File)-[r:FILE_CHANGES_WITH]-(b:File) WHERE a.file_path = '{file}' RETURN b.file_path", format = "json" } }]
+
+[cochange.serena]
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
+# cross_http (from 0.8): which client call sites in other repositories request route R? Each repository pair is
+# indexed into one workspace (KnowCode) or one store with cross-repo linking run (codebase-memory-mcp,
+# index_repository mode "cross-repo-intelligence"). Normalised to file:line sites.
+
+[cross_http.knowcode]
+calls = [{ tool = "kc_impact", args = { symbol = "{handle}", depth = 1 } }]
+
+[cross_http.codebase-memory-mcp]
+calls = [{ tool = "trace_path", args = { project = "{project}", function_name = "{handle}", direction = "inbound", depth = 1, mode = "cross_service", format = "json" } }]
+
+[cross_http.serena]
+no_counterpart = true
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Questions only KnowCode has a call for. Listed so the results can show them as `no_counterpart` rows; they are
+# never scored as KnowCode wins, and compare-v1 asks none of them.
+
+# These rows say only that compare-v1 asks no such question of any tool. A feature another tool documents a
+# counterpart for is asked above instead (cochange, cross_http), whoever answers it better.
+[only_knowcode]
+history = "commits, last change and authors of a symbol (kc_history)"
+test_selection = "tests to run for a change (kc_impact tests, kc_task tests)"
+sql_links = "tables and the code that reads and writes them (kc_context topic tables)"

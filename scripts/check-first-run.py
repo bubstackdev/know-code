@@ -19,6 +19,8 @@ import sys
 import tempfile
 import threading
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
 
 
 def scaled(seconds: float) -> float:
@@ -35,14 +37,7 @@ def check(binary: Path) -> None:
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         source = repo / "api.ts"
         source.write_text("export function apiHandler() { return 42; }\n")
-        env = dict(os.environ)
-        env.update({
-            "KNOWCODE_CACHE_DIR": str(base / "cache"),
-            "KNOWCODE_CONFIG_DIR": str(base / "config"),
-            "KNOWCODE_DATA_DIR": str(base / "data"),
-            "KNOWCODE_TOOLS": "core",
-            "KNOWCODE_UPDATE_CHECK": "0",
-        })
+        env = kc_env.knowcode_env(base, KNOWCODE_TOOLS="core")
         env.pop("KNOWCODE_VERIFY", None)
         with (base / "stderr.log").open("w+") as stderr:
             process = subprocess.Popen(
@@ -110,9 +105,10 @@ def check(binary: Path) -> None:
                 assert "apiHandler" in json.dumps(cold["items"]), cold
                 assert not any("from its last sync" in p for p in cold.get("provenance", [])), cold
 
-                indexes = list((base / "cache" / "repos").glob("*.sqlite"))
+                # In the build's own tree (`cache/v/<key>/repos`), or at the top level for 0.6.1 and older.
+                indexes = list((base / "cache").glob("v/*/repos/*.sqlite")) + list((base / "cache" / "repos").glob("*.sqlite"))
                 assert len(indexes) == 1, indexes
-                writer_lock = base / "cache" / "locks" / (indexes[0].stem + ".lock")
+                writer_lock = indexes[0].parent.parent / "locks" / (indexes[0].stem + ".lock")  # beside the index's repos/
                 with writer_lock.open("r+") as writer:
                     fcntl.flock(writer, fcntl.LOCK_EX)
                     source.write_text("export function changedApiHandler() { return 4242; }\n")

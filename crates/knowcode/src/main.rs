@@ -15,7 +15,10 @@ mod help;
 mod history;
 mod hook;
 mod mcp;
+mod memory;
+mod more_text;
 mod ops;
+mod pending;
 mod record;
 mod refactor;
 mod refresh;
@@ -36,6 +39,16 @@ mod tree;
 mod walk;
 mod unread;
 mod whole;
+#[cfg(test)]
+mod local_decl_tests;
+#[cfg(test)]
+mod jsx_impact_tests;
+#[cfg(test)]
+mod overload_tests;
+#[cfg(test)]
+mod receiver_path_tests;
+#[cfg(test)]
+mod ts_local_scope_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -897,6 +910,10 @@ fn notes_repo(path: &std::path::Path) -> Result<PathBuf> {
 
 fn main() {
     let cli = Cli::parse();
+    // Before any thread starts: the long-lived commands run with an allocator that gives freed memory back.
+    if matches!(&cli.command, Cmd::Serve { .. } | Cmd::Index { .. }) {
+        memory::lean_allocator();
+    }
     // A command or query that has to build a repo's reference graph is one the user waits for: most of the machine
     // (a server's background builds take their own share, see `refresh`). Read only when one is built.
     kc_store::rank::set_default_threads(|| {
@@ -999,7 +1016,7 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || render::at(&out.data, out.env["file_indexed"].as_bool().unwrap_or(false)))
         }
         Cmd::Find { query, kind, limit, repo } => {
-            let out = ops::find(&query, kind.as_deref(), limit, &repo.scope())?;
+            let out = cursor::find_definitions(&query, kind.as_deref(), limit, &repo.scope())?;
             emit(&repo, &out.env, || {
                 let d = &out.data;
                 if !d.items.is_empty() || d.manifests.is_empty() {

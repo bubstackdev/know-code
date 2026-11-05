@@ -114,6 +114,9 @@ pub struct Operation {
     /// While a [`SyncMemo`] holds, the repos the query synced, each with what its sync reported (see
     /// [`Operation::synced`]).
     synced: Mutex<Option<std::collections::HashMap<PathBuf, Arc<dyn std::any::Any + Send + Sync>>>>,
+    /// While a [`ChangeMemo`] holds, whether each repo checked had changed since its last sync (see
+    /// [`Operation::changed`]).
+    changes: Mutex<Option<std::collections::HashMap<PathBuf, Change>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -234,6 +237,30 @@ impl Operation {
         lock(&self.synced).as_ref()?.get(root)?.clone().downcast::<T>().ok()
     }
 
+    /// Remembers, until the guard drops, whether each repo the query checks changed since its last sync (see
+    /// [`Operation::note_changed`]): a query consults the workspace summary from several places, and checks each repo
+    /// once. The query's own: a check another query made, even one running now, may predate an edit this one must see.
+    pub fn remember_changes(self: &Arc<Self>) -> ChangeMemo {
+        let mut changes = lock(&self.changes);
+        let outermost = changes.is_none();
+        changes.get_or_insert_with(Default::default);
+        ChangeMemo(outermost.then(|| self.clone()))
+    }
+
+    /// Records whether the repo at `root` changed since its last sync, as the query found, while a [`ChangeMemo`]
+    /// holds.
+    pub fn note_changed(&self, root: &Path, change: Change) {
+        if let Some(changes) = lock(&self.changes).as_mut() {
+            changes.insert(root.to_path_buf(), change);
+        }
+    }
+
+    /// Whether the repo at `root` changed since its last sync, when the query checked it while a [`ChangeMemo`]
+    /// holds.
+    pub fn changed(&self, root: &Path) -> Option<Change> {
+        lock(&self.changes).as_ref()?.get(root).copied()
+    }
+
     /// Records that the query used the index of the repo at `root`.
     pub fn note_touched(&self, root: &Path) {
         lock(&self.touched).insert(root.to_path_buf());
@@ -268,6 +295,26 @@ impl Drop for SyncMemo {
     fn drop(&mut self) {
         if let Some(op) = self.0.take() {
             *lock(&op.synced) = None;
+        }
+    }
+}
+
+/// What a query found of whether a repo changed since its last sync (see [`Operation::note_changed`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Change {
+    pub changed: bool,
+    /// The index file (device, inode, creation time) the repo's freshness snapshot proved current, when that is how it
+    /// was found unchanged: a later check in the query takes the proof for that file only.
+    pub proof: Option<(u64, u64, u128)>,
+}
+
+/// Holds [`Operation::remember_changes`]; the outermost one forgets the checks when dropped.
+pub struct ChangeMemo(Option<Arc<Operation>>);
+
+impl Drop for ChangeMemo {
+    fn drop(&mut self) {
+        if let Some(op) = self.0.take() {
+            *lock(&op.changes) = None;
         }
     }
 }
@@ -528,14 +575,43 @@ mod tests {
     /// gives no cut.
     #[test]
     fn a_child_stopped_at_its_budget_keeps_what_it_printed() {
+        use std::os::unix::process::CommandExt;
         let _in = enter(Operation::new());
-        // One process printing then waiting: a shell would leave its `sleep` holding the pipe open after the kill.
-        let mut c = Command::new("perl");
-        c.args(["-e", "$| = 1; print qq(first\\n); sleep 30"]);
+        // Output written before the budget's clock starts, so no load can make it late: `pre_exec` runs in the child
+        // once its stdout is the pipe, and `spawn` returns (and the budget starts) only after the child has exec'd. A
+        // child that had to start up and print within a 300 ms budget (perl, before) was sometimes killed first on a
+        // loaded machine, and rightly gave back nothing. One process (`sleep`, not a shell left holding the pipe open
+        // after the kill) then waits out the budget.
+        let mut c = Command::new("sleep");
+        c.arg("30");
+        // SAFETY: the closure runs between fork and exec, where only async-signal-safe calls are allowed: one raw
+        // write(2) on fd 1, and on failure a read of errno; no allocation, formatting or std::io (whose locks another
+        // thread may have held at the fork).
+        unsafe {
+            c.pre_exec(|| {
+                unsafe extern "C" { fn write(fd: i32, buf: *const u8, count: usize) -> isize; }
+                const LINE: &[u8] = b"first\n";
+                if write(1, LINE.as_ptr(), LINE.len()) == LINE.len() as isize {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
         let t = Instant::now();
         let (out, cut) = output_until(c, Kind::Git, "sh", Some(Instant::now() + Duration::from_millis(300))).unwrap();
         assert!(t.elapsed() < Duration::from_secs(10));
         assert_eq!(String::from_utf8_lossy(&out.stdout), "first\n");
+        let cut = cut.expect("a cut");
+        assert!(cut.detail.contains("time budget"), "{}", cut.detail);
+        assert_eq!(take_cuts(), vec![cut]);
+
+        // Output written while the budget runs is kept too: perl starts, prints and waits, with a budget far longer
+        // than it takes to start even on a loaded machine.
+        let mut c = Command::new("perl");
+        c.args(["-e", "$| = 1; print qq(second\\n); sleep 30"]);
+        let (out, cut) = output_until(c, Kind::Git, "perl", Some(Instant::now() + Duration::from_secs(5))).unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "second\n");
         let cut = cut.expect("a cut");
         assert!(cut.detail.contains("time budget"), "{}", cut.detail);
         assert_eq!(take_cuts(), vec![cut]);

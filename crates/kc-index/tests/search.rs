@@ -221,3 +221,45 @@ fn a_hit_carries_the_rest_of_its_statement_and_its_functions_parameters() {
     assert_eq!((with[0].3.len(), with[0].4.len()), (1, 1), "{with:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A scan cut at its line limit keeps the same files in an index built cold and in one updated with files that sort
+/// before those it had: the content index's rows follow the order files were first indexed in, the scan doesn't (#230).
+#[test]
+fn a_capped_scan_keeps_the_same_files_whatever_order_they_were_indexed_in() {
+    let scanned = |root: &Path, store: &mut Store| -> Vec<String> {
+        sync(root, store, &SyncOptions { threads: 1, full_discovery: true, ..Default::default() }).unwrap();
+        let (_, files) = sync_content_files(root, store, 1).unwrap();
+        let opts = SearchOptions {
+            pattern: "needle".into(),
+            regex: false,
+            case: Case::Sensitive,
+            word: false,
+            langs: Vec::new(),
+            globs: Vec::new(),
+            max_lines: 3,
+        };
+        let m = search::compile(&opts).unwrap();
+        let (cands, _) = search::candidates(store, files, &m, 0).unwrap();
+        let out = search::scan(&[root.to_path_buf()], &cands, &m, 1, 3);
+        assert!(out.stats.capped, "the limit cuts the scan");
+        out.files.iter().map(|f| f.path.clone()).collect()
+    };
+    let names: Vec<String> = (0..8).map(|i| format!("Sources/n{i}.swift")).collect();
+    let cold = scratch("capped-cold");
+    for n in &names {
+        write(&cold, n, b"let needle = 1\n");
+    }
+    let mut cold_store = Store::open(&cold.join(".git/kc.sqlite")).unwrap();
+    let stepped = scratch("capped-stepped");
+    for n in &names[4..] {
+        write(&stepped, n, b"let needle = 1\n");
+    }
+    let mut stepped_store = Store::open(&stepped.join(".git/kc.sqlite")).unwrap();
+    let _ = scanned(&stepped, &mut stepped_store);
+    for n in &names[..4] {
+        write(&stepped, n, b"let needle = 1\n");
+    }
+    assert_eq!(scanned(&cold, &mut cold_store), scanned(&stepped, &mut stepped_store));
+    let _ = std::fs::remove_dir_all(&cold);
+    let _ = std::fs::remove_dir_all(&stepped);
+}

@@ -1,0 +1,249 @@
+{
+ "jhipster-sample-app": [
+  {
+   "dirs": [
+    "src/main/java/io/github/jhipster/sample",
+    "src/main/java/io/github/jhipster/sample/aop/logging",
+    "src/main/java/io/github/jhipster/sample/config",
+    "src/main/java/io/github/jhipster/sample/domain",
+    "src/main/java/io/github/jhipster/sample/management",
+    "src/main/java/io/github/jhipster/sample/repository",
+    "src/main/java/io/github/jhipster/sample/security",
+    "src/main/java/io/github/jhipster/sample/service",
+    "src/main/java/io/github/jhipster/sample/service/dto",
+    "src/main/java/io/github/jhipster/sample/service/mapper",
+    "src/main/java/io/github/jhipster/sample/web/filter",
+    "src/main/java/io/github/jhipster/sample/web/rest",
+    "src/main/java/io/github/jhipster/sample/web/rest/errors",
+    "src/main/java/io/github/jhipster/sample/web/rest/vm"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "piggymetrics": [
+  {
+   "dirs": [
+    "account-service/src/main/java/com/piggymetrics/account",
+    "account-service/src/main/java/com/piggymetrics/account/client",
+    "account-service/src/main/java/com/piggymetrics/account/config",
+    "account-service/src/main/java/com/piggymetrics/account/controller",
+    "account-service/src/main/java/com/piggymetrics/account/domain",
+    "account-service/src/main/java/com/piggymetrics/account/repository",
+    "account-service/src/main/java/com/piggymetrics/account/service",
+    "account-service/src/main/java/com/piggymetrics/account/service/security"
+   ],
+   "module": "account-service",
+   "package": "account-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "auth-service/src/main/java/com/piggymetrics/auth",
+    "auth-service/src/main/java/com/piggymetrics/auth/config",
+    "auth-service/src/main/java/com/piggymetrics/auth/controller",
+    "auth-service/src/main/java/com/piggymetrics/auth/domain",
+    "auth-service/src/main/java/com/piggymetrics/auth/repository",
+    "auth-service/src/main/java/com/piggymetrics/auth/service",
+    "auth-service/src/main/java/com/piggymetrics/auth/service/security"
+   ],
+   "module": "auth-service",
+   "package": "auth-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "config/src/main/java/com/piggymetrics/config"
+   ],
+   "module": "config",
+   "package": "config",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "gateway/src/main/java/com/piggymetrics/gateway"
+   ],
+   "module": "gateway",
+   "package": "gateway",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "monitoring/src/main/java/com/piggymetrics/monitoring"
+   ],
+   "module": "monitoring",
+   "package": "monitoring",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "notification-service/src/main/java/com/piggymetrics/notification",
+    "notification-service/src/main/java/com/piggymetrics/notification/client",
+    "notification-service/src/main/java/com/piggymetrics/notification/config",
+    "notification-service/src/main/java/com/piggymetrics/notification/controller",
+    "notification-service/src/main/java/com/piggymetrics/notification/domain",
+    "notification-service/src/main/java/com/piggymetrics/notification/repository",
+    "notification-service/src/main/java/com/piggymetrics/notification/repository/converter",
+    "notification-service/src/main/java/com/piggymetrics/notification/service"
+   ],
+   "module": "notification-service",
+   "package": "notification-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "registry/src/main/java/com/piggymetrics/registry"
+   ],
+   "module": "registry",
+   "package": "registry",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "statistics-service/src/main/java/com/piggymetrics/statistics",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/client",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/config",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/controller",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/domain",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/domain/timeseries",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/repository",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/repository/converter",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/service",
+    "statistics-service/src/main/java/com/piggymetrics/statistics/service/security"
+   ],
+   "module": "statistics-service",
+   "package": "statistics-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "turbine-stream-service/src/main/java/com/piggymetrics/turbine"
+   ],
+   "module": "turbine-stream-service",
+   "package": "turbine-stream-service",
+   "status": "listed"
+  }
+ ],
+ "spring-petclinic-kotlin": [
+  {
+   "dirs": [
+    "src/main/kotlin/org/springframework/samples/petclinic",
+    "src/main/kotlin/org/springframework/samples/petclinic/model",
+    "src/main/kotlin/org/springframework/samples/petclinic/owner",
+    "src/main/kotlin/org/springframework/samples/petclinic/system",
+    "src/main/kotlin/org/springframework/samples/petclinic/vet",
+    "src/main/kotlin/org/springframework/samples/petclinic/visit"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ],
+ "spring-petclinic-microservices": [
+  {
+   "dirs": [
+    "spring-petclinic-admin-server/src/main/java/org/springframework/samples/petclinic/admin"
+   ],
+   "module": "spring-petclinic-admin-server",
+   "package": "spring-petclinic-admin-server",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-api-gateway/src/main/java/org/springframework/samples/petclinic/api",
+    "spring-petclinic-api-gateway/src/main/java/org/springframework/samples/petclinic/api/application",
+    "spring-petclinic-api-gateway/src/main/java/org/springframework/samples/petclinic/api/boundary/web",
+    "spring-petclinic-api-gateway/src/main/java/org/springframework/samples/petclinic/api/dto"
+   ],
+   "module": "spring-petclinic-api-gateway",
+   "package": "spring-petclinic-api-gateway",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-config-server/src/main/java/org/springframework/samples/petclinic/config"
+   ],
+   "module": "spring-petclinic-config-server",
+   "package": "spring-petclinic-config-server",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers",
+    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/config",
+    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/model",
+    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web",
+    "spring-petclinic-customers-service/src/main/java/org/springframework/samples/petclinic/customers/web/mapper"
+   ],
+   "module": "spring-petclinic-customers-service",
+   "package": "spring-petclinic-customers-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-discovery-server/src/main/java/org/springframework/samples/petclinic/discovery"
+   ],
+   "module": "spring-petclinic-discovery-server",
+   "package": "spring-petclinic-discovery-server",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-genai-service/src/main/java/org/springframework/samples/petclinic/genai",
+    "spring-petclinic-genai-service/src/main/java/org/springframework/samples/petclinic/genai/dto"
+   ],
+   "module": "spring-petclinic-genai-service",
+   "package": "spring-petclinic-genai-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets",
+    "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/model",
+    "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/system",
+    "spring-petclinic-vets-service/src/main/java/org/springframework/samples/petclinic/vets/web"
+   ],
+   "module": "spring-petclinic-vets-service",
+   "package": "spring-petclinic-vets-service",
+   "status": "listed"
+  },
+  {
+   "dirs": [
+    "spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits",
+    "spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/config",
+    "spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/model",
+    "spring-petclinic-visits-service/src/main/java/org/springframework/samples/petclinic/visits/web"
+   ],
+   "module": "spring-petclinic-visits-service",
+   "package": "spring-petclinic-visits-service",
+   "status": "listed"
+  }
+ ],
+ "spring-petclinic-rest": [
+  {
+   "dirs": [
+    "src/main/java/org/springframework/samples/petclinic",
+    "src/main/java/org/springframework/samples/petclinic/config",
+    "src/main/java/org/springframework/samples/petclinic/mapper",
+    "src/main/java/org/springframework/samples/petclinic/model",
+    "src/main/java/org/springframework/samples/petclinic/repository",
+    "src/main/java/org/springframework/samples/petclinic/repository/jdbc",
+    "src/main/java/org/springframework/samples/petclinic/repository/jpa",
+    "src/main/java/org/springframework/samples/petclinic/repository/springdatajpa",
+    "src/main/java/org/springframework/samples/petclinic/rest",
+    "src/main/java/org/springframework/samples/petclinic/rest/advice",
+    "src/main/java/org/springframework/samples/petclinic/rest/controller",
+    "src/main/java/org/springframework/samples/petclinic/rest/controller/v1",
+    "src/main/java/org/springframework/samples/petclinic/rest/controller/v2",
+    "src/main/java/org/springframework/samples/petclinic/rest/validation",
+    "src/main/java/org/springframework/samples/petclinic/security",
+    "src/main/java/org/springframework/samples/petclinic/service",
+    "src/main/java/org/springframework/samples/petclinic/util"
+   ],
+   "module": ".",
+   "package": ".",
+   "status": "listed"
+  }
+ ]
+}

@@ -20,6 +20,8 @@ const TS_FILE = /\.(ts|tsx|mts|cts)$/;
 const out = [];
 const done = new Set();
 const declared = new Set();
+// compare-v1 (eval/compare-v1/README.md) adds `in` to each reference row; identity-v1's output is unchanged without it.
+const enclosing = process.env.LABEL_ENCLOSING === '1';
 
 function own(fileName) {
   const full = path.resolve(fileName);
@@ -64,6 +66,21 @@ function group(decl) {
   if (ts.isClassDeclaration(decl) || ts.isInterfaceDeclaration(decl) || ts.isTypeAliasDeclaration(decl) || ts.isEnumDeclaration(decl)) return 'type';
   if (ts.isFunctionDeclaration(decl) || ts.isMethodDeclaration(decl) || ts.isMethodSignature(decl) || functionValued(decl)) return 'callable';
   if (ts.isPropertyDeclaration(decl) || ts.isPropertySignature(decl) || ts.isEnumMember(decl) || ts.isVariableDeclaration(decl)) return 'member';
+  return null;
+}
+
+// A counted declaration's key, as its `decl` row gives it.
+function declKey(checker, node, rel) {
+  const symbol = checker.getSymbolAtLocation(ts.getNameOfDeclaration(node));
+  return symbol && symbol.declarations ? key(symbol.declarations) : `${rel}:${nameLine(node)}`;
+}
+
+// The key of the innermost declaration around a reference that identity-v1 counts; null at file level.
+function enclosingKey(checker, node, rel) {
+  for (let n = node.parent; n; n = n.parent) {
+    const name = group(n) && ts.getNameOfDeclaration(n);
+    if (name && ts.isIdentifier(name)) return declKey(checker, n, rel);
+  }
   return null;
 }
 
@@ -140,8 +157,7 @@ for (const config of configs) {
       const g = group(node);
       const name = g && ts.getNameOfDeclaration(node);
       if (name && ts.isIdentifier(name)) {
-        const symbol = checker.getSymbolAtLocation(name);
-        const k = symbol && symbol.declarations ? key(symbol.declarations) : `${rel}:${nameLine(node)}`;
+        const k = declKey(checker, node, rel);
         if (!declared.has(k)) {
           declared.add(k);
           out.push({ t: 'decl', repo, name: name.text, key: k, file: rel, line: nameLine(node), decl: g });
@@ -149,6 +165,7 @@ for (const config of configs) {
       }
       if (refs && ts.isIdentifier(node)) {
         const row = reference(checker, sf, rel, node);
+        if (row && enclosing) row.in = enclosingKey(checker, node, rel);
         if (row) out.push(row);
       }
       ts.forEachChild(node, visit);

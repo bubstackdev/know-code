@@ -15,7 +15,16 @@ import sys
 import tempfile
 import threading
 import time
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
 
+
+
+def indexes(base: Path, name: str) -> list[Path]:
+    """The indexes of the repository `name`: in the build's own tree (`cache/v/<key>/repos`), or at the cache's top
+    level for 0.6.1 and older."""
+    cache = base / "cache"
+    return list(cache.glob(f"v/*/repos/{name}-*.sqlite")) + list(cache.glob(f"repos/{name}-*.sqlite"))
 
 def check(binary: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="knowcode-workspace-first-run-") as temp:
@@ -35,9 +44,8 @@ def check(binary: Path) -> None:
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             for name, text in files.items():
                 (root / name).write_text(text)
-        env = dict(os.environ, KNOWCODE_CACHE_DIR=str(base / "cache"), KNOWCODE_CONFIG_DIR=str(base / "config"), KNOWCODE_DATA_DIR=str(base / "data"), KNOWCODE_TOOLS="core")
+        env = kc_env.knowcode_env(base, KNOWCODE_TOOLS="core")
         env.pop("KNOWCODE_VERIFY", None)
-        env["KNOWCODE_UPDATE_CHECK"] = "0"
         subprocess.run([str(binary), "workspace", "add", str(workspace)], env=env, cwd=base, check=True, capture_output=True)
         with (base / "stderr.log").open("w+") as stderr:
             process = subprocess.Popen([str(binary), "serve"], cwd=web, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
@@ -103,7 +111,7 @@ def check(binary: Path) -> None:
                         break
                     assert time.monotonic() < deadline, context
                     time.sleep(0.1)
-                assert list((base / "cache/repos").glob("backend-*.sqlite")), "the needed backend was not indexed automatically"
+                assert indexes(base, "backend"), "the needed backend was not indexed automatically"
                 # Repos cloned under the root later are noticed and indexed; one whose privacy file blocks it whole is not.
                 late, locked = workspace / "late", workspace / "locked"
                 for root, files in ((locked, {".knowcode-privacy.yml": "level: 1\n", "secret.py": "def kept_out():\n    return 2\n"}), (late, {"late.py": "def late_arrival():\n    return 1\n"})):
@@ -112,7 +120,7 @@ def check(binary: Path) -> None:
                     for name, text in files.items():
                         (root / name).write_text(text)
                 wait_indexed([late], "a repo cloned under the root while the server ran")
-                assert not list((base / "cache/repos").glob("locked-*.sqlite")), "a repo blocked whole was indexed"
+                assert not indexes(base, "locked"), "a repo blocked whole was indexed"
                 (backend / ".knowcode-privacy.yml").write_text("level: 1\n")
                 private = tool("kc_context", {"symbol": "OrderService.load", "max_chars": 20000})
                 assert private["complete"] is False and any(i["reason"] == "withheld" for i in private["incomplete"]), private

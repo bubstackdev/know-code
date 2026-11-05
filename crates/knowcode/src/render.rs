@@ -2359,12 +2359,25 @@ pub fn reviewers(repos: &[crate::ops::ReviewersRepo]) {
 
 /// A page of a list continued by a cursor (`knowcode more`): one line per row, its place and what it is.
 pub fn page(env: &serde_json::Value) {
+    print!("{}", page_text(env));
+}
+
+/// A page of a list (see [`crate::cursor::more`]) as text: its place in the list, then a line per row. A page of an
+/// impact's dependents gives each row the line it has in the impact's own tree, so the pages after a text answer
+/// read like it.
+pub fn page_text(env: &serde_json::Value) -> String {
+    let mut out = String::new();
     let list = env["list"].as_str().unwrap_or("items");
     let offset = env["offset"].as_u64().unwrap_or(0);
     let rows = env["items"].as_array().cloned().unwrap_or_default();
     let total = env["total"].as_u64().map(|t| format!(" of {t}")).unwrap_or_default();
-    println!("{list}: {}-{}{total}", offset + 1, offset + rows.len() as u64);
+    w!(out, "{list}: {}-{}{total}", offset + 1, offset + rows.len() as u64);
+    let affected = list.ends_with("affected");
     for r in &rows {
+        if affected {
+            w!(out, "  {}", affected_value_line(r));
+            continue;
+        }
         let repo = r["repo"].as_str().map(|r| format!("{r}: ")).unwrap_or_default();
         let at = match (r["file"].as_str(), r["line"].as_u64()) {
             (Some(f), Some(l)) => format!("{f}:{l}"),
@@ -2375,10 +2388,32 @@ pub fn page(env: &serde_json::Value) {
         let kind = r["kind"].as_str().map(|k| format!(" [{k}]")).unwrap_or_default();
         let conf = r["confidence"].as_str().map(|c| format!(" ({c})")).unwrap_or_default();
         match r["steps"].as_array() {
-            Some(steps) => println!("  {}", steps.iter().filter_map(|s| s["qualified"].as_str()).collect::<Vec<_>>().join(" -> ")),
-            None => println!("  {repo}{at}  {what}{kind}{conf}"),
+            Some(steps) => w!(out, "  {}", steps.iter().filter_map(|s| s["qualified"].as_str()).collect::<Vec<_>>().join(" -> ")),
+            None => w!(out, "  {repo}{at}  {what}{kind}{conf}"),
         }
     }
+    out
+}
+
+/// An impact row as a page holds it (JSON), as [`affected_line`] gives it in the tree: the relation, the symbol's
+/// kind and name, its place (its site when that is in its own file), the confidence and class, and the line its
+/// symbol is declared at when the row leads with its site.
+fn affected_value_line(a: &serde_json::Value) -> String {
+    let s = |k: &str| a[k].as_str().unwrap_or("");
+    let (file, repo) = (s("file"), a["repo"].as_str());
+    let line = a["line"].as_u64().unwrap_or(0) as u32;
+    let site = a["site"].as_str();
+    let own = site.and_then(|x| own_line(file, x));
+    let mut tail = match own {
+        Some(at) => declared(line, at),
+        None => site.map(|x| format!(" at {}", in_repo(repo, x))).unwrap_or_default(),
+    };
+    if let Some(h) = a["nearest_ambiguous_hop"].as_u64() {
+        tail = format!(" (ambiguous at hop {h}){tail}");
+    }
+    let relation = kc_store::trace::relation(s("edge"), "in");
+    let relation = if relation.is_empty() { s("edge") } else { relation };
+    format!("{relation} {} {}  {}  [{}] {}{tail}", kw(s("kind"), file), s("qualified"), loc_in(None, repo, file, own.unwrap_or(line)), s("confidence"), s("class"))
 }
 
 #[cfg(test)]

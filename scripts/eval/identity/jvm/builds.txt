@@ -1,0 +1,35 @@
+# How run.sh builds each JVM repository of repos.txt for labelling: NAME JVM TOOL [VAR=VALUE ...] -- BUILD ARGUMENTS.
+# JVM is the JDK scip-java runs the build with; the arguments follow scip-java's own defaults (Maven: clean verify
+# without running tests; Gradle: its scipCompileAll task), which compile main and test sources. run.sh adds -o or
+# --offline for the labelling build.
+#
+# gson: the proto module needs Maven 3.9.6 and the image has 3.9.1, so it's left out.
+# commons-lang: commons-parent compiles in-process unless commons.compiler.fork is set, and then with its own
+#   commons.compiler.javac; both are pointed at scip-java's javac, as its own Maven properties are.
+# moshi: the scip-java 0.13.2 Kotlin plugin needs Kotlin 2.4, and moshi pins 2.3.21 but takes MOSHI_KOTLIN_VERSION.
+#   Under 2.4 one Java test calls an internal Kotlin member by its 2.3 mangled name, so moshi's Java tests are left out.
+# exposed: pins Kotlin 2.3.20 in its version catalog (KOTLIN_CATALOG, as moshi's variable) and, like ktlint, turns on
+#   Gradle's configuration cache. Its Gradle (8.14) compiles buildSrc with a Kotlin too old for scip-java's plugin,
+#   so buildSrc compiles without it (jvm/skip-buildsrc.gradle).
+# moshix: like ktlint, turns on Gradle's configuration cache; its Gradle plugin's build asks for a JDK 23 toolchain
+#   (TOOLCHAINS: Temurin 23.0.2+7, its aarch64 Linux archive's sha256, as Adoptium publishes it).
+# misk: pins Kotlin 2.3.10 in its version catalog (KOTLIN_CATALOG) and runs Gradle 9.3.0 through hermit, with no
+#   wrapper; GRADLE_WRAPPER gives the container's copy a wrapper for that Gradle version. Its admin console's web
+#   front end is an npm build, which the offline build can't run and which holds no Kotlin, so it is left out.
+# graphql-kotlin: pins Kotlin 2.3.0 in its version catalog (KOTLIN_CATALOG). Its buildSrc is a precompiled script
+#   plugin, and scip-java's Kotlin plugin reads each compile's arguments while the build is configured, which Gradle
+#   refuses for that build; SCIP_ROOT_BUILD_ONLY keeps scip-java's init script to the root build
+#   (jvm/gradlew-root-only.sh), so buildSrc, which holds no labels, compiles without it.
+gson 17 maven -- --batch-mode clean verify -DskipTests -pl !proto
+commons-lang 17 maven -- --batch-mode clean verify -DskipTests -Dcommons.compiler.fork=true '-Dcommons.compiler.javac=${maven.compiler.executable}'
+spring-petclinic 17 maven -- --batch-mode clean verify -DskipTests
+moshi 21 gradle MOSHI_KOTLIN_VERSION=2.4.21 -- clean scipPrintDependencies scipCompileAll -x :moshi:compileTestJava
+kotlinpoet 21 gradle -- clean scipPrintDependencies scipCompileAll
+spring-petclinic-kotlin 21 gradle -- clean scipPrintDependencies scipCompileAll
+jsoup 17 maven -- --batch-mode clean verify -DskipTests
+jackson-core 17 maven -- --batch-mode clean verify -DskipTests
+ktlint 26 gradle -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+exposed 21 gradle KOTLIN_CATALOG=2.4.21 SCIP_SKIP_BUILDSRC=1 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+moshix 21 gradle TOOLCHAINS=temurin:1.23.0.2@fb43ae1202402842559cb6223886ec1663b90ffbec48479abbcb92c92c9012eb -- clean scipPrintDependencies scipCompileAll --no-configuration-cache
+misk 21 gradle KOTLIN_CATALOG=2.4.21 GRADLE_WRAPPER=9.3.0 -- clean scipPrintDependencies scipCompileAll --no-configuration-cache -x :misk-admin:buildMiskWeb
+graphql-kotlin 17 gradle KOTLIN_CATALOG=2.4.21 SCIP_ROOT_BUILD_ONLY=1 -- clean scipPrintDependencies scipCompileAll

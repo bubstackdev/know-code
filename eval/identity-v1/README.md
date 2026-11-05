@@ -137,7 +137,8 @@ reference's row in it:
 - **Its targets:** the row's `targets`, or, for a call of an overloaded name, the entries of the answer's numbered
   `overloads` list that its `overload` names. A KnowCode target matches the label when it is in the same file and its name line is one of the
   label's lines. The name line is the first of the target's line and the next 10 that has the name as a word outside
-  comments, attributes and decorators (a declaration that starts at one of those).
+  comments, attributes and decorators (a declaration that starts at one of those); a leading block of attributes or
+  annotations, of any length, is skipped before the 10 are counted.
 
 Reported, per language, per repository and per stratum:
 
@@ -227,6 +228,16 @@ Scoring takes under a minute on a loaded development Mac (8 indexes, 2462 `refs`
 **The scorer was corrected after its first run**, before these figures: it read only a row's `targets`, not the
 numbered `overloads` an answer lists once for every row that calls one, and it took a doc comment or attribute naming
 the declaration as the declaration's name line. Neither touched the labels or the rule for them.
+
+**Corrected again on 2026-10-29**, while identity-v2's Kotlin labels were first scored: a declaration under an
+annotation longer than the window (kotlinpoet's `inner class IsAnnotated`, below a 12-line `@HasDefaultsAnnotation(…)`)
+had its name line taken as the annotation's first line, so 3 links KnowCode made correctly were judged wrong. The
+window now starts after a declaration's leading attribute or annotation block, as the rule above always said
+attributes come before the name. The labels didn't change. Judged by the scorer before and after with
+one KnowCode build, identity-v1 and identity-v2 (Go, its held-out set, JVM and both JVM held-out sets: 10,251
+labels) changed 9 judgements, each to agree with the toolchain: in identity-v1, 2 C# `exact` rows under a 20-line
+`[InlineData]` block judged right, and 2 Swift `ambiguous` rows now counted as listing the label; in identity-v2, the 3
+Kotlin rows above judged right. No judgement went the other way.
 
 ## Running it
 

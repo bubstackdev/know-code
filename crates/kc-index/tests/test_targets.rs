@@ -1,5 +1,5 @@
-//! Declared test targets: SwiftPM test targets, .NET test projects and package.json test scripts, with their tests and
-//! the commands to run them.
+//! Declared test targets: SwiftPM test targets, .NET test projects, package.json test scripts, Go modules and Maven
+//! and Gradle projects, with their tests and the commands to run them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,6 +51,13 @@ let package = Package(
 "#);
     write(&repo, "dotnet/Ledger.Tests/BalanceTests.cs", "using Xunit;\nnamespace Ledger.Tests;\npublic class BalanceTests\n{\n    [Fact]\n    public void Adds() { }\n    public void Helper() { }\n}\n");
     write(&repo, "dotnet/Ledger/Ledger.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+    // A Go module with a nested module: each module's tests are its own.
+    write(&repo, "goapp/go.mod", "module example.com/orchard\n\ngo 1.22\n");
+    write(&repo, "goapp/crate.go", "package orchard\n\nfunc Count() int { return 1 }\n");
+    write(&repo, "goapp/crate_test.go", "package orchard\n\nimport \"testing\"\n\nfunc TestCount(t *testing.T) {}\n\nfunc BenchmarkCount(b *testing.B) {}\n\nfunc helper() {}\n");
+    write(&repo, "goapp/press/press_test.go", "package press\n\nimport \"testing\"\n\nfunc TestJuice(t *testing.T) {}\n");
+    write(&repo, "goapp/tools/go.mod", "module example.com/orchard/tools\n\ngo 1.22\n");
+    write(&repo, "goapp/tools/gen_test.go", "package tools\n\nimport \"testing\"\n\nfunc TestGen(t *testing.T) {}\n");
     write(&repo, "web/package.json", "{\n  \"name\": \"web\",\n  \"keywords\": [\"test\"],\n  \"scripts\": { \"build\": \"tsc\", \"test\": \"vitest run\", \"test:unit\": \"vitest run unit\" }\n}\n");
     write(&repo, "web/yarn.lock", "\n");
     write(&repo, "web/src/cart.ts", "export class Cart {}\n");
@@ -70,6 +77,8 @@ let package = Package(
         [
             ("swiftpm", "KitTests", r"swift test --filter '^KitTests\.'", vec!["KitTests.testMakes"]),
             ("dotnet", "Ledger.Tests", "dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj", vec!["BalanceTests.Adds"]),
+            ("go", "example.com/orchard", "cd goapp && go test ./...", vec!["TestCount", "BenchmarkCount", "TestJuice"]),
+            ("go", "example.com/orchard/tools", "cd goapp/tools && go test ./...", vec!["TestGen"]),
             ("npm", "test", "cd web && yarn test", vec!["web/src/cart.test.ts"]),
             ("npm", "test:unit", "cd web && yarn test:unit", vec!["web/src/cart.test.ts"]),
             ("npm", "test", "cd web/packages/ui && yarn test", vec!["web/packages/ui/button.test.ts"]),
@@ -84,8 +93,93 @@ let package = Package(
         targets[1].tests[0].command,
         r"dotnet test dotnet/Ledger.Tests/Ledger.Tests.csproj --filter 'FullyQualifiedName=Ledger.Tests.BalanceTests.Adds|FullyQualifiedName~Ledger.Tests.BalanceTests.Adds\('"
     );
+    // One Go test, from its package's directory; a benchmark alone.
+    let go: Vec<&str> = targets[2].tests.iter().map(|c| c.command.as_str()).collect();
+    assert_eq!(
+        go,
+        ["cd goapp && go test . -run '^TestCount$'", "cd goapp && go test . -run '^$' -bench '^BenchmarkCount$'", "cd goapp && go test ./press -run '^TestJuice$'"]
+    );
+    assert_eq!((targets[2].manifest.as_str(), targets[2].line), ("goapp/go.mod", 1));
     // A script's line is its key under `scripts`, not an earlier `"test"`.
-    assert_eq!((targets[2].manifest.as_str(), targets[2].line), ("web/package.json", 4));
-    assert_eq!(targets[2].tests[0].command, "cd web && yarn test -- src/cart.test.ts");
+    assert_eq!((targets[4].manifest.as_str(), targets[4].line), ("web/package.json", 4));
+    assert_eq!(targets[4].tests[0].command, "cd web && yarn test -- src/cart.test.ts");
+
+    // Maven and Gradle: each project's JUnit tests, run from its build's root.
+    let jvm = base.join("orchard");
+    std::fs::create_dir_all(&jvm).unwrap();
+    assert!(Command::new("git").arg("init").arg("-q").arg(&jvm).status().unwrap().success());
+    let pom = |artifact: &str, modules: &str| {
+        format!("<project>\n  <groupId>org.example</groupId>\n  <artifactId>{artifact}</artifactId>\n  <modules>{modules}</modules>\n</project>\n")
+    };
+    // A Maven reactor (with its wrapper) whose root has no tests, and a module with a nested test class.
+    write(&jvm, "shop/pom.xml", &pom("shop", "<module>cart</module>"));
+    write(&jvm, "shop/mvnw", "#!/bin/sh\n");
+    write(&jvm, "shop/cart/pom.xml", &pom("cart", ""));
+    write(&jvm, "shop/cart/src/main/java/org/example/cart/Cart.java", "package org.example.cart;\n\npublic class Cart {}\n");
+    write(
+        &jvm,
+        "shop/cart/src/test/java/org/example/cart/CartTest.java",
+        "package org.example.cart;\n\nimport org.junit.jupiter.api.*;\n\nclass CartTest {\n    @Test void adds() {}\n    void helper() {}\n    @Nested class Empty {\n        @ParameterizedTest void totals() {}\n    }\n}\n",
+    );
+    // A Gradle build (no wrapper): the root project and an included one, Kotlin tests in each.
+    write(&jvm, "press/settings.gradle.kts", "rootProject.name = \"press\"\ninclude(\":juice\", \":pulp\")\n");
+    write(&jvm, "press/build.gradle.kts", "plugins { kotlin(\"jvm\") }\n");
+    write(&jvm, "press/src/test/kotlin/PressTest.kt", "package org.example.press\n\nimport kotlin.test.Test\n\nclass PressTest {\n    @Test fun `squeezes twice`() {}\n}\n");
+    write(&jvm, "press/juice/build.gradle.kts", "dependencies { implementation(project(\":\")) }\n");
+    write(&jvm, "press/juice/src/test/kotlin/JuiceTest.kt", "package org.example.juice\n\nimport org.junit.jupiter.api.Test\n\nclass JuiceTest {\n    @Test fun pours() {}\n}\n");
+    // A Kotlin Multiplatform project: its JVM tests are `jvmTest`'s, and its common tests run there too.
+    write(&jvm, "press/pulp/build.gradle.kts", "plugins { kotlin(\"multiplatform\") }\n");
+    write(&jvm, "press/pulp/src/jvmTest/kotlin/PulpTest.kt", "package org.example.pulp\n\nimport kotlin.test.Test\n\nclass PulpTest {\n    @Test fun strains() {}\n}\n");
+    write(&jvm, "press/pulp/src/commonTest/kotlin/SeedTest.kt", "package org.example.pulp\n\nimport kotlin.test.Test\n\nclass SeedTest {\n    @Test fun sprouts() {}\n}\n");
+    let root = kc_index::repo_root(&jvm).unwrap();
+    let mut store = kc_index::open(&root).unwrap();
+    sync(&root, &mut store, &SyncOptions { threads: 1, ..Default::default() }).unwrap();
+    let targets = kc_index::test_targets::list(&root, &store).unwrap();
+    // kind, name, manifest, command, and each test's name and command.
+    type Row<'a> = (&'a str, &'a str, &'a str, &'a str, Vec<(&'a str, &'a str)>);
+    let summary: Vec<Row> = targets
+        .iter()
+        .map(|t| (t.kind, t.name.as_str(), t.manifest.as_str(), t.command.as_str(), t.tests.iter().map(|c| (c.name.as_str(), c.command.as_str())).collect()))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (
+                "gradle",
+                "press",
+                "press/build.gradle.kts",
+                "cd press && gradle :test",
+                vec![("PressTest.squeezes twice", "cd press && gradle :test --tests 'org.example.press.PressTest.squeezes twice' --tests 'org.example.press.PressTest.squeezes twice[*]'")]
+            ),
+            (
+                "gradle",
+                "juice",
+                "press/juice/build.gradle.kts",
+                "cd press && gradle :juice:test",
+                vec![("JuiceTest.pours", "cd press && gradle :juice:test --tests org.example.juice.JuiceTest.pours --tests 'org.example.juice.JuiceTest.pours[*]'")]
+            ),
+            (
+                "gradle",
+                "pulp",
+                "press/pulp/build.gradle.kts",
+                "cd press && gradle :pulp:jvmTest",
+                vec![
+                    ("SeedTest.sprouts", "cd press && gradle :pulp:jvmTest --tests org.example.pulp.SeedTest.sprouts --tests 'org.example.pulp.SeedTest.sprouts[*]'"),
+                    ("PulpTest.strains", "cd press && gradle :pulp:jvmTest --tests org.example.pulp.PulpTest.strains --tests 'org.example.pulp.PulpTest.strains[*]'"),
+                ]
+            ),
+            (
+                "maven",
+                "org.example:cart",
+                "shop/cart/pom.xml",
+                "cd shop && ./mvnw test -pl cart",
+                vec![
+                    ("CartTest.adds", "cd shop && ./mvnw test -pl cart -Dtest='org.example.cart.CartTest#adds+adds[*]'"),
+                    ("CartTest.Empty.totals", "cd shop && ./mvnw test -pl cart -Dtest='org.example.cart.CartTest$Empty#totals+totals[*]'"),
+                ]
+            ),
+        ],
+        "{targets:#?}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }

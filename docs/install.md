@@ -5,8 +5,9 @@ How to install KnowCode, connect it to a coding agent, keep it current and remov
 
 ## Install
 
-KnowCode runs on macOS (Apple silicon) and Linux (x86_64 or arm64). It needs `git`, and the client you connect: the
-`claude` CLI for Claude Code, or Codex or Cursor. Windows is not supported yet.
+KnowCode runs on macOS (Apple silicon) and Linux (x86_64 or arm64) with glibc 2.28 or later (RHEL 8 and its
+rebuilds, Debian 10, Ubuntu 20.04 and newer). It needs `git`, and the client you connect: the `claude` CLI for Claude
+Code, or Codex or Cursor. Windows is not supported yet.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bubstackdev/know-code/releases/latest/download/knowcode-installer.sh | sh

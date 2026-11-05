@@ -643,7 +643,7 @@ pub fn text_hints(env: &mut Value) {
             let Some(Value::String(h)) = i.get_mut("hint") else { continue };
             let field = h.split("<`").nth(1).and_then(|r| r.split("`>").next()).map(str::to_string);
             let value = field.as_deref().and_then(|f| at(&snapshot, f)).and_then(Value::as_str).filter(|c| c.starts_with("kc1."));
-            *h = short_hint(h, value.map(handle).as_deref());
+            *h = short_hint(h, value.inspect(|c| crate::more_text::mark(c)).map(handle).as_deref());
         }
     }
 }

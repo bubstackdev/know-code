@@ -33,6 +33,7 @@ pub mod line_history;
 pub mod machine;
 pub mod meter;
 pub mod http;
+pub mod jvm_builds;
 pub mod notes;
 pub mod revision;
 pub mod ownership;
@@ -60,7 +61,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use kc_extract::{FileFacts, Lang};
-use kc_store::{FileRecord, Store};
+use kc_store::{FileRecord, Prepared, Store};
 use serde::Serialize;
 
 /// Files larger than this are left out of the content (search) index (generated code, fixtures).
@@ -111,6 +112,27 @@ pub fn cache_dir() -> Result<PathBuf> {
     Ok(config::cache_dir()?.0)
 }
 
+/// This build's part of the cache: `<cache>/v/<key>/`, holding every file whose format depends on the index schema
+/// (`repos/`, `bases/`, `locks/`, `workspace.json`, `discovery.json`). Builds of different schemas keep apart and never
+/// rewrite each other's files, so any two versions can share one cache; 0.6.1 and older keep theirs at the top level,
+/// which this build never opens. What all builds share stays at the top: the update check's state, the cursor key,
+/// notes, and the maintenance lock.
+pub fn tree_dir() -> Result<PathBuf> {
+    Ok(cache_dir()?.join(DATA_TREES).join(data_key()))
+}
+
+/// The directory under the cache holding each build's data tree (see [`tree_dir`]).
+pub const DATA_TREES: &str = "v";
+
+/// The name of this build's data tree: its index schema (`s24`). Builds of one schema share a tree: one with another
+/// extractor or resolver version re-extracts the languages that differ in place, as an upgrade did before, which keeps
+/// a release that bumps one extractor from reindexing every repository from scratch. Alternating two such builds is
+/// correct but slower, each re-extracting what the other changed.
+pub fn data_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| format!("s{}", kc_store::SCHEMA_VERSION))
+}
+
 pub use git::{command as git_command, repo_root};
 
 /// A full rediscovery is forced at least this often, as a backstop for changes the cheap check can't see (a file
@@ -124,11 +146,11 @@ pub const SUMMARY_GEN: &str = "summary_gen";
 /// Cached `dirty` is recomputed with `git status` at least this often.
 const DIRTY_TTL_SECS: u64 = 60;
 
-/// The index file for a repo root: `<cache>/repos/<name>-<hash>.sqlite`.
+/// The index file for a repo root: `<tree>/repos/<name>-<hash>.sqlite` (see [`tree_dir`]).
 pub fn db_path(root: &Path) -> Result<PathBuf> {
     let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
     let hash = blake3::hash(root.to_string_lossy().as_bytes()).to_hex();
-    Ok(cache_dir()?.join("repos").join(format!("{name}-{}.sqlite", &hash[..12])))
+    Ok(tree_dir()?.join("repos").join(format!("{name}-{}.sqlite", &hash[..12])))
 }
 
 /// Opens (creating if needed) the index for a repo root and records the root in it.
@@ -862,7 +884,7 @@ impl Default for SyncOptions {
 }
 
 enum Work {
-    Parsed { path: String, lang: Lang, mtime_ns: i64, size: i64, hash: String, lines: u32, facts: Box<FileFacts> },
+    Parsed { path: String, lang: Lang, mtime_ns: i64, size: i64, hash: String, lines: u32, facts: Box<FileFacts>, prepared: Box<Prepared> },
     Touched { id: i64, mtime_ns: i64, size: i64 },
     Failed { path: String },
 }
@@ -990,6 +1012,20 @@ pub fn changed_since_sync(root: &Path, db: &Path) -> bool {
     fresh::changed(root, db)
 }
 
+/// [`changed_since_sync`] for the query running: unchanged without a check when the query found so already, under a
+/// [`ChangeMemo`], by the snapshot of this same index file (a workspace query checks the repos its summary rules out,
+/// then opens some of them); else checked now, and remembered. The proof was made after the query started, as one
+/// made now would be; a repo found changed is checked again, since a sync may have finished since.
+pub fn changed_in_query(root: &Path, db: &Path) -> bool {
+    let query = kc_store::limits::current();
+    if query.changed(root).and_then(|c| c.proof).is_some_and(|proof| fresh::identity(db) == Some(proof)) {
+        return false;
+    }
+    let proof = fresh::unchanged(root, db);
+    query.note_changed(root, kc_store::limits::Change { changed: proof.is_none(), proof });
+    proof.is_none()
+}
+
 /// Whether derived data an earlier query computed (the areas, the file ranking) is from an earlier index generation
 /// or history than `store`'s. Never computed, it isn't stale: the query needing it computes it.
 pub fn derived_stale(root: &Path, store: &Store) -> Result<bool> {
@@ -1057,61 +1093,50 @@ fn derive(root: &Path, store: &Store, missing: bool) -> Result<()> {
     Ok(())
 }
 
-/// Within a [`ChangeMemo`], [`changed_repos`] checks each repo once (a query consults the workspace summary from
-/// several places). Outside one, every call checks afresh.
-static CHANGE_MEMO: std::sync::Mutex<(usize, Option<HashMap<PathBuf, bool>>)> = std::sync::Mutex::new((0, None));
-
 /// Remembers [`changed_repos`] answers until dropped: hold one for the length of one query. A repo seen changed stays
-/// so, which only means it is opened (and synced) again.
-pub struct ChangeMemo(());
+/// so, which only means it is opened (and synced) again. The memo is the query's own (see
+/// [`kc_store::limits::Operation::remember_changes`]): another query's, made before an edit, never answers for it.
+pub type ChangeMemo = kc_store::limits::ChangeMemo;
 
-/// Starts (or joins) a [`ChangeMemo`].
+/// Starts (or joins) the current query's [`ChangeMemo`].
 pub fn memo_changes() -> ChangeMemo {
-    let mut m = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
-    m.0 += 1;
-    m.1.get_or_insert_with(HashMap::new);
-    ChangeMemo(())
-}
-
-impl Drop for ChangeMemo {
-    fn drop(&mut self) {
-        let mut m = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
-        m.0 = m.0.saturating_sub(1);
-        if m.0 == 0 {
-            m.1 = None;
-        }
-    }
+    kc_store::limits::current().remember_changes()
 }
 
 /// Of `roots`, the indexed ones whose working tree changed since their last sync (see [`changed_since_sync`]), checked
 /// on a few threads. One no longer on disk isn't (nothing there to sync).
 pub fn changed_repos(roots: &[PathBuf]) -> HashSet<PathBuf> {
-    let check = |root: &PathBuf| -> bool {
+    use kc_store::limits::Change;
+    // Read once, by whichever thread first meets a root whose index is gone, not once per such root: on a large
+    // workspace the summary file is tens of megabytes.
+    let saved: std::sync::OnceLock<Option<HashSet<PathBuf>>> = std::sync::OnceLock::new();
+    let check = |root: &PathBuf| -> Change {
         if !root.join(".git").exists() {
-            return false;
+            return Change { changed: false, proof: None };
         }
         if !db_path(root).is_ok_and(|p| p.exists()) {
-            return workspace::has_saved_index(root).unwrap_or(true) || !light::unchanged(root);
+            let saved = saved.get_or_init(|| workspace::saved_index_roots().ok());
+            let changed = saved.as_ref().is_none_or(|s| s.contains(root)) || !light::unchanged(root);
+            return Change { changed, proof: None };
         }
-        changed_since_sync(root, &db_path(root).expect("checked above"))
+        let proof = fresh::unchanged(root, &db_path(root).expect("checked above"));
+        Change { changed: proof.is_none(), proof }
     };
-    let known: HashMap<PathBuf, bool> = {
-        let m = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner());
-        m.1.as_ref().map(|k| roots.iter().filter_map(|r| Some((r.clone(), *k.get(r)?))).collect()).unwrap_or_default()
-    };
+    let query = kc_store::limits::current();
+    let known: HashMap<PathBuf, bool> = roots.iter().filter_map(|r| Some((r.clone(), query.changed(r)?.changed))).collect();
     let todo: Vec<&PathBuf> = roots.iter().filter(|r| !known.contains_key(*r)).collect();
     let chunk = todo.len().div_ceil(8).max(1);
-    let checked: Vec<(PathBuf, bool)> = std::thread::scope(|scope| {
+    let checked: Vec<(PathBuf, Change)> = std::thread::scope(|scope| {
         let parts: Vec<_> = todo
             .chunks(chunk)
             .map(|part| scope.spawn(move || part.iter().map(|r| ((*r).clone(), check(r))).collect::<Vec<_>>()))
             .collect();
         parts.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
-    if let Some(memo) = CHANGE_MEMO.lock().unwrap_or_else(|e| e.into_inner()).1.as_mut() {
-        memo.extend(checked.iter().cloned());
+    for (root, change) in &checked {
+        query.note_changed(root, *change);
     }
-    known.into_iter().chain(checked).filter(|(_, changed)| *changed).map(|(r, _)| r).collect()
+    known.into_iter().chain(checked.into_iter().map(|(r, c)| (r, c.changed))).filter(|(_, changed)| *changed).map(|(r, _)| r).collect()
 }
 
 /// Indexes `paths` again however their stat looks: their content was seen to differ from what the index holds (a
@@ -1274,6 +1299,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
                                             let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                                             kc_extract::ansible::name_root_role(&mut facts, &name);
                                         }
+                                        // Computed here rather than by the one writer, which every file waits on.
+                                        let prepared = Box::new(Prepared::of(path, *lang, &facts));
                                         Work::Parsed {
                                             path: path.clone(),
                                             lang: *lang,
@@ -1282,6 +1309,7 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
                                             hash,
                                             lines,
                                             facts: Box::new(facts),
+                                            prepared,
                                         }
                                     }
                                 }
@@ -1299,8 +1327,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
         // On an error, `rx` is dropped on return, which stops the workers.
         for work in rx {
             match work {
-                Work::Parsed { path, lang, mtime_ns, size, hash, lines, facts } => {
-                    summary_changed |= batch.put(&FileRecord { path: &path, lang, mtime_ns, size, hash: &hash, lines, facts: &facts })?;
+                Work::Parsed { path, lang, mtime_ns, size, hash, lines, facts, prepared } => {
+                    summary_changed |= batch.put(&FileRecord { path: &path, lang, mtime_ns, size, hash: &hash, lines, facts: &facts, prepared: &prepared })?;
                     report.parsed += 1;
                     report.bytes_parsed += size as u64;
                 }
@@ -1332,8 +1360,8 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
     }
     if report.parsed + report.removed > 0 {
         batch.set_meta("last_sync", &now_secs().to_string())?;
-        // Invalidates the cached `dirty` flag.
-        batch.set_meta("tree_gen", &now_nanos().to_string())?;
+        // Invalidates the cached `dirty` flag, and logs the names the sync changed for the reference graph.
+        batch.set_generation(&now_nanos().to_string())?;
     }
     // In the same commit as the facts: a summary is reused while this generation holds (see `workspace`).
     if summary_changed || store_lacks_summary_gen {
@@ -1349,17 +1377,19 @@ fn sync_unpinned(root: &Path, store: &mut Store, opts: &SyncOptions) -> Result<S
     mark.record("write.commit");
     // SDK packages the repo declares as external clients, read from its `node_modules` when they changed.
     let mark = meter::Mark::now();
-    sdk::refresh(root, store, &privacy)?;
+    // What they read outside the indexed files, stamped before it is read, goes into the snapshot.
+    let mut outside = fresh::Outside::new();
+    sdk::refresh(root, store, &privacy, &mut outside)?;
     mark.record("sdk");
     let mark = meter::Mark::now();
-    report.scip = scip::refresh(root, store, opts.scip_compare)?;
+    report.scip = scip::refresh(root, store, opts.scip_compare, &mut outside)?;
     mark.record("scip");
     let mark = meter::Mark::now();
     if !report.failed.is_empty() {
         fresh::invalidate(store);
-    } else if rewrites || !fresh::exists(store) {
+    } else if rewrites || !fresh::current(store, &outside) {
         // Best effort: without it, the repo only counts as changed.
-        let _ = fresh::write(store);
+        let _ = fresh::write(store, &outside);
     }
     mark.record("write.snapshot");
     report.write_ms = ms(t3);

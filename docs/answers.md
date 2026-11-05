@@ -170,8 +170,10 @@ own (over MCP, a search's hits are text rows there too).
   same way.
 - A cursor records the request, the index generation and HEAD of every repo the answer read, and a hash of the rows
   delivered. If any of these changed, it is refused with `stale cursor: …; start again with the original call`.
+  A `find` answer's cursor records only the repos asked about: the rest of the workspace, read for its `declared`
+  statement, holds none of its rows.
 - Over MCP a cursor is a short handle (`kc~1f`) that the server maps to the full cursor, for its last 4096 cursors.
-- Lists that continue: references, a context's callers, callees, members, conformers and table accessors, a
+- Lists that continue: definitions found (`find`), references, a context's callers, callees, members, conformers and table accessors, a
   trace's nodes, impact's `affected`, `coupled` and `cross_repo`, every list of a repo's deploy answer
   (`deploy_chains`, `deployed_by`, `own`, `ci_templates`, `ci_includes`, `ci_skipped`), a path search's paths and
   candidate ends, rename sites, and `search` and `grep-ast` hits.

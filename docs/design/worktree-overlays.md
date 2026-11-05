@@ -5,7 +5,7 @@ its own changes on top of it, and keeps every freshness guarantee a separate ind
 
 ## What exists in 0.5
 
-- One SQLite index per checkout (`<cache>/repos/<name>-<hash>.sqlite`). References are stored unresolved and
+- One SQLite index per checkout (`<tree>/repos/<name>-<hash>.sqlite`, in the build's own part of the cache). References are stored unresolved and
   resolved at query time against the whole index, so an edit to one file never re-extracts another.
 - A new checkout of an indexed repo is seeded with `VACUUM INTO` from the most recently indexed checkout of the same
   origin (`kc_index::seed`). The first sync then hashes every file and extracts only those whose content differs.
@@ -35,7 +35,7 @@ which the clone gets by construction from the existing incremental sync.
 - **Key:** the repository's identity (its normalized origin; without one, its git common directory, which every
   worktree of a checkout shares), the full commit, the build (schema, resolver and extractor versions, as the
   freshness snapshot records them) and the privacy policy's key.
-- **Where:** `<cache>/bases/<name>-<identity hash>-<commit>.sqlite`, with a `.used` access record.
+- **Where:** `<tree>/bases/<name>-<identity hash>-<commit>.sqlite`, with a `.used` access record.
 - **Made from** a checkout whose tree is clean at that commit (`git status --porcelain` empty, untracked files
   included, since they are indexed) right after a sync with no failed reads, by `VACUUM INTO` a temporary file
   renamed into place. `VACUUM INTO` writes a consistent copy while other processes use the source, and leaves no
@@ -139,6 +139,8 @@ Public repositories at pinned commits, cloned into a scratch directory; worktree
 - **State outside per-file facts** carried from the base (meta keys, SDK and SCIP stamps, history tables, derived
   rows): each needs resetting or a key that the worktree's state invalidates. The gate is what finds a missed one.
 - **Derived data is whole-graph:** any change recomputes the ranking and areas per worktree.
-- **First sync reads every file** to hash it: linear in the repository's bytes, small next to extraction.
+- **First sync reads every file** to hash it: linear in the repository's bytes, small next to extraction. Since 0.7
+  the clone keeps the checkout's stat for every file git says is clean and unchanged since the base's commit, so the
+  first sync reads only the others.
 - **Page churn:** the first sync rewrites every `files` row (new stats), so those pages become private; a large
   change rewrites more than its files' share of the index.

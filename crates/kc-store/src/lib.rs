@@ -10,9 +10,11 @@ pub mod ci;
 mod cfml;
 mod csharp;
 pub mod content;
+mod go;
 pub mod db;
 pub mod di;
 pub mod identity;
+mod jvm;
 pub mod limits;
 pub mod locate;
 pub mod manifests;
@@ -40,11 +42,11 @@ use kc_extract::{FileFacts, Lang};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 /// Bumped when query-time resolution changes, so cached derived results (file edges, hotspots, maps) are recomputed.
-pub const RESOLVER_VERSION: u32 = 30;
+pub const RESOLVER_VERSION: u32 = 52;
 
 /// Bumped when the schema changes. An index with an older version is rebuilt from scratch; one with a newer version
 /// (written by a newer build sharing the cache) is refused, not dropped: see [`Store::open`].
-pub const SCHEMA_VERSION: u32 = 21;
+pub const SCHEMA_VERSION: u32 = 25;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -62,7 +64,9 @@ CREATE TABLE IF NOT EXISTS files (
     extractor_version INTEGER NOT NULL,
     parse_errors      INTEGER NOT NULL,
     script            INTEGER NOT NULL DEFAULT 0,
-    lines             INTEGER NOT NULL
+    lines             INTEGER NOT NULL,
+    -- The package the file declares into, as written (`FileFacts::package`): Go's package clause.
+    package           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
@@ -94,7 +98,11 @@ CREATE TABLE IF NOT EXISTS symbols (
     -- for none), and the most &&/|| operators in one branch condition with that condition's line.
     bumps       TEXT,
     cond_ops    INTEGER NOT NULL DEFAULT 0,
-    cond_line   INTEGER
+    cond_line   INTEGER,
+    -- For a declaration inside a function body (TypeScript): the lines of the innermost body holding it, where alone
+    -- its name can be used; NULL at module and type level.
+    scope_start INTEGER,
+    scope_end   INTEGER
 );
 CREATE INDEX IF NOT EXISTS symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
@@ -176,6 +184,15 @@ CREATE TABLE IF NOT EXISTS import_bindings (
     line    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS import_bindings_file ON import_bindings(file_id);
+
+-- Modules a TypeScript file augments (`declare module 'pkg' { … }`): the declarations in it are the package's
+-- module's too.
+CREATE TABLE IF NOT EXISTS module_augments (
+    file_id INTEGER NOT NULL,
+    module  TEXT NOT NULL,
+    line    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS module_augments_file ON module_augments(file_id);
 
 -- A TypeScript project configuration's module resolution settings (`kc_extract::TsConfig`, as JSON).
 CREATE TABLE IF NOT EXISTS ts_configs (
@@ -391,6 +408,23 @@ CREATE TABLE IF NOT EXISTS file_keys (
     summary TEXT NOT NULL
 );
 
+-- Per file, its surface key (see `surface_key`) and the content hash it was computed for. A key counts only while the
+-- file still has that hash: a build that doesn't keep this table, sharing the cache, can't leave a stale key behind.
+CREATE TABLE IF NOT EXISTS file_surface (
+    file_id INTEGER PRIMARY KEY,
+    hash    TEXT NOT NULL,
+    key     TEXT NOT NULL
+);
+
+-- Per sync that moved the generation (`tree_gen`): the one it moved from, and the reference names whose resolution
+-- the sync may have changed, as a JSON array; NULL when it may have changed any (see `Store::ref_graph`). Only the
+-- latest entries are kept. A generation moved without an entry (a SCIP ingest, an older build) breaks the chain.
+CREATE TABLE IF NOT EXISTS graph_log (
+    gen   TEXT PRIMARY KEY,
+    prev  TEXT NOT NULL,
+    names TEXT
+);
+
 -- Results derived from the whole index (hotspots, key types), cached until the index changes.
 CREATE TABLE IF NOT EXISTS derived (
     key  TEXT PRIMARY KEY,
@@ -473,12 +507,44 @@ pub struct FileRecord<'a> {
     pub hash: &'a str,
     pub lines: u32,
     pub facts: &'a FileFacts,
+    /// What its rows need beyond the facts: [`Prepared::of`] them.
+    pub prepared: &'a Prepared,
+}
+
+/// The parts of a file's rows computed from its facts alone: its `locate` document, its symbols' FTS tokens and its
+/// summary key. One thread writes an index while several parse, so the parse workers compute these and the writer
+/// only inserts them.
+pub struct Prepared {
+    /// `None` for a file `locate` never reads as a document (see [`Batch::put`]).
+    document: Option<([String; 4], i64)>,
+    /// Per symbol, in order.
+    tokens: Vec<String>,
+    summary: String,
+    /// Its [`surface_key`]: whether a sync changed more of it than its references.
+    surface: String,
+}
+
+impl Prepared {
+    pub fn of(path: &str, lang: Lang, facts: &FileFacts) -> Prepared {
+        // A config file read only for its hosts stays the text document `locate` read it as before (see
+        // `kc_index::textdocs`).
+        let document = (lang != Lang::HostConfig).then(|| locate::file_document(path, facts));
+        Prepared { document, tokens: facts.symbols.iter().map(|s| name_tokens(&s.name)).collect(), summary: summary_key(lang, facts), surface: surface_key(lang, facts, false) }
+    }
 }
 
 /// A repo's index. Reads made through [`Store::conn`] while a snapshot is held (see [`Store::begin_snapshot`]) all see
 /// one committed state of the index, whatever another process writes meanwhile.
 /// Each connection's page cache, in KiB: queries touch little, and the MCP server may hold several connections.
 pub const CACHE_KIB: i64 = 2048;
+
+/// The page cache of a write batch, in KiB (see [`Store::batch`]). On cold indexes of public repos of 550–2,300 files,
+/// 16 MiB took 6–14% off the writer's instructions (inserts and commit) for 11–22 MB more peak memory; 64 MiB saved
+/// at most a few points more, for 27–60 MB more.
+const BATCH_CACHE_KIB: i64 = 16 * 1024;
+
+/// Prepared statements each connection keeps: every statement a sync writes with, with room to spare.
+const STATEMENT_CACHE: usize = 64;
 
 pub struct Store {
     conn: Connection,
@@ -587,6 +653,14 @@ fn set_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+/// Device, inode and creation time of the file at `path` (0 where the file system keeps none); `None` when there is none.
+fn file_identity(path: &Path) -> Option<(u64, u64, u128)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    let created = m.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Some((m.dev(), m.ino(), created))
+}
+
 /// Opens a read transaction on `conn` and takes its snapshot (a deferred transaction takes it at its first read).
 fn begin_snapshot(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN DEFERRED")?;
@@ -646,12 +720,25 @@ impl Store {
     }
 
     /// Whether opening this index would create or migrate its schema. Does not write to the file.
+    ///
+    /// A file found at this build's schema stays at it: only an older schema is ever rebuilt, and each schema has its
+    /// own part of the cache, so no other build rewrites it. This process remembers such files by identity (device,
+    /// inode, creation time; a file recreated is another), and finds them current again without opening a connection:
+    /// a server opened one per repo per query for this.
     pub fn needs_migration(path: &Path) -> Result<bool> {
-        if !path.exists() {
-            return Ok(true);
+        static CURRENT: std::sync::Mutex<Option<std::collections::HashSet<(u64, u64, u128)>>> = std::sync::Mutex::new(None);
+        let Some(id) = file_identity(path) else { return Ok(true) };
+        let known = |id| CURRENT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|k| k.contains(&id));
+        if id.2 != 0 && known(id) {
+            return Ok(false);
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        Ok(schema_state(&conn)? != Schema::Current)
+        let current = schema_state(&conn)? == Schema::Current;
+        // Without a creation time, a file recreated at once could get the inode just freed: not remembered.
+        if current && id.2 != 0 {
+            CURRENT.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(id);
+        }
+        Ok(!current)
     }
 
     pub fn open(path: &Path) -> Result<Store> {
@@ -662,6 +749,9 @@ impl Store {
         // Another process (the MCP server, a CLI query) may hold the index for a moment: opening while it checkpoints
         // or closes its WAL is briefly busy, so wait rather than fail.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // Writing a file's facts uses about 30 statements (see [`Batch::put`]). With rusqlite's default of 16 cached
+        // statements, the least recently used were evicted on every file and prepared again for the next.
+        conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
         // A 2 MB page cache per connection: queries touch little, and the MCP server may hold several connections.
         conn.execute_batch(&format!("PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -{CACHE_KIB};"))?;
         set_wal(&conn)?;
@@ -855,7 +945,60 @@ impl Store {
     pub fn ref_graph(&self) -> Result<rank::RefGraph> {
         let generation = self.generation()?;
         let _turn = rank::Turn::take(self.conn.path().unwrap_or_default(), &generation);
-        self.derived(&format!("ref_graph:{}", rank::RANK_VERSION), &generation, || rank::ref_graph(&self.conn))
+        let key = format!("ref_graph:{}", rank::RANK_VERSION);
+        self.derived(&key, &generation, || {
+            let Some(graph) = self.ref_graph_updated(&key, &generation)? else { return rank::ref_graph(&self.conn) };
+            // Set by the tests (and by hand, to check a repo): the updated graph must be the one built afresh.
+            if std::env::var_os("KNOWCODE_TEST_GRAPH_CHECK").is_some() {
+                let full = rank::ref_graph(&self.conn)?;
+                anyhow::ensure!(
+                    serde_json::to_string(&graph)? == serde_json::to_string(&full)?,
+                    "the updated reference graph differs from the one built afresh at {generation}"
+                );
+            }
+            Ok(graph)
+        })
+    }
+
+    /// The graph cached at an earlier generation brought to `generation` (see [`rank::update`]), when every sync since
+    /// logged the names it changed (see [`Batch::set_generation`]); `None` when it has to be built afresh: nothing
+    /// cached, another resolver, a sync that may have changed any name, a generation moved without a log entry, or
+    /// SCIP facts, which match definitions by line in any file.
+    fn ref_graph_updated(&self, key: &str, generation: &str) -> Result<Option<rank::RefGraph>> {
+        let Some((cached, graph)) = self.derived_latest::<rank::RefGraph>(key)? else { return Ok(None) };
+        let (Some((from, from_resolver)), Some((to, to_resolver))) = (cached.rsplit_once('|'), generation.rsplit_once('|')) else {
+            return Ok(None);
+        };
+        if from_resolver != to_resolver || self.conn.query_row("SELECT EXISTS(SELECT 1 FROM scip_files)", [], |r| r.get(0))? {
+            return Ok(None);
+        }
+        let Some(changed) = self.changed_names(from, to)? else { return Ok(None) };
+        rank::update(&self.conn, graph, &changed)
+    }
+
+    /// The names whose resolution the syncs from generation `from` to `to` (`tree_gen` values) may have changed, from
+    /// `graph_log`; `None` when the log doesn't reach back to `from` or a sync on the way may have changed any.
+    fn changed_names(&self, from: &str, to: &str) -> Result<Option<std::collections::BTreeSet<String>>> {
+        let has_log: bool = self.conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'graph_log')", [], |r| r.get(0))?;
+        if !has_log {
+            return Ok(None);
+        }
+        let mut stmt = self.conn.prepare_cached("SELECT prev, names FROM graph_log WHERE gen = ?1")?;
+        let mut names = std::collections::BTreeSet::new();
+        let mut at = to.to_string();
+        for _ in 0..=GRAPH_LOG_KEPT {
+            if at == from {
+                return Ok(Some(names));
+            }
+            let Some((prev, logged)) = stmt.query_row([&at], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))).optional()?
+            else {
+                return Ok(None);
+            };
+            let Some(logged) = logged else { return Ok(None) };
+            names.extend(serde_json::from_str::<Vec<String>>(&logged)?);
+            at = prev;
+        }
+        Ok(None)
     }
 
     /// File ranks for ordering a long answer: PageRank over the reference graph, personalized toward `seeds` (the
@@ -923,16 +1066,35 @@ impl Store {
     /// timeout for another writer: a deferred one that read first could not write once another process committed.
     pub fn batch(&mut self) -> Result<Batch<'_>> {
         let resnap = self.end_snapshot()?;
+        // A cold index writes every page of the file in one transaction. In a query-sized cache the dirty pages spill
+        // to the WAL long before the commit, and the pages a sync keeps changing (each table's last leaf and the
+        // inner pages over it, the FTS segments) are written out again after every few files. A larger cache for the
+        // batch keeps them until the commit writes each once; SQLite takes the pages only as the batch dirties them,
+        // so a small sync costs no more than before. The query-sized cache is back once the batch ends.
+        self.conn.execute_batch(&format!("PRAGMA cache_size = -{BATCH_CACHE_KIB};"))?;
+        let cache = CacheRestore { conn: &self.conn, kib: self.cache_kib.get() };
         let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)?;
         // An index made before the table was: created in place, its files' keys missing (each reads as changed).
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS file_keys (file_id INTEGER PRIMARY KEY, summary TEXT NOT NULL);")?;
-        Ok(Batch { tx, conn: &self.conn, resnap })
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS file_keys (file_id INTEGER PRIMARY KEY, summary TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS file_surface (file_id INTEGER PRIMARY KEY, hash TEXT NOT NULL, key TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS graph_log (gen TEXT PRIMARY KEY, prev TEXT NOT NULL, names TEXT);",
+        )?;
+        Ok(Batch { tx, conn: &self.conn, resnap, change: Default::default(), _cache: cache })
     }
 
     /// Reclaims space after large deletions (for example, a new ignore rule dropping hundreds of files).
     pub fn vacuum(&self) -> Result<()> {
         let resnap = self.end_snapshot()?;
-        self.conn.execute_batch("VACUUM;")?;
+        // VACUUM builds a whole copy of the database in the temp store before writing it back: in memory, under this
+        // connection's `temp_store = MEMORY`, that is the index's size in RAM: re-indexing bitwarden/server after
+        // 1,364 of its files were removed peaked at 426 MB footprint, where a cold index of it peaks at 106 MB (macOS,
+        // `MallocLargeCache=0`). With the copy in a temp file it peaks at 108 MB, for 7% more instructions. The
+        // connection's setting is put back whatever VACUUM returns.
+        self.conn.execute_batch("PRAGMA temp_store = FILE;")?;
+        let vacuumed = self.conn.execute_batch("VACUUM;");
+        self.conn.execute_batch("PRAGMA temp_store = MEMORY;")?;
+        vacuumed?;
         if resnap {
             self.begin_snapshot()?;
         }
@@ -950,11 +1112,43 @@ impl Store {
     }
 }
 
+/// How many syncs `graph_log` remembers: a reference graph older than that is built again in full.
+const GRAPH_LOG_KEPT: i64 = 64;
+
 pub struct Batch<'c> {
     tx: Transaction<'c>,
     conn: &'c Connection,
     /// A snapshot was held before the batch: one is taken again after it commits.
     resnap: bool,
+    /// What the batch changed that the reference graph depends on (see [`Batch::set_generation`]).
+    change: std::cell::RefCell<GraphChange>,
+    /// Declared after `tx`, so the cache shrinks back once the transaction has committed or rolled back.
+    _cache: CacheRestore<'c>,
+}
+
+/// What a batch changed that resolving references depends on: the names whose resolution it may have changed, or
+/// `full` when it may have changed any. Only a batch that changed no file's surface (see [`surface_key`]), added or
+/// removed no file and changed at most `limit` files names them: past that, collecting stops.
+#[derive(Default)]
+struct GraphChange {
+    full: bool,
+    files: usize,
+    /// How many files a batch may change and still name them: 50, or 5% of the files when that is more.
+    limit: Option<usize>,
+    names: std::collections::BTreeSet<String>,
+}
+
+/// Sets a connection's page cache back to `kib` KiB when dropped (see [`Store::batch`]).
+struct CacheRestore<'c> {
+    conn: &'c Connection,
+    kib: i64,
+}
+
+impl Drop for CacheRestore<'_> {
+    fn drop(&mut self) {
+        // Best effort: on failure the connection keeps the batch's cache, which costs memory, not answers.
+        let _ = self.conn.execute_batch(&format!("PRAGMA cache_size = -{};", self.kib));
+    }
 }
 
 impl Batch<'_> {
@@ -974,7 +1168,71 @@ impl Batch<'_> {
     /// Resolves what the DI factories whose type only the repo's declarations tell make (see [`di::resolve_made`]):
     /// after the files changed, since a declaration in any file may change the answer.
     pub fn resolve_di_factories(&self) -> Result<()> {
-        di::resolve_made(&self.tx)
+        di::resolve_made(&self.tx)?;
+        // What factories make is read by resolution in every file: when it changed since the last sync, any name's
+        // resolution may have.
+        let digest = di::made_digest(&self.tx)?;
+        let before: Option<String> =
+            self.tx.query_row("SELECT value FROM meta WHERE key = 'di.made_digest'", [], |r| r.get(0)).optional()?;
+        if before.as_deref() != Some(digest.as_str()) {
+            self.change.borrow_mut().full = true;
+            self.set_meta("di.made_digest", &digest)?;
+        }
+        Ok(())
+    }
+
+    /// Moves the index generation to `generation`, logging what the batch changed for resolution (see `graph_log`).
+    pub fn set_generation(&self, generation: &str) -> Result<()> {
+        let prev: String = self
+            .tx
+            .query_row("SELECT value FROM meta WHERE key = 'tree_gen'", [], |r| r.get(0))
+            .optional()?
+            .unwrap_or_default();
+        self.set_meta("tree_gen", generation)?;
+        let change = self.change.borrow();
+        let names = (!change.full).then(|| serde_json::to_string(&change.names)).transpose()?;
+        self.tx.execute("INSERT OR REPLACE INTO graph_log(gen, prev, names) VALUES (?1, ?2, ?3)", params![generation, prev, names])?;
+        self.tx.execute(&format!("DELETE FROM graph_log WHERE rowid <= (SELECT MAX(rowid) FROM graph_log) - {GRAPH_LOG_KEPT}"), [])?;
+        Ok(())
+    }
+
+    /// Notes a file about to be put: an existing file whose surface key holds adds the names of the references it had
+    /// and has; anything else makes the change `full`.
+    fn note_put(&self, existing: Option<i64>, rec: &FileRecord) -> Result<()> {
+        let mut change = self.change.borrow_mut();
+        if change.full {
+            return Ok(());
+        }
+        let Some(id) = existing else {
+            change.full = true;
+            change.names.clear();
+            return Ok(());
+        };
+        change.files += 1;
+        if change.limit.is_none() {
+            let files: i64 = self.tx.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+            change.limit = Some((files as usize / 20).max(50));
+        }
+        let same: bool = change.files <= change.limit.unwrap_or(0)
+            && self
+                .tx
+                .prepare_cached(
+                    "SELECT s.hash = f.hash AND s.key = ?2 FROM files f JOIN file_surface s ON s.file_id = f.id WHERE f.id = ?1",
+                )?
+                .query_row(params![id, rec.prepared.surface], |r| r.get(0))
+                .optional()?
+                .unwrap_or(false);
+        if !same {
+            change.full = true;
+            change.names.clear();
+            return Ok(());
+        }
+        let mut stmt = self.tx.prepare_cached("SELECT DISTINCT name FROM refs WHERE file_id = ?1")?;
+        for name in stmt.query_map([id], |r| r.get::<_, String>(0))? {
+            change.names.insert(name?);
+        }
+        change.names.extend(rec.facts.refs.iter().map(|r| r.name.clone()));
+        Ok(())
     }
 
     /// Replaces the stored SCIP facts (see [`scip`]).
@@ -1019,8 +1277,14 @@ impl Batch<'_> {
     }
 
     pub fn remove(&self, id: i64) -> Result<()> {
+        {
+            let mut change = self.change.borrow_mut();
+            change.full = true;
+            change.names.clear();
+        }
         self.clear_facts(id)?;
         self.tx.prepare_cached("DELETE FROM file_keys WHERE file_id = ?1")?.execute([id])?;
+        self.tx.prepare_cached("DELETE FROM file_surface WHERE file_id = ?1")?.execute([id])?;
         self.tx.prepare_cached("DELETE FROM files WHERE id = ?1")?.execute([id])?;
         Ok(())
     }
@@ -1035,6 +1299,7 @@ impl Batch<'_> {
             "DELETE FROM imports WHERE file_id = ?1",
             "DELETE FROM global_usings WHERE file_id = ?1",
             "DELETE FROM import_bindings WHERE file_id = ?1",
+            "DELETE FROM module_augments WHERE file_id = ?1",
             "DELETE FROM ts_configs WHERE file_id = ?1",
             "DELETE FROM packages WHERE file_id = ?1",
             "DELETE FROM package_targets WHERE file_id = ?1",
@@ -1060,13 +1325,15 @@ impl Batch<'_> {
     pub fn put(&self, rec: &FileRecord) -> Result<bool> {
         let existing: Option<i64> =
             self.tx.prepare_cached("SELECT id FROM files WHERE path = ?1")?.query_row([rec.path], |r| r.get(0)).optional()?;
+        // Before its rows are replaced: the references it had count.
+        self.note_put(existing, rec)?;
         let file_id = match existing {
             Some(id) => {
                 self.clear_facts(id)?;
                 self.tx
                     .prepare_cached(
                         "UPDATE files SET lang = ?2, mtime_ns = ?3, size = ?4, hash = ?5, extractor_version = ?6,
-                         parse_errors = ?7, lines = ?8, script = ?9 WHERE id = ?1",
+                         parse_errors = ?7, lines = ?8, script = ?9, package = ?10 WHERE id = ?1",
                     )?
                     .execute(params![
                         id,
@@ -1077,15 +1344,16 @@ impl Batch<'_> {
                         rec.lang.extractor_version(),
                         rec.facts.parse_errors,
                         rec.lines,
-                        rec.facts.script
+                        rec.facts.script,
+                        rec.facts.package
                     ])?;
                 id
             }
             None => {
                 self.tx
                     .prepare_cached(
-                        "INSERT INTO files(path, lang, mtime_ns, size, hash, extractor_version, parse_errors, lines, script)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        "INSERT INTO files(path, lang, mtime_ns, size, hash, extractor_version, parse_errors, lines, script, package)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     )?
                     .execute(params![
                         rec.path,
@@ -1096,7 +1364,8 @@ impl Batch<'_> {
                         rec.lang.extractor_version(),
                         rec.facts.parse_errors,
                         rec.lines,
-                        rec.facts.script
+                        rec.facts.script,
+                        rec.facts.package
                     ])?;
                 self.tx.last_insert_rowid()
             }
@@ -1106,8 +1375,8 @@ impl Batch<'_> {
         let mut sym_stmt = self.tx.prepare_cached(
             "INSERT INTO symbols(file_id, parent_id, name, kind, container, signature, doc, attrs, tags, start_line,
              end_line, start_byte, end_byte, complexity, type_name, nesting, min_args, max_args, lambda_types, bumps, cond_ops, cond_line,
-             param_types)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+             param_types, scope_start, scope_end)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         )?;
         let mut fts_stmt = self.tx.prepare_cached("INSERT INTO symbols_fts(rowid, tokens) VALUES (?1, ?2)")?;
         for (i, s) in rec.facts.symbols.iter().enumerate() {
@@ -1135,16 +1404,15 @@ impl Batch<'_> {
                 (!s.bumps.is_empty()).then(|| s.bumps.iter().map(|(a, b)| format!("{a}-{b}")).collect::<Vec<_>>().join(",")),
                 s.cond_ops,
                 (s.cond_ops > 0).then_some(s.cond_line),
-                rec.facts.param_types.get(&i)
+                rec.facts.param_types.get(&i),
+                s.scope.map(|r| r.0),
+                s.scope.map(|r| r.1)
             ])?;
             let id = self.tx.last_insert_rowid();
-            fts_stmt.execute(params![id, name_tokens(&s.name)])?;
+            fts_stmt.execute(params![id, rec.prepared.tokens[i]])?;
             ids.push(id);
         }
-        // A config file read only for its hosts stays the text document `locate` read it as before (see
-        // `kc_index::textdocs`).
-        if rec.lang != Lang::HostConfig {
-            let (fields, len) = locate::file_document(rec.path, rec.facts);
+        if let Some((fields, len)) = &rec.prepared.document {
             self.tx
                 .prepare_cached("INSERT INTO files_fts(rowid, path, names, docs, refs, len) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?
                 .execute(params![file_id, fields[0], fields[1], fields[2], fields[3], len])?;
@@ -1180,6 +1448,10 @@ impl Batch<'_> {
         let mut imp_stmt = self.tx.prepare_cached("INSERT INTO imports(file_id, module, line) VALUES (?1, ?2, ?3)")?;
         for i in &rec.facts.imports {
             imp_stmt.execute(params![file_id, i.module, i.line])?;
+        }
+        let mut aug_stmt = self.tx.prepare_cached("INSERT INTO module_augments(file_id, module, line) VALUES (?1, ?2, ?3)")?;
+        for a in &rec.facts.augments {
+            aug_stmt.execute(params![file_id, a.module, a.line])?;
         }
         let mut bind_stmt = self.tx.prepare_cached(
             "INSERT INTO import_bindings(file_id, local, name, module, export, line) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -1296,7 +1568,10 @@ impl Batch<'_> {
                 ])?;
             }
         }
-        let key = summary_key(rec.lang, rec.facts);
+        self.tx
+            .prepare_cached("INSERT OR REPLACE INTO file_surface(file_id, hash, key) VALUES (?1, ?2, ?3)")?
+            .execute(params![file_id, rec.hash, rec.prepared.surface])?;
+        let key = &rec.prepared.summary;
         let old: Option<String> = match existing {
             Some(_) => self.tx.prepare_cached("SELECT summary FROM file_keys WHERE file_id = ?1")?.query_row([file_id], |r| r.get(0)).optional()?,
             None => None,
@@ -1328,6 +1603,8 @@ pub fn summary_key(lang: Lang, facts: &FileFacts) -> String {
         refs,
         relations,
         imports,
+        // Read by TypeScript resolution only (`ts::Modules`), never from the summary.
+        augments: _,
         global_usings: _,
         bindings,
         ts_config,
@@ -1346,6 +1623,8 @@ pub fn summary_key(lang: Lang, facts: &FileFacts) -> String {
         param_types: _,
         parse_errors: _,
         script,
+        // Read by resolution per repo (a Go file's package), never from the summary.
+        package: _,
     } = facts;
     let symbols: Vec<_> = symbols
         .iter()
@@ -1371,8 +1650,9 @@ pub fn summary_key(lang: Lang, facts: &FileFacts) -> String {
                 type_name: _,
                 arity: _,
                 lambda_types: _,
+                scope,
             } = s;
-            (parent, name, kind, container, signature, attrs, tags, start_line, end_line)
+            (parent, name, kind, container, signature, attrs, tags, start_line, end_line, scope)
         })
         .collect();
     let refs: Vec<_> = refs
@@ -1391,6 +1671,145 @@ pub fn summary_key(lang: Lang, facts: &FileFacts) -> String {
         &(symbols, refs, relations, imports, bindings, ts_config, packages, http_routes, constants, ng, di, db, bus, ansible, script, hosts),
     );
     h.finalize().to_hex()[..32].to_string()
+}
+
+/// A fingerprint of what of a file another file's resolution can read: every fact except its references (with the
+/// per-reference argument types, assignments and usages), and of symbols everything but the doc comment and the body
+/// metrics (complexity, nesting, bumps, conditions). With `positions` false, lines, columns and byte offsets count only
+/// by their order within the file, so an edit inside a body that only moves later declarations keeps the key.
+/// While every file's key holds, a sync changed only references, and only the names those references use resolve
+/// differently (see `knowcode-planning/perf-hunt/ref-graph-m1-plan.md`).
+pub fn surface_key(lang: Lang, facts: &FileFacts, positions: bool) -> String {
+    // Destructured without `..`: a fact added to these types fails to compile here until it is either keyed or
+    // shown to be read only with its file's references.
+    let FileFacts {
+        unsupported,
+        symbols,
+        refs: _,
+        relations,
+        imports,
+        augments,
+        global_usings,
+        bindings,
+        ts_config,
+        packages,
+        http_routes,
+        hosts,
+        constants,
+        ng,
+        di,
+        db,
+        bus,
+        ansible,
+        arg_types: _,
+        assigns: _,
+        usages: _,
+        param_types,
+        parse_errors,
+        script,
+        package,
+    } = facts;
+    let symbols: Vec<_> = symbols
+        .iter()
+        .map(|s| {
+            let kc_extract::Symbol {
+                parent,
+                name,
+                kind,
+                container,
+                signature,
+                doc: _,
+                attrs,
+                tags,
+                start_line,
+                end_line,
+                start_byte,
+                end_byte,
+                complexity: _,
+                nesting: _,
+                bumps: _,
+                cond_ops: _,
+                cond_line: _,
+                type_name,
+                arity,
+                lambda_types,
+                scope,
+            } = s;
+            (parent, name, kind, container, signature, attrs, tags, (start_line, end_line, start_byte, end_byte), type_name, arity, lambda_types, scope)
+        })
+        .collect();
+    let mut v = serde_json::to_value((
+        symbols,
+        (unsupported, relations, imports, augments, global_usings, bindings, ts_config, packages, http_routes, hosts),
+        (constants, ng, di, db, bus, ansible, param_types, parse_errors, script, package),
+    ))
+    .unwrap_or_default();
+    if !positions {
+        strip_positions(&mut v);
+    }
+    let mut h = blake3::Hasher::new();
+    h.update(lang.as_str().as_bytes());
+    h.update(b"\0");
+    let _ = serde_json::to_writer(&mut h, &v);
+    h.finalize().to_hex()[..32].to_string()
+}
+
+/// Replaces every position in a serialized fact by its rank among the file's positions of that unit (lines, columns,
+/// byte offsets; equal values keep equal ranks). Any number in a field named `line` or `col` is taken for a position:
+/// a fact field so named that isn't one must be renamed, or its changes would count only by order. Resolution compares a file's positions only with each other (a
+/// definition inside a namespace's line span, two candidates declared on one line), and those comparisons come out the
+/// same for any edit that keeps the ranks; an edit inside a body moves the declarations after it all alike.
+fn strip_positions(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+    // The positions, by unit: 0 lines, 1 columns, 2 byte offsets.
+    fn each(v: &mut Value, f: &mut dyn FnMut(usize, &mut Value)) {
+        if let Value::Array(top) = v
+            && let Some(Value::Array(symbols)) = top.first_mut()
+        {
+            for s in symbols {
+                if let Value::Array(fields) = s
+                    && let Some(Value::Array(range)) = fields.get_mut(7)
+                {
+                    for (i, x) in range.iter_mut().enumerate() {
+                        f(if i < 2 { 0 } else { 2 }, x);
+                    }
+                }
+            }
+        }
+        fn walk(v: &mut Value, f: &mut dyn FnMut(usize, &mut Value)) {
+            match v {
+                Value::Object(m) => {
+                    for (k, x) in m.iter_mut() {
+                        match k.as_str() {
+                            "line" => f(0, x),
+                            "col" => f(1, x),
+                            _ => walk(x, f),
+                        }
+                    }
+                }
+                Value::Array(a) => a.iter_mut().for_each(|x| walk(x, f)),
+                _ => {}
+            }
+        }
+        walk(v, f);
+    }
+    let mut ranks: [BTreeMap<u64, u64>; 3] = Default::default();
+    each(v, &mut |unit, x| {
+        if let Some(n) = x.as_u64() {
+            ranks[unit].insert(n, 0);
+        }
+    });
+    for r in &mut ranks {
+        for (i, rank) in r.values_mut().enumerate() {
+            *rank = i as u64;
+        }
+    }
+    each(v, &mut |unit, x| {
+        if let Some(n) = x.as_u64() {
+            *x = Value::from(ranks[unit][&n]);
+        }
+    });
 }
 
 /// Splits an identifier into lowercase words: `loadHTTPSettings2` gives `load`, `http`, `settings`, `2`.
@@ -1455,6 +1874,21 @@ mod tests {
         store.limit_cache(128).unwrap();
         assert_eq!(size(store.side().unwrap()), -128);
         store.end_snapshot().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vacuum_puts_the_memory_temp_store_back() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-vacuum-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::open(&dir.join("index.sqlite")).unwrap();
+        store.set_meta("root", "/x").unwrap();
+        // 2 is MEMORY: VACUUM ran with the copy in a file, and later sorts and temp b-trees are in memory again.
+        let temp_store = || store.conn().query_row("PRAGMA temp_store", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(temp_store(), 2);
+        store.vacuum().unwrap();
+        assert_eq!(temp_store(), 2);
+        assert_eq!(store.meta("root").unwrap().as_deref(), Some("/x"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1536,6 +1970,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// An index found current is found so again without a connection; one recreated at the same path is a new file,
+    /// checked afresh.
+    #[test]
+    fn a_current_index_is_remembered_and_a_recreated_one_checked_again() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-current-{}", std::process::id()));
+        let path = dir.join("i.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Store::needs_migration(&path).unwrap(), "no file yet");
+        drop(Store::open(&path).unwrap());
+        assert!(!Store::needs_migration(&path).unwrap());
+        assert!(!Store::needs_migration(&path).unwrap(), "remembered");
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        let raw = Connection::open(&path).unwrap();
+        raw.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1');").unwrap();
+        drop(raw);
+        assert!(Store::needs_migration(&path).unwrap(), "a new file at the same path, of an older schema");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Opening never destroys an index another build can read: a newer schema is refused and left as it was; only an
     /// older one is rebuilt, tables made outside the schema included.
     #[test]
@@ -1571,6 +2026,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// An index from before declarations had scopes (schema 24, its symbols without `scope_start`/`scope_end`) is
+    /// rebuilt as this schema's, so a TypeScript local's scope is read wherever it is resolved.
+    #[test]
+    fn a_schema_24_index_without_scopes_is_rebuilt_with_them() {
+        let dir = std::env::temp_dir().join(format!("knowcode-test-schema24-{}", std::process::id()));
+        let path = dir.join("i.sqlite");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let store = Store::open(&path).unwrap();
+            store.conn().execute_batch("ALTER TABLE symbols DROP COLUMN scope_start; ALTER TABLE symbols DROP COLUMN scope_end;").unwrap();
+            store.set_meta("schema_version", "24").unwrap();
+            store.set_meta("root", "/old").unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.meta("schema_version").unwrap(), Some(SCHEMA_VERSION.to_string()));
+        assert_eq!(store.meta("root").unwrap(), None, "rebuilt from scratch");
+        let cols: Vec<String> =
+            store.conn().prepare("SELECT name FROM pragma_table_info('symbols')").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert!(cols.iter().any(|c| c == "scope_start") && cols.iter().any(|c| c == "scope_end"), "{cols:?}");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The summary key moves with every edit that can change the workspace summary, and only with those: an edit
     /// inside a body keeps it, one adding a reference, moving a line or renaming changes it.
     #[test]
@@ -1588,6 +2066,38 @@ mod tests {
             ("a new member", base.replace("public class A\n{\n", "public class A\n{\n    public int P { get; set; }\n")),
         ] {
             assert_ne!(key(&edited), k, "{what}");
+        }
+    }
+
+    #[test]
+    fn invariant_the_surface_key_ignores_only_references_and_positions() {
+        let key = |src: &str, positions: bool| surface_key(Lang::CSharp, &kc_extract::extract_file(Lang::CSharp, "a.cs", src), positions);
+        let base = "namespace N;\npublic class A\n{\n    public int F(int x)\n    {\n        return x + 1;\n    }\n    public string G() => \"g\";\n}\n";
+        let (strict, relaxed) = (key(base, true), key(base, false));
+        // Inside a body: new references, and a body growing by a line, keep the key without positions. Both move the
+        // byte offsets of the declarations after them, which the key with positions keeps.
+        for edited in [
+            base.replace("return x + 1;", "return Other.H(x) + Y.Z;"),
+            base.replace("return x + 1;", "var y = x;\n        return y + 1;"),
+        ] {
+            assert_eq!(key(&edited, false), relaxed);
+            assert_ne!(key(&edited, true), strict);
+        }
+        // A body changed in place, its length kept, keeps both.
+        let same = base.replace("x + 1", "x - 1");
+        assert_eq!((key(&same, true), key(&same, false)), (strict, relaxed.clone()));
+        for (what, edited) in [
+            ("a new member", base.replace("public string G()", "public int P { get; set; }\n    public string G()")),
+            ("a changed return type", base.replace("public int F", "public long F")),
+            ("a changed parameter type", base.replace("F(int x)", "F(long x)")),
+            ("a renamed method", base.replace("F(int x)", "K(int x)")),
+            ("a new base type", base.replace("public class A", "public class A : B")),
+            ("a new using", format!("using Other;\n{base}")),
+            // Resolution counts candidates declared on one line as one declaration.
+            ("two members joined on one line", base.replace("    }\n    public string G()", "    } public string G()")),
+            ("reordered members", base.replace("    public string G() => \"g\";\n", "").replace("public class A\n{\n", "public class A\n{\n    public string G() => \"g\";\n")),
+        ] {
+            assert_ne!(key(&edited, false), relaxed, "{what}");
         }
     }
 
@@ -1637,7 +2147,8 @@ mod tests {
         assert!(!facts.unsupported.is_empty() && !facts.ansible.is_empty(), "{facts:?}");
         let put = |store: &mut Store, facts: &FileFacts| {
             let b = store.batch().unwrap();
-            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts }).unwrap();
+            let prepared = Prepared::of("site.yml", Lang::Ansible, facts);
+            b.put(&FileRecord { path: "site.yml", lang: Lang::Ansible, mtime_ns: 1, size: 1, hash: "h", lines: 5, facts, prepared: &prepared }).unwrap();
             b.commit().unwrap();
         };
         put(&mut store, &facts);
@@ -1670,7 +2181,8 @@ mod tests {
         let src = "public static class Api\n{\n    public static void Map(WebApplication app)\n    {\n        app.MapGet(Paths.Item(), GetItem);\n        app.MapGet(\"/items\", ListItems);\n    }\n    static string GetItem(int id) => \"\";\n    static string ListItems() => \"\";\n}\n";
         let facts = kc_extract::extract_file(Lang::CSharp, "Api.cs", src);
         let b = store.batch().unwrap();
-        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts }).unwrap();
+        let prepared = Prepared::of("Api.cs", Lang::CSharp, &facts);
+        b.put(&FileRecord { path: "Api.cs", lang: Lang::CSharp, mtime_ns: 1, size: 1, hash: "h", lines: 10, facts: &facts, prepared: &prepared }).unwrap();
         b.commit().unwrap();
         let conn = store.conn();
         let stored: Vec<(String, String, u32, Option<String>)> = conn

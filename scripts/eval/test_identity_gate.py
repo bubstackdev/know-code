@@ -57,6 +57,25 @@ class RowTest(unittest.TestCase):
         # Comments and attributes naming it come before the name.
         self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 6, 'load'), 8)
         self.assertEqual(identity_gate.name_line(SOURCES['b.swift'], 9, 'load'), 10)
+
+    def test_a_long_annotation_block_comes_before_the_window(self):
+        # A twelve-line annotation, as kotlinpoet's tests write them, then the declaration.
+        lines = ['  @HasDefaultsAnnotation('] + [f'    o{i} = {i},' for i in range(10)] + ['  )', '  inner class IsAnnotated', '']
+        self.assertEqual(identity_gate.name_line(lines, 1, 'IsAnnotated'), 13)
+        # C# attributes over several lines, then the name.
+        cs = ['[Route("a",', '  Name = "b")]', '[Obsolete]', 'public class Orders {}']
+        self.assertEqual(identity_gate.name_line(cs, 1, 'Orders'), 4)
+        # The declaration on an attribute's own line, or on a multi-line attribute's closing line, isn't skipped.
+        self.assertEqual(identity_gate.name_line(['@inlinable', '@discardableResult public func f() {}'], 1, 'f'), 2)
+        self.assertEqual(identity_gate.name_line(['@Retention(RUNTIME)', '@interface Marker {}', '', '@Marker int x;'], 1, 'Marker'), 2)
+        self.assertEqual(identity_gate.name_line(['@Suite(', '  .serialized', ') struct Tests {'], 1, 'Tests'), 3)
+        # No block: as before, the name's line in the window from the target's line.
+        self.assertEqual(identity_gate.name_line(['fun load() {}', 'fun load2() {}'], 1, 'load'), 1)
+
+    def test_a_go_embedded_pointer_field_is_not_a_comment(self):
+        lines = ['type Request struct {', '\t*Base', '\tBase int', '}']
+        self.assertEqual(identity_gate.name_line(lines, 2, 'Base', identity_gate.comment_pattern('shop/request.go')), 2)
+        self.assertEqual(identity_gate.name_line(lines, 2, 'Base', identity_gate.comment_pattern('Shop/Request.swift')), 3)
         self.assertTrue(identity_gate.target_matches(dict(file='b.swift', line=4), label(locs=[['b.swift', 5]]), lines_of))
         self.assertFalse(identity_gate.target_matches(dict(file='b.swift', line=2), label(locs=[['b.swift', 5]]), lines_of))
         self.assertFalse(identity_gate.target_matches(dict(file='c.swift', line=2), label(), lines_of))
