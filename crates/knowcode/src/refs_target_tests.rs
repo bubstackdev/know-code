@@ -155,3 +155,25 @@ fn a_placed_partial_types_other_parts_rows_are_its_own() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// `Handler` and `Handler<T>` share a qualified name and a namespace, yet are two types: asked by the place of one, a
+/// use of the other is elsewhere.
+#[test]
+fn a_placed_types_other_arity_is_elsewhere() {
+    let cache = test_cache();
+    let base = cache.dir("refs-target-arity");
+    let files: &[(&str, &str)] = &[
+        ("src/Shop.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"),
+        ("src/Handler.cs", "namespace Shop;\npublic interface IHandler { }\n"),
+        ("src/HandlerOfT.cs", "namespace Shop;\npublic interface IHandler<T> { }\n"),
+        ("src/Uses.cs", "namespace Shop;\npublic class Plain : IHandler { }\npublic class Typed : IHandler<int> { }\n"),
+    ];
+    let root = repo(&base, "shop", files);
+    let scope = Scope { repos: vec![root.clone()], no_sync: false };
+    for (place, own, other) in [("src/Handler.cs:2", 2, "src/HandlerOfT.cs"), ("src/HandlerOfT.cs:2", 3, "src/Handler.cs")] {
+        let env = ops::refs(place, &[], 50, &scope).unwrap().env;
+        assert_eq!(lines(&env, "items"), [own], "{place}: {env}");
+        assert_eq!(env["elsewhere"][0]["file"].as_str(), Some(other), "{place}: {env}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

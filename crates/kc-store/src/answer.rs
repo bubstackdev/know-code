@@ -373,7 +373,7 @@ pub struct Evidence {
 
 /// A declaration sharing a reference's name that the reference was resolved past: `target` (its qualified name),
 /// `at` (`file:line`) and `why`, the first check that ruled it out: `kind` (a different kind of declaration),
-/// `arity` (takes another number of arguments), `argument_labels` (Swift labels it doesn't take), `argument_types`,
+/// `arity` (takes another number of arguments, or for a C# type, of type arguments), `argument_labels` (Swift labels it doesn't take), `argument_types`,
 /// `receiver_type` (not a member of the receiver's type or its supertypes), `namespace` (a namespace the file doesn't
 /// see, or not the one its receiver's type is in), `module` (a module the file is neither in nor imports), `project`
 /// (not compiled by the caller's project or one it references), `visibility` (private to its file or script),

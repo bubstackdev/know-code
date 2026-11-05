@@ -4,6 +4,12 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- A C# type reference names the type declaring as many type parameters as it writes type arguments: `IHandler`
+  (and `nameof(IHandler)`) is the non-generic `IHandler`, `IHandler<Command>` and `typeof(IHandler<>)` the generic
+  `IHandler<T>`, where both were candidates (`ambiguous`). Asked by a place, the other arity's uses are in
+  `elsewhere`. C# files are re-extracted on the next query (C# extractor 40). On compare-v1's 106 C# refs questions,
+  precision went from 0.951 (2543/2674) to 0.957 (2543/2656), recall unchanged at 0.889 (2543/2861); on identity-v1's
+  C# labels, 12 type references went from ambiguous to the right exact link, none got worse (exact precision 0.998).
 - `refs` asked by a C# declaration's place no longer lists, as that declaration's own, the uses of another
   declaration with the same qualified name in another namespace or project (two test projects' `DisposeTracker.IsDisposed`);
   they are counted under that declaration in `elsewhere`. A partial type's parts still count as one. On compare-v1's

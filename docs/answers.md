@@ -399,7 +399,7 @@ which it was resolved past and why: its evidence lists `rivals`, each `{target, 
 | `module` | is in a module the file is neither in nor imports |
 | `kind` | is another kind of declaration (a property where a call is made) |
 | `argument_labels` | doesn't take the call's argument labels (Swift) |
-| `arity` | takes another number of arguments |
+| `arity` | takes another number of arguments (a C# type: of type arguments, `Handler` vs `Handler<T>`) |
 | `argument_types` | doesn't take the call's argument types (C#) |
 | `receiver_type` | isn't a member of the receiver's type or its supertypes |
 | `scope` | isn't in the caller's type, file or module where a nearer declaration is |

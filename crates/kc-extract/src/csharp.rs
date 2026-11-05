@@ -21,7 +21,7 @@ use crate::{
     Unsupported,
 };
 
-pub const VERSION: u32 = 39;
+pub const VERSION: u32 = 40;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -2709,34 +2709,42 @@ impl<'a> Cx<'a> {
 
     /// Type references inside a type expression, skipping framework types. `skip_base` leaves out the outermost
     /// name (already recorded as an instantiation). A qualified name (`Models.Domain`) keeps its qualifier as the
-    /// reference's receiver.
+    /// reference's receiver. Each records how many type arguments it writes (`{"g": n}` in `arg_types`; `X<>` and
+    /// `X<,>` count their slots): C# names a generic type only with its arguments, so `Handler` and `Handler<T>` are
+    /// two types (see [`FileFacts::arg_types`]).
     fn type_refs(&mut self, t: Node, skip_base: bool) {
-        let mut stack: Vec<(Node, bool, Option<String>)> = vec![(t, skip_base, None)];
-        while let Some((n, skip, qualifier)) = stack.pop() {
+        let mut stack: Vec<(Node, bool, Option<String>, usize)> = vec![(t, skip_base, None, 0)];
+        while let Some((n, skip, qualifier, arity)) = stack.pop() {
             match n.kind() {
                 "identifier" => {
                     let name = self.text(n);
                     if !skip && !COMMON_TYPES.contains(&name) {
-                        self.add(name.to_string(), qualifier, None, RefKind::TypeRef, n);
+                        self.pending_arg_types = Some(serde_json::json!({ "g": arity }).to_string());
+                        self.add_passing(name.to_string(), qualifier, None, RefKind::TypeRef, n, None);
+                        self.pending_arg_types = None;
                     }
                 }
                 "qualified_name" => {
                     if let Some(name) = n.child_by_field_name("name") {
-                        stack.push((name, skip, type_qualifier(self.src, n)));
+                        stack.push((name, skip, type_qualifier(self.src, n), 0));
                     }
                 }
                 "generic_name" => {
+                    let written = children(n).find(|c| c.kind() == "type_argument_list").map_or(0, |list| {
+                        let named = children(list).filter(|a| a.is_named()).count();
+                        if named > 0 { named } else { children(list).filter(|c| c.kind() == ",").count() + 1 }
+                    });
                     for c in children(n) {
                         if c.kind() == "identifier" {
-                            stack.push((c, skip, qualifier.clone()));
+                            stack.push((c, skip, qualifier.clone(), written));
                         } else {
-                            stack.extend(children(c).filter(|a| a.is_named()).map(|a| (a, false, None)));
+                            stack.extend(children(c).filter(|a| a.is_named()).map(|a| (a, false, None, 0)));
                         }
                     }
                 }
                 // `(string Number, decimal Amount)`: the elements' names aren't types.
-                "tuple_element" => stack.extend(n.child_by_field_name("type").map(|t| (t, skip, None))),
-                _ => stack.extend(children(n).filter(|c| c.is_named()).map(|c| (c, skip, None))),
+                "tuple_element" => stack.extend(n.child_by_field_name("type").map(|t| (t, skip, None, 0))),
+                _ => stack.extend(children(n).filter(|c| c.is_named()).map(|c| (c, skip, None, 0))),
             }
         }
     }
@@ -2890,7 +2898,10 @@ impl<'a> Cx<'a> {
         let name = self.text(e);
         if e.kind() == "identifier" && starts_upper(name) && self.local(name).is_none() {
             let name = name.to_string();
-            self.with_usage("nameof", |cx| cx.add(name, None, None, RefKind::TypeRef, e));
+            // Written without type arguments: a generic type is named only with them (`nameof(List<int>)`).
+            self.pending_arg_types = Some(serde_json::json!({ "g": 0 }).to_string());
+            self.with_usage("nameof", |cx| cx.add_passing(name, None, None, RefKind::TypeRef, e, None));
+            self.pending_arg_types = None;
         }
     }
 
