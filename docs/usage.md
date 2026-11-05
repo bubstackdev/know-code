@@ -44,6 +44,8 @@ command, run `knowcode <command> --help`.
 | The symbols enclosing a `file:line` (a stack frame) | `knowcode at src/app/filter.service.ts:419` | `kc_symbol_at` |
 | Text or regex over every file, ranked definitions first | `knowcode search` | `kc_search` |
 | Code patterns over syntax trees ([ast-grep](https://ast-grep.github.io) patterns) | `knowcode grep-ast 'new HttpClient($$$)' -l cs` | `kc_grep_ast` |
+| A repo's own rules ([ast-grep rule files](https://ast-grep.github.io/reference/yaml.html)), and as a monitor, only the matches since a commit | `knowcode rules --rules lint/ [--new-since main]` | `kc_rules` (the `kc` op `rules`) |
+| One review of a diff: what it changes, the tests to run, files usually changed with it, what depends on it, the rule matches it brings | `knowcode review --diff main [--format sarif]` | `kc_review` (the `kc` op `review`) |
 
 `search` matches per line, like `git grep`. Hits are ranked `def` (the match covers a declared name), `decl`
 (elsewhere on a declaration line), `code`, then `test`, `comment` and `doc`. It stops at 50,000 matching lines,
@@ -54,6 +56,38 @@ always at the same file, and says `capped`.
 `kind:<node kind>` matches every node of a kind and `kind:<node kind>~<regex>` those whose text matches. A pattern
 that doesn't parse alone goes in context with `--selector`:
 `'try { $$$ } catch $$$ { }' --selector catch_clause` finds empty catch blocks.
+
+`rules` runs ast-grep rule files over a repo and prints their matches, with each rule's severity and message; it
+never edits, so a rule with `fix` is refused. A rule matches what the ast-grep command line (0.50) matches on the same
+files: KnowCode reads rule files with the same library, including `inside`/`has`/`precedes`/`follows` with their
+`stopBy`, `all`/`any`/`not`, `matches` with `utils`, `constraints`, `transform` in messages, `files` and `ignores`, and
+`ast-grep-ignore` comments ([eval/rules-v1](../eval/rules-v1/README.md)). Rule languages are `CSharp`, `TypeScript`,
+`Tsx`, `Python`, `Rust`, `Swift`, `Java` and `Go`; JavaScript and Kotlin are refused, since KnowCode parses them
+with other grammars than ast-grep's. A Go call doesn't parse alone as a pattern: give it in context
+(`pattern: {context: "func f() { fmt.Println($$$) }", selector: call_expression}`). `--rules` names rule files or directories of them (relative paths from the repo's root); without it the
+config's `rules.paths` are read. Every file KnowCode lists in the language is read, generated and large ones too.
+Rule files are hostile input when they come with the repo under review: one over 2 MiB, or whose YAML aliases stand
+for over 100,000 nodes, is refused unread, as is one in a part of the repo its privacy file blocks, and the MCP op
+reads rule files only from inside the repo. `--regex RE` runs a line regex instead of rules: each line it matches is a
+match.
+
+With `--new-since REF`, `rules` (or `--regex`) is a monitor: it reports the matches the working tree has that REF
+didn't. A match is
+known by its rule and its matched text, so one that moved or whose file was renamed isn't new; only the files that
+differ from REF are read, in both versions. The base is the monitor's only state: nothing is stored, and it runs only
+when asked. `--format sarif` prints a SARIF 2.1.0 log (locations and messages, no source text) with every match.
+
+`review --diff REF` answers once for the diff from REF (or `working`) to the working tree, where a client would
+otherwise join `impact --diff`, `tests`, `coupled` and `rules`: the changed files with the symbols in their changed
+lines, the tests to run (with their target's command where a manifest declares one), the files that usually change
+with them and weren't changed, what depends on the changed symbols (one hop, by file), the HTTP routes the diff
+removes or changes with the requests in other repos they break, and the repo's rule matches the diff brings. A route's
+old path is read from the changed file's version at REF; a request still answered by a route the repo serves now isn't
+broken. Bus messages and table columns aren't read yet: the `contracts` section says `unsupported`. Each
+section says whether it is whole and how to continue it; the tests are advice, never the only ones to run. The CLI
+prints a markdown comment for a pull request; `--format sarif` prints a SARIF 2.1.0 log, contract breaks as errors
+and possible breaks as warnings; `--json` gives the answer, whose structure [answers.md](answers.md#review) describes.
+`--changes`, `--dependents`, `--tests` and `--missed` set how many of each are listed.
 
 ## Understand a symbol
 
@@ -88,14 +122,15 @@ it shows against the files.
 | --- | --- | --- |
 | What depends on a symbol, a file or a diff, by proximity: `direct` (hop 1), `near` (2), `far` (3+), `test`; plus files history couples to it | `knowcode impact [SYMBOL] \| --file F \| --diff working` | `kc_impact` (topics `kc_impact.crossings`, `kc_impact.history`) |
 | The tests to run, ranked, with reasons and a confidence | `knowcode tests FILE... \| --diff REV` | `kc_tests` |
-| Declared test targets (SwiftPM, .NET test projects, `package.json` test scripts): their tests and how to run them, not ranked | `knowcode test-targets [NAME]` | `kc_test_targets` (the `kc` op `test_targets`) |
+| Declared test targets (SwiftPM, .NET test projects, `package.json` test scripts, Go modules): their tests and how to run them, not ranked | `knowcode test-targets [NAME]` | `kc_test_targets` (the `kc` op `test_targets`) |
 | Files that usually change in the same commits | `knowcode coupled FILE` | `kc_coupled` |
 | Who could review a change | `knowcode reviewers FILE... \| --diff REV` | `kc_reviewers` |
 | Dead-code candidates, `unused` or `possibly unused` with reasons (C#, TypeScript) | `knowcode unused` | `kc_unused` |
 | Every site a rename would edit, with collisions; exits 2 when unsure (C#, TypeScript) | `knowcode rename SYMBOL NEW_NAME` | `kc_rename_preview` |
 
 Proximity is graph distance, not risk. `impact --diff` also reads definitions the change deletes or renames from the
-base commit (`removed`), and warns about usual partners the diff leaves alone (`missed_partners`). `unused` and
+base commit (`removed`), with the C# methods whose parameters it changes (`old_signature`): the code still calling
+them as they were is affected, and `review` lists it with its tests. It warns about usual partners the diff leaves alone (`missed_partners`). `unused` and
 `rename` are previews: nothing is edited.
 
 ## History
@@ -204,7 +239,7 @@ client that loads every schema, and about 1,300 with the plugin's 25 tools in Cl
 
 The separate tools are still there. `KNOWCODE_TOOLS=core` (or `serve --tools core`) advertises the core tools:
 `kc_find`, `kc_locate`, `kc_context`, `kc_refs`, `kc_impact`, `kc_search`, `kc_more` and `kc_help`. `all` advertises
-all 27 tools (every tool but `kc_capabilities` and `kc_test_targets`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
+all 27 tools (every tool but `kc_capabilities`, `kc_test_targets` and `kc_rules`); a comma list adds tools by name (`core,kc_trace,kc_tests`). Under these, a tool left out is still
 documented in `kc_help`, which says it isn't advertised, but can't be called until the server is started with it, and
 answers name the separate tools (`kc_more {cursor: …}`). To keep the separate tools in Claude Code, run
 `KNOWCODE_TOOLS=all knowcode setup claude`; for Codex or Cursor, set `KNOWCODE_TOOLS` in the environment `setup`
@@ -258,10 +293,14 @@ updated from 0.3, which wrote `all` as its default, takes `one` too.
 | `kc_capabilities` | `capabilities` | `kc_capabilities` |
 | `kc_task` | `task` | `kc_task` |
 | `kc_test_targets` | `test-targets` | `kc_test_targets` |
+| `kc_rules` | `rules` | `kc_rules` |
+| `kc_review` | `review` | `kc_review` |
 
 `kc_capabilities` isn't in `all`: it is the `kc` tool's `capabilities` op, the resource `knowcode://capabilities`,
 and `knowcode capabilities`, and `--tools all,kc_capabilities` advertises it. Nor is `kc_test_targets`, read by an
 automated client once per task: it is the `kc` op `test_targets`, and `--tools all,kc_test_targets` advertises it.
+Nor is `kc_rules`, which a pipeline or a client asks for by name: it is the `kc` op `rules`, and `--tools
+all,kc_rules` advertises it. `kc_review` is served the same way: the `kc` op `review`, and `--tools all,kc_review`.
 
 ## Capabilities
 
@@ -361,6 +400,8 @@ record, for durable records; see [answers](answers.md#the-provenance-record)); t
 | `docs` | `--map-budget` |
 | `search` | `-e/--regex`, `-i/--ignore-case`, `-S/--smart-case`, `-w/--word`, `-l/--lang`, `-g/--glob`, `-C/--context`, `-n/--limit`, `--offset`, `--files`, `-a/--all` |
 | `grep-ast` | `-l/--lang`, `--selector`, `--inside`, `--has`, `--not-inside`, `--not-has`, `--text`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
+| `rules` | `--rules`, `--regex`, `--new-since`, `--format`, `-g/--glob`, `-n/--limit`, `--offset`, `-a/--all` |
+| `review` | `--diff`, `--changes`, `--dependents`, `--tests`, `--missed`, `--format` |
 | `tables` | `--all-callers` |
 | `routes`, `events`, `deps` | |
 | `fetch-deps` | `--into DIR` (required), `--dry-run`, `--full`, `--add-root`, `--include-blocked` |

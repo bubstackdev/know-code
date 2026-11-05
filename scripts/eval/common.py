@@ -5,8 +5,12 @@ import math
 import os
 import random
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/: kc_env
+import kc_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 BIN = ROOT / "target" / "release" / "knowcode"
@@ -18,8 +22,13 @@ EVAL_DIR = Path(os.environ.get("KNOWCODE_EVAL_DIR", f"{GITLAB}-eval"))
 
 
 def kc(bin_, args, cache, cwd=None, timeout=600):
-    """Runs knowcode with its own cache directory. Returns (exit code, stdout, stderr)."""
-    env = dict(os.environ, KNOWCODE_CACHE_DIR=str(cache))
+    """Runs knowcode with its own cache directory, and a home, config and data directory of its own beside it
+    (`<cache>-env`) unless the caller set KNOWCODE_CONFIG_DIR or KNOWCODE_DATA_DIR (snapshot.py's query-set config).
+    Returns (exit code, stdout, stderr)."""
+    cache = Path(cache)
+    env = kc_env.knowcode_env(cache.with_name(cache.name + "-env"), cache=cache,
+                              config=os.environ.get("KNOWCODE_CONFIG_DIR") or None,
+                              data=os.environ.get("KNOWCODE_DATA_DIR") or None)
     try:
         out = subprocess.run([str(bin_), *args], env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:

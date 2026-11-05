@@ -212,6 +212,38 @@ fn npm_dependencies_see_exported_members_only() {
 }
 
 #[test]
+fn maven_and_gradle_coordinates_link_repos() {
+    let turn = turn();
+    let base = turn.dir("jvm");
+    // A Gradle library: its `core` project publishes `org.example:core`.
+    let lib = scratch(&base, "lib");
+    std::fs::create_dir_all(lib.join("core/src/main/java/org/example")).unwrap();
+    write(&lib, "settings.gradle.kts", "rootProject.name = \"lib\"\ninclude(\":core\")\n");
+    write(&lib, "core/build.gradle.kts", "group = \"org.example\"\n");
+    write(&lib, "core/src/main/java/org/example/Cart.java", "package org.example;\n\npublic class Cart {}\n");
+    // A Maven app depending on it by those coordinates.
+    let app = scratch(&base, "app");
+    write(
+        &app,
+        "pom.xml",
+        "<project>\n  <groupId>org.example.app</groupId>\n  <artifactId>app</artifactId>\n  <dependencies>\n    <dependency><groupId>org.example</groupId><artifactId>core</artifactId><version>1.0</version></dependency>\n    <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>\n  </dependencies>\n</project>\n",
+    );
+    std::fs::create_dir_all(app.join("src/main/java/org/example/app")).unwrap();
+    write(&app, "src/main/java/org/example/app/App.java", "package org.example.app;\n\nclass App {}\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots = [kc_index::repo_root(&lib).unwrap(), kc_index::repo_root(&app).unwrap()];
+    let mut stores: Vec<_> = roots.iter().map(|r| kc_index::open(r).unwrap()).collect();
+    for (r, s) in roots.iter().zip(stores.iter_mut()) {
+        sync(r, s, &opts).unwrap();
+    }
+    let owners = kc_index::package_owners(&roots).unwrap();
+    let edges = manifests::repo_edges(&manifests::packages(stores[1].conn()).unwrap(), &roots[1].to_string_lossy(), &roots[1].to_string_lossy(), &owners);
+    // The library the repo builds links; junit, which no indexed repo builds, doesn't.
+    assert_eq!(edges.iter().map(|e| e.dependency.as_str()).collect::<Vec<_>>(), ["org.example:core"]);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
 fn npm_references_resolve_in_the_dependency_their_import_names() {
     let turn = turn();
     let base = turn.dir("npm-import");
@@ -336,7 +368,7 @@ fn http_routes_link_frontend_contracts_to_backend_actions() {
     assert_eq!(callers, [("ApiGetFilters".to_string(), "exact")]);
 
     // A summary written by an older build (no `routes`, same index stamps) must not be trusted.
-    let path = base.parent().unwrap().join("cache/workspace.json");
+    let path = kc_index::tree_dir().unwrap().join("workspace.json");
     let current: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let repos = current.get("repos").cloned().unwrap_or(current);
     let mut old = serde_json::Map::new();
@@ -1462,5 +1494,105 @@ fn a_seeded_worktree_names_its_root_role_after_its_own_directory() {
     sync(&wt_root, &mut store, &opts).unwrap();
     assert!(!query::find(store.conn(), "web-role-wt", None, 5).unwrap().0.is_empty());
     assert!(query::find(store.conn(), "web-role", None, 5).unwrap().0.iter().all(|h| h.symbol.name != "web-role"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn go_routes_and_clients_link_across_repos() {
+    let turn = turn();
+    let base = turn.dir("go-http");
+    let api = scratch(&base, "orchard-api");
+    write(&api, "go.mod", "module example.com/orchard\n\ngo 1.22\n\nrequire github.com/gin-gonic/gin v1.10.0\n");
+    write(
+        &api,
+        "src/routes.go",
+        "package api\n\nimport \"github.com/gin-gonic/gin\"\n\nconst treesPath = \"/trees\"\n\n\
+         func Router() *gin.Engine {\n\tr := gin.Default()\n\tv1 := r.Group(\"/api/v1\")\n\ttrees(v1.Group(treesPath))\n\treturn r\n}\n\n\
+         func trees(g *gin.RouterGroup) {\n\tg.GET(\"/:id\", getTree)\n\tg.DELETE(\"/:id\", removeTree)\n\tg.GET(\"/:id/fruit\", listFruit)\n}\n\n\
+         func getTree(c *gin.Context)    {}\nfunc removeTree(c *gin.Context) {}\nfunc listFruit(c *gin.Context)  {}\n",
+    );
+    let picker = scratch(&base, "picker");
+    write(&picker, "go.mod", "module example.com/picker\n\ngo 1.22\n");
+    write(
+        &picker,
+        "src/client.go",
+        "package picker\n\nimport (\n\t\"context\"\n\t\"fmt\"\n\t\"net/http\"\n)\n\n\
+         type Client struct {\n\tbase string\n\thttp *http.Client\n}\n\n\
+         func (p *Client) Tree(id string) {\n\thttp.Get(p.base + \"/api/v1/trees/\" + id)\n}\n\n\
+         func (p *Client) Remove(ctx context.Context, id string) {\n\treq, _ := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf(\"%s/api/v1/trees/%s\", p.base, id), nil)\n\tp.http.Do(req)\n}\n",
+    );
+    let web = scratch(&base, "web");
+    write(&web, "src/fruit.ts", "export function fruit(id: string) { return fetch(`/api/v1/trees/${id}/fruit`); }\n");
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &picker, &web].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    // The group's prefix and the constant reach the routes the helper registers.
+    let served: Vec<(String, String, String)> =
+        routes(0).into_iter().filter(|r| r.side == "server").map(|r| (r.symbol, r.verb, r.path.unwrap_or_default())).collect();
+    let s = |sym: &str, verb: &str, path: &str| (sym.to_string(), verb.to_string(), path.to_string());
+    // Each route belongs to its handler, under the group's prefix and the constant the helper's group was given.
+    assert_eq!(
+        served,
+        [s("getTree", "GET", "api/v1/trees/:id"), s("removeTree", "DELETE", "api/v1/trees/:id"), s("listFruit", "GET", "api/v1/trees/:id/fruit")]
+    );
+    let link = |i: usize, symbol: &str| -> Vec<(String, &'static str)> {
+        let r = routes(i).into_iter().find(|r| r.symbol == symbol).unwrap_or_else(|| panic!("{symbol}"));
+        kc_index::http::handlers(&r, &roots[i], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    let one = |sym: &str| vec![(sym.to_string(), "exact")];
+    // Go requests, their base addresses dropped and `:id` a parameter, and a TypeScript one.
+    assert_eq!(link(1, "Client.Tree"), one("getTree"));
+    assert_eq!(link(1, "Client.Remove"), one("removeTree"));
+    assert_eq!(link(2, "fruit"), one("listFruit"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn spring_routes_and_clients_link_across_repos() {
+    let turn = turn();
+    let base = turn.dir("spring-http");
+    let api = scratch(&base, "orders-api");
+    write(
+        &api,
+        "src/OrderController.java",
+        "package org.example.orders;\n\n@RestController\n@RequestMapping(\"/api/orders\")\npublic class OrderController {\n\
+         \x20   @GetMapping(\"/{id}\")\n    public Order find(@PathVariable long id) { return null; }\n\n\
+         \x20   @PutMapping(\"/{id}\")\n    public void update(@PathVariable long id) {}\n\n\
+         \x20   @GetMapping(\"/{id}/lines\")\n    public List<Line> lines(@PathVariable long id) { return null; }\n}\n",
+    );
+    let shop = scratch(&base, "shop");
+    write(
+        &shop,
+        "src/OrderClient.java",
+        "package org.example.shop;\n\n@FeignClient(name = \"orders\", path = \"/api/orders\")\npublic interface OrderClient {\n\
+         \x20   @RequestMapping(method = RequestMethod.PUT, value = \"/{id}\")\n    void update(@PathVariable(\"id\") long id);\n}\n",
+    );
+    write(
+        &shop,
+        "src/Orders.java",
+        "package org.example.shop;\n\npublic class Orders {\n    private final RestTemplate rest;\n    private final WebClient web;\n    private String base;\n\n\
+         \x20   Order find(long id) { return rest.getForObject(base + \"/api/orders/{id}\", Order.class, id); }\n\n\
+         \x20   void lines(long id) { web.get().uri(\"http://orders/api/orders/{id}/lines\", id).retrieve(); }\n}\n",
+    );
+    let opts = SyncOptions { threads: 1, ..Default::default() };
+    let roots: Vec<PathBuf> = [&api, &shop].iter().map(|r| kc_index::repo_root(r).unwrap()).collect();
+    for r in &roots {
+        sync(r, &mut kc_index::open(r).unwrap(), &opts).unwrap();
+    }
+    let summaries = kc_index::workspace::summaries(&[]).unwrap();
+    let routes = |i: usize| summaries.iter().find(|s| s.root == roots[i]).unwrap().routes.clone();
+    let link = |i: usize, symbol: &str| -> Vec<(String, &'static str)> {
+        let r = routes(i).into_iter().find(|r| r.symbol == symbol && r.side == "client").unwrap_or_else(|| panic!("{symbol}"));
+        kc_index::http::handlers(&r, &roots[i], &summaries).into_iter().map(|l| (l.route.symbol, l.confidence)).collect()
+    };
+    let one = |sym: &str| vec![(sym.to_string(), "exact")];
+    // A Feign method under its client's path, a RestTemplate call after its base address, and a WebClient chain.
+    assert_eq!(link(1, "OrderClient.update"), one("OrderController.update"));
+    assert_eq!(link(1, "Orders.find"), one("OrderController.find"));
+    assert_eq!(link(1, "Orders.lines"), one("OrderController.lines"));
     let _ = std::fs::remove_dir_all(&base);
 }

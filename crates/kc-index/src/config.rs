@@ -75,6 +75,7 @@ pub const KEYS: &[&str] = &[
     "update.check",
     "hooks.session_start",
     "index.node_modules",
+    "rules.paths",
     "conventions.csharp.bus.message_attributes",
     "conventions.csharp.bus.consumer_bases",
     "conventions.csharp.bus.consumer_registrations",
@@ -91,7 +92,7 @@ pub const KEYS: &[&str] = &[
     "conventions.ansible.name_prefixes",
 ];
 /// The `[conventions.*]` keys among [`KEYS`]: each a list (`scope_lifetimes` a table) replacing its default.
-pub const CONVENTION_KEYS: &[&str] = KEYS.split_at(16).1;
+pub const CONVENTION_KEYS: &[&str] = KEYS.split_at(17).1;
 /// The notes database's file name, in the data directory by default.
 pub const NOTES_FILE: &str = "notes.sqlite";
 
@@ -116,6 +117,9 @@ pub struct Config {
     pub notes_path: Option<PathBuf>,
     /// `[workspace] roots`.
     pub roots: Vec<PathBuf>,
+    /// `[rules] paths`: rule files, or directories of them, `rules` reads when none is named; relative paths are
+    /// taken from the repo's root.
+    pub rules: Vec<PathBuf>,
     /// `[workspace] max_depth`.
     pub max_depth: Option<usize>,
     /// `[ignore]`: each repo key with its patterns, in file order; `None` when the file has no `[ignore]` table.
@@ -204,6 +208,21 @@ impl Config {
                                 c.max_depth = Some(d.ok_or_else(|| bad("workspace.max_depth", &format!("must be a whole number from 0 to {MAX_DEPTH_LIMIT}")))? as usize);
                             }
                             _ => c.unknown.push(format!("workspace.{k}")),
+                        }
+                    }
+                }
+                "rules" => {
+                    for (k, v) in table("rules", item)? {
+                        match k.as_str() {
+                            "paths" => {
+                                let arr = v.as_array().ok_or_else(|| bad("rules.paths", "must be an array of rule file or directory paths"))?;
+                                // Relative paths stay relative: each repo's root is where they are taken from.
+                                for r in arr.iter() {
+                                    let s = r.as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| bad("rules.paths", "must be an array of rule file or directory paths"))?;
+                                    c.rules.push(expand_tilde(s).unwrap_or_else(|| PathBuf::from(s)));
+                                }
+                            }
+                            _ => c.unknown.push(format!("rules.{k}")),
                         }
                     }
                 }
@@ -815,7 +834,7 @@ pub fn set(key: &str, raw: &str) -> Result<()> {
         .ok()
         .and_then(|d| d.get("v").and_then(|i| i.as_value().cloned()))
         .unwrap_or_else(|| raw.into());
-    let list = matches!(key, "workspace.roots") || table == "ignore" || (CONVENTION_KEYS.contains(&key) && !key.ends_with(".scope_lifetimes"));
+    let list = matches!(key, "workspace.roots" | "rules.paths") || table == "ignore" || (CONVENTION_KEYS.contains(&key) && !key.ends_with(".scope_lifetimes"));
     if list && !value.is_array() {
         value = Value::Array(Array::from_iter([value]));
     }
@@ -986,6 +1005,13 @@ mod tests {
 
     fn parse(text: &str) -> Result<Config> {
         Config::parse(text, Path::new("/cfg/config.toml"))
+    }
+
+    #[test]
+    fn rule_paths_stay_relative_to_each_repo() {
+        let c = parse("[rules]\npaths = [\"lint/rules\", \"~/shared.yml\", \"/etc/team.yml\"]\n").unwrap();
+        assert_eq!(c.rules, vec![PathBuf::from("lint/rules"), dirs::home_dir().unwrap().join("shared.yml"), PathBuf::from("/etc/team.yml")]);
+        assert!(parse("[rules]\npaths = \"lint\"\n").is_err());
     }
 
     #[test]

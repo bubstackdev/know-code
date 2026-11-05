@@ -33,7 +33,8 @@ pub(crate) struct Grammar {
 impl Grammar {
     pub(crate) fn new(lang: Lang) -> Option<Grammar> {
         let ts = kc_extract::grammar(lang)?;
-        let expando = if matches!(lang, Lang::TypeScript | Lang::Tsx | Lang::JavaScript) { '$' } else { 'µ' };
+        // As ast-grep's own languages: Java, like TypeScript, takes `$` in an identifier.
+        let expando = if matches!(lang, Lang::TypeScript | Lang::Tsx | Lang::JavaScript | Lang::Java) { '$' } else { 'µ' };
         Some(Grammar { ts, expando })
     }
 }

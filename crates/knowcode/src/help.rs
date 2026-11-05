@@ -28,8 +28,13 @@ saying it has every declaration of the name in the workspace (whichever repo was
 overloads, and how many references in code name it across the workspace (the other mentions: uses, which kc_refs
 resolves). When files KnowCode doesn't read as code (Razor, vendored JavaScript) name it too, the count is "at least",
 with those lines. Each item declaring the name asked for quotes the line naming it in `cite`, read from the file now
-and checked against the index (`check: verified`). Matches with the name asked for (in any case) come first: when only
-others are past the limit, the answer is `complete` and they are a `more` entry. Use kc_locate when you know what the code does but not its name,
+and checked against the index (`check: verified`). When a plain name (no kind, not
+qualified) has declarations named exactly so, `items` holds only those, and `similar` names up to half the limit of
+the other matches (another case, a prefix, a word) as `kind name file:line` lines, shown but never items (`total` counts both and the matches in
+neither); with every exact one listed the answer is `complete`, and matches in neither list are a `more` entry that
+`rest` explains. Otherwise matches with
+the name asked for (in any case) come first: when only others are past the limit, the answer is `complete` and they
+are a `more` entry. Use kc_locate when you know what the code does but not its name,
 kc_search for exact text."#,
     },
     Topic {
@@ -71,7 +76,9 @@ repos that depend on this one. Long lists come most certain first, then by how c
 
 In C#, a type named only as a generic argument (`AddBus<IOrders>()`, `Get<IOrders>()`, `AddScoped<IFoo, Foo>()`), in
 `typeof`, `nameof` or a generic constraint (`where T : IFoo`) is a `type_ref` with `usage` saying so (`type_argument`,
-`typeof`, `nameof`, `constraint`); a target-typed `new(…)` is an `instantiate` with `usage: target_typed`. A file sees
+`typeof`, `nameof`, `constraint`); a target-typed `new(…)` is an `instantiate` with `usage: target_typed`. A local or
+parameter called (`next(ctx)`) is a `call` of `Invoke` with `usage: delegate_call`: its delegate's own `Invoke`,
+`external_likely`, never a method declared `Invoke`. A file sees
 its own `using`s and what its project imports into every file: `global using` directives (GlobalUsings.cs), the
 .csproj's `<Using>` items, and the SDK's implicit usings (Microsoft.NET.Sdk, .Web, .Worker, MSTest.Sdk,
 Aspire.AppHost.Sdk) when ImplicitUsings is enabled; where those can't be read (a property sets ImplicitUsings, another SDK) nothing is ruled out by them.
@@ -92,6 +99,14 @@ list empty is said in `none_found` with what was searched. An assembly scan that
 (when nothing registers or injects the type, a scan of an assembly the code doesn't name is in its `none_found` line
 instead); one that can't (in test code, or exposing only other services) is counted in that line. Razor and other files KnowCode doesn't read as code are checked as text for the name: the lines naming it
 are in `incomplete`; when none does, `checked` says so.
+
+Asked by a place (`file:line`, `path#name`), the answer is that declaration's references alone: `items`, `total`,
+`by_confidence`, `callers` and the cursor count only rows bound to it (its own, or ambiguous with it among the
+candidates). Rows the answer binds only to another declaration of the name (another overload, a same-named member) are
+counted per declaration in `elsewhere` (`qualified`, `file`, `line`, `rows`; `among` for an ambiguity between others),
+with `elsewhere_note`; kc_refs on that file:line lists them. Uses it can't place (unresolved, ambiguous with no
+candidate listed, or for a member a use on a receiver whose type isn't known) are listed apart in `unplaced` (`unplaced_total`, its own `unplaced_cursor`), with an `unsupported`
+entry: some may be the declaration's. A name asked as a name answers for every use of it, as before.
 
 `Type.member` keeps only references that can point at that member. Filter with `kinds` (call, instantiate, type_ref,
 member; SQL read, write) or `edges` (the same filter named as kc_trace names edges: calls, instantiates, uses, member,
@@ -246,7 +261,10 @@ generic or `object` parameter passed on) is the helper's caller's, at the call; 
 file (`Publish(Build(…))`) has that method's return type. Consumers include MassTransit state machines (their
 `Event<X>` and `Schedule<…, X>` properties) and registrations closing a generic consumer over a message
 (`AddConsumer<MailConsumer<X>>()`, `AddMailConsumer<X>()`), at the registration. Each link is exact (both sides name
-the same declared message type) or ambiguous (the bare name only)."#,
+the same declared message type) or ambiguous (the bare name only). For a message type, `callers` holds only the uses
+inside its publishers and consumers, each with `bus` (publisher, consumer); its other uses (a construction in a mapper
+or a test builder, a type mention) are `users`, with `users_total` and their own `users_cursor`. Links cut to fit
+`max_chars` continue by the bus entry's `links_cursor`."#,
     },
     Topic {
         name: "kc_context.sql",
@@ -258,7 +276,8 @@ indexed repo using it, either an Entity Framework entity mapped to the table (wi
 procedure call (EXEC, MySQL CALL, CommandType.StoredProcedure), each with a link confidence: exact (the repo defines it,
 or both sides name the schema), unique_name (one schema in the workspace defines it), dominant (several schemas do; for
 an EF table, the one its DbContext is named for or that defines most of the context's tables, else the one defining
-most of the repo's tables), ambiguous. A procedure name passed to a wrapper method (`ExecuteStoredProcedureAsync("p",
+most of the repo's tables), ambiguous. `used_by` reads as many of the repos naming it as the page lists callers; when it read
+fewer than all, `used_by_truncated` and `used_by_note` say so and `used_by_cursor` reads on. A procedure name passed to a wrapper method (`ExecuteStoredProcedureAsync("p",
 …)`) counts as a call when a procedure of that name is defined."#,
     },
     Topic {
@@ -516,7 +535,10 @@ With diff, `missed_partners` warns about usual partners the diff leaves alone (a
 changed file's; source files only, not docs or extension-less files): "you changed A; B changed with it in 8 of 10
 commits". With diff, definitions the change deletes, renames or cuts are read from the base commit: `removed` lists
 each with `named_by` (the code still naming it), and that code is affected at hop 1 with `via_removed: true`; matched by
-name, so approximate (`pre_change`)."#,
+name, so approximate (`pre_change`). A C# method the change keeps with other parameters is listed there too, with
+`old_signature`: the calls still passing a number of arguments only the old signature took are its `named_by`
+(`ambiguous` when an overload the change left alone takes them too), and `review` lists them as dependents and walks
+to their tests."#,
     },
     Topic {
         name: "kc_unused",
@@ -826,10 +848,64 @@ itself. `sections` says for each list whether it is whole (`complete`) and the c
   run with the package manager its lockfile names.
 - Go modules (each `go.mod`): the test functions (`TestXxx`, `BenchmarkXxx`, `ExampleXxx`, `FuzzXxx`) in the
   module's `_test.go` files, `go test ./...` and `go test ./pkg -run '^TestXxx$'` from the module's directory.
+- Maven and Gradle projects with test methods (JUnit 4 and 5, TestNG) in their Java and Kotlin files, from the build's
+  root (`./mvnw`, `./gradlew` when the build has a wrapper): `mvn test -pl <module> -Dtest='pkg.Class#method+method[*]'`,
+  or `gradle :project:test --tests 'pkg.Class.method'` (`jvmTest` for a Kotlin Multiplatform project's tests).
 
 Each item: `kind`, `name`, `manifest` and `line`, `dir`, `command`, `tests` (`name`, `file`, `line`, `command`; at most
 200, `tests_total` counts them all). `name` keeps the targets of that name. Declared, not ranked: which tests a change
 needs is `kc_tests`. Served on request: `all` leaves the tool out unless named; the `kc` op is `test_targets`."#,
+    },
+    Topic {
+        name: "kc_rules",
+        summary: "a repo's own ast-grep rules, and monitors of what is new since a commit",
+        text: r#"Runs a repo's own ast-grep rule files (YAML: `id`, `language`, `rule`, `message`, `severity`, `constraints`,
+`utils`, `transform`, `files`, `ignores`) over its files and reports each match: `rule`, `severity`, `file`, `line`,
+`column`, `end_line`, `end_column`, `message` (metavariables filled in) and `text` (its first line). A rule matches what
+the ast-grep command line (0.50) matches on the same files, `ast-grep-ignore` comments included. Read only: a rule with
+`fix` is refused. Languages: CSharp, TypeScript, Tsx, Python, Rust, Swift, Java, Go; a JavaScript or Kotlin rule is
+refused, since KnowCode parses those with other grammars than ast-grep's.
+
+`rules` names rule files or directories of them, relative to the repo's root (inside it); none: the config's
+`rules.paths`. `rule` takes rules written inline. A rule file over 2 MiB, or whose YAML aliases stand for over 100,000
+nodes, is refused unread, as is one in a part of the repo its privacy file blocks. `regex` instead of rules makes each
+line it matches a match (rule `regex`).
+
+`new_since` (a commit) makes it a monitor: only the matches that commit didn't have, read from the files that differ
+from it. A match is known by its rule and its matched text, so one that moved or whose file was renamed isn't new.
+Nothing is stored between runs. `paths` globs (a leading `!` excludes); page with `offset` (`next_offset`);
+`max_matches` stops reading files after that many matches (default 50000). `by_rule` counts matches per rule;
+`new_since` gives the commit each repo was compared with. `format` `sarif` answers with a SARIF 2.1.0 log of every
+match (locations and messages, no source text; what the answer missed is in the run's notifications), whole whatever
+`max_chars` says. Served on request: `all` leaves the tool out unless named; the `kc` op is `rules`."#,
+    },
+    Topic {
+        name: "kc_review",
+        summary: "one bounded answer for a diff: what it changes, tests, partners, dependents, contracts, rules",
+        text: r#"One bounded answer for a diff (`diff`: `working`, or a git revision to diff the working tree against), where a
+client reviewing a change would otherwise join `impact`, `tests`, `coupled` and `rules` itself. Sections, in reading
+order:
+
+- `changes`: each changed file (`added`, `modified`, `deleted`, `renamed`) with up to 3 of the symbols in its changed
+  lines (`change: removed` for a definition the diff removes; an added file's symbols are counted, not listed);
+- `tests`: the tests to run, each with `confidence` and `run` (its target's command) where a manifest declares one;
+  advice, never the only tests to run;
+- `missed`: files that usually change with the changed ones, which the diff leaves alone;
+- `dependents`: by file, what depends on the changed symbols, one hop, in this repo and others (`class` is `direct`,
+  `near`, `far` or `test`);
+- `contracts`: HTTP routes the diff removes or changes, each with the requests in other repos it served that nothing
+  serves now (`verdict` `broken` on an exact link, `possible` by name or among several); bus messages and table
+  columns aren't read yet, so the section says `unsupported`;
+- `rules`: matches of the repo's own rules (`[rules] paths`) that the diff brings;
+- `walkthrough` (reserved, null) and `unsettled`: what the index can't settle.
+
+`version` is the answer's structure (1). Every row has a stable `id`, a hash of its kind and fields, never its line.
+`sections` says per section whether it is whole (`complete`), how many rows it shows of how many, and, for a cut one,
+the call continuing it (`next`) and why (`incomplete`); a field with nothing to report is left out. `changes`,
+`dependents`, `tests`, `missed` set how many are listed. `format` `markdown` answers with a comment for a pull request,
+`sarif` with a SARIF 2.1.0 log (contract breaks are errors, possible breaks warnings, rule matches at their
+severity), both whole whatever `max_chars` says. Served on request: `all` leaves the tool out unless named; the `kc`
+op is `review`."#,
     },
     Topic {
         name: "kc_capabilities",
@@ -1026,13 +1102,13 @@ Under any policy but `default` the answer has `policy: {evidence, excluded, excl
     Topic {
         name: "cursors",
         summary: "continuing a cut list with kc_more",
-        text: r#"A list an answer cut and can continue has a cursor: `cursor` for the answer's own `items`, `<list>_cursor`
-beside a nested list (`items[0].callers_cursor`). Pass it as it is to kc_more for the next page, which has its own
+        text: r#"A list an answer cut and can continue has a cursor: `cursor` for the answer's own `items` (a find's definitions, a
+refs answer's references), `<list>_cursor` beside a nested list (`items[0].callers_cursor`). Pass it as it is to kc_more for the next page, which has its own
 `cursor` until the list ends; the `incomplete` entry for the cut list names the call. Following every cursor gives each
 row of the full list exactly once: in the list's order for lists cut as a prefix, and for a walk's ranked list
 (impact's `affected`, a path search's `paths`), the rows shown first and then the rest of the walk, ranked the same
-way. A cursor is refused when the index, HEAD or the rows delivered so far changed since (`stale cursor`): ask the
-original question again.
+way. A cursor is refused when the rows delivered so far, or the index or HEAD of a repo holding rows of the list,
+changed since (`stale cursor`): ask the original question again. Other repos the answer read re-indexing don't refuse it.
 
 Over MCP a cursor is a short handle (`kc~1f`) the server maps to the full cursor; it lasts while the server runs, for
 the last 4096 cursors. `kc_search` and `kc_grep_ast` also page with `offset` and `next_offset`."#,

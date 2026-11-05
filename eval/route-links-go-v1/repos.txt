@@ -1,0 +1,6 @@
+# route-links-go-v1: group, repository, URL and the commit labelled.
+gotify gotify-server https://github.com/gotify/server dd06dc77190696e93d3297b9a733711516fb17d9
+opengist opengist https://github.com/thomiceli/opengist 2acf3dae87f9c3d536e0a870787941bbd06d0b46
+flipt flipt https://github.com/flipt-io/flipt 4cacb7ca5032952429cb980d08aeaeffa22d97f3
+sftpgo terraform-provider-sftpgo https://github.com/drakkan/terraform-provider-sftpgo bfceb850c568d426ed671dbc8110c86da9b65f29
+sftpgo sftpgo https://github.com/drakkan/sftpgo 9712163e617744ed244da6d4d2a84cdbd25d8888

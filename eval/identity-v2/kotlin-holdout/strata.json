@@ -1,0 +1,82 @@
+{
+ "ktlint/kotlin/call/inside/1": {
+  "available": 1843,
+  "drawn": 20
+ },
+ "ktlint/kotlin/call/inside/2-4": {
+  "available": 3943,
+  "drawn": 40
+ },
+ "ktlint/kotlin/call/inside/5+": {
+  "available": 222,
+  "drawn": 40
+ },
+ "ktlint/kotlin/call/outside/0": {
+  "available": 8779,
+  "drawn": 10
+ },
+ "ktlint/kotlin/call/outside/1+": {
+  "available": 1309,
+  "drawn": 40
+ },
+ "ktlint/kotlin/dispatch/inside/2-4": {
+  "available": 11,
+  "drawn": 9
+ },
+ "ktlint/kotlin/dispatch/inside/5+": {
+  "available": 11,
+  "drawn": 11
+ },
+ "ktlint/kotlin/extension/inside/1": {
+  "available": 1150,
+  "drawn": 20
+ },
+ "ktlint/kotlin/extension/inside/2-4": {
+  "available": 2208,
+  "drawn": 40
+ },
+ "ktlint/kotlin/extension/inside/5+": {
+  "available": 752,
+  "drawn": 40
+ },
+ "ktlint/kotlin/member/inside/1": {
+  "available": 5153,
+  "drawn": 20
+ },
+ "ktlint/kotlin/member/inside/2-4": {
+  "available": 4025,
+  "drawn": 40
+ },
+ "ktlint/kotlin/member/inside/5+": {
+  "available": 1065,
+  "drawn": 40
+ },
+ "ktlint/kotlin/member/outside/0": {
+  "available": 1235,
+  "drawn": 10
+ },
+ "ktlint/kotlin/member/outside/1+": {
+  "available": 2014,
+  "drawn": 40
+ },
+ "ktlint/kotlin/type/inside/1": {
+  "available": 805,
+  "drawn": 20
+ },
+ "ktlint/kotlin/type/inside/2-4": {
+  "available": 701,
+  "drawn": 40
+ },
+ "ktlint/kotlin/type/inside/5+": {
+  "available": 1,
+  "drawn": 1
+ },
+ "ktlint/kotlin/type/outside/0": {
+  "available": 4454,
+  "drawn": 10
+ },
+ "ktlint/kotlin/type/outside/1+": {
+  "available": 40,
+  "drawn": 9
+ }
+}

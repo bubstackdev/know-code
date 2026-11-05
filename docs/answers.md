@@ -125,11 +125,14 @@ instead, with the same `{reason, detail, hint}` (reason `capped` or `budget`), a
 - a symbol's `callers`, `callees` and `members`, the tables its calls reach (`touches_tables`), the candidate
   `targets` of one reference, its `source`, the `repos` list, and strings the size cap shortened;
 - cites past the first few that give their place without their line (`cite text: 12 of 30 cites quote their line`);
-- a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every match
-  with the name asked for (in any case) is listed and the rest match by prefix or word; `search`'s when every file with
-  a match is named, on the page or in `other_files`, and the rest are their other lines (`rest` says when they are
-  all in tests, comments and prose: a first page at the default limit shows every hit in code when there are at most
-  60 hits and they fit, and leaves those a page away). Cut further to fit
+- a page of the answer's own `items` whose `rest` says the rows cut are past what was asked: `find`'s when every
+  declaration named exactly as a plain name asked is listed (the other matches, in another case, by prefix or by word,
+  are not items: up to half the limit of them are named apart in `similar`, shown but not counted as items, so
+  `total` is the items, `similar` and the matches in neither; with none in neither, nothing is cut), or, when none is
+  named exactly so, when every match with the name in any case is listed and the rest match by prefix or word;
+  `search`'s when every file with a match is named, on the page or in `other_files`, and the rest are their other
+  lines (`rest` says when they are all in tests, comments and prose: a first page at the default limit shows every
+  hit in code when there are at most 60 hits and they fit, and leaves those a page away). Cut further to fit
   `max_chars`, the page is incomplete.
 
 The lists an answer is about stay `incomplete` when cut: the answer's `items` (references, impact rows, search hits
@@ -159,21 +162,47 @@ is `capped` when a limit cuts it; a list on the side is in `more` (see [More is 
 These remain and agree with `incomplete` and `more`: `truncated` and `total`, `capped` (`find`, `search`), `freshness.failed`
 with `freshness.status`, a list's `<list>_total` and `<list>_truncated`, and the MCP server's `left_out` and `hint`.
 
+## References to one declaration
+
+`refs` asked by a place (`file:line`, `path#name`) answers for the declaration there, not for its name. Its rows are
+split three ways, each said by the answer itself:
+
+- `items`: the rows bound to that declaration, either to it alone or ambiguously with it among the candidates
+  (`confidence: ambiguous`). `total`, `by_confidence`, `callers` and `cursor` count these alone.
+- `elsewhere`: the rows the answer binds only to another declaration of the name (another overload, a same-named
+  member of another type, a C# declaration with the same qualified name in another namespace or project), counted per declaration as `{qualified, file, line, rows}`, or `{among: [...], rows}` for
+  an ambiguity between others. `elsewhere_note` says how many and how to list them (`refs` on that declaration's
+  place). Nothing about the declaration asked for is missing, so this isn't an `incomplete` entry.
+- `unplaced`: uses of the name the answer can't place (unresolved, or ambiguous with no candidate listed), as rows,
+  with `unplaced_total` and their own `unplaced_cursor`. For a member, these include uses on a receiver whose type
+  isn't known (`Fetch().Seal()`), which the member's `Type.member` references leave out. An `unsupported` entry says some may be the declaration's:
+  a reader counting its references can check them, and one that wants only certain rows can leave them out.
+
+A `refs` asked by a name answers for every use of the name, all in `items`, as before.
+
 ## Cursors
 
 A list that was cut and can be continued carries a cursor: `cursor` for the answer's own `items`, `<list>_cursor`
 beside a nested list (`items[0].callers_cursor`). Pass it unchanged to `knowcode more <cursor>` or `kc_more`. Each
 page is `{list, items, offset, total, cursor}` and has its own cursor until the list ends; its rows are the list's
-own (over MCP, a search's hits are text rows there too).
+own (over MCP, a search's hits are text rows there too). A page of a workspace answer's nested list says the repo of
+the item the list belongs to as its `repo`, and its rows name a repo only when it is another, as on the first page.
 
 - Following every cursor gives each row of the full list exactly once. For a walk's ranked list (impact's
   `affected`, a path search's `paths`), the rows shown first come first, then the rest of the walk, ranked the
   same way.
 - A cursor records the request, the index generation and HEAD of every repo the answer read, and a hash of the rows
-  delivered. If any of these changed, it is refused with `stale cursor: …; start again with the original call`.
+  delivered. It is refused with `stale cursor: …; start again with the original call` when the rows delivered
+  changed, or when a repo holding rows of the list moved to another generation or HEAD. A repo the answer read but
+  whose rows the list doesn't hold (one searched for a cross-repo link that led nowhere, say) re-indexing doesn't
+  refuse it: the rows delivered are checked unchanged, so following the cursor still gives one list, each row once.
+  A list whose rows don't say their repo, and a path search's candidate ends, count every repo read.
+  A `find` answer's cursor records only the repos asked about: the rest of the workspace, read for its `declared`
+  statement, holds none of its rows.
 - Over MCP a cursor is a short handle (`kc~1f`) that the server maps to the full cursor, for its last 4096 cursors.
-- Lists that continue: references, a context's callers, callees, members, conformers and table accessors, a
-  trace's nodes, impact's `affected`, `coupled` and `cross_repo`, every list of a repo's deploy answer
+- Lists that continue: definitions found (`find`), references (and a placed `refs` answer's `unplaced`), a context's
+  callers (and a message type's `users`), callees, members, conformers, table accessors and a SQL definition's
+  `used_by`, a trace's nodes, impact's `affected`, `coupled` and `cross_repo`, every list of a repo's deploy answer
   (`deploy_chains`, `deployed_by`, `own`, `ci_templates`, `ci_includes`, `ci_skipped`), a path search's paths and
   candidate ends, rename sites, and `search` and `grep-ast` hits.
 - `search` and `grep-ast` also page with `--offset` and `next_offset`.
@@ -370,7 +399,7 @@ which it was resolved past and why: its evidence lists `rivals`, each `{target, 
 | `module` | is in a module the file is neither in nor imports |
 | `kind` | is another kind of declaration (a property where a call is made) |
 | `argument_labels` | doesn't take the call's argument labels (Swift) |
-| `arity` | takes another number of arguments |
+| `arity` | takes another number of arguments (a C# type: of type arguments, `Handler` vs `Handler<T>`) |
 | `argument_types` | doesn't take the call's argument types (C#) |
 | `receiver_type` | isn't a member of the receiver's type or its supertypes |
 | `scope` | isn't in the caller's type, file or module where a nearer declaration is |
@@ -464,6 +493,38 @@ nodes, `kc_impact` 30 dependents, `kc_flow` 40 steps, `kc_unused` 25 findings; `
 its cursor or the parameter to raise.
 
 The CLI's `--json` output is the full envelope.
+
+## review
+
+`review` answers once for a diff, in a structure renderers and CI build on: `version` says which (1). A change to a
+field's meaning is a new version.
+
+- **Sections**, in reading order: `changes`, `tests`, `missed`, `dependents`, `contracts`, `rules`, `walkthrough`
+  (reserved: null) and `unsettled` (what the index can't settle, never a blocked path). Top level: `version`, `repo`
+  (the reviewed repo's root, as in every answer; a renderer shows its last component), `base` (the commit diffed
+  against), `head` (`working`, or the commit), and the envelope above.
+- **Rows** are objects. Each has an `id` and a `file`, and lines (1-based, never columns) where there are any; `repo`
+  only when it isn't the reviewed repo, except a contract's consumer, which always has it.
+- **`sections.<name>`**: `complete`, `shown` of `total`, and for a cut section `next` (the call that continues it) and
+  `incomplete` (the reasons, as in `incomplete` above). A cut section is a top-level `incomplete` entry too.
+- **Left out when there is nothing to say:** a missing `next` means no call continues the section, a missing
+  `incomplete` means no reason cut it, and a changed file's symbol without `change` is `changed` (only `removed` is
+  written).
+- **`class`** of a dependent row is one of `direct` (hop 1), `near` (2), `far` (3 and more) and `test`, by the nearer
+  of its hop and any ambiguous way to it.
+- **`verdict`** of a contract's consumer: `broken` when its request matched the old route exactly and nothing the repo
+  serves now answers it; `possible` when the link was by name or one of several.
+
+**Ids.** An `id` is 16 hex digits: FNV-1a 64 of the row's kind and fields joined by a zero byte. No line, row order or
+page is in it, so a CI job finds the row again after edits elsewhere in the file. An empty field stays empty; `repo`
+is empty for the reviewed repo.
+
+| Kind | Fields |
+| --- | --- |
+| `change`, `test`, `missed`, `dependent` | repo, file |
+| `contract` | repo, file, (empty), the contract (`GET api/items/{id}`) |
+| `consumer` | repo, file, symbol, the contract, the link |
+| `rule` | repo, file, the rule's id, the matched text, the match's index among that rule's matches of the same text in the file |
 
 ## How to use an answer
 

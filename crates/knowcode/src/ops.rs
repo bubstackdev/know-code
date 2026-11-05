@@ -748,7 +748,10 @@ fn parse_coverage(opened: &[Opened], env: &mut Value) {
         match v {
             Value::Object(m) => {
                 let repo = m.get("repo").and_then(Value::as_str).or(repo);
-                if let Some(f) = m.get("file").and_then(Value::as_str)
+                // Only the first COVERAGE_FILES are checked: past them, looking each new file up in the list cost the
+                // square of the files named, and a workspace answer names tens of thousands.
+                if files.len() < COVERAGE_FILES
+                    && let Some(f) = m.get("file").and_then(Value::as_str)
                     && !files.iter().any(|(r, x)| x == f && r.as_deref() == repo)
                 {
                     files.push((repo.map(str::to_string), f.to_string()));
@@ -838,14 +841,72 @@ pub fn repo_name(root: &Path) -> String {
 
 /// The qualified name of the definition `place` (`file:line`, `path#name`) names in the first of `roots` having it;
 /// an error saying what didn't resolve (see [`unresolved_place`]) when none does.
-fn placed_name(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<String> {
+/// The declaration a place names, for a references answer about it alone (see [`refs`]).
+pub struct Placed {
+    root: PathBuf,
+    id: i64,
+    file: String,
+    line: u32,
+    qualified: String,
+    kind: String,
+}
+
+/// The declaration a place (`file:line`, `path#name`) names; a place naming none is refused, saying why.
+fn placed_target(place: &str, roots: &[PathBuf], no_sync: bool) -> Result<Placed> {
     for root in roots {
         let Some(o) = open_member(roots, root, no_sync)? else { continue };
         if let Some(s) = query::definitions(o.store.conn(), place)?.into_iter().next() {
-            return Ok(s.qualified());
+            return Ok(Placed { root: root.clone(), id: s.id, file: s.file.clone(), line: s.line, qualified: s.qualified(), kind: s.kind.clone() });
         }
     }
     bail!(crate::pending::unresolved(place, roots, unresolved_in(place, roots, no_sync)?.unwrap_or_else(|| format!("no definition at {place}"))))
+}
+
+/// Where a reference found from the repo at `root` binds, for a references answer about the declaration `d`.
+#[derive(PartialEq)]
+enum Binding {
+    /// To `d`: one of its candidates is `d`, or it has none of its own (it was found as `d`'s).
+    Target,
+    /// Only to other declarations of the name.
+    Elsewhere,
+    /// Nowhere the answer can say: unresolved, or ambiguous with no candidate listed.
+    Unplaced,
+}
+
+/// Kinds of declaration whose parts (a partial class, a merged interface) are one declaration however many places
+/// declare them; a callable's same-named declarations are overloads, each its own.
+fn one_declaration(kind: &str) -> bool {
+    !matches!(kind, "method" | "function" | "init" | "constructor" | "subscript" | "macro")
+}
+
+fn binding(conn: &rusqlite::Connection, root: &Path, h: &RefHit, d: &Placed) -> Binding {
+    let here = root == d.root.as_path() && h.repo.is_none();
+    let ctors = match &h.ctors {
+        Some(c) if h.kind == "instantiate" => c.as_slice(),
+        _ => &[],
+    };
+    if here && (h.target_ids.contains(&d.id) || ctors.contains(&d.id)) {
+        return Binding::Target;
+    }
+    let d_repo = repo_name(&d.root);
+    let is_d = |t: &query::Target| {
+        let same_repo = t.repo.as_deref().map_or(here || root == d.root.as_path(), |r| r == d_repo);
+        // Another place with `d`'s qualified name is another part of `d` (a partial type) only if it can be: a
+        // qualified name carries no namespace, so two projects' `Util.Tracker` share one (checked when both are in
+        // the index at hand; a failed check keeps the name's word).
+        let part = || !(here && t.repo.is_none()) || query::may_be_one_declaration(conn, t.id, d.id).unwrap_or(true);
+        same_repo
+            && ((t.file == d.file && t.line == d.line) || (t.qualified == d.qualified && t.kind == d.kind && one_declaration(&d.kind) && part()))
+    };
+    if h.targets.iter().any(is_d) {
+        return Binding::Target;
+    }
+    if h.targets.is_empty() && h.target_ids.is_empty() && ctors.is_empty() {
+        // A reference with no candidate of its own that resolution still placed (`exact`, `unique_name`) is `d`'s:
+        // it was found as a reference to `d`'s name.
+        return if matches!(h.confidence, "exact" | "unique_name") { Binding::Target } else { Binding::Unplaced };
+    }
+    Binding::Elsewhere
 }
 
 /// Why `symbol`, a place (`file:line`, `path#name`, after its repo's name or not), picks no definition in the repos
@@ -899,6 +960,12 @@ pub struct FindData {
     pub manifests: Vec<ManifestHit>,
     /// Per repo, its declarations of the name (see [`crate::whole::declared`]).
     pub declared: Vec<String>,
+    /// Other names' matches, one line each, when `items` holds only the declarations named exactly as asked: never
+    /// counted among the items.
+    pub similar: Vec<String>,
+    /// The same find with a higher limit lists more in `items`: what a cursor continues to. Not so for matches cut
+    /// from `similar`, which `items` never holds.
+    pub more: bool,
 }
 
 /// Every client route (request contract) in the selected repos, with the actions serving it. Reads the workspace
@@ -1395,6 +1462,12 @@ pub struct SqlFacts {
     pub section: kc_store::sql::SqlSection,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub used_by: Vec<SqlUseOut>,
+    /// `used_by` read only some of the repos naming the definition (see [`HttpCrossing::sql_uses_upto`]): its cursor
+    /// reads on, and `used_by_note` says how many were read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub used_by_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_by_note: Option<String>,
     /// Definitions and databases of the context's `tables`, in order.
     #[serde(skip)]
     pub tables: Vec<TableSql>,
@@ -1420,8 +1493,15 @@ fn sql_facts(o: &Opened, ctx: &Context, tables: &SymbolTables, max_accessors: us
         if kc_store::sql::is_object(s) {
             let summaries = full_summaries(o)?;
             let mut crossing = HttpCrossing::new(o, no_sync);
-            for u in crossing.sql_uses(&o.root, s, &summaries)? {
+            // A table a whole workspace uses: each repo read builds its database model, so a page reads as many repos
+            // as it lists rows at most, and the cursor reads on (fix 5(b): 120 repos took 119 G instructions).
+            let (uses, read, naming) = crossing.sql_uses_upto(&o.root, s, &summaries, Some(max_accessors))?;
+            for u in uses {
                 out.used_by.push(u.out(max_accessors));
+            }
+            if read < naming {
+                out.used_by_truncated = true;
+                out.used_by_note = Some(format!("read {read} of the {naming} repos naming {}; the cursor reads on", s.name));
             }
         }
         return Ok(out);
@@ -1592,15 +1672,23 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     // The rest of the workspace, for the `declared` statement: each repo whose summary says it may declare the name, or
     // name it, is opened; the others are known not to, as last indexed.
     let bare = query::split_dotted(q.trim()).1.to_string();
+    // A plain name with declarations named exactly that answers with those alone, and names a few of the other
+    // matches (another case, a prefix, a word) apart in `similar`: on find-dev-v1, mixing them into the page cut the
+    // first page's precision for exact names from 0.974 to 0.637 at the same recall. A qualified name or a kind
+    // narrows the matches itself, and is answered as before. Each repo reads up to half a page more, for `similar`.
+    let apart = symbols && kind.is_none() && !bare.is_empty() && bare == q.trim() && !bare.contains(['#', ':', '/', ' ']);
+    let fetch = if apart { limit.saturating_add(limit / 2) } else { limit };
+    let mut name_cut = false;
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         if symbols {
             // Ties go by path and line, not by a rank: the rank was only used when cached, so the order depended on
             // cache state, and ranking ties didn't help (concept-find on replayed commits: 0 better, 0 worse).
-            let found = query::find_counted(o.store.conn(), q, kind, limit, &kc_store::rank::FileRank::default())?;
+            let found = query::find_counted(o.store.conn(), q, kind, fetch, &kc_store::rank::FileRank::default())?;
             total += found.total;
             capped |= found.capped;
             exact_cut |= found.total > found.hits.len() && found.hits.last().is_some_and(|h| h.matched == "exact");
+            name_cut |= found.total > found.hits.len() && found.hits.last().is_some_and(|h| h.symbol.name == bare);
             items.extend(found.hits.into_iter().map(|h| (o.root.clone(), h)));
             declared.extend(crate::whole::declared(&o, q, kind)?);
         }
@@ -1667,18 +1755,37 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         .map(|s| if unchecked == 0 { s } else { format!("{s}. Not checked: {unchecked} repo{} of the workspace not indexed yet", if unchecked == 1 { "" } else { "s" }) })
         .into_iter()
         .collect();
+    let apart = apart && items.iter().any(|(_, h): &(PathBuf, FindHit)| h.symbol.name == bare);
     // Across repos, keep each repo's ranking but interleave by match quality.
     if roots.len() > 1 {
-        let rank = |m: &str| match m {
-            "exact" => 0,
-            "prefix" => 1,
-            _ => 2,
+        let rank = |h: &FindHit| match h.matched {
+            "exact" if apart && h.symbol.name == bare => 0,
+            "exact" => 1,
+            "prefix" => 2,
+            _ => 3,
         };
-        items.sort_by_key(|(_, h)| rank(h.matched));
+        items.sort_by_key(|(_, h)| rank(h));
     }
-    exact_cut |= items.iter().skip(limit).any(|(_, h)| h.matched == "exact");
-    items.truncate(limit);
     let multi = roots.len() > 1;
+    let mut similar = Vec::new();
+    if apart {
+        let (named, others): (Vec<_>, Vec<_>) = items.into_iter().partition(|(_, h)| h.symbol.name == bare);
+        name_cut |= named.len() > limit;
+        items = named;
+        similar = others
+            .iter()
+            .take(limit / 2)
+            .map(|(root, h)| {
+                let s = &h.symbol;
+                let file = if multi { format!("{}/{}", repo_name(root), s.file) } else { s.file.clone() };
+                format!("{} {}  {file}:{}", s.kind, s.qualified(), s.line)
+            })
+            .collect();
+    } else {
+        exact_cut |= items.iter().skip(limit).any(|(_, h)| h.matched == "exact");
+    }
+    items.truncate(limit);
+    let more = if apart { name_cut } else { total > items.len() };
     // A declaration of the name asked for quotes the line naming it, read from the working tree now and checked
     // against the index: what an agent would otherwise open the file to see. The first few only, so that none is
     // left with its place alone under `cite: brief`.
@@ -1697,7 +1804,11 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         .collect();
     // A cite that drifted says so in its `check`; the answer isn't less whole for it (its items come from the index,
     // and a repo behind its working tree is said in `stale` already), so no `incomplete` entry of its own.
-    let mut env = envelope(&opened, json!(list), total, items.len());
+    // `similar` rows are matches shown that aren't items (`total` = items + similar + those cut): with none cut, nothing
+    // is hidden, and the answer isn't cut.
+    let hidden = total - items.len() - similar.len().min(total - items.len());
+    let shown = if apart && hidden == 0 && !capped { total } else { items.len() };
+    let mut env = envelope(&opened, json!(list), total, shown);
     // Past the candidate cap, the total is a lower bound and a match may be missing: never a complete answer.
     if capped {
         env["truncated"] = json!(true);
@@ -1713,7 +1824,19 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
     }
     // Every match with the name asked for is listed: the rows cut are other names (by prefix or by word), more to
     // read rather than missing from the answer.
-    if total > items.len() && !exact_cut && !capped && items.iter().any(|(_, h)| h.matched == "exact") {
+    if apart {
+        if hidden > 0 && !name_cut && !capped {
+            let others = total - items.len();
+            env["rest"] = json!(format!(
+                "every declaration named exactly {bare} is listed; `similar` names {} of the {others} other match{}, in another case, by prefix or by word (raise limit for more)",
+                similar.len(),
+                if others == 1 { "" } else { "es" }
+            ));
+        }
+        if !similar.is_empty() {
+            env["similar"] = json!(similar);
+        }
+    } else if total > items.len() && !exact_cut && !capped && items.iter().any(|(_, h)| h.matched == "exact") {
         env["rest"] = json!(format!("every match named {bare} (in any case) is listed; the rest match by prefix or word"));
     }
     if !manifest_hits.is_empty() {
@@ -1723,7 +1846,7 @@ pub fn find(q: &str, kind: Option<&str>, limit: usize, args: &Scope) -> Result<O
         env["manifests_total"] = json!(manifests_total);
     }
     finish(&mut env);
-    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared } })
+    Ok(Out { env, data: FindData { items, total, capped, multi, manifests: manifest_hits, declared, similar, more } })
 }
 
 pub struct LocateData {
@@ -1806,24 +1929,48 @@ pub struct RefsData {
 /// that definition's qualified name, said as `name`. A place naming no definition is refused, saying why.
 pub fn refs(name: &str, kinds: &[String], limit: usize, args: &Scope) -> Result<Out<RefsData>> {
     let (roots, workspace) = scope_repos(&args.repos)?;
+    let asked = name;
     let placed = match query::place(name) {
-        Some(_) => Some(placed_name(name, &roots, args.no_sync)?),
+        Some(_) => Some(placed_target(name, &roots, args.no_sync)?),
         None => None,
     };
-    let name = placed.as_deref().unwrap_or(name);
-    let mut out = refs_in(name, kinds, limit, roots, workspace, args.no_sync)?;
+    let name = placed.as_ref().map_or(name, |p| p.qualified.as_str());
+    let mut out = refs_in_for(name, kinds, limit, roots, workspace, args.no_sync, placed.as_ref())?;
     if placed.is_some() {
         out.env["name"] = json!(name);
     }
     let more = out.data.total > out.data.items.len();
-    let req = cursor::Request::Refs { name: name.to_string(), kinds: kinds.to_vec(), limit };
-    cursor::offer(&mut out.env, req, args, vec![cursor::List::new("/items", limit, more)], &[]);
+    // A place is asked again as a place: a page of its references is of that declaration's alone.
+    let req = cursor::Request::Refs { name: (if placed.is_some() { asked } else { name }).to_string(), kinds: kinds.to_vec(), limit };
+    let mut lists = vec![cursor::List::new("/items", limit, more)];
+    if out.env.get("unplaced").is_some() {
+        let n = out.env["unplaced_total"].as_u64().unwrap_or(0) as usize;
+        let shown = out.env["unplaced"].as_array().map_or(0, Vec::len);
+        lists.push(cursor::List::new("/unplaced", limit, n > shown));
+    }
+    cursor::offer(&mut out.env, req, args, lists, &[]);
     finish(&mut out.env);
     Ok(out)
 }
 
 /// [`refs`] over `roots`; `workspace` when they are every indexed repo (the query names no repo and runs outside one).
-fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, workspace: bool, no_sync: bool) -> Result<Out<RefsData>> {
+#[cfg(test)]
+fn refs_in(name: &str, kinds: &[String], limit: usize, roots: Vec<PathBuf>, workspace: bool, no_sync: bool) -> Result<Out<RefsData>> {
+    refs_in_for(name, kinds, limit, roots, workspace, no_sync, None)
+}
+
+/// [`refs_in`]; with `target`, the references of that declaration alone in `items`: those the answer binds only to
+/// another declaration of the name are counted per declaration in `elsewhere`, and those it can't place are listed
+/// apart in `unplaced` (see docs/answers.md, "References to one declaration").
+fn refs_in_for(
+    name: &str,
+    kinds: &[String],
+    limit: usize,
+    mut roots: Vec<PathBuf>,
+    workspace: bool,
+    no_sync: bool,
+    target: Option<&Placed>,
+) -> Result<Out<RefsData>> {
     // Each repo's change since its summary is checked once for the whole query.
     let _memo = kc_index::memo_changes();
     let args = &Scope { repos: Vec::new(), no_sync };
@@ -1844,6 +1991,9 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     let mut callers = crate::whole::Callers::default();
     let mut overloads = crate::whole::Overloads::default();
     let mut hierarchy = None;
+    // Rows bound only elsewhere, per declaration (its place, as the answer names it), and rows that can't be placed.
+    let mut elsewhere: BTreeMap<String, (Value, usize)> = BTreeMap::new();
+    let mut unplaced: Vec<(PathBuf, RefHit)> = Vec::new();
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let (_, bare) = query::split_dotted(name.trim());
@@ -1880,6 +2030,57 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
                 *summary.by_confidence.entry(h.confidence).or_default() += 1;
                 summary.total += 1;
                 hits.push(h);
+            }
+        }
+        if let Some(d) = target {
+            // A member asked as `Type.member` keeps only the references that can point at it, which leaves out uses
+            // on a receiver whose type isn't known (`Fetch().Seal()`): those can't be placed, and some may be `d`'s,
+            // so they go to `unplaced` too, after the rest the answer can't place.
+            let mut unknown_receivers = Vec::new();
+            if name.contains('.') {
+                let seen: HashSet<(String, u32, u32)> = hits.iter().map(|h| (h.file.clone(), h.line, h.col)).collect();
+                let (all, _) = query::refs_with(o.store.conn(), bare, &kinds, usize::MAX, &dep_refs)?;
+                for h in all {
+                    if !seen.contains(&(h.file.clone(), h.line, h.col))
+                        && h.confidence != "external_likely"
+                        && matches!(binding(o.store.conn(), &o.root, &h, d), Binding::Unplaced)
+                    {
+                        unknown_receivers.push((o.root.clone(), h));
+                    }
+                }
+            }
+            let mut kept = Vec::with_capacity(hits.len());
+            for h in hits {
+                match binding(o.store.conn(), &o.root, &h, d) {
+                    Binding::Target => kept.push(h),
+                    Binding::Unplaced => unplaced.push((o.root.clone(), h)),
+                    Binding::Elsewhere => {
+                        let shown: Vec<&query::Target> = h.targets.iter().collect();
+                        let key = shown.iter().map(|t| format!("{}:{}:{}", t.repo.as_deref().unwrap_or(""), t.file, t.line)).collect::<Vec<_>>().join(" ");
+                        let entry = elsewhere.entry(key).or_insert_with(|| {
+                            let place = |t: &query::Target| {
+                                let mut v = json!({ "qualified": t.qualified, "file": t.file, "line": t.line });
+                                if let Some(r) = t.repo.as_ref().or(multi.then(|| repo_name(&o.root)).as_ref()) {
+                                    v["repo"] = json!(r);
+                                }
+                                v
+                            };
+                            let v = match shown.as_slice() {
+                                [one] => place(one),
+                                many => json!({ "among": many.iter().map(|t| place(t)).collect::<Vec<_>>() }),
+                            };
+                            (v, 0)
+                        });
+                        entry.1 += 1;
+                    }
+                }
+            }
+            unplaced.extend(unknown_receivers);
+            hits = kept;
+            summary.total = hits.len();
+            summary.by_confidence = BTreeMap::new();
+            for h in &hits {
+                *summary.by_confidence.entry(h.confidence).or_default() += 1;
             }
         }
         if let Some(g) = order_refs(&o.store, name, &mut hits)? {
@@ -2012,6 +2213,47 @@ fn refs_in(name: &str, kinds: &[String], limit: usize, mut roots: Vec<PathBuf>, 
     if precise > 0 {
         env["precise"] = json!(precise);
         env["corrected"] = json!(corrected);
+    }
+    if let Some(d) = target {
+        let (_, bare) = query::split_dotted(name.trim());
+        if !elsewhere.is_empty() {
+            let mut rows: Vec<(Value, usize)> = elsewhere.into_values().collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_string().cmp(&b.0.to_string())));
+            let n: usize = rows.iter().map(|r| r.1).sum();
+            env["elsewhere"] = json!(rows.into_iter().map(|(mut v, k)| { v["rows"] = json!(k); v }).collect::<Vec<_>>());
+            env["elsewhere_note"] = json!(format!(
+                "{n} reference{} named {bare} bound to other declarations of the name, not {}: kc_refs on one's file:line lists them",
+                if n == 1 { " is" } else { "s are" },
+                d.qualified
+            ));
+        }
+        if !unplaced.is_empty() {
+            let n = unplaced.len();
+            unplaced.truncate(limit);
+            let rows: Vec<Value> = unplaced
+                .iter()
+                .map(|(root, h)| {
+                    let mut v = tag_repo(h, root, multi);
+                    if let Some(r) = &h.repo {
+                        v["repo"] = json!(r);
+                    }
+                    v
+                })
+                .collect();
+            env["unplaced"] = json!(rows);
+            env["unplaced_total"] = json!(n);
+            push_incomplete(
+                &mut env,
+                Incomplete::new(
+                    Reason::Unsupported,
+                    format!(
+                        "unplaced: {n} use{} of the name {bare} couldn't be placed (unresolved, or ambiguous with no candidate listed); listed apart in `unplaced`, and some may be {}'s",
+                        if n == 1 { "" } else { "s" },
+                        d.qualified
+                    ),
+                ),
+            );
+        }
     }
     finish(&mut env);
     Ok(Out { env, data: RefsData { items, total, by_confidence: by_conf, multi, callers: said, overloads: overloads.list, hierarchy } })
@@ -2987,6 +3229,60 @@ impl BusOut {
     }
 }
 
+/// Whether `s` is a message type the bus carries (a `message` bus fact).
+fn is_message_type(o: &Opened, s: &query::SymbolRow) -> Result<bool> {
+    Ok(o.store.conn().query_row("SELECT EXISTS(SELECT 1 FROM bus_facts WHERE symbol_id = ?1 AND kind = 'message')", [s.id], |r| r.get(0))?)
+}
+
+/// A message type's uses that neither publish nor consume it (see [`bus_split`]), cut at the page.
+pub struct BusUsers {
+    pub rows: Vec<RefHit>,
+    /// How many there are in all.
+    pub total: usize,
+    /// The callers kept, each as (repo name, file, line), with the bus role (`publisher`, `consumer`) of the link it
+    /// is.
+    roles: Vec<((String, String, u32), &'static str)>,
+}
+
+/// Splits a message type's callers (fix 4): those inside one of its bus links (the publishing method, or the
+/// consumer: its class or a member of it, in the link's repo and file) stay in `callers`, tagged with the link's role;
+/// the rest (a `new X()` in a mapper or a test builder, a type mention) are its users. Each list is cut at `page`, in
+/// the callers' order, so a cursor's raised page lists a longer prefix of both. `here` is the context's repo name.
+fn bus_split(ctx: &mut Context, bus: &[BusOut], here: &str, page: usize) -> BusUsers {
+    let links: Vec<&BusLinkOut> = bus.iter().filter(|b| b.role == "message").flat_map(|b| b.links.iter()).collect();
+    let role_of = |h: &RefHit| -> Option<&'static str> {
+        let repo = h.repo.as_deref().unwrap_or(here);
+        let from = h.from.as_ref().map(|f| f.container.as_ref().map_or_else(|| f.name.clone(), |c| format!("{c}.{}", f.name)))?;
+        links.iter().find_map(|l| {
+            if l.repo != repo || l.file != h.file {
+                return None;
+            }
+            let class = l.symbol.rsplit_once('.').map_or(l.symbol.as_str(), |(c, _)| c);
+            let inside = from == l.symbol || (l.role == "consumer" && (from == class || from.starts_with(&format!("{class}."))));
+            inside.then_some(l.role)
+        })
+    };
+    let (mut kept, mut rest): (Vec<RefHit>, Vec<RefHit>) = (Vec::new(), Vec::new());
+    let mut roles = Vec::new();
+    for h in std::mem::take(&mut ctx.callers) {
+        match role_of(&h) {
+            Some(role) => {
+                if kept.len() < page {
+                    roles.push(((h.repo.clone().unwrap_or_else(|| here.to_string()), h.file.clone(), h.line), role));
+                }
+                kept.push(h);
+            }
+            None => rest.push(h),
+        }
+    }
+    ctx.callers_summary = query::summarize(&kept);
+    kept.truncate(page);
+    ctx.callers = kept;
+    let total = rest.len();
+    rest.truncate(page);
+    BusUsers { rows: rest, total, roles }
+}
+
 /// The bus facts about a context's symbol. The workspace summary is read only when the repo has a bus fact for it.
 fn bus_for(o: &Opened, ctx: &Context) -> Result<(Vec<BusOut>, Vec<kc_store::unsupported::Site>)> {
     let s = &ctx.symbol;
@@ -3364,6 +3660,8 @@ pub fn context_raised(
     }
     let mut named_like = Vec::new();
     let mut found = Vec::new();
+    // Per found symbol, for a bus message type: the uses of it that neither publish nor consume it (see `bus_split`).
+    let mut bus_users: Vec<Option<BusUsers>> = Vec::new();
     let mut tables = Vec::new();
     let mut table_hits = Vec::new();
     let mut sql = Vec::new();
@@ -3386,7 +3684,21 @@ pub fn context_raised(
         }
         let mut imported = query::context_imports(o.store.conn(), symbol)?;
         let mut deps = open_dependencies_importing(&o, Some(&imported), args.no_sync)?;
-        let mut found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &limits, &dependency_refs(&deps))?;
+        // A bus message type (fix 4): its callers are split into those publishing or consuming it and the rest, each
+        // cut at the page, so the one read keeps every caller (the context builds them all before cutting anyway).
+        let message = match query::definitions(o.store.conn(), symbol)?.first() {
+            Some(s) => is_message_type(&o, s)?,
+            None => false,
+        };
+        let read_limits = ContextLimits {
+            source_chars: limits.source_chars,
+            members: limits.members,
+            callers: if message { usize::MAX } else { limits.callers },
+            callees: limits.callees,
+            conformers: limits.conformers,
+            source: limits.source,
+        };
+        let mut found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &read_limits, &dependency_refs(&deps))?;
         // The file's content differs from the index although its stat didn't move (an edit keeping mtime and size):
         // index it again and answer from that.
         if !args.no_sync && !o.refresh_pending && let Some(file) = found_ctx.as_ref().filter(|c| c.source_changed).map(|c| c.symbol.file.clone()) {
@@ -3398,7 +3710,7 @@ pub fn context_raised(
             }
             imported = query::context_imports(o.store.conn(), symbol)?;
             deps = open_dependencies_importing(&o, Some(&imported), args.no_sync)?;
-            found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &limits, &dependency_refs(&deps))?;
+            found_ctx = query::context_with(o.store.conn(), &o.root, symbol, &read_limits, &dependency_refs(&deps))?;
         }
         // A stored procedure (or table) the repo's code calls but another repo defines: its definition there.
         if found_ctx.is_none()
@@ -3423,6 +3735,9 @@ pub fn context_raised(
             }
         }
         if let Some(mut ctx) = found_ctx {
+            // The message type read uncut above is the one found (a symbol found elsewhere was read at the page).
+            let message = message && ctx.callers_summary.total == ctx.callers.len() && is_message_type(&o, &ctx.symbol)?;
+            let caller_cap = if message { usize::MAX } else { limits.callers };
             // Callers in repos that depend on this one.
             let s = &ctx.symbol;
             let (name, kinds): (String, Vec<&str>) = if s.kind == "init" {
@@ -3481,11 +3796,13 @@ pub fn context_raised(
                 if target_id.is_some() {
                     *ctx.callers_summary.by_confidence.entry(h.confidence).or_default() += 1;
                     ctx.callers_summary.total += 1;
-                    if ctx.callers.len() < limits.callers {
+                    if ctx.callers.len() < caller_cap {
                         ctx.callers.push(h);
                     }
                 }
             }
+            let (bus, mut unknown_publishes) = bus_for(&o, &ctx)?;
+            let mut users = if message { Some(bus_split(&mut ctx, &bus, &repo_name(&o.root), limits.callers)) } else { None };
             // A library's interface or base class: its implementations and subclasses in the repos using it.
             ctx.conformers_elsewhere = dependent_conformers(&o, &ctx.symbol, None, args.no_sync)?;
             let n = ctx.conformers_elsewhere.len();
@@ -3517,17 +3834,23 @@ pub fn context_raised(
                 own.cut = None;
                 ctx.cite = Some(own);
                 citer.refs(&o.root, ctx.callers.iter_mut());
+                if let Some(u) = users.as_mut() {
+                    citer.refs(&o.root, u.rows.iter_mut());
+                }
                 // A callee's statement is in the symbol's source when the answer quotes those lines.
                 let shown = source_shows(&ctx);
                 citer.refs_in_source(&o.root, ctx.callees.iter_mut(), |line| shown.iter().any(|r| r.contains(&line)));
                 unread.extend(citer.incomplete());
-                for h in &mut ctx.callers {
+                for h in ctx.callers.iter_mut().chain(users.iter_mut().flat_map(|u| u.rows.iter_mut())) {
                     if h.cite.as_ref().is_some_and(|c| c.text.is_some()) {
                         h.code = None;
                     }
                 }
             } else if source != kc_store::skeleton::SourceMode::None {
                 fill_call_lines(&o.root, &mut ctx.callers);
+                if let Some(u) = users.as_mut() {
+                    fill_call_lines(&o.root, &mut u.rows);
+                }
             }
             // No resolved caller of a callable: say so, and how many references by its name resolve elsewhere.
             let callable = matches!(ctx.symbol.kind.as_str(), "method" | "function" | "init" | "property");
@@ -3549,7 +3872,6 @@ pub fn context_raised(
             let t = db::for_symbol(o.store.conn(), &model, &ctx.symbol, limits.callers)?;
             sql.push(sql_facts(&o, &ctx, &t, limits.callers, args.no_sync)?);
             tables.push(t);
-            let (bus, mut unknown_publishes) = bus_for(&o, &ctx)?;
             unknown_publishes.extend(unplaced);
             let di_found = ctx.di.as_ref().is_some_and(|d| !d.registrations.is_empty() || !d.registered_as.is_empty() || d.injection_sites > 0)
                 || !ctx.di_implementers.is_empty();
@@ -3572,6 +3894,7 @@ pub fn context_raised(
                 Vec::new()
             });
             found.push((o.root.clone(), ctx, http, angular, bus));
+            bus_users.push(users);
         } else if let Some(file) = indexed_file(&o, symbol)? {
             // A file: its top-level declarations, its area, and the notes on its symbols.
             let page = raise.map_or(FILE_DECLARATIONS, |r| r.max(FILE_DECLARATIONS));
@@ -3647,6 +3970,24 @@ pub fn context_raised(
             }
             if !bus.is_empty() {
                 v["bus"] = json!(bus);
+            }
+            if let Some(u) = &bus_users[i] {
+                if let Some(rows) = v["callers"].as_array_mut() {
+                    for r in rows {
+                        let here = repo_name(root);
+                        let at = (r["repo"].as_str().unwrap_or(&here).to_string(), r["file"].as_str().unwrap_or("").to_string(), r["line"].as_u64().unwrap_or(0) as u32);
+                        if let Some((_, role)) = u.roles.iter().find(|(k, _)| *k == at) {
+                            r["bus"] = json!(role);
+                        }
+                    }
+                }
+                if u.total > 0 {
+                    v["users"] = json!(u.rows);
+                    v["users_total"] = json!(u.total);
+                    v["users_note"] = json!(
+                        "uses of the message type that neither publish nor consume it (constructions, mappings, type mentions); `callers` holds those that do"
+                    );
+                }
             }
             if let Some(a) = angular {
                 v["angular"] = json!(a);
@@ -3729,9 +4070,17 @@ pub fn context_raised(
             lists.push(cursor::List::new(format!("/items/{i}/ansible/{k}"), page, deploy_cut.contains(&(i, *k))));
         }
     }
-    for (i, (_, c, ..)) in found.iter().enumerate() {
+    for (i, (_, c, _, _, bus)) in found.iter().enumerate() {
         let at = format!("/items/{}", repo_items_n + i);
         lists.push(cursor::List::new(format!("{at}/callers"), limits.callers, c.callers_summary.total > c.callers.len()));
+        if let Some(u) = &bus_users[i] {
+            lists.push(cursor::List::new(format!("{at}/users"), limits.callers, u.total > u.rows.len()));
+        }
+        // A message type's bus links are its publishers and consumers in other repos: whole here, and when the size
+        // cap cuts them they continue by `links_cursor` like any other list, rather than being lost to the answer.
+        for j in 0..bus.len() {
+            lists.push(cursor::List::new(format!("{at}/bus/{j}/links"), limits.callers, false));
+        }
         lists.push(cursor::List::new(format!("{at}/callees"), limits.callees, c.callees_total > c.callees.len()));
         lists.push(cursor::List::new(format!("{at}/members"), limits.members, c.members_total > c.members.len()));
         lists.push(cursor::List::new(format!("{at}/conformers"), limits.conformers, c.conformers_total.is_some()));
@@ -3740,6 +4089,9 @@ pub fn context_raised(
         for (j, t) in tables[i].tables.iter().enumerate() {
             let cut = t.accessors_total.is_some_and(|n| n > t.accessors.len());
             lists.push(cursor::List::new(format!("{at}/tables/{j}/accessors"), limits.callers, cut));
+        }
+        if !sql[i].is_empty() {
+            lists.push(cursor::List::new(format!("{at}/sql/used_by"), limits.callers, sql[i].used_by_truncated));
         }
     }
     // A file's declarations continue too.
@@ -5229,6 +5581,18 @@ impl<'a> HttpCrossing<'a> {
     /// tables mapped to it (with their accessors), and calls running it. Only code whose name links to this definition
     /// (see `kc_index::sql`) counts.
     pub(crate) fn sql_uses(&mut self, root: &Path, sym: &query::SymbolRow, summaries: &[kc_index::workspace::RepoSummary]) -> Result<Vec<SqlUse>> {
+        Ok(self.sql_uses_upto(root, sym, summaries, None)?.0)
+    }
+
+    /// [`Self::sql_uses`] reading at most `max_repos` of the repos naming `sym` (in the summaries' order, which a
+    /// cursor relies on), with how many it read and how many name it. A cancelled call stops before the next repo.
+    pub(crate) fn sql_uses_upto(
+        &mut self,
+        root: &Path,
+        sym: &query::SymbolRow,
+        summaries: &[kc_index::workspace::RepoSummary],
+        max_repos: Option<usize>,
+    ) -> Result<(Vec<SqlUse>, usize, usize)> {
         let relation = kc_store::sql::is_relation(sym);
         let kinds = if relation { kc_index::sql::TABLE_KINDS } else { kc_index::sql::ROUTINE_KINDS };
         let sql = kc_index::sql::Sql::new(summaries, Some(&self.home.root));
@@ -5236,7 +5600,15 @@ impl<'a> HttpCrossing<'a> {
         let me = key(&sym.kind, sym.container.as_deref(), &sym.name);
         let name = sym.name.to_lowercase();
         let mut out = Vec::new();
-        for repo in sql.users(&name) {
+        let users = sql.users(&name);
+        let naming = users.len();
+        let mut read = 0;
+        for repo in users {
+            if max_repos.is_some_and(|m| read >= m) {
+                break;
+            }
+            read += 1;
+            kc_store::limits::check()?;
             if !repo.join(".git").exists() {
                 continue;
             }
@@ -5266,7 +5638,7 @@ impl<'a> HttpCrossing<'a> {
                 }
             }
         }
-        Ok(out)
+        Ok((out, read, naming))
     }
 
     /// The code depending on `sym`, a SQL table, view or routine: the methods reading or writing an entity mapped to
@@ -6275,8 +6647,9 @@ fn impact_repo(
     let mut impact = crate::tree::impact(g, &ids, p.depth, p.limit)?;
     // The diff's pre-change side: code still naming a definition the change removed.
     let gone = crate::removed::removed(conn, &old_defs, &ids)?;
+    let resigned = crate::removed::resigned(conn, &old_defs, &gone)?;
     let mut removed = Vec::new();
-    if !gone.is_empty() {
+    if !gone.is_empty() || !resigned.is_empty() {
         let mut seen = trace::Reached::default();
         for s in &impact.scope {
             seen.root(s.id);
@@ -6290,7 +6663,7 @@ fn impact_repo(
         let room = p.limit.saturating_sub(impact.affected.len());
         let depth = p.depth.clamp(1, trace::MAX_IMPACT_DEPTH);
         let mut onward = |from: &[i64], room: usize, seen: &mut trace::Reached| crate::tree::dependents(g, 0, from, 1, depth, room, seen);
-        let (more, list, cut) = crate::removed::dependents(conn, &gone, &mut seen, edges, depth, room, &mut onward)?;
+        let (more, list, cut) = crate::removed::dependents(conn, &crate::removed::PreChange { gone: &gone, resigned: &resigned }, &mut seen, edges, depth, room, &mut onward)?;
         // A better way to a symbol listed already replaces its row; each row's class by its nearest way.
         let mut at: HashMap<i64, usize> = impact.affected.iter().enumerate().map(|(i, a)| (a.id, i)).collect();
         for a in more {
@@ -6984,7 +7357,7 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
     for root in &roots {
         let Some(o) = open_member(&roots, root, args.no_sync)? else { continue };
         let mut g = crate::walk::Graph::new(&o, &[], args.no_sync, usize::MAX).with_edges(edges.clone());
-        let r = tests_repo(p, &o, &mut g)?;
+        let r = tests_repo(p, &o, &mut g, &[])?;
         drop(g);
         found.extend(r);
         opened.push(o);
@@ -6995,11 +7368,18 @@ pub fn tests(p: &TestsParams, args: &Scope) -> Result<Out<Vec<TestsRepo>>> {
 /// [`tests`] of one repo the caller has open, walked on a symbol graph it holds under the tests' own evidence policy
 /// (see [`impact_on`]). The answer is `tests`'s for that repo.
 pub(crate) fn tests_on(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Out<Vec<TestsRepo>>> {
+    tests_on_also(p, o, g, &[])
+}
+
+/// [`tests_on`] walking from the symbols `also` too, as if they were changed: for `review`, the code calling a method
+/// as it was before the change, which `impact --diff` reads from the base commit (see [`crate::removed`]). That code no
+/// longer builds against the change, so the tests reaching it are among the tests to run.
+pub(crate) fn tests_on_also(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph, also: &[i64]) -> Result<Out<Vec<TestsRepo>>> {
     let _memo = kc_index::memo_changes();
     let edges = tests_edges(p)?;
     let before = o.consulted.list();
     g.begin_walk(edges.clone());
-    let out = tests_repo(p, o, g).and_then(|found| tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges));
+    let out = tests_repo(p, o, g, also).and_then(|found| tests_answer(p, std::slice::from_ref(o), found.into_iter().collect(), &edges));
     o.consulted.reset(before);
     out
 }
@@ -7013,7 +7393,7 @@ fn tests_edges(p: &TestsParams) -> Result<trace::EdgeFilter> {
 }
 
 /// One repo's part of [`tests`], walked on `g` (whose home is `o`); none when no target is in it.
-fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result<Option<TestsRepo>> {
+fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph, also: &[i64]) -> Result<Option<TestsRepo>> {
     let root = o.root.as_path();
     let conn = o.store.conn();
     let mut ids: Vec<i64> = Vec::new();
@@ -7039,6 +7419,7 @@ fn tests_repo(p: &TestsParams, o: &Opened, g: &mut crate::walk::Graph) -> Result
             }
         }
     }
+    ids.extend_from_slice(also);
     changed.sort();
     changed.dedup();
     ids.sort_unstable();
@@ -7742,14 +8123,20 @@ fn docs_markdown(env: &Value, r: &Value) -> String {
         );
         for f in files {
             let file = s(&f["file"]);
+            // The fence's language, for highlighting; one KnowCode doesn't name is left bare rather than mislabelled.
             let lang = match file.rsplit('.').next() {
+                Some("swift") => "swift",
                 Some("py") => "python",
                 Some("rs") => "rust",
                 Some("cs") => "csharp",
-                Some("ts") => "typescript",
+                Some("ts" | "mts" | "cts") => "typescript",
                 Some("tsx") => "tsx",
+                Some("js" | "mjs" | "cjs" | "jsx") => "javascript",
+                Some("java") => "java",
+                Some("kt" | "kts") => "kotlin",
+                Some("go") => "go",
                 Some("cfm" | "cfc" | "cfs") => "cfml",
-                _ => "swift",
+                _ => "",
             };
             let _ = writeln!(md, "### `{file}`\n\n```{lang}");
             for sym in arr(&f["symbols"]) {
@@ -8482,6 +8869,18 @@ pub fn note_rm(id: i64, args: &Scope) -> Result<Vec<PathBuf>> {
 pub(crate) mod tests {
     use super::*;
 
+    /// Each file in docs' `## Map` is fenced with its own language, and one KnowCode doesn't name with none: a Java
+    /// file once came out as ```swift.
+    #[test]
+    fn docs_map_fences_each_file_in_its_own_language() {
+        let file = |f: &str| json!({ "file": f, "symbols": [{ "signature": "x", "line": 1 }] });
+        let r = json!({ "repo": "shop", "map": { "files": [file("src/A.java"), file("pkg/b.go"), file("src/c.swift"), file("build.gradle")] } });
+        let md = docs_markdown(&json!({}), &r);
+        for (f, fence) in [("src/A.java", "```java\n"), ("pkg/b.go", "```go\n"), ("src/c.swift", "```swift\n"), ("build.gradle", "```\n")] {
+            assert!(md.contains(&format!("### `{f}`\n\n{fence}")), "{f}: {md}");
+        }
+    }
+
     /// A fan-out's workers run as the query that started it: what they note is the query's, and its cancellation
     /// stops them.
     /// An answer naming a file the extractor couldn't read whole says so: the file, its first error, and the
@@ -9103,7 +9502,7 @@ public class OrderStore\n{\n    private readonly ShopContext _db;\n    private r
     }
 
     /// Commits everything in `dir` with a fixed author.
-    fn commit(dir: &Path, msg: &str) {
+    pub(crate) fn commit(dir: &Path, msg: &str) {
         let git = |args: &[&str]| {
             let out = std::process::Command::new("git")
                 .arg("-C")
@@ -10541,9 +10940,10 @@ public class User { public void Go(Store s, Other o) { o.Put(); s.Put(); var x =
             ],
         );
         // One module's `const` and `type` of one name are one declaration; same-named types local to two callbacks
-        // aren't.
+        // aren't, and each callback names its own.
         assert_eq!(at(&web, "Kind", "src/kind.test.ts", 5), ("exact", vec![1, 2]));
-        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 5).0, "ambiguous");
+        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 5), ("exact", vec![4]));
+        assert_eq!(at(&web, "Expected", "src/kind.test.ts", 9), ("exact", vec![8]));
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -12655,10 +13055,12 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// A find cut past every match with the name asked for is complete, the other names `more`; cut among them, it
-    /// is incomplete.
+    /// A plain name with declarations named exactly that answers with those alone, a few other names apart in
+    /// `similar`, and is complete with the rest `more`; cut among those named so, it is incomplete. A name no
+    /// declaration has exactly, a qualified name and a kind are answered as before: every match named so in any case
+    /// listed first, the other names after them on the page.
     #[test]
-    fn find_is_complete_when_only_other_names_are_cut() {
+    fn find_lists_the_exact_name_alone_and_other_names_apart() {
         let cache = test_cache();
         let base = cache.dir("find-rest");
         let root = repo(
@@ -12668,16 +13070,43 @@ public class Orphans\n{\n    public void Unused() { }\n    public string Name() 
                 ("a.py", "class Ledger:\n    pass\n"),
                 ("b.py", "class Ledger:\n    pass\n"),
                 ("c.py", "class LedgerRow:\n    pass\nclass LedgerTotal:\n    pass\nclass LedgerView:\n    pass\n"),
+                ("d.py", "class Book:\n    def ledger(self):\n        pass\n"),
             ],
         );
         let scope = Scope { repos: vec![root], no_sync: false };
-        let env = find("Ledger", None, 3, &scope).unwrap().env;
-        assert_eq!((env["complete"].clone(), env.get("incomplete")), (json!(true), None), "{env}");
+        let out = find("Ledger", None, 4, &scope).unwrap();
+        let env = out.env;
+        let names: Vec<&str> = env["items"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Ledger", "Ledger"], "{env}");
+        // The other case first, then the prefixes; `similar` never counts among the items.
+        assert_eq!(env["similar"], json!(["method Book.ledger  d.py:2", "class LedgerRow  c.py:1"]), "{env}");
+        assert_eq!(out.data.similar.len(), 2);
+        assert_eq!((env["complete"].clone(), env.get("incomplete"), env["total"].clone()), (json!(true), None, json!(6)), "{env}");
         let more = crate::contract::more_of(&env);
-        assert!(more.len() == 1 && more[0].detail.starts_with("items: 3 of 5 shown; every match named Ledger"), "{env}");
+        assert!(
+            more.len() == 1 && more[0].detail.starts_with("items: 2 of 6 shown; every declaration named exactly Ledger is listed; `similar` names 2 of the 4 other matches"),
+            "{env}"
+        );
+        // Every other match in `similar`: nothing hidden, so nothing cut.
+        let env = find("Ledger", None, 10, &scope).unwrap().env;
+        assert_eq!(env["similar"].as_array().unwrap().len(), 4, "{env}");
+        assert_eq!((env["complete"].clone(), env.get("more"), env.get("rest"), env["truncated"].clone()), (json!(true), None, None, json!(false)), "{env}");
         // One of the two named so cut: incomplete.
         let env = find("Ledger", None, 1, &scope).unwrap().env;
         assert_eq!((env["complete"].clone(), env.get("rest")), (json!(false), None), "{env}");
+        // No declaration named `LEDGER` exactly: the page as before, the case-blind matches first.
+        let env = find("LEDGER", None, 4, &scope).unwrap().env;
+        assert_eq!(env.get("similar"), None, "{env}");
+        let names: Vec<&str> = env["items"].as_array().unwrap().iter().map(|i| i["name"].as_str().unwrap()).collect();
+        assert_eq!(names.len(), 4, "{env}");
+        assert!(names[..3].iter().all(|n| n.eq_ignore_ascii_case("ledger")), "{env}");
+        // A kind narrows the matches itself: as before.
+        let env = find("Ledger", Some("class"), 4, &scope).unwrap().env;
+        assert_eq!((env.get("similar"), env["items"].as_array().unwrap().len()), (None, 4), "{env}");
+        assert!(env["rest"].as_str().unwrap().starts_with("every match named Ledger (in any case)"), "{env}");
+        // A qualified name: as before.
+        let env = find("Book.ledger", None, 4, &scope).unwrap().env;
+        assert_eq!((env.get("similar"), env["items"][0]["name"].clone()), (None, json!("ledger")), "{env}");
         let _ = std::fs::remove_dir_all(&base);
     }
 

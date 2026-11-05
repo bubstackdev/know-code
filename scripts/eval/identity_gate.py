@@ -44,6 +44,8 @@ import time
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
+sys.path.insert(0, str(HERE.parent))  # scripts/: kc_env
+from kc_env import knowcode_env  # noqa: E402
 REPOS = HERE/'identity/repos.txt'
 LABELS = ROOT/'eval/identity-v1/labels.jsonl'
 EXACT_PRECISION = 0.99
@@ -291,10 +293,7 @@ def binary_hash(binary):
 
 
 def kc_env(base):
-    for d in ('home', 'cache', 'config', 'data'):
-        (base/d).mkdir(parents=True, exist_ok=True)
-    return dict(GIT_ENV, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'),
-                KNOWCODE_CONFIG_DIR=str(base/'config'), KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
+    return knowcode_env(base, start=GIT_ENV)
 
 
 OVERLOAD = re.compile(r'^(\d+): .* at (.+?):(\d+)(?: \([^)]*\))*$')

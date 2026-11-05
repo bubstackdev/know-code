@@ -131,7 +131,7 @@ fn a_worktree_starts_from_the_base_and_holds_what_a_cold_index_holds() {
     let main = repo("shop", 30);
     drop(indexed(&main));
     let published = kc_index::base::publish(&main).unwrap().expect("a clean checkout with a worktree publishes a base");
-    assert!(published.starts_with(base().join("cache/bases")), "{published:?}");
+    assert!(published.starts_with(kc_index::tree_dir().unwrap().join("bases")), "{published:?}");
     // The checkout it was published from adopts it: its index is a clone of the base, with its own records.
     let store = kc_index::open(&main).unwrap();
     assert_eq!(store.meta(kc_index::base::META_FROM).unwrap().as_deref(), published.file_name().and_then(|n| n.to_str()));
@@ -275,7 +275,8 @@ fn a_repo_checked_out_once_or_dirty_publishes_no_base() {
     git(&main, &["worktree", "prune"]);
     drop(indexed(&main));
     assert!(kc_index::base::publish(&main).unwrap().is_none());
-    assert!(!base().join("cache/bases").exists() || std::fs::read_dir(base().join("cache/bases")).unwrap().next().is_none());
+    let bases = kc_index::tree_dir().unwrap().join("bases");
+    assert!(!bases.exists() || std::fs::read_dir(&bases).unwrap().next().is_none());
 }
 
 #[test]

@@ -38,7 +38,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))  # scripts/: kc_env
 from clean_machine import is_knowcode_tool  # noqa: E402
+from kc_env import knowcode_env  # noqa: E402
 
 QUESTIONS = HERE / "adoption-questions.jsonl"
 PLUGIN = HERE.parent.parent / "integrations" / "claude-code"
@@ -107,16 +109,13 @@ def session_argv(client: str, question: str, config: str, *, model: str, effort:
 
 
 def session_env(base: Path, knowcode: Path, cache: Path, client: str) -> dict:
-    home = base / "home"
-    for d in (home, base / "claude-config", base / "kc-config", base / "kc-data", base / "tmp"):
+    for d in (base / "claude-config", base / "tmp"):
         d.mkdir(parents=True, exist_ok=True)
     path = os.pathsep.join([str(knowcode.parent), str(Path(client).parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
-    env = {"HOME": str(home), "PATH": path, "LC_ALL": "C", "SHELL": "/bin/bash", "TMPDIR": str(base / "tmp"),
-           "CLAUDE_CONFIG_DIR": str(base / "claude-config"), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-           "KNOWCODE_CACHE_DIR": str(cache), "KNOWCODE_CONFIG_DIR": str(base / "kc-config"),
-           "KNOWCODE_DATA_DIR": str(base / "kc-data"), "KNOWCODE_UPDATE_CHECK": "0"}
-    env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
-    return env
+    start = {"PATH": path, "LC_ALL": "C", "SHELL": "/bin/bash", "TMPDIR": str(base / "tmp"),
+             "CLAUDE_CONFIG_DIR": str(base / "claude-config"), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+             "ANTHROPIC_API_KEY": os.environ["ANTHROPIC_API_KEY"]}
+    return knowcode_env(base, start, cache=cache, config=base / "kc-config", data=base / "kc-data")
 
 
 def parse_stream(path: Path) -> dict:
@@ -156,9 +155,7 @@ def parse_stream(path: Path) -> dict:
 
 
 def index_repos(knowcode: Path, repos: Path, names: set[str], cache: Path, work: Path) -> None:
-    env = {"HOME": str(work / "index-home"), "PATH": "/usr/bin:/bin", "KNOWCODE_CACHE_DIR": str(cache),
-           "KNOWCODE_CONFIG_DIR": str(work / "index-config"), "KNOWCODE_DATA_DIR": str(work / "index-data"),
-           "KNOWCODE_UPDATE_CHECK": "0"}
+    env = knowcode_env(work / "index", {"PATH": "/usr/bin:/bin"}, cache=cache)
     for name in sorted(names):
         subprocess.run([str(knowcode), "index", str(repos / name)], env=env, check=True, stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL)

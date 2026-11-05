@@ -1,0 +1,36 @@
+#!/bin/sh
+# Cargo's runner for this workspace (.cargo/config.toml): every binary cargo runs comes through here. Test binaries
+# (unit and integration tests and benches, which cargo builds into target/<profile>/deps/) each get their own
+# throwaway home, so a test can't read the developer's config.toml, write into their real index cache, or wait on a
+# lock held by their running `knowcode serve`. That holds for every test without the test asking for it, which is
+# the point: most integration tests never set KNOWCODE_*_DIR, and CI passed only because its runners have no user
+# state. `cargo run` and examples (target/<profile>/<name>, target/<profile>/examples/) run unchanged.
+#
+# The sandbox: HOME and the XDG base directories point inside it, so `dirs` (and so KnowCode's defaults) resolve
+# there on macOS and Linux; KNOWCODE_CACHE_DIR, KNOWCODE_CONFIG_DIR and KNOWCODE_DATA_DIR are cleared, since a value
+# inherited from the developer's shell would point tests back at real state (tests that need them set their own);
+# the update check is off; git gets CI's test identity from the sandbox's own .gitconfig; and the Rust toolchain
+# stays reachable. KNOWCODE_TEST_SANDBOX names the sandbox, and crates/kc-index/tests/isolation.rs fails if a test
+# process can still resolve the real user directories. KNOWCODE_TEST_KEEP=1 keeps the sandbox for inspection.
+case "$1" in
+    */deps/*) ;;
+    *) exec "$@" ;;
+esac
+real_home=$HOME
+: "${CARGO_HOME:=$real_home/.cargo}" "${RUSTUP_HOME:=$real_home/.rustup}"
+sandbox=$(mktemp -d "${TMPDIR:-/tmp}/knowcode-test.XXXXXX") || exit 1
+mkdir -p "$sandbox/home" || exit 1
+printf '[user]\n\tname = Test Author\n\temail = test@example.test\n' > "$sandbox/home/.gitconfig"
+unset KNOWCODE_CACHE_DIR KNOWCODE_CONFIG_DIR KNOWCODE_DATA_DIR
+export HOME="$sandbox/home" XDG_CONFIG_HOME="$sandbox/home/.config" XDG_CACHE_HOME="$sandbox/home/.cache" \
+    XDG_DATA_HOME="$sandbox/home/.local/share" XDG_STATE_HOME="$sandbox/home/.local/state" \
+    KNOWCODE_UPDATE_CHECK=0 KNOWCODE_TEST_SANDBOX="$sandbox" CARGO_HOME RUSTUP_HOME
+"$@"
+status=$?
+if [ "${KNOWCODE_TEST_KEEP:-0}" = 1 ]; then
+    echo "test-runner: kept $sandbox" >&2
+else
+    chmod -R u+w "$sandbox" 2>/dev/null
+    rm -rf "$sandbox"
+fi
+exit $status

@@ -32,6 +32,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # scripts/: kc_env
+import kc_env  # noqa: E402
+
 ENDPOINT = "https://api.anthropic.com/v1/messages/count_tokens"
 SERVER = "knowcode"
 PROFILES = ["one", "all", "core"]
@@ -52,10 +55,7 @@ DEFERRED_INTRO = "The following deferred tools are available through tool search
 def server_view(bin_, profile):
     """(instructions, tools) as `BIN serve --tools profile` advertises them, from a scratch environment."""
     with tempfile.TemporaryDirectory(prefix="kc-schema-cost-") as tmp:
-        env = dict(os.environ)
-        for name in ("CACHE", "CONFIG", "DATA"):
-            env[f"KNOWCODE_{name}_DIR"] = str(Path(tmp, name.lower()))
-        env["KNOWCODE_UPDATE_CHECK"] = "0"
+        env = kc_env.knowcode_env(tmp)
         env.pop("KNOWCODE_TOOLS", None)
         msgs = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize",

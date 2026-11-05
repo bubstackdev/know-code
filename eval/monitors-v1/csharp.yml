@@ -1,0 +1,34 @@
+id: sync-over-async
+language: CSharp
+severity: warning
+message: blocking on a task ($T)
+rule:
+  any:
+    - pattern: $T.Result
+    - pattern: $T.Wait()
+    - pattern: $T.GetAwaiter().GetResult()
+---
+id: argument-null-guard
+language: CSharp
+severity: info
+message: hand-written null guard for $P
+rule:
+  pattern: throw new ArgumentNullException($P)
+---
+id: new-exception-without-message
+language: CSharp
+severity: hint
+message: exception without a message
+rule:
+  pattern: new $E()
+constraints:
+  E:
+    regex: Exception$
+---
+id: lock-this
+language: CSharp
+severity: warning
+message: lock on this
+rule:
+  kind: lock_statement
+  regex: ^lock\s*\(\s*this\s*\)

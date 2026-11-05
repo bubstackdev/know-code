@@ -1,0 +1,9 @@
+# find-dev-v1's public repositories: name, language, URL and the commit labelled (eval/find-dev-v1/README.md).
+mediatr csharp https://github.com/jbogard/MediatR 62010baf12851770553f275ce4047e93f4471e79
+fluentvalidation csharp https://github.com/FluentValidation/FluentValidation f95dbd5c8166a10e38f7a8bca4d752abd641a453
+jotai typescript https://github.com/pmndrs/jotai e5971ba44866d070564a0a30187f6976fee0e350
+class-validator typescript https://github.com/typestack/class-validator 2e1a5c27dbd65b80e27fe96b49bd6e6641fa3603
+pflag go https://github.com/spf13/pflag f8a990678a6d44385313e9b19e40737f889f9b14
+urfave-cli go https://github.com/urfave/cli 293b0229b99c460fa66283418569773681df010d
+commons-cli jvm https://github.com/apache/commons-cli 7dfda5bb37158b99d543f03ac8f56c68add46094
+commons-text jvm https://github.com/apache/commons-text aeab8401bbdb1a98d458c10f4ef6d77a86e5b4ba

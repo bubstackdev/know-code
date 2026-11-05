@@ -6,6 +6,7 @@ mod cite;
 mod contract;
 mod compact;
 mod cursor;
+mod sarif;
 mod diagram;
 #[cfg(test)]
 mod completeness;
@@ -16,6 +17,7 @@ mod help;
 mod history;
 mod hook;
 mod mcp;
+mod memory;
 mod more_text;
 mod ops;
 mod pending;
@@ -26,7 +28,12 @@ mod removed;
 mod render;
 #[cfg(test)]
 mod repo_walks;
+mod rules;
+// The `review` answer's markdown and SARIF: called by review's `format`, which its wiring adds.
+#[allow(dead_code)]
+mod review_format;
 mod restricted;
+mod review;
 mod session_hook;
 mod settings;
 mod summary;
@@ -39,6 +46,24 @@ mod tree;
 mod walk;
 mod unread;
 mod whole;
+#[cfg(test)]
+mod local_decl_tests;
+#[cfg(test)]
+mod jsx_impact_tests;
+#[cfg(test)]
+mod overload_tests;
+#[cfg(test)]
+mod resigned_tests;
+#[cfg(test)]
+mod receiver_path_tests;
+#[cfg(test)]
+mod refs_target_tests;
+#[cfg(test)]
+mod ts_local_scope_tests;
+#[cfg(test)]
+mod table_context_tests;
+#[cfg(test)]
+mod bus_context_tests;
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -226,6 +251,30 @@ enum Cmd {
         /// Tests to list.
         #[arg(long, default_value_t = mcp::TASK_TESTS.default)]
         tests: usize,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
+    /// One bounded review of a diff: what it changes, the tests to run, files usually changed with it, what depends on
+    /// it, and the repo's rule matches it brings.
+    Review {
+        /// `working` (uncommitted changes) or a git revision: the diff is from it to the working tree.
+        #[arg(long, default_value = "working")]
+        diff: String,
+        /// Changed files to list.
+        #[arg(long, default_value_t = mcp::REVIEW_CHANGES.default)]
+        changes: usize,
+        /// Dependent files to list.
+        #[arg(long, default_value_t = mcp::REVIEW_DEPENDENTS.default)]
+        dependents: usize,
+        /// Tests to list.
+        #[arg(long, default_value_t = mcp::REVIEW_TESTS.default)]
+        tests: usize,
+        /// Missed partners to list.
+        #[arg(long, default_value_t = mcp::REVIEW_MISSED.default)]
+        missed: usize,
+        /// `markdown` (default: a comment for a pull request), or `sarif` (a SARIF 2.1.0 log); --json gives the answer.
+        #[arg(long, default_value = "markdown")]
+        format: String,
         #[command(flatten)]
         repo: RepoArgs,
     },
@@ -622,6 +671,39 @@ enum Cmd {
         #[command(flatten)]
         repo: RepoArgs,
     },
+    /// Run ast-grep rules (rule YAML files; `fix` is refused) over the repo and print their matches; with
+    /// --new-since, as a monitor: only the matches that ref didn't have.
+    Rules {
+        /// Rule file or directory of them (repeatable); relative to the repo's root. Default: `[rules] paths`.
+        #[arg(long = "rules")]
+        paths: Vec<PathBuf>,
+        /// Report only the matches this commit (branch, tag, sha) didn't have.
+        #[arg(long)]
+        new_since: Option<String>,
+        /// A line regex instead of rules: each line it matches is a match (a text monitor with --new-since).
+        #[arg(long, conflicts_with = "paths")]
+        regex: Option<String>,
+        /// Path glob (repeatable); `!` excludes.
+        #[arg(long, short = 'g')]
+        glob: Vec<String>,
+        /// Matches listed at most (default 50; every match for --format sarif).
+        #[arg(long, short = 'n')]
+        limit: Option<usize>,
+        /// Skip this many results (for paging; see next_offset).
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Run over every indexed repo in the workspace.
+        #[arg(long, short = 'a', conflicts_with = "repos")]
+        all: bool,
+        /// Stop after this many matches.
+        #[arg(long, default_value_t = 50_000, hide = true)]
+        max_matches: usize,
+        /// `text` (default), or `sarif` (a SARIF 2.1.0 log; --json gives the answer itself).
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[command(flatten)]
+        repo: RepoArgs,
+    },
     /// Structural search with an ast-grep pattern: code with metavariables (`$X` one node, `$$$ARGS` any number,
     /// `$_` one node, uncaptured), matched against syntax trees: `knowcode grep-ast 'new HttpClient($$$)' -l cs`.
     GrepAst {
@@ -909,6 +991,10 @@ fn notes_repo(path: &std::path::Path) -> Result<PathBuf> {
 
 fn main() {
     let cli = Cli::parse();
+    // Before any thread starts: the long-lived commands run with an allocator that gives freed memory back.
+    if matches!(&cli.command, Cmd::Serve { .. } | Cmd::Index { .. }) {
+        memory::lean_allocator();
+    }
     // A command or query that has to build a repo's reference graph is one the user waits for: most of the machine
     // (a server's background builds take their own share, see `refresh`). Read only when one is built.
     kc_store::rank::set_default_threads(|| {
@@ -1011,11 +1097,11 @@ fn run(cli: Cli) -> Result<()> {
             emit(&repo, &out.env, || render::at(&out.data, out.env["file_indexed"].as_bool().unwrap_or(false)))
         }
         Cmd::Find { query, kind, limit, repo } => {
-            let out = ops::find(&query, kind.as_deref(), limit, &repo.scope())?;
+            let out = cursor::find_definitions(&query, kind.as_deref(), limit, &repo.scope())?;
             emit(&repo, &out.env, || {
                 let d = &out.data;
                 if !d.items.is_empty() || d.manifests.is_empty() {
-                    render::find(&d.items, d.total, d.multi, d.capped, &d.declared);
+                    render::find(&d.items, &d.similar, d.total, d.multi, d.capped, &d.declared);
                 }
                 render::manifest_hits(&d.manifests);
             })
@@ -1034,11 +1120,30 @@ fn run(cli: Cli) -> Result<()> {
             let out = task::task(&p, &repo.scope())?;
             emit(&repo, &out.env, || task::render(&out.env))
         }
+        Cmd::Review { diff, changes, dependents, tests, missed, format, repo } => {
+            let mut p = review::ReviewParams::new(diff);
+            p.changes = mcp::REVIEW_CHANGES.clamp(Some(changes));
+            p.dependents = mcp::REVIEW_DEPENDENTS.clamp(Some(dependents));
+            p.tests = mcp::REVIEW_TESTS.clamp(Some(tests));
+            p.missed = mcp::REVIEW_MISSED.clamp(Some(missed));
+            let out = review::review(&p, &repo.scope())?;
+            match format.as_str() {
+                "markdown" => emit(&repo, &out.env, || print!("{}", review_format::markdown(&out.env))),
+                "sarif" => {
+                    println!("{}", serde_json::to_string_pretty(&review_format::sarif(&out.env))?);
+                    Ok(())
+                }
+                other => anyhow::bail!("--format is markdown or sarif, not {other}"),
+            }
+        }
         Cmd::Refs { name, kind, limit, cite, repo } => {
             cite.enter();
             let out = ops::refs(&name, &kind, limit, &repo.scope())?;
             let d = &out.data;
-            emit(&repo, &out.env, || render::refs(&name, d))
+            emit(&repo, &out.env, || {
+                render::refs(&name, d);
+                render::refs_apart(&out.env);
+            })
         }
         Cmd::Context { symbol, budget, source, limit, cite, repo } => {
             cite.enter();
@@ -1302,6 +1407,22 @@ fn run(cli: Cli) -> Result<()> {
             };
             let out = ops::grep_ast(&ops::AstParams { opts, limit, offset }, &repo.scope())?;
             emit(&repo, &out.env, || render::grep_ast(&out.data))
+        }
+        Cmd::Rules { paths, new_since, regex, glob, limit, offset, all, max_matches, format, mut repo } => {
+            if all {
+                repo.repos = kc_index::indexed_roots()?;
+            }
+            let limit = limit.unwrap_or(if format == "sarif" { usize::MAX } else { 50 });
+            let p = rules::RulesParams { paths, inline: None, regex, new_since, globs: glob, limit, offset, max_matches };
+            let out = rules::rules(&p, &repo.scope())?;
+            match format.as_str() {
+                "text" => emit(&repo, &out.env, || rules::render(&out.data)),
+                "sarif" => {
+                    println!("{}", serde_json::to_string_pretty(&sarif::rules(&out.data, &out.env))?);
+                    Ok(())
+                }
+                other => anyhow::bail!("--format is text or sarif, not {other}"),
+            }
         }
         Cmd::Files { repo } => {
             for (root, files) in ops::content_files(&repo.scope())? {

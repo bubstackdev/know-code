@@ -121,7 +121,8 @@ pub fn at(chain: &[kc_store::query::SymbolAt], indexed: bool) {
 }
 
 /// `capped`: more definitions matched than were read, so `total` is a lower bound and a match may be missing.
-pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: bool, declared: &[String]) {
+/// `similar`: other names' matches, set apart when `items` holds only the declarations named exactly as asked.
+pub fn find(items: &[(PathBuf, FindHit)], similar: &[String], total: usize, multi: bool, capped: bool, declared: &[String]) {
     let cap = || {
         if capped {
             println!(
@@ -141,9 +142,15 @@ pub fn find(items: &[(PathBuf, FindHit)], total: usize, multi: bool, capped: boo
         println!("{:<9} {}  {}{tags}", kw(&s.kind, &s.file), qualified(s), loc(multi.then_some(root.as_path()), &s.file, s.line));
         println!("          {}", s.signature);
     }
-    if total > items.len() {
+    if !similar.is_empty() {
+        println!("similar names:");
+        for line in similar {
+            println!("          {line}");
+        }
+    }
+    if total > items.len() + similar.len() {
         let more = if capped { "at least " } else { "" };
-        println!("… {more}{} more (raise --limit or narrow with --kind)", total - items.len());
+        println!("… {more}{} more (raise --limit or narrow with --kind)", total - items.len() - similar.len());
     }
     cap();
     for d in declared {
@@ -291,6 +298,35 @@ pub fn refs(name: &str, d: &crate::ops::RefsData) {
             for r in rows.as_array().into_iter().flatten() {
                 println!("  {}", r.as_str().unwrap_or(""));
             }
+        }
+    }
+}
+
+/// What a references answer about one declaration keeps apart from its own rows: rows bound to other declarations of
+/// the name, per declaration, and uses it couldn't place.
+pub fn refs_apart(env: &serde_json::Value) {
+    let place = |v: &serde_json::Value| {
+        let repo = v["repo"].as_str().map(|r| format!("{r}/")).unwrap_or_default();
+        format!("{}  {repo}{}:{}", v["qualified"].as_str().unwrap_or(""), v["file"].as_str().unwrap_or(""), v["line"])
+    };
+    if let (Some(note), Some(rows)) = (env["elsewhere_note"].as_str(), env["elsewhere"].as_array()) {
+        println!("elsewhere: {note}");
+        for r in rows {
+            let at = match r["among"].as_array() {
+                Some(many) => format!("ambiguous among {}", many.iter().map(place).collect::<Vec<_>>().join(", ")),
+                None => place(r),
+            };
+            println!("  {at}  ({} rows)", r["rows"]);
+        }
+    }
+    if let Some(rows) = env["unplaced"].as_array() {
+        let n = env["unplaced_total"].as_u64().unwrap_or(rows.len() as u64);
+        println!("unplaced: {n} uses of the name couldn't be placed (unresolved, or ambiguous with no candidate listed):");
+        for r in rows {
+            println!("  {}:{}  [{}]", r["file"].as_str().unwrap_or(""), r["line"], r["confidence"].as_str().unwrap_or(""));
+        }
+        if n > rows.len() as u64 {
+            println!("  … {} more (raise --limit)", n - rows.len() as u64);
         }
     }
 }
@@ -906,6 +942,16 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
             children.entry((a.via.as_str(), a.hop.saturating_sub(1))).or_default().push(k);
         }
         let mut shown = vec![false; i.affected.len()];
+        // A method the change kept with other parameters isn't removed: its old calls are named as calls of what it was.
+        let resigned: std::collections::HashSet<&str> = r.removed.iter().filter(|g| g.old_signature.is_some()).map(|g| g.qualified.as_str()).collect();
+        let line_of = |a: &kc_store::trace::Affected| {
+            let line = affected_line(root, a);
+            if a.via_removed && resigned.contains(a.via.as_str()) {
+                line.replace(&format!("(names {}, which the change removes)", a.via), &format!("(calls {} as it was before the change)", a.via))
+            } else {
+                line
+            }
+        };
         let tree = |out: &mut String, start: &str, shown: &mut Vec<bool>, seen: &mut std::collections::HashSet<String>| {
             let mut stack: Vec<(usize, usize)> = Vec::new();
             let push = |stack: &mut Vec<(usize, usize)>, key: (&str, u8), depth: usize, shown: &[bool]| {
@@ -920,7 +966,7 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
                 }
                 shown[k] = true;
                 let a = &i.affected[k];
-                w!(out, "{}{}", "  ".repeat(d), affected_line(root, a));
+                w!(out, "{}{}", "  ".repeat(d), line_of(a));
                 if let Some(r) = rivals_line(a.evidence.as_ref()) {
                     w!(out, "{}  {r}", "  ".repeat(d));
                 }
@@ -940,7 +986,10 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         // Definitions the change removed, with the code still naming them under each.
         let at = r.base.as_deref().map(|b| &b[..b.len().min(10)]).unwrap_or("base");
         for g in &r.removed {
-            w!(out, "removed {} {}  {} at {at}  [{} still name it]", g.kind, g.qualified, loc(root, &g.file, g.line), g.named_by.len());
+            match &g.old_signature {
+                Some(sig) => w!(out, "changed signature of {} {}  {} at {at}: was `{}`  [{} still call it so]", g.kind, g.qualified, loc(root, &g.file, g.line), sig.trim(), g.named_by.len()),
+                None => w!(out, "removed {} {}  {} at {at}  [{} still name it]", g.kind, g.qualified, loc(root, &g.file, g.line), g.named_by.len()),
+            }
             tree(&mut out, &g.qualified, &mut shown, &mut seen);
             // Reached from a changed symbol first, so listed under it; named here too.
             for n in g.named_by.iter().filter(|n| !i.affected.iter().any(|a| a.via_removed && a.via == g.qualified && a.qualified == n.qualified)) {
@@ -957,7 +1006,7 @@ pub fn impact_text(repos: &[crate::ops::ImpactRepo], multi: bool) -> String {
         // Reached from a symbol not in the tree (a crossing's landing, say): listed flat.
         for (k, a) in i.affected.iter().enumerate() {
             if !shown[k] {
-                w!(out, "  {}  (via {})", affected_line(root, a), a.via);
+                w!(out, "  {}  (via {})", line_of(a), a.via);
                 if let Some(r) = rivals_line(a.evidence.as_ref()) {
                     w!(out, "    {r}");
                 }

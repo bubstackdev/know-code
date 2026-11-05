@@ -7,14 +7,15 @@ brings it up to date with the working tree before answering, and resolves names 
 
 | Crate | Role |
 | --- | --- |
-| `kc-extract` | Per-file extraction with tree-sitter (Swift, Python, Rust, C#, TypeScript/TSX/JavaScript, Java, CFML, Terraform, Angular templates), a SQL statement scanner, Ansible YAML and Jinja, GitLab CI, and manifests (SwiftPM, XcodeGen, Cargo, `.csproj`, `package.json`, `tsconfig.json`). Extraction is context-free: changing one file never forces another to be re-extracted. |
+| `kc-extract` | Per-file extraction with tree-sitter (Swift, Python, Rust, C#, TypeScript/TSX/JavaScript, Java, Kotlin, CFML, Terraform, Angular templates), a SQL statement scanner, Ansible YAML and Jinja, GitLab CI, and manifests (SwiftPM, XcodeGen, Cargo, `.csproj`, `package.json`, `tsconfig.json`). Extraction is context-free: changing one file never forces another to be re-extracted. |
 | `kc-store` | The SQLite schema, FTS5 and trigram search, name resolution and graph queries (`query.rs`, `trace.rs`), the answer contract types (`answer.rs`), and execution limits (`limits.rs`). |
 | `kc-index` | File discovery, ignore rules, freshness, incremental indexing, the content index, git history (hotspots, co-change, ownership, test selection), cross-repo linking (HTTP, bus, SQL, Terraform, Ansible, CI), the workspace summary, configuration, privacy, notes, the writer lock and the cache lifecycle. |
 | `knowcode` | The CLI (`main.rs`), the operations behind each command (`ops.rs`), walks, paths and flows, rendering, the answer contract (`contract.rs`), cursors, the MCP server (`mcp.rs`) and its help topics (`help.rs`), client setup, uninstall and updates. |
 
 ## The index
 
-Each checkout gets `<cache>/repos/<name>-<hash>.sqlite`, opened in WAL mode. It holds:
+Each checkout gets `<tree>/repos/<name>-<hash>.sqlite`, opened in WAL mode, where `<tree>` is this build's own part of
+the cache (see "Versions sharing a cache" below). It holds:
 
 - files with `(path, mtime, size, blake3)`;
 - symbols, references with their site (file, line, column), relations, imports and tags;
@@ -31,8 +32,38 @@ References are stored unresolved. Resolution happens at query time against the w
 dependency repos when the answer crosses into them), so an edit to one file never requires re-extracting others.
 Each extractor has a version; bumping it re-extracts that language's files on the next query.
 
+**The reference graph after an edit.** The file reference graph behind rankings, `overview`, `hotspots` and `areas`
+resolves every reference name; each name's edges come from resolving that name alone. A sync that changed only
+references (every file it re-extracted kept its *surface key*: all its facts but its references, positions counted
+only by their order in the file) logs the names those files referenced before and after, in `graph_log`. The next
+graph is then the cached one with those names resolved again, plus the names DI factories file constructions under
+(they come from calls in any file) and, ignoring case, CFML and SQL spellings. Anything else rebuilds it in full: a
+file added or removed, a changed surface, more than 50 files (or 5%) changed, a change in what DI factories make,
+SCIP facts (matched to definitions by line in any file), a generation moved without a log entry (a SCIP ingest, an
+older build sharing the cache), or another resolver version. The test `ref_graph_update` checks the updated graph
+against one built afresh after every edit of a random sequence.
+
 An index written by a newer schema is refused with an error naming both schemas, rather than rebuilt; an older one
-is rebuilt.
+is rebuilt. Neither happens between released versions, which keep their indexes apart:
+
+**Versions sharing a cache.** Two versions of KnowCode can share one cache: an upgrade, a downgrade, or another tool
+that bundles its own knowcode. Each index schema has its own tree, `<cache>/v/s<schema>/`, holding every file whose
+format depends on it: `repos/`, `bases/`, `locks/`, and the workspace summary and discovery files. Builds of different
+schemas never open or rewrite each other's files. Builds of one schema share a tree: one with another extractor or
+resolver version re-extracts the languages that differ in place, as an upgrade always has, so a release that bumps one
+extractor doesn't reindex every repository from scratch. Alternating two such builds is correct but slower, each
+re-extracting what the other changed. 0.6.1 and older keep their files at the cache's top level, which later builds
+never open or change. Shared by every version at the top level: the update check's state (`updates/`), the cursor key,
+notes left in the cache by older versions, and `locks/maintenance.lock`, which every version takes, so that one
+cleaner runs at a time.
+
+After an upgrade to a new schema, the new build's tree starts empty, so each repository is indexed afresh on its first
+query. A downgrade finds the older version's files as it left them.
+
+The cache budget (`cache.max_size`) counts every tree. Maintenance evicts other schemas' files first, least recently
+used first, then this build's. It only deletes another build's file, never rewrites it, and only one no process holds
+(by that build's own writer lock and reader lease). A tree under `v/` left empty goes whole, and `purge` and
+`uninstall` clear every tree.
 
 One thing in the index isn't the repo's own code: for an SDK package the repo declares as an external client
 (`declare module '<package>'` in a `.d.ts`), installed in its `node_modules` at the version its lockfile pins, the
@@ -97,6 +128,13 @@ There is no daemon. `knowcode serve` runs for as long as the client keeps it.
   come on top of that, and are freed when their statement ends. SQLite is built without a process-wide page cache or
   allocation counting (`.cargo/config.toml`): with several repos indexing at once, their global locks cost more
   system time than the indexing did. That rules out a process-wide limit (`sqlite3_soft_heap_limit64`).
+- Most of what a long-lived process held was memory freed but kept by the allocator, not memory in use. On macOS the
+  default allocator keeps freed large blocks in a cache that `malloc_zone_pressure_relief` doesn't empty, so `serve`
+  and `index` start themselves again with that cache off (`MallocLargeCache=0`, unless the environment already sets
+  it; `knowcode::memory`). On bitwarden/server (8,274 files) a cold `index` then peaked at 92 to 94 MB of footprint
+  instead of 254 to 262 MB, and a server idled at 21 to 22 MB instead of 162 MB after its first calls, for about 1%
+  more instructions. After each call and each background job the server hands freed pages back (glibc's
+  `malloc_trim` on Linux).
 - Calls run one at a time, except that a call past 2 seconds lets the next one start beside it (at most two), and
   `kc_search` and `kc_grep_ast` run in a child process of their own.
 - Child processes have deadlines (`git` 60 seconds, a search child 120 seconds). A child past its deadline, or in a
@@ -142,7 +180,7 @@ exact call going on from it. Walk answers are pinned by a snapshot test (`crates
 ## The cache lifecycle
 
 - **Shared bases.** Worktrees and clones of one repo share bases: immutable copies of the repo's index at a commit,
-  in `<cache>/bases/`, keyed by the repo's identity (its origin, else its git directory), the commit, the build and
+  in `<tree>/bases/`, keyed by the repo's identity (its origin, else its git directory), the commit, the build and
   the privacy policy. A checkout clean at a commit (no change, no untracked file) publishes one after it is indexed,
   when the repo has another checkout and no base is within a few files of that commit; it is written by `VACUUM
   INTO` (no free pages, no WAL) and the checkout's own index becomes a clone of it. A new checkout's index starts as a

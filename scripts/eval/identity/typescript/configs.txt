@@ -1,3 +1,6 @@
 # The tsconfig files whose programs identity-v1 labels, per TypeScript repository (eval/identity-v1/README.md).
 jellyfin-web tsconfig.json
 hono tsconfig.spec.json
+# find-dev-v1 (eval/find-dev-v1/README.md): the configs whose programs hold the sources and the tests.
+jotai tsconfig.json
+class-validator tsconfig.spec.json

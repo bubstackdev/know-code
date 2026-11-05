@@ -16,7 +16,10 @@ doesn't change to fit them. A change to the rule is a new set.
 
 Each language keeps its labels in its own directory: `labels.jsonl`, `strata.json` (per stratum, how many references
 there were and how many were drawn), `exclusions.json` (per reason, how many references the toolchain binds the rule
-leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in).
+leaves out) and `enumerations.sha256` (the digests of the enumerations drawn from, which aren't checked in). A digest
+covers an enumeration's rows, not its bytes ([digest.py](../../scripts/eval/identity/digest.py)): each row with its keys
+sorted, the lines sorted. Two labelling runs of one pinned repository give the same rows, but scip-java writes its
+documents in an order that varies from build to build, and gzip's bytes vary from one compressor to another.
 
 ## Java and Kotlin
 
@@ -246,6 +249,193 @@ KnowCode answer on it was read, and scored once.
 | Java | member | 20 | 40 | 40 | 10 | 40 | 150 |
 | Java | type | 20 | 40 | 0 | 10 | 0 | 70 |
 
+### Held out: ktlint (Kotlin)
+
+KnowCode's Kotlin resolver was developed against the Kotlin labels above, so a held-out set tests it fresh:
+[pinterest/ktlint](https://github.com/pinterest/ktlint), Kotlin only, pinned at its head on 2026-10-29, labelled,
+drawn and committed in [kotlin-holdout/](kotlin-holdout/labels.jsonl) the same way before any KnowCode answer on it was
+read, and scored once. Its build needs a Java 26 runtime and turns on Gradle's configuration cache, which scip-java's
+Gradle plugin doesn't support, so it is built on JDK 26 with `--no-configuration-cache`
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). Its `build-logic` sources aren't compiled by the
+build and give no references.
+
+500 references (381 inside, 119 outside), drawn from 39727 Kotlin references by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 0 | 9 | 11 | 0 | 0 | 20 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 1 | 10 | 9 | 80 |
+
+### Held out, second: Exposed (Kotlin)
+
+ktlint's two outside links led to three resolver changes (an explicit import over a class's own name, no repository
+member on a library receiver's `this`, and `private` declarations unseen from other files), so ktlint no longer tests
+those fresh. [JetBrains/Exposed](https://github.com/JetBrains/Exposed) at its 1.6.0 tag, Kotlin only, is labelled,
+drawn and committed in [kotlin-holdout-2/](kotlin-holdout-2/labels.jsonl) the same way before any KnowCode answer on it
+is read, and scored once. Two build settings, neither changing a source file
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)): it pins Kotlin 2.3.20 in its version catalog, which the
+container's copy sets to 2.4.21 (scip-java's Kotlin plugin needs 2.4, as for moshi); and its Gradle 8.14 compiles
+`buildSrc` with an embedded Kotlin too old for that plugin, so `buildSrc`, build logic that gives no labels, compiles
+without it. It turns on Gradle's configuration cache, so it is built with `--no-configuration-cache`, as ktlint is.
+
+637 references (500 inside, 137 outside), drawn from the 125367 eligible Kotlin references counted in [strata.json](kotlin-holdout-2/strata.json) by the rule:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 27 | 137 |
+
+### Held out, third: MoshiX and misk (Kotlin)
+
+Exposed's four wrong links led to two more resolver changes, so a third held-out set tests them fresh: two
+repositories as one set, chosen and committed before any labelling, labelled by the same rule, labeller and sampler,
+committed before any KnowCode answer on them is read, and scored once.
+
+Two repositories chosen first couldn't be built for labelling, and nothing from either was enumerated:
+
+- [http4k](https://github.com/http4k/http4k) at 6.61.0.0: its build logic is an included build of precompiled script
+  plugins (`*.gradle.kts` under `src/main/kotlin`), and scip-java 0.13.2's Gradle plugin, which its init script applies
+  to every project of every build, reads each Kotlin compile's compiler arguments while the build is configured. Under
+  Gradle 9 those arguments come from a task that hasn't run yet, and Gradle refuses the read, so the build fails before
+  compiling anything.
+- [Netflix/dgs-framework](https://github.com/Netflix/dgs-framework) at v12.1.0: it pins Kotlin 2.2.20, and with the
+  container's copy raised to Kotlin 2.4 (scip-java's plugin needs it) its Kotlin compiles still load Kotlin's scripting
+  compiler plugin at a version the 2.4 compiler refuses, even with Kotlin's own artifacts held to 2.4 on the compiler's
+  classpaths; it was given up after a 30-minute limit.
+
+So the set is drawn from repositories already on, or near, Kotlin 2.4, with no precompiled build scripts:
+[ZacSweers/MoshiX](https://github.com/ZacSweers/MoshiX) at its 0.38.0 tag (Kotlin 2.4.20, Gradle 9.8.0), and
+[cashapp/misk](https://github.com/cashapp/misk) at its v2026.10.28.211731-46eb623 tag, which pins Kotlin 2.3.10 in its
+version catalog (the container's copy is set to 2.4.21, as for Exposed) and runs Gradle 9.3.0 through hermit without
+a wrapper (`GRADLE_WRAPPER` gives the container's copy one, for that version). Both turn on Gradle's configuration
+cache and are built with `--no-configuration-cache` ([builds.txt](../../scripts/eval/identity/jvm/builds.txt)). MoshiX's
+Gradle plugin build asks for a JDK 23 toolchain, fetched and checked against its published digest; misk's admin
+console's web front end, an npm build with no Kotlin, is left out of its build.
+
+1622 references in [kotlin-holdout-3/](kotlin-holdout-3/labels.jsonl): 1152 Kotlin (882 inside, 270 outside), drawn from
+the 139341 eligible Kotlin references counted in [strata.json](kotlin-holdout-3/strata.json), and 470 Java
+(333 inside, 137 outside) from 3310, which the same draw gives from the two repositories' Java sources. Kotlin is
+the held-out set; its Java references are scored and reported beside it.
+
+| Repository | Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| moshix | Kotlin | extension | 20 | 40 | 28 | 0 | 0 | 88 |
+| moshix | Kotlin | dispatch | 2 | 9 | 10 | 0 | 0 | 21 |
+| moshix | Kotlin | call | 20 | 17 | 40 | 10 | 40 | 127 |
+| moshix | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| moshix | Kotlin | type | 20 | 40 | 36 | 10 | 10 | 116 |
+| moshix | Java | extension | 1 | 0 | 0 | 0 | 0 | 1 |
+| moshix | Java | call | 4 | 0 | 10 | 10 | 19 | 43 |
+| moshix | Java | member | 2 | 3 | 11 | 1 | 0 | 17 |
+| moshix | Java | type | 20 | 20 | 23 | 10 | 4 | 77 |
+| misk | Kotlin | extension | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| misk | Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Kotlin | type | 20 | 40 | 40 | 10 | 40 | 150 |
+| misk | Java | call | 0 | 22 | 40 | 10 | 40 | 112 |
+| misk | Java | member | 8 | 40 | 40 | 10 | 3 | 101 |
+| misk | Java | type | 20 | 32 | 37 | 10 | 20 | 119 |
+
+### Held out, fourth and last: graphql-kotlin (Kotlin)
+
+MoshiX and misk's six wrong links led to three more resolver rules, so a fourth set tests them fresh, and it is the
+last for 0.7: whatever it scores is published as it is.
+[ExpediaGroup/graphql-kotlin](https://github.com/ExpediaGroup/graphql-kotlin) at its 11.0.0 tag, Kotlin on the JVM
+only, was chosen and committed before any labelling, with [kotlin-orm/ktorm](https://github.com/kotlin-orm/ktorm) at
+its v4.2.1 tag named as the reserve should it not build.
+
+Neither built at first, and nothing from either was enumerated then. Both keep their build logic in a buildSrc of
+precompiled script plugins (`*.gradle.kts` conventions). scip-java 0.13.2's init script applies its Gradle plugin to
+every project of every build, buildSrc's too, and the plugin reads each Kotlin compile's compiler arguments while the
+build is configured; for a precompiled script plugin those arguments come from a task that hasn't run yet, and Gradle
+refuses the read. graphql-kotlin (Gradle 9.4.0) failed so with and without jvm/skip-buildsrc.gradle; ktorm (Gradle
+8.9, with Kotlin 2.0.21 pinned in buildSrc's dependencies) failed the same way. This is http4k's failure above. The
+labeller now has a setting for it, `SCIP_ROOT_BUILD_ONLY`: a `gradlew` in front of the container's copy's own
+(jvm/gradlew-root-only.sh) keeps scip-java's init script to the root build, so build logic, which is never labelled,
+compiles without the plugin. Exposed, labelled again with the changed labeller, gives an enumeration of the same
+row digest as the one its labels were drawn from (a9c94f30…, [enumerations.sha256](kotlin-holdout-2/enumerations.sha256)).
+With that setting and its version catalog's Kotlin set to 2.4.21
+([builds.txt](../../scripts/eval/identity/jvm/builds.txt)), graphql-kotlin builds, and it is the set; ktorm wasn't
+needed.
+
+628 references in [kotlin-holdout-4/](kotlin-holdout-4/labels.jsonl), all Kotlin (479 inside, 149 outside), drawn from
+the 32845 eligible references counted in [strata.json](kotlin-holdout-4/strata.json), committed before any KnowCode
+answer on them is read, and scored once, by a build with every Kotlin rule above:
+
+| Language | Kind | inside 1 | inside 2-4 | inside 5+ | outside 0 | outside 1+ | All |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Kotlin | extension | 20 | 40 | 19 | 0 | 0 | 79 |
+| Kotlin | dispatch | 20 | 40 | 40 | 0 | 0 | 100 |
+| Kotlin | call | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | member | 20 | 40 | 40 | 10 | 40 | 150 |
+| Kotlin | type | 20 | 40 | 40 | 10 | 39 | 149 |
+### Kotlin, scored
+
+Each held-out set was scored once, by the build of its day, and its figures stand as scored: a rule added after
+reading one can't be measured on it again. The set above, which the resolver was developed against, is re-scored after
+every change; it shows no regression, not accuracy on unseen code.
+
+| Set | Build | Labels | Inside | `exact` rows | `exact` precision | Recall, linked | Recall, among candidates | Outside linked |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| identity-v2 Kotlin (tuned on) | this change | 1185 | 899 | 433 | 1.000 | 0.482 | 0.848 | 0 |
+| ktlint, held out | before its rules | 500 | 381 | 165 | 0.994 (1 wrong) | 0.430 | 0.787 | 2 |
+| Exposed, held out | after ktlint's | 637 | 500 | 175 | 0.977 (4 wrong) | 0.342 | 0.606 | 1 |
+| MoshiX and misk, held out | after Exposed's | 1152 | 882 | 426 | 0.986 (6 wrong) | 0.476 | 0.780 | 0 |
+| MoshiX and misk, Java beside it | after Exposed's | 470 | 333 | 276 | 1.000 | 0.829 | 0.886 | 1 |
+| graphql-kotlin, held out, last | after MoshiX and misk's | 628 | 479 | 272 | 1.000 | 0.568 | 0.869 | 1 |
+
+None of the four held-out sets meets the gate at its single scoring. The last, graphql-kotlin, meets its `exact`
+precision (1.000 over 272 links) and falls short only on the outside label it links. What each found, and the rule each
+led to:
+
+- **ktlint** (1 wrong, 2 outside). An explicit import of a name inside a top-level class of that name was read as the
+  class (`import …EditorConfigLoader` in `class EditorConfigLoader`); kotlinc reads the import. `this.text` in an
+  extension on a library type was linked to a repository member named `text`; a library receiver's members aren't
+  known, so only a repository extension on that type is a candidate (that link's other target was a member of a
+  `private` nested class in another file). A `private` declaration, or one inside a `private` type, is now seen
+  only in its own file.
+- **Exposed** (4 wrong, 1 outside). A bare name in a lambda with a receiver (`lazyMetadata { url }`, `x.apply {
+  close() }`) was linked to the enclosing class's member; the receiver's members come first, and the receiver isn't
+  typed, so such a name is now a candidate only. And two same-named test classes in different modules pooled their
+  supertypes, so a bare call reached the other module's base class; members are now read through each type's own
+  declared supertypes.
+- **MoshiX and misk** (6 wrong; the 1 outside link is a Java reference). `factory.newQuery<Q>()` was linked to the
+  member `newQuery(queryClass)` rather than the extension `newQuery()` (3 wrong): every Kotlin function's minimum
+  argument count was taken as zero, so the member fit a call it can't take, and a member shadows an extension only
+  where it fits. `val transport = build()` was typed by another file's `private fun build()` (2 wrong); a function
+  `private` to another file never types a call, and an expression body that constructs a type gives that type.
+  `featureFlags.getDouble(…)` on wisp's `FeatureFlags`, which inherits it, was linked to misk's same-named
+  `FeatureFlags`, which declares it (1 wrong); a typed receiver's inherited member is now read through its own
+  declared supertypes. The Java outside link is `super.connect(…)` linked to the class's own override, which
+  `super` never reaches (JLS 15.12.1); that rule is Java resolution's, in its own change.
+- **graphql-kotlin** (0 wrong, 1 outside), scored by integration/0.7 at f3fc3a8, which doesn't hold that `super`
+  rule. `super.transform(…)` in `SynchronizedDataLoader`, whose supertype `DelegatingDataLoader` is a library's, was
+  linked (`unique_name`) to the class's own override of `transform`: the same cause as MoshiX and misk's Java outside
+  link, in Kotlin. That cause is fixed by the `super` rule of the Java change that follows MoshiX and misk (it covers
+  Kotlin's `super` too), which landed after this set was scored; the fix can't be re-measured on this set, the last
+  held-out set for 0.7.
+
+**Recall.** Linked recall on the held-out sets (0.430, 0.342, 0.476) is near the tuned set's (0.482), and below
+Java's (0.874) because much of Kotlin is written in lambdas with receivers: builder DSLs, `apply` and `with` blocks,
+and a repository's own `T.() -> R` parameters. A bare name in one is a candidate rather than a link, since the
+receiver isn't typed; on the tuned set that rule costs 26 links (recall 0.504 without it). Calls of extension
+functions are the other gap: on MoshiX and misk, 3 of 188 inside extension references are linked, and 136 have
+candidates instead.
+
+**Parse errors.** tree-sitter-kotlin-ng 1.1.0 can't read a nested class whose primary constructor starts on the line
+after its name; such a file is parsed again with those line breaks joined, every position kept (docs/languages.md).
+That recovers 9 files: 5 in kotlinpoet, 3 in misk and 1 in moshi, holding 86 of the tuned set's labels and 5 of
+MoshiX and misk's. Other files with parse errors are reported as such and indexed as far as they parse: 30 labels of
+the tuned set, 51 of ktlint's, 105 of Exposed's and 107 of MoshiX and misk's are in one. Most of MoshiX's 28 such
+files are its compiler plugin's test data, written with diagnostic markers that aren't Kotlin.
+
 ### Scoring
 
 [identity_gate.py](../../scripts/eval/identity_gate.py), as in v1, with this set's labels:
@@ -268,7 +458,9 @@ python3 scripts/eval/identity/sample.py OUT/enumeration-*.jsonl.gz --out eval/id
 
 The labels are in [go/](go/labels.jsonl): 1,194 over three repositories (cobra 242, chi 418, gin 534), 705 inside and
 489 outside, per stratum in [go/strata.json](go/strata.json). Two runs of each repository give byte-identical
-enumerations ([go/enumerations.sha256](go/enumerations.sha256)).
+enumerations ([go/enumerations.sha256](go/enumerations.sha256)). The digests were first recorded over the gzip
+bytes; a third run, whose files had those same byte digests, gave the row digests now recorded, and the labels, strata
+and exclusions drawn from it are byte-identical to the committed ones (the held-out set's too).
 
 ### Repositories
 

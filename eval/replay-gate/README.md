@@ -48,7 +48,9 @@ fifth, final, rerun) and public-v2 runs (baseline, release candidate). That is 1
 | Codes | refuses a call without a machine code (or with `internal`), or gives an `incomplete` or `more` entry a reason or code outside [the contract](../../docs/answers.md#codes); checked for builds that code their refusals (0.6 on) |
 
 Precision here is over every place the answers name, context and evidence included, so it is low in absolute terms. It
-is for comparing builds, not a claim about answers.
+is for comparing builds, not a claim about answers. A place is read whatever the answer's format: a `path:line` in its
+text, a tree row's call sites, and a JSON row's `file` and `line` fields, so moving a row from one form to another
+doesn't change what is counted.
 
 ## Running it
 

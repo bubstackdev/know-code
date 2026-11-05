@@ -177,6 +177,8 @@ fn case(op: &str) -> Option<Value> {
         "overview" => json!({}),
         "areas" => json!({}),
         "unused" | "hotspots" | "status" | "test_targets" => json!({}),
+        "rules" => json!({ "regex": "Place" }),
+        "review" => json!({ "q": "working" }),
         other => panic!("no case for op {other}: add one"),
     })
 }
@@ -187,7 +189,11 @@ fn check_answer(op: &str, entry: &Value, args: &Value, text: &str) {
     let format = args.get("format").and_then(Value::as_str).unwrap_or_else(|| out["format"].as_str().unwrap());
     match format {
         "tree" => assert!(text.starts_with("repo "), "{op} {args}: a tree starts with its header: {text}"),
-        "text" => assert!(!text.is_empty(), "{op}"),
+        "text" | "markdown" => assert!(!text.is_empty(), "{op} {args}"),
+        "sarif" => {
+            let v: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("{op} {args}: {e}: {text}"));
+            assert_eq!(v["version"], "2.1.0", "{op} {args}: a SARIF log: {text}");
+        }
         "mermaid" => assert!(text.starts_with("flowchart "), "{op} {args}: a Mermaid flowchart: {text}"),
         _ => {
             let v: Value = serde_json::from_str(text).unwrap_or_else(|e| panic!("{op} {args}: {e}: {text}"));

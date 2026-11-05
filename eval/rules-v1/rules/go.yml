@@ -1,0 +1,54 @@
+id: go-println
+language: Go
+severity: warning
+message: fmt.Println($$$ARGS)
+rule:
+  pattern:
+    context: func f() { fmt.Println($$$ARGS) }
+    selector: call_expression
+---
+id: go-panic
+language: golang
+severity: error
+message: panic in $F
+rule:
+  pattern: panic($$$)
+  inside:
+    kind: function_declaration
+    stopBy: end
+    has:
+      field: name
+      pattern: $F
+---
+id: go-ignored-error
+language: Go
+message: error discarded
+rule:
+  kind: short_var_declaration
+  has:
+    field: left
+    regex: ', _$'
+---
+id: go-goroutine
+language: Go
+severity: hint
+message: goroutine started
+rule:
+  kind: go_statement
+---
+id: go-errors-new
+language: Go
+message: errors.New with a concatenation
+rule:
+  pattern:
+    context: func f() { errors.New($A + $B) }
+    selector: call_expression
+---
+id: go-unlock-without-defer
+language: Go
+message: Unlock not deferred
+rule:
+  pattern: $M.Unlock()
+  not:
+    inside:
+      kind: defer_statement

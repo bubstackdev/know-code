@@ -14,7 +14,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::answer::{Assumption, Evidence, EvidencePolicy, PolicyReport, Verdict};
-use crate::query::{self, REF_COLS, RefHit, SYMBOL_COLS, SymbolRow, is_type_or_extension, ref_row, resolve_all, symbol_row};
+use crate::query::{self, REF_COLS, RefHit, SYMBOL_COLS, SymbolRow, is_type_or_extension, ref_row, symbol_row};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -544,6 +544,10 @@ fn is_zero(n: &usize) -> bool {
 struct Tracer<'c> {
     conn: &'c Connection,
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
+    /// Definitions looked up, by query, at the snapshot the walk reads.
+    defs: query::DefinitionsMemo,
+    /// What resolving references reads about the repo, at the snapshot the walk reads.
+    res: query::Resolution,
     /// Registration (`file:line, lifetime`) of each implementation member reached `via_di`.
     bindings: HashMap<i64, String>,
     /// Edges resolved from a SCIP index: (the symbol reached, the site).
@@ -600,20 +604,21 @@ impl Tracer<'_> {
         symbol(self.conn, id)
     }
 
-    fn refs_named(&mut self, name: &str, kinds: Vec<&'static str>) -> Result<Vec<RefHit>> {
-        let key = (name.to_string(), kinds.clone());
-        if !self.refs_by_name.contains_key(&key) {
-            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
-            self.refs_by_name.insert(key.clone(), hits);
-        }
-        Ok(self.refs_by_name[&key].clone())
+    fn definitions(&mut self, query: &str) -> Result<Vec<SymbolRow>> {
+        self.defs.get(self.conn, query)
     }
 
-    /// [`Self::refs_named`]'s references that `keep` keeps, without copying the rest.
+    /// The references to `name` of `kinds` that may reach `want`, as callers of it: only those are copied out of the
+    /// memo, since most references to a common name (`write`, `init`) reach another of its definitions.
+    fn refs_named(&mut self, name: &str, kinds: Vec<&'static str>, want: Option<i64>) -> Result<Vec<RefHit>> {
+        self.refs_named_where(name, kinds, |h| h.confidence != "external_likely" && want.is_some_and(|id| h.may_target(id)))
+    }
+
+    /// The references to `name` of `kinds` that `keep` keeps, without copying the rest.
     fn refs_named_where(&mut self, name: &str, kinds: Vec<&'static str>, keep: impl Fn(&RefHit) -> bool) -> Result<Vec<RefHit>> {
         let key = (name.to_string(), kinds.clone());
         if !self.refs_by_name.contains_key(&key) {
-            let (hits, _) = query::refs(self.conn, name, &kinds, usize::MAX)?;
+            let hits = query::refs_in_resolution(self.conn, name, &kinds, &mut self.res)?;
             self.refs_by_name.insert(key.clone(), hits);
         }
         Ok(self.refs_by_name[&key].iter().filter(|h| keep(h)).cloned().collect())
@@ -630,7 +635,7 @@ impl Tracer<'_> {
             let targets: Vec<(String, String, u32)> =
                 stmt.query_map([sym.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
             for (name, file, line) in targets {
-                if let Some(t) = query::definitions(self.conn, &name)?.into_iter().find(|d| !is_type_or_extension(&d.kind) || d.kind != "extension") {
+                if let Some(t) = self.definitions(&name)?.into_iter().find(|d| !is_type_or_extension(&d.kind) || d.kind != "extension") {
                     out.push((t, "conforms_to", "exact", Some(format!("{file}:{line}"))));
                 }
             }
@@ -644,7 +649,7 @@ impl Tracer<'_> {
         );
         let mut stmt = self.conn.prepare_cached(&sql)?;
         let mut hits: Vec<RefHit> = stmt.query_map([sym.id], ref_row)?.collect::<rusqlite::Result<_>>()?;
-        resolve_all(self.conn, &mut hits)?;
+        query::resolve_all_in(self.conn, &mut hits, &mut self.res)?;
         let mut seen = HashSet::new();
         for h in hits {
             if !matches!(h.confidence, "exact" | "unique_name" | "ambiguous") {
@@ -730,7 +735,7 @@ impl Tracer<'_> {
         let mut seen = HashSet::new();
         // SwiftUI never calls `body` from user code: a view's body is reached by creating the view.
         if sym.kind == "property" && sym.name == "body" && let Some(container) = &sym.container {
-            let view = query::definitions(self.conn, container)?.into_iter().find(|d| d.tags.contains("swiftui_view"));
+            let view = self.definitions(container)?.into_iter().find(|d| d.tags.contains("swiftui_view"));
             if let Some(view) = view {
                 let mut edges = self.in_edges(&view)?;
                 edges.retain(|(_, edge, _, _)| *edge == "instantiates");
@@ -739,7 +744,7 @@ impl Tracer<'_> {
         }
         let (name, kinds, target_id) = if sym.kind == "init" {
             let ty = sym.container.as_deref().unwrap_or("");
-            let id = query::definitions(self.conn, ty)?.first().map(|d| d.id);
+            let id = self.definitions(ty)?.first().map(|d| d.id);
             (ty.rsplit('.').next().unwrap_or(ty).to_string(), vec!["instantiate"], id)
         } else if is_type_or_extension(&sym.kind) {
             (sym.name.clone(), vec!["instantiate", "type_ref"], Some(sym.id))
@@ -774,16 +779,20 @@ impl Tracer<'_> {
                 if from.id == sym.id || (from.kind == "table" && crate::sql::is_sql_path(&h.file)) {
                     continue;
                 }
-                if !seen.insert(from.id) {
+                let from_id = enclosing_callable(this.conn, from.id)?;
+                if from_id == sym.id {
+                    continue;
+                }
+                if !seen.insert(from_id) {
                     // The caller's edge is listed once, at its first site; its other sites are kept beside it.
                     let at = format!("{}:{}", h.file, h.line);
-                    let also = this.also.entry((from.id, sym.id)).or_default();
+                    let also = this.also.entry((from_id, sym.id)).or_default();
                     if !also.contains(&at) {
                         also.push(at);
                     }
                     continue;
                 }
-                if let Some(caller) = this.symbol(from.id)? {
+                if let Some(caller) = this.symbol(from_id)? {
                     let edge = if edge.is_empty() {
                         match h.kind.as_str() {
                             // A call of a factory the container injects, making the class.
@@ -813,11 +822,17 @@ impl Tracer<'_> {
             }
             Ok(())
         };
-        let hits = self.refs_named(&name, kinds.clone())?;
+        let hits = self.refs_named(&name, kinds.clone(), target_id)?;
         push_callers(self, hits, target_id, "")?;
+        // A TypeScript class component is rendered by its JSX tag, which the extractor records as a call: rendering
+        // it creates it.
+        if sym.kind == "class" && crate::ts::is_ts_path(&sym.file) {
+            let hits = self.refs_named(&name, vec!["call"], target_id)?;
+            push_callers(self, hits, target_id, "instantiates")?;
+        }
         // A constructor chaining to it: `: base(…)`, `: this(…)`, Swift's `super.init(…)`.
         if sym.kind == "init" {
-            let hits = self.refs_named("init", vec!["call"])?;
+            let hits = self.refs_named("init", vec!["call"], Some(sym.id))?;
             push_callers(self, hits, Some(sym.id), "")?;
         }
         // An Ansible task runs when what holds it runs: its block, play, role or task file; a play, when its playbook
@@ -846,7 +861,7 @@ impl Tracer<'_> {
                 out.push((r, "conformer", "exact", None));
             }
         } else if let Some(container) = &sym.container {
-            let owner = query::definitions(self.conn, container)?.into_iter().find(|d| d.kind != "extension");
+            let owner = self.definitions(container)?.into_iter().find(|d| d.kind != "extension");
             // An interface's static member (C#: `private static readonly object[] NoValues`) is its own: implementing
             // types have none to supply, unless it is `abstract` or `virtual`.
             let words = |w: &str| sym.signature.split_whitespace().any(|x| x == w);
@@ -869,9 +884,14 @@ impl Tracer<'_> {
                 let short = container.rsplit('.').next().unwrap_or(container);
                 // Overloads of the requirement: only the implementations taking the same parameters (see
                 // [`query::same_parameters`]).
-                let overloaded = query::definitions(self.conn, &sym.qualified())?.iter().filter(|d| d.container == sym.container && d.kind == sym.kind).count() > 1;
-                let rows: Vec<SymbolRow> =
+                let overloaded = self.definitions(&sym.qualified())?.iter().filter(|d| d.container == sym.container && d.kind == sym.kind).count() > 1;
+                let mut rows: Vec<SymbolRow> =
                     stmt.query_map(rusqlite::params![sym.name, sym.kind, short, sym.id, overloaded], symbol_row)?.collect::<rusqlite::Result<_>>()?;
+                // And, of several taking as many, the ones taking its parameter types.
+                if overloaded && !rows.is_empty() {
+                    let keep = query::same_parameter_types(self.conn, sym.id, rows.iter().map(|r| r.id).collect())?;
+                    rows.retain(|r| keep.contains(&r.id));
+                }
                 for r in rows {
                     out.push((r, "witness", "exact", None));
                 }
@@ -893,11 +913,18 @@ impl Tracer<'_> {
                 };
                 let own = arity(sym.id)?;
                 for p in protocols {
+                    // Much of what a type conforms to or extends is no protocol of this repo's (a base class, a
+                    // library's `Sendable`): asked first, the protocol check, remembered by name, spares looking up a
+                    // requirement in each such type for each member.
+                    let is_protocol = self.definitions(&p)?.iter().any(|d| d.kind == "protocol");
+                    if !is_protocol {
+                        continue;
+                    }
                     // The requirement taking the arguments it does: a `Find(query, parent)` overload doesn't implement
                     // the interface's `Find(query)`, and calls of that one don't reach it. Of several taking as many
                     // (`Find(query, bool)`, `Find(query, parents)`), the members below tell them apart by type.
                     let mut reqs = Vec::new();
-                    for d in query::definitions(self.conn, &format!("{p}.{}", sym.name))? {
+                    for d in self.definitions(&format!("{p}.{}", sym.name))? {
                         if d.kind == sym.kind && d.container.as_deref().is_some_and(|c| c == p || c.ends_with(&format!(".{p}"))) {
                             let theirs = arity(d.id)?;
                             if query::same_parameters(theirs, own) {
@@ -906,15 +933,11 @@ impl Tracer<'_> {
                         }
                     }
                     let Some(req) = reqs.pop().filter(|_| reqs.is_empty()) else { continue };
-                    let is_protocol = query::definitions(self.conn, &p)?.iter().any(|d| d.kind == "protocol");
-                    if !is_protocol {
-                        continue;
-                    }
                     if !through.insert(req.id) {
                         continue;
                     }
-                    let hits = self.refs_named(&sym.name, kinds.clone())?;
-                    let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
+                    let hits = self.refs_named(&sym.name, kinds.clone(), Some(req.id))?;
+                    let hits = if self.one_of { through_one_of(self.conn, &mut self.defs, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
                 // Members declared further up: an interface's base interface (`Impl : IDerived`, `IDerived : IBase`,
@@ -924,17 +947,17 @@ impl Tracer<'_> {
                 // of: `IOrders.Get` through `IRepo<Order>.Get` reaches it, `IPlans.Get` (another `IRepo<Plan>`) doesn't.
                 let mut is_a = supertype_names(self.conn, &short)?;
                 is_a.insert(short.clone());
-                for m in query::implemented_members(self.conn, sym)? {
+                for m in query::implemented_members_with(self.conn, sym, &mut self.defs)? {
                     if !through.insert(m.id) {
                         continue;
                     }
                     let Some(req) = self.symbol(m.id)? else { continue };
                     let hits: Vec<RefHit> = self
-                        .refs_named(&req.name, kinds.clone())?
+                        .refs_named(&req.name, kinds.clone(), Some(req.id))?
                         .into_iter()
                         .filter(|h| h.receiver_type.as_deref().is_none_or(|r| is_a.contains(bare_type(r))))
                         .collect();
-                    let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
+                    let hits = if self.one_of { through_one_of(self.conn, &mut self.defs, req.id, hits)? } else { hits };
                     // A base class member runs itself, or another override, for other instances.
                     let hits = if self.one_of && m.shared { ambiguous_all(hits) } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
@@ -945,8 +968,8 @@ impl Tracer<'_> {
                         continue;
                     }
                     let Some(req) = self.symbol(base)? else { continue };
-                    let hits = self.refs_named(&req.name, kinds.clone())?;
-                    let hits = if self.one_of { through_one_of(self.conn, req.id, hits)? } else { hits };
+                    let hits = self.refs_named(&req.name, kinds.clone(), Some(req.id))?;
+                    let hits = if self.one_of { through_one_of(self.conn, &mut self.defs, req.id, hits)? } else { hits };
                     push_callers(self, hits, Some(req.id), "via_protocol")?;
                 }
                 // And calls through a library's interface or base class it implements, one no indexed repo defines
@@ -954,7 +977,7 @@ impl Tracer<'_> {
                 // on a receiver of that type, passing arguments this member takes, may run it. Another implementation
                 // may run instead, the library's own or another type's, so each is `ambiguous`. With the library
                 // indexed, they resolve into it and `impact` lists them across repos instead.
-                let unresolved: Vec<RefHit> = if matches!(sym.kind.as_str(), "method" | "property") {
+                let mut unresolved: Vec<RefHit> = if matches!(sym.kind.as_str(), "method" | "property") {
                     self.refs_named_where(&sym.name, kinds.clone(), |h| {
                         h.confidence == "unresolved" && h.target_ids.is_empty() && h.receiver.is_some() && h.receiver_type.is_some()
                     })?
@@ -964,10 +987,14 @@ impl Tracer<'_> {
                 if !unresolved.is_empty() {
                     let library: HashSet<String> =
                         query::outside_supertype_names(self.conn, container)?.iter().map(|t| bare_type(t).to_string()).collect();
+                    unresolved.retain(|h| h.receiver_type.as_deref().is_some_and(|r| library.contains(bare_type(r))));
+                }
+                // The overloads are read only for a call on a library type's receiver: most members have none.
+                if !unresolved.is_empty() {
                     let mut overloads = query::Overloads::named(self.conn, &sym.name)?;
                     let mut hits = Vec::new();
                     for mut h in unresolved {
-                        if !h.receiver_type.as_deref().is_some_and(|r| library.contains(bare_type(r))) || !overloads.may_call(&h, sym.id)? {
+                        if !overloads.may_call(&h, sym.id)? {
                             continue;
                         }
                         h.confidence = "ambiguous";
@@ -999,8 +1026,8 @@ fn binding_evidence(b: &crate::di::Bound) -> Option<Evidence> {
 /// Calls through the protocol requirement `req`, as calls of one implementation among several: `ambiguous`, as the
 /// forward edge from the requirement to each implementation (`dispatch`) is, so a walk filters the edge the same
 /// way in either direction.
-fn through_one_of(conn: &Connection, req: i64, hits: Vec<RefHit>) -> Result<Vec<RefHit>> {
-    if crate::db::running_implementations(conn, req)?.len() <= 1 {
+fn through_one_of(conn: &Connection, defs: &mut query::DefinitionsMemo, req: i64, hits: Vec<RefHit>) -> Result<Vec<RefHit>> {
+    if defs.running_implementations(conn, req)?.len() <= 1 {
         return Ok(hits);
     }
     Ok(hits
@@ -1057,6 +1084,8 @@ fn ambiguous_all(hits: Vec<RefHit>) -> Vec<RefHit> {
 #[derive(Default)]
 pub struct EdgeCache {
     refs_by_name: HashMap<(String, Vec<&'static str>), Vec<RefHit>>,
+    defs: query::DefinitionsMemo,
+    res: query::Resolution,
     bindings: HashMap<i64, String>,
     precise: HashSet<(i64, String)>,
     evidence: HashMap<(i64, String), Evidence>,
@@ -1090,6 +1119,8 @@ impl EdgeCache {
         let mut t = Tracer {
             conn,
             refs_by_name: std::mem::take(&mut self.refs_by_name),
+            defs: std::mem::take(&mut self.defs),
+            res: std::mem::take(&mut self.res),
             bindings: std::mem::take(&mut self.bindings),
             precise: std::mem::take(&mut self.precise),
             evidence: std::mem::take(&mut self.evidence),
@@ -1098,6 +1129,8 @@ impl EdgeCache {
         };
         let out = f(&mut t);
         self.refs_by_name = t.refs_by_name;
+        self.defs = t.defs;
+        self.res = t.res;
         self.bindings = t.bindings;
         self.precise = t.precise;
         self.evidence = t.evidence;
@@ -1746,6 +1779,27 @@ pub fn defined_at(conn: &Connection, qualified: &str, file: &str, line: u32) -> 
 }
 
 /// A symbol by id.
+/// The symbol a use made in `id` belongs to: `id` itself, or, when `id` is a function or type declared in a function
+/// body (tagged `local`) or inside one, the function around the outermost of them. A compiler's index reports a use in
+/// a local helper as the enclosing function's, so a walk reaches that function in the same hop rather than through
+/// the helper, whose own callers (same-named locals elsewhere) can't be told apart.
+fn enclosing_callable(conn: &Connection, id: i64) -> Result<i64> {
+    let mut stmt = conn.prepare_cached("SELECT parent_id, tags FROM symbols WHERE id = ?1")?;
+    let (mut at, mut owner) = (id, id);
+    // Bounded: nesting is a handful deep, and a cycle can't be stored but costs nothing to rule out.
+    for _ in 0..16 {
+        let Some((parent, tags)) = stmt.query_map([at], |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, String>(1)?)))?.next().transpose()? else {
+            break;
+        };
+        let Some(parent) = parent else { break };
+        if tags.split(',').any(|t| t == "local") {
+            owner = parent;
+        }
+        at = parent;
+    }
+    Ok(owner)
+}
+
 pub fn symbol(conn: &Connection, id: i64) -> Result<Option<SymbolRow>> {
     let sql = format!("SELECT {SYMBOL_COLS} FROM symbols s JOIN files f ON f.id = s.file_id WHERE s.id = ?1");
     let mut stmt = conn.prepare_cached(&sql)?;

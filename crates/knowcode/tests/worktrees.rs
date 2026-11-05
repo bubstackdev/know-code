@@ -74,9 +74,10 @@ fn unused_never_counts_another_worktree_as_a_user_of_its_packages() {
 
 /// The index files in the cache, by name.
 fn indexes(base: &Path) -> Vec<String> {
-    let mut out: Vec<String> = std::fs::read_dir(base.join("cache/repos"))
-        .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".sqlite")).collect())
-        .unwrap_or_default();
+    // In the build's own tree, `cache/v/<key>/repos`: the only one these runs make.
+    let trees: Vec<std::path::PathBuf> = std::fs::read_dir(base.join("cache/v")).map(|d| d.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    let mut out: Vec<String> = trees.iter().flat_map(|t| std::fs::read_dir(t.join("repos")).into_iter().flatten().flatten())
+        .map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".sqlite")).collect();
     out.sort();
     out
 }

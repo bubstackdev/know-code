@@ -23,6 +23,22 @@
 {"end": 742, "file": "csharp/Ledger.cs", "message": "sync over async (CountAsync())", "rule": "cs-result-or-getresult", "severity": "warning", "start": 723}
 {"end": 782, "file": "csharp/Ledger.cs", "message": "sync over async (CountAsync())", "rule": "cs-result-or-getresult", "severity": "warning", "start": 745}
 {"end": 947, "file": "csharp/OrderService.cs", "message": "throw follows a log line", "rule": "cs-throw-after-log", "severity": "hint", "start": 941}
+{"end": 365, "file": "go/ledger.go", "message": "errors.New with a concatenation", "rule": "go-errors-new", "severity": "hint", "start": 337}
+{"end": 229, "file": "go/main.go", "message": "goroutine started", "rule": "go-goroutine", "severity": "hint", "start": 189}
+{"end": 118, "file": "go/main.go", "message": "error discarded", "rule": "go-ignored-error", "severity": "hint", "start": 100}
+{"end": 450, "file": "go/ledger.go", "message": "panic in Must", "rule": "go-panic", "severity": "error", "start": 440}
+{"end": 238, "file": "go/ledger.go", "message": "fmt.Println(\"added\", key)", "rule": "go-println", "severity": "warning", "start": 213}
+{"end": 134, "file": "go/main.go", "message": "fmt.Println(v)", "rule": "go-println", "severity": "warning", "start": 120}
+{"end": 211, "file": "go/ledger.go", "message": "Unlock not deferred", "rule": "go-unlock-without-defer", "severity": "hint", "start": 198}
+{"end": 281, "file": "java/Report.java", "message": "cast to String", "rule": "java-cast", "severity": "hint", "start": 260}
+{"end": 281, "file": "java/Report.java", "message": "cast to Object", "rule": "java-cast", "severity": "hint", "start": 269}
+{"end": 605, "file": "java/Inventory.java", "message": "empty catch", "rule": "java-empty-catch", "severity": "hint", "start": 574}
+{"end": 483, "file": "java/Inventory.java", "message": "Optional.get on head", "rule": "java-optional-get", "severity": "error", "start": 473}
+{"end": 336, "file": "java/Inventory.java", "message": "System.out.println(\"adding \" + item)", "rule": "java-println", "severity": "warning", "start": 300}
+{"end": 213, "file": "java/Report.java", "message": "System.out.println(inv.count())", "rule": "java-println", "severity": "warning", "start": 182}
+{"end": 779, "file": "java/Inventory.java", "message": "synchronized method", "rule": "java-synchronized-method", "severity": "hint", "start": 635}
+{"end": 239, "file": "java/Report.java", "message": "Thread.sleep in main", "rule": "java-thread-sleep", "severity": "hint", "start": 223}
+{"end": 291, "file": "java/Inventory.java", "message": "argument check", "rule": "java-throw-iae", "severity": "hint", "start": 248}
 {"end": 366, "file": "python/billing.py", "message": "bare except", "rule": "py-bare-except", "severity": "error", "start": 342}
 {"end": 466, "file": "python/billing.py", "message": "bare except", "rule": "py-bare-except", "severity": "error", "start": 425}
 {"end": 597, "file": "python/billing.py", "message": "comparison to None with ==", "rule": "py-eq-none", "severity": "hint", "start": 588}

@@ -1,11 +1,12 @@
 """`snapshot` and `diff`: a regression gate on answers.
 
 A query set (TOML) names repos and knowcode commands. `snapshot` runs each with `--json --no-sync` and stores the
-answer normalised (no build info, timings or row ids; lists sorted only where their order means nothing), one file
-per query. A query that fails (an exit code it doesn't expect, a timeout, output that isn't JSON) makes the snapshot
-invalid: every answer is still written, the failures are listed in `_meta.json`, and `snapshot` exits 1. `diff`
-compares two snapshots query by query: exit 0 when every answer is the same, 1 when any differs, 2 when it refuses to
-compare (either snapshot invalid, incomplete, or taken under another normalisation format).
+answer normalised (no build info, timings, row ids, cursor values or the index's own size; lists sorted only where
+their order means nothing), one file per query, so two fresh caches of one build give the same snapshot. A query that
+fails (an exit code it doesn't expect, a timeout, output that isn't JSON) makes the snapshot invalid: every answer is
+still written, the failures are listed in `_meta.json`, and `snapshot` exits 1. `diff` compares two snapshots query by
+query: exit 0 when every answer is the same, 1 when any differs, 2 when it refuses to compare (either snapshot
+invalid, incomplete, or taken under another normalisation format).
 
 Query set format:
 
@@ -48,7 +49,25 @@ from common import ROOT, canon, expand, kc, kc_json, load_toml, normalize, repo_
 UNORDERED = {"context", "refs", "trace", "routes", "tables", "events", "deps", "unused", "rename"}
 
 # Bumped whenever normalisation changes: snapshots taken under different rules aren't comparable.
-FORMAT = 2
+FORMAT = 3
+
+# Fields that name the index rather than the answer, so two fresh caches of one build differ in them: a cursor is
+# signed with a key of its cache (`cursor`, `callers_cursor`, ...), and `/index/own_bytes` measures the cache's files.
+# A cursor is masked rather than dropped: whether a list was cut, and so can be continued, is part of the answer.
+CACHE_FIELDS = ("/index/own_bytes",)
+
+
+def mask_cursors(ans):
+    """Replaces the value of every cursor field (`cursor`, `<list>_cursor`) in `ans` with `<cursor>`, in place."""
+    if isinstance(ans, dict):
+        for k, v in ans.items():
+            if (k == "cursor" or k.endswith("_cursor")) and isinstance(v, str):
+                ans[k] = "<cursor>"
+            else:
+                mask_cursors(v)
+    elif isinstance(ans, list):
+        for v in ans:
+            mask_cursors(v)
 
 
 def load_queries(path):
@@ -115,8 +134,9 @@ def run_one(q, root, bin_, cache):
         raw = kc_json(bin_, argv, cache, cwd=cwd, exits=exits)
     if is_error(raw):
         return q["id"], raw
-    for path in q.get("drop", ()):
+    for path in (*CACHE_FIELDS, *q.get("drop", ())):
         drop(raw, path)
+    mask_cursors(raw)
     keep, ordered, unordered = order_rules(q)
     roots = [("<root>", str(root)), ("<cache>", str(cache)), ("~", str(Path.home()))]
     return q["id"], normalize(raw, roots, ordered, keep_order=keep, unordered=unordered)

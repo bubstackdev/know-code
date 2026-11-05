@@ -67,11 +67,29 @@ pub struct Report {
 /// Re-reads the repo's SCIP index if it changed since the last ingest (or was never read), and says what it found,
 /// with how the heuristics compare when `compare`. Nothing happens when there is no SCIP file. A file that can't be
 /// read is reported, never an error: the index works without it.
-pub fn refresh(root: &Path, store: &mut Store, compare: bool) -> Result<Option<Report>> {
+///
+/// The SCIP file and the build files its facts depend on are stamped into `outside` before they are read; when the
+/// set of build files watched changes during the refresh (an ingest, or a check finding new ones), what was stamped
+/// is not the whole set, and `outside` can't prove the repo unchanged until the next sync.
+pub(crate) fn refresh(root: &Path, store: &mut Store, compare: bool, outside: &mut crate::fresh::Outside) -> Result<Option<Report>> {
     let path = match store.meta("scip.path")? {
         Some(p) => PathBuf::from(p),
         None => root.join(DEFAULT_FILE),
     };
+    outside.note(root, &path);
+    let watched = kc_store::scip::watched(store.conn())?;
+    for p in &watched {
+        outside.note(root, Path::new(p));
+    }
+    let report = read(root, store, compare, &path)?;
+    if kc_store::scip::watched(store.conn())? != watched {
+        outside.unprovable();
+    }
+    Ok(report)
+}
+
+fn read(root: &Path, store: &mut Store, compare: bool, path: &Path) -> Result<Option<Report>> {
+    let path = path.to_path_buf();
     let Ok(meta) = std::fs::metadata(&path) else { return Ok(None) };
     let mtime_ns = mtime_ns(&meta);
     // Re-extracting files with a new extractor changes the sites SCIP occurrences are matched to.

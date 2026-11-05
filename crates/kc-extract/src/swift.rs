@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser};
 use crate::types::{PathRoot, Seg, TypeExpr};
 use crate::{FileFacts, Import, Ref, RefKind, Relation, RelationKind, Symbol, SymbolKind};
 
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 26;
 
 /// Collection methods whose closure argument receives the receiver's elements: `$0` (or the first named parameter)
 /// is an element.
@@ -62,6 +62,7 @@ pub fn extract(source: &str) -> FileFacts {
         closure_locals: HashMap::new(),
         seen_bare: HashSet::new(),
         awaits: HashMap::new(),
+        path: crate::Ancestry::default(),
     };
     cx.visit(tree.root_node());
     // A file runs top-level statements: a script, or a target's `main.swift`. A build diagnostic (`#error(…)` in a
@@ -470,6 +471,8 @@ struct Cx<'a> {
     seen_bare: HashSet<(Option<usize>, String)>,
     /// Per statement (by node id), where its first `await` outside a closure starts, if it has one.
     awaits: HashMap<usize, Option<usize>>,
+    /// The nodes [`Cx::visit`] is inside, for [`Cx::parent`].
+    path: crate::Ancestry<'a>,
 }
 
 impl<'a> Cx<'a> {
@@ -477,7 +480,23 @@ impl<'a> Cx<'a> {
         &self.src[node.byte_range()]
     }
 
-    fn visit(&mut self, node: Node) {
+    fn visit(&mut self, node: Node<'a>) {
+        self.path.enter(node);
+        self.visit_node(node);
+        self.path.leave();
+    }
+
+    /// Visits `child`, one of `parent`'s children.
+    fn visit_child(&mut self, parent: Node<'a>, child: Node<'a>) {
+        self.path.child_of(parent);
+        self.visit(child);
+    }
+
+    fn parent(&self, node: Node<'a>) -> Option<Node<'a>> {
+        self.path.parent(node)
+    }
+
+    fn visit_node(&mut self, node: Node<'a>) {
         if is_parse_error(node) {
             self.facts.parse_errors += 1;
         }
@@ -487,8 +506,9 @@ impl<'a> Cx<'a> {
         if NEST_KINDS.contains(&node.kind())
             && let Some(s) = self.scopes.iter().rev().find(|s| s.callable)
         {
-            let sym = &mut self.facts.symbols[s.sym];
-            let depth = crate::nesting_depth(node, NEST_KINDS, (sym.start_byte, sym.end_byte));
+            let (i, outer) = (s.sym, (self.facts.symbols[s.sym].start_byte, self.facts.symbols[s.sym].end_byte));
+            let depth = crate::nesting_depth_by(node, NEST_KINDS, outer, |n| self.parent(n));
+            let sym = &mut self.facts.symbols[i];
             sym.nesting = sym.nesting.max(depth);
         }
         match node.kind() {
@@ -549,7 +569,7 @@ impl<'a> Cx<'a> {
                             }
                         }
                         (0, "prefix_expression" | "simple_identifier") => {}
-                        _ => self.visit(child),
+                        _ => self.visit_child(node, child),
                     }
                 }
             }
@@ -605,9 +625,9 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn visit_children(&mut self, node: Node) {
+    fn visit_children(&mut self, node: Node<'a>) {
         for child in children(node) {
-            self.visit(child);
+            self.visit_child(node, child);
         }
     }
 
@@ -653,7 +673,9 @@ impl<'a> Cx<'a> {
             signature,
             doc: doc_comment(self.src, node),
             attrs,
-            tags: Vec::new(),
+            // A function or type declared in a function body: its uses belong to that function (see
+            // `kc_store::trace`), as the compiler's index reports them.
+            tags: if self.in_callable() { vec!["local"] } else { Vec::new() },
             start_line: line(node),
             end_line: node.end_position().row as u32 + 1,
             start_byte: node.start_byte() as u32,
@@ -666,11 +688,12 @@ impl<'a> Cx<'a> {
             type_name: None,
             arity: None,
             lambda_types: None,
+            scope: None,
         });
         self.facts.symbols.len() - 1
     }
 
-    fn type_decl(&mut self, node: Node) {
+    fn type_decl(&mut self, node: Node<'a>) {
         let kind = match node.child_by_field_name("declaration_kind").map(|k| self.text(k)) {
             Some("class") => SymbolKind::Class,
             Some("struct") => SymbolKind::Struct,
@@ -726,7 +749,8 @@ impl<'a> Cx<'a> {
             }
         }
         self.scopes.pop();
-        self.facts.symbols[sym].tags = type_tags(kind, &self.facts.symbols[sym].attrs, &targets);
+        let tags = type_tags(kind, &self.facts.symbols[sym].attrs, &targets);
+        self.facts.symbols[sym].tags.extend(tags);
 
         self.scopes.push(Scope { sym, type_name: Some(qualified), callable: false, locals: HashMap::new(), bound: HashSet::new() });
         if let Some(body) = node.child_by_field_name("body") {
@@ -735,7 +759,7 @@ impl<'a> Cx<'a> {
         self.scopes.pop();
     }
 
-    fn func_decl(&mut self, node: Node, kind: SymbolKind) {
+    fn func_decl(&mut self, node: Node<'a>, kind: SymbolKind) {
         let name = match kind {
             SymbolKind::Init => "init".to_string(),
             SymbolKind::Subscript => "subscript".to_string(),
@@ -862,7 +886,7 @@ impl<'a> Cx<'a> {
 
     /// Binds every identifier a pattern introduces, and visits expressions inside it (`case .a(x + 1)` is rare,
     /// `if let x = compute()` keeps its value outside the pattern node).
-    fn bind_pattern(&mut self, node: Node) {
+    fn bind_pattern(&mut self, node: Node<'a>) {
         let mut stack = vec![node];
         while let Some(n) = stack.pop() {
             for (i, c) in children(n).enumerate() {
@@ -897,7 +921,8 @@ impl<'a> Cx<'a> {
     /// Recorded once per enclosing symbol and name, to keep the index small.
     fn bare_identifier(&mut self, node: Node) {
         let name = self.text(node);
-        let field = node.parent().and_then(|p| {
+        let parent = self.parent(node);
+        let field = parent.and_then(|p| {
             let i = children(p).position(|c| c.id() == node.id())?;
             p.field_name_for_child(i as u32)
         });
@@ -908,7 +933,7 @@ impl<'a> Cx<'a> {
             Some("name") => return,
             _ => {}
         }
-        let parent = node.parent().map(|p| p.kind()).unwrap_or("");
+        let parent = parent.map(|p| p.kind()).unwrap_or("");
         let skip_parent = matches!(
             parent,
             "value_argument_label" | "parameter" | "lambda_parameter" | "navigation_suffix" | "statement_label"
@@ -1011,7 +1036,7 @@ impl<'a> Cx<'a> {
         self.current_sym().is_some_and(|p| self.facts.symbols[p].tags.contains(&"test"))
     }
 
-    fn property_decl(&mut self, node: Node) {
+    fn property_decl(&mut self, node: Node<'a>) {
         let in_type = self.scopes.last().is_some_and(|s| s.type_name.is_some());
         let container = if in_type { self.enclosing_type() } else { None };
         let mut first = None;
@@ -1043,7 +1068,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn enum_entry(&mut self, node: Node) {
+    fn enum_entry(&mut self, node: Node<'a>) {
         let container = self.enclosing_type();
         for (i, child) in children(node).enumerate() {
             if node.field_name_for_child(i as u32) == Some("name") {
@@ -1056,7 +1081,7 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn typealias_decl(&mut self, node: Node) {
+    fn typealias_decl(&mut self, node: Node<'a>) {
         let Some(n) = node.child_by_field_name("name") else { return };
         let name = type_name(self.src, n);
         let sym = self.push_symbol(node, name, SymbolKind::Typealias, self.enclosing_type());
@@ -1147,7 +1172,7 @@ impl<'a> Cx<'a> {
     }
 
     /// `x.member` used as a value (not called): a member reference, typed like a call's receiver.
-    fn member_access(&mut self, node: Node) {
+    fn member_access(&mut self, node: Node<'a>) {
         let Some(suffix) = node.child_by_field_name("suffix").and_then(|s| s.child_by_field_name("suffix")) else {
             return self.visit_children(node);
         };
@@ -1239,7 +1264,7 @@ impl<'a> Cx<'a> {
             if stmt.kind() == "await_expression" {
                 return true;
             }
-            match stmt.parent() {
+            match self.parent(stmt) {
                 Some(p) if !matches!(p.kind(), "statements" | "lambda_literal" | "function_body" | "class_body" | "computed_property" | "source_file") => {
                     stmt = p
                 }
@@ -1272,10 +1297,16 @@ impl<'a> Cx<'a> {
     /// for a capitalised one (`XCTAssertThrowsError(…)`, read as a creation), which may call a function.
     fn label_call(&mut self, at: Option<usize>, kind: RefKind, call: Node) {
         if let Some(i) = at.filter(|_| matches!(kind, RefKind::Call | RefKind::Instantiate))
-            && let Some(labels) = call_labels(self.src, call, self.awaited(call))
+            && let Some(labels) = call_labels(self.src, call, self.wrapper(call), self.awaited(call))
         {
             self.facts.arg_types.insert(i, labels);
         }
+    }
+
+    /// The `try` or `await` around `call`, with that expression's parent.
+    fn wrapper(&self, call: Node<'a>) -> Option<(Node<'a>, Node<'a>)> {
+        let p = self.parent(call).filter(|p| matches!(p.kind(), "try_expression" | "await_expression"))?;
+        Some((p, self.parent(p)?))
     }
 }
 
@@ -1510,8 +1541,9 @@ fn doc_comment(src: &str, node: Node) -> Option<String> {
 
 /// A call's argument labels as JSON: `{"l": [...], "t": [...]}`, the labels of the arguments in parentheses and of the
 /// trailing closures, `null` for one without (`f(1, from: x) { }` is `{"l": [null, "from"], "t": [null]}`). `None`
-/// for a call without a suffix (a function reference) or with an argument tree-sitter couldn't read.
-fn call_labels(src: &str, call: Node, awaited: bool) -> Option<String> {
+/// for a call without a suffix (a function reference) or with an argument tree-sitter couldn't read. `wrapper` is the
+/// `try` or `await` around the call and its parent ([`Cx::wrapper`]).
+fn call_labels(src: &str, call: Node, wrapper: Option<(Node, Node)>, awaited: bool) -> Option<String> {
     let suffix = children(call).find(|c| c.kind() == "call_suffix")?;
     let label = |n: Node| collapse(&src[n.byte_range()], 80);
     let mut args = Vec::new();
@@ -1529,10 +1561,9 @@ fn call_labels(src: &str, call: Node, awaited: bool) -> Option<String> {
     let mut trailing = Vec::new();
     let mut pending = None;
     // `try f(x) { … }` reads as a call of `try f(x)` with the closure: the closure is `f`'s.
-    let outer = call
-        .parent()
-        .filter(|p| matches!(p.kind(), "try_expression" | "await_expression"))
-        .and_then(|p| p.parent().filter(|g| g.kind() == "call_expression" && g.named_child(0) == Some(p)))
+    let outer = wrapper
+        .filter(|(p, g)| g.kind() == "call_expression" && g.named_child(0) == Some(*p))
+        .map(|(_, g)| g)
         .and_then(|g| children(g).find(|c| c.kind() == "call_suffix"))
         .filter(|s| !children(*s).any(|c| c.kind() == "value_arguments"));
     for c in children(suffix).chain(outer.into_iter().flat_map(children)) {

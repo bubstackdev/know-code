@@ -1,0 +1,7 @@
+# The image each Spring repository is labelled in (eval/routes-v1/README.md, "Java and Kotlin"): repo and image, pinned by
+# digest. Each gets the Java its build asks for: Java 8 for piggymetrics, a Java 17 toolchain for spring-petclinic-kotlin.
+jhipster-sample-app maven:3.9-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320
+spring-petclinic-rest maven:3.9-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320
+spring-petclinic-microservices maven:3.9-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320
+piggymetrics maven:3.9-eclipse-temurin-8@sha256:0f402712b7a469189cfea5ec69cdcadcb32b22aaf1ea62777ab925c3d8470175
+spring-petclinic-kotlin eclipse-temurin:17-jdk@sha256:43338b737d0f75d6883d3c4563bc66974113ca8ac296e82f39d161fb3d398f0d

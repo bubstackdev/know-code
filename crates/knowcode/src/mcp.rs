@@ -82,6 +82,10 @@ pub const SEARCH_LIMIT: Range = Range { what: "Results per page", min: 1, defaul
 pub const TASK_FILES: Range = Range { what: "Files to list", min: 1, default: 6, max: 30, note: "", type_max: None };
 pub const TASK_DEPENDENTS: Range = Range { what: "Dependents to list", min: 0, default: 6, max: 40, note: "", type_max: None };
 pub const TASK_TESTS: Range = Range { what: "Tests to list", min: 0, default: 4, max: 30, note: "", type_max: None };
+pub const REVIEW_CHANGES: Range = Range { what: "Changed files to list", min: 1, default: 30, max: 200, note: "", type_max: None };
+pub const REVIEW_DEPENDENTS: Range = Range { what: "Dependent files to list", min: 0, default: 8, max: 40, note: "", type_max: None };
+pub const REVIEW_TESTS: Range = Range { what: "Tests to list", min: 0, default: 6, max: 30, note: "", type_max: None };
+pub const REVIEW_MISSED: Range = Range { what: "Missed partners to list", min: 0, default: 6, max: 30, note: "", type_max: None };
 pub const SEARCH_CONTEXT: Range = Range { what: "Lines of context around each hit", min: 0, default: 0, max: 10, note: "", type_max: None };
 pub const ANSWER_CHARS: Range = Range {
     what: "Answer size cap in characters",
@@ -102,9 +106,14 @@ pub const RANGES: &[(&str, &str, &Range)] = &[
     ("kc_search", "limit", &SEARCH_LIMIT),
     ("kc_search", "context", &SEARCH_CONTEXT),
     ("kc_grep_ast", "limit", &SEARCH_LIMIT),
+    ("kc_rules", "limit", &SEARCH_LIMIT),
     ("kc_task", "files", &TASK_FILES),
     ("kc_task", "dependents", &TASK_DEPENDENTS),
     ("kc_task", "tests", &TASK_TESTS),
+    ("kc_review", "changes", &REVIEW_CHANGES),
+    ("kc_review", "dependents", &REVIEW_DEPENDENTS),
+    ("kc_review", "tests", &REVIEW_TESTS),
+    ("kc_review", "missed", &REVIEW_MISSED),
     ("*", "max_chars", &ANSWER_CHARS),
 ];
 
@@ -126,6 +135,8 @@ pub const CHOICES: &[(&str, &str, &[&str])] = &[
     ("kc_search", "case", &["sensitive", "insensitive", "smart"]),
     ("kc_grep_ast", "lang", &["csharp", "typescript", "javascript", "python", "rust", "swift"]),
     ("kc_note_add", "tag", &["decision", "gotcha", "todo"]),
+    ("kc_rules", "format", &["json", "sarif"]),
+    ("kc_review", "format", &["json", "markdown", "sarif"]),
     ("kc_path", "format", &["tree", "json", "mermaid"]),
     ("kc_flow", "format", &["tree", "json", "mermaid"]),
     ("kc_areas", "format", &["json", "mermaid"]),
@@ -346,6 +357,29 @@ pub struct LocateParams {
     /// Rank files across every indexed repo.
     #[serde(default)]
     pub workspace: bool,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReviewParams {
+    /// `working` (uncommitted changes) or a git revision: the diff reviewed is from it to the working tree.
+    pub diff: String,
+    /// Changed files to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub changes: Option<usize>,
+    /// Dependent files to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub dependents: Option<usize>,
+    /// Tests to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub tests: Option<usize>,
+    /// Missed partners to list (bounds in `RANGES`).
+    #[serde(default)]
+    pub missed: Option<usize>,
+    /// `json` (default), `markdown` (a comment for a pull request) or `sarif` (a SARIF 2.1.0 log).
+    #[serde(default)]
+    pub format: Option<String>,
     #[serde(flatten)]
     pub common: Common,
 }
@@ -866,6 +900,39 @@ pub struct TestTargetsParams {
     pub common: Common,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RulesParams {
+    /// ast-grep rule files, or directories of them, relative to the repo's root (default: the config's `rules.paths`).
+    #[serde(default)]
+    pub rules: Vec<String>,
+    /// Rules written inline: YAML documents, as in a rule file.
+    #[serde(default)]
+    pub rule: Option<String>,
+    /// A line regex instead of rules: each line it matches is a match.
+    #[serde(default)]
+    pub regex: Option<String>,
+    /// A commit (branch, tag, sha): report only the matches it didn't have (a monitor).
+    #[serde(default)]
+    pub new_since: Option<String>,
+    /// Path globs; a leading `!` excludes.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Results per page (default 20).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Results to skip: the previous `next_offset`.
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// Stop after this many matches (default 50000).
+    #[serde(default)]
+    pub max_matches: Option<usize>,
+    /// `json` (default), or `sarif`: a SARIF 2.1.0 log of every match.
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(flatten)]
+    pub common: Common,
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct CapabilitiesParams {
     /// One op (`impact`) or tool (`kc_impact`) to describe; none: every op.
@@ -944,6 +1011,8 @@ pub const ONE_OPS: &[(&str, &str, &str)] = &[
     ("capabilities", "of", ""),
     ("task", "goal", ""),
     ("test_targets", "name", ""),
+    ("rules", "rules", "rules"),
+    ("review", "diff", ""),
 ];
 
 /// What `q` and `qs` fill, a line per parameter `q` fills (ops in [`ONE_OPS`] order), the ops taking no `q` last: the
@@ -978,7 +1047,7 @@ pub fn one_q_lines() -> String {
 }
 
 /// The parameters that take a list, among those `q` fills.
-const ONE_LISTS: &[&str] = &["targets", "files"];
+const ONE_LISTS: &[&str] = &["targets", "files", "rules"];
 
 /// A `kc` call as the tool it runs and that tool's arguments.
 pub fn one_call(p: OneParams) -> Result<(String, serde_json::Map<String, Value>), String> {
@@ -1166,6 +1235,8 @@ pub const ADVERTISED: &[(&str, &[(&str, &str)])] = &[
     ("kc_capabilities", &[("of", "")]),
     ("kc_task", &[("goal", "")]),
     ("kc_test_targets", &[("name", "")]),
+    ("kc_rules", &[("rules", "Rule files or directories, from the repo's root."), ("new_since", "A commit: only matches it lacked.")]),
+    ("kc_review", &[("diff", "`working` or a git revision.")]),
     ("kc", &[("op", ""), ("q", "Name, `Type.member`, file:line, text, cursor or topic."), ("qs", ""), ("depth", "impact: 2 for callers' callers.")]),
 ];
 
@@ -1200,7 +1271,7 @@ fn advertised(tool: &str, schema: &rmcp::model::JsonObject) -> rmcp::model::Json
 
 /// The tools `all` leaves out, advertised only when named (`all,kc_capabilities`): what they answer is read once by a
 /// client building its tool surface, not on every turn, and is also served as a resource and as the `kc` tool's op.
-pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets"];
+pub const ON_REQUEST: &[&str] = &["kc_capabilities", "kc_test_targets", "kc_rules", "kc_review"];
 
 /// The profile `serve` uses unless `--tools` or `KNOWCODE_TOOLS` names another: the single `kc` tool.
 pub const DEFAULT_PROFILE: &str = "one";
@@ -1460,16 +1531,28 @@ fn note(recording: &Recording, env: &Value) {
 
 /// Runs a blocking operation and returns its envelope as compact JSON within the size cap.
 async fn run(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
-    let env = blocking(false, with_cuts(f)).await?;
-    note(&recording(), &env);
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
+    // Cut to size in the lane, as the call's operation: a client gone away stops the cutting too.
+    let (rec, max) = (recording(), max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS));
+    let f = with_cuts(f);
+    blocking(false, move || {
+        let env = f()?;
+        note(&rec, &env);
+        Ok(cap(env, max))
+    })
+    .await
 }
 
 /// [`run`] for an operation that runs a child process (a search): in the children's lane.
 async fn run_child(max_chars: Option<usize>, f: impl FnOnce() -> anyhow::Result<Value> + Send + 'static) -> Result<String, ToolError> {
-    let env = blocking(true, with_cuts(f)).await?;
-    note(&recording(), &env);
-    Ok(cap(env, max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS)))
+    // Cut to size in the lane, as the call's operation: a client gone away stops the cutting too.
+    let (rec, max) = (recording(), max_chars.unwrap_or(DEFAULT_CHARS).clamp(MIN_CHARS, MAX_CHARS));
+    let f = with_cuts(f);
+    blocking(true, move || {
+        let env = f()?;
+        note(&rec, &env);
+        Ok(cap(env, max))
+    })
+    .await
 }
 
 /// `f`, with the child processes cut while it ran said in its envelope (see [`ops::add_cuts`]). Runs on the blocking
@@ -1501,7 +1584,7 @@ async fn blocking<T: Send + 'static>(child: bool, f: impl FnOnce() -> anyhow::Re
     .await
     .map_err(|e| ToolError::new(Code::Internal, e.to_string()));
     cancel_on_drop.0 = None;
-    release_memory();
+    crate::memory::release();
     result?.map_err(ToolError::from)
 }
 
@@ -2006,20 +2089,6 @@ fn noted(workspace: bool, mut env: Value) -> Value {
     env
 }
 
-/// Hands freed pages back to the OS after each call, so resident memory tracks what is in use rather than the
-/// high-water mark of the biggest call.
-fn release_memory() {
-    #[cfg(target_os = "macos")]
-    {
-        unsafe extern "C" {
-            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
-        }
-        // SAFETY: a null zone means all zones; goal 0 means release as much as possible. No pointers are kept.
-        unsafe {
-            malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
-        }
-    }
-}
 
 /// The answer as the server outputs it: [`cap_full`], said in its compact form (see [`crate::compact`]).
 pub(crate) fn cap(env: Value, max: usize) -> String {
@@ -2052,25 +2121,63 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
     // The compact form is measured exactly when the full form, less what compacting saved at the last exact
     // measure, says it may fit: compacting a clone at every item cut would cost more than the cut.
     let mut len = crate::compact::measure(&env, names).len();
-    let mut saved = env.to_string().len().saturating_sub(len);
+    let mut full = env.to_string().len();
+    let mut saved = full.saturating_sub(len);
     let mut guard = 0;
     let mut lost: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    // Cursors not yet renewed for rows cut (see `FAR`).
+    let mut unstamped = false;
     while len > max && guard < 10_000 {
         guard += 1;
+        // A call cancelled (its client gone, its deadline passed) wants no answer: cutting it further is wasted work.
+        if kc_store::limits::cancelled() {
+            break;
+        }
+        // Far over the size (a workspace answer can be thousands of times it), rows go many at a time: each list cut
+        // loses up to half its rows, and while the answer is large nothing is measured, finished or stamped again; the
+        // size is the full form's less the rows removed, counted as they go. Cutting one row at a time, each followed
+        // by a measure of the whole answer, cost the rows cut times the answer's size: past ten minutes for a table used
+        // across a large workspace. Halving at most, and measuring exactly once the answer is small enough for that to
+        // be cheap, leaves at least twice the size for the last cuts, which go one row at a time as before: an answer
+        // cut by a little is cut the same, and one cut by a lot keeps as many rows.
+        let far = len > FAR * max;
+        let keep = if far { (FAR * max) as f64 / len as f64 } else { 1.0 }.max(0.5);
         // Rows' detail dropped (a statement's lines, whose cite then compacts further than the full form says): measured
         // exactly before any row is cut.
         let mut detail = false;
-        match shrink(&mut env) {
+        let mut removed = None;
+        match shrink(&mut env, keep) {
             // Rows' detail dropped: no row lost.
-            Some(path) if path.is_empty() => detail = true,
-            Some(path) => {
+            Some(c) if c.path.is_empty() => detail = true,
+            Some(c) => {
                 if let Some(r) = resume.as_mut() {
-                    crate::cursor::cut(&mut env, r, &path);
+                    if far {
+                        unstamped |= crate::cursor::mark(r, &c.path);
+                    } else {
+                        crate::cursor::cut(&mut env, r, &c.path);
+                    }
                 }
-                refuse_partial_rename(&mut env, &path);
-                *lost.entry(path).or_default() += 1;
+                refuse_partial_rename(&mut env, &c.path);
+                *lost.entry(c.path).or_default() += c.rows;
+                removed = c.bytes;
             }
             None => break,
+        }
+        // While far, the size is the full form's less the rows removed, at the compact form's last measured ratio.
+        if far
+            && !detail
+            && let Some(bytes) = removed
+        {
+            let ratio = len as f64 / full.max(1) as f64;
+            full = full.saturating_sub(bytes);
+            len = (full as f64 * ratio) as usize;
+            if len > FAR * max && full > MEASURED * max {
+                continue;
+            }
+        }
+        if unstamped && let Some(r) = resume.as_ref() {
+            crate::cursor::restamp(&mut env, r);
+            unstamped = false;
         }
         // A workspace `kc_status` answers with an array of per-repo objects.
         if let Some(obj) = env.as_object_mut()
@@ -2094,12 +2201,17 @@ fn cap_full_named(mut env: Value, max: usize, names: &crate::compact::Names) -> 
             );
         }
         crate::contract::finish(&mut env);
-        let full = env.to_string().len();
+        full = env.to_string().len();
+        #[cfg(test)]
+        MEASURED_BYTES.with(|n| n.set(n.get() + full));
         len = full.saturating_sub(saved);
-        if len <= max || detail {
+        if len <= max || detail || far {
             len = crate::compact::measure(&env, names).len();
             saved = full.saturating_sub(len);
         }
+    }
+    if unstamped && let Some(r) = resume.as_ref() {
+        crate::cursor::restamp(&mut env, r);
     }
     // A context bundle's own lists, counted as they are after the cap.
     if env["items"].as_array().is_some_and(|items| items.iter().any(|i| i.get("callers_summary").is_some())) {
@@ -2168,6 +2280,7 @@ fn answer_list(key: &str) -> bool {
             | "sql"
             | "links"
             | "other_files"
+            | "changes"
     )
 }
 
@@ -2185,6 +2298,10 @@ fn tier(path: &str) -> u8 {
         1
     }
 }
+
+/// Notes an answer's items carry about one of their lists, the same text in every answer: the size cap drops them
+/// before it cuts a row.
+const NOTES: &[&str] = &["users_note"];
 
 /// Detail an answer list's rows can do without, dropped before a row of one is cut: the row keeps its name, kind and
 /// `file:line`.
@@ -2229,14 +2346,41 @@ fn unstate(v: &mut Value) -> bool {
     }
 }
 
-/// Trims one item from the longest list, returning its path (`/items`, `/items/0/callers`); or shortens a long
+/// How far over the size an answer is cut many rows at a time (see `cap_full_named`).
+const FAR: usize = 4;
+/// Below how many times the size an answer far over it is measured exactly after each cut: small enough to be cheap.
+const MEASURED: usize = 64;
+
+#[cfg(test)]
+thread_local! {
+    /// How many bytes of the answer the size cap serialised to measure it while cutting, for tests of its cost.
+    static MEASURED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What one [`shrink`] took: where (as [`shrink`] says), how many rows, and their size in the full form when they were
+/// rows of a list (`None` when it shortened strings or dropped detail).
+struct Cut {
+    path: String,
+    rows: u64,
+    bytes: Option<usize>,
+}
+
+/// Cuts `a` to `keep` of its rows (at least one goes, one stays), returning how many went and their size.
+fn cut_rows(a: &mut Vec<Value>, keep: f64) -> (u64, usize) {
+    let stay = ((a.len() as f64 * keep).ceil() as usize).clamp(1, a.len().saturating_sub(1).max(1));
+    let gone: Vec<Value> = a.drain(stay.min(a.len())..).collect();
+    let bytes = gone.iter().map(|x| x.to_string().len() + 1).sum();
+    (gone.len() as u64, bytes)
+}
+
+/// Trims the longest list (one row, or all but `keep` of its rows), returning its path (`/items`, `/items/0/callers`); or shortens a long
 /// string, returning `/…`; or drops the detail of answer lists' rows, returning an empty path; `None` when nothing is
 /// left to trim. A rename's `group` (the members renamed together) and a path's `steps` are never cut: a path or a
 /// group cut short would mislead; the list holding them is cut instead. A deploy answer's tails go before the rest,
 /// and its chains and includes are cut whole (see [`atomic`]), in the answer and in a page of one of those lists. The
 /// lists an answer is about (see [`answer_list`]) go last: every other list down to one row, the source shortened and
 /// their rows' detail dropped first.
-fn shrink(v: &mut Value) -> Option<String> {
+fn shrink(v: &mut Value, keep: f64) -> Option<Cut> {
     type Found<'a> = (&'a mut Vec<Value>, String, (u8, usize));
     // Prefer trimming the longest array anywhere in the response; a list inside an answer list's row ranks with it.
     fn longest(v: &mut Value, path: String, whole: bool, answer: bool) -> Option<Found<'_>> {
@@ -2318,36 +2462,49 @@ fn shrink(v: &mut Value) -> Option<String> {
             _ => None,
         }
     }
+    // The answer's items' notes about their lists (see [`NOTES`]), dropped all at once; false when there are none.
+    fn drop_notes(v: &mut Value) -> bool {
+        v.get_mut("items").and_then(Value::as_array_mut).is_some_and(|items| {
+            items.iter_mut().filter_map(Value::as_object_mut).fold(false, |any, item| NOTES.iter().fold(false, |d, k| item.remove(*k).is_some() | d) | any)
+        })
+    }
     // The rest of a site's statement goes before any row.
+    // A string shortened counts as one item cut, as it always has in `omitted`; detail dropped isn't counted.
+    let other = |path: &str| Some(Cut { path: path.to_string(), rows: u64::from(!path.is_empty()), bytes: None });
     if unstate(v) {
-        return Some(String::new());
+        return other("");
     }
     if let Some((a, path, (tier, _))) = longest(v, String::new(), false, false)
         && tier > 0
     {
-        a.pop();
-        return Some(path);
+        let (rows, bytes) = cut_rows(a, keep);
+        return Some(Cut { path, rows, bytes: Some(bytes) });
     }
     // Only the lists the answer is about are left to cut: the source, their rows' detail and the other lists' last
     // rows go first.
     if trim_strings(v, false) {
-        return Some("/…".to_string());
+        return other("/…");
     }
     if slim(v, false) {
-        return Some(String::new());
+        return other("");
+    }
+    // A note saying what a list is, the same in every answer (`users_note`; `kc_help` describes the list), goes before
+    // any row: of a side list, or of a list the answer is about.
+    if drop_notes(v) {
+        return other("");
     }
     // A page of one list (`kc_more`) is that list's rows only.
     if v.get("list").is_none()
         && let Some(path) = last_row(v, String::new())
     {
-        return Some(path);
+        return Some(Cut { path, rows: 1, bytes: None });
     }
     if let Some((a, path, _)) = longest(v, String::new(), false, false) {
-        a.pop();
-        return Some(path);
+        let (rows, bytes) = cut_rows(a, keep);
+        return Some(Cut { path, rows, bytes: Some(bytes) });
     }
     // Last resort: shorten long strings anywhere.
-    trim_strings(v, true).then(|| "/…".to_string())
+    if trim_strings(v, true) { other("/…") } else { None }
 }
 
 
@@ -2485,7 +2642,7 @@ impl KnowcodeServer {
     async fn kc_find(&self, Parameters(p): Parameters<FindParams>) -> Result<String, ToolError> {
         let scope = self.scope(&p.common, false)?;
         run(p.common.max_chars, move || {
-            let env = ops::find(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
+            let env = crate::cursor::find_definitions(&p.query, p.kind.as_deref(), p.limit.unwrap_or(10), &scope)?.env;
             let what = format!("no definition matches {:?}{}", p.query, p.kind.as_deref().map(|k| format!(" of kind {k}")).unwrap_or_default());
             Ok(explain(env, &what, "limit"))
         })
@@ -2503,6 +2660,29 @@ impl KnowcodeServer {
         match (p.query, p.queries) {
             (Some(q), many) if many.is_empty() => run(p.common.max_chars, move || locate(&q)).await,
             (one, many) => run_batch(p.common.max_chars, inputs(one, many, "query or queries")?, locate).await,
+        }
+    }
+
+    #[tool(description = "One bounded answer for a diff: what it changes, the tests to run, files usually changed with it, what depends on it, contracts it breaks, rule matches. kc_help kc_review.")]
+    async fn kc_review(&self, Parameters(p): Parameters<ReviewParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        let mut params = crate::review::ReviewParams::new(p.diff);
+        params.changes = REVIEW_CHANGES.clamp(p.changes);
+        params.dependents = REVIEW_DEPENDENTS.clamp(p.dependents);
+        params.tests = REVIEW_TESTS.clamp(p.tests);
+        params.missed = REVIEW_MISSED.clamp(p.missed);
+        match p.format.as_deref() {
+            None | Some("json") => run(p.common.max_chars, move || Ok(crate::review::review(&params, &scope)?.env))
+                .await
+                .map(|text| crate::review::reading_order(&text)),
+            // A comment and a log are read whole (a cut SARIF log isn't valid): `max_chars` doesn't apply, and what the
+            // answer missed is in them (the comment's notes, the log's notifications).
+            Some("markdown") => blocking(false, move || Ok(crate::review_format::markdown(&crate::review::review(&params, &scope)?.env))).await,
+            Some("sarif") => {
+                blocking(false, move || Ok(serde_json::to_string(&crate::review_format::sarif(&crate::review::review(&params, &scope)?.env)).unwrap_or_default()))
+                    .await
+            }
+            Some(other) => Err(ToolError::new(Code::InvalidArgument, format!("format must be json, markdown or sarif, not {other}"))),
         }
     }
 
@@ -3047,6 +3227,8 @@ impl KnowcodeServer {
             "kc_status" => self.kc_status(a(t, args)?).await,
             "kc_task" => self.kc_task(a(t, args)?).await,
             "kc_test_targets" => self.kc_test_targets(a(t, args)?).await,
+            "kc_rules" => self.kc_rules(a(t, args)?).await,
+            "kc_review" => self.kc_review(a(t, args)?).await,
             other => Err(ToolError::new(Code::InvalidArgument, format!("no op {other}"))),
         };
         out.map(|o| crate::summary::restate(one_text(&o, false))).map_err(|e| e.reworded(|m| one_text(m, false)))
@@ -3064,6 +3246,48 @@ impl KnowcodeServer {
         run(p.common.max_chars, move || {
             let what = "no declared test target: no SwiftPM test target, .NET test project or package.json test script".to_string();
             Ok(explain(ops::test_targets(p.name.as_deref(), &scope)?.env, &what, ""))
+        })
+        .await
+    }
+
+    #[tool(description = "A repo's own ast-grep rules (or a line regex) run over its files; with new_since, only new matches. kc_help kc_rules.")]
+    async fn kc_rules(&self, Parameters(p): Parameters<RulesParams>) -> Result<String, ToolError> {
+        let scope = self.scope(&p.common, false)?;
+        // Rule files are read from inside the repo only: a path is relative to its root and never climbs out of it.
+        for r in &p.rules {
+            let path = Path::new(r);
+            if path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                return Err(ToolError::new(Code::NotAllowed, format!("rule paths are relative to the repo's root, inside it: {r}")));
+            }
+        }
+        let sarif = match p.format.as_deref() {
+            None | Some("json") => false,
+            Some("sarif") => true,
+            Some(other) => return Err(ToolError::new(Code::InvalidArgument, format!("format must be json or sarif, not {other}"))),
+        };
+        let limit = if sarif { usize::MAX } else { SEARCH_LIMIT.clamp(p.limit) };
+        let params = crate::rules::RulesParams {
+            paths: p.rules.iter().map(PathBuf::from).collect(),
+            inline: p.rule,
+            regex: p.regex,
+            new_since: p.new_since,
+            globs: p.paths,
+            limit,
+            offset: p.offset.unwrap_or(0),
+            max_matches: p.max_matches.unwrap_or(50_000),
+        };
+        if sarif {
+            // The log is the answer, whole (a cut log wouldn't be valid SARIF, so `max_chars` doesn't apply); its run's
+            // notifications say what the answer missed.
+            return blocking(false, move || {
+                let out = crate::rules::rules(&params, &scope)?;
+                Ok(serde_json::to_string(&crate::sarif::rules(&out.data, &out.env)).unwrap_or_default())
+            })
+            .await;
+        }
+        run(p.common.max_chars, move || {
+            let what = "no rule matched".to_string();
+            Ok(explain(crate::rules::rules(&params, &scope)?.env, &what, "limit (or offset=next_offset)"))
         })
         .await
     }
@@ -3257,7 +3481,7 @@ fn run_server(server: KnowcodeServer) -> anyhow::Result<()> {
     kc_index::light::discover_roots()?;
     crate::refresh::start();
     // No process-wide SQLite memory limit: SQLite is built without the counting it needs (see .cargo/config.toml).
-    // Each connection's page cache is bounded by its `cache_size`, and `release_memory` hands freed pages back.
+    // Each connection's page cache is bounded by its `cache_size`, and `crate::memory::release` hands freed pages back.
     // Stdin and stdout each hold a blocking thread; the others run tool work, one per lane (see `WORK`).
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).max_blocking_threads(5).enable_all().build()?;
     rt.block_on(async move {
@@ -3349,7 +3573,8 @@ mod tests {
 
     #[test]
     fn bounds_are_said_as_answers_apply_them() {
-        let s = server("all");
+        // Every tool with a bounded parameter, those served on request too.
+        let s = server("all,kc_rules,kc_review");
         let advertised: std::collections::HashMap<String, rmcp::model::Tool> =
             s.tool_router.list_all().into_iter().map(|t| (t.name.to_string(), t)).collect();
         for (tool, param, r) in RANGES.iter().filter(|(t, _, _)| *t != "*") {
@@ -3554,6 +3779,8 @@ mod tests {
             "kc_capabilities" => as_::<CapabilitiesParams>(args),
             "kc_task" => as_::<TaskParams>(args),
             "kc_test_targets" => as_::<TestTargetsParams>(args),
+            "kc_rules" => as_::<RulesParams>(args),
+            "kc_review" => as_::<ReviewParams>(args),
             "kc" => as_::<OneParams>(args),
             other => Err(format!("no parameters type for {other}")),
         }
@@ -3565,7 +3792,7 @@ mod tests {
     /// the tool runs with, not dropped as unknown).
     #[test]
     fn every_unadvertised_parameter_is_documented_and_accepted() {
-        let s = server("all,kc_capabilities,kc_test_targets");
+        let s = server("all,kc_capabilities,kc_test_targets,kc_rules,kc_review");
         let mut tools = s.tool_router.list_all();
         tools.extend(server("one").tool_router.list_all());
         assert_eq!(ADVERTISED.len(), tools.len(), "every tool says what it advertises");
@@ -3608,7 +3835,7 @@ mod tests {
     /// op's main parameters, and any other is passed by its own name and reaches the tool.
     #[test]
     fn every_op_reaches_its_tool_with_every_parameter() {
-        let s = server("all,kc_capabilities,kc_test_targets");
+        let s = server("all,kc_capabilities,kc_test_targets,kc_rules,kc_review");
         let tools = s.tool_router.list_all();
         assert_eq!(ONE_OPS.len(), tools.len(), "an op per tool");
         let kc = |v: Value| one_call(serde_json::from_value::<OneParams>(v).unwrap());
@@ -3873,6 +4100,47 @@ mod tests {
         assert!(v["incomplete"].as_array().unwrap().iter().any(|i| i["reason"] == "budget" && i["detail"].as_str().unwrap().starts_with("inputs: ")), "{v}");
         let v: Value = serde_json::from_str(&batch(80_000, 1).unwrap()).unwrap();
         assert_eq!((v.get("complete"), v.get("incomplete"), v["results"][0].get("complete")), (Some(&json!(true)), None, Some(&json!(true))), "{v}");
+    }
+
+    #[test]
+    fn an_answer_far_over_the_size_is_cut_without_measuring_it_at_every_row() {
+        // A workspace answer: 150 repos, each with 300 accessors, about 3 MB against 8,000 characters.
+        let items: Vec<Value> = (0..150)
+            .map(|r| {
+                let rows: Vec<Value> = (0..300).map(|k| json!({ "file": format!("svc{r}/src/Reader{k}.cs"), "line": k + 1, "name": "Read" })).collect();
+                json!({ "repo": format!("svc{r}"), "table": { "name": "ledger", "accessors": rows } })
+            })
+            .collect();
+        let env = json!({ "repo": "workspace", "items": items, "total": 150, "truncated": false });
+        let size = env.to_string().len();
+        MEASURED_BYTES.with(|n| n.set(0));
+        let out = cap(env, 8_000);
+        let measured = MEASURED_BYTES.with(std::cell::Cell::get);
+        assert!(out.len() <= 8_000, "{} chars", out.len());
+        let v: Value = serde_json::from_str(&out).unwrap();
+        // Measuring the whole answer after each row cut serialised it about 75 times over (each repo cut, the answer a
+        // little smaller); cut by halves, measured only once small, it is serialised about once.
+        assert!(measured < 2 * size, "{measured} bytes measured for an answer of {size}");
+        // As many rows as fit are kept: the one repo left keeps more than a handful of its accessors.
+        assert_eq!(v["items"].as_array().map(Vec::len), Some(1), "{out}");
+        assert!(v["items"][0]["table"]["accessors"].as_array().map_or(0, Vec::len) > 20, "{out}");
+    }
+
+    #[test]
+    fn a_cancelled_call_stops_cutting_its_answer() {
+        let items: Vec<Value> = (0..150)
+            .map(|r| {
+                let rows: Vec<Value> = (0..300).map(|k| json!({ "file": format!("svc{r}/src/Reader{k}.cs"), "line": k + 1 })).collect();
+                json!({ "repo": format!("svc{r}"), "rows": rows })
+            })
+            .collect();
+        let env = json!({ "repo": "workspace", "items": items, "total": 150, "truncated": false });
+        let op = kc_store::limits::Operation::new();
+        op.cancel();
+        let _entered = kc_store::limits::enter(op);
+        MEASURED_BYTES.with(|n| n.set(0));
+        let _ = cap(env, 8_000);
+        assert_eq!(MEASURED_BYTES.with(std::cell::Cell::get), 0, "a cancelled call's answer is cut no further");
     }
 
     #[test]
@@ -4396,6 +4664,68 @@ mod tests {
         assert!(refs["items"][0]["cite"].get("at").is_none(), "{refs}");
         assert!(!refs_bare.contains("\"cite\""), "{refs_bare}");
         assert_eq!(bad.unwrap_err(), "cite must be brief, lines, check or none, not all");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// kc_review answers its structure as JSON, a comment as markdown and a SARIF log, and refuses another format.
+    #[test]
+    fn review_answers_json_markdown_or_sarif() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-review");
+        let root = crate::ops::tests::repo(&base, "shop", &[("src/A.cs", "class A\n{\n    int F() => 1;\n}\n")]);
+        for args in [&["init", "-q"][..], &["add", "-A"], &["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-qm", "base"]] {
+            assert!(std::process::Command::new("git").arg("-C").arg(&root).args(args).status().unwrap().success());
+        }
+        std::fs::write(root.join("src/A.cs"), "class A\n{\n    int F() => 2;\n}\n").unwrap();
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("all,kc_review") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let (json, md, sarif, bad) = rt.block_on(async {
+            (
+                s.kc_review(p(json!({ "diff": "working" }))).await.unwrap(),
+                s.kc_review(p(json!({ "diff": "working", "format": "markdown" }))).await.unwrap(),
+                s.kc_review(p(json!({ "diff": "working", "format": "sarif" }))).await.unwrap(),
+                s.kc_review(p(json!({ "diff": "working", "format": "html" }))).await,
+            )
+        });
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["version"], 1, "{json}");
+        assert_eq!(v["changes"][0]["file"], "src/A.cs", "{json}");
+        assert!(md.contains("src/A.cs"), "{md}");
+        let log: Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(log["version"], "2.1.0", "{sarif}");
+        assert_eq!(bad.unwrap_err().code, Code::InvalidArgument);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// kc_rules reads rule files from inside the repo only, answers its matches, and as SARIF answers the whole log.
+    #[test]
+    fn rules_read_rule_files_inside_the_repo_and_answer_json_or_sarif() {
+        let cache = crate::ops::tests::test_cache();
+        let base = cache.dir("mcp-rules");
+        let rule = "id: no-result\nlanguage: CSharp\nseverity: error\nmessage: blocking\nrule:\n  pattern: $T.Result\n";
+        let root = crate::ops::tests::repo(&base, "shop", &[("lint/r.yml", rule), ("src/A.cs", "class A\n{\n    int F() => G().Result;\n}\n")]);
+        let s = KnowcodeServer { default: Scope { repos: vec![root.clone()], no_sync: false }, ..server("all,kc_rules") };
+        fn p<T: serde::de::DeserializeOwned>(v: Value) -> Parameters<T> {
+            Parameters(serde_json::from_value(v).unwrap())
+        }
+        let rt = runtime();
+        let (json, sarif, up, abs) = rt.block_on(async {
+            (
+                s.kc_rules(p(json!({ "rules": ["lint"] }))).await.unwrap(),
+                s.kc_rules(p(json!({ "rules": ["lint/r.yml"], "format": "sarif" }))).await.unwrap(),
+                s.kc_rules(p(json!({ "rules": ["../elsewhere.yml"] }))).await,
+                s.kc_rules(p(json!({ "rules": ["/etc/elsewhere.yml"] }))).await,
+            )
+        });
+        assert!(json.contains("src/A.cs") && json.contains("blocking"), "{json}");
+        let log: Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(log["runs"][0]["results"][0]["level"], "error", "{sarif}");
+        for r in [up, abs] {
+            assert_eq!(r.unwrap_err().code, Code::NotAllowed);
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 

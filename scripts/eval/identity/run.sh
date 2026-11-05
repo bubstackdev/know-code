@@ -11,6 +11,7 @@
 # enumeration is read from, IO/out/index-REPO.scip). The container is removed afterwards.
 #
 # Images are pinned by digest (IMAGES below); CPUS (default 4) and MEMORY (default 12g) limit the container.
+# REPOS names another repository list in repos.txt's format (find-dev-v1 labels its own repositories this way).
 # LABEL_ENCLOSING=1 adds compare-v1's `in` field to each reference row (eval/compare-v1/README.md); without it the
 # enumeration is identity-v1's.
 set -euo pipefail
@@ -31,7 +32,8 @@ GO_IMAGE=golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6
 # scip-java with its JDKs (17, 21, 25), Maven and Gradle; the multi-platform index's digest.
 JVM_IMAGE=ghcr.io/scip-code/scip-java:0.13.2@sha256:459c2fa0544d3801857428d94590e86bcd5f8af25980a36cb360720c1b3cf802
 
-read -r _ LANGUAGE URL SHA < <(grep -E "^$REPO " "$HERE/repos.txt") || { echo "run.sh: $REPO is not in repos.txt" >&2; exit 2; }
+REPOS=${REPOS:-$HERE/repos.txt}
+read -r _ LANGUAGE URL SHA < <(grep -E "^$REPO " "$REPOS") || { echo "run.sh: $REPO is not in $REPOS" >&2; exit 2; }
 if [ "$(git -C "$CLONE" rev-parse HEAD)" != "$SHA" ]; then
   echo "run.sh: $CLONE is not at $SHA" >&2
   exit 2
@@ -97,8 +99,26 @@ case $LANGUAGE in
     ARGS=${LINE#* -- }
     read -r _ JVM TOOL ENVS <<<"${LINE%% -- *}"
     BUILD="env $ENVS JVM_VERSION=$JVM scip-java index --build-tool=$TOOL --"
-    run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /root/.gradle/init.d/
-         JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk
+    # KOTLIN_CATALOG=V sets the Kotlin version in the container's copy of gradle/libs.versions.toml, for a build that
+    # pins it there rather than reading a variable (scip-java's Kotlin plugin needs Kotlin 2.4).
+    CATALOG=$(sed -nE 's/.*(^| )KOTLIN_CATALOG=([^ ]+).*/\2/p' <<<"$ENVS")
+    [ -z "$CATALOG" ] || run "cd /work/src && sed -i -E 's/^kotlin = \"[^\"]*\"/kotlin = \"$CATALOG\"/' gradle/libs.versions.toml
+         grep -qx 'kotlin = \"$CATALOG\"' gradle/libs.versions.toml"
+    # TOOLCHAINS=ID@SHA256[,…]: JDKs a build's toolchains ask for beyond 17, 21 and the image's own, fetched with the
+    # network up and checked against the archive's digest (jvm/toolchains.sh).
+    TOOLCHAINS=$(sed -nE 's/.*(^| )TOOLCHAINS=([^ ]+).*/\2/p' <<<"$ENVS" | tr ',' ' ')
+    # GRADLE_WRAPPER=V gives the container's copy a Gradle wrapper for version V, for a build that runs Gradle some other
+    # way (hermit); the wrapper is generated in an empty directory, so the build itself isn't configured to make it.
+    WRAPPER=$(sed -nE 's/.*(^| )GRADLE_WRAPPER=([^ ]+).*/\2/p' <<<"$ENVS")
+    [ -z "$WRAPPER" ] || run "mkdir -p /tmp/wrapper && cd /tmp/wrapper && : > settings.gradle && gradle -q wrapper --gradle-version $WRAPPER
+         cp -R gradlew gradle /work/src/ && cd /work/src && ./gradlew --version >>$LOG 2>&1"
+    # SCIP_ROOT_BUILD_ONLY=1 keeps scip-java's plugin out of the build's own build logic (buildSrc, included builds),
+    # through a gradlew in front of the real one (jvm/gradlew-root-only.sh).
+    if grep -qE '(^| )SCIP_ROOT_BUILD_ONLY=1( |$)' <<<"$ENVS"; then
+      run "cd /work/src && mv gradlew gradlew.real && cp /work/tools/gradlew-root-only.sh gradlew && chmod +x gradlew"
+    fi
+    run "mkdir -p /root/.gradle/init.d && cp /work/tools/no-werror.gradle /work/tools/skip-buildsrc.gradle /root/.gradle/init.d/
+         JDKS=\$(coursier java-home --jvm 17),\$(coursier java-home --jvm 21),/opt/java/openjdk\$(bash /work/tools/toolchains.sh $TOOLCHAINS)
          echo org.gradle.java.installations.paths=\$JDKS > /root/.gradle/gradle.properties
          cd /work/src && $BUILD $ARGS >>$LOG 2>&1 || echo 'restore build failed' >>$LOG
          rm -f index.scip" ;;

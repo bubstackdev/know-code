@@ -40,6 +40,9 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LIST = ROOT / "scripts" / "worktree-gate" / "repos.json"
@@ -103,13 +106,11 @@ def make_worktrees(repo, src, wt_dir, n):
 
 
 def env_for(work, cache, shared=True):
-    env = dict(os.environ)
-    env.pop("KNOWCODE_VERIFY", None)
     cfg = work / "config" / cache.name
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / "config.toml").write_text(f"[cache]\nmax_size = 0\nshared_bases = {'true' if shared else 'false'}\n[update]\ncheck = false\n")
-    env.update(KNOWCODE_CACHE_DIR=str(cache), KNOWCODE_CONFIG_DIR=str(cfg), KNOWCODE_DATA_DIR=str(work / "data" / cache.name),
-               KNOWCODE_UPDATE_CHECK="0")
+    env = kc_env.knowcode_env(work / "env" / cache.name, cache=cache, config=cfg, data=work / "data" / cache.name)
+    env.pop("KNOWCODE_VERIFY", None)
     return env
 
 
@@ -238,12 +239,18 @@ def private_size(path):
     return int.from_bytes(buf.raw[4:12], "little")
 
 
+def trees(cache):
+    """The directories holding a cache's `repos` and `bases`: since 0.7 (#294) each index schema's are under
+    `<cache>/v/s<schema>/`; earlier builds kept them at the top. Both are read, so either build can be measured."""
+    return [cache] + sorted(d for d in (cache / "v").glob("s*") if d.is_dir())
+
+
 def disk(cache):
     """Bytes the cache's indexes and bases hold on disk: each file's own bytes, plus the blocks a base still shares
     with its clones, once. Also their apparent size."""
     own = apparent = 0
-    for sub in ("repos", "bases"):
-        for f in sorted((cache / sub).glob("*")) if (cache / sub).is_dir() else []:
+    for tree, sub in ((t, sub) for t in trees(cache) for sub in ("repos", "bases")):
+        for f in sorted((tree / sub).glob("*")) if (tree / sub).is_dir() else []:
             if not f.is_file() or f.suffix in (".lock", ".use"):
                 continue
             size = f.stat().st_size
@@ -256,7 +263,7 @@ def disk(cache):
 
 
 def cloned_from(cache, root):
-    for db in (cache / "repos").glob(f"{root.name}-*.sqlite"):
+    for db in (db for tree in trees(cache) for db in (tree / "repos").glob(f"{root.name}-*.sqlite")):
         con = sqlite3.connect(str(db))
         try:
             meta = dict(con.execute("SELECT key, value FROM meta WHERE key IN ('root', 'base.from')"))

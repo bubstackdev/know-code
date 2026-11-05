@@ -52,6 +52,8 @@ import time
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/: kc_env
+import kc_env  # noqa: E402
 import public_transcript  # noqa: E402
 import recheck  # noqa: E402
 
@@ -186,10 +188,8 @@ def workspaces(source, work, only=None):
 
 
 def build_env(base):
-    env = dict(GIT_ENV, HOME=str(base/'home'), KNOWCODE_CACHE_DIR=str(base/'cache'), KNOWCODE_CONFIG_DIR=str(base/'config'),
-               KNOWCODE_DATA_DIR=str(base/'data'), KNOWCODE_UPDATE_CHECK='0')
-    (base/'home').mkdir(parents=True, exist_ok=True)
-    return env
+    # On the bare git environment, not the caller's: a run depends on nothing of the machine's user.
+    return kc_env.knowcode_env(base, start=GIT_ENV)
 
 
 # --- MCP ------------------------------------------------------------------------------------------------------------
@@ -284,9 +284,30 @@ def schemas(binary, key):
 
 # --- run ------------------------------------------------------------------------------------------------------------
 
+def json_places(value, roots):
+    """The places a JSON answer gives as fields: every object with a `file` and a `line`, in the object's own `repo`
+    when that names a repository of the cohort (by name, or as its root's last component). An object with a file and
+    no line names no place."""
+    out = []
+    if isinstance(value, dict):
+        file, line, repo = value.get('file'), value.get('line'), value.get('repo')
+        if isinstance(file, str) and file and isinstance(line, int) and not isinstance(line, bool) and line > 0:
+            name = repo if isinstance(repo, str) and repo in roots else None
+            if name is None and isinstance(repo, str) and Path(repo).name in roots:
+                name = Path(repo).name
+            out.append((name, file, str(line)))
+        for v in value.values():
+            out += json_places(v, roots)
+    elif isinstance(value, list):
+        for v in value:
+            out += json_places(v, roots)
+    return out
+
+
 def places(text, repos, roots):
-    """The `repo/path:line` places an answer names, a tree row's call sites (`at line N (also M)`) in its caller's
-    file. A path without its repository is given the one repository, among the question's first and then the
+    """The `repo/path:line` places an answer names, whatever its format: in its text (a `path:line`, and a tree row's
+    call sites, `at line N (also M)`, in its caller's file) and, for a JSON answer, in its rows' `file` and `line`
+    fields. A path without its repository is given the one repository, among the question's first and then the
     cohort's, that has the file."""
     named = []
     for row in text.splitlines():
@@ -296,6 +317,10 @@ def places(text, repos, roots):
         if matches and sites:
             repo, path = matches[-1].group(1), matches[-1].group(2)
             named += [(repo, path, line) for line in [sites.group(1), *re.findall(r'\d+', sites.group(2) or '')]]
+    try:
+        named += json_places(json.loads(text), roots)
+    except ValueError:
+        pass
     out = []
     for repo, path, line in named:
         first = path.split('/', 1)[0]

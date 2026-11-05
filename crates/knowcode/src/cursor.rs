@@ -6,8 +6,9 @@
 //! the same index as the first, and for lists a walk cuts (impact's dependents, a path search's paths) the rest is
 //! not a slice of a longer run. A cursor carries what the next page needs and checks both: the request itself (so a
 //! nested list is continued without restating the call), the list, how far it was delivered, the index generation
-//! of every repo the answer read (a cursor from an older generation is refused, "stale cursor; start again", never
-//! mixed into a newer answer), and a hash of the rows delivered so far (so a list whose order changed meanwhile, a
+//! of every repo the answer read (a cursor from an older generation of a repo holding rows of the list is refused,
+//! "stale cursor; start again", never mixed into a newer answer; other repos re-indexing in the background don't
+//! refuse it, see [`check_gens`]), and a hash of the rows delivered so far (so a list whose order changed meanwhile, a
 //! ranking recomputed say, is refused too). `search` and `grep-ast` keep their `offset` as well.
 //!
 //! How each list continues ([`Mode`]): most lists are cut as a prefix of their order (references, a context's callers,
@@ -40,6 +41,12 @@ const PREFIX: &str = "kc1.";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
+    Find {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+        limit: usize,
+    },
     Refs {
         name: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -260,6 +267,10 @@ impl List {
 pub fn offer(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, extra: &[String]) {
     let mut g = gens(env);
     g.extend(extra.iter().cloned());
+    offer_at(env, req, scope, lists, g);
+}
+
+fn offer_at(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, g: Vec<String>) {
     let lists = lists
         .into_iter()
         .map(|l| (l.ptr.clone(), ListState { l: l.ptr, o0: l.start, b: l.start, h0: FNV_BASIS, n: l.n, k: None, more: l.more }))
@@ -267,6 +278,32 @@ pub fn offer(env: &mut Value, req: Request, scope: &Scope, lists: Vec<List>, ext
     let r = Resume { q: Query { req, repos: scope.repos.clone(), no_sync: scope.no_sync, cite: kc_store::limits::current().cite() }, g, lists };
     stamp(env, &r);
     env[FIELD] = json!(r);
+}
+
+/// Definitions matching `q` ([`ops::find`]), their list continuable: one cut at `limit`, or later by the size cap,
+/// has a cursor to the rest. Without one, an answer cut to fit named the cut definitions nowhere but `declared`, and
+/// a reader listing `items` missed them. Offered here rather than inside [`ops::find`] so that its callers who need no
+/// cursor (the declared statement's tests, refresh checks) keep the plain answer.
+pub fn find_definitions(q: &str, kind: Option<&str>, limit: usize, scope: &Scope) -> Result<ops::Out<ops::FindData>> {
+    let mut out = ops::find(q, kind, limit, scope)?;
+    // Only rows a higher limit adds to `items`: when `items` holds the declarations named exactly as asked, the other
+    // names' matches (in `similar`, or cut from it) are never among them, and a cursor to them would continue to nothing.
+    let more = out.data.more;
+    let req = Request::Find { query: q.to_string(), kind: kind.map(str::to_string), limit };
+    // The rows come from the repos asked about alone: the rest of the workspace, read for `declared`, changing under
+    // the cursor doesn't change them, so it doesn't make the cursor stale.
+    let asked: Vec<&str> = match out.env["repos"].as_array() {
+        Some(repos) => repos.iter().filter_map(|r| r["repo"].as_str()).collect(),
+        None => out.env["repo"].as_str().into_iter().collect(),
+    };
+    let answered: Vec<Value> = out.env["provenance"]
+        .as_array()
+        .map(|ps| ps.iter().filter(|p| p["repo"].as_str().is_some_and(|r| asked.contains(&r))).cloned().collect())
+        .unwrap_or_default();
+    let g = gens(&json!({ "provenance": answered }));
+    offer_at(&mut out.env, req, scope, vec![List::new("/items", limit, more)], g);
+    crate::contract::finish(&mut out.env);
+    Ok(out)
 }
 
 /// The answer's [`Resume`], taken out of it (to measure the answer as it will be output).
@@ -285,10 +322,23 @@ pub fn seal(env: &mut Value) {
 /// The answer's list at `ptr` was cut further (by the size cap): marks it continued and renews its cursor. False when
 /// the list isn't one that continues.
 pub fn cut(env: &mut Value, r: &mut Resume, ptr: &str) -> bool {
-    let Some(st) = r.lists.get_mut(ptr) else { return false };
-    st.more = true;
+    if !mark(r, ptr) {
+        return false;
+    }
     stamp(env, r);
     true
+}
+
+/// [`cut`] without renewing the cursors: for cutting many rows at once, [`restamp`] after the last.
+pub fn mark(r: &mut Resume, ptr: &str) -> bool {
+    let Some(st) = r.lists.get_mut(ptr) else { return false };
+    st.more = true;
+    true
+}
+
+/// Renews the cursors of the answer's lists from their rows as they are now (after [`mark`]).
+pub fn restamp(env: &mut Value, r: &Resume) {
+    stamp(env, r);
 }
 
 /// Gives each list that has more rows its cursor, made from its rows as they are now, and takes it from those that
@@ -371,15 +421,16 @@ pub fn find(env: &Value, value: &str) -> Option<String> {
 }
 
 /// The generations an answer was computed at: each repo it read (`provenance`), its index generation and HEAD,
-/// hashed short.
+/// hashed short, as `r<repo>.<generation>` so that a page can tell which repo moved (see [`check_gens`]).
 fn gens(env: &Value) -> Vec<String> {
     let mut out: Vec<String> = env["provenance"]
         .as_array()
         .map(|list| {
             list.iter()
                 .map(|p| {
-                    let s = format!("{}|{}|{}", p["repo"].as_str().unwrap_or(""), p["generation"].as_str().unwrap_or(""), p["commit"].as_str().unwrap_or(""));
-                    format!("{:08x}", fnv(FNV_BASIS, s.as_bytes()) as u32)
+                    let repo = p["repo"].as_str().unwrap_or("");
+                    let s = format!("{}|{}|{}", repo, p["generation"].as_str().unwrap_or(""), p["commit"].as_str().unwrap_or(""));
+                    format!("r{}.{:08x}", repo_key(repo), fnv(FNV_BASIS, s.as_bytes()) as u32)
                 })
                 .collect()
         })
@@ -538,6 +589,7 @@ fn decode(s: &str) -> Result<Cursor> {
 /// isn't one this KnowCode made.
 pub fn tool_of(cursor: &str) -> Result<&'static str> {
     Ok(match decode(cursor)?.q.req {
+        Request::Find { .. } => "kc_find",
         Request::Refs { .. } => "kc_refs",
         Request::Context { .. } => "kc_context",
         Request::Trace { .. } => "kc_trace",
@@ -602,6 +654,7 @@ fn run(q: &Query, raise: Raise) -> Result<Value> {
         _ => limit,
     };
     Ok(match &q.req {
+        Request::Find { query, kind, limit } => find_definitions(query, kind.as_deref(), up(*limit), &scope)?.env,
         Request::Refs { name, kinds, limit } => ops::refs(name, kinds, up(*limit), &scope)?.env,
         Request::Context { symbol, budget, source, limit } => {
             let raise = match raise {
@@ -701,10 +754,43 @@ fn gens_of(env: &Value) -> Vec<String> {
     env[FIELD]["g"].as_array().map(|a| a.iter().filter_map(|g| g.as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
-/// Refuses a cursor whose answer was computed at another generation than `now`'s.
-fn check_gens(c: &Cursor, now: &Value) -> Result<()> {
+/// A repo's name, hashed short: the part of a generation that says whose it is. Provenance names a repo by its path
+/// and rows by its name (the path's last component, [`ops::repo_name`]); both are taken to the name, so two checkouts
+/// sharing a name count as one, which only makes more cursors stale, never fewer.
+fn repo_key(repo: &str) -> String {
+    let name = std::path::Path::new(repo).file_name().map_or_else(|| repo.to_string(), |n| n.to_string_lossy().into_owned());
+    format!("{:08x}", fnv(FNV_BASIS, name.as_bytes()) as u32)
+}
+
+/// The repos whose rows the list at `ptr` of `env` holds (as [`repo_key`]s): each row's own `repo`, else the repo of
+/// the item the list belongs to (or the answer's). None when a row's repo can't be told (a workspace-wide answer's
+/// row without one), so that every repo the answer read counts.
+fn holders(env: &Value, ptr: &str) -> Option<std::collections::HashSet<String>> {
+    let owner = ptr.rsplit_once('/').and_then(|(parent, _)| env.pointer(parent)).and_then(|o| o.get("repo")).and_then(Value::as_str);
+    let fallback = owner.or_else(|| env["repo"].as_str()).filter(|r| *r != "workspace");
+    let mut out = std::collections::HashSet::new();
+    for row in rows_at(env, ptr) {
+        let repo = row.get("repo").and_then(Value::as_str).filter(|r| !r.is_empty()).or(fallback)?;
+        out.insert(repo_key(repo));
+    }
+    Some(out)
+}
+
+/// Refuses a cursor whose answer was computed at another generation than `now`'s, for the repos that matter to its
+/// list: those whose rows the list holds (`holders`, from the list as `now` computes it). The caller has checked, or
+/// checks, that the rows delivered so far are `now`'s first rows (their hash), so a repo that holds none of the list's
+/// rows (read for a cross-repo link that led nowhere, a workspace summary consulted) moving on can't put a row of
+/// another snapshot in the list: following the cursor still gives `now`'s list, each row once. A repo that holds rows
+/// moving on is refused even when the rows delivered are unchanged, as before. `holders` None, a search's content files
+/// (`c…`) and a cursor made before generations said their repo count every one (such a cursor's generations are in the
+/// old form, which no answer has now, so it is refused).
+fn check_gens(c: &Cursor, now: &Value, holders: Option<&std::collections::HashSet<String>>) -> Result<()> {
     let have = gens_of(now);
-    if let Some(gone) = c.g.iter().find(|g| !have.contains(g)) {
+    let matters = |g: &String| match (holders, g.strip_prefix('r').and_then(|k| k.split_once('.'))) {
+        (Some(h), Some((repo, _))) => h.contains(repo),
+        _ => true,
+    };
+    if let Some(gone) = c.g.iter().filter(|g| matters(g)).find(|g| !have.contains(g)) {
         let what = if gone.starts_with('c') { "a searched file" } else { "a repo the answer read" };
         bail!(Refusal::new(
             Code::StaleCursor,
@@ -739,17 +825,19 @@ pub fn more(cursor: &str) -> Result<Value> {
     let (env, full, total) = match m {
         Mode::Prefix => {
             let env = run(&c.q, Raise::Upto(c.o + c.n + 1))?;
-            check_gens(&c, &env)?;
+            check_gens(&c, &env, holders(&env, &c.l).as_ref())?;
             let full = rows_at(&env, &c.l);
             let total = known_total(&env, &c.l);
             (env, full, total)
         }
         _ => {
             let first = run(&c.q, Raise::None)?;
-            check_gens(&c, &first)?;
             let shown: Vec<Value> = rows_at(&first, &c.l).into_iter().take(c.k).collect();
             let env = run(&c.q, Raise::All)?;
-            check_gens(&c, &env)?;
+            // The list is the first answer's rows then the walk's others: the repos either holds rows of matter.
+            let held = holders(&first, &c.l).zip(holders(&env, &c.l)).map(|(a, b)| a.union(&b).cloned().collect());
+            check_gens(&c, &first, held.as_ref())?;
+            check_gens(&c, &env, held.as_ref())?;
             let seen: std::collections::HashSet<String> = shown.iter().map(subject).collect();
             let mut full = shown;
             full.extend(rows_at(&env, &c.l).into_iter().filter(|r| !seen.contains(&subject(r))));
@@ -769,6 +857,16 @@ pub fn more(cursor: &str) -> Result<Value> {
         if let Some(v) = env.get(k) {
             out[k] = v.clone();
         }
+    }
+    // A workspace-wide answer's nested list (`items[0].callers`) belongs to its item's repo, and its rows name a repo
+    // only when it is another: the page says the item's repo, as the first answer's item did, so a reader can place
+    // the rows. The rows themselves are untouched (their hash continues the cursor).
+    if env["repo"] == "workspace"
+        && let Some((parent, _)) = c.l.rsplit_once('/')
+        && !parent.is_empty()
+        && let Some(owner) = env.pointer(parent).and_then(|o| o.get("repo")).and_then(Value::as_str)
+    {
+        out["repo"] = Value::from(owner);
     }
     // What made the request's answer partial besides its own cuts (unreadable files, stale data) holds for the page.
     let carried: Vec<kc_store::answer::Incomplete> = crate::contract::incomplete_of(&env)
@@ -807,7 +905,9 @@ fn window(c: &Cursor) -> Result<Value> {
     let Request::Path { from_skip, to_skip, .. } = &c.q.req else { bail!("not a path search's cursor") };
     let skips = if c.l.ends_with("from_candidates") { (c.o, *to_skip) } else { (*from_skip, c.o) };
     let mut env = run(&c.q, Raise::Skip(skips.0, skips.1))?;
-    check_gens(c, &env)?;
+    // A window's rows are whole searches between ends anywhere in the workspace, with no delivered rows to check
+    // against: every repo the search read counts.
+    check_gens(c, &env, None)?;
     env["list"] = Value::from(readable(&c.l));
     env["offset"] = json!(c.o);
     crate::contract::finish(&mut env);
@@ -909,6 +1009,42 @@ mod tests {
         repo(base, "app", &files)
     }
 
+    /// A find answering with the declarations named exactly as asked continues only when some of those were cut: the
+    /// other names' matches, shown in `similar` or cut from it, are never in `items`, so a cursor to them would
+    /// continue to nothing.
+    #[test]
+    fn find_with_similar_continues_only_to_declarations_named_so() {
+        let cache = test_cache();
+        let base = cache.dir("cursor-find-similar");
+        let root = repo(
+            &base,
+            "app",
+            &[
+                ("a.py", "class Ledger:\n    pass\n"),
+                ("b.py", "class Ledger:\n    pass\n"),
+                ("c.py", "class LedgerRow:\n    pass\nclass LedgerTotal:\n    pass\nclass LedgerView:\n    pass\n"),
+                ("d.py", "class Book:\n    def ledger(self):\n        pass\n"),
+            ],
+        );
+        let s = scope(&root);
+        // Both named so listed, 2 of the 4 others in `similar` and 2 cut from it: no cursor.
+        let env = find_definitions("Ledger", None, 4, &s).unwrap().env;
+        assert_eq!((env["items"].as_array().unwrap().len(), env["similar"].as_array().unwrap().len()), (2, 2), "{env}");
+        assert!(env.get("cursor").is_none(), "{env}");
+        // Every match shown, in `items` or `similar`: nothing cut, no cursor, complete.
+        let env = find_definitions("Ledger", None, 10, &s).unwrap().env;
+        assert_eq!((env.get("cursor"), env["complete"].clone()), (None, json!(true)), "{env}");
+        // One of the two named so cut: a cursor, to exactly the declarations named so.
+        let env = find_definitions("Ledger", None, 1, &s).unwrap().env;
+        capped_hints_continue(&env);
+        assert!(env["cursor"].as_str().is_some(), "{env}");
+        let (rows, pages) = follow(&env, "/items");
+        assert_eq!(pages, 1);
+        let all = rows_at(&ops::find("Ledger", None, 10_000, &s).unwrap().env, "/items");
+        assert_eq!((keys(&rows), all.len()), (keys(&all), 2));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn invariant_following_every_cursor_gives_the_uncapped_list() {
         let cache = test_cache();
@@ -923,6 +1059,17 @@ mod tests {
         let (rows, pages) = follow(&env, "/items");
         assert!(pages >= 4, "{pages}");
         assert_eq!(keys(&rows), keys(&rows_at(&all, "/items")));
+
+        // Definitions found: a prefix of their order, the same name's first. `Go` is declared 56 times.
+        let env = find_definitions("Go", None, 7, &s).unwrap().env;
+        capped_hints_continue(&env);
+        assert!(env["cursor"].as_str().is_some(), "a find cut at its limit continues: {env}");
+        let all = ops::find("Go", None, 10_000, &s).unwrap().env;
+        let (rows, pages) = follow(&env, "/items");
+        assert!(pages >= 7, "{pages}");
+        assert_eq!(keys(&rows), keys(&rows_at(&all, "/items")));
+        // A find whose matches all fit has no cursor.
+        assert!(find_definitions("Ping", None, 10, &s).unwrap().env.get("cursor").is_none());
 
         // A context's callers, conformers and accessors.
         let env = ops::context("Hub.Ping", 600, Default::default(), &s).unwrap().env;
@@ -1094,6 +1241,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// Another repo the answer read moving on doesn't stale a cursor whose list holds none of its rows: a busy
+    /// workspace re-indexes in the background, and every page would otherwise be refused. A repo holding rows moving
+    /// on still refuses it.
+    #[test]
+    fn a_cursor_outlives_a_repo_that_holds_none_of_its_rows() {
+        let cache = test_cache();
+        let base = cache.dir("cursor-stale-scope");
+        let app = fixture(&base);
+        let other = repo(&base, "ledgerbook", &[("src/Book.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"), ("src/Page.cs", "namespace L;\npublic class Page { public void Ping() { } }\n")]);
+        let s = Scope { repos: vec![app.clone(), other.clone()], no_sync: false };
+        let env = ops::refs("Ping", &[], 5, &s).unwrap().env;
+        let read: Vec<&str> = env["provenance"].as_array().unwrap().iter().filter_map(|p| p["repo"].as_str()).collect();
+        assert_eq!(read.len(), 2, "both repos read: {env}");
+        let c = env["cursor"].as_str().unwrap().to_string();
+        let rows = rows_at(&env, "/items");
+        assert!(rows.iter().all(|r| r.get("repo").is_none_or(|x| x.as_str() != Some("ledgerbook"))), "{env}");
+        // The other repo re-indexes: the list holds none of its rows, so the next page still comes.
+        std::fs::write(other.join("src/Note.cs"), "namespace L;\npublic class Note { }\n").unwrap();
+        let page = more(&c).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(page["offset"], json!(rows.len()), "{page}");
+        // A change to the repo holding the rows refuses it, as before.
+        std::fs::write(app.join("src/T0.cs"), "namespace N;\npublic class T0 : IThing\n{\n    public void Go() { Hub.Ping(); Hub.Ping(); }\n}\n").unwrap();
+        let err = format!("{:#}", more(&c).unwrap_err());
+        assert!(err.starts_with("stale cursor"), "{err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn a_cursor_from_before_the_index_changed_is_refused() {
         let cache = test_cache();
@@ -1153,6 +1327,22 @@ mod tests {
             }
             let (rows, _) = follow(&v, "/items");
             assert_eq!(keys(&no_col(rows)), all, "max_chars {max}");
+        }
+        // A find cut to fit continues the same way, though its limit didn't cut it.
+        let all = keys(&rows_at(&ops::find("Go", None, 1000, &s).unwrap().env, "/items"));
+        for max in [1_000, 2_000, 4_000] {
+            let env = find_definitions("Go", None, 1000, &s).unwrap().env;
+            let mut v: Value = serde_json::from_str(&crate::mcp::cap(env, max)).unwrap();
+            assert!(v["items"].as_array().unwrap().len() < all.len(), "max_chars {max} cuts");
+            let handle = v["cursor"].as_str().expect("a find cut to fit continues").to_string();
+            v["cursor"] = Value::from(crate::compact::resolve(&handle).unwrap());
+            if let Some(name) = v.get("name").cloned() {
+                for r in v["items"].as_array_mut().unwrap() {
+                    r["name"] = name.clone();
+                }
+            }
+            let (rows, _) = follow(&v, "/items");
+            assert_eq!(keys(&rows), all, "max_chars {max}");
         }
         let _ = std::fs::remove_dir_all(&base);
     }

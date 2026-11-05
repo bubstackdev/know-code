@@ -12,6 +12,13 @@ KnowCode works with no configuration. Everything here is optional.
 | The shell installer's binary | `~/.local/bin/knowcode` | `~/.local/bin/knowcode` | `KNOWCODE_INSTALL_DIR` at install |
 | The shell installer's receipt, `env.sh`, `env.fish` | `~/.config/knowcode/` | `~/.config/knowcode/` | `XDG_CONFIG_HOME` |
 
+Inside the cache directory, each index schema has its own folder, `v/s<schema>/` (indexes, shared bases, the
+workspace summary and their locks), so versions of KnowCode that share the cache never rewrite each other's files.
+0.6.1 and older keep theirs at the cache's top level. Upgrading to a version with a new schema indexes each repository
+afresh on its first query, the cost of a first index; an upgrade that keeps the schema re-extracts only the languages
+whose extractor changed. The older version's files stay until the cache budget evicts them, other versions' first
+([architecture](architecture.md), "Versions sharing a cache").
+
 Nothing is written into the repos you index. `knowcode config path` prints the config file's path, and
 `knowcode status` shows the config file, the cache directory, the notes database and the workspace roots, each with
 where its setting came from. `knowcode uninstall` removes what KnowCode wrote; removing a shell-installer
@@ -44,6 +51,9 @@ block_at = 1                     # content at this level or below is blocked; 0 
 malformed = "restricted"         # a privacy file that can't be read: "restricted" or "default"
 file = ".knowcode-privacy.yml"   # the privacy file's name and keys (see "Privacy file")
 
+[rules]
+paths = ["lint/rules"]           # ast-grep rule files `knowcode rules` reads, from each repo's root
+
 [conventions.csharp.bus]         # names your code base's own conventions use (see "Conventions")
 message_attributes = ["BusMessage"]
 
@@ -60,7 +70,7 @@ node_modules = true              # read declared SDK clients' code from node_mod
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `cache.dir` | the user cache directory | Where indexes live. |
-| `cache.max_size` | `2147483648` (2 GiB) | Idle indexes above this are evicted least recently used. Bytes or a size such as `"4 GiB"`; `0` disables size eviction. |
+| `cache.max_size` | `2147483648` (2 GiB) | Idle indexes above this are evicted least recently used, other KnowCode versions' first when versions share the cache (docs/architecture.md, "Versions sharing a cache"). Bytes or a size such as `"4 GiB"`; `0` disables size eviction. |
 | `cache.shared_bases` | `true` | Whether checkouts of a repo with more than one (worktrees, clones) share a base: a checkout clean at a commit publishes one, and a new checkout's index starts as a clone of the nearest (see [architecture](architecture.md#the-cache-lifecycle)). |
 | `notes.path` | `notes.sqlite` in the data directory | The notes database. |
 | `workspace.roots` | none | Directories whose git repos make up the workspace. |
@@ -75,6 +85,7 @@ node_modules = true              # read declared SDK clients' code from node_mod
 | `privacy.level_key` | `"level"` | A rule's key for its level. |
 | `update.check` | `true` | Whether to run the daily update check. |
 | `hooks.session_start` | `true` | Whether the Claude Code plugin's session-start hook adds its line (what is indexed here, and which tools to call). |
+| `rules.paths` | none | Rule files, or directories of them, that `knowcode rules` reads when none is named. A relative path is taken from each repo's root; the files are only read. |
 | `index.node_modules` | `true` | Whether the code of an SDK package a repo declares as an external client is read from its `node_modules` (see [Ignoring paths](#ignoring-paths)). |
 
 The `[conventions.*]` keys are in [Conventions](#conventions).

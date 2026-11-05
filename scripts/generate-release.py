@@ -111,16 +111,43 @@ BOT_NAME = "KnowCode release bot"
 BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
 
 
+# Runs in the tap checkout after cargo-dist writes the formula, for the tap's own CI (`brew test-bot`). It drops the
+# `version` line when every URL names that version's tag (Homebrew reads the version from there, and its audit calls
+# the line redundant). It adds a test that the installed binary runs and reports the formula's version, with the daily
+# update check off, since Homebrew tests run offline.
+FORMULA_FINISH_PY = r'''import re, sys
+path = sys.argv[1]
+text = open(path).read()
+m = re.search(r'^  version "([^"]+)"\n', text, re.M)
+urls = re.findall(r'url "([^"]+)"', text)
+if m and urls and all(f"/v{m[1]}/" in u for u in urls):
+    text = text[:m.start()] + text[m.end():]
+if "\n  test do\n" not in text:
+    assert text.endswith("\nend\n"), "unexpected formula layout"
+    text = text[:-len("end\n")] + (
+        "\n  test do\n"
+        '    ENV["KNOWCODE_UPDATE_CHECK"] = "0"\n'
+        '    assert_match version.to_s, shell_output("#{bin}/knowcode --version")\n'
+        "  end\nend\n")
+open(path, "w").write(text)
+'''
+# The script reaches the step as an environment variable (a heredoc can't close inside the indented `run:` block).
+FORMULA_FINISH_ENV = ("        env:\n          FORMULA_FINISH: |\n"
+                      + "".join(f"            {line}\n" for line in FORMULA_FINISH_PY.splitlines()))
+FORMULA_FINISH = '            python3 -c "$FORMULA_FINISH" "Formula/${filename}"\n'
+
+
 def homebrew(text: str) -> str:
     """The tap publish job: read-only GITHUB_TOKEN, KnowCode's own commit identity, and the tap token kept out of
     the checkout's git config and out of every step but the push, which receives it through `env:`."""
     job = "  publish-homebrew-formula:\n"
     assert text.count(job) == 1, "expected the Homebrew publish job; review dist-workspace.toml's publish-jobs"
+    # The tap token lives in the `release` environment, which only `v*.*.*` tags may deploy to (docs/releasing.md).
     text = replace(text, '    runs-on: "ubuntu-24.04"\n    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n'
                    '      PLAN: ${{ needs.plan.outputs.val }}\n',
-                   '    runs-on: "ubuntu-24.04"\n    permissions:\n      "contents": "read"\n    env:\n'
-                   '      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      PLAN: ${{ needs.plan.outputs.val }}\n',
-                   "Homebrew job permissions")
+                   '    runs-on: "ubuntu-24.04"\n    environment: release\n    permissions:\n      "contents": "read"\n'
+                   '    env:\n      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n      PLAN: ${{ needs.plan.outputs.val }}\n',
+                   "Homebrew job permissions and environment")
     text = replace(text, '      GITHUB_USER: "axo bot"\n      GITHUB_EMAIL: "admin+bot@axo.dev"\n',
                    f'      GITHUB_USER: "{BOT_NAME}"\n      GITHUB_EMAIL: "{BOT_EMAIL}"\n', "Homebrew commit identity")
     text = replace(text,
@@ -128,6 +155,11 @@ def homebrew(text: str) -> str:
                    f"          token: {HOMEBREW_TOKEN}\n",
                    "          persist-credentials: false\n          repository: \"bubstackdev/homebrew-tap\"\n",
                    "Homebrew tap checkout")
+    style = ('            brew style --except-cops FormulaAudit/Homepage,FormulaAudit/Desc,FormulaAuditStrict --fix '
+             '"Formula/${filename}" || true\n')
+    text = replace(text, style, style + FORMULA_FINISH, "Homebrew formula finishing")
+    commit = "      - name: Commit formula files\n        run: |\n"
+    text = replace(text, commit, commit.replace("        run:", FORMULA_FINISH_ENV + "        run:"), "Homebrew formula script")
     # `git config --global` sets both author and committer; the variables make that explicit for `git commit`.
     text = replace(text, '            git add "Formula/${filename}"\n            git commit -m "${name} ${version}"\n'
                    '          done\n          git push\n',

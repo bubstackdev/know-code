@@ -4,6 +4,7 @@ python3 -m unittest discover -s scripts/acceptance -p 'test_*.py'
 """
 import json
 import os
+import shlex
 import sys
 import tempfile
 import time
@@ -240,3 +241,58 @@ class RegistrationTest(unittest.TestCase):
 if __name__ == "__main__":
     os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     unittest.main()
+
+
+class RemovalTest(unittest.TestCase):
+    """`remove` carries out exactly what `knowcode uninstall` printed, inside HOME, or changes nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name).resolve() / "home dir"
+        h = self.home
+        (h / ".config/knowcode").mkdir(parents=True)
+        (h / ".local/bin").mkdir(parents=True)
+        for f in (".config/knowcode/env.sh", ".config/knowcode/knowcode-receipt.json", ".local/bin/knowcode"):
+            (h / f).write_text("x\n")
+        self.source = '. "$HOME/.config/knowcode/env.sh"'
+        (h / ".profile").write_text(f"export A=1\n{self.source}\nexport B=2\n")
+        (h / ".zshrc").write_text(f"{self.source}\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def log(self, extra_rm=None):
+        q = lambda p: shlex.quote(str(self.home / p))  # noqa: E731
+        rm = extra_rm or q(".local/bin/knowcode")
+        return (f"Running clients were not stopped.\n"
+                f"KnowCode was installed with the shell installer, which has no uninstaller. To remove it:\n"
+                f"  1. Delete these lines first; once env.sh is deleted, a shell that still sources it prints an error:\n"
+                f"       {self.home}/.profile:2: {self.source}\n"
+                f"       {self.home}/.zshrc:1: {self.source}\n"
+                f"  2. rm {rm}\n"
+                f"  3. rm {q('.config/knowcode/knowcode-receipt.json')} {q('.config/knowcode/env.sh')}"
+                f" && rmdir {q('.config/knowcode')}\n")
+
+    def test_carries_out_the_printed_steps(self):
+        done = cm.carry_out_removal(self.log(), self.home)
+        self.assertEqual((self.home / ".profile").read_text(), "export A=1\nexport B=2\n")
+        self.assertEqual((self.home / ".zshrc").read_text(), "")
+        self.assertFalse((self.home / ".local/bin/knowcode").exists())
+        self.assertFalse((self.home / ".config/knowcode").exists())
+        self.assertEqual(len(done), 5)
+
+    def test_refuses_a_path_outside_home_and_changes_nothing(self):
+        outside = Path(self.tmp.name) / "elsewhere"
+        outside.write_text("keep\n")
+        with self.assertRaises(ValueError):
+            cm.carry_out_removal(self.log(extra_rm=shlex.quote(str(outside))), self.home)
+        self.assertTrue(outside.exists())
+        self.assertIn(self.source, (self.home / ".profile").read_text())
+
+    def test_refuses_a_flag_or_a_moved_line(self):
+        with self.assertRaises(ValueError):
+            cm.carry_out_removal(self.log(extra_rm="-rf " + shlex.quote(str(self.home))), self.home)
+        (self.home / ".profile").write_text(f"{self.source}\n")  # the line moved: line 2 no longer reads it
+        with self.assertRaises(ValueError):
+            cm.carry_out_removal(self.log(), self.home)
+        self.assertTrue((self.home / ".local/bin/knowcode").exists())

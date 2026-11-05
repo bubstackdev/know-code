@@ -22,6 +22,10 @@ import statistics
 import subprocess
 import tempfile
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # kc_env, beside this script
+import kc_env  # noqa: E402
+
 
 ROOT = Path(__file__).resolve().parent.parent
 FIELDS = ("instructions", "cpu_ms", "child_cpu_ms", "wall_ms")
@@ -31,8 +35,7 @@ def index(bin_path, repo, work, threads, clean):
     cache = work / "cache"
     if clean and cache.exists():
         shutil.rmtree(cache)
-    env = dict(os.environ)
-    env.update(KNOWCODE_CACHE_DIR=str(cache), KNOWCODE_CONFIG_DIR=str(work / "config"), KNOWCODE_DATA_DIR=str(work / "data"))
+    env = kc_env.knowcode_env(work, cache=cache)
     args = [str(bin_path), "index", "--phases", "--json"]
     if threads:
         args += ["--threads", str(threads)]
