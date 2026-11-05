@@ -4,6 +4,8 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+## 0.7.0 (2026-11-05)
+
 - Go HTTP routes and clients (net/http, chi, gin, echo) are a preview in 0.7: on the frozen route labels chi and
   `net/http` fell short of the 0.95 precision gate and the held-out repositories scored unevenly
   ([0.7 release gate](eval/release-gate/0.7.0.md#routes)). A fresh held-out round in 0.8 decides whether the label
