@@ -8,3 +8,11 @@ pkgsite go https://github.com/golang/pkgsite fb32d103a734d75ea28b6f96a3ef24e08c2
 gin-vue-admin go https://github.com/flipped-aurora/gin-vue-admin cee04b08d1262036ca33e3026e1e13d29471c7d5
 vikunja go https://github.com/go-vikunja/vikunja d4899715e3724448aaa08951f474a575c7d729a0
 step-ca go https://github.com/smallstep/certificates 06ac06a18186397a5887df91c5443d96f57dd966
+# Round 3, for 0.8's decision on Go routes' preview label: pinned at their default branch's head on 2026-11-05, named
+# before any was labelled (eval/routes-v1/README.md, "Held-out repositories, round 3").
+shiori go https://github.com/go-shiori/shiori aebb4021a56048eed4c8feb325399be5f46e5470
+navidrome go https://github.com/navidrome/navidrome 7c1e68a1e4e68e7257affba4f25cd9cb545c7016
+ollama go https://github.com/ollama/ollama 84dc81db1fa22ea3a7e6279b85cadcd955cb61f8
+pgweb go https://github.com/sosedoff/pgweb e4858a16d8e032730055289596ea9059a91bca64
+hatchet go https://github.com/hatchet-dev/hatchet 79f07e21b18baf646d5101f2358993727c4e92a4
+gokapi go https://github.com/Forceu/gokapi d0b47654b186a8eda61e3a1065df9144e9963e1e

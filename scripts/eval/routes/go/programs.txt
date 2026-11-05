@@ -32,3 +32,10 @@ pkgsite . test:internal/frontend
 gin-vue-admin server test:core
 vikunja . test:pkg/routes
 step-ca . test:api
+# routes-v1.2's round-3 held-out repositories (repos-heldout.txt).
+shiori . . server
+navidrome . .
+ollama . test:server
+pgweb . .
+hatchet . test:api/v1/server/run
+gokapi . cmd/gokapi
