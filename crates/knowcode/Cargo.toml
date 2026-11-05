@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "../../README.md"
-description = "A lightweight, local code graph for coding agents."
+description = "Lightweight, local code graph for coding agents"
 
 [dependencies]
 anyhow.workspace = true
