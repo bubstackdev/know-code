@@ -638,6 +638,15 @@ impl Modules {
         Ok(files.iter().any(|f| is_ts_path(f)))
     }
 
+    /// The package `module`, imported in `file`, is when it resolves outside the repo and the repo doesn't augment it:
+    /// a value from it, and whatever is reached from that value, is the package's. `None` for the repo's own modules.
+    pub(crate) fn package_of(&mut self, conn: &Connection, file: &str, module: &str) -> Result<Option<String>> {
+        if self.origin(conn, file, module)? != Origin::External || self.augments(conn, module)? {
+            return Ok(None);
+        }
+        Ok(Some(package_name(module).to_string()))
+    }
+
     pub(crate) fn imports_external(&mut self, conn: &Connection, file: &str, ty: &str) -> Result<bool> {
         let Some(b) = self.imported(conn, file, ty)? else { return Ok(false) };
         Ok(b.name != "*" && self.origin(conn, file, &b.module)? == Origin::External)

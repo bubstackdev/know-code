@@ -917,7 +917,13 @@ struct TypeOracle<'c> {
     vis: crate::csharp::Visibility,
     /// Whether the repo declares an enum of this name.
     enums: HashMap<String, bool>,
+    /// TypeScript module resolution, for a value imported from a bare specifier ([`TypeExpr::Imported`]).
+    ts: crate::ts::Modules,
 }
+
+/// The type of a TypeScript value from a package (see [`TypeExpr::Imported`]): this prefix and the package's name. No
+/// declaration has such a name, so the value's members are never the repo's.
+const PACKAGE_TYPE: &str = "package:";
 
 /// A typealias the repo declares: its file, the type it is nested in, and its target, encoded.
 struct Alias {
@@ -984,6 +990,7 @@ impl<'c> TypeOracle<'c> {
             caller: None,
             vis: crate::csharp::Visibility::default(),
             enums: HashMap::new(),
+            ts: crate::ts::Modules::default(),
         }
     }
 
@@ -1084,6 +1091,33 @@ impl<'c> TypeOracle<'c> {
             return Ok(None);
         }
         Ok(match t {
+            TypeExpr::Named(n) if n.starts_with(PACKAGE_TYPE) => Some(t.clone()),
+            // A TypeScript value imported from a bare specifier: the package's, judged in the file the expression was
+            // written in (a type reached through another file's return or property type is that file's), or else the
+            // repo's, typed as before.
+            TypeExpr::Imported { module, of } => {
+                let at = match &self.origin {
+                    Origin::In(f, _) => Some(f.clone()),
+                    _ => self.file.clone(),
+                };
+                // What a package's function returns is left unjudged, and so are its properties (`useContext(Ctx)` and
+                // `useMemo(() => x)` hand back the repo's values): a method called on a package's value (`getApi(api)
+                // .list()`), or anything reached from a package's object, is the package's.
+                let called = match of.as_deref() {
+                    Some(TypeExpr::Call { .. }) => true,
+                    Some(TypeExpr::Path { root: PathRoot::Expr(r), segs }) => matches!(**r, TypeExpr::Call { .. }) && !segs.iter().any(|s| matches!(s, Seg::Call(_))),
+                    _ => false,
+                };
+                match at {
+                    Some(f) if !called && let Some(package) = self.ts.package_of(self.conn, &f, module)? => {
+                        Some(TypeExpr::Named(format!("{PACKAGE_TYPE}{package}")))
+                    }
+                    _ => match of {
+                        Some(o) => self.eval(o, scope, depth + 1)?,
+                        None => None,
+                    },
+                }
+            }
             TypeExpr::Named(n) if n == "Self" => scope.map(|s| TypeExpr::Named(s.to_string())),
             // An Entity Framework owned type's builder (`Order#Payments`, see the C# extractor): the owned type.
             TypeExpr::Named(n) if n.contains('#') => self.owned_type(n, depth)?,
@@ -1312,6 +1346,8 @@ impl<'c> TypeOracle<'c> {
 
     fn step(&mut self, cur: &TypeExpr, seg: &Seg, depth: u8) -> Result<Option<TypeExpr>> {
         Ok(match (cur, seg) {
+            // Whatever is reached from a package's value is the package's.
+            (TypeExpr::Named(n), _) if n.starts_with(PACKAGE_TYPE) => Some(cur.clone()),
             // A value of a C# delegate type invoked: what the delegate returns.
             (TypeExpr::Named(_), Seg::Call(m)) if m == "Invoke" && self.here.is_some() && self.delegate(cur)?.is_some() => {
                 self.invoked(cur, depth)?
@@ -1366,6 +1402,9 @@ impl<'c> TypeOracle<'c> {
                     }
                     // A library's generic type hands out its one argument through the usual accessors.
                     None => match (args.as_slice(), m.as_str()) {
+                        // react-query's result: its `data` is the query function's (TanStack's `TData`), judged in the
+                        // file the query was written in.
+                        ([Some(a)], "data") if name == "UseQueryResult" => self.eval(a, None, depth + 1)?,
                         ([Some(a)], "Value" | "CurrentValue" | "Current" | "Instance" | "Message" | "Data" | "Result" | "Model" | "Entity"
                             | "CreateDbContext" | "CreateDbContextAsync") => {
                             self.origin = Origin::Unknown;
@@ -1957,6 +1996,7 @@ fn typed_receiver(hit: &RefHit, oracle: &mut TypeOracle) -> Result<Receiver> {
 fn receiver_from(hit: &RefHit, ty: Option<TypeExpr>, oracle: &mut TypeOracle) -> Result<Receiver> {
     let caller = hit.caller_type();
     let ty = match ty {
+        Some(TypeExpr::Named(n)) if n.starts_with(PACKAGE_TYPE) => return Ok(Receiver::Foreign(vec![n])),
         Some(TypeExpr::Named(n)) => last_segment(&n).to_string(),
         Some(TypeExpr::Array(_)) => "Array".to_string(),
         Some(TypeExpr::Dict(..)) => "Dictionary".to_string(),
@@ -5842,6 +5882,9 @@ fn resolve_hits_with<'c>(
                 seen_ns = ns;
                 recv
             } else {
+                if ts {
+                    oracle.origin = Origin::Here;
+                }
                 receiver(hit, oracle)?
             };
             if ts {
@@ -6614,15 +6657,21 @@ fn ts_receiver(
     oracle: &mut TypeOracle,
     modules: &mut crate::ts::Modules,
 ) -> Result<Receiver> {
+    // The type's name is judged where it was written: a type another file's function returns, or its property holds,
+    // is named in that file.
+    let at = match &oracle.origin {
+        Origin::In(f, _) if crate::ts::is_ts_path(f) => f.clone(),
+        _ => hit.file.clone(),
+    };
     Ok(match recv {
-        Receiver::Known(chain) if modules.imports_external(conn, &hit.file, &chain[0])? => Receiver::Foreign(vec![chain[0].clone()]),
+        Receiver::Known(chain) if modules.imports_external(conn, &at, &chain[0])? => Receiver::Foreign(vec![chain[0].clone()]),
         // A type the file neither declares nor imports is the platform's (`Response`), whatever the repo's modules
         // export under that name; unless the receiver's type is written by another name the file does see, an
         // alias of it (`ItemLike = Item`).
         Receiver::Known(chain)
-            if !is_js(&hit.file)
+            if !is_js(&at)
                 && modules.declared(conn, &chain[0])?
-                && !modules.sees(conn, &hit.file, &chain[0])?
+                && !modules.sees(conn, &at, &chain[0])?
                 && !seen_alias(conn, hit, &chain[0], modules)? =>
         {
             Receiver::Foreign(vec![chain[0].clone()])

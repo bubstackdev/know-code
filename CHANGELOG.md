@@ -4,6 +4,15 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- TypeScript: react-query's `data` is what the query function returns. A member read on a `useQuery` result whose
+  fetcher returns a package's value (`getSystemApi(api).getLogEntries(…)`'s `data`) is the package's, and no longer
+  links to the repo's same-named declaration; a fetcher casting to the repo's own model keeps its links. To get there,
+  a function with no return type written now has the type of what it returns, a destructured local
+  (`const { data } = …`) its value's property, and a method called on a package's value stays the package's through
+  locals and returns. On identity-v1's TypeScript labels, the 2 outside labels 0.7 listed (both in jellyfin-web) are
+  no longer linked, `exact` links went from 468 to 470 (both right), linked recall from 0.636 to 0.639, and no label
+  got worse; C#, Swift, Go, Java and Kotlin are unchanged. TypeScript files are re-extracted on the next query
+  (TypeScript extractor 30).
 - A C# local or parameter called (`next(ctx)`) invokes its delegate: the row is a `call` of `Invoke` with
   `usage: delegate_call`, `external_likely`, and no longer binds to a method the repo declares as `Invoke`. A lambda's
   parameter whose type isn't known was linked by name: on autofac, 8 of its 210 delegate calls were listed as calls of

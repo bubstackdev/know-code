@@ -20,7 +20,7 @@ use crate::{
     SymbolKind, Unsupported,
 };
 
-pub const VERSION: u32 = 29;
+pub const VERSION: u32 = 30;
 
 const SIGNATURE_CAP: usize = 240;
 const RECEIVER_CAP: usize = 48;
@@ -121,7 +121,22 @@ struct Scope {
     locals: HashMap<String, TypeExpr>,
     /// Parameters and locals of unknown type: they hide a file-level name of the same spelling.
     untyped: HashSet<String>,
+    /// For a function declared without a return type, what its own `return` statements give (see
+    /// [`Cx::record_return`]).
+    returns: Option<Returns>,
 }
+
+/// The types a function's `return` statements give, in order: `None` for one whose type isn't known.
+struct Returns {
+    /// The function's node, so that a `return` in a callback inside it isn't counted as its own.
+    func: usize,
+    types: Vec<Option<TypeExpr>>,
+}
+
+/// react-query's hooks returning a `UseQueryResult`, whose `data` is what the query function gives (TanStack's
+/// `TData`), and the modules they come from.
+const QUERY_HOOKS: &[&str] = &["useQuery", "useSuspenseQuery"];
+const QUERY_MODULES: &[&str] = &["@tanstack/react-query", "react-query"];
 
 struct Cx<'a> {
     src: &'a str,
@@ -342,6 +357,10 @@ impl<'a> Cx<'a> {
                     self.declarator(d, outer);
                 }
             }
+            "return_statement" => {
+                self.record_return(node);
+                self.visit_children(node);
+            }
             "import_statement" => {
                 if let Some(src) = node.child_by_field_name("source") {
                     let module = self.text(src).trim_matches(['"', '\'', '`']).to_string();
@@ -400,7 +419,7 @@ impl<'a> Cx<'a> {
                 if let Some(p) = node.child_by_field_name("property") {
                     let o = node.child_by_field_name("object");
                     let receiver = o.map(|o| collapse(self.text(o), RECEIVER_CAP));
-                    let rt = o.and_then(|o| self.expr_type(o)).map(|t| t.encode());
+                    let rt = o.and_then(|o| self.receiver_type(o)).map(|t| t.encode());
                     let name = self.text(p).trim_start_matches('#').to_string();
                     self.add(name, receiver, rt, RefKind::Member, p);
                 }
@@ -529,7 +548,7 @@ impl<'a> Cx<'a> {
         untyped: HashSet<String>,
         f: impl FnOnce(&mut Self),
     ) {
-        self.scopes.push(Scope { sym, type_name, callable, locals, untyped });
+        self.scopes.push(Scope { sym, type_name, callable, locals, untyped, returns: None });
         f(self);
         self.scopes.pop();
     }
@@ -954,6 +973,12 @@ impl<'a> Cx<'a> {
             TypeExpr::Named(n) if n == "this" => container.clone().map_or(TypeExpr::Named(n), TypeExpr::Named),
             t => t,
         });
+        // With no return type written, the function's is what it returns: its expression body, or the one type all of
+        // its `return` statements give. A generator returns its iterator, which this doesn't say.
+        let infer = ret.is_none()
+            && f.child_by_field_name("body").is_some()
+            && !f.kind().starts_with("generator")
+            && !children(f).any(|c| c.kind() == "*");
         self.facts.symbols[sym].type_name = ret.map(|t| t.encode());
         let mut locals = HashMap::new();
         let mut untyped = HashSet::new();
@@ -985,6 +1010,9 @@ impl<'a> Cx<'a> {
             untyped.insert(self.text(p).to_string());
         }
         self.in_scope_with(sym, None, true, locals, untyped, |cx| {
+            if infer {
+                cx.scopes.last_mut().expect("pushed").returns = Some(Returns { func: f.id(), types: Vec::new() });
+            }
             for c in children(f) {
                 if !matches!(c.kind(), "decorator" | "property_identifier" | "private_property_identifier" | "identifier")
                     || Some(c) == f.child_by_field_name("body")
@@ -992,7 +1020,119 @@ impl<'a> Cx<'a> {
                     cx.visit(c);
                 }
             }
+            if infer {
+                let returns = cx.scopes.last_mut().and_then(|s| s.returns.take()).map(|r| r.types).unwrap_or_default();
+                let inferred = match f.child_by_field_name("body") {
+                    Some(b) if b.kind() != "statement_block" => cx.expr_type(b),
+                    _ => agreed(returns),
+                };
+                if let Some(t) = inferred {
+                    cx.facts.symbols[sym].type_name = Some(t.encode());
+                }
+            }
         });
+    }
+
+    /// A `return` of the function whose scope is innermost: what it gives, for [`Returns`]. `return;`, `return null`
+    /// and `return undefined` say nothing of the type (TypeScript reads them as `T | null`).
+    fn record_return(&mut self, node: Node) {
+        let Some(func) = enclosing_function(node).map(|f| f.id()) else { return };
+        let Some(i) = self.scopes.iter().rposition(|s| s.callable) else { return };
+        if self.scopes[i].returns.as_ref().is_none_or(|r| r.func != func) {
+            return;
+        }
+        let Some(v) = children(node).find(|c| c.is_named() && c.kind() != "comment") else { return };
+        if v.kind() == "null" || v.kind() == "undefined" || (v.kind() == "identifier" && self.text(v) == "undefined") {
+            return;
+        }
+        let t = self.expr_type(v);
+        if let Some(r) = self.scopes[i].returns.as_mut() {
+            r.types.push(t);
+        }
+    }
+
+    /// A reference's receiver type. A receiver written from an imported name (`Api.items`, `getApi(api).list()`) is
+    /// the import rules' to place, which read its text: it is typed as it was before imports were (see
+    /// [`TypeExpr::Imported`]). A local holding such a value keeps the import.
+    fn receiver_type(&self, o: Node) -> Option<TypeExpr> {
+        match self.expr_type(o) {
+            Some(TypeExpr::Imported { of, .. }) if root_identifier(o).is_some_and(|r| matches!(self.expr_type(r), Some(TypeExpr::Imported { of: None, .. }))) => {
+                of.map(|o| *o)
+            }
+            t => t,
+        }
+    }
+
+    /// The module `name` is imported from in this file when it is written as a bare specifier (`'@scope/sdk'`,
+    /// `'hooks/useApi'`): a package's, or the repo's through tsconfig, which only the query can tell.
+    fn bare_import(&self, name: &str) -> Option<String> {
+        self.facts
+            .bindings
+            .iter()
+            .rev()
+            .find(|b| !b.export && b.local == name)
+            .filter(|b| !b.module.starts_with('.') && !b.module.starts_with('/'))
+            .map(|b| b.module.clone())
+    }
+
+    /// `useQuery({ queryKey, queryFn })` with `useQuery` from react-query: a `UseQueryResult` of what the query function
+    /// gives, or of a type not known when `select` maps it.
+    fn query_result(&self, call: Node, name: &str) -> Option<TypeExpr> {
+        let b = self.facts.bindings.iter().rev().find(|b| !b.export && b.local == name)?;
+        if !QUERY_HOOKS.contains(&b.name.as_str()) || !QUERY_MODULES.contains(&b.module.as_str()) {
+            return None;
+        }
+        Some(TypeExpr::Generic { name: "UseQueryResult".to_string(), args: vec![self.query_data(call)] })
+    }
+
+    /// The query's `TData`: `useQuery<T>`'s first type argument, else what its query function returns.
+    fn query_data(&self, call: Node) -> Option<TypeExpr> {
+        let args: Vec<Node> =
+            call.child_by_field_name("arguments").map(|a| children(a).filter(|c| c.is_named() && c.kind() != "comment").collect()).unwrap_or_default();
+        let (options, f) = match args.first() {
+            Some(o) if o.kind() == "object" => (Some(*o), object_pairs(self.src, *o).into_iter().find(|(k, _)| k == "queryFn").map(|(_, v)| v)),
+            // react-query 3's `useQuery(key, fn, options)`.
+            Some(_) => (args.get(2).copied().filter(|o| o.kind() == "object"), args.get(1).copied()),
+            None => return None,
+        };
+        if options.is_some_and(|o| object_pairs(self.src, o).iter().any(|(k, _)| k == "select")) {
+            return None;
+        }
+        if let Some(t) = call.child_by_field_name("type_arguments").and_then(|a| children(a).find(|c| c.is_named())).and_then(|t| type_expr(self.src, t)) {
+            return Some(t);
+        }
+        let f = f?;
+        match f.kind() {
+            // `queryFn: fetchItems`: what calling it gives.
+            "identifier" => {
+                let name = self.text(f);
+                let call = TypeExpr::Call { owner: None, name: name.to_string() };
+                Some(match self.bare_import(name) {
+                    Some(module) => TypeExpr::Imported { module, of: Some(Box::new(call)) },
+                    None => call,
+                })
+            }
+            // `queryFn: ({ signal }) => fetchItems(api, signal)`, or a body returning one value. A name the function
+            // binds itself (a parameter, a local) isn't typed here: its scope isn't read yet.
+            "arrow_function" | "function_expression" => {
+                let body = f.child_by_field_name("body")?;
+                let e = if body.kind() == "statement_block" {
+                    let mut found = Vec::new();
+                    returns_in(body, &mut found);
+                    let [r] = found.as_slice() else { return None };
+                    children(*r).find(|c| c.is_named() && c.kind() != "comment")?
+                } else {
+                    body
+                };
+                if let Some(root) = root_identifier(e)
+                    && binds(self.src, f, self.text(root)) > 0
+                {
+                    return None;
+                }
+                self.expr_type(e)
+            }
+            _ => None,
+        }
     }
 
     /// `xs.filter(x => …)` and `xs$.subscribe(x => …)` bind `x` to an element of the receiver, as do the callbacks
@@ -1044,6 +1184,17 @@ impl<'a> Cx<'a> {
         let Some(n) = d.child_by_field_name("name") else { return self.visit_children(d) };
         let value = d.child_by_field_name("value");
         let declared = d.child_by_field_name("type").and_then(|t| type_expr(self.src, t));
+        // `const { data, error: e } = useOrders()`: each name is the value's property of its key.
+        if n.kind() == "object_pattern" && self.in_callable() {
+            let ty = declared.or_else(|| value.and_then(|v| self.expr_type(v)));
+            for (key, local) in destructured(self.src, n) {
+                match &ty {
+                    Some(t) => self.bind(local, t.clone().then(Seg::Member(key))),
+                    None => self.bind_untyped(local),
+                }
+            }
+            return self.visit_children(d);
+        }
         if n.kind() != "identifier" {
             return self.visit_children(d);
         }
@@ -1128,13 +1279,21 @@ impl<'a> Cx<'a> {
                         return None;
                     }
                 }
-                self.globals.get(name).cloned()
+                self.globals.get(name).cloned().or_else(|| self.bare_import(name).map(|module| TypeExpr::Imported { module, of: None }))
             }
             "await_expression" | "parenthesized_expression" | "non_null_expression" => {
                 children(e).find(|c| c.is_named()).and_then(|c| self.expr_type(c))
             }
             "as_expression" | "satisfies_expression" => {
-                children(e).filter(|c| c.is_named()).nth(1).and_then(|t| type_expr(self.src, t))
+                let t = children(e).filter(|c| c.is_named()).nth(1).and_then(|t| type_expr(self.src, t))?;
+                // `response.data as ItemDto`: the type the file imports by that name, whichever module that is.
+                Some(match &t {
+                    TypeExpr::Named(n) => match self.bare_import(n) {
+                        Some(module) => TypeExpr::Imported { module, of: Some(Box::new(t)) },
+                        None => t,
+                    },
+                    _ => t,
+                })
             }
             "new_expression" => {
                 let c = e.child_by_field_name("constructor")?;
@@ -1160,11 +1319,13 @@ impl<'a> Cx<'a> {
             "member_expression" => {
                 let p = self.text(e.child_by_field_name("property")?).trim_start_matches('#').to_string();
                 let o = e.child_by_field_name("object")?;
+                let upper = o.kind() == "identifier" && starts_upper(self.text(o));
+                let stat = || TypeExpr::root(PathRoot::Static(self.text(o).to_string())).then(Seg::Member(p.clone()));
                 match self.expr_type(o) {
+                    // `Api.items` with `Api` imported: read as a static member, as before, unless it is a package's.
+                    Some(TypeExpr::Imported { module, of: None }) if upper => Some(TypeExpr::Imported { module, of: Some(Box::new(stat())) }),
                     Some(t) => Some(t.then(Seg::Member(p))),
-                    None if o.kind() == "identifier" && starts_upper(self.text(o)) => {
-                        Some(TypeExpr::root(PathRoot::Static(self.text(o).to_string())).then(Seg::Member(p)))
-                    }
+                    None if upper => Some(stat()),
                     None => None,
                 }
             }
@@ -1180,7 +1341,15 @@ impl<'a> Cx<'a> {
                         {
                             return Some(t);
                         }
-                        Some(TypeExpr::Call { owner: None, name: name.to_string() })
+                        if let Some(t) = self.query_result(e, name) {
+                            return Some(t);
+                        }
+                        let call = TypeExpr::Call { owner: None, name: name.to_string() };
+                        // `useMemo<Details>(…)`: a package's function given a type argument may return the repo's type.
+                        Some(match self.bare_import(name) {
+                            Some(module) if e.child_by_field_name("type_arguments").is_none() => TypeExpr::Imported { module, of: Some(Box::new(call)) },
+                            _ => call,
+                        })
                     }
                     "member_expression" => {
                         let name = self.text(f.child_by_field_name("property")?).trim_start_matches('#').to_string();
@@ -1192,11 +1361,22 @@ impl<'a> Cx<'a> {
                         {
                             return Some(t);
                         }
+                        let upper = o.kind() == "identifier" && starts_upper(self.text(o));
+                        let generic = e.child_by_field_name("type_arguments").is_some();
                         match self.expr_type(o) {
+                            // `http.get<Order>(url)`: what a package's method given a type argument returns may be the
+                            // repo's type, so the value is no longer only the package's.
+                            Some(TypeExpr::Imported { of, .. }) if generic => match of {
+                                Some(t) => Some(t.then(Seg::Call(name))),
+                                None if upper => Some(TypeExpr::Call { owner: Some(self.text(o).to_string()), name }),
+                                None => None,
+                            },
+                            Some(TypeExpr::Imported { module, of: None }) if upper => Some(TypeExpr::Imported {
+                                module,
+                                of: Some(Box::new(TypeExpr::Call { owner: Some(self.text(o).to_string()), name })),
+                            }),
                             Some(t) => Some(t.then(Seg::Call(name))),
-                            None if o.kind() == "identifier" && starts_upper(self.text(o)) => {
-                                Some(TypeExpr::Call { owner: Some(self.text(o).to_string()), name })
-                            }
+                            None if upper => Some(TypeExpr::Call { owner: Some(self.text(o).to_string()), name }),
                             None => None,
                         }
                     }
@@ -1291,7 +1471,7 @@ impl<'a> Cx<'a> {
                 let o = f.child_by_field_name("object");
                 let receiver = o.map(|o| collapse(self.text(o), RECEIVER_CAP));
                 let rt = o.and_then(|o| {
-                    self.expr_type(o)
+                    self.receiver_type(o)
                         .or_else(|| (o.kind() == "identifier" && starts_upper(self.text(o))).then(|| TypeExpr::Named(self.text(o).to_string())))
                 });
                 let name = self.text(p).trim_start_matches('#').to_string();
@@ -1309,7 +1489,7 @@ impl<'a> Cx<'a> {
             "member_expression" => {
                 let (Some(o), Some(p)) = (tag.child_by_field_name("object"), tag.child_by_field_name("property")) else { return };
                 let receiver = Some(collapse(self.text(o), RECEIVER_CAP));
-                let rt = self.expr_type(o).map(|t| t.encode());
+                let rt = self.receiver_type(o).map(|t| t.encode());
                 self.add(self.text(p).to_string(), receiver, rt, RefKind::Member, p);
                 self.visit(o);
             }
@@ -2099,6 +2279,34 @@ const FUNCTION_KINDS: &[&str] =
 /// The innermost function around `n`.
 fn enclosing_function(n: Node) -> Option<Node> {
     std::iter::successors(n.parent(), |p| p.parent()).find(|p| FUNCTION_KINDS.contains(&p.kind()))
+}
+
+/// The one type all of a function's `return` statements give, when each is known.
+fn agreed(types: Vec<Option<TypeExpr>>) -> Option<TypeExpr> {
+    let first = types.first()?.clone()?;
+    types.iter().all(|t| t.as_ref() == Some(&first)).then_some(first)
+}
+
+/// The `return` statements in `n`, outside the functions in it.
+fn returns_in<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
+    for c in children(n) {
+        if c.kind() == "return_statement" {
+            out.push(c);
+        } else if !FUNCTION_KINDS.contains(&c.kind()) && !matches!(c.kind(), "class_declaration" | "class") {
+            returns_in(c, out);
+        }
+    }
+}
+
+/// The name an expression's value starts from (`api` in `(await api.get(id)).data`), if any.
+fn root_identifier(e: Node) -> Option<Node> {
+    match e.kind() {
+        "identifier" => Some(e),
+        "call_expression" => root_identifier(e.child_by_field_name("function")?),
+        "member_expression" | "subscript_expression" => root_identifier(e.child_by_field_name("object")?),
+        "await_expression" | "parenthesized_expression" | "non_null_expression" => root_identifier(children(e).find(|c| c.is_named())?),
+        _ => None,
+    }
 }
 
 /// How many times the function `f` binds `name`: as a parameter, and in declarations in its body outside the
@@ -3349,5 +3557,78 @@ export class Effects {
                 ("branch", "guarded$", "one", "21-23"),
             ]
         );
+    }
+
+    #[test]
+    fn query_results_destructured_locals_and_inferred_returns_are_typed() {
+        let f = extract(
+            r#"
+import { useQuery } from '@tanstack/react-query';
+import { getShelfApi } from '@acme/sdk/shelf-api';
+import type { ShelfPage } from 'types/shelf-page';
+import { loadLocal } from './local';
+
+const fetchShelves = async (api: Api, signal?: AbortSignal) => {
+    const response = await getShelfApi(api).getShelves({ signal });
+    return response.data;
+};
+
+const fetchPage = async (api: Api) => {
+    const response = await getShelfApi(api).getPage();
+    if (!response) return null;
+    return response.data as ShelfPage;
+};
+
+function* pages() { yield 1; }
+
+function mixed(flag: boolean) {
+    if (flag) return loadLocal();
+    return fetchPage(api);
+}
+
+export const useShelves = (api: Api) => {
+    return useQuery({
+        queryKey: ['shelves'],
+        queryFn: ({ signal }) => fetchShelves(api, signal)
+    });
+};
+
+export const usePage = (api: Api) => useQuery({ queryKey: ['page'], queryFn: () => fetchPage(api), select: (p) => p.Rows });
+
+export function Shelves({ api }: Props) {
+    const { data, isPending } = useShelves(api);
+    const { data: page } = usePage(api);
+    return data?.TotalCount + page?.Items.length;
+}
+"#,
+            true,
+        );
+        let ty = |name: &str| f.symbols.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("{name}")).type_name.clone();
+        let sdk = |of: TypeExpr| TypeExpr::Imported { module: "@acme/sdk/shelf-api".into(), of: Some(Box::new(of)) };
+        let shelves_call = TypeExpr::Call { owner: None, name: "getShelfApi".into() };
+        // The fetcher's `response.data` stays rooted in the package's value.
+        assert_eq!(
+            ty("fetchShelves"),
+            Some(sdk(TypeExpr::root(PathRoot::Expr(Box::new(shelves_call.clone()))).then(Seg::Call("getShelves".into())).then(Seg::Member("data".into()))).encode())
+        );
+        // A cast names the file's import; `return null` says nothing of the type.
+        assert_eq!(
+            ty("fetchPage"),
+            Some(TypeExpr::Imported { module: "types/shelf-page".into(), of: Some(Box::new(TypeExpr::Named("ShelfPage".into()))) }.encode())
+        );
+        // Returns of different types, and a generator, give none.
+        assert_eq!(ty("mixed"), None);
+        assert_eq!(ty("pages"), None);
+        // The hook returns a query result of what its query function gives; with `select`, of a type not known.
+        assert_eq!(
+            ty("useShelves"),
+            Some(TypeExpr::Generic { name: "UseQueryResult".into(), args: vec![Some(TypeExpr::Call { owner: None, name: "fetchShelves".into() })] }.encode())
+        );
+        assert_eq!(ty("usePage"), Some(TypeExpr::Generic { name: "UseQueryResult".into(), args: vec![None] }.encode()));
+        // Destructured locals are the value's properties of their keys.
+        let rt = |name: &str| f.refs.iter().find(|r| r.name == name).unwrap_or_else(|| panic!("{name}")).receiver_type.clone();
+        let hook = |name: &str| TypeExpr::root(PathRoot::Expr(Box::new(TypeExpr::Call { owner: None, name: name.into() }))).then(Seg::Member("data".into()));
+        assert_eq!(rt("TotalCount"), Some(hook("useShelves").encode()));
+        assert_eq!(rt("Items"), Some(hook("usePage").encode()));
     }
 }

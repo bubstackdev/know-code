@@ -191,7 +191,13 @@ Resolved:
   `filename_guess`. A name imported from a package never resolves to a same-named helper in the repo. Into
   dependency repos, an imported name resolves only in the repo providing that package.
 - **Receivers.** Typed fields and parameters, Angular constructor injection and `inject()`, `TestBed.inject(T)`,
-  `Mocked<T>` and injection tokens.
+  `Mocked<T>` and injection tokens; a function with no return type written has the type of what it returns, and a
+  destructured local (`const { data } = useOrders()`) its value's property. A method called on a package's value
+  (`getApi(api).list()`), and anything reached from it through locals and returns, is the package's, so its members
+  are never the repo's same-named ones; a package function's own return (`useContext(Ctx)`, `useMemo<T>(…)`) is left
+  unjudged, since it may be the repo's type. A cast (`as Order`) names the type its file imports, wherever the value
+  is used. react-query's `useQuery` and `useSuspenseQuery` give a result whose `data` is what the query function
+  returns, unless `select` maps it.
 - **Angular.** Component selectors (elements, attribute directives, compound selectors, selectors in constants),
   templates, routes (lazy prefixes resolved), dialogs, and providers (`useClass`, `useExisting`, `useFactory`,
   `useValue`, `providedIn: 'root'`) scoped as injectors scope them. Several providers in scope are all listed as
@@ -203,7 +209,7 @@ Re-exports (`export { x } from`, `export * from`) are followed a few levels deep
 
 Known gaps: dynamic `import()` with a computed path, and JavaScript without imports (globals, script tags), are
 resolved by name only, if at all. Decorators other than Angular's carry no meaning. Frameworks other than Angular
-(React, Vue, Svelte) get plain TypeScript resolution, with no component or DI model.
+(React, Vue, Svelte) get plain TypeScript resolution, with no component or DI model, apart from react-query's `data`.
 
 ## Swift
 

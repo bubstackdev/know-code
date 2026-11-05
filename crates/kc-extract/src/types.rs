@@ -35,6 +35,12 @@ pub enum TypeExpr {
     /// A tuple (`(string Number, decimal Amount)`): its elements' names (`Item1`, … when unnamed) and types, when known.
     /// Its members are the elements, never a type's of the same name.
     Tuple(Vec<(String, Option<TypeExpr>)>),
+    /// A TypeScript expression rooted in a value the file imports from a bare module specifier (`getApi(api).items`
+    /// with `getApi` from `'@scope/sdk'`, `x as Model` with `Model` from `'types/model'`): `of` is the expression as it
+    /// is typed without that knowledge (`None` when nothing types it). Whether the module is a package or one of the
+    /// repo's (through tsconfig `paths` or `baseUrl`) is known only at query time, against the file the expression is
+    /// written in: a package's value, and everything reached from it, is the package's; else `of` stands.
+    Imported { module: String, of: Option<Box<TypeExpr>> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -113,6 +119,8 @@ impl TypeExpr {
     /// Appends a segment, turning this expression into (or extending) a path.
     pub fn then(self, seg: Seg) -> TypeExpr {
         match self {
+            // Kept outermost, so that a package's value stays the package's however far it is followed.
+            TypeExpr::Imported { module, of } => TypeExpr::Imported { module, of: of.map(|o| Box::new(o.then(seg))) },
             TypeExpr::Path { root, mut segs } => {
                 segs.push(seg);
                 TypeExpr::Path { root, segs }
@@ -154,6 +162,7 @@ impl TypeExpr {
                 arg: *arg,
                 param: *param,
             },
+            TypeExpr::Imported { module, of } => TypeExpr::Imported { module: module.clone(), of: of.as_ref().map(|o| m(o)) },
             TypeExpr::Call { .. } => self.clone(),
         }
     }
@@ -180,6 +189,7 @@ impl TypeExpr {
                 arg: *arg,
                 param: *param,
             },
+            TypeExpr::Imported { module, of } => TypeExpr::Imported { module: module.clone(), of: of.as_ref().map(|o| m(o)) },
             TypeExpr::Path { .. } | TypeExpr::Call { .. } => self.clone(),
         }
     }
