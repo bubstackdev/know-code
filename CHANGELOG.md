@@ -78,6 +78,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
   made-up workspace of 400 repos each mapping the table (300 accessors each), one `context` on the table takes 2.6 G
   instructions instead of 12.0 G (3.7 G instead of 34.8 G on the first query) and answers in 87 KB instead of 2.1 MB;
   at 120 repos, 1.1 G instead of 3.6 G.
+- `review` lists the HTTP routes a diff removes or changes, each with the requests in other repos it served that no
+  route the repo serves now answers: `broken` when the request matched the old route exactly, `possible` when it was
+  linked by name or as one of several. A route whose old path can't be placed is said in `unsettled`. Bus messages and
+  table columns follow.
+
 - `knowcode review --diff REF` (the `kc` op `review`) answers once for a diff, where a client would otherwise join
   `impact`, `tests`, `coupled` and `rules`: the changed files with their changed symbols, the tests to run with their
   target's command, the files that usually change with them and weren't changed, what depends on the changes (one hop,
