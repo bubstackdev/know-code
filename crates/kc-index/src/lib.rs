@@ -22,6 +22,7 @@ pub mod bus;
 pub mod config;
 pub mod cache;
 pub mod content;
+pub mod contracts;
 pub mod diff;
 mod fresh;
 mod git;
