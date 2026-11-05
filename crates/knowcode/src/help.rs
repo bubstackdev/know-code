@@ -535,7 +535,7 @@ With diff, `missed_partners` warns about usual partners the diff leaves alone (a
 changed file's; source files only, not docs or extension-less files): "you changed A; B changed with it in 8 of 10
 commits". With diff, definitions the change deletes, renames or cuts are read from the base commit: `removed` lists
 each with `named_by` (the code still naming it), and that code is affected at hop 1 with `via_removed: true`; matched by
-name, so approximate (`pre_change`). A C# method the change keeps with other parameters is listed there too, with
+name, so approximate (`pre_change`). A C#, Java or Kotlin method the change keeps with other parameters is listed there too, with
 `old_signature`: the calls still passing a number of arguments only the old signature took are its `named_by`
 (`ambiguous` when an overload the change left alone takes them too), and `review` lists them as dependents and walks
 to their tests."#,
