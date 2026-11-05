@@ -101,3 +101,54 @@ fn an_old_call_that_now_fits_another_overload_is_ambiguous() {
     assert_eq!(cell, [(true, "ambiguous")], "{:?}", r.impact.affected);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+
+/// Java: a parameter added to a method. The JVM resolver keeps a method its only candidate even when the call's
+/// argument count no longer fits it, so the old call stays a caller of the changed method: review lists its file.
+#[test]
+fn java_a_call_to_a_method_that_gained_a_parameter_stays_its_caller() {
+    let cache = test_cache();
+    let base = cache.dir("resigned-java-added-param");
+    let casing = "package fmt;\npublic final class Casing {\n    public static String format(String value, String format) { return value; }\n}\n";
+    let writer = "package fmt;\npublic class Writer {\n    public String render(String v) { return Casing.format(v, \"u\"); }\n}\n";
+    let app = repo(&base, "fmt", &[("src/fmt/Casing.java", casing), ("src/fmt/Writer.java", writer)]);
+    commit(&app, "init");
+    std::fs::write(app.join("src/fmt/Casing.java"), casing.replace("String format)", "String format, int width)")).unwrap();
+    let r = diff_impact(&app);
+    assert!(r.impact.affected.iter().any(|a| a.qualified == "Writer.render" && a.hop == 1), "{:?}", r.impact.affected);
+    let out = review(&ReviewParams::new("working".into()), &Scope { repos: vec![app.clone()], no_sync: false }).unwrap();
+    let files: Vec<String> = out.env["dependents"].as_array().unwrap().iter().map(|v| v["file"].as_str().unwrap().to_string()).collect();
+    assert_eq!(files, ["src/fmt/Writer.java"], "{}", out.env);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The `Padding.apply` variant in Java and Kotlin: of two overloads, the changed one's old calls now fit the other by
+/// count, and the resolver binds them to it `exact`. Which one such a call meant can't be told by count alone, so it is
+/// a dependent through the old signature, `ambiguous`, never an `exact` caller of either.
+#[test]
+fn jvm_an_old_call_that_now_fits_another_overload_is_ambiguous() {
+    let cache = test_cache();
+    let java_padding = "package fmt;\npublic final class Padding {\n\
+        \x20   public static String apply(String value, int width) { return value; }\n\
+        \x20   public static String apply(StringBuilder value, int width) { return value.toString(); }\n}\n";
+    let java_table = "package fmt;\npublic class Table {\n    public String cell(String v) { return Padding.apply(v, 4); }\n}\n";
+    let kt_padding = "package fmt\n\nobject Padding {\n\
+        \x20   fun apply(value: String, width: Int): String = value\n\
+        \x20   fun apply(value: StringBuilder, width: Int): String = value.toString()\n}\n";
+    let kt_table = "package fmt\n\nclass Table {\n    fun cell(v: String): String = Padding.apply(v, 4)\n}\n";
+    for (name, files, from, to) in [
+        ("resigned-java-overload", [("src/fmt/Padding.java", java_padding), ("src/fmt/Table.java", java_table)],
+         "apply(String value, int width)", "apply(String value, int width, boolean trim)"),
+        ("resigned-kotlin-overload", [("src/fmt/Padding.kt", kt_padding), ("src/fmt/Table.kt", kt_table)],
+         "apply(value: String, width: Int)", "apply(value: String, width: Int, trim: Boolean)"),
+    ] {
+        let base = cache.dir(name);
+        let app = repo(&base, "fmt", &files);
+        commit(&app, "init");
+        std::fs::write(app.join(files[0].0), files[0].1.replace(from, to)).unwrap();
+        let r = diff_impact(&app);
+        let cell: Vec<_> = r.impact.affected.iter().filter(|a| a.qualified == "Table.cell").map(|a| (a.via_removed, a.confidence)).collect();
+        assert_eq!(cell, [(true, "ambiguous")], "{name}: {:?}", r.impact.affected);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

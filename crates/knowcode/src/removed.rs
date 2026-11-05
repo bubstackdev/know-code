@@ -7,9 +7,10 @@
 //! something else of the name. That is approximate, and the answer says so: no pre-change graph is kept, and a
 //! reference the old graph had bound elsewhere by its receiver or imports is matched here by name alone.
 //!
-//! A C# method whose parameters the change alters is read the same way ([`resigned`]): the method is still there, but
-//! a call written for its old parameters no longer binds to it, so the current graph has no edge from that call. Its
-//! old signature counts as removed, and the calls still passing the old number of arguments are the code naming it.
+//! A C#, Java or Kotlin method whose parameters the change alters is read the same way ([`resigned`]): the method is
+//! still there, but a call written for its old parameters no longer binds to it (or, among overloads, binds to another
+//! one the count now fits), so the current graph has no edge from that call to it. Its old signature counts as
+//! removed, and the calls still passing the old number of arguments are the code naming it.
 
 
 use anyhow::Result;
@@ -80,8 +81,8 @@ type Arity = (u32, Option<u32>);
 /// A method's arity, with whether it is an extension method.
 type Form = (Arity, bool);
 
-/// What the diff's base commit says is gone: the definitions it removed, and the C# methods it kept with other
-/// parameters (whose old calls are gone).
+/// What the diff's base commit says is gone: the definitions it removed, and the C#, Java and Kotlin methods it kept
+/// with other parameters (whose old calls are gone).
 pub struct PreChange<'a> {
     pub gone: &'a [OldDefinition],
     pub resigned: &'a [Resigned],
@@ -178,7 +179,7 @@ pub fn removed(conn: &Connection, old: &[OldDefinition], scope: &[i64]) -> Resul
     Ok(out)
 }
 
-/// A C# method the change kept with other parameters.
+/// A C#, Java or Kotlin method the change kept with other parameters.
 #[derive(Debug, Clone)]
 pub struct Resigned {
     /// The method as it was at the base commit.
@@ -188,13 +189,19 @@ pub struct Resigned {
     pub kept: Vec<Form>,
 }
 
-/// Of `old`, the C# methods the change kept with other parameters: still defined in the same file and container
+/// Of `old`, the C#, Java and Kotlin methods (and Kotlin's top-level functions) the change kept with other parameters: still defined in the same file and container
 /// (not in `gone`), but nothing of the name there takes the number of arguments it took. A call written for the old
 /// signature no longer binds to it. A method whose parameters changed type only, or that gained a parameter with a
 /// default, still takes the old calls, which the graph binds as before: it isn't listed.
 pub fn resigned(conn: &Connection, old: &[OldDefinition], gone: &[OldDefinition]) -> Result<Vec<Resigned>> {
     let mut out: Vec<Resigned> = Vec::new();
-    for d in old.iter().filter(|d| d.lang == "csharp" && d.kind == "method") {
+    // These extractors record each method's arity and each call's argument count, which the test below needs.
+    let resignable = |d: &OldDefinition| match d.lang {
+        "csharp" | "java" => d.kind == "method",
+        "kotlin" => matches!(d.kind, "method" | "function"),
+        _ => false,
+    };
+    for d in old.iter().filter(|d| resignable(d)) {
         let (Some(arity), Some(now)) = (d.arity, d.now.as_deref()) else { continue };
         let same = |o: &OldDefinition| o.file == d.file && o.name == d.name && o.container == d.container && o.line == d.line;
         if gone.iter().any(|g| g.file == d.file && g.name == d.name && g.container == d.container) || out.iter().any(|r| same(&r.def)) {

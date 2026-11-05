@@ -4,6 +4,11 @@ KnowCode follows [Semantic Versioning](https://semver.org/) and stays on 0.x whi
 
 ## Unreleased
 
+- `review` and `impact --diff` reach the callers a Java or Kotlin signature change breaks, as they did for C#. When a
+  method gains a parameter and another overload of its name now takes the old call's argument count, the resolver
+  binds the old call to that overload, so it wasn't a caller of the changed method at all. It is now a dependent
+  through the old signature (`via_removed`, listed under the method's `old_signature`), `ambiguous`, since the count
+  alone can't tell which overload the call meant. A method without such an overload already kept its old callers.
 - Go HTTP routes on gin are no longer a preview: 0.8's fresh held-out round (routes-v1.2, round 3, scored once) gave gin
   precision 1.000 (75/75) and recall 1.000 (81/81) over ollama and pgweb. `net/http` (0.934), chi (0.073) and echo (no
   routes read from oapi-codegen's generated registrations) stay a preview; the round names each one's cause

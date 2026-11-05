@@ -129,7 +129,7 @@ it shows against the files.
 | Every site a rename would edit, with collisions; exits 2 when unsure (C#, TypeScript) | `knowcode rename SYMBOL NEW_NAME` | `kc_rename_preview` |
 
 Proximity is graph distance, not risk. `impact --diff` also reads definitions the change deletes or renames from the
-base commit (`removed`), with the C# methods whose parameters it changes (`old_signature`): the code still calling
+base commit (`removed`), with the C#, Java and Kotlin methods whose parameters it changes (`old_signature`): the code still calling
 them as they were is affected, and `review` lists it with its tests. It warns about usual partners the diff leaves alone (`missed_partners`). `unused` and
 `rename` are previews: nothing is edited.
 
