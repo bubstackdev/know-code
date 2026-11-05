@@ -38,4 +38,6 @@ navidrome . .
 ollama . test:server
 pgweb . .
 hatchet . test:api/v1/server/run
+# chi's named fallback (round 3): navidrome's labels merged to 39 routes, under routes-v1's 50.
+wakapi . .
 gokapi . cmd/gokapi

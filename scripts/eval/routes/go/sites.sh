@@ -41,11 +41,16 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // KCSites holds, by route (gin, echo: "METHOD path"; chi: the endpoint handler's identity and the pattern as its own
 // router has it), each site that registered it.
 var KCSites = map[string][]string{}
+
+// kcMu guards KCSites: a program may build its routers on several goroutines at once (navidrome does, under an
+// errgroup), and an unguarded map write then stops it with "concurrent map writes".
+var kcMu sync.Mutex
 
 var _ = http.MethodGet
 
@@ -56,7 +61,9 @@ func KCRecord(key string) {
 	for {
 		f, more := frames.Next()
 		if f.File != "" && !strings.HasPrefix(f.File, runtime.GOROOT()+"/") && !strings.HasPrefix(f.File, "$dir/") {
+			kcMu.Lock()
 			KCSites[key] = append(KCSites[key], fmt.Sprintf("%s:%d", f.File, f.Line))
+			kcMu.Unlock()
 			return
 		}
 		if !more {

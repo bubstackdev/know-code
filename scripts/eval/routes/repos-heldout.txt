@@ -16,3 +16,4 @@ ollama go https://github.com/ollama/ollama 84dc81db1fa22ea3a7e6279b85cadcd955cb6
 pgweb go https://github.com/sosedoff/pgweb e4858a16d8e032730055289596ea9059a91bca64
 hatchet go https://github.com/hatchet-dev/hatchet 79f07e21b18baf646d5101f2358993727c4e92a4
 gokapi go https://github.com/Forceu/gokapi d0b47654b186a8eda61e3a1065df9144e9963e1e
+wakapi go https://github.com/muety/wakapi aba6a4475a797fd4325fc3126c1df33d2b00ff85
