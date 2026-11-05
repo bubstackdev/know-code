@@ -117,3 +117,36 @@ reported, never scored as `broken`.
    repo holds.
 
 The figures are given per pair and pooled, so one pair's volume doesn't carry the result.
+
+## Result, scored once
+
+Scored once against `review` at integration/0.8 `8faf6c3` (the crates unchanged through `231643c`), with the scorer
+([contract_changes_gate.py](../../scripts/eval/contract_changes_gate.py)) on the frozen rows: every one of the 66
+(pair, commit) answers asked, none in error. [score.json](score.json); every reported and labelled consumer, judged, in
+[judged.jsonl](judged.jsonl). The run first stopped at jellyfin-vue: one row's client commit is empty, since
+jellyfin-vue had no commit yet at that jellyfin server commit, and the scorer tried to check it out. The scorer was
+fixed to review such a commit's server alone (#377), and the run went on from the answers it had kept; no answer was
+asked twice.
+
+| Pair | Commits | `broken` | Right | Precision | Recall (all) | Recall (own source) |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| bitwarden | 23 | 26 | 24 | 0.923 | 1.000 (24/24) | 1.000 (24/24) |
+| bitwarden-dc | 23 | 8 | 8 | 1.000 | 1.000 (8/8) | 1.000 (8/8) |
+| jellyfin | 10 | 3 | 3 | 1.000 | 0.12 (3/26) | 0.14 (3/21) |
+| jellyfin-vue | 10 | 0 | 0 | – | – (no labels) | – |
+| pooled | 66 | 37 | 35 | **0.946** | 0.603 (35/58) | 0.660 (35/53) |
+
+**The gate fails:** pooled precision of `broken` is 0.946 (35/37, Wilson 0.823–0.985), under 0.95. No `possible`
+consumer was reported.
+
+Read after scoring:
+
+- **The two `broken` consumers not labelled** are bitwarden-clients' requests for `POST
+  providers/{providerId:guid}/billing/payment-method/verify-bank-account` (commit `398741ce`) and `GET
+  tax/is-country-supported` (`90a9473a`). In both commits the route's declaration is gone from the server's source, and
+  the client still requests it. Both routes were declared with a method-level `[Route(…)]` attribute, and neither is
+  among its commit's rows, so the labeller didn't record either route as removed. Under the rule as frozen they count as
+  wrong. A labeller change is a new version (contract-v2), not a change to this result.
+- **jellyfin's recall** (3 of 26) is low because 21 of its 26 labelled consumers build their URL in the client (`url`: the path
+  passed to the API client's `getUrl`), and KnowCode's HTTP client linking doesn't read those requests. `review` lists
+  the routes the commits remove (for example DLNA's) with no consumer.
