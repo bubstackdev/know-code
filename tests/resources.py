@@ -43,7 +43,16 @@ def cli(*args,check=True,timeout=60):
  p=subprocess.run([str(HOST),*map(str,args)],cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=timeout)
  assert not check or p.returncode==0,(args,p.stdout,p.stderr)
  return p
-atexit.register(lambda:cli('coordinator','stop',check=False))
+def cleanup():
+ # Shutdown deliberately drains active work. Cancel our held fixture jobs first
+ # so a failed assertion cannot strand its coordinator/descendants indefinitely.
+ if (DATA/'c.sock').exists():
+  for root in [A,B]:
+   try:cli('cancel',root,check=False,timeout=5)
+   except subprocess.TimeoutExpired:pass
+ try:cli('coordinator','stop',check=False,timeout=5)
+ except subprocess.TimeoutExpired:pass
+atexit.register(cleanup)
 def rows():return json.loads(cli('coordinator','status').stdout)['workspaces']
 def status(root):return next(s for s in rows() if s['workspace_root']==str(root))
 def wait(root,predicate,description,seconds=45):
@@ -111,8 +120,9 @@ for language,number in [('node',43),('dotnet',44)]:
 
 # Queue B behind A; cancel B without launching its worker, then a save resumes it.
 (A/'.mode').write_text('hold');save(A,45);wait(A,lambda s:s['phase']=='analyzing','queue blocker')
-cli('watch',B);cli('cancel',B)
-assert status(B)['phase']=='cancelled' and start_count(B)==0
+cli('watch',B);cancelled_queued=json.loads(cli('cancel',B).stdout)
+queued_status=status(B)
+assert queued_status['phase']=='cancelled' and start_count(B)==0,(cancelled_queued,queued_status,start_count(B))
 not_ready=json.loads(cli('query',status(B)['database'],'{"op":"symbols","name":"answer","freshness_wait_ms":0}').stdout)
 assert not_ready['error']['code']=='not_ready',not_ready
 save(B,99);cli('cancel',A)

@@ -34,6 +34,14 @@ SQLite setup and publication preparation use the same cancellation controller th
 
 Unchanged failed/cancelled input fingerprints survive restart and do not repeatedly launch compilers. A new observed save or explicit refresh resumes cancelled work. A cancellation before any input fingerprint exists first establishes a stopped-input baseline during reconciliation; changes made while offline before that first baseline cannot be distinguished reliably. Explicit refresh or a subsequent observed save resumes it. Cursor deadlines, comprehensive query-memory budgets, adaptive pressure tuning and stronger process isolation remain separate work.
 
+## Open cancellation defect (first-wave integration)
+
+The frozen Debug checkpoint at source `d9b4227` failed the queued-cancellation assertion in `tests/resources.py`. A focused rerun passed all ten checks, but an unchanged-runtime bounded probe then reproduced actual unwanted resumption: five of six cancelled queued workspaces launched a compiler and published after the blocking workspace released, without any intervening source/configuration save. Delayed filesystem events can call `queue()` after cancellation; its file-event path sets force and can bypass the first-baseline guard. This is a product defect, not merely a status timing issue, and remains an unmet R02 gate. Earlier passing runs do not waive it.
+
+Evidence: `.artifacts/qc/cd499850/result.json`, `events.jsonl`, `probe.py` and `watcher-api.json`. The same host SHA-256 was verified before/after; all probe process groups exited. Pinned notify 8.2.1 discards native event IDs and exposes no stream flush barrier. The user's decision is pending on a proposed boundary: return `cancelling` immediately, record the saved-input baseline before reporting `cancelled`, treat saves during `cancelling` as cancelled, and resume on saves after `cancelled`. This proposal has not been implemented or accepted yet.
+
+The original failed resource fixture left a held worker because graceful shutdown drains active work. Its verified fixture group was explicitly stopped; resource-test cleanup now cancels its owned workspaces before requesting shutdown. The cancellation assertion itself remains unchanged, with status details added for diagnosis.
+
 ## Evidence
 
 `tests/resources.py` uses real compiler graphs plus owned fixture helpers to check default/invalid policies, cancellation from both native SDKs, stale preservation, save/refresh resumption, queued cancellation, restart retention, helper memory enforcement, cap-change resumption and aggregate CPU throttling across four helpers. It runs in both profiles and is included in `scripts/test.sh`. Rust tests additionally cover publication/cancellation ordering, one shared admission slot and stubborn process-group cleanup.
