@@ -33,15 +33,25 @@ def evidence(kind,name,version,license_text,source,files):
 
 # Runtime JS dependencies come from the installed pinned closure, never workspace links.
 visited=set();npm_lock=json.loads((ROOT/'package-lock.json').read_text())['packages']
-def npm_package(name):
- if name in visited:return
- visited.add(name);source=ROOT/'node_modules'/name;manifest=json.loads((source/'package.json').read_text())
- assert manifest['version']==npm_lock['node_modules/'+name]['version'],name
+def npm_package(name,requiring):
+ source=None
+ for directory in [requiring,*requiring.parents]:
+  candidate=directory/'node_modules'/name
+  if (candidate/'package.json').is_file():source=candidate;break
+  if directory==ROOT:break
+ if source is None:raise RuntimeError(f'Missing installed runtime dependency {name} required by {requiring}')
+ key=source.relative_to(ROOT).as_posix()
+ if key in visited:return
+ visited.add(key);manifest=json.loads((source/'package.json').read_text())
+ assert manifest['version']==npm_lock[key]['version'],key
  if source.is_symlink():raise RuntimeError(f'Cannot distribute workspace link: {source}')
- shutil.copytree(source,RESOURCES/'node_modules'/name,symlinks=False)
+ # Preserve installed nesting so conflicting versions keep Node's resolution.
+ # Recurse declared dependencies explicitly rather than copying incidental/dev trees.
+ shutil.copytree(source,RESOURCES/key,symlinks=False,ignore=shutil.ignore_patterns('node_modules'))
  evidence('npm',name,manifest['version'],manifest.get('license',''),f'https://registry.npmjs.org/{name}',[p for p in source.rglob('*') if p.is_file() and any(t in p.name.lower() for t in ['license','notice','copyright'])])
- for dependency in manifest.get('dependencies',{}):npm_package(dependency)
-for name in ['typescript','protobufjs']:npm_package(name)
+ for dependency in manifest.get('dependencies',{}):npm_package(dependency,source)
+provider_package=ROOT/'providers/typescript'
+for name in json.loads((provider_package/'package.json').read_text())['dependencies']:npm_package(name,provider_package)
 for provider in ['typescript','shared','rust','swift']:
  for source in (ROOT/'providers'/provider).glob('*.mjs'):copy(source,RESOURCES/'providers'/provider/source.name)
 copy(ROOT/'proto/analysis.proto',RESOURCES/'proto/analysis.proto')
@@ -79,9 +89,9 @@ for package in metadata['packages']:
 (NOTICES/'README.md').write_text('Third-party dependency metadata and upstream-provided license/notice evidence for this local candidate.\nRuntime JS files and their own notices remain intact. NuGet nuspec metadata and provided notices are retained.\nSQLite is bundled through libsqlite3-sys; upstream SQLite is public domain (https://www.sqlite.org/copyright.html).\nA final license/source provenance review remains a publication gate.\n')
 shutil.copytree(NOTICES,RESOURCES/'THIRD_PARTY')
 copy(ROOT/'LICENSE',RUNTIME/'LICENSE')
-for doc in ['WORKSPACE_API.md','MCP.md','PACKAGING.md','INSTALLATION.md','RESOURCE_CONTROL.md']:copy(ROOT/'docs'/doc,RUNTIME/'docs'/doc)
+for doc in ['WORKSPACE_API.md','MCP.md','PACKAGING.md','INSTALLATION.md','RESOURCE_CONTROL.md','WORKSPACE_SETTINGS.md']:copy(ROOT/'docs'/doc,RUNTIME/'docs'/doc)
 copy(ROOT/f'target/{PROFILE}/know-code',RUNTIME/'bin/know-code')
-manifest={'layout_version':1,'version':VERSION,'artifact_kind':'local-candidate','target':'darwin-arm64','minimum_macos':'15.0','worker_protocol':7,'store_format':6,'build_profile':PROFILE,'telemetry':'none','prerequisites':{'node':'24.x','dotnet_sdk':'10.x; repository selection/compatible Roslyn required'},'providers':[{'language':lang,'status':status,'entrypoint':entry} for lang,status,entry in [('typescript','required','providers/typescript/worker.mjs'),('csharp','required','providers/dotnet/KnowCode.Provider.DotNet.dll'),('rust','experimental-v0.0.3','providers/rust/worker.mjs'),('swift','experimental-v0.0.3','providers/swift/worker.mjs')]]}
+manifest={'layout_version':1,'version':VERSION,'artifact_kind':'local-candidate','target':'darwin-arm64','minimum_macos':'15.0','worker_protocol':7,'store_format':6,'analysis_settings_version':1,'build_profile':PROFILE,'telemetry':'none','prerequisites':{'node':'24.x','dotnet_sdk':'10.x; repository selection/compatible Roslyn required'},'providers':[{'language':lang,'status':status,'entrypoint':entry} for lang,status,entry in [('typescript','required','providers/typescript/worker.mjs'),('csharp','required','providers/dotnet/KnowCode.Provider.DotNet.dll'),('rust','experimental-v0.0.3','providers/rust/worker.mjs'),('swift','experimental-v0.0.3','providers/swift/worker.mjs')]]}
 (RESOURCES/'runtime.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # Only platform libraries and relative self identities may appear in native load commands.
 native_inputs=[RUNTIME/'bin/know-code',ROOT/f'target/{PROFILE}/libknow_code_node.dylib',ROOT/f'target/{PROFILE}/libknow_code_ffi.dylib',RESOURCES/'providers/swift/indexstore-reader']
@@ -90,7 +100,7 @@ for native in native_inputs:
  for line in run('otool','-L',native).splitlines()[1:]:
   dependency=line.strip().split(' (',1)[0]
   assert dependency.startswith(('@rpath/','/usr/lib/','/System/Library/')) and 'sqlite' not in dependency.lower(),(native,dependency)
-info=json.loads(run(RUNTIME/'bin/know-code','runtime-info'));assert info['layout']=='bundle' and info['sqlite']['fts5'] and info['profile']==PROFILE
+info=json.loads(run(RUNTIME/'bin/know-code','runtime-info'));assert info['layout']=='bundle' and info['sqlite']['fts5'] and info['profile']==PROFILE and info['analysis_settings_version']==manifest['analysis_settings_version']
 
 NODE=STAGE/'node';NODE.mkdir()
 for name in ['index.mjs','index.d.ts','package.json','README.md']:copy(ROOT/'bindings/node'/name,NODE/name)

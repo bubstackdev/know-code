@@ -1,6 +1,6 @@
 # C# compiler context selection
 
-This adapter slice implements the C# variant of analysis policy 1 from [FIRST_WAVE_CONTRACT.md](FIRST_WAVE_CONTRACT.md). Shared settings/coordinator integration is owned separately; direct framed requests establish the worker behavior below. Legacy requests retain their selected configuration string.
+This adapter slice implements the C# variant of analysis policy 1 from [FIRST_WAVE_CONTRACT.md](FIRST_WAVE_CONTRACT.md). The shared settings/coordinator integration is described in [WORKSPACE_SETTINGS.md](WORKSPACE_SETTINGS.md); direct framed requests establish the worker behavior below. Legacy requests retain their selected configuration string.
 
 With a present policy, absent configuration leaves the MSBuild Configuration global property unset. Projects evaluate their own repository/SDK defaults; a nonempty workspace override selects that configuration explicitly. No Know Code-wide Debug default is injected. Every declared framework is still planned and analyzed.
 

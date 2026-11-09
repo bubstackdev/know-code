@@ -13,8 +13,10 @@ cargo test --workspace --locked --profile "$task_cargo_profile"
 node tests/protocol.mjs
 node tests/jsonrpc.mjs
 node tests/typescript.mjs
+node tests/node_preparation.mjs
 node tests/swift_toolchain.mjs
 node tests/sdk-metadata.mjs
+node tests/csharp_context.mjs
 python3 tests/e2e.py
 python3 tests/mcp.py
 python3 tests/workspace_api.py
