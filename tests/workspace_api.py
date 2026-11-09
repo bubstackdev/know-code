@@ -42,12 +42,12 @@ class Client:
   self.selector.close()
   (RUN/f'client-{self.p.pid}.json').write_text(json.dumps(self.events,indent=2)+'\n')
 
-def ready(client,after=0):
+def ready(client,after=0,previous_failed_epoch=None):
  until=time.monotonic()+60
  while time.monotonic()<until:
   status=client.send('wait',wait_ms=1000)
   assert 'error' not in status or not isinstance(status['error'],dict),status
-  assert status['phase']!='failed',status
+  assert status['phase']!='failed' or status['observed_epoch']==previous_failed_epoch,status
   if status['phase']=='idle' and status['observed_epoch']==status['published_epoch'] and status['generation']>=after:return status
  raise AssertionError(('index not ready',status))
 
@@ -180,7 +180,7 @@ while time.monotonic()<until:
  time.sleep(.05)
 else:raise AssertionError(failed)
 assert failed['generation']==0 and failed['outcome_code']=='invalid_request'
-broken_file.write_text('{}');fixed=ready(bad,1)
+broken_file.write_text('{}');fixed=ready(bad,1,failed['observed_epoch'])
 personal=Path(fixed['requested_settings']['personal_file']);personal.write_text('{"allow_install_scripts":"yes"}')
 until=time.monotonic()+15
 while time.monotonic()<until:
@@ -190,7 +190,7 @@ while time.monotonic()<until:
 else:raise AssertionError(failed)
 assert failed['generation']==fixed['generation']
 assert bad.send('query',request={'op':'symbols','name':'repairedSettings'})['result']['freshness']=='stale'
-personal.write_text('{}');fixed=ready(bad,fixed['generation']+1)
+personal.write_text('{}');fixed=ready(bad,fixed['generation']+1,failed['observed_epoch'])
 bad.send('configure',settings={'allow_install_scripts':True});ready(bad,fixed['generation']+1)
 cli('unwatch',broken);assert json.loads(personal.read_text())['allow_install_scripts'] is False
 bad.close();broken.rename(RUN/'removed-workspace');broken.mkdir();(broken/'value.ts').write_text('export const replacementWorkspace = 1;\n')
