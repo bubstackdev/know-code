@@ -72,11 +72,15 @@ pub fn query_json(database: &str, request: &str) -> String {
                     "freshness_wait_ms cannot exceed 120000".into(),
                 ));
             }
-            let status = control::wait_for_database(
+            let status = match control::wait_for_database(
                 std::path::Path::new(database),
                 wait,
                 request.deadline_ms,
-            );
+            ) {
+                Err(error @ Error::UpdateRequired(_)) => return Err(error),
+                Ok(Some(status)) if status.generation == 0 => return Err(Error::NotReady),
+                other => other,
+            };
             let mut result = query::ReadView::open(database)?.query(request)?;
             match status {
                 Ok(Some(status)) => {
@@ -91,7 +95,6 @@ pub fn query_json(database: &str, request: &str) -> String {
                     };
                     result.coordination = Some(status);
                 }
-                Err(Error::UpdateRequired(message)) => return Err(Error::UpdateRequired(message)),
                 Err(_)
                     if control::root_for_database(std::path::Path::new(database))
                         .is_some_and(|root| root.join("registry.db").exists()) =>

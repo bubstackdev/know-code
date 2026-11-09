@@ -241,7 +241,7 @@ fn request_one(
 ) -> Result<WorkspaceStatus> {
     let settings_operation = matches!(
         value.operation.as_str(),
-        "register" | "refresh" | "settings"
+        "register" | "refresh" | "settings" | "cancel"
     );
     if settings_operation {
         ensure_running(data, executable)?;
@@ -259,7 +259,7 @@ fn request_one(
         }
         result => result?,
     };
-    if settings_operation && response.analysis_settings_version != crate::settings::VERSION {
+    if response.analysis_settings_version != crate::settings::VERSION {
         return Err(Error::UpdateRequired("the coordinator changed during the request; update the running runtime to use workspace settings".into()));
     }
     response.workspaces.into_iter().next().ok_or_else(|| {
@@ -429,6 +429,9 @@ pub fn wait_for_database(
         },
         deadline_ms.unwrap_or(wait_ms.saturating_add(50).max(100)),
     )?;
+    if response.analysis_settings_version != crate::settings::VERSION {
+        return Err(Error::UpdateRequired("update the running Know Code coordinator before querying managed workspace analysis settings".into()));
+    }
     if !response.workspaces.is_empty() {
         record_activity(key);
     }

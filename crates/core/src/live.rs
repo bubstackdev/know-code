@@ -29,6 +29,8 @@ struct Owner {
     token: [u8; 16],
     #[serde(default)]
     activity_hints: bool,
+    #[serde(default)]
+    analysis_settings_version: u32,
 }
 fn process(pid: u32) -> Option<(u64, u64)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
@@ -238,6 +240,7 @@ impl Publisher {
             start_usec,
             token,
             activity_hints: true,
+            analysis_settings_version: crate::settings::VERSION,
         };
         let name = format!(".owner-{}-{}", owner.pid, u128::from_le_bytes(token));
         let staging = dir.join(name);
@@ -429,6 +432,7 @@ fn read_certified(
     let owner: Owner = serde_json::from_slice(body)?;
     if owner.version != 3
         || owner.protocol != protocol::VERSION
+        || owner.analysis_settings_version != crate::settings::VERSION
         || process(owner.pid) != Some((owner.start_sec, owner.start_usec))
     {
         return Ok(None);
@@ -762,7 +766,7 @@ mod tests {
         p.publish(&s);
         let owner_path = r.join("live/owner");
         let original = std::fs::read(&owner_path).unwrap();
-        for change in [0, 1, 2] {
+        for change in [0, 1, 2, 3, 4] {
             let mut owner: Owner = serde_json::from_slice(
                 &original
                     [76..76 + u32::from_le_bytes(original[72..76].try_into().unwrap()) as usize],
@@ -772,6 +776,8 @@ mod tests {
                 0 => owner.start_usec += 1,
                 1 => owner.version += 1,
                 2 => owner.protocol += 1,
+                3 => owner.analysis_settings_version += 1,
+                4 => owner.analysis_settings_version = 0,
                 _ => unreachable!(),
             };
             let body = serde_json::to_vec(&owner).unwrap();

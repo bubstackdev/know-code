@@ -380,6 +380,9 @@ fn info(bundle: &Path) -> Result<Value> {
 }
 fn same_contract(a: &Path, b: &Path) -> Result<()> {
     let (a, b) = (info(a)?, info(b)?);
+    if b["analysis_settings_version"] != know_code_core::settings::VERSION {
+        return Err("target runtime lacks the required workspace analysis-settings contract; use a compatible runtime rather than rolling back to legacy settings".into());
+    }
     if a["worker_protocol"] != b["worker_protocol"] || a["store_format"] != b["store_format"] {
         return Err("this installer only switches compatible protocol/store contracts; a migration-capable update is required".into());
     }

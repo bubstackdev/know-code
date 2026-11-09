@@ -42,6 +42,8 @@ Both settings paths, including absent files, enter the saved-input snapshot befo
 
 Control capability `analysis_settings_version = 1` is required for registration, refresh and settings operations. Clients check before mutation and verify the response, including when an existing handle encounters a replaced coordinator. An incompatible running coordinator returns an actionable `update_required`; there is no fallback to legacy settings. Worker policy acknowledgment remains separately required before accepting any facts/checkpoints. The development login job is not automatically restarted by these code changes.
 
+Managed queries require the same capability in RPC responses and live publisher certificates, so an existing client cannot certify an older coordinator's different scope as fresh. Runtime information reports the capability; the installer rejects a target lacking it while allowing an old compatible store/runtime to upgrade to a supporting target. A newly registered workspace without a published generation returns not-ready even if an index from a removed workspace remains at that disk path.
+
 ## Verification
 
 Resolver tests exercise precedence, persistent explicit clearing, script-grant isolation and invalid replacement preservation. The existing workspace API harness adds .NET/Node/CLI settings parity, no-source-save invalidation, clearing a newly chosen configuration, and malformed first-run/personal-file recovery with coherent stale fallback. Adapter direct-worker suites cover actual package tools and mapped compiler contexts; those remain distinct from coordinator integration evidence. Full Debug validation belongs at the settled integration checkpoint.

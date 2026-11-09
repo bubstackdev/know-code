@@ -120,7 +120,7 @@ pub fn info() -> Result<serde_json::Value> {
         })?;
     Ok(
         json!({"version":env!("CARGO_PKG_VERSION"),"target":"darwin-arm64","profile":profile(),"resource_directory":root,
-        "layout":if root.join("runtime.json").is_file(){"bundle"}else{"development"},"worker_protocol":VERSION,"store_format":know_code_core::store::SCHEMA_VERSION,"resource_control_version":know_code_core::resource::CONTROL_VERSION,
+        "layout":if root.join("runtime.json").is_file(){"bundle"}else{"development"},"worker_protocol":VERSION,"store_format":know_code_core::store::SCHEMA_VERSION,"resource_control_version":know_code_core::resource::CONTROL_VERSION,"analysis_settings_version":know_code_core::settings::VERSION,
         "sqlite":{"version":rusqlite::version(),"bundled":true,"fts5":fts5},"telemetry":"none"}),
     )
 }
