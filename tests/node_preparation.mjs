@@ -182,6 +182,16 @@ write(userHook, "throw new Error('user hook still requires a personal workspace 
 const userChanged = worker(lastDirectory, payloads(userSelected, 'preparation'));
 assert.equal(payloads(userChanged, 'preparation').length, 1, 'selected user hook contents did not invalidate setup');
 assert(payloads(userChanged, 'preparation')[0].succeeded);
+const arbitraryConfig = path.join(run, 'company-npm-config');
+const arbitraryHook = path.join(run, 'company-external-hook.cjs');
+write(arbitraryConfig, `global-pnpmfile=${arbitraryHook}\n`);
+environment.npm_config_userconfig = arbitraryConfig;
+const arbitrarySelected = worker(lastDirectory);
+assert(payloads(arbitrarySelected, 'compilation')[0].inputPaths.includes(arbitraryHook), 'arbitrary-basename user INI selector was not parsed');
+write(arbitraryHook, "throw new Error('company hook must remain suppressed without personal grant');\n");
+const arbitraryChanged = worker(lastDirectory, payloads(arbitrarySelected, 'preparation'));
+assert.equal(payloads(arbitraryChanged, 'preparation').length, 1);
+assert(payloads(arbitraryChanged, 'preparation')[0].succeeded);
 const selectedManifest = path.join(lastDirectory, 'package.json'), selectedBytes = fs.readFileSync(selectedManifest);
 const unsupported = JSON.parse(selectedBytes); unsupported.packageManager = 'pnpm@13.0.0';
 write(selectedManifest, JSON.stringify(unsupported));
@@ -247,7 +257,7 @@ try {
 } finally { globalThis.fetch = originalFetch; }
 const summary = {result: 'passed', node: process.version, cache, cells,
   cacheChecks: ['unsupported_pins', 'bounded_metadata_stream', 'warm_offline_reuse', 'cold_offline_failure_and_cleanup', 'two_process_acquisition_deduplication', 'corrupted_cache_not_used'],
-  inputChecks: ['absent_default_hook_creation', 'ini_selected_external_hook_creation', 'user_yaml_selected_external_hook_change']};
+  inputChecks: ['absent_default_hook_creation', 'ini_selected_external_hook_creation', 'user_yaml_selected_external_hook_change', 'arbitrary_basename_user_ini_hook']};
 fs.writeFileSync(path.join(run, 'result.json'), JSON.stringify(summary, null, 2) + '\n');
 write(path.join(root, '.artifacts/node-preparation/latest.json'), JSON.stringify({...summary, evidence: run}, null, 2) + '\n');
 console.log(JSON.stringify({result: summary.result, cells: cells.length, evidence: run}));

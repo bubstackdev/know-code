@@ -108,18 +108,22 @@ export async function preparePackages(root, directories, request, send) {
     }
     for (const name of dependencyInputs) inputs.add(path.join(directory, name));
     const configHome = process.env.XDG_CONFIG_HOME ?? (process.env.HOME && path.join(process.env.HOME, '.config'));
-    for (const filename of [process.env.npm_config_userconfig, process.env.NPM_CONFIG_USERCONFIG,
-      process.env.HOME && path.join(process.env.HOME, '.npmrc'), configHome && path.join(configHome, 'pnpm/config.yaml'),
-      configHome && path.join(configHome, 'pnpm/rc'), configHome && path.join(configHome, 'pnpm/auth.ini')])
-      if (filename) inputs.add(path.resolve(filename));
+    const userIniPaths = [process.env.npm_config_userconfig, process.env.NPM_CONFIG_USERCONFIG,
+      process.env.HOME && path.join(process.env.HOME, '.npmrc'),
+      configHome && path.join(configHome, 'pnpm/rc'), configHome && path.join(configHome, 'pnpm/auth.ini')]
+      .filter(Boolean)
+      .map(filename => path.resolve(directory, filename));
+    for (const filename of userIniPaths) inputs.add(filename);
+    const userYamlPath = configHome && path.resolve(directory, configHome, 'pnpm/config.yaml');
+    if (userYamlPath) inputs.add(userYamlPath);
     const hookConfigs = [group.workspace.pnpm, {
       pnpmfile: process.env.pnpm_config_pnpmfile ?? process.env.PNPM_CONFIG_PNPMFILE ?? process.env.npm_config_pnpmfile ?? process.env.NPM_CONFIG_PNPMFILE,
       globalPnpmfile: process.env.pnpm_config_global_pnpmfile ?? process.env.PNPM_CONFIG_GLOBAL_PNPMFILE ?? process.env.npm_config_global_pnpmfile ?? process.env.NPM_CONFIG_GLOBAL_PNPMFILE,
     }];
     for (const filename of [...inputs]) if (fs.existsSync(filename)) {
-      if (path.basename(filename) === '.npmrc' || ['rc', 'auth.ini'].includes(path.basename(filename)))
+      if (path.basename(filename) === '.npmrc' || userIniPaths.includes(filename))
         hookConfigs.push(ini.parse(fs.readFileSync(filename, 'utf8')));
-      else if (path.basename(filename) === 'config.yaml') hookConfigs.push(YAML.parse(fs.readFileSync(filename, 'utf8')));
+      else if (filename === userYamlPath) hookConfigs.push(YAML.parse(fs.readFileSync(filename, 'utf8')));
     }
     for (const config of hookConfigs) for (const filename of configuredHookPaths(config, directory)) inputs.add(filename);
     const inputHash = createHash('sha256');

@@ -32,7 +32,7 @@ export function selection(value, fallback = 'npm') {
 export function runCommand(program, args, directory, send, env = {}, outputLimit = 8192) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, {cwd: directory, stdio: ['ignore', 'pipe', 'pipe'],
-      env: {...process.env, npm_config_update_notifier: 'false', pnpm_config_update_notifier: 'false',
+      env: {...process.env, npm_config_update_notifier: 'false', npm_config_logs_max: '0', pnpm_config_update_notifier: 'false',
         PNPM_CONFIG_UPDATE_NOTIFIER: 'false', NO_UPDATE_NOTIFIER: '1', ...env}});
     let tail = '', stdout = '', last = Date.now(), overflow = false;
     child.stdout.on('data', bytes => { stdout = (stdout + bytes.toString('utf8')).slice(-outputLimit); });
@@ -57,7 +57,10 @@ async function registryMetadata(name, version) {
   catch (error) { throw new Error(`Cannot acquire ${name}@${version} from the public package registry: ${error.cause?.code ?? error.message}; check network access and retry preparation`, {cause: error}); }
   if (!response.ok) throw new Error(`Package-tool metadata ${name}@${version}: HTTP ${response.status}`);
   const limit = 1024 * 1024;
-  if (Number(response.headers.get('content-length')) > limit) throw new Error('Oversized package-tool metadata');
+  if (Number(response.headers.get('content-length')) > limit) {
+    await response.body?.cancel();
+    throw new Error('Oversized package-tool metadata');
+  }
   const chunks = [];
   let length = 0;
   for await (const chunk of response.body) {
