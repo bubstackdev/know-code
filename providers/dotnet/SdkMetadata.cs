@@ -18,6 +18,18 @@ sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
         var properties = contexts.Properties(path);
         var key = System.Text.Json.JsonSerializer.Serialize(new {path, properties = properties.OrderBy(p => p.Key).ToArray()});
         if (includeIdentity && complete.TryGetValue(key, out var cached)) return cached;
+        var result = await Request(path, sdkPath, properties, includeIdentity);
+        if (includeIdentity) complete.Add(key, result);
+        return result;
+    }
+
+    public static Task<SdkMetadataResult> ReadSolution(string path, string? configuration, string sdkPath) =>
+        Request(path, sdkPath, configuration is null ? new Dictionary<string,string>()
+            : new Dictionary<string,string> { ["Configuration"] = configuration }, false);
+
+    private static async Task<SdkMetadataResult> Request(string path, string sdkPath,
+        IReadOnlyDictionary<string,string> properties, bool includeIdentity)
+    {
         var info = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(path)!,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
         info.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
@@ -53,7 +65,6 @@ sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
             if (process.ExitCode != 0)
                 throw new InvalidOperationException($"SDK metadata failed for {path} ({process.ExitCode}): {details}");
             if (!completed || result is null) throw new InvalidDataException($"SDK metadata incomplete for {path}: {details}");
-            if (includeIdentity) complete.Add(key, result);
             return result;
         }
         catch
@@ -84,6 +95,11 @@ static class SdkMetadataServer
                     or "SolutionPath" or "SolutionFileName" or "SolutionName" or "SolutionExt"))
                     throw new InvalidDataException($"unsupported solution property: {property.Key}");
                 globals.Add(property.Key, property.Value);
+            }
+            if (Path.GetExtension(request.ProjectPath) is ".sln" or ".slnx")
+            {
+                ReadSolution(request.ProjectPath, globals, collection);
+                return;
             }
             var inputPaths = new HashSet<string>(StringComparer.Ordinal);
             var outer = new Microsoft.Build.Evaluation.Project(request.ProjectPath, globals, null, collection);
@@ -133,6 +149,27 @@ static class SdkMetadataServer
             Wire.Send(new Envelope { SdkMetadataResult = result });
         }
         finally { collection.UnloadAllProjects(); }
+    }
+
+    private static void ReadSolution(string path, Dictionary<string,string> globals, ProjectCollection collection)
+    {
+        var logger = new Errors();
+        using var manager = new BuildManager();
+        // The standard SDK metadata target returns generated-wrapper state.
+        // Never request default Build, compiler or external codegen targets.
+        // Normal SDK InitialTargets/validation hooks can still execute.
+        var evaluated = manager.Build(new BuildParameters(collection) {
+            MaxNodeCount = 1, EnableNodeReuse = false, ShutdownInProcNodeOnBuildFinish = true,
+            DiscardBuildResults = true, Loggers = [logger]
+        }, new BuildRequestData(path, globals.ToDictionary(p => p.Key, p => (string?)p.Value), null, ["ValidateSolutionConfiguration"], null,
+            BuildRequestDataFlags.ProvideProjectStateAfterBuild));
+        if (evaluated.OverallResult != BuildResultCode.Success || evaluated.ProjectStateAfterBuild is not { } state)
+            throw new InvalidOperationException($"solution evaluation failed for {path}: {logger.Text}", evaluated.Exception);
+        var result = new SdkMetadataResult();
+        foreach (var name in BuildContexts.SolutionPropertyNames.Concat(["Configuration", "Platform"]))
+            result.Definition.Add(name, name == "BuildingSolutionFile" ? "true" : state.GetPropertyValue(name));
+        result.Definition.Add("KnowCodeInputPaths", System.Text.Json.JsonSerializer.Serialize(state.ImportPaths));
+        Wire.Send(new Envelope { SdkMetadataResult = result });
     }
 
     private sealed class Errors : ILogger

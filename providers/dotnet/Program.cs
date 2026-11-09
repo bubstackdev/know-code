@@ -159,7 +159,7 @@ static partial class Analysis
 {
     public static async Task Run(AnalyzeRequest request, string sdkVersion, string sdkPath)
     {
-        var contexts = BuildContexts.Create(request);
+        var contexts = await BuildContexts.Create(request, sdkPath);
         var metadata = new SdkMetadataClient(contexts, sdkPath);
         var preparationErrors = new Dictionary<string, string>(StringComparer.Ordinal);
         // Finish restoration before caching any compiler inputs or identity metadata.

@@ -19,7 +19,7 @@ const checks = [];
 function write(name, contents) {fs.mkdirSync(path.dirname(name), {recursive:true}); fs.writeFileSync(name, contents);}
 function invoke(workspace, projects, settings, previous = []) {
   const fingerprint = createHash('sha256');
-  for (const name of ['Directory.Build.props', 'SolutionInputs.props', 'App.sln', ...projects.map(p => path.relative(workspace, p))]) {
+  for (const name of ['Directory.Build.props', 'Directory.Solution.props', 'Directory.Solution.targets', 'SolutionInputs.props', 'App.sln', ...projects.map(p => path.relative(workspace, p))]) {
     const file = path.join(workspace, name);
     if (fs.existsSync(file)) fingerprint.update(name).update(fs.readFileSync(file));
   }
@@ -142,6 +142,11 @@ checks.push('multiple_solutions_require_selection');
 result=invoke(workspace,projects,{solutionPath:selected}); success(result);
 assert.equal(result.compilations.length,4);
 checks.push('explicit_solution_selects_one_context');
+result=invoke(workspace,projects,{solutionPath:selected,configuration:'Release'});success(result);
+assert(result.compilations.every(c=>c.options.build_context.solution_configuration==='Release'));
+assert(result.compilations.every(c=>c.configuration==='Release'&&c.options.platform==='AnyCPU'));
+assert.equal(result.compilations.find(c=>c.projectPath==='Outside/Outside.csproj').options.build_context.origin,'workspace_override');
+checks.push('explicit_override_selects_solution_context_and_direct_project_defaults');
 result=invoke(workspace,projects,{solutionPath:path.join(workspace,'missing.sln')});
 assert.notEqual(result.status,0);assert.match(result.error,/selected solution is unavailable/);assert.equal(result.compilations.length,0);
 checks.push('missing_selected_solution_no_substitution');
@@ -181,6 +186,34 @@ assert(result.symbols.some(s=>s.name==='ChangedSolutionMarker'&&!s.external));
 assert(!result.symbols.some(s=>s.name==='InitialSolutionMarker'&&!s.external));
 assert(result.preparations.length>0);
 checks.push('solution_relative_imports_and_changed_input_facts');
+const solutionProps=path.join(workspace,'Directory.Solution.props');
+write(solutionProps,`<Project><PropertyGroup><Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+  <Platform Condition="'$(Platform)' == ''">Any CPU</Platform></PropertyGroup>
+  <Target Name="DoNotExecuteSolutionTargets" BeforeTargets="Build;CoreCompile"><Error Text="Solution planning executed targets" /></Target></Project>`);
+result=invoke(workspace,projects,{solutionPath:selected});success(result);
+assert(result.compilations.every(c=>c.options.build_context.solution_configuration==='Release'));
+assert(result.compilations.filter(c=>c.projectPath!=='Outside/Outside.csproj').every(c=>c.configuration==='Release'&&c.options.platform==='AnyCPU'));
+assert.equal(result.compilations.find(c=>c.projectPath==='Outside/Outside.csproj').configuration,'Repository');
+assert(result.compilations.every(c=>c.inputPaths.includes(solutionProps)));
+result=invoke(workspace,projects,{solutionPath:selected,configuration:'Debug'});success(result);
+assert(result.compilations.every(c=>c.options.build_context.solution_configuration==='Debug'));
+checks.push('solution_props_defaults_without_requesting_build_targets');
+fs.unlinkSync(solutionProps);
+const solutionTargets=path.join(workspace,'Directory.Solution.targets');
+write(solutionTargets,'<Project><PropertyGroup><Configuration>Release</Configuration><Platform>Any CPU</Platform></PropertyGroup><Target Name="NeverRun" BeforeTargets="Build;CoreCompile"><Error Text="Solution targets executed" /></Target></Project>');
+result=invoke(workspace,projects,{solutionPath:selected});
+assert.equal(result.status,0,result.error);
+assert(result.compilations.every(c=>c.options.build_context.solution_configuration==='Release'));
+assert(result.compilations.every(c=>c.inputPaths.includes(solutionTargets)));
+checks.push('solution_targets_properties_without_requesting_build_targets');
+fs.unlinkSync(solutionTargets);
+write(solutionTargets,`<Project InitialTargets="RecordMetadataHook"><Target Name="RecordMetadataHook">
+  <WriteLinesToFile File="$(SolutionDir)metadata-hook.txt" Lines="metadata" Overwrite="false" /></Target>
+  <Target Name="NeverBuild" BeforeTargets="Build;CoreCompile"><Error Text="Planner requested build" /></Target></Project>`);
+result=invoke(workspace,projects,{solutionPath:selected});success(result);
+assert.equal(fs.readFileSync(path.join(workspace,'metadata-hook.txt'),'utf8').trim(),'metadata');
+checks.push('normal_sdk_initial_metadata_hook_is_visible_not_a_full_build');
+fs.unlinkSync(solutionTargets);
 const outsideProject=projects[2];
 fs.writeFileSync(outsideProject,fs.readFileSync(outsideProject,'utf8').replace('</Project>', '<ItemGroup><ProjectReference Include="../Library/Library.csproj" /></ItemGroup></Project>'));
 write(path.join(workspace,'Outside/Code.cs'),'public static class OutsideApi { public static int Read() => LibraryApi.RepositoryOnly(); }');
@@ -194,7 +227,12 @@ assert(result.reports.find(r=>r.compilationId===outsideContext.id).diagnostics.s
 checks.push('outside_caller_preserves_compiler_context_without_fabricated_body_link');
 assert(!fs.existsSync(path.join(workspace,'Library/bin')),'analysis ran a full build');
 checks.push('no_full_build');
-const summary={result:'passed',profile,checks,run,worker};
+const sourceRevision=spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim();
+const sourceFiles=['proto/analysis.proto','providers/dotnet/BuildContexts.cs','providers/dotnet/Program.cs',
+  'providers/dotnet/ProjectCatalog.cs','providers/dotnet/ProjectLinks.cs','providers/dotnet/SdkMetadata.cs',
+  'tests/csharp_context.mjs','tests/sdk-metadata.mjs'].map(file=>({path:file,sha256:createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex')}));
+const summary={result:'passed',profile,checks,run,worker,sourceRevision,
+  workerSha256:createHash('sha256').update(fs.readFileSync(worker)).digest('hex'),sourceFiles};
 write(path.join(run,'result.json'),JSON.stringify(summary,null,2)+'\n');
 write(path.join(root,'.artifacts/csharp-context/latest.json'),JSON.stringify(summary,null,2)+'\n');
 console.log(JSON.stringify(summary,null,2));

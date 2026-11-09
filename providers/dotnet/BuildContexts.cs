@@ -1,9 +1,7 @@
 using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
 using KnowCode.Protocol;
-using Microsoft.Build.Construction;
 
 // One selected workspace context. MSBuild owns solution parsing/defaults and
 // mapping semantics; this adapter carries the selected globals to all phases.
@@ -20,7 +18,10 @@ sealed class BuildContexts
     public string? RequestedConfiguration { get; }
     public IReadOnlyList<string> InputPaths { get; }
 
-    private BuildContexts(AnalyzeRequest request, string? solutionPath, SolutionFile? solution)
+    public static readonly string[] SolutionPropertyNames = ["BuildingSolutionFile", "CurrentSolutionConfigurationContents",
+        "SolutionDir", "SolutionPath", "SolutionFileName", "SolutionName", "SolutionExt"];
+
+    private BuildContexts(AnalyzeRequest request, string? solutionPath, SdkMetadataResult? solution)
     {
         this.request = request;
         RequestedConfiguration = PolicyEnabled
@@ -30,35 +31,24 @@ sealed class BuildContexts
         InputPaths = solutionPath is null ? [] : [solutionPath];
         solutionProperties = ImmutableDictionary<string, string>.Empty;
         if (solution is null) return;
-        SolutionConfiguration = RequestedConfiguration ?? solution.GetDefaultConfigurationName();
-        SolutionPlatform = solution.GetDefaultPlatformName();
-        var selected = solution.SolutionConfigurations.FirstOrDefault(c =>
-            c.ConfigurationName.Equals(SolutionConfiguration, StringComparison.OrdinalIgnoreCase)
-            && c.PlatformName.Equals(SolutionPlatform, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException($"solution has no selected context {SolutionConfiguration}|{SolutionPlatform}: {solutionPath}");
-        var contents = new XElement("SolutionConfiguration",
-            new XAttribute("Configuration", selected.ConfigurationName), new XAttribute("Platform", selected.PlatformName));
-        foreach (var project in solution.ProjectsInOrder.Where(p => p.ProjectType != SolutionProjectType.SolutionFolder))
+        SolutionConfiguration = solution.Definition["Configuration"];
+        SolutionPlatform = solution.Definition["Platform"];
+        var contents = solution.Definition["CurrentSolutionConfigurationContents"];
+        if (string.IsNullOrWhiteSpace(contents))
+            throw new InvalidOperationException($"solution has no selected context {SolutionConfiguration}|{SolutionPlatform}: {solutionPath}");
+        foreach (var project in XElement.Parse(contents).Elements("ProjectConfiguration"))
         {
-            if (!project.ProjectConfigurations.TryGetValue(selected.FullName, out var context))
-            {
-                // Shared/non-build project entries need not have a build mapping.
-                if (!Path.GetExtension(project.AbsolutePath).Equals(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
-                throw new InvalidOperationException($"solution mapping is missing for {project.AbsolutePath} in {selected.FullName}");
-            }
-            mapped.Add(Path.GetFullPath(project.AbsolutePath), new(context.ConfigurationName, context.PlatformName));
-            contents.Add(new XElement("ProjectConfiguration", new XAttribute("Project", project.ProjectGuid),
-                new XAttribute("AbsolutePath", project.AbsolutePath), new XAttribute("BuildProjectInSolution", context.IncludeInBuild),
-                $"{context.ConfigurationName}|{context.PlatformName}"));
+            var selected = project.Value;
+            var separator = selected.LastIndexOf('|');
+            if (separator <= 0 || separator == selected.Length - 1)
+                throw new InvalidDataException($"invalid SDK solution mapping: {selected}");
+            var path = project.Attribute("AbsolutePath")?.Value
+                ?? throw new InvalidDataException("SDK solution mapping has no project path");
+            mapped.Add(Path.GetFullPath(path), new(selected[..separator], selected[(separator + 1)..]));
         }
-        solutionProperties = solutionProperties
-            .Add("BuildingSolutionFile", "true")
-            .Add("CurrentSolutionConfigurationContents", contents.ToString(SaveOptions.DisableFormatting))
-            .Add("SolutionDir", Path.GetDirectoryName(solutionPath)! + Path.DirectorySeparatorChar)
-            .Add("SolutionPath", solutionPath!)
-            .Add("SolutionFileName", Path.GetFileName(solutionPath)!)
-            .Add("SolutionName", Path.GetFileNameWithoutExtension(solutionPath)!)
-            .Add("SolutionExt", Path.GetExtension(solutionPath)!);
+        solutionProperties = SolutionPropertyNames.ToImmutableDictionary(name => name, name => solution.Definition[name]);
+        InputPaths = InputPaths.Concat(JsonSerializer.Deserialize<string[]>(solution.Definition["KnowCodeInputPaths"])!)
+            .Distinct(StringComparer.Ordinal).ToArray();
     }
 
     public static void Validate(AnalyzeRequest request)
@@ -72,8 +62,7 @@ sealed class BuildContexts
             throw new InvalidOperationException("selected solution_path must be absolute");
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public static BuildContexts Create(AnalyzeRequest request)
+    public static async Task<BuildContexts> Create(AnalyzeRequest request, string sdkPath)
     {
         Validate(request);
         if (request.AnalysisPolicy is null) return new(request, null, null);
@@ -93,7 +82,9 @@ sealed class BuildContexts
         }
         if (Path.GetExtension(source) is not (".sln" or ".slnx"))
             throw new InvalidOperationException($"selected file is not a supported .sln, .slnx or .slnf solution: {selected}");
-        var result = new BuildContexts(request, source, SolutionFile.Parse(source));
+        var configuration = policy.HasConfiguration ? policy.Configuration : null;
+        var evaluated = await SdkMetadataClient.ReadSolution(source, configuration, sdkPath);
+        var result = new BuildContexts(request, source, evaluated);
         if (source != selected) result.filterPath = selected;
         return result;
     }
