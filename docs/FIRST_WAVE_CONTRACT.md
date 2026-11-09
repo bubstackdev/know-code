@@ -1,0 +1,64 @@
+# First implementation wave: adapter boundaries
+
+The initial source baseline is `bec023e` (178 reviewed source/documentation files). The inventory and exact hashes are under the path recorded in `.artifacts/baseline/current`; ignored reference clones, generated outputs and local diagnostics are excluded. This checkpoint establishes source identity, not release certification or source-to-binary provenance for older artifacts.
+
+This contract prepares the C09 npm/pnpm and C06 C# work packets from [RELEASE_ACCEPTANCE.md](RELEASE_ACCEPTANCE.md). The integrator owns the shared schema, settings/control plumbing and input invalidation. Adapter implementers own their narrow language behavior and focused checks. No full-release goal or external publication is activated here.
+
+## Shared worker contract
+
+`proto/analysis.proto` adds optional `AnalyzeRequest.analysis_policy`. An absent message retains the existing legacy behavior, including the existing configuration string. A present message has version **1** and exactly one settings variant:
+
+| Field | Meaning |
+| --- | --- |
+| `node.cache_directory` | Absolute user-scoped package-tool cache directory, resolved by the common coordinator settings path. It is not a repository-selected executable or global installation. |
+| `node.allow_install_scripts` | False by default. Only an explicit personal grant for this workspace can set true; a checked-in configuration cannot grant permission. |
+| `csharp.configuration` | Optional. Absence means evaluate repository/MSBuild defaults without injecting a Configuration global property. A nonempty value is the explicit workspace override; it selects the solution context when a solution is selected. The legacy request string does not override this presence-aware field. |
+| `csharp.solution_path` | Optional absolute selected solution path. Absence invokes bounded repository discovery: zero solutions uses direct project defaults; one selects that solution; several require a workspace selection. Never expand all solution contexts. |
+
+The selected solution provides mappings; it does not become an exclusion list. Projects outside it remain indexed under their evaluated defaults. An explicit workspace configuration override applies to direct projects too. All declared frameworks and default test indexing remain required. Resolve paths/aliases through the shared workspace identity rules; malformed, missing or ambiguous selection must be visible, without substituting an unrelated solution. A selected solution filter must not silently remove unrelated indexed projects; its base solution supplies mappings.
+
+The core validates policy shape/version at the worker boundary and includes its encoded value in the preparation fingerprint, with a domain separator. Policy absence preserves the legacy fingerprint. A worker must acknowledge the exact requested policy version in `ProviderInfo.analysis_policy_version`, with the matching language, before any progress/checkpoint/fact messages are accepted. Zero means legacy-only; rejection is `update_required`, preserves the old generation and does not retry under legacy settings. Existing framing protocol **7**, store format and control APIs remain unchanged. This additive acknowledgment prevents an old worker from silently ignoring new policy fields.
+
+Workers must validate supported policy/version before preparation or compiler work, and advertise version 1 only after implementing the relevant behavior. Policies are sent only to the applicable provider. This is one shared transport contract, not a provider/plugin framework.
+
+## C09: Node package preparation
+
+Own `providers/typescript/preparation.mjs`, a narrow helper if needed, its TypeScript worker integration, `tests/preparation.py` and owned package fixtures. Shared codec changes go through the integrator.
+
+Honor repository manager/version selection and npm/pnpm workspace boundaries. Never substitute npm for pnpm. The finite supported-version matrix remains a product decision until recorded in release acceptance; exact fixture pins are frozen before implementation evidence is claimed. Unpinned fallback versions must be explicit in the implementation/release metadata, with effective identity in progress/coverage. Do not install Node or .NET SDKs.
+
+The read-only tooling audit proposes npm 10–11 and pnpm 10–12 on Node 24; the user has been asked and this remains pending. Primary references: [npm 10 engine declaration](https://raw.githubusercontent.com/npm/cli/v10.9.4/package.json), [npm 11 engine declaration](https://raw.githubusercontent.com/npm/cli/v11.19.1/package.json), [pnpm 10 compatibility](https://pnpm.io/10.x/installation), [pnpm 11 changes](https://pnpm.io/blog/releases/11.0) and [current pnpm installation](https://pnpm.io/installation). Older pnpm versions can also run on Node 24; excluding them would be a deliberate release scope choice, not a platform impossibility. Freeze exact lower-bound/latest fixture pins for each accepted family before release evidence, without substituting those versions for a repository's exact supported pin. Script and hook controls differ across these families; see [pnpm install options](https://pnpm.io/cli/install).
+
+Automatically acquire missing supported pinned package tools into the supplied user cache. Share acquisition across workspaces/processes, publish complete cache entries atomically, report progress/failures and reuse verified entries offline. Keep downloads/preparation in the managed worker tree so existing cancellation/resource controls apply. Cache contention/failure must be bounded and actionable, not an unbounded wait or a second scheduling service. Record source/integrity/version sufficiently to avoid treating a partial or unrelated cache entry as the selected tool.
+
+Without personal authorization, disable lifecycle scripts **and repository executable hooks/configuration** (including pnpmfile hooks). An install-script flag alone does not cover every package manager's hook controls. A grant permits this workspace's package preparation code, without overriding further restrictions imposed by the selected manager. Never execute repository hooks merely to discover a version. Compiler-required package restoration does not authorize a full build or external code generation.
+
+Provider checkpoints additionally bind the actual manager/version, runtime identity, workspace/lock/config dependency inputs and effective execution policy. The core policy fingerprint alone does not prove which tool ran. Preserve failed-checkpoint deduplication, explicit retry and missing-output reconciliation. A policy/tool/input change invalidates the relevant checkpoint; ordinary source saves and watcher rescans do not become restore retries. Locked installs must preserve repository constraints/lockfiles; fixture checks assert that behavior.
+
+Required focused cases: both managers; single package and workspace; supported pinned acquisition/reuse; concurrent cache reuse; offline warm cache and failed cold setup; scripts/hooks off and personal grant; selected-tool mismatch/unsupported version; workspace/lock/policy/version invalidation; repeated-save/rescan deduplication; partial setup failure without a fabricated complete graph. Reuse the existing preparation harness and shared codec. Yarn restoration stays on the unassigned backlog.
+
+## C06: C# repository build contexts
+
+Own `providers/dotnet/Program.cs`, `SdkMetadata.cs`, `ProjectCatalog.cs`, **`ProjectLinks.cs`**, `tests/sdk-metadata.mjs`, `tests/resolution.py` and owned C# fixtures. No generic registry/control or native DTO edits.
+
+Evaluate repository defaults with the selected SDK/MSBuild rather than imposing Debug. Preserve a selected solution's configuration/platform mappings even when solution Debug maps a project to Release. Empty Configuration in the internal SDK helper means omit that global property, not pass an empty value. The additive optional `SdkMetadataRequest.platform` carries the effective mapped project platform; absence omits that global property and preserves evaluated defaults. The existing `SdkMetadataResult.definition`/target metadata maps can report effective Configuration/Platform; no parallel metadata protocol is needed. Keep helper cache keys context-specific rather than path-only once multiple effective contexts can be evaluated.
+
+Emit actual effective project configuration in `Compilation.configuration`. Use existing `options_json` for requested context, selected solution, effective platform/configuration and selection origin; include analysis inputs in `input_paths`. Preparation, project evaluation, compilation identities, assembly identity and project-reference witnesses must agree on the same effective context, including mapped platform. `ProjectLinks.cs` must not derive every reference from one workspace-wide string or invent cross-target composition. Preserve source deduplication and compiler-selected framework compatibility.
+
+Required focused cases: repository-defined default; explicit override; solution-to-project differing labels; multiple solutions requiring selection; projects outside the selection; all declared frameworks; visible selection/effective provenance; mapping/import changes causing reanalysis; exact project-reference context compatibility. The integrator additionally runs project-link/dispatch regressions after assembly. Do not index all configurations or weaken compiler-backed/partial-graph behavior.
+
+## Integrator responsibilities and remaining wiring
+
+The schema and worker acknowledgment/fingerprint guard are concrete interfaces, **not enabled product settings**. Normal request factories still use the legacy path. Before enabling the new behavior, the integrator must resolve optional checked-in settings and central personal overrides through one path, persist automatic versus explicit selection distinctly, and pass only the applicable policy. Existing registry entries containing Debug cannot be retroactively classified as user overrides without migration/provenance handling. Both public SDKs, CLI and MCP must use that same resolution; no adapter reads a private trust environment variable.
+
+The integrator must also ensure effective policy changes enqueue invalidation even without a file event, bind solution/manager selection to saved inputs, and expose the effective choices/failures. Shared input tracking now recognizes `.sln`, `.slnx`, `.slnf` and `pnpm-workspace.yaml`; tracking alone does not implement planning or per-compilation invalidation. Adapter evidence includes imported files and manager configuration dependencies so updates use the existing publication path.
+
+Separate worktrees must own generated protocol outputs, Cargo target, node_modules, SDK smoke/native staging, coordinator state and fixture artifacts. Use durable `.artifacts/worktrees/` locations and isolated compiler servers. The independent reviewer is read-only; findings return to the owner. A handoff includes source revisions, owned diff, commands/profile, fixture identities, evidence paths, failures and dependencies. The integrator merges sequentially, runs affected boundary checks and owns candidate certification. Focused checks during implementation; full Debug suite at the settled integration checkpoint.
+
+Adapter branches initially exercise new policies through directly framed worker requests using the existing shared codec/worker-harness or SDK-metadata test patterns. Existing preparation/resolution tests that enter through `know-code watch` still send legacy requests until the integrator lands settings wiring. They remain regressions, not evidence for the new mode. Coordinator-driven selection, policy invalidation, saved-change handling and deduplication must be verified again after integration before C06/C09 can pass. The core's synthetic legacy-worker publication test separately verifies acknowledgment rejection and retention of the prior generation.
+
+## Checkpoint review and verification
+
+The independent read-only handoff review identified the missing mapped-platform input; it was added before the shared checkpoint. The reviewer found no remaining shared-interface blockers and confirmed the direct-worker versus coordinator-test split above. Package-tool support remains the pending product choice.
+
+Focused checks cover policy presence/defaults, rejection of malformed or unacknowledged policies, preparation fingerprint changes, actual update-path rejection preserving the published generation, Node codec presence semantics, generated C# protocol compilation, Rust formatting and all-target Clippy. The evidence location is recorded in `.artifacts/first-wave/current`. The full Debug suite is reserved for the settled integration checkpoint; this interface check neither enables the new adapter modes nor certifies release acceptance.

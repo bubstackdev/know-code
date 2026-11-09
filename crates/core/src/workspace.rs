@@ -104,6 +104,9 @@ pub fn relevant(path: &Path) -> bool {
                 | "modulemap"
                 | "metal"
                 | "csproj"
+                | "sln"
+                | "slnx"
+                | "slnf"
                 | "props"
                 | "targets"
                 | "json"
@@ -123,6 +126,7 @@ pub fn relevant(path: &Path) -> bool {
             Some(
                 "yarn.lock"
                     | "pnpm-lock.yaml"
+                    | "pnpm-workspace.yaml"
                     | "Cargo.lock"
                     | "rust-toolchain"
                     | "Package.resolved"

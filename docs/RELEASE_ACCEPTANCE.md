@@ -119,6 +119,8 @@ The reviewer checks behavior, invariants, failure cases, evidence and complexity
 
 Recommended first pair: **C09 package preparation and C06 C# build-context planning**, after a small integrator-owned contract checkpoint.
 
+The source baseline and concrete additive worker interfaces are documented in [FIRST_WAVE_CONTRACT.md](FIRST_WAVE_CONTRACT.md). Normal settings/control wiring remains explicitly pending; schema presence is not a claim that the adapter features are enabled.
+
 | Owner | Bounded task and owned paths | Required handoff and exclusions |
 | --- | --- | --- |
 | Integrator | Own `proto/analysis.proto`, shared settings/control plumbing, input invalidation and shared build/test scripts. Specify automatic vs override context inputs/effective provenance; script authorization and cache-location inputs; policy-aware preparation fingerprints. Centrally add tracking for `pnpm-workspace.yaml` and `.sln`/`.slnx`/`.slnf`, currently omitted from `workspace::relevant`. | Commit/review the common contract before implementation worktrees fork. Later changes explicitly invalidate affected handoffs. Keep generic settings, query, registry and transport edits out of both adapter packets. |

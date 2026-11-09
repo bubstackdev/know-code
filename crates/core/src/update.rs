@@ -62,6 +62,7 @@ pub fn index_controlled(
             Err(error) => return Err(error.into()),
         };
     for (number, mut worker) in workers.into_iter().enumerate() {
+        let requested_policy = protocol::prepare_analysis_policy(&mut worker.request)?;
         worker.request.preparations = preparations.values().cloned().collect();
         let job_id = format!("{}-{number}", writer.generation);
         control.check()?;
@@ -129,6 +130,7 @@ pub fn index_controlled(
                 }
                 match message.payload {
                     Some(Payload::Provider(info)) if !hello => {
+                        protocol::check_analysis_policy(requested_policy, &info)?;
                         eprintln!(
                             "analyzing {} with compiler {}",
                             info.language, info.compiler_version
@@ -180,7 +182,10 @@ pub fn index_controlled(
         let exit = child.wait()?;
         let details = errors.join().unwrap_or_default();
         control.check()?;
-        execution.map_err(|error| Error::Provider(format!("{error}\n{details}")))?;
+        execution.map_err(|error| match error {
+            Error::UpdateRequired(_) => error,
+            other => Error::Provider(format!("{other}\n{details}")),
+        })?;
         if !exit.success() {
             return Err(Error::Provider(format!(
                 "worker {} exited with {exit}; previous generation preserved\n{details}",

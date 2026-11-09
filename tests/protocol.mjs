@@ -4,6 +4,24 @@ import protobuf from 'protobufjs';
 
 const schema = await protobuf.load(new URL('../proto/analysis.proto', import.meta.url).pathname);
 const Envelope = schema.lookupType('knowcode.Envelope');
+const AnalyzeRequest = schema.lookupType('knowcode.AnalyzeRequest');
+const SdkMetadataRequest = schema.lookupType('knowcode.SdkMetadataRequest');
+for (const platform of [undefined, 'AnyCPU']) {
+  const value = platform === undefined ? {} : {platform};
+  const decoded = SdkMetadataRequest.decode(SdkMetadataRequest.encode(SdkMetadataRequest.create(value)).finish());
+  assert.equal(Object.hasOwn(decoded, 'platform'), platform !== undefined,
+    'default project platform must survive the Node codec as absent');
+  if (platform !== undefined) assert.equal(decoded.platform, platform);
+}
+for (const configuration of [undefined, 'Release']) {
+  const context = configuration === undefined ? {} : {configuration};
+  const request = AnalyzeRequest.decode(AnalyzeRequest.encode(AnalyzeRequest.create({
+    analysisPolicy: {version: 1, csharp: context}
+  })).finish());
+  assert.equal(Object.hasOwn(request.analysisPolicy.csharp, 'configuration'), configuration !== undefined,
+    'automatic configuration must survive the Node codec as absent');
+  if (configuration !== undefined) assert.equal(request.analysisPolicy.csharp.configuration, configuration);
+}
 const worker = `import {readRequest,send} from './providers/shared/protocol.mjs';
   const request=readRequest(); send('provider',{language:request.configuration});
   send('complete',{success:true});`;

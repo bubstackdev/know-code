@@ -29,6 +29,9 @@ message SdkMetadataRequest {
   string project_path = 2;
   string configuration = 3;
   bool include_identity = 4;
+  // Absent leaves the project's Platform default intact; present is the
+  // effective project platform selected by solution mapping.
+  optional string platform = 5;
 }
 message SdkMetadataResult {
   map<string, string> definition = 1;
@@ -48,6 +51,28 @@ message AnalyzeRequest {
   bool retry_preparation = 6;
   repeated string loose_sources = 7;
   repeated string configured_projects = 8;
+  // Absent retains the legacy configuration/preparation contract.
+  // A present policy requires matching ProviderInfo acknowledgment before facts.
+  AnalysisPolicy analysis_policy = 9;
+}
+message AnalysisPolicy {
+  uint32 version = 1;
+  oneof settings {
+    NodePreparationPolicy node = 2;
+    CSharpBuildContext csharp = 3;
+  }
+}
+message NodePreparationPolicy {
+  // Absolute, user-scoped tool cache resolved by the coordinator.
+  string cache_directory = 1;
+  // Only personal workspace settings may grant this; defaults to false.
+  bool allow_install_scripts = 2;
+}
+message CSharpBuildContext {
+  // Absence means repository/MSBuild defaults, not an empty global property.
+  optional string configuration = 1;
+  // Absent: discover zero/one solution; several require an explicit selection.
+  optional string solution_path = 2;
 }
 // Required setup state, shared by providers; not usage telemetry or graph facts.
 message PreparationResult {
@@ -66,6 +91,8 @@ message ProviderInfo {
   string language = 1;
   string compiler_version = 2;
   string runtime_version = 3;
+  // Zero means the legacy contract only. Advertise after implementing the policy.
+  uint32 analysis_policy_version = 4;
 }
 message Compilation {
   string id = 1;

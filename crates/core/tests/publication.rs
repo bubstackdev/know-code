@@ -425,3 +425,61 @@ fn source_default_budget_does_not_materialize_an_unbounded_rust_result() {
         know_code_core::query::DEFAULT_SOURCE_BYTES as usize
     );
 }
+
+#[test]
+fn legacy_worker_cannot_publish_when_new_policy_is_required() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "retained source");
+    let published = writer.publish().unwrap();
+    let response_path = path.with_extension("worker-frames");
+    let mut response = std::fs::File::create(&response_path).unwrap();
+    for payload in [
+        Payload::Provider(ProviderInfo {
+            language: "csharp".into(),
+            ..Default::default()
+        }),
+        Payload::Complete(Completion { success: true }),
+    ] {
+        write_frame(
+            &mut response,
+            &Envelope {
+                protocol_version: VERSION,
+                job_id: format!("{}-0", published + 1),
+                payload: Some(payload),
+            },
+        )
+        .unwrap();
+    }
+    let result = know_code_core::update::index(
+        &path,
+        vec![know_code_core::update::WorkerCommand {
+            program: "/bin/cat".into(),
+            // Retain stdin until the parent finishes writing its request.
+            args: vec![
+                response_path.to_string_lossy().into_owned(),
+                "/dev/stdin".into(),
+            ],
+            request: AnalyzeRequest {
+                workspace_root: path.parent().unwrap().to_string_lossy().into_owned(),
+                analysis_policy: Some(AnalysisPolicy {
+                    version: ANALYSIS_POLICY_VERSION,
+                    settings: Some(analysis_policy::Settings::Csharp(
+                        CSharpBuildContext::default(),
+                    )),
+                }),
+                ..Default::default()
+            },
+        }],
+    );
+    assert!(
+        matches!(result, Err(know_code_core::Error::UpdateRequired(_))),
+        "{result:?}"
+    );
+    let current = ReadView::open(&path)
+        .unwrap()
+        .query(request("symbols"))
+        .unwrap();
+    assert_eq!(current.generation, published);
+    assert_eq!(current.symbols.len(), 1);
+}
