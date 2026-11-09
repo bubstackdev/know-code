@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1];RUN=ROOT/'.artifacts/wa'/format(time.ti
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');CONFIG='Debug' if PROFILE=='debug' else 'Release';HOST=ROOT/f'target/{PROFILE}/know-code';ADDON=ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs';SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1');CLIENTS=[];paused=None;checks=[]
 (WORKSPACE/'value.ts').write_text('export function answer() { return 42; }\n')
-(WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
+(WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><Target Name="CountRestores" BeforeTargets="Restore"><WriteLinesToFile File="$(MSBuildProjectExtensionsPath)restore-count.txt" Lines="restore" Overwrite="false" /></Target></Project>')
 (WORKSPACE/'Value.cs').write_text('public static class Greeter { public static int Value() => 42; }\n')
 
 def cli(*args,check=True):
@@ -83,6 +83,47 @@ checks+=['CLI_Node_dotnet_same_native_query_results','typed_dotnet_query','Relea
 previous=initial['generation'];scheduled=dotnet.send('refresh',configuration='Debug');assert scheduled['observed_epoch']>initial['observed_epoch']
 current=ready(node,previous+1);assert all(c['configuration']=='Debug' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
 checks.append('explicit_refresh_and_workspace_configuration_shared')
+# A new explicit override must not become a legacy fallback after clearing it.
+node.send('configure',settings={})
+current=ready(dotnet,current['generation']+1)
+assert node.send('settings')['requested_settings']['csharp']['configuration'] is None
+assert node.send('settings')['requested_settings']['configuration_origin']=='repository_default'
+# Personal settings use one resolver in both hosts; null persists a real reset,
+# while omission in a replacement inherits the checked-in choice.
+settings_file=WORKSPACE/'.know-code.json'
+settings_file.write_text(json.dumps({'csharp':{'configuration':'Release'}}))
+current=ready(node,current['generation']+1)
+assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
+requested=dotnet.send('configure',settings={'csharp':{'configuration':None},'allow_install_scripts':True})
+assert requested['requested_settings']['configuration_origin']=='personal'
+current=ready(node,current['generation']+1)
+assert node.send('settings')['requested_settings']['node']['allow_install_scripts']
+assert node.send('settings')['requested_settings']['csharp']['configuration'] is None
+assert all(c['configuration']=='Debug' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
+reset=node.send('configure',settings={})
+assert reset['requested_settings']['configuration_origin']=='project_file'
+current=ready(dotnet,current['generation']+1)
+assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
+assert not dotnet.send('settings')['requested_settings']['node']['allow_install_scripts']
+personal_file=Path(reset['requested_settings']['personal_file'])
+assert json.loads(personal_file.read_text())['allow_install_scripts'] is False
+error(node.send('configure',settings={'csharp':{'configuration':' '}}),'invalid_request')
+for client in [node,dotnet]:error(client.send('configure',settings=None),'invalid_request')
+assert json.loads(personal_file.read_text())['allow_install_scripts'] is False
+checks+=['settings_parity_and_replacement','explicit_null_clears_legacy_and_project_override','script_grant_personal_only','settings_change_without_source_save_invalidates']
+# Concurrent config changes must not restore a grant revoked by another client.
+restore_counter=WORKSPACE/'obj/restore-count.txt';restore_before=restore_counter.read_text()
+node.send('configure',settings={'allow_install_scripts':True});current=ready(node,current['generation']+1)
+assert restore_counter.read_text()==restore_before,'Node trust change repeated unrelated C# restoration'
+results=[]
+tasks=[threading.Thread(target=lambda:results.append(dotnet.send('refresh',configuration='Debug'))),
+       threading.Thread(target=lambda:results.append(node.send('configure',settings={'allow_install_scripts':False})))]
+for task in tasks:task.start()
+for task in tasks:task.join(timeout=15)
+assert all(not task.is_alive() for task in tasks) and len(results)==2,results
+current=ready(node,current['generation']+1)
+assert not node.send('settings')['requested_settings']['node']['allow_install_scripts']
+checks.append('concurrent_configuration_cannot_restore_revoked_script_grant')
 # Published compiler errors remain valid fresh partial results, not exceptions.
 (WORKSPACE/'value.ts').write_text('export function answer() { return missingName; }\n');ready(dotnet,current['generation']+1)
 value=equivalent({'op':'symbols','name':'answer'});assert value['freshness']=='current' and any(c['status']=='partial' and c['diagnostic_counts'].get('error',0) for c in value['coverage'])
@@ -128,6 +169,54 @@ finally:moved.rename(WORKSPACE)
 ready(dotnet);dotnet.close()
 checks.append('retained_status_and_stale_graph_for_missing_root')
 checks+=['auto_start_from_dotnet','restart_registry_and_saved_source_reconciliation']
+# A malformed first-run settings file must stay registered and watchable.
+broken=RUN/'bad-settings';broken.mkdir();(broken/'value.ts').write_text('export const repairedSettings = 1;\n')
+broken_file=broken/'.know-code.json';broken_file.write_text('{"allow_install_scripts":true}')
+bad=Client('node',root=broken,configuration=None)
+until=time.monotonic()+15
+while time.monotonic()<until:
+ failed=bad.send('status')
+ if failed['phase']=='failed':break
+ time.sleep(.05)
+else:raise AssertionError(failed)
+assert failed['generation']==0 and failed['outcome_code']=='invalid_request'
+broken_file.write_text('{}');fixed=ready(bad,1)
+personal=Path(fixed['requested_settings']['personal_file']);personal.write_text('{"allow_install_scripts":"yes"}')
+until=time.monotonic()+15
+while time.monotonic()<until:
+ failed=bad.send('status')
+ if failed['phase']=='failed':break
+ time.sleep(.05)
+else:raise AssertionError(failed)
+assert failed['generation']==fixed['generation']
+assert bad.send('query',request={'op':'symbols','name':'repairedSettings'})['result']['freshness']=='stale'
+personal.write_text('{}');fixed=ready(bad,fixed['generation']+1)
+bad.send('configure',settings={'allow_install_scripts':True});ready(bad,fixed['generation']+1)
+cli('unwatch',broken);assert json.loads(personal.read_text())['allow_install_scripts'] is False
+bad.close();broken.rename(RUN/'removed-workspace');broken.mkdir();(broken/'value.ts').write_text('export const replacementWorkspace = 1;\n')
+replacement=Client('node',root=broken,configuration=None);replacement_ready=ready(replacement)
+assert not replacement_ready['requested_settings']['node']['allow_install_scripts'];replacement.close()
+checks+=['malformed_first_settings_remain_watchable','personal_settings_creation_failure_and_repair_preserve_stale_generation']
+checks.append('explicit_removal_prevents_replacement_workspace_inheriting_script_grant')
+# Existing handles must reject a peer with the right framing but no settings
+# capability after a coordinator rollback, before sending any refresh mutation.
+node=Client('node',configuration=None);dotnet=Client('dotnet',configuration=None)
+cli('coordinator','stop');until=time.monotonic()+15
+while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
+old=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);old.bind(str(DATA/'c.sock'));old.listen(4)
+requests=[]
+def old_settings_peer():
+ for _ in range(4):
+  conn,_=old.accept()
+  with conn:
+   requests.append(conn.recv(65536))
+   # Envelope(protocol_version=7, control_response=empty) has capability zero.
+   conn.sendall(b'\x05\x00\x00\x00\x08\x07\xfa\x01\x00')
+thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
+for client in [node,dotnet]:error(client.send('refresh',configuration='Release'),'update_required');client.close()
+thread.join(timeout=5);old.close();(DATA/'c.sock').unlink()
+assert len(requests)==4 and not thread.is_alive()
+checks.append('existing_handles_reject_settings_incompatible_coordinator')
 # A client must not spawn a replacement when a connected peer is incompatible.
 mock=RUN/'m';mock.mkdir();listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);listener.bind(str(mock/'c.sock'));listener.listen(2)
 marker=RUN/'spawn-marker';fake=RUN/'fake-host';fake.write_text('#!/bin/sh\ntouch "'+str(marker)+'"\n');fake.chmod(0o755)

@@ -20,6 +20,8 @@ if (args[0] == "--workspace")
                 switch(value.GetProperty("op").GetString()) {
                     case "cancel": Print(await workspace.CancelIndexingAsync());break;
                     case "status": Print(await workspace.StatusAsync());break;
+                    case "settings": Print(await workspace.SettingsAsync());break;
+                    case "configure": Print(await workspace.ConfigureJsonAsync(value.GetProperty("settings").GetRawText()));break;
                     case "wait": Print(await workspace.WaitForIndexAsync(value.GetProperty("wait_ms").GetUInt32()));break;
                     case "refresh": Print(await workspace.RefreshAsync(value.TryGetProperty("configuration",out var configuration)?configuration.GetString():null));break;
                     case "query":

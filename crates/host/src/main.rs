@@ -45,11 +45,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let status = response.workspaces.iter().find(|s| Path::new(&s.workspace_root) == root).ok_or("workspace is not registered; inspect coordinator status")?;
             let result = control::workspace_operation(control::WorkspaceRequest {
                 op: control::WorkspaceOperation::Cancel, database: Some(status.database.clone()), data_directory: Some(data),
-                workspace_root: None, coordinator_executable: None, configuration: None, wait_ms: None,
+                workspace_root: None, coordinator_executable: None, configuration: None, wait_ms: None, personal_settings: None,
             })?;
             println!("{}", serde_json::to_string(&result.status)?);
         }
         Some("query") if args.len() == 4 => println!("{}", know_code_core::query_json(&args[2], &args[3])),
+        Some("settings") if args.len() == 3 || args.len() == 4 => {
+            let personal_settings = args.get(3).map(|s| serde_json::from_str(s)).transpose()?;
+            let status = coordinator::attach_workspace(&data, Path::new(&args[2]), String::new(), false)?;
+            let result = control::workspace_operation(control::WorkspaceRequest {
+                op: if personal_settings.is_some() { control::WorkspaceOperation::Configure } else { control::WorkspaceOperation::Settings }, database: Some(status.database), data_directory: Some(data),
+                workspace_root: None, coordinator_executable: Some(std::env::current_exe()?), configuration: None, wait_ms: None,
+                personal_settings,
+            })?;
+            println!("{}", serde_json::to_string(&result.status.requested_settings)?);
+        }
         Some(operation @ ("index" | "watch")) if args.len() == 3 || args.len() == 5 => {
             let root = Path::new(&args[2]);
             let configuration = if args.len() == 5 && args[3] == "--configuration" { args[4].clone() }
@@ -86,7 +96,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some("login-plist") => print!("{}", coordinator::login_plist(&std::env::current_exe()?, &absolute(&data)?)),
             _ => return Err("usage: know-code coordinator run|status|stop|login-plist".into()),
         },
-        _ => return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] | cancel WORKSPACE | index|watch WORKSPACE [--configuration NAME] | query DATABASE JSON | mcp --workspace PATH [--configuration NAME] | coordinator run|status|stop|login-plist | install|update [--from BUNDLE] [--prefix DIR] | rollback|uninstall|install-info [--prefix DIR] | service enable|disable|status [--prefix DIR]".into()),
+        _ => return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] | cancel WORKSPACE | settings WORKSPACE [JSON] | index|watch WORKSPACE [--configuration NAME] | query DATABASE JSON | mcp --workspace PATH [--configuration NAME] | coordinator run|status|stop|login-plist | install|update [--from BUNDLE] [--prefix DIR] | rollback|uninstall|install-info [--prefix DIR] | service enable|disable|status [--prefix DIR]".into()),
     }
     Ok(())
 }

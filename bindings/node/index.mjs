@@ -27,6 +27,12 @@ export class Workspace {
   constructor(token, descriptor) {
     if (token !== createWorkspace) throw new TypeError('Use Workspace.open(root, options).');
     if (descriptor.status.progress) Object.freeze(descriptor.status.progress);
+    if (descriptor.status.requested_settings) {
+      const settings = descriptor.status.requested_settings;
+      if (settings.csharp) Object.freeze(settings.csharp);
+      if (settings.node) Object.freeze(settings.node);
+      Object.freeze(settings);
+    }
     Object.freeze(descriptor.status);
     this.#descriptor = descriptor;
     this.#executable = descriptor.coordinator_executable;
@@ -48,6 +54,8 @@ export class Workspace {
   }
   status() { return this.#operation('status'); }
   cancelIndexing() { return this.#operation('cancel'); }
+  settings() { return this.#operation('settings'); }
+  configure(personalSettings) { return this.#operation('configure',{personal_settings:personalSettings}); }
   refresh(options = {}) { return this.#operation('refresh',{configuration:options.configuration}); }
   waitForIndex(options = {}) { return this.#operation('wait',{wait_ms:options.waitMs}); }
   async query(request) {

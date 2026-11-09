@@ -91,6 +91,17 @@ export interface WorkspaceStatus {
   observed_epoch: number; published_epoch: number; generation: number;
   available: boolean; error: string; outcome_code: string;
   progress: {stage: string; project_path: string; message: string} | null;
+  requested_settings: AnalysisSettings | null;
+}
+export interface AnalysisSettings {
+  csharp: {configuration: string | null; solution_path: string | null};
+  node: {cache_directory: string; allow_install_scripts: boolean};
+  configuration_origin: string; solution_origin: string;
+  project_file: string; personal_file: string;
+}
+export interface PersonalWorkspaceSettings {
+  csharp?: {configuration?: string | null; solution?: string | null};
+  allow_install_scripts?: boolean;
 }
 export interface WorkspaceOptions {configuration?: string; dataDirectory?: string; coordinatorExecutable?: string}
 export class KnowCodeError extends Error {readonly code: string; constructor(code: string, message: string)}
@@ -101,6 +112,9 @@ export class Workspace {
   readonly initialStatus: Readonly<WorkspaceStatus>;
   status(): Promise<WorkspaceStatus>;
   cancelIndexing(): Promise<WorkspaceStatus>;
+  settings(): Promise<WorkspaceStatus>;
+  /** Replaces personal settings; omitted fields inherit/default. */
+  configure(settings: PersonalWorkspaceSettings): Promise<WorkspaceStatus>;
   refresh(options?: {configuration?: string}): Promise<WorkspaceStatus>;
   waitForIndex(options?: {waitMs?: number}): Promise<WorkspaceStatus>;
   query(request: QueryRequest): Promise<{result: QueryResult}>;

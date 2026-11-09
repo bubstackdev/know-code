@@ -4,6 +4,7 @@ use know_code_core::{
     protocol::{self, envelope::Payload, *},
     query::ReadView,
     resource::{Control, Governor, Limits, Session},
+    settings,
     workspace::{self, Snapshot},
 };
 use notify::{RecursiveMode, Watcher};
@@ -220,10 +221,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             };
             let mut tracked =
                 registry.prepare("SELECT path FROM tracked_inputs WHERE database=?")?;
-            let special_inputs = tracked
+            let mut special_inputs = tracked
                 .query_map([&database], |r| r.get::<_, String>(0))?
                 .map(|r| r.map(PathBuf::from))
                 .collect::<std::result::Result<BTreeSet<_>, _>>()?;
+            special_inputs.extend(settings::paths(Path::new(&root), data));
+            let requested_settings = settings::resolve(Path::new(&root), data, &configuration).ok();
             entries.insert(
                 database.clone(),
                 Entry {
@@ -241,6 +244,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                             error,
                             progress: None,
                             outcome_code,
+                            requested_settings,
                         },
                         &publisher,
                     ),
@@ -431,6 +435,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     shared.analysis_running.store(true, Ordering::Release);
                     let entry = entries.get_mut(&database).unwrap();
                     entry.status.phase = "analyzing".into();
+                    entry.status.requested_settings = settings::resolve(
+                        Path::new(&entry.status.workspace_root),
+                        data,
+                        &entry.configuration,
+                    )
+                    .ok();
                     let job = Job {
                         database: database.clone(),
                         root: PathBuf::from(&entry.status.workspace_root),
@@ -601,7 +611,11 @@ fn execute(
     let control = job.session.control();
     control.check()?;
     let database = Path::new(&job.database);
-    let extras = workspace::extra_inputs(database, &job.root).unwrap_or_default();
+    let data = control::root_for_database(database)
+        .ok_or("workspace database has no central data root")?;
+    let settings_paths = settings::paths(&job.root, data);
+    let mut extras = workspace::extra_inputs(database, &job.root).unwrap_or_default();
+    extras.extend(settings_paths.clone());
     let mut forced_paths = job.paths.clone();
     if job.rehash {
         forced_paths.push(job.root.clone());
@@ -616,6 +630,10 @@ fn execute(
         hash.update(stamp.hash.as_bytes());
         hash.update([0]);
     }
+    // Even malformed settings get a saved-input identity and remain watchable.
+    *attempt_hash = format!("{:x}", hash.clone().finalize());
+    let effective_settings = settings::resolve(&job.root, data, &job.configuration)?;
+    hash.update(serde_json::to_vec(&effective_settings)?);
     *attempt_hash = format!("{:x}", hash.finalize());
     control.check()?;
     if !job.force
@@ -665,7 +683,7 @@ fn execute(
     } else {
         workspace::affected_projects(database, &job.root, &changes)?
     };
-    let preparation_fingerprint = workspace::preparation_fingerprint(&before);
+    let preparation_fingerprint = workspace::preparation_fingerprint(&before, &settings_paths);
     let generation = workspace::refresh_controlled(
         &job.root,
         database,
@@ -676,11 +694,13 @@ fn execute(
             preparation_fingerprint: &preparation_fingerprint,
             retry_preparation: job.retry_preparation,
             expected_identity: &job.identity,
+            settings: &effective_settings,
         },
         progress,
         &control,
     )?;
-    let extras = workspace::extra_inputs(database, &job.root)?;
+    let mut extras = workspace::extra_inputs(database, &job.root)?;
+    extras.extend(settings_paths);
     let after =
         workspace::snapshot_controlled(&job.root, &before, &forced_paths, &extras, &control)?;
     let newer = workspace::differences(&before, &after);
@@ -928,6 +948,31 @@ fn serve(
                 ..Default::default()
             });
         }
+        if request.operation == "settings" {
+            let mut entries = shared.entries.lock().unwrap();
+            let entry = entries
+                .get_mut(&request.database)
+                .ok_or("workspace is not registered")?;
+            let root = Path::new(&entry.status.workspace_root);
+            let effective = if let Some(json) = request.settings_json {
+                let value: settings::PersonalSettings =
+                    serde_json::from_str(&json).map_err(know_code_core::Error::from)?;
+                let effective = settings::save(root, data, &entry.configuration, &value)?;
+                // Settings changes are analysis invalidation, not restore retries.
+                queue(entry, None, true);
+                effective
+            } else {
+                settings::resolve(root, data, &entry.configuration)?
+            };
+            entry.status.requested_settings = Some(effective);
+            let status = entry.status.snapshot();
+            wake(sender, shared, Event::Wake);
+            shared.changed.notify_all();
+            return Ok(ControlResponse {
+                workspaces: vec![status],
+                ..Default::default()
+            });
+        }
         if request.operation == "shutdown" {
             shared.publisher.disable();
             shared.stop.store(true, Ordering::Release);
@@ -945,6 +990,7 @@ fn serve(
             if entries[&database].status.phase == "analyzing" {
                 return Err("wait for the active update before unregistering".into());
             }
+            settings::revoke_scripts(Path::new(&request.workspace_root), data)?;
             let mut registry = shared.registry.lock().unwrap();
             let tx = registry.transaction()?;
             tx.execute("DELETE FROM workspaces WHERE database=?", [&database])?;
@@ -971,13 +1017,40 @@ fn serve(
             let database = workspace::database_path(&root, data)
                 .to_string_lossy()
                 .into_owned();
-            let configuration = if request.configuration.is_empty() {
-                "Debug"
-            } else {
-                &request.configuration
-            };
+            let configuration = request.configuration.as_str();
             let persistent = {
                 let mut entries = shared.entries.lock().unwrap();
+                if entries
+                    .get(&database)
+                    .is_some_and(|entry| entry.identity != actual_identity)
+                {
+                    return Err(
+                        "workspace identity changed; unwatch before registering the replacement"
+                            .into(),
+                    );
+                }
+                std::fs::create_dir_all(
+                    Path::new(&database)
+                        .parent()
+                        .ok_or("workspace database parent missing")?,
+                )?;
+                // Never promote a new personal choice into legacy fallback state.
+                let legacy = entries
+                    .get(&database)
+                    .map(|entry| entry.configuration.clone())
+                    .unwrap_or_default();
+                let mut settings_changed = false;
+                if !configuration.is_empty() {
+                    let mut personal = settings::personal(&root, data)?;
+                    if !matches!(&personal.csharp.configuration, settings::Selection::Named(value) if value == configuration)
+                    {
+                        personal.csharp.configuration =
+                            settings::Selection::Named(configuration.into());
+                        settings::save(&root, data, &legacy, &personal)?;
+                        settings_changed = true;
+                    }
+                }
+                let requested_settings = settings::resolve(&root, data, &legacy).ok();
                 let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
                     analysis_error: String::new(),
                     failed_input_hash: String::new(),
@@ -988,13 +1061,14 @@ fn serve(
                             phase: "queued".into(),
                             observed_epoch: 1,
                             available: true,
+                            requested_settings,
                             ..Default::default()
                         },
                         &shared.publisher,
                     ),
-                    configuration: configuration.into(),
+                    configuration: legacy,
                     identity: actual_identity.clone(),
-                    special_inputs: BTreeSet::new(),
+                    special_inputs: settings::paths(&root, data).into_iter().collect(),
                     dirty: BTreeSet::new(),
                     force: false,
                     rehash: true,
@@ -1009,10 +1083,11 @@ fn serve(
                             .into(),
                     );
                 }
-                if !request.configuration.is_empty() && entry.configuration != configuration {
-                    entry.configuration = configuration.into();
+                if settings_changed {
                     queue(entry, None, true);
                 }
+                entry.status.requested_settings =
+                    settings::resolve(&root, data, &entry.configuration).ok();
                 if request.operation == "refresh" {
                     entry.retry_preparation = true;
                     queue(entry, None, true);
@@ -1091,6 +1166,7 @@ fn serve(
         ..Default::default()
     });
     response.resource_control_version = know_code_core::resource::CONTROL_VERSION;
+    response.analysis_settings_version = settings::VERSION;
     response.analysis_running = shared.analysis_running.load(Ordering::Acquire);
     response.coordinator_executable = std::env::current_exe()?
         .canonicalize()?

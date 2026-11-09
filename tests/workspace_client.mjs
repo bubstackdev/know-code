@@ -16,6 +16,8 @@ for await(const line of createInterface({input:process.stdin})) {
   try {
     switch(action.op) {
       case 'status': print(await workspace.status());break;
+      case 'settings': print(await workspace.settings());break;
+      case 'configure': print(await workspace.configure(action.settings));break;
       case 'wait': print(await workspace.waitForIndex({waitMs:action.wait_ms}));break;
       case 'refresh': print(await workspace.refresh({configuration:action.configuration}));break;
       case 'query': print(await workspace.query(action.request));break;

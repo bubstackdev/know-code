@@ -4,8 +4,12 @@ namespace KnowCode;
 
 public sealed record WorkspaceOptions(string? Configuration = null, string? DataDirectory = null, string? CoordinatorExecutable = null);
 public sealed record IndexProgress(string Stage, string ProjectPath, string Message);
+public sealed record CSharpBuildContext(string? Configuration, string? SolutionPath);
+public sealed record NodePreparationPolicy(string CacheDirectory, bool AllowInstallScripts);
+public sealed record AnalysisSettings(CSharpBuildContext Csharp, NodePreparationPolicy Node,
+    string ConfigurationOrigin, string SolutionOrigin, string ProjectFile, string PersonalFile);
 public sealed record WorkspaceStatus(string WorkspaceRoot, string Database, string Phase, ulong ObservedEpoch,
-    ulong PublishedEpoch, ulong Generation, bool Available, string Error, IndexProgress? Progress, string OutcomeCode = "");
+    ulong PublishedEpoch, ulong Generation, bool Available, string Error, IndexProgress? Progress, string OutcomeCode = "", AnalysisSettings? RequestedSettings = null);
 internal sealed record WorkspaceDescriptor(string DataDirectory, string? CoordinatorExecutable, WorkspaceStatus Status);
 
 public sealed class KnowCodeException(string code, string message) : Exception(message)
@@ -38,13 +42,23 @@ public sealed class Workspace : IDisposable
     }
     public Task<WorkspaceStatus> StatusAsync() => OperationAsync("status");
     public Task<WorkspaceStatus> CancelIndexingAsync() => OperationAsync("cancel");
+    public Task<WorkspaceStatus> SettingsAsync() => OperationAsync("settings");
+    /// <summary>Replaces personal settings. Omitted fields inherit/default; explicit null selects compiler defaults.</summary>
+    public Task<WorkspaceStatus> ConfigureJsonAsync(string settings)
+    {
+        CheckOpen();
+        try {
+            using var document = JsonDocument.Parse(settings);
+            return OperationAsync("configure",personalSettings:document.RootElement.Clone());
+        } catch(JsonException error) { throw new KnowCodeException("invalid_request",error.Message); }
+    }
     public Task<WorkspaceStatus> RefreshAsync(string? configuration = null) => OperationAsync("refresh",configuration);
     public Task<WorkspaceStatus> WaitForIndexAsync(uint waitMs = 500) => OperationAsync("wait",waitMs:waitMs);
-    private async Task<WorkspaceStatus> OperationAsync(string op, string? configuration = null, uint? waitMs = null)
+    private async Task<WorkspaceStatus> OperationAsync(string op, string? configuration = null, uint? waitMs = null, JsonElement? personalSettings = null)
     {
         CheckOpen();
         var result = await ControlAsync(new { Op = op, descriptor.Status.Database, descriptor.DataDirectory,
-            CoordinatorExecutable = executable, Configuration = configuration, WaitMs = waitMs }).ConfigureAwait(false);
+            CoordinatorExecutable = executable, Configuration = configuration, WaitMs = waitMs, PersonalSettings = personalSettings }).ConfigureAwait(false);
         return result.Status;
     }
     public Task<JsonDocument> QueryAsync(QueryRequest request) => QueryJsonAsync(JsonSerializer.Serialize(request,Native.JsonOptions));

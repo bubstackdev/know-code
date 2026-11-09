@@ -390,12 +390,17 @@ pub struct RefreshOptions<'a> {
     pub preparation_fingerprint: &'a str,
     pub retry_preparation: bool,
     pub expected_identity: &'a str,
+    pub settings: &'a crate::protocol::WorkspaceAnalysisSettings,
 }
 
-pub fn preparation_fingerprint(inputs: &Snapshot) -> String {
+pub fn preparation_fingerprint(inputs: &Snapshot, settings_paths: &[PathBuf]) -> String {
     let mut hash = Sha256::new();
     for (path, stamp) in inputs {
-        if source_language(Path::new(path)).is_none() {
+        // Provider-specific effective policies are hashed at the worker boundary.
+        // Raw settings bytes must not restore C# merely for a Node trust change.
+        if source_language(Path::new(path)).is_none()
+            && !settings_paths.iter().any(|p| p == Path::new(path))
+        {
             hash.update(path.as_bytes());
             hash.update([0]);
             hash.update(stamp.hash.as_bytes());
@@ -434,6 +439,7 @@ pub fn refresh_controlled(
         preparation_fingerprint,
         retry_preparation,
         expected_identity,
+        settings,
     } = options;
     if identity(root)? != expected_identity {
         return Err(Error::Provider(
@@ -511,6 +517,12 @@ pub fn refresh_controlled(
                 retry_preparation,
                 loose_sources: if inferred { loose_sources } else { vec![] },
                 configured_projects,
+                analysis_policy: settings.node.clone().map(|node| {
+                    crate::protocol::AnalysisPolicy {
+                        version: crate::protocol::ANALYSIS_POLICY_VERSION,
+                        settings: Some(crate::protocol::analysis_policy::Settings::Node(node)),
+                    }
+                }),
                 ..Default::default()
             },
         });
@@ -536,6 +548,12 @@ pub fn refresh_controlled(
                 configuration: configuration.into(),
                 preparation_fingerprint: preparation_fingerprint.into(),
                 retry_preparation,
+                analysis_policy: settings.csharp.clone().map(|context| {
+                    crate::protocol::AnalysisPolicy {
+                        version: crate::protocol::ANALYSIS_POLICY_VERSION,
+                        settings: Some(crate::protocol::analysis_policy::Settings::Csharp(context)),
+                    }
+                }),
                 ..Default::default()
             },
         });

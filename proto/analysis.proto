@@ -185,6 +185,8 @@ message ControlRequest {
   string maintenance_token = 6;
   uint32 maintenance_lease_ms = 7;
   ResourceLimits resources = 8;
+  // Optional full replacement of personal workspace settings; absent reads them.
+  optional string settings_json = 9;
 }
 message WorkspaceStatus {
   string workspace_root = 1;
@@ -197,6 +199,8 @@ message WorkspaceStatus {
   string error = 8;
   Progress progress = 9;
   string outcome_code = 10;
+  // Desired scope; compilation coverage describes the served generation.
+  WorkspaceAnalysisSettings requested_settings = 11;
 }
 message ControlResponse {
   repeated WorkspaceStatus workspaces = 1;
@@ -206,6 +210,16 @@ message ControlResponse {
   bool analysis_running = 5;
   ResourceLimits resources = 6;
   uint32 resource_control_version = 7;
+  uint32 analysis_settings_version = 8;
+}
+
+message WorkspaceAnalysisSettings {
+  CSharpBuildContext csharp = 1;
+  NodePreparationPolicy node = 2;
+  string configuration_origin = 3;
+  string solution_origin = 4;
+  string project_file = 5;
+  string personal_file = 6;
 }
 
 // Personal coordinator-wide ceilings; not workspace compiler settings.

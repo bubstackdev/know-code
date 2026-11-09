@@ -81,6 +81,7 @@ pub struct WorkspaceRequest {
     pub coordinator_executable: Option<PathBuf>,
     pub configuration: Option<String>,
     pub wait_ms: Option<u32>,
+    pub personal_settings: Option<crate::settings::PersonalSettings>,
 }
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +91,8 @@ pub enum WorkspaceOperation {
     Refresh,
     Cancel,
     Wait,
+    Settings,
+    Configure,
 }
 #[derive(Debug, serde::Serialize)]
 pub struct WorkspaceResult {
@@ -149,17 +152,25 @@ pub fn workspace_operation(request: WorkspaceRequest) -> Result<WorkspaceResult>
                 WorkspaceOperation::Status => {
                     request_status(&data, &database, executable.as_deref())?
                 }
-                WorkspaceOperation::Refresh => request_one(
-                    &data,
-                    ControlRequest {
-                        operation: "refresh".into(),
-                        workspace_root: request_status(&data, &database, executable.as_deref())?
+                WorkspaceOperation::Refresh => {
+                    ensure_running(&data, executable.as_deref())?;
+                    require_analysis_settings(&data)?;
+                    request_one(
+                        &data,
+                        ControlRequest {
+                            operation: "refresh".into(),
+                            workspace_root: request_status(
+                                &data,
+                                &database,
+                                executable.as_deref(),
+                            )?
                             .workspace_root,
-                        configuration: request.configuration.unwrap_or_default(),
-                        ..Default::default()
-                    },
-                    executable.as_deref(),
-                )?,
+                            configuration: request.configuration.unwrap_or_default(),
+                            ..Default::default()
+                        },
+                        executable.as_deref(),
+                    )?
+                }
                 WorkspaceOperation::Cancel => {
                     ensure_running(&data, executable.as_deref())?;
                     require_resource_control(&data)?;
@@ -183,6 +194,34 @@ pub fn workspace_operation(request: WorkspaceRequest) -> Result<WorkspaceResult>
                     },
                     executable.as_deref(),
                 )?,
+                WorkspaceOperation::Settings | WorkspaceOperation::Configure => {
+                    let settings_json = match operation {
+                        WorkspaceOperation::Configure => Some(serde_json::to_string(
+                            request.personal_settings.as_ref().ok_or_else(|| {
+                                Error::InvalidRequest(
+                                    "configure requires a personal_settings object".into(),
+                                )
+                            })?,
+                        )?),
+                        _ if request.personal_settings.is_some() => {
+                            return Err(Error::InvalidRequest(
+                                "settings is read-only; use configure to replace personal settings"
+                                    .into(),
+                            ));
+                        }
+                        _ => None,
+                    };
+                    request_one(
+                        &data,
+                        ControlRequest {
+                            operation: "settings".into(),
+                            database,
+                            settings_json,
+                            ..Default::default()
+                        },
+                        executable.as_deref(),
+                    )?
+                }
                 WorkspaceOperation::Open => unreachable!(),
             }
         }
@@ -200,6 +239,14 @@ fn request_one(
     value: ControlRequest,
     executable: Option<&Path>,
 ) -> Result<WorkspaceStatus> {
+    let settings_operation = matches!(
+        value.operation.as_str(),
+        "register" | "refresh" | "settings"
+    );
+    if settings_operation {
+        ensure_running(data, executable)?;
+        require_analysis_settings(data)?;
+    }
     let response = match request(data, value.clone()) {
         Err(Error::Io(error))
             if matches!(
@@ -212,6 +259,9 @@ fn request_one(
         }
         result => result?,
     };
+    if settings_operation && response.analysis_settings_version != crate::settings::VERSION {
+        return Err(Error::UpdateRequired("the coordinator changed during the request; update the running runtime to use workspace settings".into()));
+    }
     response.workspaces.into_iter().next().ok_or_else(|| {
         Error::Coordinator("workspace is no longer registered; open it again explicitly".into())
     })
@@ -502,6 +552,19 @@ pub fn require_resource_control(data: &Path) -> Result<()> {
     )?;
     if response.resource_control_version != crate::resource::CONTROL_VERSION {
         return Err(Error::UpdateRequired("update the running Know Code coordinator to use resource controls or indexing cancellation".into()));
+    }
+    Ok(())
+}
+pub fn require_analysis_settings(data: &Path) -> Result<()> {
+    let response = request(
+        data,
+        ControlRequest {
+            operation: "status".into(),
+            ..Default::default()
+        },
+    )?;
+    if response.analysis_settings_version != crate::settings::VERSION {
+        return Err(Error::UpdateRequired("update the running Know Code coordinator to use repository-default build contexts and workspace settings".into()));
     }
     Ok(())
 }
