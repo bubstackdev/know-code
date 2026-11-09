@@ -32,6 +32,9 @@ message SdkMetadataRequest {
   // Absent leaves the project's Platform default intact; present is the
   // effective project platform selected by solution mapping.
   optional string platform = 5;
+  // Adapter-selected standard solution globals, shared with project evaluation.
+  // Not arbitrary consumer-supplied MSBuild properties.
+  map<string, string> solution_properties = 6;
 }
 message SdkMetadataResult {
   map<string, string> definition = 1;
