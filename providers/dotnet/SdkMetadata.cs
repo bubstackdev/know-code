@@ -9,13 +9,15 @@ using Microsoft.Build.Framework;
 
 // One request-local cache, shared by preparation and the lazy Roslyn catalog.
 // No SDK process or compilation remains resident between projects/jobs.
-sealed class SdkMetadataClient(string configuration, string sdkPath)
+sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
 {
     private readonly Dictionary<string, SdkMetadataResult> complete = new(StringComparer.Ordinal);
 
     public async Task<SdkMetadataResult> Read(string path, bool includeIdentity = true)
     {
-        if (includeIdentity && complete.TryGetValue(path, out var cached)) return cached;
+        var properties = contexts.Properties(path);
+        var key = System.Text.Json.JsonSerializer.Serialize(new {path, properties = properties.OrderBy(p => p.Key).ToArray()});
+        if (includeIdentity && complete.TryGetValue(key, out var cached)) return cached;
         var info = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(path)!,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
         info.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
@@ -26,9 +28,13 @@ sealed class SdkMetadataClient(string configuration, string sdkPath)
         var completed = false;
         try
         {
+            var request = new SdkMetadataRequest { SdkPath = sdkPath, ProjectPath = path,
+                Configuration = properties.GetValueOrDefault("Configuration", ""), IncludeIdentity = includeIdentity };
+            if (properties.TryGetValue("Platform", out var platform)) request.Platform = platform;
+            request.SolutionProperties.Add(properties.Where(p => p.Key is not ("Configuration" or "Platform"))
+                .ToDictionary(p => p.Key, p => p.Value));
             Wire.Write(process.StandardInput.BaseStream, new Envelope { ProtocolVersion = Wire.ProtocolVersion, JobId = Wire.JobId,
-                SdkMetadataRequest = new SdkMetadataRequest { SdkPath = sdkPath, ProjectPath = path,
-                    Configuration = configuration, IncludeIdentity = includeIdentity } });
+                SdkMetadataRequest = request });
             process.StandardInput.Close();
             await Task.Run(() => {
                 while (Wire.Read(process.StandardOutput.BaseStream) is { } message)
@@ -47,7 +53,7 @@ sealed class SdkMetadataClient(string configuration, string sdkPath)
             if (process.ExitCode != 0)
                 throw new InvalidOperationException($"SDK metadata failed for {path} ({process.ExitCode}): {details}");
             if (!completed || result is null) throw new InvalidDataException($"SDK metadata incomplete for {path}: {details}");
-            if (includeIdentity) complete.Add(path, result);
+            if (includeIdentity) complete.Add(key, result);
             return result;
         }
         catch
@@ -69,11 +75,22 @@ static class SdkMetadataServer
         using var collection = new ProjectCollection();
         try
         {
-            var globals = new Dictionary<string, string> { ["Configuration"] = request.Configuration };
+            var globals = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrEmpty(request.Configuration)) globals.Add("Configuration", request.Configuration);
+            if (request.HasPlatform) globals.Add("Platform", request.Platform);
+            foreach (var property in request.SolutionProperties)
+            {
+                if (property.Key is not ("BuildingSolutionFile" or "CurrentSolutionConfigurationContents" or "SolutionDir"
+                    or "SolutionPath" or "SolutionFileName" or "SolutionName" or "SolutionExt"))
+                    throw new InvalidDataException($"unsupported solution property: {property.Key}");
+                globals.Add(property.Key, property.Value);
+            }
+            var inputPaths = new HashSet<string>(StringComparer.Ordinal);
             var outer = new Microsoft.Build.Evaluation.Project(request.ProjectPath, globals, null, collection);
             var result = new SdkMetadataResult();
-            foreach (var name in new[] { "TargetFrameworks", "TargetFramework", "UsingMicrosoftNETSdk" })
+            foreach (var name in new[] { "TargetFrameworks", "TargetFramework", "UsingMicrosoftNETSdk", "Configuration", "Platform" })
                 result.Definition.Add(name, outer.GetPropertyValue(name));
+            inputPaths.UnionWith(outer.Imports.Select(i => i.ImportedProject.FullPath));
             var frameworks = result.Definition["TargetFrameworks"];
             if (string.IsNullOrWhiteSpace(frameworks)) frameworks = result.Definition["TargetFramework"];
             var targets = frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
@@ -89,6 +106,10 @@ static class SdkMetadataServer
                 if (string.IsNullOrWhiteSpace(assets)) assets = Path.Combine(state.GetPropertyValue("MSBuildProjectExtensionsPath"), "project.assets.json");
                 var metadata = new SdkTargetMetadata { Target = target,
                     AssetsFile = Path.GetFullPath(assets, Path.GetDirectoryName(request.ProjectPath)!) };
+                inputPaths.UnionWith(project.Imports.Select(i => i.ImportedProject.FullPath));
+                if (request.IncludeIdentity)
+                    foreach (var name in new[] { "Configuration", "Platform" })
+                        metadata.Identity.Add(name, state.GetPropertyValue(name));
                 if (request.IncludeIdentity && result.Definition["UsingMicrosoftNETSdk"].Equals("true", StringComparison.OrdinalIgnoreCase))
                 {
                     Wire.Send(new Envelope { Progress = new Progress { Stage = "preparing", ProjectPath = request.ProjectPath,
@@ -108,6 +129,7 @@ static class SdkMetadataServer
                 result.Targets.Add(metadata);
                 collection.UnloadAllProjects();
             }
+            result.Definition.Add("KnowCodeInputPaths", System.Text.Json.JsonSerializer.Serialize(inputPaths.Order(StringComparer.Ordinal)));
             Wire.Send(new Envelope { SdkMetadataResult = result });
         }
         finally { collection.UnloadAllProjects(); }

@@ -34,9 +34,9 @@ const line = dotnet(['--list-sdks']).toString().split('\n').find(s => s.startsWi
 const sdkPath = path.join(line.slice(line.indexOf('[') + 1, line.lastIndexOf(']')), selected);
 const schema = await protobuf.load(path.join(root, 'proto/analysis.proto'));
 const Envelope = schema.lookupType('knowcode.Envelope');
-function evaluate(includeIdentity) {
+function evaluate(includeIdentity, overrides = {}) {
   const body = Envelope.encode(Envelope.create({ protocolVersion: 7, jobId: 'metadata-test',
-    sdkMetadataRequest: { sdkPath, projectPath: project, configuration: 'Debug', includeIdentity } })).finish();
+    sdkMetadataRequest: { sdkPath, projectPath: project, configuration: 'Debug', includeIdentity, ...overrides } })).finish();
   const header = Buffer.alloc(4); header.writeUInt32LE(body.length);
   const output = dotnet([path.join(root, `providers/dotnet/bin/${configuration}/net10.0/KnowCode.Provider.DotNet.dll`), '--sdk-metadata'],
     { cwd: directory, input: Buffer.concat([header, body]) });
@@ -57,6 +57,11 @@ assert.ok(fs.readFileSync(props, 'utf8').includes('1.0.0.0'), 'Planning ran iden
 const result = evaluate(true);
 assert.deepEqual(result.targets.map(t => [t.target, t.identity.AssemblyVersion]), [['net10.0', '1.0.0.0'], ['netstandard2.1', '2.0.0.0']]);
 assert.deepEqual(evaluate(true).targets.map(t => t.identity.AssemblyVersion), ['2.0.0.0', '2.0.0.0']);
-const summary = { result: 'passed', build_profile: profile, checks: ['planning_does_not_run_metadata_hooks', 'changed_imports_between_targets', 'fresh_project_session', 'no_compilation_target'] };
+const mapped = evaluate(true, {configuration:'Release', platform:'x64'});
+assert.equal(mapped.definition.Configuration, 'Release'); assert.equal(mapped.definition.Platform, 'x64');
+assert.ok(mapped.targets.every(t => t.identity.Configuration === 'Release' && t.identity.Platform === 'x64'));
+assert.equal(evaluate(false, {configuration:'Debug', platform:'AnyCPU'}).definition.Platform, 'AnyCPU');
+assert.ok(JSON.parse(mapped.definition.KnowCodeInputPaths).includes(props));
+const summary = { result: 'passed', build_profile: profile, checks: ['planning_does_not_run_metadata_hooks', 'changed_imports_between_targets', 'fresh_project_session', 'no_compilation_target', 'mapped_configuration_platform', 'import_inputs_reported'] };
 fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify(summary, null, 2) + '\n');
 console.log(JSON.stringify(summary, null, 2));

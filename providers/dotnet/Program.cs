@@ -31,6 +31,7 @@ try
     else
     {
         if (args.Length != 0 || request.Analyze is null) throw new InvalidDataException("invalid analysis worker request");
+        BuildContexts.Validate(request.Analyze);
         var projects = request.Analyze.Projects;
         if (projects.Count == 0) throw new InvalidOperationException("no C# projects requested");
         var selected = await Tools.Dotnet(Path.GetDirectoryName(projects[0])!, "--version");
@@ -51,7 +52,7 @@ try
                 throw new InvalidOperationException("multiple SDK selections in one workspace require separate worker sessions; unsupported in this first slice");
         }
         MSBuildLocator.RegisterMSBuildPath(sdkPath);
-        Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected.Trim()}", RuntimeVersion = Environment.Version.ToString() } });
+        Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected.Trim()}", RuntimeVersion = Environment.Version.ToString(), AnalysisPolicyVersion = request.Analyze.AnalysisPolicy is null ? 0u : 1u } });
         await Analysis.Run(request.Analyze, selected.Trim(), sdkPath);
     }
     Wire.Send(new Envelope { Complete = new Completion { Success = true } });
@@ -158,25 +159,31 @@ static partial class Analysis
 {
     public static async Task Run(AnalyzeRequest request, string sdkVersion, string sdkPath)
     {
-        var metadata = new SdkMetadataClient(request.Configuration, sdkPath);
+        var contexts = BuildContexts.Create(request);
+        var metadata = new SdkMetadataClient(contexts, sdkPath);
         var preparationErrors = new Dictionary<string, string>(StringComparer.Ordinal);
         // Finish restoration before caching any compiler inputs or identity metadata.
         foreach (var projectPath in request.Projects)
         {
             var key = $"nuget:{projectPath}";
-            var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{request.PreparationFingerprint}:{request.Configuration}:{sdkVersion}")));
+            var globals = contexts.Properties(projectPath);
+            var plan = await metadata.Read(projectPath, includeIdentity: false);
+            var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+                JsonSerializer.Serialize(new { request.PreparationFingerprint, sdkVersion,
+                    configuration = plan.Definition["Configuration"], platform = plan.Definition["Platform"],
+                    assets = plan.Targets.Select(t => t.AssetsFile).ToArray(), globals = globals.OrderBy(p => p.Key).ToArray() }))));
             var previous = request.Preparations.FirstOrDefault(p => p.Key == key && p.Fingerprint == fingerprint);
             var preparationError = "";
             if (previous is not null && !request.RetryPreparation && (!previous.Succeeded || previous.Outputs.Count > 0 && previous.Outputs.All(File.Exists)))
                 preparationError = previous.Error;
             else
             {
-                var plan = await metadata.Read(projectPath, includeIdentity: false);
                 var assets = plan.Targets.Select(t => t.AssetsFile).ToHashSet(StringComparer.Ordinal);
                 if (previous?.Succeeded != true || request.RetryPreparation || assets.Any(p => !File.Exists(p)))
                 {
                     Wire.Send(new Envelope { Progress = new Progress { Stage = "restoring", ProjectPath = projectPath, Message = "Restoring NuGet dependencies for all declared targets" } });
-                    try { await Tools.Restore(request.WorkspaceRoot, "restore", projectPath, "--nologo", $"-property:Configuration={request.Configuration}"); }
+                    try { await Tools.Restore(request.WorkspaceRoot, ["restore", projectPath, "--nologo",
+                        .. globals.Select(p => $"-property:{p.Key}={Microsoft.Build.Evaluation.ProjectCollection.Escape(p.Value)}")]); }
                     catch (InvalidOperationException error) { preparationError = error.Message; }
                 }
                 if (preparationError.Length > 4096) preparationError = preparationError[^4096..];
@@ -185,7 +192,7 @@ static partial class Analysis
             }
             preparationErrors.Add(projectPath, preparationError);
         }
-        using var catalog = new ProjectCatalog(request.Configuration, metadata);
+        using var catalog = new ProjectCatalog(contexts, metadata);
         var requested = new List<(string Path, string Target)>();
         foreach (var projectPath in request.Projects)
         {
@@ -195,7 +202,7 @@ static partial class Analysis
         }
         foreach (var (projectPath, target) in catalog.Schedule(requested))
         {
-            Wire.Send(new Envelope { Progress = new Progress { Stage = "analyzing", ProjectPath = projectPath, Message = $"Analyzing {target} ({request.Configuration})" } });
+            Wire.Send(new Envelope { Progress = new Progress { Stage = "analyzing", ProjectPath = projectPath, Message = $"Analyzing {target} ({contexts.Origin(projectPath)})" } });
             await Project(request, projectPath, target, sdkVersion, preparationErrors[projectPath], catalog);
         }
     }
@@ -203,22 +210,28 @@ static partial class Analysis
     private static async Task Project(AnalyzeRequest request, string projectPath, string target, string sdkVersion, string preparationError, ProjectCatalog catalog)
     {
         var relative = Path.GetRelativePath(request.WorkspaceRoot, projectPath).Replace('\\', '/');
-        var id = $"cs:{relative}:{target}:{request.Configuration}";
-        var diagnostics = new List<Diagnostic>();
-        if (preparationError.Length > 0) diagnostics.Add(new Diagnostic { Code = "dependency_restore_failed", Severity = "error", Message = preparationError, Path = projectPath });
         var opened = catalog.Open(projectPath, target);
         var project = opened.Project;
+        var compilerMetadata = catalog.Metadata(project.Id);
+        var configuration = compilerMetadata["Configuration"];
+        var platform = compilerMetadata["Platform"];
+        var id = ProjectLinks.ContextId(request.WorkspaceRoot, projectPath, target, configuration,
+            catalog.BuildContexts.PolicyEnabled ? platform : null);
+        var diagnostics = new List<Diagnostic>();
+        if (preparationError.Length > 0) diagnostics.Add(new Diagnostic { Code = "dependency_restore_failed", Severity = "error", Message = preparationError, Path = projectPath });
         diagnostics.AddRange(opened.Diagnostics.Select(d => new Diagnostic { Code = "project_loading", Severity = d.Kind == WorkspaceDiagnosticKind.Failure ? "error" : "warning", Message = d.Message }));
         var compilation = await project.GetCompilationAsync() ?? throw new InvalidOperationException($"compilation unavailable for {projectPath} ({target})");
         var projectLinks = await ProjectLinks.Create(project, compilation, catalog, request, sdkVersion);
         Wire.Send(new Envelope { Compilation = new KnowCode.Protocol.Compilation {
             InputFingerprint = projectLinks.Fingerprint, References = {projectLinks.References},
-            Id = id, Language = "csharp", ProjectPath = relative, Target = target, Configuration = request.Configuration,
+            Id = id, Language = "csharp", ProjectPath = relative, Target = target, Configuration = configuration,
             CompilerVersion = $"Roslyn {typeof(CSharpCompilation).Assembly.GetName().Version}; SDK {sdkVersion}",
             Dependencies = { project.ProjectReferences.Select(r => project.Solution.GetProject(r.ProjectId)?.FilePath).Where(p => p is not null).Select(p => Path.GetRelativePath(request.WorkspaceRoot, p!).Replace('\\', '/')) },
             InputPaths = { project.AdditionalDocuments.Select(d => d.FilePath).Concat(project.AnalyzerConfigDocuments.Select(d => d.FilePath))
-                .Concat(project.Documents.Where(d => GeneratedFile(d.FilePath)).Select(d => d.FilePath)).OfType<string>() },
-            OptionsJson = JsonSerializer.Serialize(new { sdk = sdkVersion, target, configuration = request.Configuration,
+                .Concat(project.Documents.Where(d => GeneratedFile(d.FilePath)).Select(d => d.FilePath)).OfType<string>()
+                .Concat(catalog.Inputs(projectPath)).Distinct(StringComparer.Ordinal) },
+            OptionsJson = JsonSerializer.Serialize(new { sdk = sdkVersion, target, configuration, platform,
+                build_context = catalog.BuildContexts.Provenance(projectPath),
                 project_context = project.Name, compiler_metadata = catalog.Metadata(project.Id), assembly_identity = compilation.Assembly.Identity.ToString(),
                 references = project.ProjectReferences.Select(r => project.Solution.GetProject(r.ProjectId)!).Select(p => new {
                     project_path = Path.GetRelativePath(request.WorkspaceRoot, p.FilePath!).Replace('\\', '/'), context = p.Name }) }) } });

@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 // Lazy inputs span one job. Only the active dependency closure stays in the
 // compiler workspace; shared contexts survive transitions until job disposal.
-sealed class ProjectCatalog(string configuration, SdkMetadataClient metadataClient) : IDisposable
+sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metadataClient) : IDisposable
 {
     private readonly AdhocWorkspace catalog = new();
     private readonly AdhocWorkspace active = new();
@@ -13,8 +13,9 @@ sealed class ProjectCatalog(string configuration, SdkMetadataClient metadataClie
     private readonly Dictionary<ProjectId, ImmutableDictionary<string, string>> compilerMetadata = [];
     private readonly HashSet<string> loaded = new(StringComparer.Ordinal);
     private readonly List<(HashSet<ProjectId> Owners, WorkspaceDiagnostic Diagnostic)> diagnostics = [];
-    private readonly ImmutableDictionary<string, string> properties =
-        ImmutableDictionary<string, string>.Empty.Add("Configuration", configuration);
+    private readonly Dictionary<string, string[]> projectInputs = new(StringComparer.Ordinal);
+    public BuildContexts BuildContexts => buildContexts;
+    public IEnumerable<string> Inputs(string path) => buildContexts.Inputs.Concat(projectInputs.GetValueOrDefault(path, []));
 
     public async Task Load(string path)
     {
@@ -25,6 +26,8 @@ sealed class ProjectCatalog(string configuration, SdkMetadataClient metadataClie
             if (loaded.Contains(current) || !visiting.Add(current)) return;
 
             var evaluated = await metadataClient.Read(current);
+            projectInputs[current] = System.Text.Json.JsonSerializer.Deserialize<string[]>(evaluated.Definition["KnowCodeInputPaths"])!;
+            var properties = buildContexts.Properties(current);
             var variants = evaluated.Targets.ToDictionary(t => t.Target, t => t.Identity.ToImmutableDictionary(), StringComparer.Ordinal);
 
             async Task<bool> LoadVariants(string? selectedTarget)
@@ -40,7 +43,19 @@ sealed class ProjectCatalog(string configuration, SdkMetadataClient metadataClie
                 async Task<ImmutableArray<ProjectInfo>> ReadInputs()
                 {
                     var known = ProjectMap.Create();
-                    foreach (var dependency in catalog.CurrentSolution.Projects.Where(p => p.FilePath != current)) known.Add(dependency);
+                    foreach (var dependency in catalog.CurrentSolution.Projects.Where(p => p.FilePath != current))
+                    {
+                        if (buildContexts.PolicyEnabled)
+                        {
+                            if (!compilerMetadata.TryGetValue(dependency.Id, out var dependencyMetadata)) continue;
+                            // Roslyn can warn and fall back to the first path-matched
+                            // context. Do not offer an incompatible known context.
+                            if (!buildContexts.Mapped(current) && (buildContexts.Mapped(dependency.FilePath!)
+                                || metadata["Configuration"] != dependencyMetadata["Configuration"]
+                                || metadata["Platform"] != dependencyMetadata["Platform"])) continue;
+                        }
+                        known.Add(dependency);
+                    }
                     return await new MSBuildProjectLoader(loaderWorkspace, selectedProperties).LoadProjectInfoAsync(current, known);
                 }
                 var projects = await ReadInputs();
@@ -85,6 +100,10 @@ sealed class ProjectCatalog(string configuration, SdkMetadataClient metadataClie
                     compilerMetadata.Add(info.Id, variants[target]);
                 }
                 var owners = selected.Values.Select(p => p.Id).ToHashSet();
+                foreach (var boundary in projects.Where(p => p.FilePath != current && !compilerMetadata.ContainsKey(p.Id))
+                    .Select(p => p.FilePath).Distinct(StringComparer.Ordinal))
+                    attemptDiagnostics.Add(new WorkspaceDiagnostic(WorkspaceDiagnosticKind.Warning,
+                        $"Compiler-selected dependency context for {boundary} is outside the indexed workspace contexts; no project-body link was inferred."));
                 diagnostics.AddRange(attemptDiagnostics.Select(d => (owners, d)));
                 return true;
             }

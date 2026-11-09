@@ -25,12 +25,12 @@ sealed class ProjectLinks
     public bool Complete { get; private set; } = true;
     private ProjectLinks(string epoch) { this.epoch=epoch; }
 
-    public static string ContextId(string root, string path, string target, string configuration) =>
-        $"cs:{System.IO.Path.GetRelativePath(root,path).Replace('\\','/')}:{target}:{configuration}";
+    public static string ContextId(string root, string path, string target, string configuration, string? platform = null) =>
+        $"cs:{System.IO.Path.GetRelativePath(root,path).Replace('\\','/')}:{target}:{configuration}" + (platform is null || platform.Replace(" ", "").Equals("AnyCPU", StringComparison.OrdinalIgnoreCase) ? "" : $":{platform}");
 
     public static async Task<ProjectLinks> Create(Project project, Compilation compilation, ProjectCatalog catalog, AnalyzeRequest request, string sdk)
     {
-        var result=new ProjectLinks($"{request.PreparationFingerprint}:{request.Configuration}:{sdk}:{typeof(CSharpCompilation).Assembly.GetName().Version}");
+        var result=new ProjectLinks($"{request.PreparationFingerprint}:{sdk}:{typeof(CSharpCompilation).Assembly.GetName().Version}");
         // Open() retains only the active dependency closure. These compilations
         // are already needed by the root; no second compiler workspace is built.
         foreach(var candidate in project.Solution.Projects)
@@ -38,7 +38,9 @@ sealed class ProjectLinks
             var selected=catalog.Context(candidate.Id);
             var compiled=await candidate.GetCompilationAsync();
             if(selected is null||compiled is null){result.Complete=false;continue;}
-            var id=ContextId(request.WorkspaceRoot,selected.Value.Path,selected.Value.Target,request.Configuration);
+            var metadata=catalog.Metadata(candidate.Id);
+            var id=ContextId(request.WorkspaceRoot,selected.Value.Path,selected.Value.Target,metadata["Configuration"],
+                catalog.BuildContexts.PolicyEnabled ? metadata["Platform"] : null);
             result.contexts[compiled]=new Context(id,System.IO.Path.GetRelativePath(request.WorkspaceRoot,selected.Value.Path).Replace('\\','/'));
         }
         result.Fingerprint=result.Snapshot(compilation);
