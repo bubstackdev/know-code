@@ -1,0 +1,11 @@
+[package]
+name = "know-code-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+know-code-core.workspace = true

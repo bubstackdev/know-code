@@ -1,0 +1,41 @@
+{
+  "purpose": "OSS architecture source review; no third-party code is incorporated into Know Code",
+  "repositories": [
+    {
+      "name": "CodeGraphContext",
+      "path": ".research/repos/CodeGraphContext",
+      "origin": "https://github.com/CodeGraphContext/CodeGraphContext.git",
+      "commit": "6ed71a9f03f8eefec5bf7c38d638425efdf92ffe"
+    },
+    {
+      "name": "Glean",
+      "path": ".research/repos/Glean",
+      "origin": "https://github.com/facebookincubator/Glean.git",
+      "commit": "ce5a6ef435b3400239f963270c83c69535385bb1"
+    },
+    {
+      "name": "codebase-memory-mcp",
+      "path": ".research/repos/codebase-memory-mcp",
+      "origin": "https://github.com/DeusData/codebase-memory-mcp.git",
+      "commit": "612eee2518ef84cc573e491fdee5fa5c90264cb5"
+    },
+    {
+      "name": "scip-dotnet",
+      "path": ".research/repos/scip-dotnet",
+      "origin": "https://github.com/sourcegraph/scip-dotnet.git",
+      "commit": "ba95b8bf3c82c3b49820eb55faf26dca6b07c75e"
+    },
+    {
+      "name": "scip-typescript",
+      "path": ".research/repos/scip-typescript",
+      "origin": "https://github.com/sourcegraph/scip-typescript.git",
+      "commit": "cfce6003ca74e6fa7e5ba471184eb67fa8514d30"
+    },
+    {
+      "name": "serena",
+      "path": ".research/repos/serena",
+      "origin": "https://github.com/oraios/serena.git",
+      "commit": "ede329aaf0c824bea75455a2926f01420d7aa620"
+    }
+  ]
+}

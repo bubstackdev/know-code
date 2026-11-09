@@ -1,0 +1,7 @@
+{
+  "name": "@know-code/provider-typescript",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": { "protobufjs": "7.5.4", "typescript": "5.9.3" }
+}

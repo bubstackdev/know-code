@@ -1,0 +1,16 @@
+[package]
+name = "know-code"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+know-code-core.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+sha2.workspace = true
+rusqlite.workspace = true
+notify = { version = "8.2", default-features = false, features = ["macos_fsevent"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["server", "transport-io"] }
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
+tracing = { version = "0.1", default-features = false, features = ["max_level_off", "release_max_level_off"] }

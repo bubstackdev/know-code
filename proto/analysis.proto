@@ -1,0 +1,182 @@
+syntax = "proto3";
+package knowcode;
+option csharp_namespace = "KnowCode.Protocol";
+
+// One schema for all compiler providers. Every frame has a 4-byte LE length.
+message Envelope {
+  uint32 protocol_version = 1;
+  string job_id = 2;
+  oneof payload {
+    AnalyzeRequest analyze = 10;
+    ProviderInfo provider = 11;
+    Compilation compilation = 12;
+    SourceArtifact source = 13;
+    FactBatch facts = 14;
+    AnalysisReport report = 15;
+    Completion complete = 16;
+    PreparationResult preparation = 17;
+    Progress progress = 18;
+    SdkMetadataRequest sdk_metadata_request = 19;
+    SdkMetadataResult sdk_metadata_result = 20;
+    ControlRequest control_request = 30;
+    ControlResponse control_response = 31;
+  }
+}
+// Internal SDK tooling mode of the same C# provider binary, scoped to one project.
+// Uses the worker codec; it never accesses the serving index or executes queries.
+message SdkMetadataRequest {
+  string sdk_path = 1;
+  string project_path = 2;
+  string configuration = 3;
+  bool include_identity = 4;
+}
+message SdkMetadataResult {
+  map<string, string> definition = 1;
+  repeated SdkTargetMetadata targets = 2;
+}
+message SdkTargetMetadata {
+  string target = 1;
+  string assets_file = 2;
+  map<string, string> identity = 3;
+}
+message AnalyzeRequest {
+  string workspace_root = 1;
+  repeated string projects = 2;
+  string configuration = 3;
+  string preparation_fingerprint = 4;
+  repeated PreparationResult preparations = 5;
+  bool retry_preparation = 6;
+  repeated string loose_sources = 7;
+  repeated string configured_projects = 8;
+}
+// Required setup state, shared by providers; not usage telemetry or graph facts.
+message PreparationResult {
+  string key = 1;
+  string fingerprint = 2;
+  bool succeeded = 3;
+  string error = 4;
+  repeated string outputs = 5;
+}
+message Progress {
+  string stage = 1;
+  string project_path = 2;
+  string message = 3;
+}
+message ProviderInfo {
+  string language = 1;
+  string compiler_version = 2;
+  string runtime_version = 3;
+}
+message Compilation {
+  string id = 1;
+  string language = 2;
+  string project_path = 3;
+  string target = 4;
+  string configuration = 5;
+  bool inferred = 6;
+  string compiler_version = 7;
+  string options_json = 8;
+  repeated string dependencies = 9;
+  repeated string input_paths = 10;
+  repeated ProjectReferenceContext references = 11;
+  string input_fingerprint = 12;
+}
+// Exact compiler-selected contexts, not every target of a referenced project.
+message ProjectReferenceContext {
+  string compilation_id = 1;
+  string project_path = 2;
+  string input_fingerprint = 3;
+}
+message SourceArtifact {
+  string id = 1;
+  string path = 2;
+  bytes utf8 = 3;
+  string sha256 = 4;
+  bool generated = 5;
+  string compilation_id = 6;
+}
+message Symbol {
+  string id = 1;
+  string name = 2;
+  string kind = 3;
+  string signature = 4;
+  bool external = 5;
+  string definition_compilation_id = 6;
+  string definition_symbol_id = 7;
+  string definition_fingerprint = 8;
+}
+message Occurrence {
+  string symbol_id = 1;
+  string artifact_id = 2;
+  uint64 start_byte = 3;
+  uint64 end_byte = 4;
+  string role = 5;
+  string enclosing_symbol_id = 6;
+}
+message Relationship {
+  string source_id = 1;
+  string target_id = 2;
+  string kind = 3;
+  string resolution = 4; // compiler_bound, possible_dispatch, unresolved; empty means legacy_unknown
+  string artifact_id = 5;
+  uint64 start_byte = 6;
+  uint64 end_byte = 7;
+  bool implicit = 8;
+  string dispatch = 9; // direct, virtual, interface, indirect; empty for non-call dependencies
+  string dispatch_key = 10; // opaque compiler-produced receiver specialization; empty means unproven
+}
+message FactBatch {
+  string compilation_id = 1;
+  repeated Symbol symbols = 2;
+  repeated Occurrence occurrences = 3;
+  repeated Relationship relationships = 4;
+}
+message Diagnostic {
+  string code = 1;
+  string severity = 2;
+  string message = 3;
+  string path = 4;
+}
+message AnalysisReport {
+  string compilation_id = 1;
+  string status = 2;
+  repeated Diagnostic diagnostics = 3;
+  map<string, string> capabilities = 4; // calls, dependencies, dispatch; missing means unknown
+}
+message Completion { bool success = 1; }
+
+// Coordinator control never executes graph queries.
+message ControlRequest {
+  string operation = 1;
+  string workspace_root = 2;
+  string database = 3;
+  string configuration = 4;
+  uint32 wait_ms = 5;
+  string maintenance_token = 6;
+  uint32 maintenance_lease_ms = 7;
+  ResourceLimits resources = 8;
+}
+message WorkspaceStatus {
+  string workspace_root = 1;
+  string database = 2;
+  string phase = 3;
+  uint64 observed_epoch = 4;
+  uint64 published_epoch = 5;
+  uint64 generation = 6;
+  bool available = 7;
+  string error = 8;
+  Progress progress = 9;
+  string outcome_code = 10;
+}
+message ControlResponse {
+  repeated WorkspaceStatus workspaces = 1;
+  string error_code = 2;
+  string error_message = 3;
+  string coordinator_executable = 4;
+  bool analysis_running = 5;
+  ResourceLimits resources = 6;
+  uint32 resource_control_version = 7;
+}
+
+// Personal coordinator-wide ceilings; not workspace compiler settings.
+message ResourceLimits { double cpu_cores = 1; uint64 memory_mib = 2; }

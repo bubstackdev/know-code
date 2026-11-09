@@ -1,0 +1,19 @@
+{
+  "purpose": "Pinned upstream reference source used only for compiler-loader, semantic-binding, and invalidation investigation; ignored copies are not implementation dependencies",
+  "sources": [
+    {
+      "repository": "https://github.com/dotnet/roslyn",
+      "commit": "35d9211b841e7613c1d2f8f5af6d628ace696c4c",
+      "package": "Microsoft.CodeAnalysis.Workspaces.MSBuild 5.9.0",
+      "local_path": ".research/sources/roslyn/35d9211b841e7613c1d2f8f5af6d628ace696c4c",
+      "license": "MIT"
+    },
+    {
+      "repository": "https://github.com/adamralph/minver",
+      "commit": "8bbc4fb0230bedfa6f7678749c7b5fe977d240eb",
+      "package": "MinVer 8.0.0",
+      "local_path": ".research/sources/minver/8.0.0",
+      "license": "Apache-2.0"
+    }
+  ]
+}

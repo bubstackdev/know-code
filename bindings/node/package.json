@@ -1,0 +1,30 @@
+{
+  "name": "@know-code/node",
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    }
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "license": "Apache-2.0",
+  "description": "In-process Know Code workspace and graph APIs for macOS Apple Silicon",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "know_code.node",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY"
+  ]
+}

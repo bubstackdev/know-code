@@ -1,0 +1,19 @@
+# Durable local reference clones; commit research notes and pinned revisions instead.
+/.research/repos/
+/.research/sources/
+/.research/toolchains/
+/.artifacts/
+/target/
+**/node_modules/
+**/bin/
+**/obj/
+**/.build/
+**/*.node
+.DS_Store
+
+# Generated Python interpreter caches.
+**/__pycache__/
+*.py[cod]
+
+# Machine-local Codex MCP launch configuration.
+/.codex/config.toml

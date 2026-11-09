@@ -1,0 +1,165 @@
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.MSBuild;
+
+// Lazy inputs span one job. Only the active dependency closure stays in the
+// compiler workspace; shared contexts survive transitions until job disposal.
+sealed class ProjectCatalog(string configuration, SdkMetadataClient metadataClient) : IDisposable
+{
+    private readonly AdhocWorkspace catalog = new();
+    private readonly AdhocWorkspace active = new();
+    private readonly Dictionary<ProjectId, ProjectInfo> inputs = [];
+    private readonly Dictionary<(string Path, string Target), ProjectId> contexts = [];
+    private readonly Dictionary<ProjectId, ImmutableDictionary<string, string>> compilerMetadata = [];
+    private readonly HashSet<string> loaded = new(StringComparer.Ordinal);
+    private readonly List<(HashSet<ProjectId> Owners, WorkspaceDiagnostic Diagnostic)> diagnostics = [];
+    private readonly ImmutableDictionary<string, string> properties =
+        ImmutableDictionary<string, string>.Empty.Add("Configuration", configuration);
+
+    public async Task Load(string path)
+    {
+        if (loaded.Contains(path)) return;
+        var visiting = new HashSet<string>(StringComparer.Ordinal);
+        async Task LoadKnownDependencies(string current)
+        {
+            if (loaded.Contains(current) || !visiting.Add(current)) return;
+
+            var evaluated = await metadataClient.Read(current);
+            var variants = evaluated.Targets.ToDictionary(t => t.Target, t => t.Identity.ToImmutableDictionary(), StringComparer.Ordinal);
+
+            async Task<bool> LoadVariants(string? selectedTarget)
+            {
+                var metadata = variants[selectedTarget ?? variants.Keys.First()];
+                var selectedProperties = properties.SetItems(metadata.Where(p => p.Value.Length > 0));
+                if (selectedTarget is not null) selectedProperties = selectedProperties.Add("TargetFramework", selectedTarget);
+                using var loaderWorkspace = new AdhocWorkspace();
+                var attemptDiagnostics = new List<WorkspaceDiagnostic>();
+                loaderWorkspace.RegisterWorkspaceFailedHandler(e => attemptDiagnostics.Add(e.Diagnostic));
+                // Dependencies keep their own SDK identities/compatible target contexts.
+                // Exclude every root variant so overlapping outputs cannot alias its IDs.
+                async Task<ImmutableArray<ProjectInfo>> ReadInputs()
+                {
+                    var known = ProjectMap.Create();
+                    foreach (var dependency in catalog.CurrentSolution.Projects.Where(p => p.FilePath != current)) known.Add(dependency);
+                    return await new MSBuildProjectLoader(loaderWorkspace, selectedProperties).LoadProjectInfoAsync(current, known);
+                }
+                var projects = await ReadInputs();
+                // Discover through Roslyn's actual compiler inputs. Reload only when
+                // new dependencies need their own identity/target contexts first.
+                var missing = projects.Select(p => p.FilePath).OfType<string>()
+                    .Where(p => p != current && !loaded.Contains(p)).Distinct(StringComparer.Ordinal).ToArray();
+                if (missing.Length > 0)
+                {
+                    foreach (var dependency in missing) await LoadKnownDependencies(dependency);
+                    attemptDiagnostics.Clear();
+                    projects = await ReadInputs();
+                }
+                var roots = projects.Where(p => p.FilePath == current).ToArray();
+                var selected = new Dictionary<string, ProjectInfo>(StringComparer.Ordinal);
+                if (selectedTarget is not null)
+                {
+                    if (roots.Length != 1) throw new InvalidOperationException($"cannot select compiler project context for {current} ({selectedTarget})");
+                    selected.Add(selectedTarget, roots[0]);
+                }
+                else
+                {
+                    // Pinned Roslyn 5.9 names multi-target roots exactly basename(TFM).
+                    // Only accept a complete, unambiguous mapping; otherwise load separately.
+                    foreach (var target in variants.Keys)
+                    {
+                        var matches = roots.Where(p => p.Name == $"{Path.GetFileNameWithoutExtension(current)}({target})").ToArray();
+                        if (matches.Length != 1) return false;
+                        selected.Add(target, matches[0]);
+                    }
+                    if (roots.Length != selected.Count || selected.Values.Select(p => p.Id).Distinct().Count() != selected.Count) return false;
+                }
+                var rootNames = selected.ToDictionary(p => p.Value.Id, p => $"{Path.GetFileNameWithoutExtension(current)}({p.Key})");
+                foreach (var info in projects)
+                {
+                    var project = rootNames.TryGetValue(info.Id, out var name) ? info.WithName(name) : info;
+                    if (inputs.TryAdd(project.Id, project)) catalog.AddProject(project);
+                }
+                foreach (var (target, info) in selected)
+                {
+                    contexts.Add((current, target), info.Id);
+                    compilerMetadata.Add(info.Id, variants[target]);
+                }
+                var owners = selected.Values.Select(p => p.Id).ToHashSet();
+                diagnostics.AddRange(attemptDiagnostics.Select(d => (owners, d)));
+                return true;
+            }
+
+            // Metadata is still evaluated for EVERY target. Only identical identity
+            // inputs may share one Roslyn load; each compilation stays independent.
+            var common = variants.Values.FirstOrDefault();
+            var equivalent = common is not null && variants.Values.All(m => m.Count == common.Count && m.All(p => common.TryGetValue(p.Key, out var value) && value == p.Value));
+            if (variants.Count <= 1 || !equivalent || !await LoadVariants(null))
+                foreach (var target in variants.Keys) await LoadVariants(target);
+            loaded.Add(current);
+        }
+        await LoadKnownDependencies(path);
+    }
+
+    private HashSet<ProjectId> Closure(string path, string target)
+    {
+        if (!contexts.TryGetValue((path, target), out var rootId))
+            throw new InvalidOperationException($"cannot select compiler project context for {path} ({target})");
+        var closure = new HashSet<ProjectId>();
+        void Visit(ProjectId id)
+        {
+            if (!closure.Add(id)) return;
+            if (!inputs.TryGetValue(id, out var project)) throw new InvalidOperationException($"referenced compiler project {id} is unavailable for {path}");
+            foreach (var reference in project.ProjectReferences) Visit(reference.ProjectId);
+        }
+        Visit(rootId);
+        return closure;
+    }
+
+    public IEnumerable<(string Path, string Target)> Schedule(IEnumerable<(string Path, string Target)> requested)
+    {
+        var pending = requested.Select(r => (r.Path, r.Target, Closure: Closure(r.Path, r.Target))).ToList();
+        var current = new HashSet<ProjectId>();
+        while (pending.Count > 0)
+        {
+            var selected = 0;
+            var score = -1;
+            for (var i = 0; i < pending.Count; i++)
+            {
+                var shared = pending[i].Closure.Count(current.Contains);
+                if (shared > score) { selected = i; score = shared; }
+            }
+            var next = pending[selected];
+            pending.RemoveAt(selected);
+            current = next.Closure;
+            yield return (next.Path, next.Target);
+        }
+    }
+
+    public (Project Project, IReadOnlyList<WorkspaceDiagnostic> Diagnostics) Open(string path, string target)
+    {
+        var closure = Closure(path, target);
+        var solution = active.CurrentSolution;
+        // Intersections of dependency closures are dependency-closed, so retained
+        // projects keep their original references, aliases, and compiler identities.
+        foreach (var id in solution.ProjectIds.Where(id => !closure.Contains(id)).ToArray())
+            solution = solution.RemoveProject(id);
+        foreach (var id in closure.Where(id => solution.GetProject(id) is null))
+            solution = solution.AddProject(inputs[id]);
+        if (!active.TryApplyChanges(solution)) throw new InvalidOperationException("cannot apply compiler context closure");
+        return (active.CurrentSolution.GetProject(contexts[(path, target)])!,
+            diagnostics.Where(d => d.Diagnostic is ProjectDiagnostic pd
+                    ? closure.Contains(pd.ProjectId) : d.Owners.Overlaps(closure))
+                .Select(d => d.Diagnostic).ToArray());
+    }
+
+    public IReadOnlyDictionary<string, string> Metadata(ProjectId id) => compilerMetadata[id];
+
+    public (string Path, string Target)? Context(ProjectId id)
+    {
+        foreach (var (context, projectId) in contexts)
+            if (projectId == id) return context;
+        return null;
+    }
+
+    public void Dispose() { active.Dispose(); catalog.Dispose(); }
+}

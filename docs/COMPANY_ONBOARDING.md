@@ -1,0 +1,11 @@
+# Company onboarding — v0.0.2 backlog
+
+Accepted by the user on 2026-11-09. This is backlog scope, not implemented behavior, and does not replace the active v0.0.1 embedding/API work.
+
+Input is a company's GitHub or GitLab root URL. The corresponding `gh` or `glab` CLI must already be installed and authenticated. Enumerate repositories within the supplied company/root and the authenticated account's permitted scope. This supports company-selected access or the individual developer's visible repositories; do not assume broader access or install/authenticate the CLI automatically.
+
+Clone the entire discovered, accessible corpus into a hidden section of durable per-user disk, then index it and keep both clones and indexes up to date. Be considerate about bandwidth and concurrency. Reuse the shared workspace registry, indexing/update path, scheduler and resource controls rather than adding a company-specific indexing engine. Repositories with unsupported source languages remain visible with honest coverage; cloning the corpus does not mean every language can already be analyzed. Show discovery/clone/fetch/indexing progress, unavailable/authentication failures and coverage; inaccessible repositories must not appear indexed. Existing public-build zero-telemetry requirements apply.
+
+Design still needed: accepted URL forms (organization/group/self-hosted roots), nested GitLab groups, pagination and rate limits, private repository visibility changes, clone/fetch scheduling and numeric budgets, branch/revision selection, authentication-expiry behavior, central hidden layout/disk bounds, and safe treatment of any edits in managed clones. Do not infer permission to discard local changes, remove retained indexes, or fetch arbitrary branches. Configuration, repository identity and background maintenance should compose with existing registration and v0.0.2 cross-repository queries. This feature requires network access during onboarding/updates; local saved-index queries remain usable without a hosted service.
+
+No company URL has been supplied and no repository enumeration, clone or external account action is authorized by recording this backlog item.

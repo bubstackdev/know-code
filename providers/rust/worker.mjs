@@ -1,0 +1,234 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL, fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {readRequest, send} from '../shared/protocol.mjs';
+import {Analyzer, compilerEnvironment} from './lsp.mjs';
+
+const relative = (root, name) => path.relative(root, name).split(path.sep).join('/');
+const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
+const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
+
+function command(tool, args, cwd) {
+  const result = spawnSync(tool, args, {cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: compilerEnvironment()});
+  if (result.error || result.status !== 0) throw new Error(`${tool} prerequisite/project evaluation failed: ${result.error?.message ?? result.stderr}; install the repository-selected Rust toolchain, rust-analyzer and rust-src components, and restore Cargo dependencies separately`);
+  return result.stdout.trim();
+}
+
+function walk(directory, result) {
+  for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory() && !['target', '.git', 'node_modules', '.artifacts', '.research'].includes(entry.name)) walk(filename, result);
+    else if (entry.isFile() && entry.name.endsWith('.rs')) result.add(filename);
+  }
+}
+
+function source(filename, root, compilationId) {
+  const utf8 = fs.readFileSync(filename);
+  const text = utf8.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(utf8)) throw new Error(`unsupported non-UTF-8 Rust source: ${filename}`);
+  const offsets = new Uint32Array(text.length + 1);
+  const lines = [0];
+  let bytes = 0;
+  for (let i = 0; i < text.length;) {
+    const point = text.codePointAt(i);
+    offsets[i] = bytes;
+    if (point > 0xffff) offsets[i + 1] = bytes;
+    bytes += Buffer.byteLength(String.fromCodePoint(point));
+    i += point > 0xffff ? 2 : 1;
+    if (point === 10) lines.push(i);
+  }
+  offsets[text.length] = bytes;
+  const sha256 = createHash('sha256').update(utf8).digest('hex');
+  return {filename, text, offsets, lines, uri: pathToFileURL(filename).href,
+    artifact: {id: `${relative(root, filename)}@${sha256}`, path: relative(root, filename), utf8, sha256, compilationId, generated: false},
+    byte(position) {
+      const start = lines[position.line];
+      if (start === undefined || position.character < 0) throw new Error('invalid compiler source position');
+      const offset = start + position.character;
+      const end = position.line + 1 < lines.length ? lines[position.line + 1] : text.length;
+      if (offset > end) throw new Error('compiler source position exceeds indexed source');
+      return offsets[offset];
+    }};
+}
+
+function inputPaths(metadata, manifest) {
+  const result = new Set(metadata.packages.filter(p => metadata.workspace_members.includes(p.id)).map(p => p.manifest_path));
+  result.add(manifest);
+  result.add(path.join(metadata.workspace_root, 'Cargo.lock'));
+  for (let directory = metadata.workspace_root;; directory = path.dirname(directory)) {
+    for (const item of ['rust-toolchain', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml']) {
+      const candidate = path.join(directory, item);
+      if (fs.existsSync(candidate)) result.add(candidate);
+    }
+    if (path.dirname(directory) === directory) break;
+  }
+  return [...result].filter(p => fs.existsSync(p));
+}
+
+async function analyze(root, manifest, metadata, configuration) {
+  const directory = path.dirname(manifest);
+  const projectPath = relative(root, manifest);
+  const compilationId = `rust:${projectPath}`;
+  const compilerVersion = command('rustc', ['-Vv'], directory);
+  const sysroot = command('rustc', ['--print', 'sysroot'], directory);
+  const librarySources = path.join(sysroot, 'lib/rustlib/src/rust/library');
+  if (!fs.existsSync(path.join(librarySources, 'Cargo.toml')) || !fs.existsSync(path.join(librarySources, 'core/src/lib.rs')))
+    throw new Error(`missing rust-src prerequisite for repository-selected Rust sysroot ${sysroot}; install rust-src separately for that toolchain and refresh. Know Code does not install toolchains or components`);
+  const analyzerVersion = command('rust-analyzer', ['--version'], directory);
+  const members = metadata.packages.filter(p => metadata.workspace_members.includes(p.id));
+  const files = new Set();
+  for (const member of members) walk(path.dirname(member.manifest_path), files);
+  const sources = new Map([...files].sort().map(filename => [pathToFileURL(filename).href, source(filename, root, compilationId)]));
+  const options = {provider: 'rust-analyzer-lsp', analyzerVersion, positionEncoding: 'utf-16', configuration,
+    cargo: {offline: true, allTargets: true, buildScripts: false, features: 'default'}, procMacros: false,
+    coverage: 'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
+  send('compilation', {id: compilationId, language: 'rust', projectPath, target: 'rust-analyzer-workspace-view', configuration,
+    inferred: false, compilerVersion, optionsJson: JSON.stringify(options), inputPaths: inputPaths(metadata, manifest), dependencies: []});
+  send('progress', {stage: 'analysis', projectPath, message: 'Loading repository-selected Rust analyzer; build scripts and procedural macro execution are disabled.'});
+  const diagnostics = [{code: 'rust_coverage_limits', severity: 'warning', path: projectPath,
+    message: 'Experimental compiler-backed Rust navigation: build scripts/procedural macros are disabled; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not covered. Discovered Rust files may include unowned/orphan modules; only unique analyzer-resolved references are published. This is a partial graph.'}];
+  if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
+    message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
+  const analyzer = new Analyzer(directory);
+  const emitted = new Set();
+  const externalSources = new Map();
+  let batch = {compilationId, symbols: [], occurrences: [], relationships: []};
+  const flush = () => {
+    if (batch.symbols.length || batch.occurrences.length) send('facts', batch);
+    batch = {compilationId, symbols: [], occurrences: [], relationships: []};
+  };
+  let unresolved = 0;
+  try {
+    const initialized = await analyzer.request('initialize', {processId: process.pid, rootUri: pathToFileURL(directory).href,
+      workspaceFolders: [{uri: pathToFileURL(directory).href, name: path.basename(directory)}],
+      capabilities: {general: {positionEncodings: ['utf-16']}, experimental: {serverStatusNotification: true},
+        textDocument: {documentSymbol: {hierarchicalDocumentSymbolSupport: true}, definition: {linkSupport: true}, hover: {contentFormat: ['plaintext']},
+          semanticTokens: {requests: {full: true}, tokenTypes: [...kinds, 'keyword'], tokenModifiers: ['declaration', 'definition'], formats: ['relative']}}},
+      initializationOptions: {checkOnSave: false, check: {enable: false}, cargo: {offline: true, allTargets: true, buildScripts: {enable: false}},
+        procMacro: {enable: false}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
+        hover: {documentation: {enable: false}, memoryLayout: {enable: false}}}});
+    if (initialized.capabilities.positionEncoding && initialized.capabilities.positionEncoding !== 'utf-16') throw new Error('unsupported rust-analyzer position encoding');
+    const legend = initialized.capabilities.semanticTokensProvider?.legend;
+    if (!legend) throw new Error('rust-analyzer lacks semantic token support');
+    analyzer.notify('initialized', {});
+    const status = await analyzer.ready();
+    if (status.health !== 'ok') diagnostics.push({code: 'rust_analyzer_load', severity: 'warning', path: projectPath, message: status.message ?? `Analyzer health: ${status.health}`});
+    for (const current of sources.values()) {
+      send('source', current.artifact);
+      analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
+      const extents = new Map();
+      if (initialized.capabilities.documentSymbolProvider) {
+        const outline = await analyzer.request('textDocument/documentSymbol', {textDocument: {uri: current.uri}});
+        const collect = items => { for (const item of items ?? []) {
+          if (item.selectionRange && item.range) {
+            const key = rangeKey(item.selectionRange);
+            const ranges = extents.get(key) ?? [];
+            ranges.push(item.range); extents.set(key, ranges);
+          }
+          collect(item.children);
+        }};
+        collect(outline);
+      }
+      const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
+      let line = 0, character = 0;
+      for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {
+        const [deltaLine, deltaCharacter, length, tokenType, modifiers] = tokens.data.slice(i, i + 5);
+        line += deltaLine;
+        character = deltaLine ? deltaCharacter : character + deltaCharacter;
+        const kind = legend.tokenTypes[tokenType];
+        if (!kinds.has(kind)) continue;
+        const position = {line, character};
+        const endPosition = {line, character: character + length};
+        // rust-analyzer may highlight a macro's bang as a separate semantic
+        // token. The identifier carries the reference; punctuation adds none.
+        if (kind === 'macro') {
+          const spelling = current.artifact.utf8.subarray(current.byte(position), current.byte(endPosition)).toString('utf8');
+          if (spelling === '!') continue;
+          if (spelling.endsWith('!')) endPosition.character--;
+        }
+        const definitions = await analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position});
+        const locations = definitions ? (Array.isArray(definitions) ? definitions : [definitions]) : [];
+        const unique = new Map(locations.map(d => {
+          const uri = d.targetUri ?? d.uri;
+          const range = d.targetSelectionRange ?? d.range;
+          return [JSON.stringify([uri, range]), {uri, range}];
+        }));
+        if (unique.size !== 1) { unresolved++; continue; }
+        const definition = [...unique.values()][0];
+        let target = sources.get(definition.uri) ?? externalSources.get(definition.uri);
+        if (!target && definition.uri.startsWith('file:')) {
+          const filename = fileURLToPath(definition.uri);
+          if (fs.existsSync(filename)) {
+            target = source(filename, root, compilationId);
+            externalSources.set(definition.uri, target);
+          }
+        }
+        if (!target) { unresolved++; continue; }
+        const startByte = current.byte(position);
+        const endByte = current.byte(endPosition);
+        const anchor = target.byte(definition.range.start);
+        const endAnchor = target.byte(definition.range.end);
+        const symbolId = `${compilationId}:${relative(root, target.filename)}:${anchor}`;
+        const declaration = current.uri === definition.uri && startByte === anchor && endByte === endAnchor;
+        if (!emitted.has(symbolId)) {
+          // File-backed modules/crates can navigate to an entire file instead
+          // of an identifier selection. Never turn that file into a name or
+          // fallback signature, or publish dependency source through that path.
+          const selectedName = target.artifact.utf8.subarray(anchor, endAnchor).toString('utf8');
+          const identifierSelection = /^(?:r#)?[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(selectedName);
+          const name = identifierSelection ? selectedName : current.artifact.utf8.subarray(startByte, endByte).toString('utf8');
+          const hover = await analyzer.request('textDocument/hover', {textDocument: {uri: identifierSelection ? definition.uri : current.uri},
+            position: identifierSelection ? definition.range.start : position});
+          const content = hover?.contents;
+          const signature = typeof content === 'string' ? content : Array.isArray(content) ? content.map(c => typeof c === 'string' ? c : c.value).join('\n') : content?.value;
+          emitted.add(symbolId);
+          batch.symbols.push({id: symbolId, name, kind, signature: signature ?? name, external: !sources.has(definition.uri)});
+        }
+        batch.occurrences.push({symbolId, artifactId: current.artifact.id, startByte, endByte, role: declaration ? 'declaration' : 'reference', enclosingSymbolId: ''});
+        if (declaration) {
+          const ranges = extents.get(rangeKey(definition.range));
+          if (ranges?.length === 1) {
+            const start = current.byte(ranges[0].start), end = current.byte(ranges[0].end);
+            if (start <= startByte && end >= endByte)
+              batch.occurrences.push({symbolId,artifactId:current.artifact.id,startByte:start,endByte:end,role:'definition',enclosingSymbolId:''});
+          }
+        }
+        if (batch.occurrences.length >= 128) flush();
+      }
+      analyzer.notify('textDocument/didClose', {textDocument: {uri: current.uri}});
+      flush();
+    }
+    for (const [uri, items] of analyzer.diagnostics) for (const item of items) {
+      if (diagnostics.length >= 100) break;
+      diagnostics.push({code: String(item.code ?? 'rust_analyzer'), severity: item.severity === 1 ? 'error' : item.severity === 2 ? 'warning' : 'info',
+        path: uri.startsWith('file:') ? relative(root, fileURLToPath(uri)) : '', message: item.message});
+    }
+    if (unresolved) diagnostics.push({code: 'rust_unresolved_navigation', severity: 'warning', path: projectPath,
+      message: `${unresolved} semantic tokens had no unique supported definition; no exact reference was invented.`});
+    send('report', {compilationId, status: 'partial', diagnostics});
+  } finally { await analyzer.close(); }
+}
+
+try {
+  const request = readRequest();
+  const root = path.resolve(request.workspaceRoot);
+  send('provider', {language: 'rust', compilerVersion: 'repository-selected rustc and rust-analyzer per workspace', runtimeVersion: process.version});
+  const workspaces = new Map();
+  for (const project of request.projects) {
+    const manifest = path.resolve(root, project);
+    const metadata = JSON.parse(command('cargo', ['metadata', '--offline', '--no-deps', '--format-version', '1', '--manifest-path', manifest], path.dirname(manifest)));
+    const workspaceRelative = path.relative(fs.realpathSync(root), fs.realpathSync(metadata.workspace_root));
+    if (workspaceRelative === '..' || workspaceRelative.startsWith(`..${path.sep}`) || path.isAbsolute(workspaceRelative))
+      throw new Error(`Cargo workspace ${metadata.workspace_root} lies outside registered root ${root}; register the enclosing Cargo workspace/repository root so compilation ownership and saved updates remain coherent`);
+    const canonical = path.join(metadata.workspace_root, 'Cargo.toml');
+    workspaces.set(canonical, metadata);
+  }
+  for (const [manifest, metadata] of workspaces) await analyze(root, manifest, metadata, request.configuration || 'Debug');
+  if (!workspaces.size) throw new Error('Rust analysis requires a Cargo.toml project; standalone Rust files are not supported by this provider yet');
+  send('complete', {success: true});
+} catch (e) {
+  process.stderr.write(`${e.stack ?? e}\n`);
+  process.exitCode = 1;
+}

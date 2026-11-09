@@ -1,0 +1,11 @@
+{
+  "name": "know-code-development",
+  "private": true,
+  "version": "0.0.1",
+  "workspaces": ["providers/typescript", "bindings/node", "tests/fixtures/typescript"],
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "test": "bash scripts/test.sh"
+  },
+  "engines": { "node": ">=24" }
+}
