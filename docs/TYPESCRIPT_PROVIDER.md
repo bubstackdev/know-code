@@ -2,6 +2,42 @@
 
 The adapter uses repository-selected TypeScript 5.9.x and the existing configured/inferred planning path. [Implementation scope](IMPLEMENTATION.md) still applies: a first explicitly partial call/impact slice is now implemented; see [supported forms and limits](CALL_GRAPH.md). The declaration/collection measurements below predate graph activation and do not include its added facts.
 
+## npm/pnpm preparation policy
+
+The additive Node analysis-policy version 1 enables shared npm/pnpm preparation in the TypeScript worker. The coordinator supplies an absolute user-scoped tool cache and the effective personal workspace script grant; the adapter does not read a private trust environment variable. Absent policy retains installed-npm/scripts-disabled behavior while common settings integration is completed. The worker acknowledges policy 1 before preparation and rejects unsupported policy shapes/versions.
+
+Supported restoration families on Node 24 are stable npm 10–11 and pnpm 10–12. Exact `packageManager` pins, optional Corepack SHA-224/SHA-512 suffixes, and exact `devEngines.packageManager` selections are honored; conflicting selections and unsupported/range/prerelease selections fail actionably without substitution. Unpinned defaults are frozen in `package-tools.mjs`: npm **11.21.2**, pnpm **12.18.0**. A pnpm lock/workspace selects pnpm when no explicit manager exists; conflicting npm/pnpm inputs without a selection fail rather than guess. Yarn restoration remains deferred.
+
+The public npm registry supplied these frozen fixture endpoints on 2026-11-09:
+
+| Family | Lowest stable fixture | Latest stable fixture |
+| --- | --- | --- |
+| npm 10 | 10.0.0 | 10.9.10 |
+| npm 11 | 11.0.0 | 11.21.2 |
+| pnpm 10 | 10.0.0 | 10.34.9 |
+| pnpm 11 | 11.0.0 | 11.28.11 |
+| pnpm 12 | 12.0.0 | 12.18.0 |
+
+Representative endpoint testing is not exhaustive certification of every patch or every upstream package-manager feature. Versioned metadata and exact distribution integrity are retained in `.artifacts/node-preparation/registry-matrix.json` in the implementation worktree. [The focused harness](../tests/node_preparation.mjs) exercises direct framed worker requests because the legacy coordinator tests cannot prove present-policy behavior before shared settings wiring lands.
+
+`package-tools.mjs` shares one download/cache/lock path across managers. It downloads official registry packages, bounds metadata streams to 1 MiB before concatenation, streams archives under a 128 MiB bound, checks registry SHA-512 and any repository pin hash, checks extracted package/executable versions, and atomically publishes a complete cache entry. npm and pnpm 10/11 ship bundled JavaScript; pnpm 12 uses the official `@pnpm/exe.darwin-arm64` native package. Downloads do not execute installation scripts or install Node/.NET. Existing entries check manifest identity/platform and the executable digest before reuse. Acquisition is deduplicated across processes, with a bounded five-minute lock wait; metadata/archive timeouts are 30/180 seconds. Unique owner filenames protect stale-lock reclamation from deleting a newly acquired live lock, and dead-owner staging is reclaimed. Failures do not publish partial tool entries.
+
+Repository lifecycle scripts and pnpmfile hooks are forced off unless the coordinator supplies a personal grant. A grant removes Know Code's forced suppression while retaining stricter repository/manager restrictions; it does not force all dependency builds. npm audit/funding/update checks and debug-log retention are disabled for restoration; pnpm update notification is explicitly disabled through command configuration across families. Checkpoints bind manager/version, runtime, dependency/workspace/lock/config inputs and policy. Source-only saves reuse successful or failed checkpoints; missing successful outputs, changed inputs/policy or explicit retry cause preparation. Optional-only dependencies trigger an initial setup attempt, while legitimately omitted optional/platform packages do not trigger repeated restoration. Previously installed optional outputs remain tracked for removal/recovery.
+
+Effective selected tool/source, authorization and install root appear in compilation options; package/config paths join compiler inputs, including absent supported candidates with explicit missing markers. INI `6.0.0` and YAML `2.9.1` parse declarative repository/user hook paths without executing them; missing/existing externally selected hook paths are tracked too. INI 7 was deliberately avoided because it would raise the Node 24 patch-level requirement. Configuration contents are hashed for required setup state, not copied into graph facts or usage telemetry.
+
+Locked restoration uses npm `ci` or pnpm frozen-lockfile and never repairs/upgrades a source lockfile. Unlocked restoration does not create one. Failed setup remains an explicit compiler-coverage diagnostic and preserves valid partial compiler facts. Declared managed-runtime installation requests are rejected with a separately-installed-Node error; native pnpm also disables runtime installation. All preparation stays in the existing worker process tree and shared core checkpoint/publication path.
+
+Actual upstream gotchas found in the fixture runs:
+
+- pnpm 12's native CLI rejects several JavaScript-era boolean flag spellings. Configuration overlays handle lockfile/production settings across families; script and hook suppression use explicit supported flags.
+- Invoking the exact native pnpm pin can still trigger an independent package-manager bootstrap from the public registry. After Know Code has verified the exact pin itself, pnpm 11/12 commands use official [`with current`](https://pnpm.io/cli/with) to suppress that second bootstrap; this is essential for warm-cache offline use. The old `managePackageManagerVersions` option was replaced in [pnpm 11](https://pnpm.io/blog/releases/11.0).
+- pnpm can skip lifecycle hooks on an unchanged no-op install. Authorization invalidates preparation but does not promise that the manager will repeat an already completed script; missing-output restoration is tested separately.
+- pnpm 10's up-to-date path can skip creating a requested author lockfile after lockfile-disabled installation. The harness authors fixture locks without installed modules before testing frozen restoration.
+- pnpm 11.0.0's own lockfile-only output for the initial local `.tgz` fixture omitted the tarball resolution and attempted a registry fetch on frozen reinstall. The failure/partial graph was visible and the lock stayed unchanged. The shared frozen-lock matrix uses local-directory dependencies; Know Code does not rewrite upstream lock metadata to hide that issue. That reproducer remains under `.artifacts/node-preparation/1a1c274b519/` in the implementation worktree.
+
+The matrix covers single packages/workspaces, compiler graphs, script/hook suppression despite repository settings, personal authorization, ordinary-save and failed-setup deduplication, explicit retry, missing outputs, unchanged frozen locks, partial graphs and repair. Additional checks cover offline tool reuse/cold failure, unsupported pins, corrupted caches and two real processes sharing one synthetic-registry acquisition. Actual upstream acquisition and synthetic concurrency evidence remain distinct. Coordinator-based invalidation/deduplication and final packaged integration remain integrator-owned gates; this adapter slice does not complete C09 by itself.
+
 ## Declaration symbols versus compiler views
 
 TypeScript can return transient instantiated symbols for a use such as `Box<string>.item`. The graph symbol represents the declaration `Box<T>.item`; its signature describes that declaration (`T`), rather than the first visited instantiated use. Occurrences retain exact source ranges and compilation ownership. Per-occurrence instantiated type display is not currently represented by the fact contract.
