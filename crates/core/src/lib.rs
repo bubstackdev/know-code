@@ -2,6 +2,7 @@ pub mod control;
 pub mod cursor;
 pub mod execution;
 pub mod graph;
+pub(crate) mod grouping;
 pub mod live;
 pub mod protocol;
 pub mod query;

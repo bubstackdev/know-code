@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-pub const SCHEMA_VERSION: i32 = 7;
+pub const SCHEMA_VERSION: i32 = 8;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS generations(id INTEGER PRIMARY KEY);
@@ -190,7 +190,7 @@ impl Writer {
         control.interruptible(interrupt, || {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if ![0, 1, 2, 3, 4, 5, 6, SCHEMA_VERSION].contains(&version) {
+        if ![0, 1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION].contains(&version) {
             return Err(Error::UpdateRequired(format!(
                 "index format {version} is unsupported; expected {SCHEMA_VERSION}"
             )));
@@ -219,6 +219,9 @@ impl Writer {
         }
         if version < 7 {
             tx.execute_batch("ALTER TABLE compilations ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE unit_artifacts ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN test_mask INTEGER NOT NULL DEFAULT 1; CREATE INDEX symbol_test_mask ON symbols(test_mask); PRAGMA user_version=7;")?;
+        }
+        if version < 8 {
+            tx.execute_batch("ALTER TABLE compilations ADD COLUMN target_family TEXT NOT NULL DEFAULT ''; ALTER TABLE compilations ADD COLUMN target_equivalence_policy INTEGER NOT NULL DEFAULT 0; ALTER TABLE symbols ADD COLUMN declaration_key TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN grouping_key TEXT NOT NULL DEFAULT ''; CREATE INDEX symbol_grouping ON symbols(grouping_key) WHERE grouping_key<>''; PRAGMA user_version=8;")?;
         }
         crate::testing::create_views(&tx, SCHEMA_VERSION)?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS occurrence_artifact ON occurrences(artifact_key);
@@ -275,6 +278,14 @@ impl Writer {
                 if c.id.is_empty() {
                     return Err(Error::Protocol("compilation identity is empty".into()));
                 }
+                if c.target_equivalence_policy > crate::grouping::POLICY_VERSION
+                    || (c.target_equivalence_policy == 0) != c.target_family.is_empty()
+                    || c.target_family.len() > 512
+                {
+                    return Err(Error::Protocol(
+                        "invalid target-equivalence family/policy".into(),
+                    ));
+                }
                 let mut selected = std::collections::BTreeSet::new();
                 if c.references.iter().any(|r| {
                     r.compilation_id.is_empty()
@@ -287,7 +298,7 @@ impl Writer {
                     ));
                 }
                 tx.execute(
-                    "INSERT INTO compilations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO compilations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     params![
                         gen_id,
                         c.id,
@@ -302,7 +313,9 @@ impl Writer {
                         serde_json::to_string(&c.input_paths)?,
                         serde_json::to_string(&c.references)?,
                         c.input_fingerprint,
-                        crate::testing::encode(c.test_classification.as_ref())?
+                        crate::testing::encode(c.test_classification.as_ref())?,
+                        c.target_family,
+                        c.target_equivalence_policy
                     ],
                 )?;
                 tx.execute("INSERT INTO generation_units VALUES(?,?,?) ON CONFLICT(generation,compilation_id) DO UPDATE SET owner_generation=excluded.owner_generation",params![gen_id,c.id,gen_id])?;
@@ -360,12 +373,22 @@ impl Writer {
                 } else {
                     std::collections::BTreeSet::new()
                 };
-                let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO symbols(generation,compilation_id,id,name,kind,signature,external,definition_compilation_id,definition_symbol_id,definition_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?)")?;
+                let declaration_keys = batch.symbols.iter().any(|s| !s.declaration_key.is_empty());
+                if declaration_keys && tx.query_row("SELECT target_equivalence_policy FROM compilations WHERE generation=? AND id=?",params![gen_id,batch.compilation_id],|r|r.get::<_,u32>(0))? != crate::grouping::POLICY_VERSION {
+                    return Err(Error::Protocol("declaration equivalence evidence requires an acknowledged target family".into()));
+                }
+                let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO symbols(generation,compilation_id,id,name,kind,signature,external,definition_compilation_id,definition_symbol_id,definition_fingerprint,declaration_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)")?;
                 for s in batch.symbols {
                     // Empty target IDs encode unresolved relationships, never
                     // a real symbol that could accidentally satisfy that join.
                     if s.id.is_empty() {
                         return Err(Error::Protocol("symbol identity is empty".into()));
+                    }
+                    if s.declaration_key.len() > 512 || s.external && !s.declaration_key.is_empty()
+                    {
+                        return Err(Error::Protocol(
+                            "invalid declaration equivalence key".into(),
+                        ));
                     }
                     let has_definition = !s.definition_compilation_id.is_empty();
                     if has_definition != !s.definition_symbol_id.is_empty()
@@ -388,15 +411,17 @@ impl Writer {
                         s.external,
                         s.definition_compilation_id,
                         s.definition_symbol_id,
-                        s.definition_fingerprint
+                        s.definition_fingerprint,
+                        s.declaration_key
                     ])?;
                     if inserted == 0 {
-                        let existing:(String,String,String)=tx.query_row("SELECT definition_compilation_id,definition_symbol_id,definition_fingerprint FROM symbols WHERE generation=? AND compilation_id=? AND id=?",params![gen_id,batch.compilation_id,s.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+                        let existing:(String,String,String,String)=tx.query_row("SELECT definition_compilation_id,definition_symbol_id,definition_fingerprint,declaration_key FROM symbols WHERE generation=? AND compilation_id=? AND id=?",params![gen_id,batch.compilation_id,s.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
                         if existing
                             != (
                                 s.definition_compilation_id,
                                 s.definition_symbol_id,
                                 s.definition_fingerprint,
+                                s.declaration_key,
                             )
                         {
                             return Err(Error::Protocol(
@@ -505,6 +530,7 @@ impl Writer {
                         "dispatch",
                         "project_links",
                         "test_classification",
+                        "target_equivalence",
                     ]
                     .contains(&name.as_str())
                         || !["complete", "partial", "unavailable", "unknown"]
@@ -553,7 +579,9 @@ impl Writer {
             let ids = q.query_map([self.generation], |r| r.get::<_, String>(0))?;
             for id in ids {
                 control.check()?;
-                crate::testing::finalize(&tx, self.generation, &id?)?;
+                let id = id?;
+                crate::testing::finalize(&tx, self.generation, &id)?;
+                crate::grouping::finalize(&tx, self.generation, &id)?;
             }
         }
         tx.execute(
