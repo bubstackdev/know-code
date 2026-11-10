@@ -674,12 +674,17 @@ mod activity_tests {
                 .to_string()
                 .contains("runtime operation is in progress")
         );
+        // Another concurrent test can fork while this lock is held. Explicitly
+        // unlock the shared file description rather than waiting for inherited
+        // descriptors to close in that child.
+        fence.unlock().unwrap();
         drop(fence);
         let error = ensure_running(&root, Some(Path::new("/missing/coordinator"))).unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("cannot start Know Code coordinator")
+                .contains("cannot start Know Code coordinator"),
+            "{error}"
         );
     }
     #[test]
