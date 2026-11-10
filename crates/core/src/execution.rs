@@ -275,7 +275,7 @@ impl Write for TimedStream {
     }
 }
 
-fn write_json<W: Write>(
+pub(crate) fn write_json<W: Write>(
     value: &impl Serialize,
     execution: Option<Execution>,
     maximum: usize,
