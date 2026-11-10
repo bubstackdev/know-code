@@ -1,6 +1,8 @@
 //! Coordinator-owned generation retention and cursor lifecycle policy.
 //! Portable control, replayable pages and byte accounting are not yet wired.
 use crate::{Error, Result, query::ReadView};
+mod accounting;
+pub use accounting::{ACCOUNTING_VERSION, RetainedUsage};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
     collections::BTreeMap,
@@ -11,6 +13,7 @@ use std::{
 
 pub const RETENTION_VERSION: u32 = 1;
 pub const DEFAULT_MAX_CURSORS: usize = 128;
+pub const DEFAULT_RETENTION_BYTES: u64 = 1024 * 1024 * 1024;
 pub const IDLE_LIFETIME: Duration = Duration::from_secs(120);
 pub const ABSOLUTE_LIFETIME: Duration = Duration::from_secs(600);
 
@@ -57,6 +60,7 @@ struct CursorEntry {
     created: Duration,
     touched: Duration,
     reads: BTreeMap<[u8; 16], Duration>,
+    result_bytes_reserved: u64,
 }
 impl CursorEntry {
     fn expired(&self, now: Duration) -> bool {
@@ -69,24 +73,29 @@ impl CursorEntry {
 
 /// One registry per coordinator/user, shared across all workspaces. Call only
 /// under its serialized admission lock and sole-writer fence. This supplies
-/// lifetime/count/read-lease policy; byte accounting, control and pages still
-/// need to be wired before advertising portable pagination.
+/// lifetime/count/read-lease and shared byte policy. Coordinator control,
+/// publication and saved-result files still need integration before pagination.
 pub struct CursorRegistry {
     owner: [u8; 16],
     maximum: usize,
+    maximum_bytes: u64,
     entries: BTreeMap<[u8; 16], CursorEntry>,
     publication_waiting: bool,
 }
 impl CursorRegistry {
     pub fn new(owner: [u8; 16], maximum: usize) -> Result<Self> {
-        if maximum == 0 {
+        Self::with_budget(owner, maximum, DEFAULT_RETENTION_BYTES)
+    }
+    pub fn with_budget(owner: [u8; 16], maximum: usize, maximum_bytes: u64) -> Result<Self> {
+        if maximum == 0 || maximum_bytes == 0 {
             return Err(Error::InvalidRequest(
-                "cursor limit must be positive".into(),
+                "cursor count and retention byte limits must be positive".into(),
             ));
         }
         Ok(Self {
             owner,
             maximum,
+            maximum_bytes,
             entries: BTreeMap::new(),
             publication_waiting: false,
         })
@@ -120,8 +129,14 @@ impl CursorRegistry {
                 created: now,
                 touched: now,
                 reads: BTreeMap::new(),
+                result_bytes_reserved: 0,
             },
         );
+        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        if let Err(error) = self.make_space(None, Some(handle.id), execution) {
+            self.retire(handle.id)?;
+            return Err(error);
+        }
         Ok(handle)
     }
 
@@ -235,10 +250,13 @@ impl CursorRegistry {
         self.remove_oldest_idle()
     }
     fn remove_oldest_idle(&mut self) -> Result<bool> {
+        self.remove_idle_except(None)
+    }
+    fn remove_idle_except(&mut self, protected: Option<[u8; 16]>) -> Result<bool> {
         let oldest = self
             .entries
             .iter()
-            .filter(|(_, entry)| entry.reads.is_empty())
+            .filter(|(id, entry)| entry.reads.is_empty() && Some(**id) != protected)
             .min_by_key(|(id, entry)| (entry.touched, entry.created, **id))
             .map(|(id, _)| *id);
         if let Some(id) = oldest {
@@ -246,6 +264,108 @@ impl CursorRegistry {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Reserve before retaining result files. Reservations only grow; they
+    /// cover in-progress files too and remain charged until cursor cleanup.
+    /// This is storage capacity, not permission to reset graph work budgets.
+    pub fn reserve_result(&mut self, handle: CursorHandle, bytes: u64) -> Result<()> {
+        self.sweep()?;
+        self.check_admission()?;
+        if handle.owner != self.owner {
+            return Err(Error::CursorInvalidated);
+        }
+        let entry = self
+            .entries
+            .get_mut(&handle.id)
+            .ok_or(Error::CursorInvalidated)?;
+        if bytes > self.maximum_bytes {
+            return Err(Error::ResourceLimited(
+                "saved graph result exceeds the shared cursor retention budget".into(),
+            ));
+        }
+        let previous = entry.result_bytes_reserved;
+        entry.result_bytes_reserved = previous.max(bytes);
+        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        if let Err(error) = self.make_space(None, Some(handle.id), execution) {
+            if let Some(entry) = self.entries.get_mut(&handle.id) {
+                entry.result_bytes_reserved = previous;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Index data is deduplicated within each database; result reservations
+    /// share this same pool across all workspaces. A preview must remain
+    /// serialized with pin admission/publication until the actual cutover.
+    pub fn retained_bytes(&self) -> Result<u64> {
+        self.budget_usage(
+            None,
+            crate::execution::Execution::new(Default::default(), None)?,
+        )
+    }
+    fn budget_usage(
+        &self,
+        proposed: Option<(&Path, u64)>,
+        execution: crate::execution::Execution,
+    ) -> Result<u64> {
+        let mut total = 0u64;
+        let mut databases = std::collections::BTreeSet::new();
+        for entry in self.entries.values() {
+            total = accounting::add(total, entry.result_bytes_reserved)?;
+            databases.insert(entry.pin.database.as_path());
+        }
+        for database in databases {
+            execution.check()?;
+            let retention = GenerationRetention {
+                database: database.into(),
+                owner: self.owner,
+            };
+            let candidate = proposed
+                .filter(|(path, _)| *path == database)
+                .map(|(_, generation)| generation);
+            total = accounting::add(
+                total,
+                retention
+                    .usage_controlled(candidate, execution)?
+                    .total_bytes()?,
+            )?;
+        }
+        execution.check()?;
+        Ok(total)
+    }
+    fn make_space(
+        &mut self,
+        proposed: Option<(&Path, u64)>,
+        protected: Option<[u8; 16]>,
+        execution: crate::execution::Execution,
+    ) -> Result<()> {
+        while self.budget_usage(proposed, execution)? > self.maximum_bytes {
+            if !self.remove_idle_except(protected)? {
+                return Err(Error::ResourceLimited(
+                    "cursor retention budget is busy; retry after an active read finishes".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// True permits a serialized cutover within the current budget. False
+    /// fences new admissions and asks the host to wait for bounded reads.
+    /// No serving write transaction may be held while calling or waiting.
+    pub fn prepare_publication(&mut self, database: &Path, generation: u64) -> Result<bool> {
+        self.sweep()?;
+        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        loop {
+            if self.budget_usage(Some((database, generation)), execution)? <= self.maximum_bytes {
+                return Ok(true);
+            }
+            self.publication_waiting = true;
+            if !self.remove_oldest_idle()? {
+                return Ok(false);
+            }
         }
     }
 
@@ -363,7 +483,8 @@ impl GenerationRetention {
         tx.execute_batch("CREATE TABLE IF NOT EXISTS staging_generations(generation INTEGER PRIMARY KEY REFERENCES generations(id) ON DELETE CASCADE);
           CREATE TABLE IF NOT EXISTS cursor_retention_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),version INTEGER NOT NULL,owner BLOB NOT NULL CHECK(length(owner)=16));
           CREATE TABLE IF NOT EXISTS cursor_generation_pins(id BLOB PRIMARY KEY CHECK(length(id)=16),generation INTEGER NOT NULL REFERENCES generations(id) ON DELETE CASCADE,owner BLOB NOT NULL CHECK(length(owner)=16));
-          CREATE INDEX IF NOT EXISTS cursor_pin_generation ON cursor_generation_pins(generation);")?;
+          CREATE INDEX IF NOT EXISTS cursor_pin_generation ON cursor_generation_pins(generation);
+          CREATE TABLE IF NOT EXISTS cursor_unit_costs_v1(owner_generation INTEGER,compilation_id TEXT,bytes INTEGER NOT NULL CHECK(bytes>=0),store_format INTEGER NOT NULL,PRIMARY KEY(owner_generation,compilation_id),FOREIGN KEY(owner_generation,compilation_id) REFERENCES compilations(generation,id) ON DELETE CASCADE);")?;
         let prior: Option<Vec<u8>> = if active {
             tx.query_row(
                 "SELECT owner FROM cursor_retention_state WHERE singleton=1",
@@ -676,5 +797,295 @@ mod lifecycle_tests {
             Err(Error::CursorInvalidated)
         ));
         cursors.admit_at(&path, at(102)).unwrap();
+    }
+
+    fn units(writer: &mut Writer, definitions: &[(&str, &str)]) {
+        for (id, text) in definitions {
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: (*id).into(),
+                    project_path: (*id).into(),
+                    language: "typescript".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Source(SourceArtifact {
+                    id: format!("source-{id}"),
+                    path: format!("{id}.ts"),
+                    compilation_id: (*id).into(),
+                    sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                    utf8: text.as_bytes().into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Facts(FactBatch {
+                    compilation_id: (*id).into(),
+                    symbols: vec![Symbol {
+                        id: "symbol".into(),
+                        name: "value".into(),
+                        kind: "function".into(),
+                        signature: format!("value(): {text}"),
+                        ..Default::default()
+                    }],
+                    occurrences: vec![Occurrence {
+                        symbol_id: "symbol".into(),
+                        artifact_id: format!("source-{id}"),
+                        role: "declaration".into(),
+                        start_byte: 0,
+                        end_byte: text.len() as u64,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: (*id).into(),
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+    }
+    fn staged_generation(path: &Path) -> u64 {
+        Connection::open(path)
+            .unwrap()
+            .query_row("SELECT generation FROM staging_generations", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn retention_projection_excludes_current_and_staged_shared_units_and_sources() {
+        let path = database();
+        let mut writer = Writer::open(&path).unwrap();
+        units(
+            &mut writer,
+            &[("a", "shared old source"), ("b", "shared old source")],
+        );
+        writer.publish().unwrap();
+        let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+        let pin = retention.pin_current().unwrap();
+        let sibling = retention.pin_current().unwrap();
+        let current = retention.retained_usage(None, None).unwrap();
+        assert_eq!(
+            (
+                current.units,
+                current.unit_bytes,
+                current.artifact_bytes,
+                current.source_bytes,
+                current.manifest_bytes
+            ),
+            (0, 0, 0, 0, 0)
+        );
+        assert!(current.pin_bytes > 0);
+        let mut replacement = Writer::open_incremental(&path, &["a".into()]).unwrap();
+        units(&mut replacement, &[("a", "new a source")]);
+        let generation = staged_generation(&path);
+        let forecast = retention.retained_usage(Some(generation), None).unwrap();
+        assert_eq!(forecast.units, 1);
+        assert_eq!(forecast.source_bytes, 0); // b still needs the identical text
+        assert!(forecast.unit_bytes > 0 && forecast.artifact_bytes > 0);
+        assert!(forecast.manifest_bytes > 0);
+        replacement.publish().unwrap();
+        let actual = retention.retained_usage(None, None).unwrap();
+        assert_eq!(
+            forecast.total_bytes().unwrap(),
+            actual.total_bytes().unwrap()
+        );
+        assert_eq!(actual.proposed_generation, generation);
+        retention.release(&sibling).unwrap();
+        let one = retention.retained_usage(None, None).unwrap();
+        assert_eq!(
+            (
+                one.unit_bytes,
+                one.source_bytes,
+                one.artifact_bytes,
+                one.manifest_bytes
+            ),
+            (
+                actual.unit_bytes,
+                actual.source_bytes,
+                actual.artifact_bytes,
+                actual.manifest_bytes
+            )
+        );
+        assert_eq!(one.pin_bytes * 2, actual.pin_bytes);
+        retention.release(&pin).unwrap();
+        assert_eq!(
+            retention
+                .retained_usage(None, None)
+                .unwrap()
+                .total_bytes()
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn retained_source_cost_uses_utf8_bytes_deduplicates_hashes_and_reclaims_summaries() {
+        let path = database();
+        let original = "😀é shared source";
+        let mut writer = Writer::open(&path).unwrap();
+        units(&mut writer, &[("a", original), ("b", original)]);
+        writer.publish().unwrap();
+        let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+        let pin = retention.pin_current().unwrap();
+        let sibling = retention.pin_current().unwrap();
+        let mut replacement = Writer::open(&path).unwrap();
+        units(
+            &mut replacement,
+            &[("a", "replacement"), ("b", "replacement")],
+        );
+        replacement.publish().unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TRIGGER fail_second_summary BEFORE INSERT ON cursor_unit_costs_v1 WHEN (SELECT count(*) FROM cursor_unit_costs_v1)>0 BEGIN SELECT raise(ABORT,'fixture cache interruption'); END;").unwrap();
+        assert!(matches!(
+            retention.retained_usage(None, None),
+            Err(Error::Sqlite(_))
+        ));
+        let completed: u64 = connection
+            .query_row("SELECT count(*) FROM cursor_unit_costs_v1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(completed, 1);
+        connection
+            .execute_batch("DROP TRIGGER fail_second_summary")
+            .unwrap();
+        let usage = retention.retained_usage(None, None).unwrap();
+        assert_eq!(usage.units, 2);
+        assert_eq!(usage.source_bytes, 64 + 64 + original.len() as u64);
+        assert_eq!(usage, retention.retained_usage(None, None).unwrap());
+        let summaries: u64 = connection
+            .query_row("SELECT count(*) FROM cursor_unit_costs_v1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(summaries, 2);
+        connection
+            .execute("UPDATE cursor_unit_costs_v1 SET store_format=5,bytes=0", [])
+            .unwrap();
+        assert_eq!(usage, retention.retained_usage(None, None).unwrap());
+        retention.release(&pin).unwrap();
+        assert_eq!(
+            retention.retained_usage(None, None).unwrap().unit_bytes,
+            usage.unit_bytes
+        );
+        retention.release(&sibling).unwrap();
+        let summaries: u64 = connection
+            .query_row("SELECT count(*) FROM cursor_unit_costs_v1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(summaries, 0);
+        assert_eq!(
+            retention
+                .retained_usage(None, None)
+                .unwrap()
+                .total_bytes()
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn retained_usage_rejects_expired_budgets_unknown_publications_and_old_owners() {
+        let path = database();
+        let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+        retention.pin_current().unwrap();
+        assert!(matches!(
+            retention.retained_usage(None, Some(0)),
+            Err(Error::DeadlineExceeded)
+        ));
+        assert!(matches!(
+            retention.retained_usage(Some(1_000_000), None),
+            Err(Error::InvalidRequest(_))
+        ));
+        GenerationRetention::activate(&path, [2; 16]).unwrap();
+        assert!(matches!(
+            retention.retained_usage(None, None),
+            Err(Error::CursorInvalidated)
+        ));
+    }
+
+    #[test]
+    fn result_reservations_share_one_budget_with_indexes_across_workspaces() {
+        let a = database();
+        let b = database();
+        let mut cursors = CursorRegistry::new([1; 16], 3).unwrap();
+        let first = cursors.admit(&a).unwrap();
+        let second = cursors.admit(&b).unwrap();
+        let pins = cursors.retained_bytes().unwrap();
+        cursors.maximum_bytes = pins + 100;
+        let active = cursors.borrow(&a, first, at(5)).unwrap();
+        cursors.reserve_result(first, 80).unwrap();
+        assert_eq!(cursors.retained_bytes().unwrap(), pins + 80);
+        assert!(matches!(
+            cursors.reserve_result(second, pins + 101),
+            Err(Error::ResourceLimited(_))
+        ));
+        assert_eq!(cursors.entries.len(), 2);
+        let other = cursors.borrow(&b, second, at(5)).unwrap();
+        assert!(matches!(
+            cursors.reserve_result(second, 80),
+            Err(Error::ResourceLimited(_))
+        ));
+        assert_eq!(cursors.entries[&second.id].result_bytes_reserved, 0);
+        cursors.finish(&active).unwrap();
+        cursors.reserve_result(second, 80).unwrap();
+        assert!(!cursors.entries.contains_key(&first.id));
+        assert_eq!(cursors.retained_bytes().unwrap(), pins / 2 + 80);
+        cursors.reserve_result(second, 10).unwrap();
+        assert_eq!(cursors.entries[&second.id].result_bytes_reserved, 80);
+        cursors.finish(&other).unwrap();
+    }
+
+    #[test]
+    fn publication_forecast_waits_for_reads_then_reclaims_with_the_shared_result_pool() {
+        let path = database();
+        let mut cursors = CursorRegistry::new([1; 16], 1).unwrap();
+        let handle = cursors.admit(&path).unwrap();
+        cursors.reserve_result(handle, 100).unwrap();
+        let active = cursors.borrow(&path, handle, at(5)).unwrap();
+        let initial = cursors.retained_bytes().unwrap();
+        let mut writer = Writer::open(&path).unwrap();
+        units(&mut writer, &[("next", "replacement")]);
+        let generation = staged_generation(&path);
+        let execution = crate::execution::Execution::new(Default::default(), None).unwrap();
+        let projected = cursors
+            .budget_usage(Some((&path, generation)), execution)
+            .unwrap();
+        assert!(projected > initial);
+        cursors.maximum_bytes = initial;
+        assert!(!cursors.prepare_publication(&path, generation).unwrap());
+        assert!(cursors.publication_waiting);
+        assert!(matches!(
+            cursors.borrow(&path, handle, at(5)),
+            Err(Error::ResourceLimited(_))
+        ));
+        assert!(matches!(
+            cursors.admit(&path),
+            Err(Error::ResourceLimited(_))
+        ));
+        let old_view = active.pin().open_view().unwrap();
+        cursors.finish(&active).unwrap();
+        assert!(cursors.prepare_publication(&path, generation).unwrap());
+        writer.publish().unwrap();
+        cursors.set_publication_waiting(false);
+        assert_eq!(cursors.retained_bytes().unwrap(), 0);
+        assert!(matches!(
+            active.pin().open_view(),
+            Err(Error::CursorInvalidated)
+        ));
+        let request: QueryRequest =
+            serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap();
+        assert_eq!(
+            old_view.query(request).unwrap().source.unwrap().text,
+            "original source"
+        );
     }
 }
