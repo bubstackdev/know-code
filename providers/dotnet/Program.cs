@@ -307,7 +307,8 @@ static partial class Analysis
         report.Capabilities.Add("dependencies", "partial");
         report.Capabilities.Add("dispatch", "partial");
         report.Capabilities.Add("project_links", projectLinks.Complete ? "complete" : "partial");
-        report.Capabilities.Add("test_classification", TestClasses.Capability(classification));
+        if (request.TestClassificationPolicy != 0)
+            report.Capabilities.Add("test_classification", TestClasses.Capability(classification));
         report.Diagnostics.AddRange(diagnostics);
         Wire.Send(new Envelope { Report = report });
     }

@@ -80,8 +80,9 @@ for(const source of linked){
 }
 checks.push('linked_and_generated_sources_inherit_distinct_contexts_without_changed_bytes_or_ranges');
 const legacy=invoke([project('Tests')],0,first.preparations);success(legacy,0);
-assert(legacy.compilations.every(c=>!c.testClassification)&&legacy.reports.every(r=>r.capabilities.test_classification==='unknown'));
+assert(legacy.compilations.every(c=>!c.testClassification)&&legacy.reports.every(r=>!Object.hasOwn(r.capabilities,'test_classification')));
 assert.equal(legacy.preparations.length,0,'classification policy change repeated dependency restoration');
+assert(legacy.reports.every(r=>Object.entries(r.capabilities).every(([key,value])=>['calls','dependencies','dispatch','project_links'].includes(key)&&['complete','partial','unavailable'].includes(value))), 'legacy capability map is rejected by pre-classification cores');
 checks.push('legacy_absence_and_policy_only_change_reuses_preparation');
 write(flags,flagsText('false'));
 const changed=invoke(projects,1,first.preparations);success(changed);
