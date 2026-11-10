@@ -53,7 +53,7 @@ Recommended next wave uses the existing four slots:
 
 Do not run graph projection, target grouping and test classification as three uncoordinated query writers: they share public/fact contracts. Likewise do not split corruption recovery and replacement rebuild into competing writer implementations, or have discovery and recovery independently edit the same coordinator/registry. Recovery can be the following implementation wave after its damaged-artifact retention/retry and temporary rebuild-disk policies are settled. Release script preparation can proceed later without credentials or external publication; execution needs concrete signing/destination choices.
 
-The pending discovery Q&A asks whether traversal stops at a repository boundary (recommended, with nested repositories/submodules explicitly registerable) or automatically enrolls nested repositories. The other already accepted defaults remain: skip directory symlinks, deduplicate aliases/worktrees through the shared identity path, keep unavailable registrations/data, and use common resource budgets. These read-only audits did not start a goal, implement the next wave, inspect credentials, activate the live runtime or publish anything.
+The user accepted stopping automatic discovery at repository boundaries; nested repositories/submodules remain explicitly registerable. The other already accepted defaults remain: skip directory symlinks, deduplicate aliases/worktrees through the shared identity path, keep unavailable registrations/data, and use common resource budgets. These read-only audits did not start a goal, implement the next wave, inspect credentials, activate the live runtime or publish anything.
 
 ## Release boundaries (accepted scope)
 

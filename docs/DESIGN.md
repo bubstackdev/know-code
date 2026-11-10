@@ -231,3 +231,7 @@ Continuation tokens are opaque and bound to the workspace, usable across local c
 ## Accepted complete-response budget (2026-11-09)
 
 Each page's shared JSON response defaults to 256 KiB and is configurable up to 2 MiB, including metadata, diagnostics, signatures and source. MCP's additional protocol framing needs its own bound. This is a complete encoded-response limit, not a claim about total query memory. See [query lifecycle](QUERY_LIFECYCLE.md#accepted-complete-response-byte-budget).
+
+## Accepted parent discovery boundary (2026-11-10)
+
+Automatic parent-folder discovery stops descending when it finds a repository. Nested repositories and submodules can still be registered explicitly through the shared identity/registration path. This complements the accepted default of skipping directory symlinks during discovery; it does not change compiler-resolved linked-source analysis or delete existing registrations.
