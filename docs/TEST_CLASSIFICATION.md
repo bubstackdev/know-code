@@ -1,6 +1,6 @@
 # Test classification and finding filters
 
-Status: active implementation contract. Root owns the common facts/store/query/API/scheduler path; two narrow adapters extract evidence. This does not change the five logical fact families or add a test execution engine.
+Status: implemented development slice with focused current-host validation; final release acceptance remains open. Root owns the common facts/store/query/API/scheduler path; two narrow adapters extract evidence. This does not change the five logical fact families or add a test execution engine.
 
 ## Accepted product decisions
 
@@ -45,3 +45,10 @@ Format7 stores classification JSON on compilations and unit_artifacts and privat
 Native query contract4 introduces `tests` and classification metadata. Node exposes the string union; .NET adds nullable `Tests` with `TestFilter.All/Exclude/Only`, leaving the positional constructor intact. Source and coverage expansion reject nondefault filters. Continuations cannot mutate test scope; retained rows/evidence remain on the original generation.
 
 Successful unchanged reconciliations with older TS/C# classification policy reanalyze through the existing full workspace job. Preparation checkpoints and retry flags remain separate. Cancelled/failed unchanged baselines remain cancelled/failed; the saved-inputv2 hash is unchanged, so a policy upgrade cannot impersonate a saved edit or resume cancellation. Explicit refresh or a real saved change retries through the existing path.
+
+
+## Combined verification
+
+The combined product source is `f244336` (shared core plus both adapters); producer `7caf29a33f7143209bc6308e687e019c` binds89 product inputs,12 generated inputs and147 outputs. Later `d6147b7` fixes only the Python fixture's durable socket path/context assertion; provider evidence documentation is `af5dcd0`/`69b6575`. All133 focused Rust tests and locked all-target Clippy pass. Combined CLI/Node/.NET classification checks pass5 groups, including typed .NET filters, mixed/linked declarations, reference-site labels, graph filters, pinned page/context replay across rename and policy-only backfill without restoration checkpoint changes. The31-group MCP check also verifies the filter schema and native operator parity. The full Debug script was not run.
+
+[Exact combined record](../.artifacts/test-classification-assembly/1794344524400115000/validation.json) binds these source/build/test/log identities and retained corrections. Adapter-only evidence is separately documented in [TypeScript](TYPESCRIPT_TEST_CLASSIFICATION.md) and [C#](CSHARP_TEST_CLASSIFICATION.md). Runtime/npm/NuGet candidates and the outside-checkout, network-denied TS/C# installed checks use the same producer; their frozen handoff is linked from the combined record. These are unsigned Debug results on this host, not broader platform/performance or publication certification. No live runtime was activated.
