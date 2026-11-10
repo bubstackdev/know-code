@@ -238,4 +238,4 @@ Automatic parent-folder discovery stops descending when it finds a repository. N
 
 ## Accepted query cancellation and MCP transport (2026-11-10)
 
-SDK query cancellation uses .NET OperationCanceledException and Node AbortError, while the shared Rust/JSON boundary reports cancelled. Cancellation stops the query and releases its resources without cancelling shared indexing. MCP output has an8MiB full serialized frame ceiling and a5-second output deadline; stalled/partially written connections close while indexing continues. See QUERY_CANCELLATION.md for ownership, scope and focused validation.
+SDK query cancellation uses .NET OperationCanceledException and Node AbortError, while the shared Rust/JSON boundary reports cancelled. Cancellation stops the query and releases its resources without cancelling shared indexing. MCP output has an 8 MiB full serialized frame ceiling and a 5-second output deadline; stalled/partially written connections close while indexing continues. See QUERY_CANCELLATION.md for ownership, scope and focused validation.

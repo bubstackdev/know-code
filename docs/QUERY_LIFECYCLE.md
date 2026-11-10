@@ -22,7 +22,7 @@ The per-call native read view is dropped before response encoding. If a low-leve
 
 Node records time before request serialization/native dispatch and before libuv queueing. .NET records time before serialization/Task.Run and passes elapsed milliseconds through additive `kc_query_json_elapsed`; Node uses additive `queryJsonElapsed`. Current SDKs reject native artifacts lacking those exports. Older low-level C/Node entry points remain available and apply the same defaults from native admission. C ABI 1, worker/control protocol 7 and store format 6 are unchanged. No coordinator protocol feature is needed to send a smaller existing wait_ms value.
 
-MCP captures its clock before blocking dispatch and advertises the shared constants. Its two permits remain held until core work exits; expiry does not detach still-running work. CancellationToken/AbortSignal and prompt underlying cancellation on MCP cancellation remain unfinished.
+MCP captures its clock before blocking dispatch and advertises the shared constants. Its two permits remain held until core work exits; expiry does not detach still-running work. CancellationToken/AbortSignal and prompt underlying MCP request/connection cancellation are implemented at e733903; see QUERY_CANCELLATION.md.
 
 Enforcement is cooperative: OS scheduling, filesystem calls, allocation, a single compiler-report JSON parse or other noninterruptible work can delay observing expiry. Millisecond host elapsed-time transfer has sub-millisecond rounding/marshalling gaps. A saturated host thread pool may delay delivering the error until it runs the expired task; that task must not begin index reading. Core JSON encoding is covered; host JSON parsing, outer MCP framing/output backpressure and caller processing are outside this implemented stopping boundary. No hard wall-clock response-delivery promise, peak-query-memory cap or outer-transport byte cap is claimed. The complete core JSON response cap below is separate. These limits do not change the accepted overall-budget objective or close the remaining release gates.
 
@@ -130,7 +130,7 @@ Page partitions are now frozen at materialization and served through the shared 
 
 ## Decisions still open
 
-Explicit request-cancellation outcomes and host API; outer transport/delivery limits; general query admission and peak memory; physical WAL/checkpoint pressure under the final candidate workload. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+General query admission and peak memory; physical WAL/checkpoint pressure under the final candidate workload. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
 
 ### Continuation implementation findings
 
@@ -186,3 +186,5 @@ Freeze `1994770` passed 66 Rust workspace tests, 31 Workspace SDK checks, 24 MCP
 Read-only review caught the pre-validation error edge; the final 1 KiB conservative policy and regression close it without a second parse. Exact source/build hashes, final test identities/log hashes and review are in `.artifacts/response-budget/1794282495361761000/validation.json`; `.artifacts/response-budget/current` points there. Earlier diagnostic logs remain retained.
 
 This is focused Debug evidence. Full Debug, optimized-profile, refreshed archives/installed acceptance, outer MCP limits, query peak-memory/admission policy and portable cursor/replay implementation remain open. No live installation/login job changed and nothing was published.
+
+The assembled cancellation/transport checkpoint at e733903 passes actual queued/active native cancellation, reader/WAL release, cursor-upload cleanup and actual MCP EOF/backpressure tests. See [QUERY_CANCELLATION.md](QUERY_CANCELLATION.md) for host conventions, exact frame/output bounds, source/build/evidence identities and cooperative limits. Physical WAL/admission and final release acceptance remain open.
