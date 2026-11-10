@@ -1288,6 +1288,7 @@ fn serve(
                 let limits = Limits {
                     cpu_cores: limits.cpu_cores,
                     memory_mib: limits.memory_mib,
+                    ..Default::default()
                 };
                 limits.validate()?;
                 if shared.resources.configure(data, limits)? {
@@ -1310,6 +1311,7 @@ fn serve(
                 resources: Some(ResourceLimits {
                     cpu_cores: limits.cpu_cores,
                     memory_mib: limits.memory_mib,
+                    ..Default::default()
                 }),
                 ..Default::default()
             });

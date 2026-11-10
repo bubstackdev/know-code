@@ -32,6 +32,14 @@ pub enum Error {
     Cancelled,
     #[error("{0}")]
     ResourceLimited(String),
+    #[error("derived index is corrupt; recovery required: {message}")]
+    IndexCorrupt {
+        database: std::path::PathBuf,
+        incarnation: String,
+        message: String,
+    },
+    #[error("index recovery is unavailable: {0}")]
+    IndexRecovering(String),
     #[error("{0}")]
     InvalidRequest(String),
     #[error("{0}")]
@@ -67,6 +75,8 @@ impl Error {
             Self::CursorLimit => "cursor_limit",
             Self::Cancelled => "cancelled",
             Self::ResourceLimited(_) => "resource_limited",
+            Self::IndexCorrupt { .. } => "index_corrupt",
+            Self::IndexRecovering(_) => "index_recovering",
             Self::InvalidRequest(_) | Self::Json(_) => "invalid_request",
             Self::Protocol(_) | Self::Decode(_) => "protocol_error",
             Self::Provider(_) => "provider_error",

@@ -665,6 +665,7 @@ pub fn resources(
             resources: limits.map(|l| ResourceLimits {
                 cpu_cores: l.cpu_cores,
                 memory_mib: l.memory_mib,
+                ..Default::default()
             }),
             ..Default::default()
         },

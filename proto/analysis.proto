@@ -62,6 +62,7 @@ message AnalyzeRequest {
   // Zero is legacy/unspecified. A nonzero value requires the provider's exact
   // acknowledgement before facts; preparation policy/fingerprints are separate.
   uint32 test_classification_policy = 10;
+  uint32 target_equivalence_policy = 11;
 }
 message AnalysisPolicy {
   uint32 version = 1;
@@ -102,6 +103,7 @@ message ProviderInfo {
   // Zero means the legacy contract only. Advertise after implementing the policy.
   uint32 analysis_policy_version = 4;
   uint32 test_classification_policy = 5;
+  uint32 target_equivalence_policy = 6;
 }
 // Classification describes saved compilation/source context, not execution
 // coverage. Absence on a source inherits its compilation's classification.
@@ -131,6 +133,8 @@ message Compilation {
   repeated ProjectReferenceContext references = 11;
   string input_fingerprint = 12;
   TestClassification test_classification = 13;
+  string target_family = 14;
+  uint32 target_equivalence_policy = 15;
 }
 // Exact compiler-selected contexts, not every target of a referenced project.
 message ProjectReferenceContext {
@@ -156,6 +160,8 @@ message Symbol {
   string definition_compilation_id = 6;
   string definition_symbol_id = 7;
   string definition_fingerprint = 8;
+  // Opaque compiler-backed declaration peer evidence; not a public symbol ID.
+  string declaration_key = 9;
 }
 message Occurrence {
   string symbol_id = 1;
@@ -211,6 +217,8 @@ message ControlRequest {
   optional string settings_json = 9;
   CursorRequest cursor = 10;
   ParentDiscoveryRequest parent_discovery = 11;
+  uint32 index_lifecycle_version = 12;
+  IndexCorruptionReport corruption = 13;
 }
 message WorkspaceStatus {
   string workspace_root = 1;
@@ -239,6 +247,7 @@ message ControlResponse {
   CursorReply cursor = 10;
   repeated ParentDiscoveryStatus parents = 11;
   uint32 parent_discovery_version = 12;
+  uint32 index_lifecycle_version = 13;
 }
 
 // Enrollment only; discovered repositories use the ordinary workspace registry.
@@ -289,6 +298,7 @@ message CursorReply {
   uint64 offset = 11;
   bool pending_pressure = 12;
   string warning = 13;
+  string index_incarnation = 14;
 }
 message CursorSettings {
   uint32 max_cursors = 1;
@@ -305,4 +315,13 @@ message WorkspaceAnalysisSettings {
 }
 
 // Personal coordinator-wide ceilings; not workspace compiler settings.
-message ResourceLimits { double cpu_cores = 1; uint64 memory_mib = 2; }
+message ResourceLimits {
+ double cpu_cores = 1;
+ uint64 memory_mib = 2;
+ uint64 rebuild_disk_mib = 3;
+ uint64 min_free_disk_mib = 4;
+}
+message IndexCorruptionReport {
+ string incarnation = 1;
+ string detail = 2;
+}
