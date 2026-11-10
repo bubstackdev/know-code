@@ -37,4 +37,19 @@ Development may use frozen archives under `.artifacts/cancellation-boundary/1794
 
 ## Current evidence
 
-The focused strict-policy probe passes, including all four IP transport/family denials and allowed Unix control. The first historical-candidate integration run reached fresh registration but failed before publication because the initial prefix-only Unix policy excluded Roslyn's fixed temporary pipe directory. Its failure is retained under `.artifacts/offline-validation/1794328973540838000/`, with installed test prefix `/Users/zakkeown/Code/.kco/rb1d64a1958`. A second run under `.artifacts/offline-validation/1794329496994021000/` also failed before publication: Seatbelt accepted the `{n}` repetition syntax but the path matcher did not match it. Literal/simple/explicit-repetition probes retained in its prefix distinguish that policy issue. Explicit character repetition now passes the actual GUID Unix IPC control while other temporary socket paths and all IP networking remain denied. The corrected full archive run remains pending at this checkpoint.
+The complete corrected historical-archive run passed **22 checks** at harness revision `5cd285c`, with frozen archive manifest source revision `c484e6f5377e82d6fbe723cdf3b5a17758b74d57`. Promoted evidence in the primary repository is [.artifacts/release-offline/1794330718012677000/validation.json](../.artifacts/release-offline/1794330718012677000/validation.json); the durable installed prefix is `/Users/zakkeown/Code/.kco/r4800b9e960`. Both this worktree and the actual primary build-source checkout were denied. The coordinator socket is absent after cleanup; the live development installation and original source corpora were untouched.
+
+The run proves fresh initial TS/C# compilation, generated source, exact Unicode source hashes/ranges, references, native/CLI/MCP agreement, automatic saved changes in both languages, relocation/reconnection and actionable missing restoration while the healthy workspace stays queryable. The missing-dependency case published an explicitly non-complete graph with the missing package named in coverage; a successful CLI transport was not interpreted as complete analysis. All four IPv4/IPv6 TCP/UDP probes returned policy denial, both required Unix controls succeeded, and an unrelated temporary Unix socket remained denied.
+
+Before the final run, corrected helpers were replayed against 11 captured CLI and 22 native query envelopes, with exact initial fixture bytes for source/hash/range checks. Rejection controls cover `not_ready`, `deadline_exceeded`, missing-result, stale and older-generation envelopes. The final harness routes MCP structured results through the same success/currentness/generation check and retains actual wire evidence in `mcp.json`. This replay is retained under the final run's `assertion-replay/` directory.
+
+Four earlier attempts remain failed and retained:
+
+| Worktree artifact run | Outcome |
+| --- | --- |
+| `1794328973540838000` | Prefix-only Unix policy denied Roslyn's fixed temporary pipe; no publication. |
+| `1794329496994021000` | Seatbelt accepted `{n}` syntax but did not match the GUID path; no publication. Exact literal/simple/explicit-repetition probes distinguish that policy issue. |
+| `1794329970283377000` | Fresh offline graph existed; a fixture wrongly treated workspace-relative source paths as absolute. Corrected resolution preserves exact hash/range checks. |
+| `1794330111527266000` | Initial and saved TypeScript graphs existed; a fixture indexed an omitted empty `symbols` array directly. Corrected absence checks first require a successful current result at the expected generation floor, then require exactly empty/omitted symbols. |
+
+No current assembled candidate, optimized build, full Debug suite, older-OS guest, performance, signing/notarization or public-build telemetry certification is claimed. Re-run the gate on the final provenance-verified candidate after integration. The `matrix` field retained from the archive manifest describes producer metadata; actual installed/relocated runtime discovery is retained in command output and the validation record.
