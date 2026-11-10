@@ -14,19 +14,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const CONTROL_VERSION: u32 = 2;
+pub const CONTROL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
     pub cpu_cores: f64,
     pub memory_mib: u64,
+    pub rebuild_disk_mib: u64,
+    pub min_free_disk_mib: u64,
 }
 impl Default for Limits {
     fn default() -> Self {
         Self {
             cpu_cores: 2.0,
             memory_mib: 2048,
+            rebuild_disk_mib: 2048,
+            min_free_disk_mib: 512,
         }
     }
 }
@@ -36,8 +40,11 @@ impl Limits {
             || self.cpu_cores <= 0.0
             || self.memory_mib == 0
             || self.memory_mib.checked_mul(1024 * 1024).is_none()
+            || self.rebuild_disk_mib == 0
+            || self.rebuild_disk_mib.checked_mul(1024 * 1024).is_none()
+            || self.min_free_disk_mib.checked_mul(1024 * 1024).is_none()
         {
-            return Err(Error::InvalidRequest("cpu_cores must be finite and positive; memory_mib must be a positive representable size".into()));
+            return Err(Error::InvalidRequest("cpu_cores must be finite and positive; memory_mib and rebuild_disk_mib must be positive representable sizes; min_free_disk_mib must be representable".into()));
         }
         Ok(())
     }
@@ -561,6 +568,36 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
+    #[test]
+    fn disk_limits_default_for_existing_settings_and_reject_overflow() {
+        let existing: Limits =
+            serde_json::from_str(r#"{"cpu_cores":1.0,"memory_mib":1024}"#).unwrap();
+        assert_eq!(existing.rebuild_disk_mib, 2048);
+        assert_eq!(existing.min_free_disk_mib, 512);
+        existing.validate().unwrap();
+        for limits in [
+            Limits {
+                rebuild_disk_mib: 0,
+                ..Limits::default()
+            },
+            Limits {
+                rebuild_disk_mib: u64::MAX,
+                ..Limits::default()
+            },
+            Limits {
+                min_free_disk_mib: u64::MAX,
+                ..Limits::default()
+            },
+        ] {
+            assert!(limits.validate().is_err());
+        }
+        Limits {
+            min_free_disk_mib: 0,
+            ..Limits::default()
+        }
+        .validate()
+        .unwrap();
+    }
     #[test]
     fn cancelled_analysis_cannot_publish_and_committed_analysis_cannot_be_cancelled() {
         let governor = Governor::new(Limits::default()).unwrap();
