@@ -46,13 +46,19 @@ The user accepted invalidating all outstanding cursors on coordinator restart in
 
 ### Accepted retention-pressure behavior
 
-The user accepted invalidating the least recently used idle cursors under cursor-retention disk pressure, returning an explicit restart error so indexing can continue. Invalidation must not silently advance a cursor or discard facts/source beneath an active page read. This policy allows a token to become invalid before its idle/absolute timeout. Active-query cleanup, admission when no idle candidate can free sufficient space, shared retention accounting and admission when the cursor-count limit is reached remain design work. A budget must not silently grow with workspace count or available workstation RAM.
+The user accepted invalidating the least recently used idle cursors under cursor-retention disk pressure, returning an explicit restart error so indexing can continue. Invalidation must not silently advance a cursor or discard facts/source beneath an active page read. This policy allows a token to become invalid before its idle/absolute timeout. Shared retention accounting and safe active-query cleanup remain implementation work. A budget must not silently grow with workspace count or available workstation RAM.
+
+### Accepted admission when capacity is full
+
+At the shared cursor-count limit, the user accepted the same least-recently-used idle eviction policy as retention pressure. Reject a new cursor with typed `cursor_limit` when every existing cursor is busy; do not evict an active page read to admit it. The configurable starting count limit remains 128 per user across workspaces.
+
+When retention space is needed and every cursor is serving a page, the user accepted deferring publication until a bounded active page read finishes, then evicting an idle cursor. Active reads remain coherent and prior serving results remain explicitly stale during the delay. This does not authorize increasing budgets or keeping a serving write transaction open while waiting. Implementation must prevent further admissions from starving a pending publication and reclaim abandoned page borrows within their deadline/lifetime bounds.
 
 ### Accepted shared retention budget
 
 The user accepted a configurable **1 GiB (1,073,741,824 bytes)** starting budget for extra cursor-retained index data, shared per user across all workspaces. Count data retained solely for cursor generations; exclude data still needed by the current serving generation. Shared units/source must not be charged repeatedly for each token. This is a disk-retention policy, not RAM reservation/preallocation, a per-workspace allowance, or a hard SQLite database/WAL file-size cap.
 
-The budget is personal, with one effective value enforced by the coordinator across workspaces/providers/clients. Exact settings encoding and retained-byte accounting remain implementation decisions to validate. Physical database, freelist and WAL size remain separate measurements; reclaimed pages can be reused without shrinking the file. The accepted idle-cursor pressure policy applies when this shared retention allowance is exhausted. The user also accepted a configurable starting limit of **128 live cursors per user**, shared across all workspaces, providers and local clients. Count cursors independently of marginal retained bytes: shared or current-generation pins cannot create unlimited metadata. This is an upper bound, not a preallocated pool or a multiplied per-workspace allowance. Exact admission/eviction behavior at the count limit and bounds on per-cursor continuation state remain under design.
+The budget is personal, with one effective value enforced by the coordinator across workspaces/providers/clients. Exact settings encoding and retained-byte accounting remain implementation decisions to validate. Physical database, freelist and WAL size remain separate measurements; reclaimed pages can be reused without shrinking the file. The accepted idle-cursor pressure policy applies when this shared retention allowance is exhausted. The user also accepted a configurable starting limit of **128 live cursors per user**, shared across all workspaces, providers and local clients. Count cursors independently of marginal retained bytes: shared or current-generation pins cannot create unlimited metadata. This is an upper bound, not a preallocated pool or a multiplied per-workspace allowance. Count-limit admission/eviction is accepted as specified above; per-cursor continuation-state bounds remain under design.
 
 ### Retention finding and proposed mechanism
 
@@ -60,7 +66,7 @@ Current `Writer::open_controlled` staging recovery and `Writer::finish_publicati
 
 Proposed mechanism: let the sole coordinator/writer maintain bounded leases over logical generation manifests. Publication/cleanup retains compilation ownership and exact source while a lease is valid; individual page requests open short SQLite transactions against that retained generation through the same operators. No SQLite transaction stays open between pages, and no complete result set/index is copied just to enable pagination. Lease changes must serialize with staging recovery, publication and reclamation; accepting a pin after its generation was reclaimed must fail explicitly. Temporary pins remain reader retention, not searchable history.
 
-Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Use a coordinator incarnation that exists independently of optional live-freshness acceleration. Startup may retire the previous incarnation's cursor leases after acquiring sole-writer ownership; existing SQLite reader transactions still need coherent cleanup. Exact storage/encoding, retained-byte accounting, cursor admission/eviction behavior, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
+Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Use a coordinator incarnation that exists independently of optional live-freshness acceleration. Startup may retire the previous incarnation's cursor leases after acquiring sole-writer ownership; existing SQLite reader transactions still need coherent cleanup. Exact storage/encoding, retained-byte accounting, admission/publication synchronization, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
 
 ### Read-only sizing observation
 
@@ -82,7 +88,7 @@ Page packing and portable cursor implementation remain pending. Current oversize
 
 ## Decisions still open
 
-Explicit request-cancellation outcomes and host API; outer transport limits and pagination packing; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/admission and continuation-state bounds. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+Explicit request-cancellation outcomes and host API; outer transport limits and pagination packing; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/synchronization and continuation-state bounds. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
 
 ### Continuation implementation findings
 
