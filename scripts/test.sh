@@ -9,6 +9,7 @@ case "$KNOW_CODE_BUILD_PROFILE" in
   release) task_cargo_profile=release ;;
   *) echo "Usage: bash scripts/test.sh [debug|release]" >&2; exit 2 ;;
 esac
+python3 tests/build_record.py
 cargo test --workspace --locked --profile "$task_cargo_profile"
 node tests/protocol.mjs
 node tests/jsonrpc.mjs
