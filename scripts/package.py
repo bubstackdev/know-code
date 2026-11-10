@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--profile',choices=['debug','release'],default='release');parser.add_argument('--out',type=Path)
 args=parser.parse_args();PROFILE=args.profile;CONFIG=PROFILE.capitalize();VERSION=tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
 try:
- BUILD_LOCK=provenance.lock(ROOT,shared=True)
+ BUILD_LOCK=provenance.lock(ROOT)
  BUILD_RECORD=provenance.verify(ROOT,PROFILE)
  PACKAGE_INPUTS=provenance.package_inputs(ROOT)
 except provenance.Invalid as error:raise SystemExit(str(error))
@@ -16,9 +16,7 @@ if platform.system()!='Darwin' or platform.machine()!='arm64':raise SystemExit('
 STAGE=OUT/'staging';STAGE.mkdir();RUNTIME=STAGE/f'know-code-{VERSION}-darwin-arm64';RESOURCES=RUNTIME/'lib/know-code';RESOURCES.mkdir(parents=True);(RUNTIME/'bin').mkdir()
 ENV=dict(os.environ,DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',npm_config_cache=str(OUT/'.npm-cache'),npm_config_audit='false',npm_config_fund='false')
 def run(*command,cwd=ROOT):
- p=subprocess.run(list(map(str,command)),cwd=cwd,env=ENV,text=True,capture_output=True,timeout=180)
- if p.returncode:raise RuntimeError(f'{command}\n{p.stdout}\n{p.stderr}')
- return p.stdout
+ return provenance.run(list(map(str,command)),cwd,ENV,inherited=(BUILD_LOCK.fileno(),),timeout=180)
 
 def copy(source,dest):
  if source.is_symlink():raise RuntimeError(f'Unexpected source symlink: {source}')

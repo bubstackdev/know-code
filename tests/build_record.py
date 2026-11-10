@@ -1,6 +1,6 @@
 """Focused producer/package evidence faults; fixtures stay under .artifacts."""
 from pathlib import Path
-import importlib.util,json,os,time,unittest
+import importlib.util,json,os,subprocess,sys,time,unittest
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -82,6 +82,20 @@ class Evidence(unittest.TestCase):
         with self.assertRaisesRegex(provenance.Invalid,'dependency inputs changed'):self.verify()
         put(self.nested/'settings.yaml','source: pinned\n');put(self.root/'providers/dotnet/obj/protocol/Analysis.cs','wrong protocol')
         with self.assertRaisesRegex(provenance.Invalid,'generated inputs changed'):self.verify()
+    def test_restoration_cannot_change_external_or_new_root_configuration(self):
+        self.env['CARGO_HOME']=str(self.case/'cargo-home');config=put(self.case/'cargo-home/config.toml','[build]\n')
+        record=provenance.begin(self.root,'debug',self.env);put(config,'[build]\nrustflags=[]\n')
+        with self.assertRaisesRegex(provenance.Invalid,'configuration inputs during restoration'):provenance.prepare(self.root,'debug',self.env,record)
+        put(config,'[build]\n');put(self.root/'Directory.Packages.props','new restore inputs')
+        with self.assertRaisesRegex(provenance.Invalid,'configuration inputs during restoration'):provenance.prepare(self.root,'debug',self.env,record)
+    def test_local_path_dependency_outside_the_workspace_is_frozen(self):
+        local=self.case/'local-patch';put(local/'Cargo.toml');code=put(local/'src/lib.rs','original patch')
+        identity='path#local-patch@1.0.0'
+        self.metadata['packages'].append({'id':identity,'version':'1.0.0','source':None,'manifest_path':str(local/'Cargo.toml')})
+        self.metadata['resolve']['nodes'][0]['deps'].append({'pkg':identity,'dep_kinds':[{'kind':None}]})
+        self.metadata['resolve']['nodes'].append({'id':identity,'deps':[]})
+        self.complete();put(code,'changed patch without a manifest/lock edit')
+        with self.assertRaisesRegex(provenance.Invalid,'dependency inputs changed'):self.verify()
     def test_changed_native_and_provider_payloads_are_rejected(self):
         self.complete();dll=self.root/'providers/dotnet/bin/Debug/net10.0/KnowCode.Provider.DotNet.dll';put(dll,'stale worker')
         with self.assertRaisesRegex(provenance.Invalid,'built outputs changed'):self.verify()
@@ -93,7 +107,7 @@ class Evidence(unittest.TestCase):
     def test_changed_external_build_configuration_is_rejected(self):
         self.env['CARGO_HOME']=str(self.case/'cargo-home');config=put(self.case/'cargo-home/config.toml','[build]\n')
         self.complete();put(config,'[build]\nrustflags=["-C", "opt-level=3"]\n')
-        with self.assertRaisesRegex(provenance.Invalid,'dependency inputs changed'):self.verify()
+        with self.assertRaisesRegex(provenance.Invalid,'configuration inputs changed'):self.verify()
     def test_finished_build_rejects_changed_dependency_or_flags(self):
         record=provenance.begin(self.root,'debug',self.env);provenance.prepare(self.root,'debug',self.env,record)
         dependency=self.nuget/'lib/Dependency.dll';put(dependency,'changed during compile')
@@ -118,6 +132,21 @@ class Evidence(unittest.TestCase):
             with self.assertRaises(provenance.Invalid):provenance.lock(self.root,shared=True)
         with provenance.lock(self.root,shared=True),provenance.lock(self.root,shared=True):
             with self.assertRaises(provenance.Invalid):provenance.lock(self.root)
+    def test_writer_child_retains_fence_after_driver_exit(self):
+        writer="import os,sys; print('ready',flush=True); sys.stdin.buffer.read(1); os.close(int(sys.argv[1])); print('released',flush=True)"
+        driver=f"import os,sys; from pathlib import Path; sys.path.insert(0,{str(ROOT/'scripts')!r}); import build_record as p\nwith p.lock(Path({str(self.root)!r})) as fence: p.run([sys.executable,'-c',{writer!r},str(fence.fileno())],Path({str(self.root)!r}),dict(os.environ),False,(fence.fileno(),))"
+        process=subprocess.Popen([sys.executable,'-c',driver],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(),'ready')
+            process.terminate();process.wait(timeout=5)
+            with self.assertRaises(provenance.Invalid):provenance.lock(self.root)
+            process.stdin.write('x');process.stdin.flush()
+            self.assertEqual(process.stdout.readline().strip(),'released')
+            with provenance.lock(self.root):pass
+        finally:
+            process.stdin.close();process.stdout.close()
+            if process.poll() is None:process.kill()
+            process.wait(timeout=5)
 
 if __name__=='__main__':
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(Evidence))

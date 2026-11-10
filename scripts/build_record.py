@@ -51,8 +51,8 @@ def package_inputs(root):
     paths.extend(files(root/'third_party/licenses'))
     return inventory(paths,root)
 
-def run(command,root,env,capture=True):
-    process=subprocess.run(command,cwd=root,env=env,text=True,capture_output=capture,timeout=1800)
+def run(command,root,env,capture=True,inherited=(),timeout=1800):
+    process=subprocess.run(command,cwd=root,env=env,text=True,capture_output=capture,timeout=timeout,pass_fds=inherited)
     if process.returncode:raise Invalid(f'Command failed ({process.returncode}): {command}\n{process.stdout or ""}\n{process.stderr or ""}')
     return process.stdout.strip() if capture else None
 
@@ -88,15 +88,19 @@ def runtime_packages(root):
     for name in json.loads((requiring/'package.json').read_text())['dependencies']:visit(name,requiring)
     return list(visited.values())
 
+def configurations(root,env):
+    result={}
+    candidates={Path(env.get('CARGO_HOME',Path.home()/'.cargo'))/name for name in ('config','config.toml')}
+    for parent in (root,*root.parents):
+        candidates.update(parent/'.cargo'/name for name in ('config','config.toml'))
+        candidates.update(parent/name for name in ('Directory.Build.props','Directory.Build.targets','Directory.Packages.props'))
+    for path in sorted(candidates):
+        if path.is_file():result['configuration:'+str(path)]=digest(path)
+    return result
+
 def dependencies(root,env):
     # These exact installed bytes can be compiled or copied by publish --no-build.
     result={}
-    configurations={Path(env.get('CARGO_HOME',Path.home()/'.cargo'))/name for name in ('config','config.toml')}
-    for parent in (root,*root.parents):
-        configurations.update(parent/'.cargo'/name for name in ('config','config.toml'))
-        configurations.update(parent/name for name in ('Directory.Build.props','Directory.Build.targets','Directory.Packages.props'))
-    for path in sorted(configurations):
-        if path.is_file():result['configuration:'+str(path)]=digest(path)
     for package in runtime_packages(root):result.update(inventory(files(package,{'node_modules'}),root))
     metadata=json.loads(run(['cargo','metadata','--locked','--offline','--filter-platform','aarch64-apple-darwin','--format-version','1'],root,env))
     nodes={node['id']:node for node in metadata['resolve']['nodes']};reachable=set();queue=list(metadata['workspace_members'])
@@ -106,11 +110,12 @@ def dependencies(root,env):
         reachable.add(identity)
         queue.extend(edge['pkg'] for edge in nodes[identity]['deps'] if any(kind['kind']!='dev' for kind in edge['dep_kinds']))
     packages=[package for package in metadata['packages'] if package['id'] in reachable]
-    result['cargo:resolved-packages']=hashlib.sha256(json.dumps(sorted((p['id'],p['version'],p['source']) for p in packages if p['source']),sort_keys=True).encode()).hexdigest()
+    result['cargo:resolved-packages']=hashlib.sha256(json.dumps(sorted((p['id'],p['version'],p['source']) for p in packages),sort_keys=True).encode()).hexdigest()
     for package in packages:
-        if package['source'] is None:continue
         directory=Path(package['manifest_path']).parent
-        for path in files(directory,{'target','.git'}):result[f'cargo:{package["id"]}/{path.relative_to(directory).as_posix()}']=digest(path)
+        covered=package['id'] in metadata['workspace_members'] and any(directory.is_relative_to(root/prefix) for prefix in ('crates','bindings','providers','proto'))
+        if package['source'] is None and covered:continue
+        for path in files(directory,{'target','.git','.artifacts','node_modules','__pycache__'}):result[f'cargo:{package["id"]}/{path.relative_to(directory).as_posix()}']=digest(path)
     nuget={}
     for project in PROJECTS:
         obj=root/project/'obj';assets=obj/'project.assets.json'
@@ -150,18 +155,19 @@ def unchanged(expected,actual,what,profile):
 def begin(root,profile,env):
     if env.get('CARGO_BUILD_TARGET'):fail('CARGO_BUILD_TARGET must be unset for the native candidate build',profile)
     revision=subprocess.run(['git','rev-parse','--verify','HEAD'],cwd=root,text=True,capture_output=True)
-    record={'schema_version':VERSION,'status':'building','build_id':uuid.uuid4().hex,'profile':profile,'started_ns':time.time_ns(),'source_revision':revision.stdout.strip() if revision.returncode==0 else None,'build_host':{'macos':platform.mac_ver()[0],'machine':platform.machine()},'source_inputs':source_inputs(root),'toolchains':toolchains(root,env),'build_flags':build_flags(env),'build_options':{'cargo_profile':'dev' if profile=='debug' else 'release','dotnet_configuration':profile.capitalize(),'UseSharedCompilation':False,'swift_optimization':'-O0' if profile=='debug' else '-O2','minimum_macos':'15.0'}}
+    record={'schema_version':VERSION,'status':'building','build_id':uuid.uuid4().hex,'profile':profile,'started_ns':time.time_ns(),'source_revision':revision.stdout.strip() if revision.returncode==0 else None,'build_host':{'macos':platform.mac_ver()[0],'machine':platform.machine()},'source_inputs':source_inputs(root),'configuration_inputs':configurations(root,env),'toolchains':toolchains(root,env),'build_flags':build_flags(env),'build_options':{'cargo_profile':'dev' if profile=='debug' else 'release','dotnet_configuration':profile.capitalize(),'UseSharedCompilation':False,'swift_optimization':'-O0' if profile=='debug' else '-O2','minimum_macos':'15.0'}}
     write(pending_path(root,profile),record);return record
 
 def prepare(root,profile,env,record):
     unchanged(record['source_inputs'],source_inputs(root),'build inputs during restoration',profile)
+    unchanged(record['configuration_inputs'],configurations(root,env),'configuration inputs during restoration',profile)
     record['dependency_inputs']=dependencies(root,env);write(pending_path(root,profile),record)
 
-def cargo_build(root,profile,env):
+def cargo_build(root,profile,env,inherited=()):
     command=['cargo','build','--workspace','--locked','--profile','dev' if profile=='debug' else 'release','--message-format=json-render-diagnostics']
     logfile=record_path(root,profile).with_name('cargo-build.jsonl')
     with logfile.open('w') as output:
-        process=subprocess.Popen(command,cwd=root,env=env,text=True,stdout=subprocess.PIPE)
+        process=subprocess.Popen(command,cwd=root,env=env,text=True,stdout=subprocess.PIPE,pass_fds=inherited)
         for line in process.stdout:
             output.write(line)
             message=json.loads(line)
@@ -209,6 +215,7 @@ def finish(root,profile,env,record):
     pending=json.loads(pending_path(root,profile).read_text())
     if pending['build_id']!=record['build_id']:fail('a different producer replaced this build attempt',profile)
     unchanged(record['source_inputs'],source_inputs(root),'build inputs during compilation',profile)
+    unchanged(record['configuration_inputs'],configurations(root,env),'configuration inputs during compilation',profile)
     unchanged(record['dependency_inputs'],dependencies(root,env),'dependency inputs during compilation',profile)
     unchanged(record['toolchains'],toolchains(root,env),'toolchains during compilation',profile)
     unchanged(record['build_flags'],build_flags(env),'flags during compilation',profile)
@@ -222,6 +229,7 @@ def verify(root,profile,env=None):
         record=json.loads(record_path(root,profile).read_text())
         if record.get('schema_version')!=VERSION or record.get('status')!='complete' or record.get('profile')!=profile:fail('record is incomplete or belongs to a different profile/version',profile)
         unchanged(record['source_inputs'],source_inputs(root),'build inputs',profile)
+        unchanged(record['configuration_inputs'],configurations(root,env),'configuration inputs',profile)
         unchanged(record['dependency_inputs'],dependencies(root,env),'dependency inputs',profile)
         unchanged(record['generated_inputs'],generated_inputs(root,profile),'generated inputs',profile)
         unchanged(record['outputs'],outputs(root,profile),'built outputs',profile)
@@ -234,18 +242,21 @@ def verify(root,profile,env=None):
 
 def build(root,profile):
     env=dict(os.environ,PATH=os.pathsep.join([str(Path.home()/'.cargo/bin'),str(Path.home()/'.dotnet'),str(Path.home()/'.local/bin'),os.environ.get('PATH','')]),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',MACOSX_DEPLOYMENT_TARGET='15.0',CARGO_TARGET_DIR=str(root/'target'))
-    with lock(root):
+    with lock(root) as producer:
+        # A writer subprocess keeps the fence if the Python driver dies while
+        # that command is still running. Do not certify/reuse orphaned output.
+        inherited=(producer.fileno(),)
         record=begin(root,profile,env)
         config=profile.capitalize()
-        run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],root,env,False)
+        run(['npm','ci','--ignore-scripts','--no-audit','--no-fund'],root,env,False,inherited)
         projects=(PROJECTS[0]+'/KnowCode.Provider.DotNet.csproj',PROJECTS[1]+'/KnowCode.csproj',PROJECTS[2]+'/Smoke.csproj')
-        for project in projects:run(['dotnet','restore',project,'--locked-mode','--nologo'],root,env,False)
-        run(['cargo','metadata','--locked','--filter-platform','aarch64-apple-darwin','--format-version','1'],root,env)
+        for project in projects:run(['dotnet','restore',project,'--locked-mode','--nologo'],root,env,False,inherited)
+        run(['cargo','metadata','--locked','--filter-platform','aarch64-apple-darwin','--format-version','1'],root,env,inherited=inherited)
         prepare(root,profile,env,record)
-        cargo_build(root,profile,env)
-        run(['bash','providers/swift/build.sh',profile],root,env,False)
-        run(['bash','scripts/generate-protocol.sh'],root,env,False)
-        for project in projects:run(['dotnet','build',project,'--no-restore','--nologo','--configuration',config,'-p:UseSharedCompilation=false'],root,env,False)
+        cargo_build(root,profile,env,inherited)
+        run(['bash','providers/swift/build.sh',profile],root,env,False,inherited)
+        run(['bash','scripts/generate-protocol.sh'],root,env,False,inherited)
+        for project in projects:run(['dotnet','build',project,'--no-restore','--nologo','--configuration',config,'-p:UseSharedCompilation=false'],root,env,False,inherited)
         stage=root/f'.artifacts/build/{profile}/node';stage.mkdir(parents=True,exist_ok=True)
         for name in ('index.mjs','index.d.ts','smoke.mjs','package.json'):shutil.copy2(root/'bindings/node'/name,stage/name)
         shutil.copy2(root/f'target/{profile}/libknow_code_node.dylib',stage/'know_code.node')
