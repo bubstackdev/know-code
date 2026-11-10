@@ -30,7 +30,17 @@ Enforcement is cooperative: OS scheduling, filesystem calls, allocation, a singl
 
 The user accepted opaque, workspace-bound continuation tokens that work across local clients and separate CLI invocations. They are not tied to one .NET/Node object, MCP connection or process. Page queries still execute in the caller's process through the Rust core; portable tokens do not authorize moving graph execution into the coordinator. All pages preserve one generation and the original query scope/provenance. Expiration or invalidation requires an explicit restart, never a silent switch to current data.
 
-Portability does not yet promise recovery after coordinator restart, token lifetime/renewal, persistent cursor state or changes to query scope on continuation. Those remain separate decisions. Pagination is not implemented by this documentation step.
+Portable tokens do not permit changing query scope on continuation. Pagination is not implemented by this documentation step.
+
+### Accepted lifetimes and restart behavior
+
+The user accepted **2 minutes idle** and a **10-minute absolute lifetime**. Page activity may renew the idle window but never resets the creation time or extends the total lifetime. An expired token requires a new query; it cannot be renewed or silently moved to the current generation. Expiry checks must reject stale tokens even if physical cleanup has not run yet. Detailed activity/renewal timing and active-page cleanup follow the shared reader/deadline contract; timeouts are not a promise that disk cleanup runs at the exact expiry instant.
+
+The user accepted invalidating all outstanding cursors on coordinator restart in v0.0.1. Return a clear typed `cursor_invalidated` error requiring a new query. Tokens remain portable across clients/processes while that coordinator instance runs. This does not require persisting/recovering cursor leases or continuation state across restart. Loss of optional live-freshness acceleration alone is not a coordinator restart and must not invalidate cursors.
+
+### Accepted retention-pressure behavior
+
+The user accepted invalidating the least recently used idle cursors under cursor-retention disk pressure, returning an explicit restart error so indexing can continue. Invalidation must not silently advance a cursor or discard facts/source beneath an active page read. This policy allows a token to become invalid before its idle/absolute timeout. Active-query cleanup, admission when no idle candidate can free sufficient space, shared retention accounting and numeric budgets remain design work. A budget must not silently grow with workspace count or available workstation RAM.
 
 ### Retention finding and proposed mechanism
 
@@ -38,15 +48,21 @@ Current `Writer::open_controlled` staging recovery and `Writer::finish_publicati
 
 Proposed mechanism: let the sole coordinator/writer maintain bounded leases over logical generation manifests. Publication/cleanup retains compilation ownership and exact source while a lease is valid; individual page requests open short SQLite transactions against that retained generation through the same operators. No SQLite transaction stays open between pages, and no complete result set/index is copied just to enable pagination. Lease changes must serialize with staging recovery, publication and reclamation; accepting a pin after its generation was reclaimed must fail explicitly. Temporary pins remain reader retention, not searchable history.
 
-Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Exact storage/encoding, renewal/admission limits, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
+Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Use a coordinator incarnation that exists independently of optional live-freshness acceleration. Startup may retire the previous incarnation's cursor leases after acquiring sole-writer ownership; existing SQLite reader transactions still need coherent cleanup. Exact storage/encoding, admission/retention budgets, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
+
+### Read-only sizing observation
+
+The existing frozen store-v6 ts-pattern snapshot occupies 36.4 MiB on disk with 19.3 MiB allocated pages; Polly occupies 681.5 MiB with 362.6 MiB allocated pages. Measured read-only without touching live indexes; raw page/file accounting is `.artifacts/cursor-design/snapshot-storage.json`, tied to the saved datasets in `.artifacts/query-performance/1794075844642436000/datasets.json`. These are historical corpus snapshots, not current estate-size acceptance or measurements of marginal cursor retention. Shared unchanged units and source deduplication mean cursor count cannot simply be multiplied by full index size.
+
+Cursor-only logical retention and physical database/WAL size need distinct accounting. Reclaiming facts makes pages reusable; it does not promise immediate file shrinkage. Numeric retention defaults remain under discussion. Measure this proposed lease path before claiming a hard physical disk bound or that a pinned generation costs nothing.
 
 ## Decisions still open
 
-Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor retention mechanism, expiration/renewal, restart behavior and retained-reader limits. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/admission and retained-state budgets. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
 
 ## Validation outline
 
-Use focused core/native boundary checks during development. Cover SQLite work interruption, Rust traversal/projection interruption, freshness and admission consuming the same deadline, coherent pages, reader release, typed native parity, and indexing continuing after a query stops. Cursor tests must publish updates between pages, preserve exact source/provenance, enforce expiration with an explicit restart, and verify retained storage is reclaimed. Run the broader suite at the settled integration checkpoint; documented partial implementation is not release acceptance.
+Use focused core/native boundary checks during development. Cover SQLite work interruption, Rust traversal/projection interruption, freshness and admission consuming the same deadline, coherent pages, reader release, typed native parity, and indexing continuing after a query stops. Cursor tests must publish updates between pages, preserve exact source/provenance, enforce idle and absolute expiration with an explicit restart, reject tokens after coordinator restart, preserve tokens across mere client reconnects, and verify retained storage is reclaimed. Run the broader suite at the settled integration checkpoint; documented partial implementation is not release acceptance.
 
 ## Focused validation checkpoint
 
