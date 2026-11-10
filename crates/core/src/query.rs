@@ -298,9 +298,9 @@ impl ReadView {
             crate::execution::check_response(&value, execution, maximum)?;
             Ok(value)
         });
-        if execution.check().is_err() {
+        if let Err(error) = execution.check() {
             self.expire()?;
-            return Err(Error::DeadlineExceeded);
+            return Err(error);
         }
         result
     }
@@ -316,9 +316,9 @@ impl ReadView {
         let result = self.check().and_then(|_| self.query_inner(request));
         let elapsed = execution.check();
         *self.execution.lock().unwrap() = None;
-        if elapsed.is_err() {
+        if let Err(error) = elapsed {
             self.expire()?;
-            return Err(Error::DeadlineExceeded);
+            return Err(error);
         }
         result
     }

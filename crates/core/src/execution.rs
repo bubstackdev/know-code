@@ -8,7 +8,7 @@ use std::{
         unix::{ffi::OsStrExt, net::UnixStream},
     },
     path::Path,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
@@ -17,6 +17,29 @@ pub const QUERY_CONTRACT_VERSION: u32 = 1;
 pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
 pub const MIN_RESPONSE_BYTES: u32 = 1024;
+
+/// Unlike macOS std::time::Instant (CLOCK_UPTIME_RAW), this clock includes
+/// machine sleep. Wall-clock corrections must not extend query/cursor budgets.
+pub(crate) fn continuous_time() -> Result<Duration> {
+    #[cfg(target_os = "macos")]
+    let clock = libc::CLOCK_MONOTONIC_RAW;
+    #[cfg(target_os = "linux")]
+    let clock = libc::CLOCK_BOOTTIME;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let clock = libc::CLOCK_MONOTONIC;
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime initializes the valid, writable timespec on success.
+    if unsafe { libc::clock_gettime(clock, &mut time) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if time.tv_sec < 0 || !(0..1_000_000_000).contains(&time.tv_nsec) {
+        return Err(std::io::Error::other("invalid monotonic clock reading").into());
+    }
+    Ok(Duration::new(time.tv_sec as u64, time.tv_nsec as u32))
+}
 
 pub(crate) fn response_budget(value: Option<u32>) -> Result<usize> {
     let bytes = value.unwrap_or(DEFAULT_RESPONSE_BYTES);
@@ -32,7 +55,7 @@ pub(crate) fn response_budget(value: Option<u32>) -> Result<usize> {
 /// time already spent preparing/queuing the call without sharing clock epochs.
 #[derive(Clone, Copy, Debug)]
 pub struct QueryStart {
-    entered: Instant,
+    entered: Option<Duration>,
     elapsed: Duration,
 }
 impl Default for QueryStart {
@@ -43,12 +66,18 @@ impl Default for QueryStart {
 impl QueryStart {
     pub fn with_elapsed_ms(elapsed: u64) -> Self {
         Self {
-            entered: Instant::now(),
+            entered: continuous_time().ok(),
             elapsed: Duration::from_millis(elapsed),
         }
     }
-    fn elapsed(self) -> Duration {
-        self.elapsed + self.entered.elapsed()
+    fn elapsed(self) -> Result<Duration> {
+        let entered = self.entered.ok_or_else(|| {
+            std::io::Error::other("monotonic clock unavailable at query admission")
+        })?;
+        let elapsed = continuous_time()?
+            .checked_sub(entered)
+            .ok_or_else(|| std::io::Error::other("monotonic clock moved backwards"))?;
+        Ok(self.elapsed.saturating_add(elapsed))
     }
 }
 
@@ -72,18 +101,20 @@ impl Execution {
     }
     pub(crate) fn remaining(self) -> Result<Duration> {
         self.timeout
-            .checked_sub(self.start.elapsed())
+            .checked_sub(self.start.elapsed()?)
             .filter(|d| !d.is_zero())
             .ok_or(Error::DeadlineExceeded)
     }
     pub(crate) fn check(self) -> Result<()> {
         self.remaining().map(|_| ())
     }
-    pub(crate) fn phase(self, maximum: Duration) -> Self {
-        Self {
-            timeout: self.timeout.min(self.start.elapsed() + maximum),
+    pub(crate) fn phase(self, maximum: Duration) -> Result<Self> {
+        Ok(Self {
+            timeout: self
+                .timeout
+                .min(self.start.elapsed()?.saturating_add(maximum)),
             ..self
-        }
+        })
     }
 }
 
@@ -502,10 +533,37 @@ mod tests {
         assert!(
             execution
                 .phase(Duration::from_secs(10))
+                .unwrap()
                 .remaining()
                 .unwrap()
                 <= Duration::from_millis(60)
         );
+    }
+    #[test]
+    fn unavailable_or_reversed_clock_cannot_extend_a_query_budget() {
+        for entered in [
+            None,
+            Some(continuous_time().unwrap() + Duration::from_secs(3600)),
+        ] {
+            let start = QueryStart {
+                entered,
+                elapsed: Duration::ZERO,
+            };
+            let execution = Execution::new(start, None).unwrap();
+            assert!(matches!(execution.remaining(), Err(Error::Io(_))));
+            assert!(matches!(
+                execution.phase(Duration::from_secs(1)),
+                Err(Error::Io(_))
+            ));
+        }
+        let start = QueryStart {
+            entered: Some(continuous_time().unwrap()),
+            elapsed: Duration::MAX,
+        };
+        assert!(matches!(
+            Execution::new(start, None).unwrap().check(),
+            Err(Error::DeadlineExceeded)
+        ));
     }
     #[test]
     fn expiry_during_encoding_never_returns_partial_success() {

@@ -452,7 +452,7 @@ fn wait_for_database_inner(
     let response = if let Some(execution) = execution {
         let execution = execution.phase(Duration::from_millis(u64::from(
             wait_ms.saturating_add(50).max(100),
-        )));
+        )))?;
         let stream = crate::execution::connect(&socket_path(root), execution)?;
         request.wait_ms = request
             .wait_ms

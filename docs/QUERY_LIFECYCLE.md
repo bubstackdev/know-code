@@ -1,6 +1,6 @@
 # Query deadlines, cancellation and pagination
 
-Status: overall deadline and complete core response-cap slices have passed focused Debug validation; cancellation/admission/response-byte/cursor contracts remain under focused Q&A. Accepted decisions are requirements, not real-time guarantees. See [release criteria Q11/Q12 and S04](RELEASE_ACCEPTANCE.md).
+Status: overall deadline and complete core response-cap slices have passed focused Debug validation. Generation-retention and lifecycle-policy primitives are implemented; coordinator/control/page/retained-byte wiring remains unfinished. Accepted decisions are requirements, not real-time guarantees. See [release criteria Q11/Q12 and S04](RELEASE_ACCEPTANCE.md).
 
 ## Accepted outcome at the overall deadline
 
@@ -64,6 +64,10 @@ The budget is personal, with one effective value enforced by the coordinator acr
 
 The user accepted fetching source and symbol context through a valid cursor's pinned generation while indexing advances. Locations from a page remain useful until that cursor expires or is invalidated. These are separate bounded reads through the snapshot; they do not advance or rewrite the original pagination scope. Returned source, hashes, extents, compilation provenance and coverage must match that generation. No current disk text or newer index generation may be substituted. Invalid/expired cursors require an explicit restart rather than a latest-generation fallback.
 
+### Accepted compute-once graph pagination
+
+The user accepted computing a bounded graph result once, retaining it locally and serving repeatable pages from it for v0.0.1. The first page waits for that bounded traversal; subsequent pages and retries reuse its indexed items, order, provenance, uncertainty and work-limit outcome. Computation remains in the common in-process Rust operators, not the coordinator. This does not authorize computing the entire workspace graph or removing the overall deadline/node/edge/path limits. Retained result data needs finite per-cursor and shared bounds and cleanup on expiry/invalidation, alongside generation/source retention. Exact spool encoding, page packing and first-page retry identity remain implementation work.
+
 ### Retention finding and proposed mechanism
 
 Before the storage foundation, `Writer::open_controlled` recovery and `Writer::finish_publication` deleted noncurrent manifests without cursor retention. They now preserve explicitly pinned manifests (foundation below). A token containing only a generation number cannot recover those deleted rows in a new process. Current long-lived ReadViews preserve an SQLite transaction in one process; they cannot supply the accepted portable token by themselves.
@@ -85,6 +89,14 @@ Cursor-only logical retention and physical database/WAL size need distinct accou
 The optional retention metadata has its own version 1 contract while base fact store format remains 6. Unknown retention metadata stops writer mutation with update_required; ordinary current-state readers remain compatible. No old coordinator may advertise cursor support or create pins. A coordinator restart invalidates cursors, so an older coordinator taking sole ownership does not promise continued cursor support. Uncoordinated writers remain outside the managed-index contract.
 
 The writer records active staging generations so cursor cleanup cannot reclaim an empty stage before its first compilation frame. Recovery clears abandoned stages after acquiring workspace writer ownership. Short staging/publication write transactions now begin IMMEDIATE: pin/release transactions cannot commit between a writer's read and later write and cause SQLITE_BUSY_SNAPSHOT. Compiler execution and publication-pressure waiting do not hold these write transactions.
+
+### Cursor lifecycle foundation
+
+`cursor::CursorRegistry` adds a coordinator-owned policy primitive over generation pins: one registry spans workspaces, with a configurable positive count limit (starting default 128), 2-minute idle and 10-minute absolute lifetimes, workspace/owner validation, LRU idle eviction and bounded active-read leases. Count admission returns `cursor_limit` when all candidates are busy. A pending-publication gate blocks new cursor/read admissions so existing reads can finish or expire before idle eviction; no serving write transaction is held while waiting. Expired/evicted descriptors cannot reopen retained generations. Active read bookkeeping is additionally bounded by the same configured count; concurrency saturation or the publication gate returns `resource_limited`, not an assertion that the index is incomplete. This internal guard is not a final general query admission/memory policy.
+
+Borrow deadlines are capped by the remaining request budget, the 120-second request maximum and the cursor's absolute lifetime. Finishing a live read refreshes idle activity without changing creation time. A lost client cannot retain an active borrow indefinitely. Host integration must periodically sweep, serialize access and own the sole-writer fence; dropping a descriptor performs no writes. The primitive is not yet connected to coordinator startup, control, publication, user settings, byte accounting or native query entry points. Consequently this does not advertise working portable pagination, automatic lifecycle enforcement or a 1 GiB retention guarantee.
+
+The shared budget clock now uses macOS `CLOCK_MONOTONIC_RAW`, which includes machine sleep and ignores wall-clock corrections. The pinned Rust standard library's `Instant` uses `CLOCK_UPTIME_RAW`, which pauses during sleep; that was unsuitable for cursor expiry and overall query budgets. Query admission/phase/execution and cursor policy share the continuous clock. Unavailable or reversed clock readings fail closed rather than extending a query. Evidence comes from local primary sources: Rust 1.99.1 `library/std/src/sys/time/unix.rs` and macOS `clock_gettime(3)`. No test suspends the user's machine; deterministic lifecycle tests advance policy time across exact idle/absolute/deadline boundaries. Other kernel/host scheduling and host-side pre-admission timing remain outside a hard real-time guarantee.
 
 This foundation does not yet enforce manager TTL/count/retention budgets, publish-wait admission or replay/portable tokens. Those remain required before exposing pagination. The focused storage tests include actual overlap at publication and definition-reference validation; this is stronger than sequential interleaving alone.
 
@@ -119,6 +131,12 @@ The user accepted node/edge/path work limits spanning the entire logical cursor.
 Use focused core/native boundary checks during development. Cover SQLite work interruption, Rust traversal/projection interruption, freshness and admission consuming the same deadline, coherent pages, reader release, typed native parity, and indexing continuing after a query stops. Cursor tests must publish updates between pages, preserve exact source/provenance, enforce idle and absolute expiration with an explicit restart, reject tokens after coordinator restart, preserve tokens across mere client reconnects, and verify retained storage is reclaimed. Run the broader suite at the settled integration checkpoint; documented partial implementation is not release acceptance.
 
 ## Focused validation checkpoint
+
+### Lifecycle policy and continuous-clock foundation
+
+Focused Debug evidence: [.artifacts/cursor-lifecycle/1794323847861175000/validation.json](../.artifacts/cursor-lifecycle/1794323847861175000/validation.json). All 77 Rust tests, both actual Node/.NET queue-deadline checks, 18 isolated coordinator checks, formatting and locked all-target Clippy passed. The five new lifecycle cases use actual SQLite publication/pin/source cleanup and deterministic policy time: shared cross-workspace count/LRU, active-reader protection, idle/absolute boundaries despite activity, abandoned borrows, publication admission fencing, concurrent retry bookkeeping, clock reversal and failed-cleanup accounting. The additional query-clock case checks unavailable/reversed time and overflow without a fail-open budget. No test suspends the user's machine.
+
+The manager remains an unwired common-core primitive; portable control/tokens, retained-byte accounting, saved graph results, page packing/replay, periodic coordinator cleanup and cursor source/context entry points remain pending. This is not full Debug, optimized-profile, refreshed distribution or installed acceptance. No new dependency, live coordinator/login change or publishing occurred. No independent subagent review was performed for this increment.
 
 Implementation freeze `16448cf` passed 64 Rust workspace cases, 30 Workspace API checks, 23 MCP checks, both actual host-queue saturation tests, 11 live-freshness checks and 18 coordinator checks. Formatting and all-target Clippy pass. The stopped-coordinator case expires during freshness waiting, then verifies a new saved change still publishes. The retained-view SQL test confirms an expired read no longer blocks WAL truncation. An isolated child resets SIGPIPE to its default and survives peer-close with BrokenPipe.
 
