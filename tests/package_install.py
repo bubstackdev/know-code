@@ -189,9 +189,13 @@ def ready(client,after=1):
   s=client.send('wait',wait_ms=1000);assert not isinstance(s.get('error'),dict),s;assert s['phase']!='failed',s
   if s['phase']=='idle' and s['observed_epoch']==s['published_epoch'] and s['generation']>=after:return s
  raise AssertionError(s)
-node=Client('node');initial=ready(node);net=Client('net');assert net.opened['opened']['database']==initial['database'];DATABASE=initial['database']
+node=Client('node');initial=ready(node);net=Client('net');assert net.opened['opened']['database']==initial['database'];DATABASE=initial['database'];MIN_GENERATION=initial['generation']
+def checked_result(envelope):
+ assert isinstance(envelope,dict) and 'error' not in envelope and isinstance(envelope.get('result'),dict),envelope
+ result=envelope['result'];assert result['freshness']=='current' and result['generation']>=MIN_GENERATION,result
+ return result
 def query(req):
- n=node.send('query',request=req);d=net.send('query',request=req);c=json.loads(command(HOST,'query',DATABASE,json.dumps(req)).stdout);assert n==d==c,(req,n,d,c);return n['result']
+ n=node.send('query',request=req);d=net.send('query',request=req);c=json.loads(command(HOST,'query',DATABASE,json.dumps(req)).stdout);assert n==d==c,(req,n,d,c);return checked_result(n)
 def exact_source(source,filename):
  raw=filename.read_bytes();path=Path(source['path']);path=path if path.is_absolute() else WORKSPACE/path;assert path.resolve()==filename.resolve(),source
  assert source['content_hash']==hashlib.sha256(raw).hexdigest() and source['total_bytes']==len(raw),source
@@ -215,23 +219,26 @@ def rpc(identifier,method,params):
  while True:
   value,mcp_buffer=read_json_line(mcp,mcp_selector,mcp_buffer,('mcp',identifier))
   if value.get('id')==identifier:mcp_events.append({'id':identifier,'method':method,'params':params,'response':value});return value
+def tool_result(identifier,name,arguments):
+ response=rpc(identifier,'tools/call',{'name':name,'arguments':arguments});assert 'error' not in response,response
+ payload=response['result'];assert not payload.get('isError',False),response
+ return checked_result(payload['structuredContent'])
 try:
  assert rpc(1,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test','version':'1'}})['result']['protocolVersion']=='2025-11-25'
  mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
  assert len(rpc(2,'tools/list',{})['result']['tools'])==10
- found=rpc(3,'tools/call',{'name':'search_symbols','arguments':{'name':'answer'}})['result']['structuredContent'];assert found['result']['freshness']=='current'
- assert found['result']['symbols']==query({'op':'symbols','name':'answer'})['symbols']
- old=initial['generation'];(WORKSPACE/'value.ts').write_text('export function savedAnswer() { return 43; }\n');saved_ts=ready(node,old+1)
+ found=tool_result(3,'search_symbols',{'name':'answer'});assert found['symbols']==query({'op':'symbols','name':'answer'})['symbols']
+ old=ready(node)['generation'];(WORKSPACE/'value.ts').write_text('export function savedAnswer() { return 43; }\n');saved_ts=ready(node,old+1);MIN_GENERATION=saved_ts['generation']
  saved=query({'op':'symbols','name':'savedAnswer'});assert saved['freshness']=='current' and saved['symbols']
- removed=query({'op':'symbols','name':'answer'});assert removed['freshness']=='current' and not removed.get('symbols',[]),removed
+ removed=query({'op':'symbols','name':'answer'});assert removed.get('symbols',[])==[],removed
  ts_context=query({'op':'symbol_context','symbol_id':saved['symbols'][0]['id'],'max_bytes':1024});exact_source(ts_context['contexts'][0]['declarations'][0]['source'],WORKSPACE/'value.ts')
- (WORKSPACE/'Code.cs').write_text(CSHARP.replace('Greet() => 42','SavedGreet() => 43'))
- saved_cs=ready(node,saved_ts['generation']+1)
+ old=ready(node)['generation'];(WORKSPACE/'Code.cs').write_text(CSHARP.replace('Greet() => 42','SavedGreet() => 43'))
+ saved_cs=ready(node,old+1);MIN_GENERATION=saved_cs['generation']
  saved=query({'op':'symbols','name':'SavedGreet'});assert saved['freshness']=='current' and saved['symbols']
- removed=query({'op':'symbols','name':'Greet'});assert removed['freshness']=='current' and not removed.get('symbols',[]),removed
+ removed=query({'op':'symbols','name':'Greet'});assert removed.get('symbols',[])==[],removed
  symbol=saved['symbols'][0];context=query({'op':'symbol_context','symbol_id':symbol['id'],'max_bytes':1024});source=context['contexts'][0]['declarations'][0]['source'];assert 'SavedGreet() => 43' in source['text'];exact_source(source,WORKSPACE/'Code.cs')
  for identifier,name in [(4,'savedAnswer'),(5,'SavedGreet')]:
-  found=rpc(identifier,'tools/call',{'name':'search_symbols','arguments':{'name':name}})['result']['structuredContent']['result']
+  found=tool_result(identifier,'search_symbols',{'name':name})
   assert found['freshness']=='current' and found['symbols']==query({'op':'symbols','name':name})['symbols']
  final_generation=saved_cs['generation'];checks.append('offline_saved_TS_and_Csharp_semantic_and_source_updates')
 finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
