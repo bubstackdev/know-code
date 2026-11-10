@@ -40,13 +40,13 @@ The user accepted invalidating all outstanding cursors on coordinator restart in
 
 ### Accepted retention-pressure behavior
 
-The user accepted invalidating the least recently used idle cursors under cursor-retention disk pressure, returning an explicit restart error so indexing can continue. Invalidation must not silently advance a cursor or discard facts/source beneath an active page read. This policy allows a token to become invalid before its idle/absolute timeout. Active-query cleanup, admission when no idle candidate can free sufficient space, shared retention accounting and cursor-count limits remain design work. A budget must not silently grow with workspace count or available workstation RAM.
+The user accepted invalidating the least recently used idle cursors under cursor-retention disk pressure, returning an explicit restart error so indexing can continue. Invalidation must not silently advance a cursor or discard facts/source beneath an active page read. This policy allows a token to become invalid before its idle/absolute timeout. Active-query cleanup, admission when no idle candidate can free sufficient space, shared retention accounting and admission when the cursor-count limit is reached remain design work. A budget must not silently grow with workspace count or available workstation RAM.
 
 ### Accepted shared retention budget
 
 The user accepted a configurable **1 GiB (1,073,741,824 bytes)** starting budget for extra cursor-retained index data, shared per user across all workspaces. Count data retained solely for cursor generations; exclude data still needed by the current serving generation. Shared units/source must not be charged repeatedly for each token. This is a disk-retention policy, not RAM reservation/preallocation, a per-workspace allowance, or a hard SQLite database/WAL file-size cap.
 
-The budget is personal, with one effective value enforced by the coordinator across workspaces/providers/clients. Exact settings encoding and retained-byte accounting remain implementation decisions to validate. Physical database, freelist and WAL size remain separate measurements; reclaimed pages can be reused without shrinking the file. The accepted idle-cursor pressure policy applies when this shared retention allowance is exhausted. A cursor-count bound is still needed because many tokens can retain the same generation without adding marginal index bytes.
+The budget is personal, with one effective value enforced by the coordinator across workspaces/providers/clients. Exact settings encoding and retained-byte accounting remain implementation decisions to validate. Physical database, freelist and WAL size remain separate measurements; reclaimed pages can be reused without shrinking the file. The accepted idle-cursor pressure policy applies when this shared retention allowance is exhausted. The user also accepted a configurable starting limit of **128 live cursors per user**, shared across all workspaces, providers and local clients. Count cursors independently of marginal retained bytes: shared or current-generation pins cannot create unlimited metadata. This is an upper bound, not a preallocated pool or a multiplied per-workspace allowance. Exact admission/eviction behavior at the count limit and bounds on per-cursor continuation state remain under design.
 
 ### Retention finding and proposed mechanism
 
@@ -54,7 +54,7 @@ Current `Writer::open_controlled` staging recovery and `Writer::finish_publicati
 
 Proposed mechanism: let the sole coordinator/writer maintain bounded leases over logical generation manifests. Publication/cleanup retains compilation ownership and exact source while a lease is valid; individual page requests open short SQLite transactions against that retained generation through the same operators. No SQLite transaction stays open between pages, and no complete result set/index is copied just to enable pagination. Lease changes must serialize with staging recovery, publication and reclamation; accepting a pin after its generation was reclaimed must fail explicitly. Temporary pins remain reader retention, not searchable history.
 
-Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Use a coordinator incarnation that exists independently of optional live-freshness acceleration. Startup may retire the previous incarnation's cursor leases after acquiring sole-writer ownership; existing SQLite reader transactions still need coherent cleanup. Exact storage/encoding, retained-byte accounting, cursor-count/admission limits, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
+Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Use a coordinator incarnation that exists independently of optional live-freshness acceleration. Startup may retire the previous incarnation's cursor leases after acquiring sole-writer ownership; existing SQLite reader transactions still need coherent cleanup. Exact storage/encoding, retained-byte accounting, cursor admission/eviction behavior, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
 
 ### Read-only sizing observation
 
@@ -64,7 +64,13 @@ Cursor-only logical retention and physical database/WAL size need distinct accou
 
 ## Decisions still open
 
-Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/admission, cursor-count limits and continuation-state bounds. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/admission and continuation-state bounds. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+
+### Continuation implementation findings
+
+Symbol search already has a stable explicit ordering (`name`, opaque symbol ID, compilation ID). References order by source path/range/compilation; coverage orders by compilation ID. These can reuse the existing operators with generation-bound continuation keys, subject to tie-breaker tests. Do not implement continuation by repeatedly increasing an offset over a changing generation.
+
+Graph queries additionally hold traversal frontier, visited/context selections, evidence paths and global work limits. Their own time budget can stop a search at different points; reissuing a query against a fixed generation alone does not establish replay-identical pages. Retry/continuation semantics and bounded frontier/page retention must therefore be settled before claiming graph pagination. Paging cannot silently reset a logical traversal's node/edge/context limits or combine incompatible compilation paths. Keep extraction/provider logic out of pagination.
 
 ## Validation outline
 
