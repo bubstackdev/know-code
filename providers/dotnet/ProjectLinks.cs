@@ -11,7 +11,7 @@ using Compilation = Microsoft.CodeAnalysis.Compilation;
 // display signature, output filename, or a guessed target framework.
 sealed class ProjectLinks
 {
-    private sealed record Context(string Id, string Path, TestClassification? Classification);
+    private sealed record Context(string Id, string Path, TestClassification? Classification, string TargetFamily);
     private sealed record Definition(string Context, string Fingerprint);
     private readonly Dictionary<Compilation, Context> contexts = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<IAssemblySymbol, Definition> assemblies = new(SymbolEqualityComparer.Default);
@@ -20,10 +20,11 @@ sealed class ProjectLinks
     private readonly Dictionary<Compilation,string> local = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<Compilation> visiting = new(ReferenceEqualityComparer.Instance);
     private readonly string epoch;
+    private readonly uint peerPolicy;
     public List<ProjectReferenceContext> References { get; } = [];
     public string Fingerprint { get; private set; } = "";
     public bool Complete { get; private set; } = true;
-    private ProjectLinks(string epoch) { this.epoch=epoch; }
+    private ProjectLinks(string epoch, uint peerPolicy) { this.epoch=epoch; this.peerPolicy=peerPolicy; }
 
     public static string ContextId(string root, string path, string target, string configuration, string? platform = null) =>
         $"cs:{System.IO.Path.GetRelativePath(root,path).Replace('\\','/')}:{target}:{configuration}" + (platform is null || platform.Replace(" ", "").Equals("AnyCPU", StringComparison.OrdinalIgnoreCase) ? "" : $":{platform}");
@@ -31,7 +32,7 @@ sealed class ProjectLinks
     public static async Task<ProjectLinks> Create(Project project, Compilation compilation, ProjectCatalog catalog, AnalyzeRequest request, string sdk)
     {
         var result=new ProjectLinks($"{request.PreparationFingerprint}:{sdk}:{typeof(CSharpCompilation).Assembly.GetName().Version}"
-            + (request.TestClassificationPolicy == 0 ? "" : $":test-classification:{request.TestClassificationPolicy}"));
+            + (request.TestClassificationPolicy == 0 ? "" : $":test-classification:{request.TestClassificationPolicy}"), request.TargetEquivalencePolicy);
         // Open() retains only the active dependency closure. These compilations
         // are already needed by the root; no second compiler workspace is built.
         foreach(var candidate in project.Solution.Projects)
@@ -43,7 +44,8 @@ sealed class ProjectLinks
             var id=ContextId(request.WorkspaceRoot,selected.Value.Path,selected.Value.Target,metadata["Configuration"],
                 catalog.BuildContexts.PolicyEnabled ? metadata["Platform"] : null);
             result.contexts[compiled]=new Context(id,System.IO.Path.GetRelativePath(request.WorkspaceRoot,selected.Value.Path).Replace('\\','/'),
-                TestClasses.ForContext(catalog.Classification(candidate.Id), request.TestClassificationPolicy, request.WorkspaceRoot, selected.Value.Path));
+                TestClasses.ForContext(catalog.Classification(candidate.Id), request.TestClassificationPolicy, request.WorkspaceRoot, selected.Value.Path),
+                TargetPeers.Family(request.TargetEquivalencePolicy, selected.Value.Path, metadata["Configuration"], metadata["Platform"], sdk));
         }
         result.Fingerprint=result.Snapshot(compilation);
         if(result.Fingerprint.Length==0)result.Complete=false;
@@ -74,7 +76,7 @@ sealed class ProjectLinks
     {
         if(!contexts.TryGetValue(compilation,out var context)){Complete=false;return "";}
         var cache=fingerprints.GetValue(compilation,_=>[]);
-        var tag=$"{epoch}:{context.Id}";
+        var tag=$"{epoch}:{context.Id}" + (peerPolicy == 0 ? "" : $":target-equivalence:{peerPolicy}:{context.TargetFamily}");
         if(cache.TryGetValue(tag,out var saved))return saved;
         if(local.TryGetValue(compilation,out saved))return saved;
         if(!visiting.Add(compilation)){Complete=false;return "";}

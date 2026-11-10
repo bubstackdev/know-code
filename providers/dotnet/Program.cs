@@ -32,6 +32,7 @@ try
     {
         if (args.Length != 0 || request.Analyze is null) throw new InvalidDataException("invalid analysis worker request");
         TestClasses.Validate(request.Analyze.TestClassificationPolicy);
+        TargetPeers.Validate(request.Analyze.TargetEquivalencePolicy);
         BuildContexts.Validate(request.Analyze);
         var projects = request.Analyze.Projects;
         if (projects.Count == 0) throw new InvalidOperationException("no C# projects requested");
@@ -54,7 +55,7 @@ try
         }
         MSBuildLocator.RegisterMSBuildPath(sdkPath);
         Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected.Trim()}", RuntimeVersion = Environment.Version.ToString(), AnalysisPolicyVersion = request.Analyze.AnalysisPolicy is null ? 0u : 1u,
-            TestClassificationPolicy = request.Analyze.TestClassificationPolicy } });
+            TestClassificationPolicy = request.Analyze.TestClassificationPolicy, TargetEquivalencePolicy = request.Analyze.TargetEquivalencePolicy } });
         await Analysis.Run(request.Analyze, selected.Trim(), sdkPath);
     }
     Wire.Send(new Envelope { Complete = new Completion { Success = true } });
@@ -229,6 +230,8 @@ static partial class Analysis
         Wire.Send(new Envelope { Compilation = new KnowCode.Protocol.Compilation {
             InputFingerprint = projectLinks.Fingerprint, References = {projectLinks.References},
             TestClassification = classification,
+            TargetEquivalencePolicy = request.TargetEquivalencePolicy,
+            TargetFamily = TargetPeers.Family(request.TargetEquivalencePolicy, projectPath, configuration, platform, sdkVersion),
             Id = id, Language = "csharp", ProjectPath = relative, Target = target, Configuration = configuration,
             CompilerVersion = $"Roslyn {typeof(CSharpCompilation).Assembly.GetName().Version}; SDK {sdkVersion}",
             Dependencies = { project.ProjectReferences.Select(r => project.Solution.GetProject(r.ProjectId)?.FilePath).Where(p => p is not null).Select(p => Path.GetRelativePath(request.WorkspaceRoot, p!).Replace('\\', '/')) },
@@ -259,7 +262,7 @@ static partial class Analysis
             sources.Add(tree, artifact);
             Wire.Send(new Envelope { Source = new SourceArtifact { Id = artifact, Path = name, Utf8 = ByteString.CopyFrom(utf8), Sha256 = hash, Generated = generated, CompilationId = id } });
         }
-        var emitter = new Emitter(id, sources, projectLinks);
+        var emitter = new Emitter(id, sources, projectLinks, request.TargetEquivalencePolicy, compilation.Assembly);
         foreach (var (tree, artifactId) in sources)
         {
             var model = compilation.GetSemanticModel(tree);
@@ -309,6 +312,8 @@ static partial class Analysis
         report.Capabilities.Add("project_links", projectLinks.Complete ? "complete" : "partial");
         if (request.TestClassificationPolicy != 0)
             report.Capabilities.Add("test_classification", TestClasses.Capability(classification));
+        if (request.TargetEquivalencePolicy != 0)
+            report.Capabilities.Add("target_equivalence", documents.Any(d => d.Generated) ? "partial" : "complete");
         report.Diagnostics.AddRange(diagnostics);
         Wire.Send(new Envelope { Report = report });
     }
@@ -356,7 +361,7 @@ static partial class Analysis
     }
 
     private sealed record Source(string Id, int[] Offsets);
-    private sealed class Emitter(string compilationId, Dictionary<SyntaxTree, string> sources, ProjectLinks projectLinks)
+    private sealed class Emitter(string compilationId, Dictionary<SyntaxTree, string> sources, ProjectLinks projectLinks, uint peerPolicy, IAssemblySymbol assembly)
     {
         private readonly HashSet<string> emitted = [];
         // A reference cache lasts one source file, so it cannot retain semantic
@@ -364,7 +369,7 @@ static partial class Analysis
         private readonly Dictionary<ISymbol, string> fileIds = new(ReferenceEqualityComparer.Instance);
         public void EndFile() => fileIds.Clear();
         private FactBatch batch = new() { CompilationId = compilationId };
-        private static string Identity(ISymbol symbol, string context)
+        private static string DeclarationIdentity(ISymbol symbol)
         {
             var key = symbol.GetDocumentationCommentId();
             if (key is null)
@@ -373,7 +378,11 @@ static partial class Analysis
                 var anchor = declaration is null ? "metadata" : $"{declaration.SourceTree!.FilePath}:{declaration.SourceSpan.Start}";
                 key = $"{symbol.Kind}:{anchor}:{symbol.Name}";
             }
-            return $"{context}:{symbol.ContainingAssembly?.Identity}:{key}";
+            return key;
+        }
+        private static string Identity(ISymbol symbol, string context)
+        {
+            return $"{context}:{symbol.ContainingAssembly?.Identity}:{DeclarationIdentity(symbol)}";
         }
         public string Symbol(ISymbol symbol)
         {
@@ -383,10 +392,12 @@ static partial class Analysis
             if (emitted.Add(id))
             {
                 var definition=projectLinks.DefinitionOf(symbol,Identity);
+                var external = !symbol.Locations.Any(l => l.SourceTree is not null && sources.ContainsKey(l.SourceTree));
                 batch.Symbols.Add(new KnowCode.Protocol.Symbol { Id = id, Name = symbol is IMethodSymbol {MethodKind: MethodKind.AnonymousFunction} ? "<lambda>" : symbol.Name,
                     Kind = symbol is IMethodSymbol {MethodKind: MethodKind.AnonymousFunction} ? "lambda" : symbol is INamedTypeSymbol type ? type.TypeKind.ToString().ToLowerInvariant() : symbol.Kind.ToString().ToLowerInvariant(),
                     Signature = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
-                    External = !symbol.Locations.Any(l => l.SourceTree is not null && sources.ContainsKey(l.SourceTree)),
+                    External = external,
+                    DeclarationKey = external ? "" : TargetPeers.Declaration(peerPolicy, symbol.ContainingAssembly, DeclarationIdentity(symbol)),
                     DefinitionCompilationId=definition?.Compilation ?? "", DefinitionSymbolId=definition?.Symbol ?? "", DefinitionFingerprint=definition?.Fingerprint ?? "" });
             }
             return id;
@@ -405,7 +416,8 @@ static partial class Analysis
             var id=$"{compilationId}:${kind}:{node.SyntaxTree.FilePath}:{node.SpanStart}";
             if(emitted.Add(id))
             {
-                batch.Symbols.Add(new KnowCode.Protocol.Symbol { Id=id,Name=name,Kind=kind,Signature=name });
+                batch.Symbols.Add(new KnowCode.Protocol.Symbol { Id=id,Name=name,Kind=kind,Signature=name,
+                    DeclarationKey=TargetPeers.Declaration(peerPolicy, assembly, $"synthetic:{kind}:{node.SyntaxTree.FilePath}:{node.SpanStart}") });
                 Occurrence(id,source,node.Span,"declaration",node.Span);
             }
             return id;
