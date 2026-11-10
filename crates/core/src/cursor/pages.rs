@@ -237,7 +237,15 @@ fn partitions(
             count: remaining,
         };
         if remaining <= header.page_size
-            && fits(header, position, tail, prefix, base, maximum, execution)?
+            && fits(
+                header,
+                position,
+                tail,
+                prefix,
+                base,
+                maximum,
+                execution.clone(),
+            )?
         {
             plans.push(tail);
             break;
@@ -252,7 +260,7 @@ fn partitions(
                 prefix,
                 base,
                 maximum,
-                execution,
+                execution.clone(),
             )? {
                 best = count;
                 low = count + 1;
@@ -343,12 +351,17 @@ pub(crate) fn encode(
         sections,
         result,
     };
-    let base = execution::encode(&header.result, execution, options.response_max_bytes)?.len();
+    let base = execution::encode(
+        &header.result,
+        execution.clone(),
+        options.response_max_bytes,
+    )?
+    .len();
     let mut items = Vec::with_capacity(rows.len());
     let mut prefix = vec![0usize];
     for row in rows {
         execution.check()?;
-        let bytes = encoded(&row, execution, options.response_max_bytes)?;
+        let bytes = encoded(&row, execution.clone(), options.response_max_bytes)?;
         let next = prefix
             .last()
             .unwrap()
@@ -368,7 +381,7 @@ pub(crate) fn encode(
             total,
             base,
             options.response_max_bytes,
-            execution,
+            execution.clone(),
         )?;
         let count = u32::try_from(plans.len()).map_err(|_| too_large())?;
         if header.page_count.to_string().len() == count.to_string().len() {
@@ -379,8 +392,8 @@ pub(crate) fn encode(
         header.page_count = count;
     }
     let plans = selected.ok_or_else(too_large)?;
-    let bytes = encoded(&header, execution, MAX_HEADER)?;
-    let header_hash = hash(&bytes, execution)?;
+    let bytes = encoded(&header, execution.clone(), MAX_HEADER)?;
+    let header_hash = hash(&bytes, execution.clone())?;
     let data_start = FIXED + bytes.len() + plans.len() * ENTRY;
     let payload: usize = plans
         .iter()
@@ -412,7 +425,7 @@ pub(crate) fn encode(
         }
         output.push(b']');
         let end = output.len();
-        let data_hash = hash(&output[offset..end], execution)?;
+        let data_hash = hash(&output[offset..end], execution.clone())?;
         let mut entry = [0u8; ENTRY];
         for (field, value) in [
             position as u32,
@@ -446,8 +459,8 @@ pub(crate) fn encode(
         output[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
     output[40..72].copy_from_slice(&header_hash);
-    output[72..104].copy_from_slice(&hash(options.cursor_prefix.as_bytes(), execution)?);
-    let checksum = hash(&output[..104], execution)?;
+    output[72..104].copy_from_slice(&hash(options.cursor_prefix.as_bytes(), execution.clone())?);
+    let checksum = hash(&output[..104], execution.clone())?;
     output[104..FIXED].copy_from_slice(&checksum);
     execution.check()?;
     Ok(output)
@@ -505,10 +518,10 @@ fn preamble(
     if !(FIXED as u64..=super::MAX_RESULT_BYTES).contains(&length) {
         return Err(Error::CursorInvalidated);
     }
-    let bytes = block(reader, 0, FIXED, execution)?;
+    let bytes = block(reader, 0, FIXED, execution.clone())?;
     if &bytes[..8] != MAGIC
         || number(&bytes, 8) != VERSION
-        || bytes[104..] != hash(&bytes[..104], execution)?
+        || bytes[104..] != hash(&bytes[..104], execution.clone())?
         || number(&bytes, 12) as u64 != length
         || u64::from_le_bytes(bytes[16..24].try_into().unwrap()) != generation
         || bytes[72..104] != hash(cursor_prefix.as_bytes(), execution)?
@@ -589,9 +602,9 @@ fn selected_entry(
     position: u32,
     execution: Execution,
 ) -> Result<Entry> {
-    let selected = entry(reader, preamble, position, execution)?;
+    let selected = entry(reader, preamble, position, execution.clone())?;
     if position > 0 {
-        let previous = entry(reader, preamble, position - 1, execution)?;
+        let previous = entry(reader, preamble, position - 1, execution.clone())?;
         if previous.plan.start + previous.plan.count != selected.plan.start
             || previous.offset + previous.bytes != selected.offset
         {
@@ -618,8 +631,13 @@ pub(crate) fn validate(
     expected_generation: u64,
     execution: Execution,
 ) -> Result<()> {
-    let preamble = preamble(&mut reader, cursor_prefix, expected_generation, execution)?;
-    selected_entry(&mut reader, &preamble, position, execution)?;
+    let preamble = preamble(
+        &mut reader,
+        cursor_prefix,
+        expected_generation,
+        execution.clone(),
+    )?;
+    selected_entry(&mut reader, &preamble, position, execution.clone())?;
     execution.check()
 }
 
@@ -634,19 +652,19 @@ pub(crate) fn read(
         &mut reader,
         options.cursor_prefix,
         options.expected_generation,
-        execution,
+        execution.clone(),
     )?;
-    let selected = selected_entry(&mut reader, &preamble, options.position, execution)?;
+    let selected = selected_entry(&mut reader, &preamble, options.position, execution.clone())?;
     let bytes = block(
         &mut reader,
         FIXED as u64,
         preamble.header_len as usize,
-        execution,
+        execution.clone(),
     )?;
-    if hash(&bytes, execution)? != preamble.header_hash {
+    if hash(&bytes, execution.clone())? != preamble.header_hash {
         return Err(Error::CursorInvalidated);
     }
-    let mut header: Header = decoded(&bytes, execution)?;
+    let mut header: Header = decoded(&bytes, execution.clone())?;
     let fields = names(&header.op).map_err(|_| Error::CursorInvalidated)?;
     if header.cursor_prefix != options.cursor_prefix
         || header.page_count != preamble.page_count
@@ -691,18 +709,18 @@ pub(crate) fn read(
         &mut reader,
         u64::from(selected.offset),
         selected.bytes as usize,
-        execution,
+        execution.clone(),
     )?;
-    if hash(&bytes, execution)? != selected.data_hash {
+    if hash(&bytes, execution.clone())? != selected.data_hash {
         return Err(Error::CursorInvalidated);
     }
-    let rows: Vec<Value> = decoded(&bytes, execution)?;
+    let rows: Vec<Value> = decoded(&bytes, execution.clone())?;
     if rows.len() != selected.plan.count as usize {
         return Err(Error::CursorInvalidated);
     }
     let metadata = encoded(
         &page(&header, options.position, selected.plan),
-        execution,
+        execution.clone(),
         MAX_HEADER,
     )?;
     let metadata: Value = serde_json::from_slice(&metadata)?;
@@ -730,10 +748,14 @@ pub(crate) fn read(
     root.insert("freshness".into(), Value::String(options.freshness.into()));
     root.remove("coordination");
     if let Some(coordination) = options.coordination {
-        let bytes = encoded(coordination, execution, options.response_max_bytes)?;
+        let bytes = encoded(coordination, execution.clone(), options.response_max_bytes)?;
         root.insert("coordination".into(), serde_json::from_slice(&bytes)?);
     }
-    execution::check_response(&header.result, execution, options.response_max_bytes)?;
+    execution::check_response(
+        &header.result,
+        execution.clone(),
+        options.response_max_bytes,
+    )?;
     execution.check()?;
     Ok(header.result)
 }
@@ -1223,7 +1245,7 @@ mod tests {
             encode(
                 result("symbols", vec![]),
                 options("symbols", 1, 1, 1024),
-                expired
+                expired.clone()
             ),
             Err(Error::DeadlineExceeded)
         ));

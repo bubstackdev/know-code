@@ -32,6 +32,14 @@ export const answer = 42;
 export function readAnswer() { return answer; }
 export function typed(a: Access) { return a; }
 export const initialized = leaf();
+export function readInitialized() { return initialized; }
+export const literal = () => leaf();
+export function literalCaller() { return literal(); }
+export function readLiteral() { return literal; }
+export class Created { constructor() { leaf(); } }
+export function construct() { return new Created(); }
+export function tag(parts: TemplateStringsArray) { return leaf(); }
+export function tagged() { return tag`π😀`; }
 '''
 (WORKSPACE / 'ts/code.ts').write_text(ts_source)
 (WORKSPACE / 'ts/consumer.ts').write_text("import {leaf} from './code.js'; export function consumer() { return leaf(); }\n")
@@ -59,6 +67,9 @@ public class Worker : Parent, IWork {
   public const int Answer = 42;
   public static int ReadAnswer() => Answer;
   public static int Initialized = Leaf();
+  public static int ReadInitialized() => Initialized;
+  public static Func<int> Deferred = () => Leaf();
+  public static Func<int> ReadDeferred() => Deferred;
   // SAVE
 }
 '''
@@ -128,6 +139,30 @@ direct = next(f for f in callers['findings'] if f['symbol']['name'] == 'direct')
 assert len(direct['paths']) == 2 and len({p[0]['location']['start_byte'] for p in direct['paths']}) == 2
 assert any(f['symbol']['kind'] == 'initializer' for f in callers['findings']), callers
 checks += ['TS calls distinct from references', 'multiple callsites', 'explicit initializer ownership']
+initializers = [f for f in callers['findings'] if f['symbol']['kind'] == 'initializer']
+assert len(initializers) == 1 and initializers[0]['symbol']['name'] == '<initialize initialized>', initializers
+initializer = initializers[0]
+edge = initializer['paths'][0][0]
+assert edge['source_id'] == initializer['symbol']['id'] and edge['target_id'] == ts_leaf
+assert edge['resolution'] == 'compiler_bound' and not edge['implicit'], edge
+assert [f['symbol']['id'] for f in graph('callees', initializer['symbol']['id'])['findings']] == [ts_leaf]
+for reader in ['readInitialized', 'readLiteral']:
+    assert not graph('callees', symbol(reader, 'ts'))['findings'], reader
+for caller, expected, kind, span in [('literalCaller', 'literal', None, 'literal()'),
+                                     ('construct', '<constructor>', 'constructor', 'new Created()'),
+                                     ('tagged', 'tag', None, 'tag`π😀`')]:
+    found = graph('callees', symbol(caller, 'ts'), max_depth=2)
+    assert {f['symbol']['name'] for f in found['findings']} == {expected, 'leaf'}, found
+    called = next(f for f in found['findings'] if f['symbol']['name'] == expected)
+    if kind:
+        assert called['symbol']['kind'] == kind, called
+    site = called['paths'][0][0]
+    assert site['resolution'] == 'compiler_bound' and site['dispatch'] == 'direct' and not site['implicit'], site
+    source = query({'op': 'source', 'artifact_id': site['location']['artifact_id']})['source']
+    assert source['content_hash'] == site['location']['content_hash']
+    assert source['text'].encode()[site['location']['start_byte']:site['location']['end_byte']].decode() == span, site
+checks += ['TS const-owned function literal/constructor/tagged calls with exact compiler sites',
+           'TS initialization is separate from field/function-value reads']
 callees = graph('callees', symbol('indirect', 'ts'))
 assert any(b['reason'] == 'unresolved_target' for b in callees['boundaries']), callees
 assert not callees['findings'], callees
@@ -144,6 +179,19 @@ callers = graph('callers', cs_leaf, target='net10.0')
 assert {'Work', 'get_Value', 'set_Value', 'get_Item', 'Local'} <= {f['symbol']['name'] for f in callers['findings']}, callers
 assert any(f['symbol']['kind'] == 'lambda' and f['symbol']['locations'] for f in callers['findings']), callers
 assert all(f['symbol']['locations'] for f in callers['findings'] if f['symbol']['name'] in {'get_Value', 'set_Value', 'get_Item'}), callers
+initializers = [f for f in callers['findings'] if f['symbol']['kind'] == 'initializer']
+assert len(initializers) == 1, initializers
+initializer = initializers[0]
+edge = initializer['paths'][0][0]
+assert edge['source_id'] == initializer['symbol']['id'] and edge['target_id'] == cs_leaf
+assert edge['resolution'] == 'compiler_bound' and not edge['implicit'], edge
+source = query({'op': 'source', 'artifact_id': edge['location']['artifact_id']})['source']
+assert source['content_hash'] == edge['location']['content_hash']
+assert source['text'].encode()[edge['location']['start_byte']:edge['location']['end_byte']].decode() == 'Leaf()', edge
+assert [f['symbol']['id'] for f in graph('callees', initializer['symbol']['id'], target='net10.0')['findings']] == [cs_leaf]
+for reader in ['ReadInitialized', 'ReadDeferred']:
+    assert not graph('callees', symbol(reader, 'cs'), target='net10.0')['findings'], reader
+checks += ['Roslyn initializer call ownership and no invented calls from field/function-value reads']
 use = graph('callees', symbol('Use', 'cs'), target='net10.0')
 assert any(b['reason'] == 'unresolved_target' for b in use['boundaries']), use
 assert {'get_Value', 'set_Value', 'get_Item', 'op_Addition', 'op_Implicit'} <= {f['symbol']['name'] for f in use['findings']}, use

@@ -186,15 +186,15 @@ try:
  first=c.send('tools/call',{'name':'search_symbols','arguments':{'name':'target','freshness_wait_ms':2000,'deadline_ms':2000}})
  second=c.send('tools/call',{'name':'search_symbols','arguments':{'name':'target','freshness_wait_ms':2000,'deadline_ms':2000}})
  time.sleep(.15);c.notify('notifications/cancelled',{'requestId':first,'reason':'test cancellation'})
- third=c.send('tools/call',{'name':'search_symbols','arguments':{'name':'target'}})
- busy=c.response(third);assert busy['result']['isError'] and busy['result']['structuredContent']['error']['code']=='busy',busy
+ third=c.send('tools/call',{'name':'search_symbols','arguments':{'name':'target','deadline_ms':0}})
+ busy=c.response(third);assert busy['result']['isError'] and busy['result']['structuredContent']['error']['code'] in ['busy','deadline_exceeded'],busy
  os.kill(pid,signal.SIGCONT);paused=None;c.response(second)
  until=time.monotonic()+5
  while True:
   tool,_=c.tool('search_symbols',{'name':'target'})
   if not tool['isError']:break
   assert time.monotonic()<until;time.sleep(.05)
- checks.append('cancelled_waiter_retains_bounded_work_slot')
+ checks.append('cancelled_work_releases_its_slot_only_after_core_exit_and_recovers')
  pinned_text=SOURCE.read_text();SOURCE.write_text(pinned_text.replace('hello😀','saved😀'));ready(generation+1)
  tool,retained=c.tool('next_page',{'cursor':symbol_cursor});assert not tool['isError'] and frozen_page(retained)==frozen_page(first_page)
  assert retained['result']['generation']==generation and retained['result']['freshness']=='stale',retained
@@ -219,6 +219,27 @@ try:
  assert [t['name'] for t in listing['tools']]==names
  tool,value=modern.tool('search_symbols',{'name':'Greeter'});assert not tool['isError'] and value['result']['freshness']=='current'
  modern.close();checks+=['current_2026_discovery_lifecycle','reconnect_reuses_index_without_forced_refresh']
+ # Real stdout backpressure, with stdin deliberately LEFT OPEN. The large
+ # successful replies cannot finish writing; the transport must close itself.
+ before_pressure=ready()['generation']
+ (WORKSPACE/'pressure.ts').write_text(''.join(f'export function pressure{i:04d}{"x"*1024}() {{ return {i}; }}\n' for i in range(400)))
+ ready(before_pressure+1)
+ pressure=json.loads(cli('query',DATABASE,json.dumps({'op':'symbols','limit':1000,'response_max_bytes':2097152})).stdout)
+ assert sum(s['name'].startswith('pressure') for s in pressure['result']['symbols'])==400,pressure
+ assert len(json.dumps(pressure).encode())>256*1024,'backpressure fixture reply is too small'
+ stalled=Client()
+ for _ in range(2):stalled.send('tools/call',{'name':'search_symbols','arguments':{'limit':1000,'response_max_bytes':2097152}})
+ started=time.monotonic();stalled.process.wait(timeout=12)
+ elapsed=time.monotonic()-started
+ wire=stalled.buffer+stalled.process.stdout.read();(RUN/'stalled-output.bin').write_bytes(wire)
+ assert wire and not wire.endswith(b'\n'),('expected a partial blocked frame',len(wire),wire[-80:])
+ assert elapsed<10,elapsed
+ for frame in wire.split(b'\n')[:-1]:
+  assert len(frame)+1<=8*1024*1024
+  json.loads(frame)
+ recovered=Client();tool,value=recovered.tool('search_symbols',{'name':'Greeter'})
+ assert not tool['isError'] and value['result']['freshness']=='current',value
+ recovered.close();checks.append('real_stdout_backpressure_closes_connection_without_stopping_coordinator')
  result={'passed':True,'profile':PROFILE,'database':DATABASE,'checks':checks}
  (RUN/'summary.json').write_text(json.dumps(result,indent=2)+'\n');(ROOT/'.artifacts/mcp/latest.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
 finally:

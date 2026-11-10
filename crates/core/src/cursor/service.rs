@@ -206,7 +206,7 @@ impl CursorService {
     fn enforce_limits(state: &mut State, execution: Execution) -> Result<()> {
         let result = (|| {
             while state.registry.entries.len() > state.registry.maximum {
-                if !state.registry.remove_idle_except(None, execution)? {
+                if !state.registry.remove_idle_except(None, execution.clone())? {
                     return Err(Error::ResourceLimited(
                         "cursor count pressure is waiting for active reads".into(),
                     ));
@@ -227,7 +227,7 @@ impl CursorService {
             .cap_at(Duration::from_millis(request.deadline_at_ms))?;
         execution.check()?;
         self.running()?;
-        let result = self.request_inner(database, request, execution);
+        let result = self.request_inner(database, request, execution.clone());
         execution.check()?;
         self.running()?;
         self.changed.notify_all();
@@ -244,7 +244,7 @@ impl CursorService {
         self.running()?;
         if request.action == "settings" {
             if state.pressure.is_some() {
-                let _ = Self::enforce_limits(&mut state, execution);
+                let _ = Self::enforce_limits(&mut state, execution.clone());
             }
             if let Some(value) = request.settings {
                 let limits = CursorLimits {
@@ -283,7 +283,7 @@ impl CursorService {
         if state.disabled.contains(database) {
             return Err(Error::CursorInvalidated);
         }
-        if let Err(error) = state.registry.sweep_controlled(execution) {
+        if let Err(error) = state.registry.sweep_controlled(execution.clone()) {
             state.maintenance_error = Some(error.to_string());
             return Err(error);
         }
@@ -292,15 +292,17 @@ impl CursorService {
                 "cursor result storage unavailable: {error}; repair the cursor cache permissions/contents and restart the coordinator"
             )));
         }
-        Self::initialize(&mut state, database, execution)?;
+        Self::initialize(&mut state, database, execution.clone())?;
         if request.action == "admit" {
             if !state.cleanup_pending.is_empty() {
                 return Err(Error::ResourceLimited("previous cursor pins are still being cleaned up; retry when cursor settings no longer report pending cleanup".into()));
             }
-            let handle = state.registry.admit_controlled(database, execution)?;
+            let handle = state
+                .registry
+                .admit_controlled(database, execution.clone())?;
             let read = match state
                 .registry
-                .borrow_controlled(database, handle, execution)
+                .borrow_controlled(database, handle, execution.clone())
             {
                 Ok(read) => read,
                 Err(error) => {
@@ -485,13 +487,16 @@ impl CursorService {
         let execution = Execution::new(Default::default(), None)?;
         // Existing leases/retiring files make progress before old-incarnation
         // retries. Rotate retries so one locked index cannot starve the rest.
-        let result = state.registry.sweep_controlled(execution).and_then(|()| {
-            if state.pressure.is_some() {
-                Self::enforce_limits(&mut state, execution)
-            } else {
-                Ok(())
-            }
-        });
+        let result = state
+            .registry
+            .sweep_controlled(execution.clone())
+            .and_then(|()| {
+                if state.pressure.is_some() {
+                    Self::enforce_limits(&mut state, execution)
+                } else {
+                    Ok(())
+                }
+            });
         // Owner activation reclaims old manifests atomically. Repeating the
         // tiny startup probe can roll back legitimate cleanup forever. Retry
         // one queued index with the existing maximum cooperative budget.
@@ -526,7 +531,7 @@ impl CursorService {
         }
         let result = (|| {
             let mut state = self.lock()?;
-            Self::initialize(&mut state, database, execution)?;
+            Self::initialize(&mut state, database, execution.clone())?;
             loop {
                 self.running()?;
                 if state.disabled.contains(database) {
@@ -534,10 +539,11 @@ impl CursorService {
                 }
                 control.check()?;
                 execution.check()?;
-                if state
-                    .registry
-                    .prepare_controlled(database, writer.generation, execution)?
-                {
+                if state.registry.prepare_controlled(
+                    database,
+                    writer.generation,
+                    execution.clone(),
+                )? {
                     return writer.publish_controlled(control);
                 }
                 let (next, _) = self

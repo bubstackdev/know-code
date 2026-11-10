@@ -25,12 +25,12 @@ fn rpc(
     execution.check()?;
     request.remaining_ms = execution.remaining()?.as_millis().min(u128::from(u32::MAX)) as u32;
     request.deadline_at_ms = execution.deadline_ms()?;
-    let stream = execution::connect(&control::socket_path(root), execution).map_err(|error| match error {
+    let stream = execution::connect(&control::socket_path(root), execution.clone()).map_err(|error| match error {
         Error::Io(error) => Error::CoordinatorUnavailable(format!("pagination requires the workspace coordinator; open a Workspace or start the installed Know Code runtime: {error}")),
         other => other,
     })?;
     let response = control::exchange_raw(
-        &mut TimedStream::new(stream, execution)?,
+        &mut TimedStream::new(stream, execution.clone())?,
         ControlRequest {
             operation: "cursor".into(),
             database: database.into(),
@@ -132,19 +132,27 @@ impl<'a> Lease<'a> {
     fn call(&self, mut request: CursorRequest) -> Result<ControlResponse> {
         request.cursor = self.handle.prefix();
         request.lease = self.reply.lease.clone();
-        rpc(self.root, self.database, request, self.execution)
+        rpc(self.root, self.database, request, self.execution.clone())
     }
-    fn finish(self, result: Result<String>) -> Result<String> {
+    fn finish(mut self, result: Result<String>) -> Result<String> {
+        let result = result.and_then(|json| {
+            self.call(CursorRequest {
+                action: "finish".into(),
+                ..Default::default()
+            })?;
+            self.execution.check()?;
+            Ok(json)
+        });
         match result {
-            Ok(json) => {
-                self.call(CursorRequest {
-                    action: "finish".into(),
-                    ..Default::default()
-                })?;
-                self.execution.check()?;
-                Ok(json)
-            }
+            Ok(json) => Ok(json),
             Err(error) => {
+                // Cleanup cannot inherit a cancelled flag. It has a separate
+                // small budget, never extending the coordinator read lease.
+                if let Ok(cleanup) = Execution::new(Default::default(), Some(200))
+                    .and_then(|e| e.cap_at(Duration::from_millis(self.reply.lease_deadline_ms)))
+                {
+                    self.execution = cleanup;
+                }
                 if self.execution.check().is_ok() {
                     let action = if self.creator {
                         "discard"
@@ -213,9 +221,9 @@ impl<'a> Lease<'a> {
                 freshness: freshness(self.reply.generation, state),
                 coordination: state,
             },
-            self.execution,
+            self.execution.clone(),
         )?;
-        execution::encode(&value, self.execution, maximum)
+        execution::encode(&value, self.execution.clone(), maximum)
     }
 }
 
@@ -254,7 +262,7 @@ pub(crate) fn query(
                 cursor: handle.prefix(),
                 ..Default::default()
             },
-            execution,
+            execution.clone(),
         )?;
         let lease = Lease::from_response(root, database, response, execution, false)?;
         if lease.handle != handle {
@@ -270,13 +278,14 @@ pub(crate) fn query(
                     position,
                     &handle.prefix(),
                     lease.reply.generation,
-                    lease.execution,
+                    lease.execution.clone(),
                 )?;
                 drop(file);
-                let mut result = ReadView::open_pinned_controlled(&lease.pin(), lease.execution)?
-                    .query_controlled(request, lease.execution)?;
+                let mut result =
+                    ReadView::open_pinned_controlled(&lease.pin(), lease.execution.clone())?
+                        .query_controlled(request, lease.execution.clone())?;
                 status(&mut result, lease.status.as_ref());
-                execution::encode(&result, lease.execution, maximum)
+                execution::encode(&result, lease.execution.clone(), maximum)
             })()
         };
         return lease.finish(result);
@@ -310,7 +319,7 @@ pub(crate) fn query(
     match control::wait_for_database_controlled(
         Path::new(database),
         request.freshness_wait_ms,
-        execution,
+        execution.clone(),
     ) {
         Ok(Some(s)) if s.generation == 0 => return Err(Error::NotReady),
         Err(error @ Error::UpdateRequired(_)) => return Err(error),
@@ -323,20 +332,20 @@ pub(crate) fn query(
             action: "admit".into(),
             ..Default::default()
         },
-        execution,
+        execution.clone(),
     )?;
     let lease = Lease::from_response(root, database, response, execution, true)?;
     let result = (|| {
         let op = request.op.clone();
         let total_limit = request.limit;
-        let mut result = ReadView::open_pinned_controlled(&lease.pin(), lease.execution)?
-            .query_controlled(request, lease.execution)?;
+        let mut result = ReadView::open_pinned_controlled(&lease.pin(), lease.execution.clone())?
+            .query_controlled(request, lease.execution.clone())?;
         status(&mut result, lease.status.as_ref());
         // Bound JSON before converting to a page-planning value; the typed
         // result/read transaction is released before file transfer begins.
         let encoded = execution::write_json(
             &result,
-            Some(lease.execution),
+            Some(lease.execution.clone()),
             MAX_RESULT_BYTES as usize,
             Vec::new(),
         )?;
@@ -354,7 +363,7 @@ pub(crate) fn query(
                 cursor_prefix: &lease.handle.prefix(),
                 response_max_bytes: maximum,
             },
-            lease.execution,
+            lease.execution.clone(),
         )?;
         lease.call(CursorRequest {
             action: "reserve".into(),
@@ -399,6 +408,117 @@ mod tests {
     use super::*;
     use crate::protocol::{self, Envelope, VERSION, envelope::Payload};
     use std::os::unix::net::UnixListener;
+    #[test]
+    fn cancelled_upload_discards_partial_file_and_pin_with_uncancelled_cleanup() {
+        use crate::{cursor::CursorService, protocol::WorkspaceStatus};
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/qcu")
+            .join(format!(
+                "{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let db = root.join("workspaces/w/index.db");
+        crate::cursor::lifecycle_tests::publish(&db, "original source");
+        let service = CursorService::new(&root, [db.clone()]).unwrap();
+        let listener = UnixListener::bind(control::socket_path(&root)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let cancellation = crate::execution::QueryCancellation::default();
+        std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                loop {
+                    let (mut stream, _) = match listener.accept() {
+                        Ok(pair) => pair,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "cursor cleanup never reached the coordinator"
+                            );
+                            std::thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        Err(error) => panic!("{error}"),
+                    };
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
+                    let Some(Payload::ControlRequest(request)) = frame.payload else {
+                        panic!("expected control request");
+                    };
+                    let mut response = ControlResponse {
+                        cursor_control_version: CONTROL_VERSION,
+                        resource_control_version: crate::resource::CONTROL_VERSION,
+                        analysis_settings_version: crate::settings::VERSION,
+                        workspaces: vec![WorkspaceStatus {
+                            database: db.to_string_lossy().into_owned(),
+                            generation: 1,
+                            phase: "idle".into(),
+                            available: true,
+                            observed_epoch: 1,
+                            published_epoch: 1,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    };
+                    let action = request
+                        .cursor
+                        .as_ref()
+                        .map(|r| r.action.clone())
+                        .unwrap_or_default();
+                    if let Some(request) = request.cursor {
+                        response.cursor =
+                            Some(service.request(&db, request, Default::default()).unwrap());
+                    }
+                    if action == "chunk" {
+                        cancellation.cancel();
+                    }
+                    // The cancelled sender may already have closed its first
+                    // socket. Its separate cleanup must still reach discard.
+                    let _ = protocol::write_frame(
+                        &mut stream,
+                        &Envelope {
+                            protocol_version: VERSION,
+                            payload: Some(Payload::ControlResponse(response)),
+                            ..Default::default()
+                        },
+                    );
+                    if action == "discard" {
+                        break;
+                    }
+                }
+            });
+            let result = crate::query_json_cancellable(
+                db.to_str().unwrap(),
+                r#"{"op":"symbols","page_size":1}"#,
+                Default::default(),
+                Some(cancellation.clone()),
+            );
+            assert_eq!(
+                serde_json::from_str::<Value>(&result).unwrap()["error"]["code"],
+                "cancelled"
+            );
+            server.join().unwrap();
+        });
+        assert_eq!(std::fs::read_dir(root.join("cursors")).unwrap().count(), 0);
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        let pins: u64 = connection
+            .query_row("SELECT count(*) FROM cursor_generation_pins", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(pins, 0);
+        let generation: u64 = connection
+            .query_row("SELECT current_generation FROM state", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(generation, 1);
+    }
     #[test]
     fn older_coordinator_requires_update_before_cursor_use() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

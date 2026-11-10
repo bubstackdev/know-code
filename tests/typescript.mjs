@@ -25,6 +25,8 @@ const local = 1; const shorthand = {local}; shorthand.local;
 export {Box as Alias};
 import {Alias as ImportedBox} from './example.js';
 new ImportedBox(true);
+export function firstScope(scopedArg: number) { const scopedLocal = scopedArg; return scopedLocal + scopedLocal + scopedArg; }
+export function secondScope(scopedArg: string) { const scopedLocal = scopedArg; return scopedLocal + scopedLocal + scopedArg; }
 `;
 const file = path.join(root, 'example.ts');
 fs.writeFileSync(file, source);
@@ -63,6 +65,28 @@ function run(checkFirst) {
     assert.deepEqual(at(`merged.${name}`, name).map(o => o.symbolId),
       symbols.filter(s => s.name === name).map(s => s.id), 'merged declarations retain both members');
   }
+  const bytes = Buffer.from(source);
+  for (const name of ['scopedArg', 'scopedLocal']) {
+    const scoped = symbols.filter(s => s.name === name);
+    assert.equal(scoped.length, 2, `${name}: one symbol per compiler scope`);
+    assert.equal(new Set(scoped.map(s => s.id)).size, 2, `${name}: distinct scope identities`);
+    for (const [owner, signature] of [['firstScope', 'number'], ['secondScope', 'string']]) {
+      const begin = source.indexOf(`export function ${owner}`);
+      const end = source.indexOf('\n', begin);
+      const startByte = Buffer.byteLength(source.slice(0, begin));
+      const endByte = Buffer.byteLength(source.slice(0, end));
+      const local = occurrences.filter(o => o.startByte >= startByte && o.endByte <= endByte);
+      const declarations = local.filter(o => o.role === 'declaration' && scoped.some(s => s.id === o.symbolId));
+      assert.equal(declarations.length, 1, `${owner}/${name}: exact declaration`);
+      const symbol = scoped.find(s => s.id === declarations[0].symbolId);
+      assert.equal(symbol.signature, signature, `${owner}/${name}: declaration type`);
+      const uses = occurrences.filter(o => o.symbolId === symbol.id && o.role === 'reference');
+      assert.equal(uses.length, 2, `${owner}/${name}: both uses preserved`);
+      assert(uses.every(o => o.startByte >= startByte && o.endByte <= endByte), `${owner}/${name}: no cross-scope references`);
+      for (const occurrence of [declarations[0], ...uses])
+        assert.equal(bytes.subarray(occurrence.startByte, occurrence.endByte).toString('utf8'), name, 'exact UTF-8 token after astral text');
+    }
+  }
   const canonical = declarationSymbols(ts, checker);
   let multipleRoots = 0;
   const visit = node => {
@@ -83,8 +107,9 @@ const after = run(false), before = run(true);
 assert.deepEqual(after.occurrences, before.occurrences, 'checking order changes occurrence identity');
 assert.deepEqual(after.symbols.map(({signature, ...identity}) => identity), before.symbols.map(({signature, ...identity}) => identity));
 fs.writeFileSync(path.join(root, 'summary.json'), JSON.stringify({compiler: ts.version,
-  symbols: after.symbols.length, occurrences: after.occurrences.length, checkOrdersMatch: true}, null, 2)+'\n');
-console.log('TypeScript declaration identities, generic roots, synthetic views, aliases and shorthand passed');
+  symbols: after.symbols.length, occurrences: after.occurrences.length, checkOrdersMatch: true,
+  scopedLocalAndParameterIdentities: true, exactScopedUtf8ReferenceRanges: true}, null, 2)+'\n');
+console.log('TypeScript declaration identities, generic roots, synthetic views, aliases, shorthand and scoped locals/parameters passed');
 
 // Receiver specialization must preserve semantic distinctions that declaration
 // identities intentionally share, including boolean/bigint/nominal literals.

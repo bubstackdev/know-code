@@ -101,9 +101,13 @@ export interface QueryResult {
   graph?: GraphResult;
 }
 export type QueryResponse = {result: QueryResult} | {error: {code: string; message: string}};
+export interface QueryOptions {
+  /** Cancels only this query. Rejects with Error name AbortError/code ABORT_ERR after native work exits. */
+  signal?: AbortSignal;
+}
 export class Index {
   constructor(database: string);
-  query(request: QueryRequest): Promise<QueryResponse>;
+  query(request: QueryRequest, options?: QueryOptions): Promise<QueryResponse>;
 }
 
 export interface SourceResult {artifact_id: string; path: string; content_hash: string; text: string; start_byte: number; end_byte: number; total_bytes: number; start_line: number}
@@ -139,6 +143,6 @@ export class Workspace {
   configure(settings: PersonalWorkspaceSettings): Promise<WorkspaceStatus>;
   refresh(options?: {configuration?: string}): Promise<WorkspaceStatus>;
   waitForIndex(options?: {waitMs?: number}): Promise<WorkspaceStatus>;
-  query(request: QueryRequest): Promise<{result: QueryResult}>;
+  query(request: QueryRequest, options?: QueryOptions): Promise<{result: QueryResult}>;
   close(): void;
 }

@@ -184,16 +184,19 @@ impl CursorRegistry {
         now: Duration,
         execution: Execution,
     ) -> Result<CursorHandle> {
-        self.sweep_inner(now, execution)?;
+        self.sweep_inner(now, execution.clone())?;
         self.check_admission()?;
         while self.entries.len() >= self.maximum {
-            if !self.remove_idle_except(None, execution)? {
+            if !self.remove_idle_except(None, execution.clone())? {
                 return Err(Error::CursorLimit);
             }
         }
-        let retention =
-            GenerationRetention::activate_controlled(database, self.owner, Some(execution))?;
-        let pin = retention.pin_controlled(Some(execution))?;
+        let retention = GenerationRetention::activate_controlled(
+            database,
+            self.owner,
+            Some(execution.clone()),
+        )?;
+        let pin = retention.pin_controlled(Some(execution.clone()))?;
         if self.entries.contains_key(&pin.id) {
             retention.release_controlled(&pin, Some(execution))?;
             return Err(Error::Protocol("cursor identity collision".into()));
@@ -214,7 +217,7 @@ impl CursorRegistry {
                 creator: None,
             },
         );
-        if let Err(error) = self.make_space(None, Some(handle.id), execution) {
+        if let Err(error) = self.make_space(None, Some(handle.id), execution.clone()) {
             // Cleanup shares this request budget; an expired one is retried by
             // periodic sweeping rather than starting an unbounded extra wait.
             let _ = self.retire(handle.id, execution);
@@ -261,7 +264,7 @@ impl CursorRegistry {
         now: Duration,
         execution: Execution,
     ) -> Result<CursorRead> {
-        self.sweep_inner(now, execution)?;
+        self.sweep_inner(now, execution.clone())?;
         self.check_admission()?;
         if remaining.is_zero() {
             return Err(Error::DeadlineExceeded);
@@ -358,7 +361,7 @@ impl CursorRegistry {
     /// must finish/expire before publication can reclaim another cursor.
     pub fn evict_idle(&mut self) -> Result<bool> {
         let execution = Execution::new(Default::default(), None)?;
-        self.sweep_inner(crate::execution::continuous_time()?, execution)?;
+        self.sweep_inner(crate::execution::continuous_time()?, execution.clone())?;
         self.remove_idle_except(None, execution)
     }
     fn remove_idle_except(
@@ -392,7 +395,7 @@ impl CursorRegistry {
         bytes: u64,
         execution: Execution,
     ) -> Result<()> {
-        self.sweep_inner(crate::execution::continuous_time()?, execution)?;
+        self.sweep_inner(crate::execution::continuous_time()?, execution.clone())?;
         self.check_admission()?;
         if handle.owner != self.owner {
             return Err(Error::CursorInvalidated);
@@ -408,7 +411,7 @@ impl CursorRegistry {
         }
         let previous = entry.result_bytes_reserved;
         entry.result_bytes_reserved = previous.max(bytes);
-        if let Err(error) = self.make_space(None, Some(handle.id), execution) {
+        if let Err(error) = self.make_space(None, Some(handle.id), execution.clone()) {
             if let Some(entry) = self.entries.get_mut(&handle.id) {
                 entry.result_bytes_reserved = previous;
             }
@@ -449,7 +452,7 @@ impl CursorRegistry {
             total = accounting::add(
                 total,
                 retention
-                    .usage_controlled(candidate, execution)?
+                    .usage_controlled(candidate, execution.clone())?
                     .total_bytes()?,
             )?;
         }
@@ -462,8 +465,8 @@ impl CursorRegistry {
         protected: Option<[u8; 16]>,
         execution: crate::execution::Execution,
     ) -> Result<()> {
-        while self.budget_usage(proposed, execution)? > self.maximum_bytes {
-            if !self.remove_idle_except(protected, execution)? {
+        while self.budget_usage(proposed, execution.clone())? > self.maximum_bytes {
+            if !self.remove_idle_except(protected, execution.clone())? {
                 return Err(Error::ResourceLimited(
                     "cursor retention budget is busy; retry after an active read finishes".into(),
                 ));
@@ -488,13 +491,15 @@ impl CursorRegistry {
         generation: u64,
         execution: Execution,
     ) -> Result<bool> {
-        self.sweep_inner(crate::execution::continuous_time()?, execution)?;
+        self.sweep_inner(crate::execution::continuous_time()?, execution.clone())?;
         loop {
-            if self.budget_usage(Some((database, generation)), execution)? <= self.maximum_bytes {
+            if self.budget_usage(Some((database, generation)), execution.clone())?
+                <= self.maximum_bytes
+            {
                 return Ok(true);
             }
             self.publication_waiting = true;
-            if !self.remove_idle_except(None, execution)? {
+            if !self.remove_idle_except(None, execution.clone())? {
                 return Ok(false);
             }
         }
@@ -526,7 +531,7 @@ impl CursorRegistry {
             }
         }
         for id in expired {
-            self.retire(id, execution)?;
+            self.retire(id, execution.clone())?;
         }
         Ok(())
     }
@@ -639,7 +644,8 @@ fn open_writer_controlled(path: &Path, execution: Option<Execution>) -> Result<C
     )?;
     if let Some(execution) = execution {
         execution.check()?;
-        connection.progress_handler(1_000, Some(move || execution.check().is_err()))?;
+        let progress = execution.clone();
+        connection.progress_handler(1_000, Some(move || progress.check().is_err()))?;
         connection.busy_handler(Some(move |count| {
             if count >= 2_000 {
                 return false;
@@ -678,7 +684,7 @@ impl GenerationRetention {
         owner: [u8; 16],
         execution: Option<Execution>,
     ) -> Result<Self> {
-        let mut connection = open_writer_controlled(database, execution)?;
+        let mut connection = open_writer_controlled(database, execution.clone())?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let active = storage_active(&tx)?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS staging_generations(generation INTEGER PRIMARY KEY REFERENCES generations(id) ON DELETE CASCADE);
@@ -732,7 +738,7 @@ impl GenerationRetention {
     }
     fn pin_controlled(&self, execution: Option<Execution>) -> Result<GenerationPin> {
         let id = nonce()?;
-        let mut connection = open_writer_controlled(&self.database, execution)?;
+        let mut connection = open_writer_controlled(&self.database, execution.clone())?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.check_owner(&tx)?;
         let generation: Option<u64> = tx.query_row(
@@ -764,7 +770,7 @@ impl GenerationRetention {
         if pin.database != self.database || pin.owner != self.owner {
             return Err(Error::CursorInvalidated);
         }
-        let mut connection = open_writer_controlled(&self.database, execution)?;
+        let mut connection = open_writer_controlled(&self.database, execution.clone())?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.check_owner(&tx)?;
         tx.execute(

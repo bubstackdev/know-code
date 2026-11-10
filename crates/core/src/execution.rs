@@ -8,12 +8,16 @@ use std::{
         unix::{ffi::OsStrExt, net::UnixStream},
     },
     path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
 pub const MAX_DEADLINE_MS: u32 = 120_000;
-pub const QUERY_CONTRACT_VERSION: u32 = 2;
+pub const QUERY_CONTRACT_VERSION: u32 = 3;
 pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
 pub const MIN_RESPONSE_BYTES: u32 = 1024;
@@ -81,10 +85,46 @@ impl QueryStart {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Shared per-query cancellation. Clones keep callbacks and active work alive
+/// independently; cancellation never targets the coordinator's indexing job.
+#[derive(Debug, Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    parent: Option<Arc<CancellationState>>,
+}
+#[derive(Clone, Debug, Default)]
+pub struct QueryCancellation(Arc<CancellationState>);
+impl QueryCancellation {
+    pub fn cancel(&self) {
+        self.0.cancelled.store(true, Ordering::Release);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        let mut state = self.0.as_ref();
+        loop {
+            if state.cancelled.load(Ordering::Acquire) {
+                return true;
+            }
+            match &state.parent {
+                Some(parent) => state = parent.as_ref(),
+                None => return false,
+            }
+        }
+    }
+    /// Cancelling a child leaves its parent/siblings running. Parent
+    /// cancellation reaches active children even before a transport drains.
+    pub fn child(&self) -> Self {
+        Self(Arc::new(CancellationState {
+            cancelled: AtomicBool::new(false),
+            parent: Some(self.0.clone()),
+        }))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct Execution {
     start: QueryStart,
     timeout: Duration,
+    cancellation: Option<QueryCancellation>,
 }
 impl Execution {
     pub(crate) fn new(start: QueryStart, deadline: Option<u32>) -> Result<Self> {
@@ -97,26 +137,38 @@ impl Execution {
         Ok(Self {
             start,
             timeout: Duration::from_millis(u64::from(deadline)),
+            cancellation: None,
         })
     }
-    pub(crate) fn remaining(self) -> Result<Duration> {
+    pub(crate) fn with_cancellation(mut self, cancellation: Option<QueryCancellation>) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+    pub(crate) fn remaining(&self) -> Result<Duration> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(QueryCancellation::is_cancelled)
+        {
+            return Err(Error::QueryCancelled);
+        }
         self.timeout
             .checked_sub(self.start.elapsed()?)
             .filter(|d| !d.is_zero())
             .ok_or(Error::DeadlineExceeded)
     }
-    pub(crate) fn check(self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         self.remaining().map(|_| ())
     }
-    pub(crate) fn phase(self, maximum: Duration) -> Result<Self> {
+    pub(crate) fn phase(&self, maximum: Duration) -> Result<Self> {
         Ok(Self {
             timeout: self
                 .timeout
                 .min(self.start.elapsed()?.saturating_add(maximum)),
-            ..self
+            ..self.clone()
         })
     }
-    pub(crate) fn cap_at(self, deadline: Duration) -> Result<Self> {
+    pub(crate) fn cap_at(&self, deadline: Duration) -> Result<Self> {
         let entered = self.start.entered.ok_or_else(|| {
             std::io::Error::other("monotonic clock unavailable at query admission")
         })?;
@@ -126,10 +178,10 @@ impl Execution {
                     .saturating_sub(entered)
                     .saturating_add(self.start.elapsed),
             ),
-            ..self
+            ..self.clone()
         })
     }
-    pub(crate) fn deadline_ms(self) -> Result<u64> {
+    pub(crate) fn deadline_ms(&self) -> Result<u64> {
         self.check()?;
         let entered = self.start.entered.ok_or_else(|| {
             std::io::Error::other("monotonic clock unavailable at query admission")
@@ -208,7 +260,7 @@ pub(crate) fn connect(path: &Path, execution: Execution) -> Result<UnixStream> {
         {
             return Err(error.into());
         }
-        ready(&stream, libc::POLLOUT, execution)?;
+        ready(&stream, libc::POLLOUT, &execution)?;
         if let Some(error) = stream.take_error()? {
             return Err(error.into());
         }
@@ -227,17 +279,20 @@ impl TimedStream {
         Ok(Self { stream, execution })
     }
 }
-fn io_remaining(execution: Execution) -> std::io::Result<Duration> {
+fn io_remaining(execution: &Execution) -> std::io::Result<Duration> {
     execution
         .remaining()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::TimedOut, e))
 }
-fn ready(stream: &UnixStream, events: i16, execution: Execution) -> std::io::Result<()> {
+fn ready(stream: &UnixStream, events: i16, execution: &Execution) -> std::io::Result<()> {
     loop {
-        let timeout = io_remaining(execution)?
-            .as_millis()
-            .saturating_add(1)
-            .min(i32::MAX as u128) as i32;
+        let timeout = io_remaining(execution)?.as_millis().saturating_add(1).min(
+            if execution.cancellation.is_some() {
+                20
+            } else {
+                i32::MAX as u128
+            },
+        ) as i32;
         let mut descriptor = libc::pollfd {
             fd: stream.as_raw_fd(),
             events,
@@ -264,7 +319,7 @@ impl Read for TimedStream {
             return Ok(0);
         }
         loop {
-            ready(&self.stream, libc::POLLIN, self.execution)?;
+            ready(&self.stream, libc::POLLIN, &self.execution)?;
             match self.stream.read(bytes) {
                 Err(error)
                     if matches!(
@@ -282,7 +337,7 @@ impl Write for TimedStream {
             return Ok(0);
         }
         loop {
-            ready(&self.stream, libc::POLLOUT, self.execution)?;
+            ready(&self.stream, libc::POLLOUT, &self.execution)?;
             match self.stream.write(bytes) {
                 Err(error)
                     if matches!(
@@ -294,7 +349,7 @@ impl Write for TimedStream {
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        io_remaining(self.execution)?;
+        io_remaining(&self.execution)?;
         Ok(())
     }
 }
@@ -313,7 +368,7 @@ pub(crate) fn write_json<W: Write>(
     }
     impl<W: Write> Write for Encoder<W> {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if let Some(execution) = self.execution {
+            if let Some(execution) = &self.execution {
                 io_remaining(execution)?;
             }
             if bytes.is_empty() {
@@ -330,7 +385,7 @@ pub(crate) fn write_json<W: Write>(
             Ok(count)
         }
         fn flush(&mut self) -> std::io::Result<()> {
-            if let Some(execution) = self.execution {
+            if let Some(execution) = &self.execution {
                 io_remaining(execution)?;
             }
             Ok(())
@@ -343,7 +398,7 @@ pub(crate) fn write_json<W: Write>(
         exceeded: false,
     };
     let result = serde_json::to_writer(&mut writer, value);
-    if let Some(execution) = execution {
+    if let Some(execution) = &writer.execution {
         execution.check()?;
     }
     if writer.exceeded {
@@ -379,7 +434,7 @@ pub(crate) fn encode(
 ) -> Result<String> {
     let bytes = write_json(
         &Response { result: value },
-        Some(execution),
+        Some(execution.clone()),
         maximum,
         Vec::new(),
     )?;
@@ -416,28 +471,127 @@ pub(crate) fn error_json(code: &str, message: &str, maximum: usize) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn cancellation_is_scoped_inherited_and_precedes_deadline() {
+        let connection = QueryCancellation::default();
+        let first = connection.child();
+        let second = connection.child();
+        let cancelled = Execution::new(Default::default(), Some(0))
+            .unwrap()
+            .with_cancellation(Some(first.clone()));
+        first.cancel();
+        assert!(matches!(cancelled.check(), Err(Error::QueryCancelled)));
+        assert!(!second.is_cancelled());
+        assert!(!connection.is_cancelled());
+        connection.cancel();
+        assert!(second.is_cancelled());
+        assert!(!QueryCancellation::default().is_cancelled());
+        let response = crate::query_json_cancellable(
+            "never-opened.db",
+            "invalid JSON",
+            Default::default(),
+            Some(first),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response).unwrap()["error"]["code"],
+            "cancelled"
+        );
+    }
+    #[test]
+    fn cancellation_during_encoding_never_returns_partial_success() {
+        struct CancelOnSerialize(QueryCancellation);
+        impl Serialize for CancelOnSerialize {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                self.0.cancel();
+                serializer.serialize_str("interrupted payload")
+            }
+        }
+        let flag = QueryCancellation::default();
+        let execution = Execution::new(Default::default(), None)
+            .unwrap()
+            .with_cancellation(Some(flag.clone()));
+        assert!(matches!(
+            encode(&CancelOnSerialize(flag), execution, 1024),
+            Err(Error::QueryCancelled)
+        ));
+    }
+    #[test]
+    fn cancellation_interrupts_control_wait_and_caps_the_remote_wait() {
+        use crate::{
+            control,
+            protocol::{self, ControlRequest, envelope::Payload},
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/qcw")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(control::socket_path(&root)).unwrap();
+        let cancellation = QueryCancellation::default();
+        let signal = cancellation.clone();
+        let (done, wait) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
+            let Some(Payload::ControlRequest(request)) = frame.payload else {
+                panic!("expected request");
+            };
+            assert!(request.wait_ms <= DEFAULT_DEADLINE_MS);
+            signal.cancel();
+            // Keep the socket open without a response: only cancellation can
+            // wake the client before its five-second overall timeout.
+            wait.recv().unwrap();
+        });
+        let started = std::time::Instant::now();
+        let result = control::request_cancellable(
+            &root,
+            ControlRequest {
+                operation: "wait".into(),
+                wait_ms: 120000,
+                ..Default::default()
+            },
+            Default::default(),
+            cancellation,
+        );
+        done.send(()).unwrap();
+        server.join().unwrap();
+        assert!(matches!(result, Err(Error::QueryCancelled)));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
     fn complete_response_budget_counts_framing_escaping_and_metadata() {
         let value = serde_json::json!({"metadata":{"coverage":"x".repeat(512)},"source":"\0\n\\\"😀".repeat(512)});
         let expected = serde_json::to_vec(&serde_json::json!({"result":value})).unwrap();
         let execution = Execution::new(Default::default(), None).unwrap();
         assert_eq!(
-            encode(&value, execution, expected.len())
+            encode(&value, execution.clone(), expected.len())
                 .unwrap()
                 .as_bytes(),
             expected
         );
         assert!(matches!(
-            encode(&value, execution, expected.len() - 1),
+            encode(&value, execution.clone(), expected.len() - 1),
             Err(Error::ResponseLimitExceeded)
         ));
         let emoji = std::str::from_utf8(&expected).unwrap().find('😀').unwrap();
         for maximum in emoji + 1..emoji + 4 {
             assert!(matches!(
-                encode(&value, execution, maximum),
+                encode(&value, execution.clone(), maximum),
                 Err(Error::ResponseLimitExceeded)
             ));
         }
-        assert!(check_response(&value, execution, expected.len()).is_ok());
+        assert!(check_response(&value, execution.clone(), expected.len()).is_ok());
         assert!(matches!(
             check_response(&value, execution, expected.len() - 1),
             Err(Error::ResponseLimitExceeded)
@@ -501,7 +655,8 @@ mod tests {
             drop(listener.accept().unwrap());
         });
         let execution = Execution::new(Default::default(), None).unwrap();
-        let mut stream = TimedStream::new(connect(&path, execution).unwrap(), execution).unwrap();
+        let mut stream =
+            TimedStream::new(connect(&path, execution.clone()).unwrap(), execution).unwrap();
         peer.join().unwrap();
         assert_eq!(stream.read(&mut [0]).unwrap(), 0);
         // Only this isolated fixture child changes its own signal disposition.
@@ -535,7 +690,7 @@ mod tests {
             stream.write_all(b"pong").unwrap();
         });
         let execution = Execution::new(Default::default(), None).unwrap();
-        let stream = connect(&path, execution).unwrap();
+        let stream = connect(&path, execution.clone()).unwrap();
         let mut stream = TimedStream::new(stream, execution).unwrap();
         stream.write_all(b"ping").unwrap();
         peer.join().unwrap();
@@ -626,7 +781,7 @@ mod tests {
             }
         });
         let execution = Execution::new(Default::default(), Some(50)).unwrap();
-        let mut reader = TimedStream::new(stream, execution).unwrap();
+        let mut reader = TimedStream::new(stream, execution.clone()).unwrap();
         assert!(crate::protocol::read_frame(&mut reader).is_err());
         assert!(matches!(execution.check(), Err(Error::DeadlineExceeded)));
         drop(reader);

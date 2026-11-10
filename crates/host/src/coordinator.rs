@@ -92,6 +92,7 @@ struct Shared {
     overflow: AtomicBool,
     clients: AtomicUsize,
     cursors: Arc<know_code_core::cursor::CursorService>,
+    discovery: Mutex<crate::discovery::Discovery>,
 }
 enum Event {
     Wake,
@@ -205,6 +206,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
           UPDATE workspaces SET cancel_pending=1,failed_input_hash='' WHERE outcome_code='cancelled';
           COMMIT;")?;
     }
+    let discovery = crate::discovery::Discovery::open(&registry)?;
     let mut entries = BTreeMap::new();
     {
         let mut query = registry.prepare(
@@ -306,6 +308,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
         entries: Mutex::new(entries),
         changed: Condvar::new(),
         registry: Mutex::new(registry),
+        discovery: Mutex::new(discovery),
         stop: AtomicBool::new(false),
         maintenance: Mutex::new(None),
         analysis_running: AtomicBool::new(false),
@@ -368,6 +371,36 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     let mut last_presence = Instant::now() - Duration::from_secs(10);
     loop {
         let _ = shared.cursors.sweep();
+        if !maintenance_active(&shared) && !shared.stop.load(Ordering::Acquire) {
+            let mut discovery = shared.discovery.lock().unwrap();
+            if let Some((parent, repository)) = discovery.candidate() {
+                let suppressed = shared.registry.lock().unwrap().query_row(
+                    "SELECT EXISTS(SELECT 1 FROM discovery_suppressed WHERE root=?)",
+                    [repository.to_string_lossy().as_ref()],
+                    |r| r.get::<_, bool>(0),
+                );
+                match suppressed {
+                    Ok(true) => discovery.outcome(&parent, true, None),
+                    Ok(false) => {
+                        let request = ControlRequest {
+                            operation: "register".into(),
+                            workspace_root: repository.to_string_lossy().into_owned(),
+                            ..Default::default()
+                        };
+                        match register_workspace(&shared, data, &request, true) {
+                            Ok(_) => {
+                                discovery.outcome(&parent, false, None);
+                                shared.changed.notify_all();
+                            }
+                            Err(error) => {
+                                discovery.outcome(&parent, false, Some(&error.to_string()))
+                            }
+                        }
+                    }
+                    Err(error) => discovery.outcome(&parent, false, Some(&error.to_string())),
+                }
+            }
+        }
         if shared.overflow.swap(false, Ordering::AcqRel) {
             let seen = shared.publisher.overflow_observed();
             mark_rescan(&shared);
@@ -1001,6 +1034,135 @@ fn persist(shared: &Shared, entry: &Entry, inputs: Option<&Snapshot>) -> AnyResu
     tx.commit()?;
     Ok(())
 }
+fn register_workspace(
+    shared: &Shared,
+    data: &Path,
+    request: &ControlRequest,
+    discovered: bool,
+) -> AnyResult<WorkspaceStatus> {
+    let root = std::fs::canonicalize(&request.workspace_root)?;
+    let actual_identity = workspace::identity(&root)?;
+    let database = workspace::database_path(&root, data)
+        .to_string_lossy()
+        .into_owned();
+    let configuration = request.configuration.as_str();
+    let persistent = {
+        let mut entries = shared.entries.lock().unwrap();
+        if discovered {
+            let suppressed: bool = shared.registry.lock().unwrap().query_row(
+                "SELECT EXISTS(SELECT 1 FROM discovery_suppressed WHERE root=?)",
+                [root.to_string_lossy().as_ref()],
+                |r| r.get(0),
+            )?;
+            if suppressed {
+                return Err("repository enrollment is explicitly suppressed".into());
+            }
+            if let Some(entry) = entries.get(&database) {
+                if entry.identity != actual_identity {
+                    return Err(
+                        "workspace identity changed; explicitly unregister the old workspace"
+                            .into(),
+                    );
+                }
+                return Ok(entry.status.snapshot());
+            }
+        }
+        if entries
+            .get(&database)
+            .is_some_and(|entry| entry.identity != actual_identity)
+        {
+            return Err(
+                "workspace identity changed; unwatch before registering the replacement".into(),
+            );
+        }
+        std::fs::create_dir_all(
+            Path::new(&database)
+                .parent()
+                .ok_or("workspace database parent missing")?,
+        )?;
+        // Never promote a new personal choice into legacy fallback state.
+        let legacy = entries
+            .get(&database)
+            .map(|entry| entry.configuration.clone())
+            .unwrap_or_default();
+        let mut settings_changed = false;
+        if !configuration.is_empty() {
+            let mut personal = settings::personal(&root, data)?;
+            if !matches!(&personal.csharp.configuration, settings::Selection::Named(value) if value == configuration)
+            {
+                personal.csharp.configuration = settings::Selection::Named(configuration.into());
+                settings::save(&root, data, &legacy, &personal)?;
+                settings_changed = true;
+            }
+        }
+        let requested_settings = settings::resolve(&root, data, &legacy).ok();
+        let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
+            registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
+            analysis_error: String::new(),
+            failed_input_hash: String::new(),
+            status: LiveStatus::new(
+                WorkspaceStatus {
+                    workspace_root: root.to_string_lossy().into_owned(),
+                    database,
+                    phase: "queued".into(),
+                    observed_epoch: 1,
+                    available: true,
+                    requested_settings,
+                    ..Default::default()
+                },
+                &shared.publisher,
+            ),
+            configuration: legacy,
+            identity: actual_identity.clone(),
+            special_inputs: settings::paths(&root, data).into_iter().collect(),
+            dirty: BTreeSet::new(),
+            force: false,
+            rehash: true,
+            retry_preparation: false,
+            watch_pending: true,
+            pending: true,
+            cancel_pending: false,
+            queued: Instant::now(),
+            active: Instant::now(),
+        });
+        if entry.identity != actual_identity {
+            return Err(
+                "workspace identity changed; unwatch before registering the replacement".into(),
+            );
+        }
+        if settings_changed {
+            queue(entry, None, true);
+        }
+        entry.status.requested_settings = settings::resolve(&root, data, &entry.configuration).ok();
+        if request.operation == "refresh" {
+            if entry.cancel_pending {
+                entry.cancel_pending = false;
+                if let Some((_, control)) = shared
+                    .active_job
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .filter(|(db, _)| db == &entry.status.database)
+                {
+                    control.cancel();
+                }
+            }
+            entry.retry_preparation = true;
+            queue(entry, None, true);
+        }
+        persist(shared, entry, None)?;
+        shared.cursors.register(Path::new(&entry.status.database))?;
+        if !discovered {
+            shared.registry.lock().unwrap().execute(
+                "DELETE FROM discovery_suppressed WHERE root=?",
+                [root.to_string_lossy().as_ref()],
+            )?;
+        }
+        entry.status.snapshot()
+    };
+    Ok(persistent)
+}
+
 fn serve(
     mut socket: UnixStream,
     shared: &Shared,
@@ -1022,6 +1184,18 @@ fn serve(
         let Some(Payload::ControlRequest(request)) = message.payload else {
             return Err("expected coordinator control request".into());
         };
+        if request.operation == "parents" {
+            let request = request
+                .parent_discovery
+                .ok_or("missing parent discovery request")?;
+            let mut discovery = shared.discovery.lock().unwrap();
+            let parents = discovery.action(&shared.registry.lock().unwrap(), request)?;
+            wake(sender, shared, Event::Wake);
+            return Ok(ControlResponse {
+                parents,
+                ..Default::default()
+            });
+        }
         if request.operation == "cursor" {
             let start = know_code_core::execution::QueryStart::default();
             let cursor = request.cursor.ok_or("missing cursor request")?;
@@ -1204,6 +1378,10 @@ fn serve(
             settings::revoke_scripts(Path::new(&request.workspace_root), data)?;
             let mut registry = shared.registry.lock().unwrap();
             let tx = registry.transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO discovery_suppressed VALUES(?)",
+                [&request.workspace_root],
+            )?;
             tx.execute("DELETE FROM workspaces WHERE database=?", [&database])?;
             tx.execute("DELETE FROM identities WHERE database=?", [&database])?;
             tx.execute("DELETE FROM manifests WHERE database=?", [&database])?;
@@ -1223,105 +1401,7 @@ fn serve(
             return Ok(ControlResponse::default());
         }
         if request.operation == "register" || request.operation == "refresh" {
-            let root = std::fs::canonicalize(&request.workspace_root)?;
-            let actual_identity = workspace::identity(&root)?;
-            let database = workspace::database_path(&root, data)
-                .to_string_lossy()
-                .into_owned();
-            let configuration = request.configuration.as_str();
-            let persistent = {
-                let mut entries = shared.entries.lock().unwrap();
-                if entries
-                    .get(&database)
-                    .is_some_and(|entry| entry.identity != actual_identity)
-                {
-                    return Err(
-                        "workspace identity changed; unwatch before registering the replacement"
-                            .into(),
-                    );
-                }
-                std::fs::create_dir_all(
-                    Path::new(&database)
-                        .parent()
-                        .ok_or("workspace database parent missing")?,
-                )?;
-                // Never promote a new personal choice into legacy fallback state.
-                let legacy = entries
-                    .get(&database)
-                    .map(|entry| entry.configuration.clone())
-                    .unwrap_or_default();
-                let mut settings_changed = false;
-                if !configuration.is_empty() {
-                    let mut personal = settings::personal(&root, data)?;
-                    if !matches!(&personal.csharp.configuration, settings::Selection::Named(value) if value == configuration)
-                    {
-                        personal.csharp.configuration =
-                            settings::Selection::Named(configuration.into());
-                        settings::save(&root, data, &legacy, &personal)?;
-                        settings_changed = true;
-                    }
-                }
-                let requested_settings = settings::resolve(&root, data, &legacy).ok();
-                let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
-                    registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
-                    analysis_error: String::new(),
-                    failed_input_hash: String::new(),
-                    status: LiveStatus::new(
-                        WorkspaceStatus {
-                            workspace_root: root.to_string_lossy().into_owned(),
-                            database,
-                            phase: "queued".into(),
-                            observed_epoch: 1,
-                            available: true,
-                            requested_settings,
-                            ..Default::default()
-                        },
-                        &shared.publisher,
-                    ),
-                    configuration: legacy,
-                    identity: actual_identity.clone(),
-                    special_inputs: settings::paths(&root, data).into_iter().collect(),
-                    dirty: BTreeSet::new(),
-                    force: false,
-                    rehash: true,
-                    retry_preparation: false,
-                    watch_pending: true,
-                    pending: true,
-                    cancel_pending: false,
-                    queued: Instant::now(),
-                    active: Instant::now(),
-                });
-                if entry.identity != actual_identity {
-                    return Err(
-                        "workspace identity changed; unwatch before registering the replacement"
-                            .into(),
-                    );
-                }
-                if settings_changed {
-                    queue(entry, None, true);
-                }
-                entry.status.requested_settings =
-                    settings::resolve(&root, data, &entry.configuration).ok();
-                if request.operation == "refresh" {
-                    if entry.cancel_pending {
-                        entry.cancel_pending = false;
-                        if let Some((_, control)) = shared
-                            .active_job
-                            .lock()
-                            .unwrap()
-                            .as_ref()
-                            .filter(|(db, _)| db == &entry.status.database)
-                        {
-                            control.cancel();
-                        }
-                    }
-                    entry.retry_preparation = true;
-                    queue(entry, None, true);
-                }
-                persist(shared, entry, None)?;
-                shared.cursors.register(Path::new(&entry.status.database))?;
-                entry.status.snapshot()
-            };
+            let persistent = register_workspace(shared, data, &request, false)?;
             wake(sender, shared, Event::Wake);
             shared.changed.notify_all();
             return Ok(ControlResponse {
@@ -1371,12 +1451,19 @@ fn serve(
                 }
             }
         }
+        let workspaces = entries
+            .values()
+            .filter(|e| request.database.is_empty() || e.status.database == request.database)
+            .map(|e| e.status.snapshot())
+            .collect();
+        drop(entries);
         Ok(ControlResponse {
-            workspaces: entries
-                .values()
-                .filter(|e| request.database.is_empty() || e.status.database == request.database)
-                .map(|e| e.status.snapshot())
-                .collect(),
+            parents: if request.operation == "status" && request.database.is_empty() {
+                shared.discovery.lock().unwrap().statuses()
+            } else {
+                vec![]
+            },
+            workspaces,
             ..Default::default()
         })
     })();
@@ -1396,6 +1483,7 @@ fn serve(
     response.resource_control_version = know_code_core::resource::CONTROL_VERSION;
     response.analysis_settings_version = settings::VERSION;
     response.cursor_control_version = know_code_core::cursor::CONTROL_VERSION;
+    response.parent_discovery_version = crate::discovery::VERSION;
     response.analysis_running = shared.analysis_running.load(Ordering::Acquire);
     response.coordinator_executable = std::env::current_exe()?
         .canonicalize()?
@@ -1566,6 +1654,9 @@ mod live_lifetime_tests {
             publisher: Arc::new(Publisher::new(&root)),
             changed: Condvar::new(),
             registry: Mutex::new(Connection::open_in_memory().unwrap()),
+            discovery: Mutex::new(
+                crate::discovery::Discovery::open(&Connection::open_in_memory().unwrap()).unwrap(),
+            ),
             stop: AtomicBool::new(false),
             maintenance: Mutex::new(None),
             analysis_running: AtomicBool::new(true),
@@ -1675,6 +1766,9 @@ mod live_lifetime_tests {
             publisher,
             changed: Condvar::new(),
             registry: Mutex::new(Connection::open_in_memory().unwrap()),
+            discovery: Mutex::new(
+                crate::discovery::Discovery::open(&Connection::open_in_memory().unwrap()).unwrap(),
+            ),
             stop: AtomicBool::new(false),
             maintenance: Mutex::new(None),
             analysis_running: AtomicBool::new(false),

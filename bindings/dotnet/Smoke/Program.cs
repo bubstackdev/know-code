@@ -1,5 +1,51 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--cancel-query")
+{
+    using var cancellation = new CancellationTokenSource();
+    var pending = new KnowCode.Index(args[1]).QueryJsonAsync(args[2], cancellation.Token);
+    cancellation.CancelAfter(int.Parse(args[3]));
+    try {
+        using var result = await pending;
+        Console.WriteLine(result.RootElement.GetRawText());
+    } catch (OperationCanceledException error) when (error.CancellationToken == cancellation.Token) {
+        Console.WriteLine("{\"cancelled\":true,\"name\":\"OperationCanceledException\"}");
+    }
+    return;
+}
+if (args[0] == "--cancel-queue")
+{
+    ThreadPool.GetMinThreads(out var minimum, out var minimumIo);
+    ThreadPool.GetMaxThreads(out var maximum, out var maximumIo);
+    if (!ThreadPool.SetMinThreads(1, minimumIo) || !ThreadPool.SetMaxThreads(1, maximumIo))
+        throw new Exception("Could not isolate fixture worker pool");
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    using var cancellation = new CancellationTokenSource();
+    var blocker = Task.Run(() => { entered.Set(); release.Wait(); });
+    try {
+        entered.Wait();
+        var queuedIndex = new KnowCode.Index(args[1]);
+        var pending = queuedIndex.QueryAsync(new KnowCode.QueryRequest("symbols"), cancellation.Token);
+        cancellation.Cancel();
+        if (pending.IsCompleted) throw new Exception("Cancelled query detached from queued native work");
+        release.Set();
+        try {
+            using var unexpected = await pending;
+            throw new Exception("Expected queued query cancellation: " + unexpected.RootElement.GetRawText());
+        } catch (OperationCanceledException error) when (error.CancellationToken == cancellation.Token) { }
+        using var next = await queuedIndex.QueryAsync(new KnowCode.QueryRequest("symbols"));
+        if (next.RootElement.TryGetProperty("error", out var failure) && failure.GetProperty("code").GetString() != "not_ready")
+            throw new Exception(next.RootElement.GetRawText());
+        Console.WriteLine("{\"passed\":true,\"check\":\"DotNet_queued_query_cancelled_after_native_exit\"}");
+    } finally {
+        release.Set();
+        ThreadPool.SetMaxThreads(maximum, maximumIo);
+        ThreadPool.SetMinThreads(minimum, minimumIo);
+        await blocker;
+    }
+    return;
+}
 if (args[0] == "--next-page")
 {
     var pagedIndex = new KnowCode.Index(args[1]);

@@ -235,3 +235,7 @@ Each page's shared JSON response defaults to 256 KiB and is configurable up to 2
 ## Accepted parent discovery boundary (2026-11-10)
 
 Automatic parent-folder discovery stops descending when it finds a repository. Nested repositories and submodules can still be registered explicitly through the shared identity/registration path. This complements the accepted default of skipping directory symlinks during discovery; it does not change compiler-resolved linked-source analysis or delete existing registrations.
+
+## Accepted query cancellation and MCP transport (2026-11-10)
+
+SDK query cancellation uses .NET OperationCanceledException and Node AbortError, while the shared Rust/JSON boundary reports cancelled. Cancellation stops the query and releases its resources without cancelling shared indexing. MCP output has an8MiB full serialized frame ceiling and a5-second output deadline; stalled/partially written connections close while indexing continues. See QUERY_CANCELLATION.md for ownership, scope and focused validation.

@@ -17,6 +17,8 @@ pub enum Error {
     NotReady,
     #[error("query deadline exceeded; restart the request")]
     DeadlineExceeded,
+    #[error("query cancelled")]
+    QueryCancelled,
     #[error(
         "query response exceeds response_max_bytes; narrow the query or increase the response budget (maximum 2097152 bytes)"
     )]
@@ -58,6 +60,7 @@ impl Error {
         match self {
             Self::NotReady => "not_ready",
             Self::DeadlineExceeded => "deadline_exceeded",
+            Self::QueryCancelled => "cancelled",
             Self::ResponseLimitExceeded => "response_limit_exceeded",
             Self::CursorInvalidated => "cursor_invalidated",
             Self::CursorLimit => "cursor_limit",
@@ -82,6 +85,25 @@ pub fn query_json(database: &str, request: &str) -> String {
 }
 
 pub fn query_json_started(database: &str, request: &str, start: execution::QueryStart) -> String {
+    query_json_cancellable(database, request, start, None)
+}
+
+pub fn query_json_cancellable(
+    database: &str,
+    request: &str,
+    start: execution::QueryStart,
+    cancellation: Option<execution::QueryCancellation>,
+) -> String {
+    if cancellation
+        .as_ref()
+        .is_some_and(execution::QueryCancellation::is_cancelled)
+    {
+        return execution::error_json(
+            "cancelled",
+            "query cancelled",
+            execution::MIN_RESPONSE_BYTES as usize,
+        );
+    }
     let value: serde_json::Value = match serde_json::from_str(request) {
         Ok(value) => value,
         Err(error) => {
@@ -116,7 +138,7 @@ pub fn query_json_started(database: &str, request: &str, start: execution::Query
         }
     };
     let execution = match execution::Execution::new(start, request.deadline_ms) {
-        Ok(execution) => execution,
+        Ok(execution) => execution.with_cancellation(cancellation),
         Err(error) => {
             return execution::error_json(
                 error.code(),
@@ -137,7 +159,7 @@ pub fn query_json_started(database: &str, request: &str, start: execution::Query
     };
     let result =
         if request.page_size.is_some() || request.cursor.is_some() || request.op == "next_page" {
-            cursor::client::query(database, request, execution, maximum)
+            cursor::client::query(database, request, execution.clone(), maximum)
         } else {
             let result = (|| {
                 execution.check()?;
@@ -149,15 +171,15 @@ pub fn query_json_started(database: &str, request: &str, start: execution::Query
                 let status = match control::wait_for_database_controlled(
                     std::path::Path::new(database),
                     request.freshness_wait_ms,
-                    execution,
+                    execution.clone(),
                 ) {
                     Err(error @ Error::UpdateRequired(_)) => return Err(error),
                     Ok(Some(status)) if status.generation == 0 => return Err(Error::NotReady),
                     other => other,
                 };
                 execution.check()?;
-                let mut result = query::ReadView::open_controlled(database, execution)?
-                    .query_controlled(request, execution)?;
+                let mut result = query::ReadView::open_controlled(database, execution.clone())?
+                    .query_controlled(request, execution.clone())?;
                 match status {
                     Ok(Some(status)) => {
                         result.freshness = if status.available
@@ -184,14 +206,17 @@ pub fn query_json_started(database: &str, request: &str, start: execution::Query
             execution
                 .check()
                 .and(result)
-                .and_then(|value| execution::encode(&value, execution, maximum))
+                .and_then(|value| execution::encode(&value, execution.clone(), maximum))
         };
     match result {
         Ok(json) => match execution.check() {
             Ok(()) => json,
             Err(error) => execution::error_json(error.code(), &error.to_string(), maximum),
         },
-        Err(error) => execution::error_json(error.code(), &error.to_string(), maximum),
+        Err(error) => {
+            let error = execution.check().err().unwrap_or(error);
+            execution::error_json(error.code(), &error.to_string(), maximum)
+        }
     }
 }
 

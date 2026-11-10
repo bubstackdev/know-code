@@ -1,4 +1,5 @@
 mod coordinator;
+mod discovery;
 mod install;
 mod mcp;
 mod runtime;
@@ -17,6 +18,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match args.get(1).map(String::as_str) {
         Some("--version") => println!("know-code {}", env!("CARGO_PKG_VERSION")),
         Some("runtime-info") if args.len()==2 => println!("{}",runtime::info()?),
+        Some("parents") => {
+            let action=args.get(2).ok_or("usage: know-code parents add PATH [--exclude RELATIVE_PATH ...] | list | scan PATH | remove PATH")?;
+            if !matches!(action.as_str(),"add"|"list"|"scan"|"remove") {return Err("parents action must be add, list, scan or remove".into());}
+            let mut request=know_code_core::protocol::ParentDiscoveryRequest{action:action.clone(),..Default::default()};
+            if action=="list" { if args.len()!=3 {return Err("parents list takes no arguments".into());} }
+            else {
+                request.root=absolute(Path::new(args.get(3).ok_or("parent path is required")?))?.to_string_lossy().into_owned();
+                for pair in args[4..].chunks(2) {
+                    if action!="add" || pair.len()!=2 || pair[0]!="--exclude" {return Err("only parents add accepts repeated --exclude RELATIVE_PATH".into());}
+                    request.exclusions.push(pair[1].clone());
+                }
+            }
+            control::ensure_running(&data,Some(&std::env::current_exe()?))?;
+            let capabilities=control::request(&data,ControlRequest{operation:"status".into(),..Default::default()})?;
+            if capabilities.parent_discovery_version!=discovery::VERSION {return Err("update required: parent discovery is unavailable or incompatible; update runtime and clients together".into());}
+            let response=control::request(&data,ControlRequest{operation:"parents".into(),parent_discovery:Some(request),..Default::default()})?;
+            if response.parent_discovery_version!=discovery::VERSION {return Err("update required: parent discovery is unavailable or incompatible; update runtime and clients together".into());}
+            println!("{}",serde_json::to_string(&response)?);
+        }
         Some("cursors") => {
             let mut count = None;
             let mut bytes = None;
@@ -108,7 +128,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             mcp::run(data, status)?;
         }
         Some("unwatch") if args.len()==3 => {
-            control::request(&data,ControlRequest{operation:"unregister".into(),workspace_root:absolute(Path::new(&args[2]))?.to_string_lossy().into_owned(),..Default::default()})?;
+            let root=std::fs::canonicalize(&args[2]).unwrap_or(absolute(Path::new(&args[2]))?);
+            control::request(&data,ControlRequest{operation:"unregister".into(),workspace_root:root.to_string_lossy().into_owned(),..Default::default()})?;
         }
         Some("coordinator") => match args.get(2).map(String::as_str) {
             Some("run") => coordinator::run(&data, &runtime::locate()?)?,

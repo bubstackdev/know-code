@@ -188,6 +188,7 @@ message ControlRequest {
   // Optional full replacement of personal workspace settings; absent reads them.
   optional string settings_json = 9;
   CursorRequest cursor = 10;
+  ParentDiscoveryRequest parent_discovery = 11;
 }
 message WorkspaceStatus {
   string workspace_root = 1;
@@ -214,6 +215,27 @@ message ControlResponse {
   uint32 analysis_settings_version = 8;
   uint32 cursor_control_version = 9;
   CursorReply cursor = 10;
+  repeated ParentDiscoveryStatus parents = 11;
+  uint32 parent_discovery_version = 12;
+}
+
+// Enrollment only; discovered repositories use the ordinary workspace registry.
+message ParentDiscoveryRequest {
+  string action = 1; // add, list, scan, remove
+  string root = 2;
+  repeated string exclusions = 3; // exact relative path prefixes, never globs
+}
+message ParentDiscoveryStatus {
+  string root = 1;
+  repeated string exclusions = 2;
+  string phase = 3;
+  bool available = 4;
+  uint64 scanned_entries = 5;
+  uint64 repositories_found = 6;
+  uint64 enrolled = 7;
+  uint64 suppressed = 8;
+  uint64 errors = 9;
+  string error = 10;
 }
 
 // Artifact/lease coordination only. Graph execution and page/source reads stay

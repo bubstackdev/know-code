@@ -23,9 +23,11 @@ python3 tests/mcp.py
 python3 tests/cursors.py
 python3 tests/workspace_api.py
 python3 tests/query_deadlines.py
+python3 tests/query_cancellation.py
 python3 tests/response_budget.py
 python3 tests/live.py
 python3 tests/coordinator.py
+python3 tests/discovery.py
 python3 tests/resources.py
 python3 tests/preparation.py
 python3 tests/resolution.py

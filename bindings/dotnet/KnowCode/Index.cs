@@ -7,25 +7,54 @@ namespace KnowCode;
 
 public sealed class Index(string database)
 {
-    public Task<JsonDocument> QueryAsync(QueryRequest request)
+    public Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
     {
+        if (cancellationToken.IsCancellationRequested) return Task.FromCanceled<JsonDocument>(cancellationToken);
         var started = Stopwatch.GetTimestamp();
-        return QueryCoreAsync(JsonSerializer.Serialize(request, Native.JsonOptions), started);
+        return QueryCoreAsync(JsonSerializer.Serialize(request, Native.JsonOptions), started, cancellationToken);
     }
 
     // Coarse native calls run off the caller's synchronization context.
-    public Task<JsonDocument> QueryJsonAsync(string request) => QueryCoreAsync(request, Stopwatch.GetTimestamp());
+    public Task<JsonDocument> QueryJsonAsync(string request, CancellationToken cancellationToken = default) =>
+        QueryCoreAsync(request, Stopwatch.GetTimestamp(), cancellationToken);
     /// <summary>Reads a frozen cursor page with optional per-request deadline and response-byte budgets.</summary>
-    public Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null) =>
-        QueryJsonAsync(JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
-            DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions));
-    private Task<JsonDocument> QueryCoreAsync(string request, long started) => Task.Run(() =>
-        Native.Invoke(() => {
-            if (Native.QueryContractVersion() != 2)
-                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; bounded cursor query support is incompatible.");
-            return Native.QueryElapsed(database, request,
-                (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-        }));
+    public Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested) return Task.FromCanceled<JsonDocument>(cancellationToken);
+        return QueryJsonAsync(JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
+            DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions), cancellationToken);
+    }
+    private async Task<JsonDocument> QueryCoreAsync(string request, long started, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cancellation = cancellationToken.CanBeCanceled ? Native.CreateQueryCancellation() : null;
+        using var registration = cancellationToken.CanBeCanceled
+            ? cancellationToken.UnsafeRegister(static state => Native.QueryCancel((QueryCancellationHandle)state!), cancellation)
+            : default;
+        // Do not cancel Task.Run itself: queued/active native work must finish
+        // before its registration and safe handle can be released.
+        var result = await Task.Run(() => Native.Invoke(() => {
+            Native.CheckQueryContract();
+            var elapsed = (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            return cancellation is null ? Native.QueryElapsed(database, request, elapsed)
+                : Native.QueryCancellable(database, request, elapsed, cancellation);
+        })).ConfigureAwait(false);
+        if (result.RootElement.TryGetProperty("error", out var error)
+            && error.GetProperty("code").GetString() == "cancelled")
+        {
+            result.Dispose();
+            throw new OperationCanceledException(cancellationToken);
+        }
+        return result;
+    }
+}
+
+internal sealed class QueryCancellationHandle : SafeHandle
+{
+    internal QueryCancellationHandle(nint value) : base(nint.Zero, true) { SetHandle(value); }
+    public override bool IsInvalid => handle == nint.Zero;
+    protected override bool ReleaseHandle() { Native.QueryCancelFree(handle); return true; }
 }
 
 public sealed record QueryRequest(string Op, string? Name = null, string? Query = null,
@@ -55,6 +84,24 @@ internal static partial class Native
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+    internal static void CheckQueryContract()
+    {
+        if (QueryContractVersion() != 3)
+            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; cancellable query support is incompatible.");
+    }
+    internal static QueryCancellationHandle CreateQueryCancellation()
+    {
+        try
+        {
+            if (AbiVersion() != 1) throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; native ABI is incompatible.");
+            CheckQueryContract();
+            var value = QueryCancelNew();
+            if (value == nint.Zero) throw new KnowCodeException("internal_error", "Know Code could not allocate a query cancellation handle.");
+            return new QueryCancellationHandle(value);
+        }
+        catch (EntryPointNotFoundException error) { throw new KnowCodeException("update_required", $"Update the Know Code managed/native packages together: {error.Message}"); }
+        catch (DllNotFoundException error) { throw new KnowCodeException("native_library_unavailable", $"Install the matching Know Code native library: {error.Message}"); }
+    }
     internal static JsonDocument Invoke(Func<nint> call)
     {
         try
@@ -84,6 +131,16 @@ internal static partial class Native
     internal static partial nint Query(string database, string request);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_elapsed", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint QueryElapsed(string database, string request, ulong elapsedMs);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_cancel_new")]
+    internal static partial nint QueryCancelNew();
+    // SafeHandle parameters retain ownership across the native call and a
+    // concurrent cancellation callback through generated interop addrefs.
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_cancel")]
+    internal static partial void QueryCancel(QueryCancellationHandle cancellation);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_cancel_free")]
+    internal static partial void QueryCancelFree(nint cancellation);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_cancellable", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint QueryCancellable(string database, string request, ulong elapsedMs, QueryCancellationHandle cancellation);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_string_free")]
     internal static partial void Free(nint value);
 }

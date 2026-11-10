@@ -35,6 +35,33 @@ pub fn request(root: &Path, request: ControlRequest) -> Result<ControlResponse> 
     let timeout = request.wait_ms.saturating_add(500);
     request_with_timeout(root, request, timeout)
 }
+/// Read-only client control sharing the query cancellation/deadline path.
+pub fn request_cancellable(
+    root: &Path,
+    mut request: ControlRequest,
+    start: crate::execution::QueryStart,
+    cancellation: crate::execution::QueryCancellation,
+) -> Result<ControlResponse> {
+    if !matches!(request.operation.as_str(), "status" | "wait") {
+        return Err(Error::InvalidRequest(
+            "cancellable control supports read-only status/wait only".into(),
+        ));
+    }
+    let execution =
+        crate::execution::Execution::new(start, None)?.with_cancellation(Some(cancellation));
+    let result = (|| {
+        let stream = crate::execution::connect(&socket_path(root), execution.clone())?;
+        request.wait_ms = request
+            .wait_ms
+            .min(execution.remaining()?.as_millis().min(u128::from(u32::MAX)) as u32);
+        exchange(
+            &mut crate::execution::TimedStream::new(stream, execution.clone())?,
+            request,
+        )
+    })();
+    execution.check()?;
+    result
+}
 fn request_with_timeout(
     root: &Path,
     request: ControlRequest,
@@ -460,7 +487,7 @@ fn wait_for_database_inner(
         let execution = execution.phase(Duration::from_millis(u64::from(
             wait_ms.saturating_add(50).max(100),
         )))?;
-        let stream = crate::execution::connect(&socket_path(root), execution)?;
+        let stream = crate::execution::connect(&socket_path(root), execution.clone())?;
         request.wait_ms = request
             .wait_ms
             .min(execution.remaining()?.as_millis().min(u128::from(u32::MAX)) as u32);

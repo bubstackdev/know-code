@@ -188,6 +188,58 @@ fn response_budget_limits_the_whole_result_and_keeps_the_view_reusable() {
 }
 
 #[test]
+fn cancellation_interrupts_active_sql_releases_wal_and_preserves_published_data() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter");
+    writer.publish().unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE reports RENAME TO fixture_reports;
+      CREATE VIEW reports AS WITH RECURSIVE n(i) AS
+      (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<100000000)
+      SELECT r.* FROM fixture_reports r CROSS JOIN n;",
+        )
+        .unwrap();
+    let view = ReadView::open(&path).unwrap();
+    connection
+        .execute("UPDATE state SET current_generation=current_generation", [])
+        .unwrap();
+    let cancellation = know_code_core::execution::QueryCancellation::default();
+    let signal = cancellation.clone();
+    let cancel = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        signal.cancel();
+    });
+    assert!(matches!(
+        view.query_cancellable(request("symbols"), cancellation),
+        Err(know_code_core::Error::QueryCancelled)
+    ));
+    cancel.join().unwrap();
+    let busy: i32 = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(busy, 0, "cancelled read retained its WAL transaction");
+    assert!(matches!(
+        view.query(request("symbols")),
+        Err(know_code_core::Error::QueryCancelled)
+    ));
+    connection
+        .execute_batch("DROP VIEW reports; ALTER TABLE fixture_reports RENAME TO reports;")
+        .unwrap();
+    assert_eq!(
+        ReadView::open(&path)
+            .unwrap()
+            .query(request("symbols"))
+            .unwrap()
+            .symbols[0]
+            .name,
+        "Greeter"
+    );
+}
+
+#[test]
 fn retained_generations_reopen_after_publication_without_holding_wal_readers() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();

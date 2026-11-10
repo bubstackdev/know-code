@@ -12,6 +12,56 @@ pub extern "C" fn kc_query_contract_version() -> u32 {
     know_code_core::execution::QUERY_CONTRACT_VERSION
 }
 
+pub struct QueryCancel(know_code_core::execution::QueryCancellation);
+#[unsafe(no_mangle)]
+pub extern "C" fn kc_query_cancel_new() -> *mut QueryCancel {
+    Box::into_raw(Box::new(QueryCancel(Default::default())))
+}
+/// # Safety
+/// Handle must be live and cannot be freed concurrently with this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_cancel(handle: *const QueryCancel) {
+    if let Some(handle) = unsafe { handle.as_ref() } {
+        handle.0.cancel();
+    }
+}
+/// # Safety
+/// Handle must be null or owned from kc_query_cancel_new, freed exactly once
+/// after all calls/cancellation callbacks using this handle have returned.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_cancel_free(handle: *mut QueryCancel) {
+    if !handle.is_null() {
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+/// # Safety
+/// Strings follow kc_query_json's contract. Handle must remain live while
+/// this function clones it; never free concurrently. The clone owns its flag
+/// independently through query completion and cursor cleanup.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_json_cancellable(
+    database: *const c_char,
+    request: *const c_char,
+    elapsed_ms: u64,
+    handle: *const QueryCancel,
+) -> *mut c_char {
+    let start = know_code_core::execution::QueryStart::with_elapsed_ms(elapsed_ms);
+    response(
+        || match unsafe { (input(database), input(request), handle.as_ref()) } {
+            (Ok(database), Ok(request), Some(handle)) => know_code_core::query_json_cancellable(
+                database,
+                request,
+                start,
+                Some(handle.0.clone()),
+            ),
+            (Err(error), _, _) | (_, Err(error), _) => error,
+            (_, _, None) => {
+                know_code_core::error_json("invalid_request", "null cancellation handle")
+            }
+        },
+    )
+}
+
 fn response(call: impl FnOnce() -> String + UnwindSafe) -> *mut c_char {
     let result = catch_unwind(call).unwrap_or_else(|_| {
         know_code_core::error_json("internal_error", "native operation panicked")

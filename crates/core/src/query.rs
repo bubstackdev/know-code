@@ -176,12 +176,25 @@ pub struct QueryResult {
     pub contexts: Vec<SymbolContext>,
 }
 
+#[derive(Clone, Copy)]
+enum Stopped {
+    Deadline,
+    Cancelled,
+}
+impl Stopped {
+    fn error(self) -> Error {
+        match self {
+            Self::Deadline => Error::DeadlineExceeded,
+            Self::Cancelled => Error::QueryCancelled,
+        }
+    }
+}
 pub struct ReadView {
     pub(crate) connection: Connection,
     pub(crate) format_version: i32,
     pub generation: u64,
     execution: Arc<Mutex<Option<crate::execution::Execution>>>,
-    expired: Cell<bool>,
+    stopped: Cell<Option<Stopped>>,
 }
 impl ReadView {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -214,7 +227,7 @@ impl ReadView {
         pin: Option<&crate::cursor::GenerationPin>,
     ) -> Result<Self> {
         execution.check()?;
-        let result = Self::open_inner(path, execution, pin);
+        let result = Self::open_inner(path, execution.clone(), pin);
         execution.check()?;
         result
     }
@@ -234,14 +247,25 @@ impl ReadView {
         let progress = Arc::clone(&execution);
         connection.progress_handler(
             1_000,
-            Some(move || progress.lock().unwrap().is_some_and(|e| e.check().is_err())),
+            Some(move || {
+                progress
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_some_and(|e| e.check().is_err())
+            }),
         )?;
         let busy = Arc::clone(&execution);
         connection.busy_handler(Some(move |count| {
             if count >= 2_000 {
                 return false;
             }
-            let remaining = busy.lock().unwrap().map(|e| e.remaining()).transpose();
+            let remaining = busy
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|e| e.remaining())
+                .transpose();
             match remaining {
                 Err(_) => false,
                 Ok(remaining) => {
@@ -295,19 +319,36 @@ impl ReadView {
             format_version: version,
             generation: generation.ok_or(Error::NotReady)?,
             execution,
-            expired: Cell::new(false),
+            stopped: Cell::new(None),
         })
     }
 
     pub fn query(&self, request: QueryRequest) -> Result<QueryResult> {
+        self.query_with_cancellation(request, None)
+    }
+    pub fn query_cancellable(
+        &self,
+        request: QueryRequest,
+        cancellation: crate::execution::QueryCancellation,
+    ) -> Result<QueryResult> {
+        self.query_with_cancellation(request, Some(cancellation))
+    }
+    fn query_with_cancellation(
+        &self,
+        request: QueryRequest,
+        cancellation: Option<crate::execution::QueryCancellation>,
+    ) -> Result<QueryResult> {
         let execution = crate::execution::Execution::new(Default::default(), request.deadline_ms)?;
+        let execution = execution.with_cancellation(cancellation);
         let maximum = crate::execution::response_budget(request.response_max_bytes)?;
-        let result = self.query_controlled(request, execution).and_then(|value| {
-            crate::execution::check_response(&value, execution, maximum)?;
-            Ok(value)
-        });
+        let result = self
+            .query_controlled(request, execution.clone())
+            .and_then(|value| {
+                crate::execution::check_response(&value, execution.clone(), maximum)?;
+                Ok(value)
+            });
         if let Err(error) = execution.check() {
-            self.expire()?;
+            self.expire(&error)?;
             return Err(error);
         }
         result
@@ -317,21 +358,26 @@ impl ReadView {
         request: QueryRequest,
         execution: crate::execution::Execution,
     ) -> Result<QueryResult> {
-        if self.expired.get() {
-            return Err(Error::DeadlineExceeded);
+        if let Some(stopped) = self.stopped.get() {
+            return Err(stopped.error());
         }
-        *self.execution.lock().unwrap() = Some(execution);
+        *self.execution.lock().unwrap() = Some(execution.clone());
         let result = self.check().and_then(|_| self.query_inner(request));
         let elapsed = execution.check();
         *self.execution.lock().unwrap() = None;
         if let Err(error) = elapsed {
-            self.expire()?;
+            self.expire(&error)?;
             return Err(error);
         }
         result
     }
-    fn expire(&self) -> Result<()> {
-        self.expired.set(true);
+    fn expire(&self, error: &Error) -> Result<()> {
+        self.stopped
+            .set(Some(if matches!(error, Error::QueryCancelled) {
+                Stopped::Cancelled
+            } else {
+                Stopped::Deadline
+            }));
         // Statements/rows have unwound; release even a retained caller view.
         if !self.connection.is_autocommit() {
             self.connection.execute_batch("ROLLBACK")?;
@@ -339,10 +385,14 @@ impl ReadView {
         Ok(())
     }
     pub(crate) fn check(&self) -> Result<()> {
-        if self.expired.get() {
-            return Err(Error::DeadlineExceeded);
+        if let Some(stopped) = self.stopped.get() {
+            return Err(stopped.error());
         }
-        self.execution.lock().unwrap().map_or(Ok(()), |e| e.check())
+        self.execution
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(Ok(()), |e| e.check())
     }
     fn query_inner(&self, request: QueryRequest) -> Result<QueryResult> {
         if request.page_size.is_some() || request.cursor.is_some() {

@@ -61,21 +61,25 @@ public sealed class Workspace : IDisposable
             CoordinatorExecutable = executable, Configuration = configuration, WaitMs = waitMs, PersonalSettings = personalSettings }).ConfigureAwait(false);
         return result.Status;
     }
-    public async Task<JsonDocument> QueryAsync(QueryRequest request)
+    public async Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         CheckOpen();
-        return Checked(await index.QueryAsync(request).ConfigureAwait(false));
+        return Checked(await index.QueryAsync(request, cancellationToken).ConfigureAwait(false));
     }
-    public async Task<JsonDocument> QueryJsonAsync(string request)
+    public async Task<JsonDocument> QueryJsonAsync(string request, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         CheckOpen();
-        return Checked(await index.QueryJsonAsync(request).ConfigureAwait(false));
+        return Checked(await index.QueryJsonAsync(request, cancellationToken).ConfigureAwait(false));
     }
     /// <summary>Reads a frozen cursor page; failures use the same typed errors as other workspace queries.</summary>
-    public async Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null)
+    public async Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         CheckOpen();
-        return Checked(await index.NextPageAsync(cursor, deadlineMs, responseMaxBytes).ConfigureAwait(false));
+        return Checked(await index.NextPageAsync(cursor, deadlineMs, responseMaxBytes, cancellationToken).ConfigureAwait(false));
     }
     private static JsonDocument Checked(JsonDocument result)
     {

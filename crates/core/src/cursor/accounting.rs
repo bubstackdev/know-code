@@ -125,7 +125,7 @@ impl GenerationRetention {
         execution: Execution,
     ) -> Result<RetainedUsage> {
         execution.check()?;
-        let result = self.measure(proposed, execution);
+        let result = self.measure(proposed, execution.clone());
         execution.check()?;
         result
     }
@@ -156,7 +156,7 @@ impl GenerationRetention {
         Ok(())
     }
     fn measure(&self, proposed: Option<u64>, execution: Execution) -> Result<RetainedUsage> {
-        let mut connection = self.open_accounting(execution)?;
+        let mut connection = self.open_accounting(execution.clone())?;
         // Immutable facts are scanned in a read snapshot. A second connection
         // commits each completed summary in a short IMMEDIATE transaction, so
         // interruption preserves progress without upgrading a read transaction.
@@ -220,14 +220,14 @@ impl GenerationRetention {
                         )?;
                     }
                     if cache_writer.is_none() {
-                        cache_writer = Some(self.open_accounting(execution)?);
+                        cache_writer = Some(self.open_accounting(execution.clone())?);
                     }
                     self.remember_unit(
                         cache_writer.as_mut().expect("initialized cache writer"),
                         owner,
                         &id,
                         bytes,
-                        execution,
+                        execution.clone(),
                     )?;
                     bytes
                 };

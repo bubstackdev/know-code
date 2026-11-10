@@ -12,6 +12,8 @@ use rmcp::{
 use serde_json::{Map, Value, json};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
+#[path = "mcp_transport.rs"]
+mod bounded;
 
 pub fn run(data: PathBuf, workspace: WorkspaceStatus) -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -20,13 +22,19 @@ pub fn run(data: PathBuf, workspace: WorkspaceStatus) -> Result<(), Box<dyn std:
         .build()?;
     let result = runtime.block_on(async {
         let (input, output) = stdio_pipes();
-        let transport = AsyncRwTransport::<RoleServer, _, _>::new(input, output)
-            .with_max_line_length(64 * 1024);
+        let connection = Arc::new(bounded::Connection::default());
+        let transport = AsyncRwTransport::<RoleServer, _, _>::new(
+            input,
+            bounded::Output::new(output, connection.clone()),
+        )
+        .with_max_line_length(64 * 1024);
+        let transport = bounded::Bounded::new(transport, connection.clone());
         let server = Mcp {
             data,
             database: workspace.database,
             tools: Arc::new(tools()),
             slots: Arc::new(Semaphore::new(2)),
+            connection,
         };
         match server.serve(transport).await {
             Ok(server) => {
@@ -48,10 +56,17 @@ struct Mcp {
     database: String,
     tools: Arc<Vec<Tool>>,
     slots: Arc<Semaphore>,
+    connection: Arc<bounded::Connection>,
 }
 fn failure(code: &str, message: impl ToString) -> CallToolResponse {
     CallToolResult::structured_error(json!({"error":{"code":code,"message":message.to_string()}}))
         .into()
+}
+struct CancelOnDrop(execution::QueryCancellation);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 impl ServerHandler for Mcp {
     fn get_info(&self) -> ServerConfig {
@@ -88,6 +103,8 @@ impl ServerHandler for Mcp {
         if context.ct.is_cancelled() {
             return Ok(failure("cancelled", "request cancelled"));
         }
+        let cancellation = self.connection.query_cancellation();
+        let _cancel_on_exit = CancelOnDrop(cancellation.clone());
         // No application queue: permits live inside the blocking work, including
         // after SDK cancellation drops its waiter. Cancellation cannot multiply work.
         let Ok(permit) = self.slots.clone().try_acquire_owned() else {
@@ -133,16 +150,19 @@ impl ServerHandler for Mcp {
         }
         let database = self.database.clone();
         let data = self.data.clone();
+        let worker_cancellation = cancellation.clone();
         let task = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             if status {
-                match control::request(
+                match control::request_cancellable(
                     &data,
                     ControlRequest {
                         operation: "status".into(),
                         database,
                         ..Default::default()
                     },
+                    start,
+                    worker_cancellation,
                 ) {
                     Ok(response) if !response.workspaces.is_empty() => {
                         CallToolResult::structured(json!({"result":response})).into()
@@ -151,10 +171,11 @@ impl ServerHandler for Mcp {
                     Err(error) => failure(error.code(), &error),
                 }
             } else {
-                let result: Value = serde_json::from_str(&know_code_core::query_json_started(
+                let result: Value = serde_json::from_str(&know_code_core::query_json_cancellable(
                     &database,
                     &Value::Object(arguments).to_string(),
                     start,
+                    Some(worker_cancellation),
                 ))
                 .expect("core query emits JSON");
                 if result.get("error").is_some() {
@@ -165,7 +186,10 @@ impl ServerHandler for Mcp {
             }
         });
         tokio::select! {
-            _=context.ct.cancelled()=>Ok(failure("cancelled","request cancelled; already-running core work retains its slot until completion")),
+            _=context.ct.cancelled()=>{
+                cancellation.cancel();
+                Ok(failure("cancelled","request cancelled; its slot is released when core cleanup finishes"))
+            },
             value=task=>value.map_err(|error|ErrorData::internal_error(error.to_string(),None)),
         }
     }
