@@ -2,7 +2,8 @@
 from pathlib import Path
 import hashlib,json,os,sqlite3,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
-RUN=ROOT/'.artifacts/test-classification/integration'/str(time.time_ns());W=RUN/'w';DATA=RUN/'d'
+# Short durable paths also respect macOS's Unix-socket pathname limit.
+RUN=ROOT/'.artifacts/tc'/format(time.time_ns(),'x')[-10:];W=RUN/'w';DATA=RUN/'d'
 W.mkdir(parents=True);PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug')
 HOST=ROOT/f'target/{PROFILE}/know-code';NODE=ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs'
 SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll'
@@ -96,7 +97,7 @@ try:
  assert not parity({'op':'symbols','name':'Mixed','tests':'only'}).get('symbols'), 'renamed unknown declarations still test'
  for language in ['cli','node','dotnet']:assert stable(query(language,{'op':'next_page','cursor':token}))==expected
  pin=parity({'op':'symbol_context','cursor':token,'symbol_id':mixed['id'],'tests':'only','include_source':True})
- assert pin['generation']==old_generation and len(pin['contexts'][0]['symbol']['locations'])==2,pin
+ assert pin['generation']==old_generation and len(pin['contexts'][0]['declarations'])==2,pin
  CHECKS.append('immutable_filtered_pages_and_pinned_context_across_rename')
  stop()
  with sqlite3.connect(DATABASE) as db:
