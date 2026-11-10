@@ -130,20 +130,7 @@ impl GenerationRetention {
         result
     }
     fn open_accounting(&self, execution: Execution) -> Result<Connection> {
-        let mut connection = open_writer(&self.database)?;
-        connection.progress_handler(1_000, Some(move || execution.check().is_err()))?;
-        connection.busy_handler(Some(move |count| {
-            if count >= 2_000 {
-                return false;
-            }
-            match execution.remaining() {
-                Ok(remaining) => {
-                    std::thread::sleep(remaining.min(Duration::from_millis(1)));
-                    true
-                }
-                Err(_) => false,
-            }
-        }))?;
+        let connection = open_writer_controlled(&self.database, Some(execution))?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != crate::store::SCHEMA_VERSION {
             return Err(Error::UpdateRequired(

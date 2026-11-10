@@ -227,8 +227,19 @@ def tool_result(identifier,name,arguments):
 try:
  assert rpc(1,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test','version':'1'}})['result']['protocolVersion']=='2025-11-25'
  mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
- assert len(rpc(2,'tools/list',{})['result']['tools'])==10
+ listing=rpc(2,'tools/list',{})['result']['tools'];assert len(listing)==11 and len({tool['name'] for tool in listing})==11
+ continuation=next(tool['inputSchema'] for tool in listing if tool['name']=='next_page')
+ assert set(continuation['properties'])=={'cursor','deadline_ms','response_max_bytes'} and continuation['required']==['cursor'] and continuation['additionalProperties'] is False
  found=tool_result(3,'search_symbols',{'name':'answer'});assert found['symbols']==query({'op':'symbols','name':'answer'})['symbols']
+ page=tool_result(30,'search_symbols',{'limit':1000,'page_size':1});token=page['page']['cursor'];assert page['page']['next_cursor'] and len(page['symbols'])==1
+ def frozen_page(result):
+  result=dict(result);result.pop('freshness',None);result.pop('coordination',None);return result
+ replay=tool_result(31,'next_page',{'cursor':token});assert frozen_page(replay)==frozen_page(page)
+ assert frozen_page(query({'op':'next_page','cursor':token}))==frozen_page(page)
+ next_page=tool_result(32,'next_page',{'cursor':page['page']['next_cursor']});assert next_page['generation']==page['generation'] and next_page['page']['cursor']!=token
+ rejected=rpc(33,'tools/call',{'name':'next_page','arguments':{'cursor':token,'page_size':2}})['result']
+ assert rejected['isError'] and rejected['structuredContent']['error']['code']=='invalid_request',rejected
+ checks.append('installed_offline_MCP_pagination_replay_and_native_CLI_token_portability')
  old=ready(node)['generation'];(WORKSPACE/'value.ts').write_text('export function savedAnswer() { return 43; }\n');saved_ts=ready(node,old+1);MIN_GENERATION=saved_ts['generation']
  saved=query({'op':'symbols','name':'savedAnswer'});assert saved['freshness']=='current' and saved['symbols']
  removed=query({'op':'symbols','name':'answer'});assert removed.get('symbols',[])==[],removed

@@ -449,6 +449,7 @@ pub struct RefreshOptions<'a> {
     pub retry_preparation: bool,
     pub expected_identity: &'a str,
     pub settings: &'a crate::protocol::WorkspaceAnalysisSettings,
+    pub cursors: Option<&'a crate::cursor::CursorService>,
 }
 
 pub fn preparation_fingerprint(inputs: &Snapshot, settings_paths: &[PathBuf]) -> String {
@@ -498,6 +499,7 @@ pub fn refresh_controlled(
         retry_preparation,
         expected_identity,
         settings,
+        cursors,
     } = options;
     if identity(root)? != expected_identity {
         return Err(Error::Provider(
@@ -665,7 +667,7 @@ pub fn refresh_controlled(
             "no supported TypeScript, C#, Rust Cargo, or Swift source/project inputs found".into(),
         ));
     }
-    update::index_controlled(
+    update::index_published(
         database,
         workers,
         replacements,
@@ -679,5 +681,6 @@ pub fn refresh_controlled(
             Ok(())
         },
         control,
+        cursors,
     )
 }

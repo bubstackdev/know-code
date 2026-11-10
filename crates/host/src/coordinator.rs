@@ -91,6 +91,7 @@ struct Shared {
     active_job: Mutex<Option<(String, Control)>>,
     overflow: AtomicBool,
     clients: AtomicUsize,
+    cursors: Arc<know_code_core::cursor::CursorService>,
 }
 enum Event {
     Wake,
@@ -170,10 +171,11 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
     let publisher = Arc::new(Publisher::new(data));
-    let _endpoint = Endpoint {
+    let mut _endpoint = Endpoint {
         socket: socket.clone(),
         _lock: lock,
         publisher: Arc::clone(&publisher),
+        cursors: None,
     };
     let registry = Connection::open(data.join("registry.db"))?;
     registry.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspaces(database TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL,configuration TEXT NOT NULL,generation INTEGER NOT NULL,inputs TEXT NOT NULL,error TEXT NOT NULL); CREATE TABLE IF NOT EXISTS identities(database TEXT PRIMARY KEY, identity TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tracked_inputs(database TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(database,path)); CREATE TABLE IF NOT EXISTS manifests(database TEXT PRIMARY KEY, inputs TEXT NOT NULL); INSERT OR IGNORE INTO manifests SELECT database,inputs FROM workspaces; UPDATE workspaces SET inputs='{}' WHERE inputs<>'{}';")?;
@@ -294,6 +296,11 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             );
         }
     }
+    let cursors = Arc::new(know_code_core::cursor::CursorService::new(
+        data,
+        entries.keys().map(PathBuf::from),
+    )?);
+    _endpoint.cursors = Some(Arc::clone(&cursors));
     let shared = Arc::new(Shared {
         publisher,
         entries: Mutex::new(entries),
@@ -306,6 +313,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
         active_job: Mutex::new(None),
         overflow: AtomicBool::new(false),
         clients: AtomicUsize::new(0),
+        cursors,
     });
     let (sender, receiver) = mpsc::sync_channel(4096);
     let accepting = Arc::clone(&shared);
@@ -359,6 +367,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     let mut running = false;
     let mut last_presence = Instant::now() - Duration::from_secs(10);
     loop {
+        let _ = shared.cursors.sweep();
         if shared.overflow.swap(false, Ordering::AcqRel) {
             let seen = shared.publisher.overflow_observed();
             mark_rescan(&shared);
@@ -520,22 +529,28 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     let registration = job.registration;
                     let cancel_baseline = job.cancel_baseline;
                     let mut input_hash = String::new();
-                    let result = execute(job, &installation, &mut input_hash, &mut |progress| {
-                        let mut entries = progress_shared.entries.lock().unwrap();
-                        if let Some(entry) = entries.get_mut(&database)
-                            && entry.registration == registration
-                            && entry.status.observed_epoch == epoch
-                        {
-                            if entry.cancel_pending && !cancel_baseline {
-                                return;
+                    let result = execute(
+                        job,
+                        &installation,
+                        &mut input_hash,
+                        &mut |progress| {
+                            let mut entries = progress_shared.entries.lock().unwrap();
+                            if let Some(entry) = entries.get_mut(&database)
+                                && entry.registration == registration
+                                && entry.status.observed_epoch == epoch
+                            {
+                                if entry.cancel_pending && !cancel_baseline {
+                                    return;
+                                }
+                                if progress.stage == "analyzing" {
+                                    entry.status.phase = "analyzing".into();
+                                }
+                                entry.status.progress = Some(progress);
                             }
-                            if progress.stage == "analyzing" {
-                                entry.status.phase = "analyzing".into();
-                            }
-                            entry.status.progress = Some(progress);
-                        }
-                        progress_shared.changed.notify_all();
-                    })
+                            progress_shared.changed.notify_all();
+                        },
+                        Some(&progress_shared.cursors),
+                    )
                     .map_err(|e| Failure {
                         code: e
                             .downcast_ref::<know_code_core::Error>()
@@ -739,6 +754,7 @@ fn execute(
     installation: &Path,
     attempt_hash: &mut String,
     progress: &mut impl FnMut(Progress),
+    cursors: Option<&know_code_core::cursor::CursorService>,
 ) -> AnyResult<JobOutput> {
     let control = job.session.control();
     control.check()?;
@@ -849,6 +865,7 @@ fn execute(
             retry_preparation: job.retry_preparation,
             expected_identity: &job.identity,
             settings: &effective_settings,
+            cursors,
         },
         progress,
         &control,
@@ -1005,6 +1022,35 @@ fn serve(
         let Some(Payload::ControlRequest(request)) = message.payload else {
             return Err("expected coordinator control request".into());
         };
+        if request.operation == "cursor" {
+            let start = know_code_core::execution::QueryStart::default();
+            let cursor = request.cursor.ok_or("missing cursor request")?;
+            let status = if cursor.action == "settings" {
+                None
+            } else {
+                Some(
+                    shared
+                        .entries
+                        .lock()
+                        .unwrap()
+                        .get(&request.database)
+                        .ok_or(know_code_core::Error::CursorInvalidated)?
+                        .status
+                        .snapshot(),
+                )
+            };
+            if cursor.action == "admit" && status.as_ref().is_some_and(|s| s.generation == 0) {
+                return Err(know_code_core::Error::NotReady.into());
+            }
+            let reply = shared
+                .cursors
+                .request(Path::new(&request.database), cursor, start)?;
+            return Ok(ControlResponse {
+                cursor: Some(reply),
+                workspaces: status.into_iter().collect(),
+                ..Default::default()
+            });
+        }
         if request.operation == "activity" {
             one_way = true;
             if let Some(entry) = shared.entries.lock().unwrap().get_mut(&request.database) {
@@ -1154,6 +1200,7 @@ fn serve(
             if entries[&database].status.phase == "analyzing" {
                 return Err("wait for the active update before unregistering".into());
             }
+            shared.cursors.unregister(Path::new(&database))?;
             settings::revoke_scripts(Path::new(&request.workspace_root), data)?;
             let mut registry = shared.registry.lock().unwrap();
             let tx = registry.transaction()?;
@@ -1272,6 +1319,7 @@ fn serve(
                     queue(entry, None, true);
                 }
                 persist(shared, entry, None)?;
+                shared.cursors.register(Path::new(&entry.status.database))?;
                 entry.status.snapshot()
             };
             wake(sender, shared, Event::Wake);
@@ -1347,6 +1395,7 @@ fn serve(
     });
     response.resource_control_version = know_code_core::resource::CONTROL_VERSION;
     response.analysis_settings_version = settings::VERSION;
+    response.cursor_control_version = know_code_core::cursor::CONTROL_VERSION;
     response.analysis_running = shared.analysis_running.load(Ordering::Acquire);
     response.coordinator_executable = std::env::current_exe()?
         .canonicalize()?
@@ -1366,12 +1415,16 @@ struct Endpoint {
     socket: PathBuf,
     _lock: File,
     publisher: Arc<Publisher>,
+    cursors: Option<Arc<know_code_core::cursor::CursorService>>,
 }
 impl Drop for Endpoint {
     fn drop(&mut self) {
         // Retire the certificate before releasing the root writer fence, even
         // if callback/handler Arcs keep Shared alive after run() returns.
         self.publisher.disable();
+        if let Some(cursors) = &self.cursors {
+            cursors.stop();
+        }
         let _ = std::fs::remove_file(&self.socket);
     }
 }
@@ -1462,6 +1515,7 @@ mod live_lifetime_tests {
             Path::new("/no/compiler/installation"),
             &mut hash,
             &mut |_| {},
+            None,
         )
         .unwrap();
         let JobOutput::CancellationBaseline(inputs, newer, verified) = result else {
@@ -1490,6 +1544,7 @@ mod live_lifetime_tests {
                     .set_times(std::fs::FileTimes::new().set_modified(saved_time))
                     .unwrap();
             },
+            None,
         )
         .unwrap();
         let JobOutput::CancellationBaseline(_, newer, verified) = result else {
@@ -1518,6 +1573,9 @@ mod live_lifetime_tests {
             active_job: Mutex::new(None),
             overflow: AtomicBool::new(false),
             clients: AtomicUsize::new(0),
+            cursors: Arc::new(
+                know_code_core::cursor::CursorService::new(&root, Vec::new()).unwrap(),
+            ),
         });
         let listener = UnixListener::bind(control::socket_path(&root)).unwrap();
         let (sender, _receiver) = mpsc::sync_channel(16);
@@ -1624,6 +1682,9 @@ mod live_lifetime_tests {
             active_job: Mutex::new(None),
             overflow: AtomicBool::new(false),
             clients: AtomicUsize::new(0),
+            cursors: Arc::new(
+                know_code_core::cursor::CursorService::new(&root, Vec::new()).unwrap(),
+            ),
         });
         let listener = UnixListener::bind(control::socket_path(&root)).unwrap();
         let state = Arc::clone(&shared);
@@ -1697,6 +1758,7 @@ mod live_lifetime_tests {
             socket: root.join("c.sock"),
             _lock: writer,
             publisher,
+            cursors: None,
         };
         drop(endpoint);
         assert!(know_code_core::live::current(&root, &status.database).is_none());

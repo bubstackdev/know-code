@@ -36,8 +36,19 @@ Every tool is scoped to the selected workspace and marked read-only. Tools do no
 | `impact` | `impact` | Symbol and shared dependency/path filters/budgets |
 | `read_source` | `source` | Indexed `artifact_id`, optional hash-guarded byte range and byte budget |
 | `query_graph` | The same callers/callees/impact operators | Structured `op` plus the same symbol, filters and budgets |
+| `next_page` | `next_page` | Required opaque `cursor`, optional `deadline_ms` and `response_max_bytes` only |
 
 `query_graph` currently dispatches one of those three bounded read operators; it introduces no textual language, joins, storage access or second execution engine. Focused and structured results match for equivalent requests. Implicit calls and possible dispatch retain existing defaults/labels; exact-only and dependency-kind filters preserve the core semantics and compilation witnesses. Lexical matches remain distinct from compiler evidence.
+
+### Generation-pinned pages
+
+The eleven-tool schema adds optional `page_size` (1–1000) to `search_symbols`, `find_references`, `callers`, `callees`, `impact`, `query_graph`, `symbol_context` and `coverage_details`. `limit` continues to cap the entire logical result. Pagination does not rerun traversal or reset graph work limits. A result's `page.cursor` replays that same page; `page.next_cursor` selects the next page, or is null at the end. The logical `truncated` and graph-limit evidence remain independent of whether additional pages exist.
+
+Pass a returned token to `next_page` with only `cursor` and optional per-request `deadline_ms`/`response_max_bytes`. Scope, filters, projection, page size, freshness waiting and traversal limits cannot be changed by a continuation; the shared parser rejects them. Retry retains the original items, order and supporting evidence, even if a different response cap is too small to serve the frozen page. Current freshness/coordination metadata may change as indexing advances, while the saved generation stays fixed.
+
+`read_source` and `symbol_context` also accept an optional cursor to read from its retained generation. Use the returned artifact IDs/content hashes and symbol IDs as usual. A saved edit may make that generation explicitly stale; it does not substitute current disk text. Tokens are portable across CLI, MCP, Node and .NET consumers of the same coordinator/workspace and survive client disconnects. Coordinator restart, expiry or retention-pressure eviction returns `cursor_invalidated`, requiring a new original query. There is no silent switch to a new generation. The accepted lifecycle and retention bounds are in [QUERY_LIFECYCLE.md](QUERY_LIFECYCLE.md).
+
+These schemas require the assembled portable-cursor core/coordinator. This MCP integration packet has format/static verification only until the integrator builds matching artifacts and runs the real wire/archive tests; historical MCP validation below predates this addition.
 
 ## Shared source excerpts
 
@@ -49,7 +60,7 @@ Hash mismatch rejects reuse of an old range after the indexed source changes. Ca
 
 The added JSON request/result fields need matching current query artifacts; a complete published query-capability compatibility policy remains release work. The existing .NET positional request constructor is preserved; new range/hash inputs are optional init properties. Worker Protobuf v7, store v6 and C ABI v1 remain unchanged.
 
-Standalone source excerpts do not complete inline graph-body projection, test filters, cross-target presentation, generation-pinned pagination or total serialized-response budgets. Those remain tracked in the release ledger. Source-body string/comment search is separate unassigned backlog work; symbol/signature search is sufficient for 0.0.1.
+Standalone source excerpts do not complete inline graph-body projection, test filters or cross-target presentation. Those remain tracked in the release ledger; portable pagination and total serialized-response budgets use the shared lifecycle contract above. Source-body string/comment search is separate unassigned backlog work; symbol/signature search is sufficient for 0.0.1.
 
 ## Transport and execution limits
 
@@ -66,6 +77,8 @@ The host compiles SDK tracing off in Debug/Release and installs no subscriber, c
 ## Verification
 
 `tests/mcp.py` runs real TS/C# indexing in a durable isolated workspace and compares complete MCP/CLI/Node/.NET results. It checks auto-registration/configuration, explicit selection, EOF before initialization, both tested lifecycles, deterministic read-only schemas, source bounds/hash mismatch, focused/structured parity, visible input errors/no SQL surface, a canceled waiter's retained work slot, oversized input handling, saved updates after disconnect and reconnect without forced reanalysis.
+
+The pagination additions assert the exact continuation schema, complete paged-symbol ordering, repeatable first/last pages across native/CLI consumers, graph replay, rejected continuation scope changes, deadline recovery and generation-pinned source/context after a saved edit and MCP reconnect. The installed archive test adds offline MCP page replay and token portability through both installed SDKs and CLI. These new cases remain pending the integrator's matching build/run; they are not implied by the older closeout evidence.
 
 Rust publication tests additionally exercise Unicode boundaries, default/caller source bounds, hash/range errors and coherent old-source reads across publication. All retained test data stays beneath `.artifacts/`. This is development evidence, not a published-package acceptance or real-encoding performance result.
 

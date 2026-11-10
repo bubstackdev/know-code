@@ -80,6 +80,13 @@ def equivalent(request):
  assert node==dotnet==baseline
  return baseline
 
+def frozen_page(envelope):
+ """Only live freshness/coordination may differ when a saved page is replayed."""
+ assert 'error' not in envelope and isinstance(envelope.get('result'),dict),envelope
+ result=dict(envelope['result']);result.pop('freshness',None);result.pop('coordination',None)
+ assert result['page']['cursor'] and 'next_cursor' in result['page'],result
+ return result
+
 try:
  missing=cli('mcp',check=False);assert missing.returncode and not missing.stdout and '--workspace' in missing.stderr
  early=subprocess.Popen([str(HOST),'mcp','--workspace',str(WORKSPACE),'--configuration','Release'],cwd=ROOT,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(RUN/'early-stderr.log').open('ab'))
@@ -91,8 +98,13 @@ try:
  listing=c.request('tools/list',{})['result']['tools'];names=[t['name'] for t in listing]
  assert not any(e.get('id')=='oversized' for e in c.events)
  checks.append('oversized_input_discarded_and_connection_usable')
- assert names==sorted(names) and len(names)==10 and len(set(names))==10
+ assert names==sorted(names) and len(names)==11 and len(set(names))==11
  assert all(t['annotations']['readOnlyHint'] is True and t['inputSchema']['additionalProperties'] is False for t in listing)
+ schemas={t['name']:t['inputSchema'] for t in listing}
+ assert set(schemas['next_page']['properties'])=={'cursor','deadline_ms','response_max_bytes'} and schemas['next_page']['required']==['cursor']
+ for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context','coverage_details']:
+  assert schemas[name]['properties']['page_size']['minimum']==1 and schemas[name]['properties']['page_size']['maximum']==1000
+ for name in ['read_source','symbol_context']:assert 'cursor' in schemas[name]['properties']
  checks+=['explicit_workspace_auto_registration','legacy_2025_lifecycle','stable_read_only_tools']
  tool,value=c.tool('workspace_status');assert not tool['isError'] and value['result']['workspaces'][0]['workspace_root']==str(WORKSPACE)
  tool,value=c.tool('search_symbols',{'name':'target'});assert not tool['isError'] and value==equivalent({'op':'symbols','name':'target'})
@@ -105,6 +117,29 @@ try:
   tool,value=c.tool(name,args);assert not tool['isError'] and value==equivalent({'op':op,**args}),(name,value)
  tool,value=c.tool('query_graph',{'op':'callees','symbol_id':caller['id']});assert not tool['isError'] and value==c.tool('callees',{'symbol_id':caller['id']})[1]
  checks+=['CLI_Node_dotnet_full_query_parity','focused_and_structured_graph_parity','Csharp_configuration_preserved']
+ baseline=equivalent({'op':'symbols','limit':1000})['result']
+ tool,paged=c.tool('search_symbols',{'limit':1000,'page_size':1});assert not tool['isError'],paged
+ first_page=paged;symbol_cursor=paged['result']['page']['cursor'];assert paged['result']['generation']==generation
+ collected=[];seen=set()
+ while True:
+  result=paged['result'];token=result['page']['cursor'];assert token not in seen;seen.add(token)
+  assert result['generation']==generation and len(result.get('symbols',[]))<=1 and result['truncated']==baseline['truncated'],result
+  collected.extend(result.get('symbols',[]))
+  tool,replayed=c.tool('next_page',{'cursor':token});assert not tool['isError'] and frozen_page(replayed)==frozen_page(paged)
+  if len(seen)==1:assert frozen_page(equivalent({'op':'next_page','cursor':token}))==frozen_page(paged)
+  if result['page']['next_cursor'] is None:break
+  tool,paged=c.tool('next_page',{'cursor':result['page']['next_cursor']});assert not tool['isError'],paged
+ assert len(seen)>1 and collected==baseline['symbols']
+ assert frozen_page(equivalent({'op':'next_page','cursor':token}))==frozen_page(paged)
+ for extra in [{'target':'other'},{'page_size':2},{'limit':1},{'freshness_wait_ms':0},{'include_source':False}]:
+  tool,rejected=c.tool('next_page',dict(extra,cursor=symbol_cursor));assert tool['isError'] and rejected['error']['code']=='invalid_request',rejected
+ tool,rejected=c.tool('next_page',{'cursor':symbol_cursor,'deadline_ms':0});assert tool['isError'] and rejected['error']['code']=='deadline_exceeded',rejected
+ tool,replayed=c.tool('next_page',{'cursor':symbol_cursor});assert not tool['isError'] and frozen_page(replayed)==frozen_page(first_page)
+ tool,graph_page=c.tool('callees',{'symbol_id':caller['id'],'page_size':1});assert not tool['isError'],graph_page
+ graph_cursor=graph_page['result']['page']['cursor']
+ tool,replayed=c.tool('next_page',{'cursor':graph_cursor});assert not tool['isError'] and frozen_page(replayed)==frozen_page(graph_page)
+ assert frozen_page(equivalent({'op':'next_page','cursor':graph_cursor}))==frozen_page(graph_page)
+ checks+=['MCP_paginated_symbols_replay_and_native_CLI_token_portability','MCP_graph_page_replay','continuation_scope_is_immutable_and_deadline_recovers']
  tool,value=c.tool('read_source',{'artifact_id':location['artifact_id']});assert value['result']['truncated'] and len(value['result']['source']['text'].encode())==16384
  source_args={k:location[k] for k in ['artifact_id','content_hash','start_byte','end_byte']}
  tool,value=c.tool('read_source',source_args);assert not tool['isError'] and value==equivalent({'op':'source',**source_args});assert value['result']['source']['text']=='target'
@@ -160,7 +195,16 @@ try:
   if not tool['isError']:break
   assert time.monotonic()<until;time.sleep(.05)
  checks.append('cancelled_waiter_retains_bounded_work_slot')
- SOURCE.write_text(SOURCE.read_text().replace('hello😀','saved😀'));ready(generation+1)
+ pinned_text=SOURCE.read_text();SOURCE.write_text(pinned_text.replace('hello😀','saved😀'));ready(generation+1)
+ tool,retained=c.tool('next_page',{'cursor':symbol_cursor});assert not tool['isError'] and frozen_page(retained)==frozen_page(first_page)
+ assert retained['result']['generation']==generation and retained['result']['freshness']=='stale',retained
+ tool,retained_source=c.tool('read_source',{'cursor':symbol_cursor,'artifact_id':location['artifact_id'],'content_hash':location['content_hash'],'max_bytes':65536})
+ assert not tool['isError'] and retained_source['result']['generation']==generation and retained_source['result']['freshness']=='stale',retained_source
+ assert retained_source['result']['source']['text']==pinned_text
+ tool,retained_context=c.tool('symbol_context',{'cursor':symbol_cursor,'symbol_id':caller['id']})
+ assert not tool['isError'] and retained_context['result']['generation']==generation and retained_context['result']['freshness']=='stale',retained_context
+ assert 'hello😀' in retained_context['result']['contexts'][0]['declarations'][0]['source']['text']
+ checks.append('saved_update_preserves_cursor_page_source_and_context_generation')
  tool,value=c.tool('read_source',source_args);assert tool['isError'] and value['error']['code']=='invalid_request'
  tool,old_detail=c.tool('coverage_details',{'generation':generation});assert tool['isError'] and 'restart lookup' in old_detail['error']['message']
  tool,old_context=c.tool('symbol_context',dict(context_args,generation=generation));assert tool['isError'] and 'restart lookup' in old_context['error']['message']
@@ -169,6 +213,8 @@ try:
  SOURCE.write_text(SOURCE.read_text()+'\n// saved after MCP disconnect\n');after=ready(generation+1);generation=after['generation']
  checks.append('EOF_leaves_coordinator_indexing')
  modern=Client(modern=True);assert ready()['generation']==generation
+ tool,reconnected=modern.tool('next_page',{'cursor':symbol_cursor});assert not tool['isError'] and frozen_page(reconnected)==frozen_page(first_page)
+ checks.append('cursor_survives_MCP_disconnect_and_new_client_lifecycle')
  listing=modern.request('tools/list',{})['result'];assert listing['resultType']=='complete' and 'ttlMs' in listing and 'cacheScope' in listing
  assert [t['name'] for t in listing['tools']]==names
  tool,value=modern.tool('search_symbols',{'name':'Greeter'});assert not tool['isError'] and value['result']['freshness']=='current'

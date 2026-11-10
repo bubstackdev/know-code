@@ -82,7 +82,30 @@ pub fn query_json(database: &str, request: &str) -> String {
 }
 
 pub fn query_json_started(database: &str, request: &str, start: execution::QueryStart) -> String {
-    let request: query::QueryRequest = match serde_json::from_str(request) {
+    let value: serde_json::Value = match serde_json::from_str(request) {
+        Ok(value) => value,
+        Err(error) => {
+            return execution::error_json(
+                "invalid_request",
+                &error.to_string(),
+                execution::MIN_RESPONSE_BYTES as usize,
+            );
+        }
+    };
+    if value.get("op").and_then(|op| op.as_str()) == Some("next_page")
+        && value.as_object().is_some_and(|object| {
+            object.keys().any(|key| {
+                !["op", "cursor", "deadline_ms", "response_max_bytes"].contains(&key.as_str())
+            })
+        })
+    {
+        return execution::error_json(
+            "invalid_request",
+            "next_page accepts only cursor, deadline_ms and response_max_bytes; the original query scope and page size are immutable",
+            execution::MIN_RESPONSE_BYTES as usize,
+        );
+    }
+    let request: query::QueryRequest = match serde_json::from_value(value) {
         Ok(request) => request,
         Err(error) => {
             return execution::error_json(
@@ -112,52 +135,57 @@ pub fn query_json_started(database: &str, request: &str, start: execution::Query
             );
         }
     };
-    let result = (|| {
-        execution.check()?;
-        if request.freshness_wait_ms > 120000 {
-            return Err(Error::InvalidRequest(
-                "freshness_wait_ms cannot exceed 120000".into(),
-            ));
-        }
-        let status = match control::wait_for_database_controlled(
-            std::path::Path::new(database),
-            request.freshness_wait_ms,
-            execution,
-        ) {
-            Err(error @ Error::UpdateRequired(_)) => return Err(error),
-            Ok(Some(status)) if status.generation == 0 => return Err(Error::NotReady),
-            other => other,
-        };
-        execution.check()?;
-        let mut result = query::ReadView::open_controlled(database, execution)?
-            .query_controlled(request, execution)?;
-        match status {
-            Ok(Some(status)) => {
-                result.freshness = if status.available
-                    && status.phase == "idle"
-                    && status.observed_epoch == status.published_epoch
-                    && status.generation == result.generation
-                {
-                    "current"
-                } else {
-                    "stale"
+    let result =
+        if request.page_size.is_some() || request.cursor.is_some() || request.op == "next_page" {
+            cursor::client::query(database, request, execution, maximum)
+        } else {
+            let result = (|| {
+                execution.check()?;
+                if request.freshness_wait_ms > 120000 {
+                    return Err(Error::InvalidRequest(
+                        "freshness_wait_ms cannot exceed 120000".into(),
+                    ));
+                }
+                let status = match control::wait_for_database_controlled(
+                    std::path::Path::new(database),
+                    request.freshness_wait_ms,
+                    execution,
+                ) {
+                    Err(error @ Error::UpdateRequired(_)) => return Err(error),
+                    Ok(Some(status)) if status.generation == 0 => return Err(Error::NotReady),
+                    other => other,
                 };
-                result.coordination = Some(status);
-            }
-            Err(_)
-                if control::root_for_database(std::path::Path::new(database))
-                    .is_some_and(|root| root.join("registry.db").exists()) =>
-            {
-                result.freshness = "stale"
-            }
-            _ => {}
-        }
-        Ok(result)
-    })();
-    let result = execution
-        .check()
-        .and(result)
-        .and_then(|value| execution::encode(&value, execution, maximum));
+                execution.check()?;
+                let mut result = query::ReadView::open_controlled(database, execution)?
+                    .query_controlled(request, execution)?;
+                match status {
+                    Ok(Some(status)) => {
+                        result.freshness = if status.available
+                            && status.phase == "idle"
+                            && status.observed_epoch == status.published_epoch
+                            && status.generation == result.generation
+                        {
+                            "current"
+                        } else {
+                            "stale"
+                        };
+                        result.coordination = Some(status);
+                    }
+                    Err(_)
+                        if control::root_for_database(std::path::Path::new(database))
+                            .is_some_and(|root| root.join("registry.db").exists()) =>
+                    {
+                        result.freshness = "stale"
+                    }
+                    _ => {}
+                }
+                Ok(result)
+            })();
+            execution
+                .check()
+                .and(result)
+                .and_then(|value| execution::encode(&value, execution, maximum))
+        };
     match result {
         Ok(json) => match execution.check() {
             Ok(()) => json,

@@ -12,3 +12,20 @@ if (status.Generation > 0) {
 ```
 
 Opening registers saved-file indexing and auto-starts an installed coordinator when absent. `WorkspaceOptions.CoordinatorExecutable` overrides PATH. Status/coverage/freshness remain explicit; waiting can time out. API failures throw `KnowCodeException` with `Code`; compiler errors remain status/coverage. Disposal preserves background indexing and permits accepted work to finish. Queries execute in-process. The package includes its macOS ARM64 native library. This candidate is unsigned; full 0.0.1 acceptance remains in progress. Public code has no usage telemetry.
+
+Set `PageSize` to 1–1000 to page a supported query. `Limit` still caps the whole logical result; the positional `QueryRequest` constructor is unchanged:
+
+```csharp
+using var first = await workspace.QueryAsync(new KnowCode.QueryRequest("symbols", Limit: 100) { PageSize = 20 });
+var page = first.RootElement.GetProperty("result").GetProperty("page");
+if (page.GetProperty("next_cursor").GetString() is { } cursor) {
+    using var next = await workspace.NextPageAsync(cursor, deadlineMs: 5_000, responseMaxBytes: 262_144);
+    Console.WriteLine(next.RootElement.GetProperty("result"));
+}
+```
+
+`Index.NextPageAsync` and `Workspace.NextPageAsync` serialize only `op`, `cursor` and supplied per-request budgets. Use these helpers rather than `new QueryRequest("next_page")`, whose ordinary query defaults are invalid for strict continuations. Like existing queries, `Index` returns error envelopes while `Workspace` throws typed errors.
+
+Every page provides its reusable `page.cursor`, nullable `next_cursor`, zero-based position, page count and section totals/start/count. Graph findings and boundaries occupy separate sections; later pages can contain boundaries after findings finish. Original `truncated`, graph limits and coverage persist through the final page. Replay preserves rows, order and next position; a smaller response budget may fail rather than repartition the result.
+
+Tokens are opaque and portable across clients using the same coordinator incarnation. Set `QueryRequest.Cursor` for separate `source` or `symbol_context` reads through the pinned generation; source hashes/ranges must match that indexed text. Expiry, coordinator restart or retention pressure returns `cursor_invalidated`, requiring an explicit new query. The SDK requires native query contract 2; assembled cursor acceptance remains in progress.

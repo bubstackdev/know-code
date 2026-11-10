@@ -28,6 +28,8 @@ pub struct QueryRequest {
     pub freshness_wait_ms: u32,
     pub deadline_ms: Option<u32>,
     pub response_max_bytes: Option<u32>,
+    pub page_size: Option<u32>,
+    pub cursor: Option<String>,
     pub kinds: Option<Vec<crate::graph::DependencyKind>>,
     #[serde(default = "default_true")]
     pub include_implicit: bool,
@@ -200,6 +202,12 @@ impl ReadView {
         *view.execution.lock().unwrap() = None;
         Ok(view)
     }
+    pub(crate) fn open_pinned_controlled(
+        pin: &crate::cursor::GenerationPin,
+        execution: crate::execution::Execution,
+    ) -> Result<Self> {
+        Self::open_selected(&pin.database, execution, Some(pin))
+    }
     fn open_selected(
         path: &Path,
         execution: crate::execution::Execution,
@@ -337,6 +345,9 @@ impl ReadView {
         self.execution.lock().unwrap().map_or(Ok(()), |e| e.check())
     }
     fn query_inner(&self, request: QueryRequest) -> Result<QueryResult> {
+        if request.page_size.is_some() || request.cursor.is_some() {
+            return Err(Error::InvalidRequest("portable pagination requires the managed query entry point, not a retained low-level ReadView".into()));
+        }
         if !(1..=1000).contains(&request.limit) {
             return Err(Error::InvalidRequest(
                 "limit must be between 1 and 1000".into(),

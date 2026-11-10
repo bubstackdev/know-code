@@ -1,9 +1,16 @@
 //! Coordinator-owned generation retention and cursor lifecycle policy.
 //! Portable control, replayable pages and byte accounting are not yet wired.
+use crate::execution::Execution;
 use crate::{Error, Result, query::ReadView};
 mod accounting;
+pub(crate) mod client;
+mod pages;
+pub mod result_store;
+mod service;
 pub use accounting::{ACCOUNTING_VERSION, RetainedUsage};
+pub use client::settings;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+pub use service::{CONTROL_VERSION, CursorLimits, CursorService};
 use std::{
     collections::BTreeMap,
     io::Read,
@@ -31,6 +38,59 @@ fn nonce() -> Result<[u8; 16]> {
 pub struct CursorHandle {
     owner: [u8; 16],
     id: [u8; 16],
+}
+fn hexadecimal(bytes: &[u8]) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdef";
+    bytes
+        .iter()
+        .flat_map(|b| {
+            [
+                DIGITS[(b >> 4) as usize] as char,
+                DIGITS[(b & 15) as usize] as char,
+            ]
+        })
+        .collect()
+}
+fn unhex<const N: usize>(text: &str) -> Result<[u8; N]> {
+    if text.len() != N * 2
+        || !text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(Error::CursorInvalidated);
+    }
+    let mut bytes = [0; N];
+    for (out, pair) in bytes.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
+        let digit = |b: u8| if b <= b'9' { b - b'0' } else { b - b'a' + 10 };
+        *out = digit(pair[0]) * 16 + digit(pair[1]);
+    }
+    Ok(bytes)
+}
+impl CursorHandle {
+    fn key(self) -> String {
+        hexadecimal(&self.id)
+    }
+    fn prefix(self) -> String {
+        format!("kc1{}{}.", hexadecimal(&self.owner), self.key())
+    }
+    fn parse_prefix(text: &str) -> Result<Self> {
+        if text.len() != 68 || !text.starts_with("kc1") || !text.ends_with('.') || !text.is_ascii()
+        {
+            return Err(Error::CursorInvalidated);
+        }
+        Ok(Self {
+            owner: unhex(&text[3..35])?,
+            id: unhex(&text[35..67])?,
+        })
+    }
+    fn parse_token(text: &str) -> Result<(Self, u32)> {
+        if text.len() != 76 || !text.is_ascii() {
+            return Err(Error::CursorInvalidated);
+        }
+        let handle = Self::parse_prefix(&text[..68])?;
+        let position = u32::from_be_bytes(unhex::<4>(&text[68..])?);
+        Ok((handle, position))
+    }
 }
 
 /// A bounded page/source read lease. Dropping this descriptor does not write.
@@ -64,6 +124,8 @@ struct CursorEntry {
     touched: Duration,
     reads: BTreeMap<[u8; 16], Duration>,
     result_bytes_reserved: u64,
+    retiring: bool,
+    creator: Option<[u8; 16]>,
 }
 impl CursorEntry {
     fn expired(&self, now: Duration) -> bool {
@@ -84,6 +146,7 @@ pub struct CursorRegistry {
     maximum_bytes: u64,
     entries: BTreeMap<[u8; 16], CursorEntry>,
     publication_waiting: bool,
+    files: Option<result_store::ResultStore>,
 }
 impl CursorRegistry {
     pub fn new(owner: [u8; 16], maximum: usize) -> Result<Self> {
@@ -101,24 +164,38 @@ impl CursorRegistry {
             maximum_bytes,
             entries: BTreeMap::new(),
             publication_waiting: false,
+            files: None,
         })
     }
 
     pub fn admit(&mut self, database: &Path) -> Result<CursorHandle> {
-        self.admit_at(database, crate::execution::continuous_time()?)
+        self.admit_controlled(database, Execution::new(Default::default(), None)?)
     }
-    fn admit_at(&mut self, database: &Path, now: Duration) -> Result<CursorHandle> {
-        self.sweep_at(now)?;
+    pub(crate) fn admit_controlled(
+        &mut self,
+        database: &Path,
+        execution: Execution,
+    ) -> Result<CursorHandle> {
+        self.admit_inner(database, crate::execution::continuous_time()?, execution)
+    }
+    fn admit_inner(
+        &mut self,
+        database: &Path,
+        now: Duration,
+        execution: Execution,
+    ) -> Result<CursorHandle> {
+        self.sweep_inner(now, execution)?;
         self.check_admission()?;
         while self.entries.len() >= self.maximum {
-            if !self.remove_oldest_idle()? {
+            if !self.remove_idle_except(None, execution)? {
                 return Err(Error::CursorLimit);
             }
         }
-        let retention = GenerationRetention::activate(database, self.owner)?;
-        let pin = retention.pin_current()?;
+        let retention =
+            GenerationRetention::activate_controlled(database, self.owner, Some(execution))?;
+        let pin = retention.pin_controlled(Some(execution))?;
         if self.entries.contains_key(&pin.id) {
-            retention.release(&pin)?;
+            retention.release_controlled(&pin, Some(execution))?;
             return Err(Error::Protocol("cursor identity collision".into()));
         }
         let handle = CursorHandle {
@@ -133,11 +210,14 @@ impl CursorRegistry {
                 touched: now,
                 reads: BTreeMap::new(),
                 result_bytes_reserved: 0,
+                retiring: false,
+                creator: None,
             },
         );
-        let execution = crate::execution::Execution::new(Default::default(), None)?;
         if let Err(error) = self.make_space(None, Some(handle.id), execution) {
-            self.retire(handle.id)?;
+            // Cleanup shares this request budget; an expired one is retried by
+            // periodic sweeping rather than starting an unbounded extra wait.
+            let _ = self.retire(handle.id, execution);
             return Err(error);
         }
         Ok(handle)
@@ -151,30 +231,45 @@ impl CursorRegistry {
         handle: CursorHandle,
         remaining: Duration,
     ) -> Result<CursorRead> {
-        self.borrow_at(
+        self.borrow_inner(
             database,
             handle,
             remaining,
             crate::execution::continuous_time()?,
+            Execution::new(Default::default(), None)?,
         )
     }
-    fn borrow_at(
+    pub(crate) fn borrow_controlled(
+        &mut self,
+        database: &Path,
+        handle: CursorHandle,
+        execution: Execution,
+    ) -> Result<CursorRead> {
+        self.borrow_inner(
+            database,
+            handle,
+            execution.remaining()?,
+            crate::execution::continuous_time()?,
+            execution,
+        )
+    }
+    fn borrow_inner(
         &mut self,
         database: &Path,
         handle: CursorHandle,
         remaining: Duration,
         now: Duration,
+        execution: Execution,
     ) -> Result<CursorRead> {
-        self.sweep_at(now)?;
+        self.sweep_inner(now, execution)?;
         self.check_admission()?;
         if remaining.is_zero() {
             return Err(Error::DeadlineExceeded);
         }
         if handle.owner != self.owner
-            || !self
-                .entries
-                .get(&handle.id)
-                .is_some_and(|entry| entry.pin.database == database && !entry.expired(now))
+            || !self.entries.get(&handle.id).is_some_and(|entry| {
+                entry.pin.database == database && !entry.expired(now) && !entry.retiring
+            })
         {
             return Err(Error::CursorInvalidated);
         }
@@ -192,6 +287,7 @@ impl CursorRegistry {
             ));
         }
         let entry = self.entries.get_mut(&handle.id).expect("checked cursor");
+        execution.check()?;
         let id = nonce()?;
         if entry.reads.contains_key(&id) {
             return Err(Error::Protocol("cursor read identity collision".into()));
@@ -213,10 +309,22 @@ impl CursorRegistry {
     }
 
     pub fn finish(&mut self, read: &CursorRead) -> Result<()> {
-        self.finish_at(read, crate::execution::continuous_time()?)
+        self.finish_controlled(read, Execution::new(Default::default(), None)?)
     }
-    fn finish_at(&mut self, read: &CursorRead, now: Duration) -> Result<()> {
-        self.sweep_at(now)?;
+    pub(crate) fn finish_controlled(
+        &mut self,
+        read: &CursorRead,
+        execution: Execution,
+    ) -> Result<()> {
+        self.finish_inner(read, crate::execution::continuous_time()?, execution)
+    }
+    fn finish_inner(
+        &mut self,
+        read: &CursorRead,
+        now: Duration,
+        execution: Execution,
+    ) -> Result<()> {
+        self.sweep_inner(now, execution)?;
         if read.handle.owner != self.owner {
             return Err(Error::CursorInvalidated);
         }
@@ -249,21 +357,23 @@ impl CursorRegistry {
     /// Release the least recently used idle cursor. False means active reads
     /// must finish/expire before publication can reclaim another cursor.
     pub fn evict_idle(&mut self) -> Result<bool> {
-        self.sweep()?;
-        self.remove_oldest_idle()
+        let execution = Execution::new(Default::default(), None)?;
+        self.sweep_inner(crate::execution::continuous_time()?, execution)?;
+        self.remove_idle_except(None, execution)
     }
-    fn remove_oldest_idle(&mut self) -> Result<bool> {
-        self.remove_idle_except(None)
-    }
-    fn remove_idle_except(&mut self, protected: Option<[u8; 16]>) -> Result<bool> {
+    fn remove_idle_except(
+        &mut self,
+        protected: Option<[u8; 16]>,
+        execution: Execution,
+    ) -> Result<bool> {
         let oldest = self
             .entries
             .iter()
             .filter(|(id, entry)| entry.reads.is_empty() && Some(**id) != protected)
-            .min_by_key(|(id, entry)| (entry.touched, entry.created, **id))
+            .min_by_key(|(id, entry)| (!entry.retiring, entry.touched, entry.created, **id))
             .map(|(id, _)| *id);
         if let Some(id) = oldest {
-            self.retire(id)?;
+            self.retire(id, execution)?;
             Ok(true)
         } else {
             Ok(false)
@@ -274,7 +384,15 @@ impl CursorRegistry {
     /// cover in-progress files too and remain charged until cursor cleanup.
     /// This is storage capacity, not permission to reset graph work budgets.
     pub fn reserve_result(&mut self, handle: CursorHandle, bytes: u64) -> Result<()> {
-        self.sweep()?;
+        self.reserve_controlled(handle, bytes, Execution::new(Default::default(), None)?)
+    }
+    pub(crate) fn reserve_controlled(
+        &mut self,
+        handle: CursorHandle,
+        bytes: u64,
+        execution: Execution,
+    ) -> Result<()> {
+        self.sweep_inner(crate::execution::continuous_time()?, execution)?;
         self.check_admission()?;
         if handle.owner != self.owner {
             return Err(Error::CursorInvalidated);
@@ -290,7 +408,6 @@ impl CursorRegistry {
         }
         let previous = entry.result_bytes_reserved;
         entry.result_bytes_reserved = previous.max(bytes);
-        let execution = crate::execution::Execution::new(Default::default(), None)?;
         if let Err(error) = self.make_space(None, Some(handle.id), execution) {
             if let Some(entry) = self.entries.get_mut(&handle.id) {
                 entry.result_bytes_reserved = previous;
@@ -346,7 +463,7 @@ impl CursorRegistry {
         execution: crate::execution::Execution,
     ) -> Result<()> {
         while self.budget_usage(proposed, execution)? > self.maximum_bytes {
-            if !self.remove_idle_except(protected)? {
+            if !self.remove_idle_except(protected, execution)? {
                 return Err(Error::ResourceLimited(
                     "cursor retention budget is busy; retry after an active read finishes".into(),
                 ));
@@ -359,23 +476,38 @@ impl CursorRegistry {
     /// fences new admissions and asks the host to wait for bounded reads.
     /// No serving write transaction may be held while calling or waiting.
     pub fn prepare_publication(&mut self, database: &Path, generation: u64) -> Result<bool> {
-        self.sweep()?;
-        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        self.prepare_controlled(
+            database,
+            generation,
+            Execution::new(Default::default(), None)?,
+        )
+    }
+    pub(crate) fn prepare_controlled(
+        &mut self,
+        database: &Path,
+        generation: u64,
+        execution: Execution,
+    ) -> Result<bool> {
+        self.sweep_inner(crate::execution::continuous_time()?, execution)?;
         loop {
             if self.budget_usage(Some((database, generation)), execution)? <= self.maximum_bytes {
                 return Ok(true);
             }
             self.publication_waiting = true;
-            if !self.remove_oldest_idle()? {
+            if !self.remove_idle_except(None, execution)? {
                 return Ok(false);
             }
         }
     }
 
     pub fn sweep(&mut self) -> Result<()> {
-        self.sweep_at(crate::execution::continuous_time()?)
+        self.sweep_controlled(Execution::new(Default::default(), None)?)
     }
-    fn sweep_at(&mut self, now: Duration) -> Result<()> {
+    pub(crate) fn sweep_controlled(&mut self, execution: Execution) -> Result<()> {
+        self.sweep_inner(crate::execution::continuous_time()?, execution)
+    }
+    fn sweep_inner(&mut self, now: Duration, execution: Execution) -> Result<()> {
+        execution.check()?;
         let mut expired = Vec::new();
         for (id, entry) in &mut self.entries {
             if now < entry.created || now < entry.touched {
@@ -383,22 +515,33 @@ impl CursorRegistry {
             } else {
                 entry.reads.retain(|_, until| *until > now);
             }
-            if entry.expired(now) && entry.reads.is_empty() {
+            if entry
+                .creator
+                .is_some_and(|id| !entry.reads.contains_key(&id))
+            {
+                entry.retiring = true;
+            }
+            if (entry.expired(now) || entry.retiring) && entry.reads.is_empty() {
                 expired.push(*id);
             }
         }
         for id in expired {
-            self.retire(id)?;
+            self.retire(id, execution)?;
         }
         Ok(())
     }
-    fn retire(&mut self, id: [u8; 16]) -> Result<()> {
+    fn retire(&mut self, id: [u8; 16], execution: Execution) -> Result<()> {
+        self.entries.get_mut(&id).expect("selected cursor").retiring = true;
+        execution.check()?;
         let entry = self.entries.get(&id).expect("selected cursor");
+        if let Some(files) = &mut self.files {
+            files.remove(&hexadecimal(&entry.pin.id))?;
+        }
         let result = GenerationRetention {
             database: entry.pin.database.clone(),
             owner: self.owner,
         }
-        .release(&entry.pin);
+        .release_controlled(&entry.pin, Some(execution));
         match result {
             // A different owner has already invalidated this incarnation's
             // pins. Other cleanup failures keep the entry for a later retry.
@@ -407,6 +550,37 @@ impl CursorRegistry {
         }
         self.entries.remove(&id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl CursorRegistry {
+    fn admit_at(&mut self, database: &Path, now: Duration) -> Result<CursorHandle> {
+        self.admit_inner(database, now, Execution::new(Default::default(), None)?)
+    }
+    fn borrow_at(
+        &mut self,
+        database: &Path,
+        handle: CursorHandle,
+        remaining: Duration,
+        now: Duration,
+    ) -> Result<CursorRead> {
+        self.borrow_inner(
+            database,
+            handle,
+            remaining,
+            now,
+            Execution::new(Default::default(), None)?,
+        )
+    }
+    fn finish_at(&mut self, read: &CursorRead, now: Duration) -> Result<()> {
+        self.finish_inner(read, now, Execution::new(Default::default(), None)?)
+    }
+    fn sweep_at(&mut self, now: Duration) -> Result<()> {
+        self.sweep_inner(now, Execution::new(Default::default(), None)?)
+    }
+    fn remove_oldest_idle(&mut self) -> Result<bool> {
+        self.remove_idle_except(None, Execution::new(Default::default(), None)?)
     }
 }
 
@@ -455,15 +629,32 @@ pub(crate) fn storage_active(connection: &Connection) -> Result<bool> {
     Ok(true)
 }
 
-fn open_writer(path: &Path) -> Result<Connection> {
+fn open_writer_controlled(path: &Path, execution: Option<Execution>) -> Result<Connection> {
     if !path.is_file() {
         return Err(Error::NotReady);
     }
-    let connection = Connection::open_with_flags(
+    let mut connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    connection.busy_timeout(Duration::from_secs(2))?;
+    if let Some(execution) = execution {
+        execution.check()?;
+        connection.progress_handler(1_000, Some(move || execution.check().is_err()))?;
+        connection.busy_handler(Some(move |count| {
+            if count >= 2_000 {
+                return false;
+            }
+            match execution.remaining() {
+                Ok(remaining) => {
+                    std::thread::sleep(remaining.min(Duration::from_millis(1)));
+                    true
+                }
+                Err(_) => false,
+            }
+        }))?;
+    } else {
+        connection.busy_timeout(Duration::from_secs(2))?;
+    }
     connection.execute_batch(
         "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048;",
     )?;
@@ -480,7 +671,14 @@ impl GenerationRetention {
     /// Activate a coordinator incarnation, invalidating the previous one's pins.
     /// The owner must be independent of optional live-freshness acceleration.
     pub fn activate(database: &Path, owner: [u8; 16]) -> Result<Self> {
-        let mut connection = open_writer(database)?;
+        Self::activate_controlled(database, owner, None)
+    }
+    fn activate_controlled(
+        database: &Path,
+        owner: [u8; 16],
+        execution: Option<Execution>,
+    ) -> Result<Self> {
+        let mut connection = open_writer_controlled(database, execution)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let active = storage_active(&tx)?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS staging_generations(generation INTEGER PRIMARY KEY REFERENCES generations(id) ON DELETE CASCADE);
@@ -503,6 +701,9 @@ impl GenerationRetention {
             tx.execute("INSERT INTO cursor_retention_state VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version,owner=excluded.owner", params![RETENTION_VERSION, owner.as_slice()])?;
             tx.execute("DELETE FROM generation_units WHERE generation IS NOT (SELECT current_generation FROM state) AND generation NOT IN (SELECT generation FROM staging_generations)", [])?;
             crate::store::reclaim(&tx)?;
+        }
+        if let Some(execution) = execution {
+            execution.check()?;
         }
         tx.commit()?;
         Ok(Self {
@@ -527,8 +728,11 @@ impl GenerationRetention {
     }
 
     pub fn pin_current(&self) -> Result<GenerationPin> {
+        self.pin_controlled(None)
+    }
+    fn pin_controlled(&self, execution: Option<Execution>) -> Result<GenerationPin> {
         let id = nonce()?;
-        let mut connection = open_writer(&self.database)?;
+        let mut connection = open_writer_controlled(&self.database, execution)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.check_owner(&tx)?;
         let generation: Option<u64> = tx.query_row(
@@ -541,6 +745,9 @@ impl GenerationRetention {
             "INSERT INTO cursor_generation_pins VALUES(?,?,?)",
             params![id.as_slice(), generation, self.owner.as_slice()],
         )?;
+        if let Some(execution) = execution {
+            execution.check()?;
+        }
         tx.commit()?;
         Ok(GenerationPin {
             database: self.database.clone(),
@@ -551,10 +758,13 @@ impl GenerationRetention {
     }
 
     pub fn release(&self, pin: &GenerationPin) -> Result<()> {
+        self.release_controlled(pin, None)
+    }
+    fn release_controlled(&self, pin: &GenerationPin, execution: Option<Execution>) -> Result<()> {
         if pin.database != self.database || pin.owner != self.owner {
             return Err(Error::CursorInvalidated);
         }
-        let mut connection = open_writer(&self.database)?;
+        let mut connection = open_writer_controlled(&self.database, execution)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         self.check_owner(&tx)?;
         tx.execute(
@@ -563,6 +773,9 @@ impl GenerationRetention {
         )?;
         tx.execute("DELETE FROM generation_units WHERE generation=? AND generation IS NOT (SELECT current_generation FROM state) AND NOT EXISTS(SELECT 1 FROM cursor_generation_pins WHERE generation=?)", params![pin.generation, pin.generation])?;
         crate::store::reclaim(&tx)?;
+        if let Some(execution) = execution {
+            execution.check()?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -579,7 +792,7 @@ mod lifecycle_tests {
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn database() -> PathBuf {
+    pub(super) fn database() -> PathBuf {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../.artifacts/cursor-tests")
@@ -596,7 +809,10 @@ mod lifecycle_tests {
         publish(&path, "original source");
         path
     }
-    fn publish(path: &Path, text: &str) {
+    pub(super) fn publish(path: &Path, text: &str) {
+        staged(path, text).publish().unwrap();
+    }
+    pub(super) fn staged(path: &Path, text: &str) -> Writer {
         let mut writer = Writer::open(path).unwrap();
         writer
             .stage(Payload::Compilation(Compilation {
@@ -622,7 +838,7 @@ mod lifecycle_tests {
                 ..Default::default()
             }))
             .unwrap();
-        writer.publish().unwrap();
+        writer
     }
     fn at(seconds: u64) -> Duration {
         Duration::from_secs(seconds)

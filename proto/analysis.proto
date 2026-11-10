@@ -187,6 +187,7 @@ message ControlRequest {
   ResourceLimits resources = 8;
   // Optional full replacement of personal workspace settings; absent reads them.
   optional string settings_json = 9;
+  CursorRequest cursor = 10;
 }
 message WorkspaceStatus {
   string workspace_root = 1;
@@ -211,6 +212,43 @@ message ControlResponse {
   ResourceLimits resources = 6;
   uint32 resource_control_version = 7;
   uint32 analysis_settings_version = 8;
+  uint32 cursor_control_version = 9;
+  CursorReply cursor = 10;
+}
+
+// Artifact/lease coordination only. Graph execution and page/source reads stay
+// in the consumer's Rust core. Each action carries its remaining call budget.
+message CursorRequest {
+  string action = 1;
+  string cursor = 2;
+  string lease = 3;
+  uint32 remaining_ms = 4;
+  uint64 bytes = 5;
+  uint64 offset = 6;
+  bytes chunk = 7;
+  string sha256 = 8;
+  CursorSettings settings = 9;
+  // Same-host continuous monotonic clock; queued control work cannot extend it.
+  uint64 deadline_at_ms = 10;
+}
+message CursorReply {
+  string cursor = 1;
+  string lease = 2;
+  bytes owner = 3;
+  bytes pin = 4;
+  uint64 generation = 5;
+  uint64 lease_deadline_ms = 6;
+  string result_path = 7;
+  uint64 result_bytes = 8;
+  string sha256 = 9;
+  CursorSettings settings = 10;
+  uint64 offset = 11;
+  bool pending_pressure = 12;
+  string warning = 13;
+}
+message CursorSettings {
+  uint32 max_cursors = 1;
+  uint64 retention_bytes = 2;
 }
 
 message WorkspaceAnalysisSettings {

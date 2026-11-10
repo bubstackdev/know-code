@@ -49,6 +49,12 @@ fn exchange(
     socket: &mut (impl std::io::Read + std::io::Write),
     request: ControlRequest,
 ) -> Result<ControlResponse> {
+    checked_response(exchange_raw(socket, request)?)
+}
+pub(crate) fn exchange_raw(
+    socket: &mut (impl std::io::Read + std::io::Write),
+    request: ControlRequest,
+) -> Result<ControlResponse> {
     protocol::write_frame(
         &mut *socket,
         &Envelope {
@@ -60,19 +66,20 @@ fn exchange(
     let response = protocol::read_frame(socket)?
         .ok_or_else(|| Error::Protocol("coordinator closed the control channel".into()))?;
     match response.payload {
-        Some(envelope::Payload::ControlResponse(response)) if response.error_code.is_empty() => {
-            Ok(response)
-        }
-        Some(envelope::Payload::ControlResponse(response))
-            if response.error_code == "update_required" =>
-        {
-            Err(Error::UpdateRequired(response.error_message))
-        }
-        Some(envelope::Payload::ControlResponse(response)) => Err(Error::Remote {
+        Some(envelope::Payload::ControlResponse(response)) => Ok(response),
+        _ => Err(Error::Protocol("unexpected coordinator response".into())),
+    }
+}
+pub(crate) fn checked_response(response: ControlResponse) -> Result<ControlResponse> {
+    if response.error_code.is_empty() {
+        Ok(response)
+    } else if response.error_code == "update_required" {
+        Err(Error::UpdateRequired(response.error_message))
+    } else {
+        Err(Error::Remote {
             code: response.error_code,
             message: response.error_message,
-        }),
-        _ => Err(Error::Protocol("unexpected coordinator response".into())),
+        })
     }
 }
 

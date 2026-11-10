@@ -17,6 +17,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match args.get(1).map(String::as_str) {
         Some("--version") => println!("know-code {}", env!("CARGO_PKG_VERSION")),
         Some("runtime-info") if args.len()==2 => println!("{}",runtime::info()?),
+        Some("cursors") => {
+            let mut count = None;
+            let mut bytes = None;
+            for pair in args[2..].chunks(2) {
+                if pair.len() != 2 { return Err("usage: know-code cursors [--max-count COUNT] [--retention-bytes BYTES]".into()); }
+                match pair[0].as_str() {
+                    "--max-count" => count = Some(pair[1].parse::<u32>()?),
+                    "--retention-bytes" => bytes = Some(pair[1].parse::<u64>()?),
+                    _ => return Err("expected --max-count or --retention-bytes".into()),
+                }
+            }
+            let mut reply = know_code_core::cursor::settings(&data, None, Some(&std::env::current_exe()?))?;
+            if count.is_some() || bytes.is_some() {
+                let current = reply.settings.as_ref().ok_or("missing cursor settings")?;
+                reply = know_code_core::cursor::settings(&data, Some(know_code_core::cursor::CursorLimits {
+                    max_cursors: count.unwrap_or(current.max_cursors),
+                    retention_bytes: bytes.unwrap_or(current.retention_bytes),
+                }), None)?;
+            }
+            println!("{}", serde_json::to_string(&reply)?);
+        }
         Some("install" | "update" | "rollback" | "uninstall" | "install-info" | "service") => println!("{}", install::run(&args[1..])?),
         Some("resources") => {
             let mut cpu = None;

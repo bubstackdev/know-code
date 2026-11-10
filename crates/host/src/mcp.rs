@@ -185,6 +185,8 @@ fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
         "content_hash":{"type":"string","description":"Indexed location's content hash; required for byte ranges."},
         "start_byte":{"type":"integer","minimum":0},"end_byte":{"type":"integer","minimum":0},
         "target":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":1000,"default":100},
+        "page_size":{"type":"integer","minimum":1,"maximum":1000,"description":"Opt into repeatable generation-pinned pages; limit remains the total result cap."},
+        "cursor":{"type":"string","description":"Opaque page token returned by a prior query. Expiry, coordinator restart or retention eviction requires restarting the original query."},
         "freshness_wait_ms":{"type":"integer","minimum":0,"maximum":120000,"default":500},
         "deadline_ms":{"type":"integer","minimum":0,"maximum":execution::MAX_DEADLINE_MS,"default":execution::DEFAULT_DEADLINE_MS,"description":"Overall query budget, including freshness, execution and core response encoding; expiry returns deadline_exceeded."},
         "response_max_bytes":{"type":"integer","minimum":execution::MIN_RESPONSE_BYTES,"maximum":execution::MAX_RESPONSE_BYTES,"default":execution::DEFAULT_RESPONSE_BYTES,"description":"Complete core JSON response budget, including metadata/source; excludes outer MCP framing. Exceeding it returns response_limit_exceeded."},
@@ -205,6 +207,7 @@ fn tools() -> Vec<Tool> {
     let waits = [
         "target",
         "limit",
+        "page_size",
         "freshness_wait_ms",
         "deadline_ms",
         "response_max_bytes",
@@ -236,6 +239,7 @@ fn tools() -> Vec<Tool> {
     let mut source = schema(
         &[
             "artifact_id",
+            "cursor",
             "content_hash",
             "start_byte",
             "end_byte",
@@ -251,7 +255,7 @@ fn tools() -> Vec<Tool> {
     );
     source["properties"]["max_bytes"] = json!({"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES});
     let mut context = references.clone();
-    context.extend(["compilation_id", "include_source", "max_bytes"]);
+    context.extend(["compilation_id", "include_source", "max_bytes", "cursor"]);
     let mut context_schema = schema(&context, &["symbol_id"]);
     context_schema["properties"]["max_bytes"] = source["properties"]["max_bytes"].clone();
     let mut result = vec![
@@ -268,12 +272,21 @@ fn tools() -> Vec<Tool> {
                     "generation",
                     "compilation_id",
                     "limit",
+                    "page_size",
                     "max_bytes",
                     "freshness_wait_ms",
                     "deadline_ms",
                     "response_max_bytes",
                 ],
                 &["generation"],
+            ),
+        ),
+        make(
+            "next_page",
+            "Read or replay a saved page using its opaque cursor. The original scope, projection, page size and graph budgets cannot change; freshness may become stale while its generation stays pinned.",
+            schema(
+                &["cursor", "deadline_ms", "response_max_bytes"],
+                &["cursor"],
             ),
         ),
         make(

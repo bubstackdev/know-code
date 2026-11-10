@@ -13,7 +13,7 @@ use std::{
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
 pub const MAX_DEADLINE_MS: u32 = 120_000;
-pub const QUERY_CONTRACT_VERSION: u32 = 1;
+pub const QUERY_CONTRACT_VERSION: u32 = 2;
 pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
 pub const MIN_RESPONSE_BYTES: u32 = 1024;
@@ -115,6 +115,30 @@ impl Execution {
                 .min(self.start.elapsed()?.saturating_add(maximum)),
             ..self
         })
+    }
+    pub(crate) fn cap_at(self, deadline: Duration) -> Result<Self> {
+        let entered = self.start.entered.ok_or_else(|| {
+            std::io::Error::other("monotonic clock unavailable at query admission")
+        })?;
+        Ok(Self {
+            timeout: self.timeout.min(
+                deadline
+                    .saturating_sub(entered)
+                    .saturating_add(self.start.elapsed),
+            ),
+            ..self
+        })
+    }
+    pub(crate) fn deadline_ms(self) -> Result<u64> {
+        self.check()?;
+        let entered = self.start.entered.ok_or_else(|| {
+            std::io::Error::other("monotonic clock unavailable at query admission")
+        })?;
+        entered
+            .saturating_add(self.timeout.saturating_sub(self.start.elapsed))
+            .as_millis()
+            .try_into()
+            .map_err(|_| Error::InvalidRequest("monotonic deadline is not representable".into()))
     }
 }
 

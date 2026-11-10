@@ -1,11 +1,15 @@
 export interface QueryRequest {
-  op: 'symbols' | 'references' | 'source' | 'callers' | 'callees' | 'impact' | 'symbol_context' | 'coverage';
+  op: 'symbols' | 'references' | 'source' | 'callers' | 'callees' | 'impact' | 'symbol_context' | 'coverage' | 'next_page';
   name?: string;
   query?: string;
   symbol_id?: string;
   artifact_id?: string;
   target?: string;
   limit?: number;
+  /** Opts supported queries into pagination: 1–1000 items per page; limit remains the total cap. */
+  page_size?: number;
+  /** Opaque continuation or pinned source/symbol_context token. next_page accepts only op, cursor, deadline_ms and response_max_bytes. */
+  cursor?: string;
   freshness_wait_ms?: number;
   /** Overall budget, including native dispatch/freshness/execution/encoding. Default 5000; maximum 120000; zero expires immediately. */
   deadline_ms?: number;
@@ -62,9 +66,24 @@ export interface SymbolResult {
   id: string; name: string; kind: string; signature: string; external: boolean;
   compilation_id: string; target: string; locations: Location[];
 }
+export interface PageSection {
+  total: number;
+  start: number;
+  count: number;
+}
+export interface QueryPage {
+  cursor: string;
+  next_cursor: string | null;
+  position: number;
+  page_count: number;
+  total_limit: number;
+  page_size: number;
+  sections: Partial<Record<'symbols' | 'occurrences' | 'contexts' | 'coverage' | 'findings' | 'boundaries', PageSection>>;
+}
 export interface QueryResult {
   generation: number; freshness: 'current' | 'stale' | 'unverified'; truncated: boolean;
   coordination?: WorkspaceStatus;
+  page?: QueryPage;
   workspace_coverage: {compilations: number; statuses: Record<string, number>; diagnostic_counts: Record<string, number>};
   coverage_scope: 'workspace' | 'relevant' | 'compilation';
   contexts?: Array<{symbol: SymbolResult; boundary?: string; declarations: Array<{

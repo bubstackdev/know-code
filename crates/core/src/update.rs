@@ -52,6 +52,25 @@ pub fn index_controlled(
     before_publish: impl FnOnce() -> Result<()>,
     control: &Control,
 ) -> Result<u64> {
+    index_published(
+        database,
+        workers,
+        replacements,
+        progress,
+        before_publish,
+        control,
+        None,
+    )
+}
+pub(crate) fn index_published(
+    database: &Path,
+    workers: Vec<WorkerCommand>,
+    replacements: Option<&[String]>,
+    progress: &mut impl FnMut(Progress),
+    before_publish: impl FnOnce() -> Result<()>,
+    control: &Control,
+    cursors: Option<&crate::cursor::CursorService>,
+) -> Result<u64> {
     control.check()?;
     let mut writer = Writer::open_controlled(database, replacements, control)?;
     let preparation_path = database.with_extension("preparation.json");
@@ -195,5 +214,9 @@ pub fn index_controlled(
     }
     control.check()?;
     before_publish()?;
-    writer.publish_controlled(control)
+    if let Some(cursors) = cursors {
+        cursors.publish(database, writer, control)
+    } else {
+        writer.publish_controlled(control)
+    }
 }

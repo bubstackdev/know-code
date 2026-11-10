@@ -71,6 +71,12 @@ public sealed class Workspace : IDisposable
         CheckOpen();
         return Checked(await index.QueryJsonAsync(request).ConfigureAwait(false));
     }
+    /// <summary>Reads a frozen cursor page; failures use the same typed errors as other workspace queries.</summary>
+    public async Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null)
+    {
+        CheckOpen();
+        return Checked(await index.NextPageAsync(cursor, deadlineMs, responseMaxBytes).ConfigureAwait(false));
+    }
     private static JsonDocument Checked(JsonDocument result)
     {
         try { Native.Check(result); return result; }

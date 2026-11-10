@@ -15,10 +15,14 @@ public sealed class Index(string database)
 
     // Coarse native calls run off the caller's synchronization context.
     public Task<JsonDocument> QueryJsonAsync(string request) => QueryCoreAsync(request, Stopwatch.GetTimestamp());
+    /// <summary>Reads a frozen cursor page with optional per-request deadline and response-byte budgets.</summary>
+    public Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null) =>
+        QueryJsonAsync(JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
+            DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions));
     private Task<JsonDocument> QueryCoreAsync(string request, long started) => Task.Run(() =>
         Native.Invoke(() => {
-            if (Native.QueryContractVersion() != 1)
-                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; bounded query support is incompatible.");
+            if (Native.QueryContractVersion() != 2)
+                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; bounded cursor query support is incompatible.");
             return Native.QueryElapsed(database, request,
                 (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }));
@@ -38,6 +42,10 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
     public string? CoverageDetail { get; init; }
     public uint? DetailMaxBytes { get; init; }
     public uint? ResponseMaxBytes { get; init; }
+    /// <summary>Opts supported queries into pagination (1–1000 items per page). Limit remains the total cap.</summary>
+    public uint? PageSize { get; init; }
+    /// <summary>Pinned source/symbol_context token. Use NextPageAsync for strict continuation requests.</summary>
+    public string? Cursor { get; init; }
 }
 
 internal static partial class Native

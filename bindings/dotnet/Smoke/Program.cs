@@ -1,5 +1,14 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--next-page")
+{
+    var pagedIndex = new KnowCode.Index(args[1]);
+    using var result = await pagedIndex.NextPageAsync(args[2],
+        args.Length > 3 ? uint.Parse(args[3]) : null,
+        args.Length > 4 ? uint.Parse(args[4]) : null);
+    Console.WriteLine(result.RootElement.GetRawText());
+    return;
+}
 if (args[0] == "--deadline-queue")
 {
     ThreadPool.GetMinThreads(out var minimum, out var minimumIo);
@@ -59,6 +68,12 @@ if (args[0] == "--workspace")
                         break;
                     case "typed_query":
                         using(var result=await workspace.QueryAsync(new KnowCode.QueryRequest("symbols",Name:value.GetProperty("name").GetString()))) Console.WriteLine(result.RootElement.GetRawText());
+                        break;
+                    case "next_page":
+                        using(var result=await workspace.NextPageAsync(value.GetProperty("cursor").GetString()!,
+                            value.TryGetProperty("deadline_ms",out var deadline)?deadline.GetUInt32():null,
+                            value.TryGetProperty("response_max_bytes",out var maximumBytes)?maximumBytes.GetUInt32():null))
+                            Console.WriteLine(result.RootElement.GetRawText());
                         break;
                     case "close": workspace.Dispose();workspace.Dispose();Print(new {Closed=true});break;
                     case "close_during_query":
