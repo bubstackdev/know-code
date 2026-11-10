@@ -2,13 +2,19 @@
 """Assemble local candidate artifacts from matching built outputs; never publish."""
 from pathlib import Path
 import argparse,gzip,hashlib,json,os,platform,shutil,subprocess,tarfile,time,tomllib,xml.etree.ElementTree as ET,zipfile
+import build_record as provenance
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--profile',choices=['debug','release'],default='release');parser.add_argument('--out',type=Path)
 args=parser.parse_args();PROFILE=args.profile;CONFIG=PROFILE.capitalize();VERSION=tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
+try:
+ BUILD_LOCK=provenance.lock(ROOT,shared=True)
+ BUILD_RECORD=provenance.verify(ROOT,PROFILE)
+ PACKAGE_INPUTS=provenance.package_inputs(ROOT)
+except provenance.Invalid as error:raise SystemExit(str(error))
 OUT=(args.out or ROOT/'.artifacts/packages'/PROFILE/str(time.time_ns())).resolve();OUT.mkdir(parents=True,exist_ok=True)
 if platform.system()!='Darwin' or platform.machine()!='arm64':raise SystemExit('Build these candidate artifacts on macOS Apple Silicon.')
 STAGE=OUT/'staging';STAGE.mkdir();RUNTIME=STAGE/f'know-code-{VERSION}-darwin-arm64';RESOURCES=RUNTIME/'lib/know-code';RESOURCES.mkdir(parents=True);(RUNTIME/'bin').mkdir()
-ENV=dict(os.environ,DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',npm_config_cache=str(OUT/'.npm-cache'),npm_config_audit='false',npm_config_fund='false')
+ENV=dict(os.environ,DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',npm_config_cache=str(OUT/'.npm-cache'),npm_config_audit='false',npm_config_fund='false')
 def run(*command,cwd=ROOT):
  p=subprocess.run(list(map(str,command)),cwd=cwd,env=ENV,text=True,capture_output=True,timeout=180)
  if p.returncode:raise RuntimeError(f'{command}\n{p.stdout}\n{p.stderr}')
@@ -32,26 +38,13 @@ def evidence(kind,name,version,license_text,source,files):
  inventory.append(entry)
 
 # Runtime JS dependencies come from the installed pinned closure, never workspace links.
-visited=set();npm_lock=json.loads((ROOT/'package-lock.json').read_text())['packages']
-def npm_package(name,requiring):
- source=None
- for directory in [requiring,*requiring.parents]:
-  candidate=directory/'node_modules'/name
-  if (candidate/'package.json').is_file():source=candidate;break
-  if directory==ROOT:break
- if source is None:raise RuntimeError(f'Missing installed runtime dependency {name} required by {requiring}')
+for source in provenance.runtime_packages(ROOT):
  key=source.relative_to(ROOT).as_posix()
- if key in visited:return
- visited.add(key);manifest=json.loads((source/'package.json').read_text())
- assert manifest['version']==npm_lock[key]['version'],key
- if source.is_symlink():raise RuntimeError(f'Cannot distribute workspace link: {source}')
+ manifest=json.loads((source/'package.json').read_text());name=manifest['name']
  # Preserve installed nesting so conflicting versions keep Node's resolution.
  # Recurse declared dependencies explicitly rather than copying incidental/dev trees.
  shutil.copytree(source,RESOURCES/key,symlinks=False,ignore=shutil.ignore_patterns('node_modules'))
  evidence('npm',name,manifest['version'],manifest.get('license',''),f'https://registry.npmjs.org/{name}',[p for p in source.rglob('*') if p.is_file() and any(t in p.name.lower() for t in ['license','notice','copyright'])])
- for dependency in manifest.get('dependencies',{}):npm_package(dependency,source)
-provider_package=ROOT/'providers/typescript'
-for name in json.loads((provider_package/'package.json').read_text())['dependencies']:npm_package(name,provider_package)
 for provider in ['typescript','shared','rust','swift']:
  for source in (ROOT/'providers'/provider).glob('*.mjs'):copy(source,RESOURCES/'providers'/provider/source.name)
 copy(ROOT/'proto/analysis.proto',RESOURCES/'proto/analysis.proto')
@@ -60,10 +53,12 @@ copy(ROOT/f'.artifacts/build/{PROFILE}/swift/indexstore-reader',RESOURCES/'provi
 # Framework-dependent publication keeps SDK/runtime installation external.
 run('dotnet','publish',ROOT/'providers/dotnet/KnowCode.Provider.DotNet.csproj','--no-restore','--no-build','--self-contained','false','-p:UseAppHost=false','-c',CONFIG,'-o',RESOURCES/'providers/dotnet')
 for pdb in (RESOURCES/'providers/dotnet').rglob('*.pdb'):pdb.unlink()
+for payload in provenance.files(RESOURCES/'providers/dotnet'):
+ provenance.require_output(BUILD_RECORD,f'providers/dotnet/bin/{CONFIG}/net10.0/{payload.relative_to(RESOURCES/"providers/dotnet").as_posix()}',digest(payload),PROFILE)
 assets=json.loads((ROOT/'providers/dotnet/obj/project.assets.json').read_text())
 for name,library in assets['libraries'].items():
  if library.get('type')!='package':continue
- package,version=name.rsplit('/',1);directory=Path.home()/'.nuget/packages'/library['path'];nuspec=next(directory.glob('*.nuspec'))
+ package,version=name.rsplit('/',1);directory=next(Path(folder)/library['path'] for folder in assets['packageFolders'] if (Path(folder)/library['path']).is_dir());nuspec=next(directory.glob('*.nuspec'))
  tree=ET.parse(nuspec);metadata=next(e for e in tree.getroot() if e.tag.endswith('metadata'))
  lic=next((e for e in metadata if e.tag.endswith('license')),None);repository=next((e for e in metadata if e.tag.endswith('repository')),None)
  files=[nuspec]+[p for p in directory.rglob('*') if p.is_file() and p.suffix not in ('.nupkg','.sha512') and any(t in p.name.lower() for t in ['license','notice','copyright'])]
@@ -89,7 +84,9 @@ for package in metadata['packages']:
 (NOTICES/'README.md').write_text('Third-party dependency metadata and upstream-provided license/notice evidence for this local candidate.\nRuntime JS files and their own notices remain intact. NuGet nuspec metadata and provided notices are retained.\nSQLite is bundled through libsqlite3-sys; upstream SQLite is public domain (https://www.sqlite.org/copyright.html).\nA final license/source provenance review remains a publication gate.\n')
 shutil.copytree(NOTICES,RESOURCES/'THIRD_PARTY')
 copy(ROOT/'LICENSE',RUNTIME/'LICENSE')
-for doc in ['WORKSPACE_API.md','MCP.md','PACKAGING.md','INSTALLATION.md','RESOURCE_CONTROL.md','WORKSPACE_SETTINGS.md']:copy(ROOT/'docs'/doc,RUNTIME/'docs'/doc)
+copy(provenance.record_path(ROOT,PROFILE),OUT/'build-record.json')
+copy(OUT/'build-record.json',RESOURCES/'build-record.json')
+for doc in provenance.PACKAGED_DOCS:copy(ROOT/'docs'/doc,RUNTIME/'docs'/doc)
 copy(ROOT/f'target/{PROFILE}/know-code',RUNTIME/'bin/know-code')
 manifest={'layout_version':1,'version':VERSION,'artifact_kind':'local-candidate','target':'darwin-arm64','minimum_macos':'15.0','worker_protocol':7,'store_format':6,'analysis_settings_version':1,'resource_control_version':2,'build_profile':PROFILE,'telemetry':'none','prerequisites':{'node':'24.x','dotnet_sdk':'10.x; repository selection/compatible Roslyn required'},'providers':[{'language':lang,'status':status,'entrypoint':entry} for lang,status,entry in [('typescript','required','providers/typescript/worker.mjs'),('csharp','required','providers/dotnet/KnowCode.Provider.DotNet.dll'),('rust','experimental-v0.0.3','providers/rust/worker.mjs'),('swift','experimental-v0.0.3','providers/swift/worker.mjs')]]}
 (RESOURCES/'runtime.json').write_text(json.dumps(manifest,indent=2)+'\n')
@@ -108,6 +105,11 @@ copy(ROOT/f'target/{PROFILE}/libknow_code_node.dylib',NODE/'know_code.node');cop
 packed=json.loads(run('npm','pack','--ignore-scripts','--json','--pack-destination',OUT,cwd=NODE));node_archive=OUT/packed[0]['filename']
 run('dotnet','pack',ROOT/'bindings/dotnet/KnowCode/KnowCode.csproj','--no-build','--no-restore','-c',CONFIG,'-o',OUT,f'-p:KnowCodeNativeLibrary={ROOT}/target/{PROFILE}/libknow_code_ffi.dylib',f'-p:KnowCodeNotices={NOTICES}')
 nuget=OUT/f'KnowCode.{VERSION}.nupkg';assert nuget.is_file()
+with tarfile.open(node_archive) as archive:
+ provenance.require_output(BUILD_RECORD,f'target/{PROFILE}/libknow_code_node.dylib',hashlib.sha256(archive.extractfile('package/know_code.node').read()).hexdigest(),PROFILE)
+with zipfile.ZipFile(nuget) as archive:
+ for entry,source in [('lib/net10.0/KnowCode.dll',f'bindings/dotnet/KnowCode/bin/{CONFIG}/net10.0/KnowCode.dll'),('runtimes/osx-arm64/native/libknow_code_ffi.dylib',f'target/{PROFILE}/libknow_code_ffi.dylib')]:
+  provenance.require_output(BUILD_RECORD,source,hashlib.sha256(archive.read(entry)).hexdigest(),PROFILE)
 
 # Normalize archive metadata; gzip timestamp does not encode the build time.
 def archive_filter(info):
@@ -116,7 +118,6 @@ runtime_archive=OUT/f'know-code-runtime-{VERSION}-darwin-arm64.tar.gz'
 with runtime_archive.open('wb') as stream,gzip.GzipFile(fileobj=stream,mode='wb',filename='',mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w') as archive:
  archive.add(RUNTIME,arcname=RUNTIME.name,filter=archive_filter)
 artifacts=[runtime_archive,node_archive,nuget]
-(OUT/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in artifacts))
 # Build provenance records actual source content; do not pretend an uncommitted tree is a release revision.
 sources={}
 for directory in ['crates','bindings','providers','proto','scripts']:
@@ -125,5 +126,11 @@ for directory in ['crates','bindings','providers','proto','scripts']:
 for name in ['Cargo.toml','Cargo.lock','package.json','package-lock.json','Directory.Build.props','global.json','rust-toolchain.toml','LICENSE','third_party/licenses/index.json']:
  sources[name]=digest(ROOT/name)
 revision=subprocess.run(['git','rev-parse','--verify','HEAD'],cwd=ROOT,text=True,capture_output=True)
-report={'version':VERSION,'candidate':True,'source_revision':revision.stdout.strip() if revision.returncode==0 else None,'build_host':{'macos':platform.mac_ver()[0],'machine':platform.machine()},'profile':PROFILE,'runtime':info,'artifacts':[{'file':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in artifacts],'source_content':sources,'toolchains':{'node':run('node','--version').strip(),'dotnet':run('dotnet','--version').strip(),'rust':run('rustc','--version').strip()},'unresolved_license_metadata':[e['name'] for e in inventory if not e['license']],'unsigned_candidate':True}
-(OUT/'manifest.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps({'out':str(OUT),'artifacts':report['artifacts'],'unresolved_license_metadata':report['unresolved_license_metadata']},indent=2))
+try:
+ if provenance.verify(ROOT,PROFILE)!=BUILD_RECORD:raise provenance.Invalid('Build record changed during packaging.')
+ if provenance.package_inputs(ROOT)!=PACKAGE_INPUTS:raise provenance.Invalid('Packaging inputs changed during assembly; rerun scripts/package.py into a fresh output directory.')
+except provenance.Invalid as error:raise SystemExit(str(error))
+report={'version':VERSION,'candidate':True,'source_revision':revision.stdout.strip() if revision.returncode==0 else None,'build_provenance':{'file':'build-record.json','sha256':digest(OUT/'build-record.json'),'schema_version':BUILD_RECORD['schema_version'],'build_id':BUILD_RECORD['build_id']},'packaging_inputs':PACKAGE_INPUTS,'build_host':{'macos':platform.mac_ver()[0],'machine':platform.machine()},'profile':PROFILE,'runtime':info,'artifacts':[{'file':p.name,'bytes':p.stat().st_size,'sha256':digest(p)} for p in artifacts],'source_content':sources,'toolchains':{'node':run('node','--version').strip(),'dotnet':run('dotnet','--version').strip(),'rust':run('rustc','--version').strip()},'unresolved_license_metadata':[e['name'] for e in inventory if not e['license']],'unsigned_candidate':True}
+(OUT/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
+(OUT/'SHA256SUMS').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in [*artifacts,OUT/'build-record.json',OUT/'manifest.json']))
+print(json.dumps({'out':str(OUT),'artifacts':report['artifacts'],'unresolved_license_metadata':report['unresolved_license_metadata']},indent=2))
