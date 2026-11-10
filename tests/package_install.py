@@ -208,13 +208,13 @@ all_symbols=query({'op':'symbols','limit':1000});assert any(l['generated'] for s
 checks+=['packaged_TS_and_Csharp_compiler_analysis','both_inprocess_SDKs_match_CLI','compiler_context_and_FTS','Roslyn_generated_sources']
 # MCP startup/query/EOF over the installed executable, using the same saved publication.
 mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-stderr.log').open('w'))
-mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b''
+mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
 def rpc(identifier,method,params):
  global mcp_buffer
  mcp.stdin.write((json.dumps({'jsonrpc':'2.0','id':identifier,'method':method,'params':params})+'\n').encode());mcp.stdin.flush()
  while True:
   value,mcp_buffer=read_json_line(mcp,mcp_selector,mcp_buffer,('mcp',identifier))
-  if value.get('id')==identifier:return value
+  if value.get('id')==identifier:mcp_events.append({'id':identifier,'method':method,'params':params,'response':value});return value
 try:
  assert rpc(1,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test','version':'1'}})['result']['protocolVersion']=='2025-11-25'
  mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
@@ -223,18 +223,18 @@ try:
  assert found['result']['symbols']==query({'op':'symbols','name':'answer'})['symbols']
  old=initial['generation'];(WORKSPACE/'value.ts').write_text('export function savedAnswer() { return 43; }\n');saved_ts=ready(node,old+1)
  saved=query({'op':'symbols','name':'savedAnswer'});assert saved['freshness']=='current' and saved['symbols']
- assert not query({'op':'symbols','name':'answer'})['symbols']
+ removed=query({'op':'symbols','name':'answer'});assert removed['freshness']=='current' and not removed.get('symbols',[]),removed
  ts_context=query({'op':'symbol_context','symbol_id':saved['symbols'][0]['id'],'max_bytes':1024});exact_source(ts_context['contexts'][0]['declarations'][0]['source'],WORKSPACE/'value.ts')
  (WORKSPACE/'Code.cs').write_text(CSHARP.replace('Greet() => 42','SavedGreet() => 43'))
  saved_cs=ready(node,saved_ts['generation']+1)
  saved=query({'op':'symbols','name':'SavedGreet'});assert saved['freshness']=='current' and saved['symbols']
- assert not query({'op':'symbols','name':'Greet'})['symbols']
+ removed=query({'op':'symbols','name':'Greet'});assert removed['freshness']=='current' and not removed.get('symbols',[]),removed
  symbol=saved['symbols'][0];context=query({'op':'symbol_context','symbol_id':symbol['id'],'max_bytes':1024});source=context['contexts'][0]['declarations'][0]['source'];assert 'SavedGreet() => 43' in source['text'];exact_source(source,WORKSPACE/'Code.cs')
  for identifier,name in [(4,'savedAnswer'),(5,'SavedGreet')]:
   found=rpc(identifier,'tools/call',{'name':'search_symbols','arguments':{'name':name}})['result']['structuredContent']['result']
   assert found['freshness']=='current' and found['symbols']==query({'op':'symbols','name':name})['symbols']
  final_generation=saved_cs['generation'];checks.append('offline_saved_TS_and_Csharp_semantic_and_source_updates')
-finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close()
+finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
 checks.append('installed_MCP_shared_queries_and_EOF')
 if args.experimental:
  before=ready(node)['generation']
