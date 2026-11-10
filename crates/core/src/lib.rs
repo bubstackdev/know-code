@@ -1,4 +1,5 @@
 pub mod control;
+pub mod cursor;
 pub mod execution;
 pub mod graph;
 pub mod live;
@@ -20,6 +21,10 @@ pub enum Error {
         "query response exceeds response_max_bytes; narrow the query or increase the response budget (maximum 2097152 bytes)"
     )]
     ResponseLimitExceeded,
+    #[error("cursor is no longer valid; restart the query")]
+    CursorInvalidated,
+    #[error("cursor capacity is exhausted; retry after an active page finishes")]
+    CursorLimit,
     #[error("indexing cancelled; previous generation preserved")]
     Cancelled,
     #[error("{0}")]
@@ -54,6 +59,8 @@ impl Error {
             Self::NotReady => "not_ready",
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::ResponseLimitExceeded => "response_limit_exceeded",
+            Self::CursorInvalidated => "cursor_invalidated",
+            Self::CursorLimit => "cursor_limit",
             Self::Cancelled => "cancelled",
             Self::ResourceLimited(_) => "resource_limited",
             Self::InvalidRequest(_) | Self::Json(_) => "invalid_request",

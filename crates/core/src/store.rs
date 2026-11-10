@@ -1,5 +1,5 @@
 use crate::{Error, Result, protocol::*};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -11,6 +11,8 @@ pub const SCHEMA_VERSION: i32 = 6;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS generations(id INTEGER PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS staging_generations(
+ generation INTEGER PRIMARY KEY REFERENCES generations(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS state(singleton INTEGER PRIMARY KEY CHECK(singleton=1), current_generation INTEGER);
 INSERT OR IGNORE INTO state VALUES(1,NULL);
 CREATE TABLE IF NOT EXISTS contents(hash TEXT PRIMARY KEY, utf8 BLOB NOT NULL);
@@ -123,11 +125,20 @@ fn migrate_project_links(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn reclaim(connection: &Connection) -> Result<()> {
+pub(crate) fn reclaim(connection: &Connection) -> Result<()> {
     connection.execute_batch("DELETE FROM compilations WHERE NOT EXISTS(SELECT 1 FROM generation_units u WHERE u.owner_generation=compilations.generation AND u.compilation_id=compilations.id);
       DELETE FROM artifacts WHERE NOT EXISTS(SELECT 1 FROM unit_artifacts u WHERE u.owner_generation=artifacts.generation AND u.artifact_id=artifacts.id);
-      DELETE FROM generations WHERE id NOT IN (SELECT generation FROM generation_units UNION SELECT owner_generation FROM generation_units);
+      DELETE FROM generations WHERE id NOT IN (SELECT generation FROM generation_units UNION SELECT owner_generation FROM generation_units UNION SELECT generation FROM staging_generations);
       DELETE FROM contents WHERE hash NOT IN (SELECT content_hash FROM artifacts);")?;
+    Ok(())
+}
+
+fn discard_unretained_manifests(connection: &Connection) -> Result<()> {
+    if crate::cursor::storage_active(connection)? {
+        connection.execute("DELETE FROM generation_units WHERE generation IS NOT (SELECT current_generation FROM state) AND generation NOT IN (SELECT generation FROM cursor_generation_pins)", [])?;
+    } else {
+        connection.execute("DELETE FROM generation_units WHERE generation IS NOT (SELECT current_generation FROM state)", [])?;
+    }
     Ok(())
 }
 
@@ -185,7 +196,7 @@ impl Writer {
             )));
         }
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON; PRAGMA cache_size=-2048;")?;
-        let tx = connection.transaction()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if version == 1 {
             tx.execute_batch("ALTER TABLE compilations ADD COLUMN dependencies_json TEXT NOT NULL DEFAULT '[]'; ALTER TABLE compilations ADD COLUMN input_paths_json TEXT NOT NULL DEFAULT '[]'")?;
         }
@@ -212,10 +223,9 @@ impl Writer {
           CREATE INDEX IF NOT EXISTS relationship_artifact ON relationships(artifact_key);
           CREATE UNIQUE INDEX IF NOT EXISTS relationship_evidence ON relationships(source_key,ifnull(target_key,0),kind,resolution,ifnull(artifact_key,0),ifnull(start_byte,0),ifnull(end_byte,0),implicit,dispatch,dispatch_key);")?;
         // Only this owner can recover abandoned staging. Readers use committed snapshots.
-        tx.execute(
-            "DELETE FROM generation_units WHERE generation IS NOT (SELECT current_generation FROM state)",
-            [],
-        )?;
+        // Sole workspace-writer ownership proves these are abandoned stages.
+        tx.execute("DELETE FROM staging_generations", [])?;
+        discard_unretained_manifests(&tx)?;
         reclaim(&tx)?;
         let generation: u64 = tx.query_row(
             "SELECT COALESCE(MAX(id),(SELECT current_generation FROM state),0)+1 FROM generations",
@@ -223,6 +233,7 @@ impl Writer {
             |r| r.get(0),
         )?;
         tx.execute("INSERT INTO generations VALUES(?)", [generation])?;
+        tx.execute("INSERT INTO staging_generations VALUES(?)", [generation])?;
         if let Some(replacements) = replacements {
             tx.execute("INSERT INTO generation_units SELECT ?,compilation_id,owner_generation FROM generation_units WHERE generation=(SELECT current_generation FROM state)",[generation])?;
             for project in replacements {
@@ -251,7 +262,9 @@ impl Writer {
 
     pub fn stage(&mut self, payload: envelope::Payload) -> Result<()> {
         // A frame is already received before this short transaction begins.
-        let tx = self.connection.transaction()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let gen_id = self.generation;
         match payload {
             envelope::Payload::Compilation(c) => {
@@ -506,7 +519,9 @@ impl Writer {
     }
     fn finish_publication(mut self, control: &crate::resource::Control) -> Result<u64> {
         control.check()?;
-        let tx = self.connection.transaction()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (count,missing): (u64,u64) = tx.query_row("SELECT count(*),count(*)-count(r.compilation_id) FROM generation_units u LEFT JOIN reports r ON u.owner_generation=r.generation AND u.compilation_id=r.compilation_id WHERE u.generation=?",[self.generation],|r| Ok((r.get(0)?,r.get(1)?)))?;
         if count == 0 || missing != 0 {
             return Err(Error::Protocol(
@@ -518,9 +533,10 @@ impl Writer {
             [self.generation],
         )?;
         tx.execute(
-            "DELETE FROM generation_units WHERE generation<>?",
+            "DELETE FROM staging_generations WHERE generation=?",
             [self.generation],
         )?;
+        discard_unretained_manifests(&tx)?;
         reclaim(&tx)?;
         control.publish(|| {
             tx.commit()?;
@@ -542,10 +558,175 @@ impl Drop for Writer {
     fn drop(&mut self) {
         if !self.published {
             let _ = self.connection.execute(
+                "DELETE FROM staging_generations WHERE generation=?",
+                [self.generation],
+            );
+            let _ = self.connection.execute(
                 "DELETE FROM generation_units WHERE generation=?",
                 [self.generation],
             );
             let _ = reclaim(&self.connection);
         }
+    }
+}
+
+#[cfg(test)]
+mod retention_overlap_tests {
+    use super::*;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
+    };
+
+    fn compilation(writer: &mut Writer) {
+        writer
+            .stage(envelope::Payload::Compilation(Compilation {
+                id: "comp".into(),
+                references: vec![ProjectReferenceContext {
+                    compilation_id: "dependency".into(),
+                    project_path: "dependency.csproj".into(),
+                    input_fingerprint: "dep".into(),
+                }],
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    fn complete(writer: &mut Writer) {
+        writer
+            .stage(envelope::Payload::Report(AnalysisReport {
+                compilation_id: "comp".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    fn overlap(publication: bool) {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/retention-overlap")
+            .join(format!(
+                "{}-{}-{:x}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("index.db");
+        let mut first = Writer::open(&path).unwrap();
+        compilation(&mut first);
+        complete(&mut first);
+        first.publish().unwrap();
+        let _retention = crate::cursor::GenerationRetention::activate(&path, [1; 16]).unwrap();
+        let mut writer = Writer::open(&path).unwrap();
+        compilation(&mut writer);
+        if publication {
+            complete(&mut writer);
+        }
+        let (start, starting) = mpsc::sync_channel(1);
+        let (event, events) = mpsc::sync_channel(2);
+        let child = std::thread::spawn(move || {
+            starting.recv().unwrap();
+            let mut connection = Connection::open(path).unwrap();
+            connection.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+            let busy_event = event.clone();
+            let mut notified = false;
+            connection
+                .busy_handler(Some(move |count| {
+                    if !notified {
+                        busy_event.send(true).unwrap();
+                        notified = true;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                    count < 2000
+                }))
+                .unwrap();
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let generation: u64 = tx
+                .query_row("SELECT current_generation FROM state", [], |r| r.get(0))
+                .unwrap();
+            tx.execute(
+                "INSERT INTO cursor_generation_pins VALUES(?,?,?)",
+                params![[99u8; 16].as_slice(), generation, [1u8; 16].as_slice()],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            let _ = event.send(false);
+            generation
+        });
+        let blocked = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&blocked);
+        let mut fired = false;
+        writer
+            .connection
+            .authorizer(Some(move |ctx: AuthContext<'_>| {
+                let target = if publication {
+                    matches!(
+                        ctx.action,
+                        AuthAction::Update {
+                            table_name: "state",
+                            ..
+                        }
+                    )
+                } else {
+                    matches!(
+                        ctx.action,
+                        AuthAction::Insert {
+                            table_name: "symbols"
+                        }
+                    )
+                };
+                if target && !fired {
+                    fired = true;
+                    start.send(()).unwrap();
+                    observed.store(
+                        events.recv_timeout(Duration::from_secs(5)).unwrap(),
+                        Ordering::Relaxed,
+                    );
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        let published = if publication {
+            Some(writer.publish().unwrap())
+        } else {
+            writer
+                .stage(envelope::Payload::Facts(FactBatch {
+                    compilation_id: "comp".into(),
+                    symbols: vec![Symbol {
+                        id: "ref".into(),
+                        name: "ref".into(),
+                        external: true,
+                        definition_compilation_id: "dependency".into(),
+                        definition_symbol_id: "target".into(),
+                        definition_fingerprint: "dep".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }))
+                .unwrap();
+            None
+        };
+        let pinned = child.join().unwrap();
+        assert!(
+            blocked.load(Ordering::Relaxed),
+            "retention committed inside writer's read/write window"
+        );
+        if let Some(published) = published {
+            assert_eq!(pinned, published);
+        }
+    }
+    #[test]
+    fn publication_serializes_concurrent_pin_transactions() {
+        overlap(true);
+    }
+    #[test]
+    fn reference_validation_and_fact_insertion_serialize_concurrent_pins() {
+        overlap(false);
     }
 }

@@ -1,5 +1,5 @@
 use crate::{Error, Result, protocol::Diagnostic, store::SCHEMA_VERSION};
-use rusqlite::{Connection, OpenFlags, config::DbConfig, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, config::DbConfig, params};
 use serde::{Deserialize, Serialize};
 use std::{
     cell::Cell,
@@ -192,12 +192,29 @@ impl ReadView {
         path: impl AsRef<Path>,
         execution: crate::execution::Execution,
     ) -> Result<Self> {
+        Self::open_selected(path.as_ref(), execution, None)
+    }
+    pub(crate) fn open_pinned(pin: &crate::cursor::GenerationPin) -> Result<Self> {
+        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        let view = Self::open_selected(&pin.database, execution, Some(pin))?;
+        *view.execution.lock().unwrap() = None;
+        Ok(view)
+    }
+    fn open_selected(
+        path: &Path,
+        execution: crate::execution::Execution,
+        pin: Option<&crate::cursor::GenerationPin>,
+    ) -> Result<Self> {
         execution.check()?;
-        let result = Self::open_inner(path.as_ref(), execution);
+        let result = Self::open_inner(path, execution, pin);
         execution.check()?;
         result
     }
-    fn open_inner(path: &Path, execution: crate::execution::Execution) -> Result<Self> {
+    fn open_inner(
+        path: &Path,
+        execution: crate::execution::Execution,
+        pin: Option<&crate::cursor::GenerationPin>,
+    ) -> Result<Self> {
         if !path.is_file() {
             return Err(Error::NotReady);
         }
@@ -249,11 +266,22 @@ impl ReadView {
             crate::graph::create_view(&connection, version)?;
         }
         connection.execute_batch("PRAGMA query_only=ON;")?;
-        let generation: Option<u64> = connection.query_row(
-            "SELECT current_generation FROM state WHERE singleton=1",
-            [],
-            |r| r.get(0),
-        )?;
+        let generation = if let Some(pin) = pin {
+            if !crate::cursor::storage_active(&connection)? {
+                return Err(Error::CursorInvalidated);
+            }
+            let generation: Option<u64> = connection.query_row("SELECT p.generation FROM cursor_generation_pins p JOIN cursor_retention_state s ON s.owner=p.owner WHERE s.singleton=1 AND p.id=? AND p.owner=?", params![pin.id.as_slice(), pin.owner.as_slice()], |r| r.get(0)).optional()?;
+            match generation {
+                Some(generation) if generation == pin.generation() => Some(generation),
+                _ => return Err(Error::CursorInvalidated),
+            }
+        } else {
+            connection.query_row(
+                "SELECT current_generation FROM state WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?
+        };
         Ok(Self {
             connection,
             format_version: version,

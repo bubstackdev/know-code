@@ -1,4 +1,5 @@
 use know_code_core::{
+    cursor::GenerationRetention,
     protocol::{envelope::Payload, *},
     query::{QueryRequest, ReadView},
     store::Writer,
@@ -184,6 +185,125 @@ fn response_budget_limits_the_whole_result_and_keeps_the_view_reusable() {
     assert!(json.len() <= 2_097_152);
     let response: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(!response["result"]["symbols"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn retained_generations_reopen_after_publication_without_holding_wal_readers() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    let first = writer.publish().unwrap();
+    let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+    let pin = retention.pin_current().unwrap();
+    let sibling = retention.pin_current().unwrap();
+    assert_eq!(pin.generation(), first);
+    for text in ["Greeter next", "Greeter latest"] {
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, text);
+        assert!(writer.publish().unwrap() > first);
+        let view = pin.open_view().unwrap();
+        let source = view
+            .query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
+            .unwrap();
+        assert_eq!(source.generation, first);
+        assert_eq!(source.source.unwrap().text, "Greeter old");
+    }
+    retention.release(&pin).unwrap();
+    assert!(matches!(
+        pin.open_view(),
+        Err(know_code_core::Error::CursorInvalidated)
+    ));
+    let active = sibling.open_view().unwrap();
+    retention.release(&pin).unwrap();
+    retention.release(&sibling).unwrap();
+    assert!(matches!(
+        sibling.open_view(),
+        Err(know_code_core::Error::CursorInvalidated)
+    ));
+    assert_eq!(
+        active
+            .query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
+            .unwrap()
+            .source
+            .unwrap()
+            .text,
+        "Greeter old"
+    );
+    drop(active);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let contents: u32 = connection
+        .query_row("SELECT count(*) FROM contents", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(contents, 1, "released old source was not reclaimed");
+    let busy: u32 = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(busy, 0);
+    let violations: u32 = connection
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(violations, 0);
+}
+
+#[test]
+fn retention_cleanup_preserves_an_empty_active_indexing_stage() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    writer.publish().unwrap();
+    let mut writer = Writer::open(&path).unwrap();
+    let staged = writer.generation;
+    // Retention may first activate while an existing job has no fact units yet.
+    let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+    let pin = retention.pin_current().unwrap();
+    retention.release(&pin).unwrap();
+    populate(&mut writer, "Greeter new");
+    assert_eq!(writer.publish().unwrap(), staged);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let stages: u32 = connection
+        .query_row("SELECT count(*) FROM staging_generations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(stages, 0);
+}
+
+#[test]
+fn new_retention_owner_invalidates_old_pins_and_keeps_current_index() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    writer.publish().unwrap();
+    let old = GenerationRetention::activate(&path, [1; 16]).unwrap();
+    let pin = old.pin_current().unwrap();
+    GenerationRetention::activate(&path, [1; 16]).unwrap();
+    assert!(
+        pin.open_view().is_ok(),
+        "same owner activation invalidated a pin"
+    );
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter new");
+    let current = writer.publish().unwrap();
+    let next = GenerationRetention::activate(&path, [2; 16]).unwrap();
+    assert!(matches!(
+        pin.open_view(),
+        Err(know_code_core::Error::CursorInvalidated)
+    ));
+    assert!(matches!(
+        old.pin_current(),
+        Err(know_code_core::Error::CursorInvalidated)
+    ));
+    assert_eq!(next.pin_current().unwrap().generation(), current);
+    assert_eq!(ReadView::open(&path).unwrap().generation, current);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute("UPDATE cursor_retention_state SET version=99", [])
+        .unwrap();
+    assert!(matches!(
+        Writer::open(&path),
+        Err(know_code_core::Error::UpdateRequired(_))
+    ));
+    assert_eq!(ReadView::open(&path).unwrap().generation, current);
 }
 
 #[test]
