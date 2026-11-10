@@ -6,6 +6,7 @@ pub(crate) mod grouping;
 pub mod live;
 pub mod protocol;
 pub mod query;
+pub mod recovery;
 pub mod resource;
 pub mod settings;
 pub mod store;
