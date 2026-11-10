@@ -1,5 +1,5 @@
 //! Coordinator-owned generation retention and cursor lifecycle policy.
-//! Portable control, replayable pages and byte accounting are not yet wired.
+//! Shared lifecycle/accounting behind portable in-process cursor queries.
 use crate::execution::Execution;
 use crate::{Error, Result, query::ReadView};
 mod accounting;
@@ -33,7 +33,7 @@ fn nonce() -> Result<[u8; 16]> {
     Ok(id)
 }
 
-/// Coordinator-owned logical cursor identity, not yet a wire continuation token.
+/// Coordinator-owned logical identity behind an opaque continuation token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CursorHandle {
     owner: [u8; 16],
@@ -138,8 +138,8 @@ impl CursorEntry {
 
 /// One registry per coordinator/user, shared across all workspaces. Call only
 /// under its serialized admission lock and sole-writer fence. This supplies
-/// lifetime/count/read-lease and shared byte policy. Coordinator control,
-/// publication and saved-result files still need integration before pagination.
+/// lifetime/count/read-lease and shared byte policy. CursorService integrates
+/// coordinator control, publication and saved-result files.
 pub struct CursorRegistry {
     owner: [u8; 16],
     maximum: usize,

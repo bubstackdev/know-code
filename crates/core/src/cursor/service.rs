@@ -492,17 +492,17 @@ impl CursorService {
                 Ok(())
             }
         });
-        for _ in 0..state.cleanup_queue.len().min(8) {
-            execution.check()?;
+        // Owner activation reclaims old manifests atomically. Repeating the
+        // tiny startup probe can roll back legitimate cleanup forever. Retry
+        // one queued index with the existing maximum cooperative budget.
+        for _ in 0..state.cleanup_queue.len().min(1) {
+            let execution =
+                Execution::new(Default::default(), Some(crate::execution::MAX_DEADLINE_MS))?;
             let database = state.cleanup_queue.pop_front().expect("queued cleanup");
             if !state.cleanup_pending.contains_key(&database) {
                 continue;
             }
-            if let Err(error) = Self::initialize(
-                &mut state,
-                &database,
-                execution.phase(Duration::from_millis(20))?,
-            ) {
+            if let Err(error) = Self::initialize(&mut state, &database, execution) {
                 state
                     .cleanup_pending
                     .insert(database.clone(), error.to_string());
@@ -825,8 +825,14 @@ mod tests {
             call(&replacement, &other, action("admit", None)),
             Err(Error::ResourceLimited(_))
         ));
-        connection.execute_batch("ROLLBACK").unwrap();
+        // Hold a legitimate writer beyond the 20 ms startup probe. Periodic
+        // retry must finish rather than repeatedly abandon the same work.
+        let unlock = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            connection.execute_batch("ROLLBACK").unwrap();
+        });
         replacement.sweep().unwrap();
+        unlock.join().unwrap();
         assert!(replacement.lock().unwrap().cleanup_pending.is_empty());
         assert!(matches!(
             call(&replacement, &db, action("borrow", Some(&old))),

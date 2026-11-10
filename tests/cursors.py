@@ -130,8 +130,12 @@ try:
   text=source['source'];assert text['text']==OLD and text['start_byte']==0,text
   assert text['content_hash']==location['content_hash']==hashlib.sha256(OLD.encode()).hexdigest(),text
   context=query(language,context_request)['result'];assert context['generation']==generation,context
-  assert context['contexts'][0]['symbol']==target,context
+  # Contexts put declaration locations in their dedicated array, while search
+  # includes them on SymbolResult. Compare the shared symbol projection exactly.
+  assert {k:v for k,v in context['contexts'][0]['symbol'].items() if k!='locations'}=={
+   k:v for k,v in target.items() if k!='locations'},context
   declarations=context['contexts'][0]['declarations'];assert declarations,context
+  assert declarations[0]['location']==location,declarations
   for declaration in declarations:
    extent=declaration['extent'];body=declaration['source']
    assert body['text'].encode()==OLD.encode()[extent['start_byte']:extent['end_byte']],declaration
