@@ -1,6 +1,6 @@
 # Portable cursor integration contract
 
-Status: active implementation wave after the reviewed build/offline integration. The accepted lifecycle, quotas, replay and compute-once decisions are in QUERY_LIFECYCLE.md. The user accepted a separate `page_size`; `limit` stays the total result cap. This wave must make the existing primitives usable through the common core, not claim success from helper-only tests.
+Status: assembled integration passed focused current-host Debug validation at `a24d1ce`; see the checkpoint below. The accepted lifecycle, quotas, replay and compute-once decisions are in QUERY_LIFECYCLE.md. The user accepted a separate `page_size`; `limit` stays the total result cap. This wave must make the existing primitives usable through the common core, not claim success from helper-only tests.
 
 ## Request and result shape
 
@@ -57,3 +57,24 @@ Startup activates a new owner before pagination. Failed old-pin cleanup is queue
 The integration uses exact reviewed helper files from `0aa14b3` (result files) and `9ad3706` (pages), the MCP packet `b51d2eb`, and SDK packet `d7a984b`; root owns the assembled lifecycle/control/publication changes. Focused runtime evidence is appended below after a matching producer build. No final full/optimized, physical disk/WAL ceiling, whole-query peak-memory bound, external publication or live installation change is implied.
 
 Startup cleanup uses a short shared 100 ms probe budget and queues failures. Periodic retries rotate one index at a time with the existing 120-second cooperative maximum so legitimate atomic cleanup is not repeatedly rolled back by a 20 ms probe. Exceptional cleanup can hold the cursor manager while its transaction completes; no hard response-delivery or <=100 ms cleanup promise is made. Existing leases/files are swept first and pending failures remain visible.
+
+## Focused assembled checkpoint — 2026-11-10
+
+Frozen source: `a24d1ceb98bdc94a0ced55d7371729555b13d7f7`. Combined evidence: [.artifacts/cursor-wave/1794337786836546000/validation.json](../.artifacts/cursor-wave/1794337786836546000/validation.json). Build ID `12212e6f4a97404d9a29ebaf8c220043`; producer record SHA-256 `91c6eb065161f7212e536057070f79e6a89dc9bd3e817e032e1653e288c1da6d`.
+
+| Validation | Passed |
+| --- | ---: |
+| Rust workspace, including actual publication/stop and old-peer checks | 110 cases |
+| Real CLI/Node/.NET cursor workflow, including actual managed NextPageAsync helpers | 13 check groups |
+| Real MCP legacy/current sessions and native token portability | 29 checks |
+| Existing Workspace API parity/lifecycle regressions | 31 checks |
+| Complete native response caps | 5 checks |
+| Actual native host queues/deadlines | 2 checks |
+| Installed runtime/npm/NuGet with checkout/network denial after setup | 24 checks |
+| Formatting and locked all-target Clippy | Pass |
+
+The cursor workflow proves total-limit truncation through the terminal page, repeatable tokens after failed response/deadline requests, exact old source/hash/ranges and declaration context across saved publication, wrong-workspace rejection without poisoning the owning cursor, central policy/idle LRU eviction, unregister/re-register and restart invalidation. MCP additionally preserves replay across disconnect/reconnect. Registry/service fault cases cover failed unlink remaining charged, abandoned uploads, original deadlines, active-reader pressure, deferred policy enforcement, startup cleanup retries, publication waiting outside a write transaction and shutdown draining staging before writer-fence release.
+
+The three matching archives were installed at `/Users/zakkeown/Code/.kco/cursor-a24d1ce`. Phase evidence shows no serving index or registration before dependency setup completed, then fresh initial TS/C# analysis plus saved semantic/source updates under denied networking and denied checkout access. The installed MCP page is replayed through CLI and both actual SDKs. Relocation, generated C# source and actionable missing-dependency/resource cases also pass. Archive hashes and exact consumed output/source/evidence hashes are in the combined record; separate read-only reviews found no remaining code or producer/archive mismatch. The producer build succeeded with a retained NU1900 vulnerability-feed warning.
+
+This is one focused unsigned Debug integration checkpoint on the current macOS ARM64 host. The full Debug script, optimized profile, macOS 15 VM, real-encoding performance, final telemetry/license review, signing/notarization and normal-security installation are not certified by it. No external publish or live development installation change occurred. Explicit request cancellation, outer transport/general query admission, physical WAL behavior, remaining accepted query semantics and recovery/enrollment still require release work.

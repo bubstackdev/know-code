@@ -148,6 +148,10 @@ Use focused core/native boundary checks during development. Cover SQLite work in
 
 ## Focused validation checkpoint
 
+### Portable cursor integration
+
+Assembled source `a24d1ce` passed 110 Rust cases, 13 real cursor check groups, 29 MCP checks, 31 Workspace API checks, five response-cap checks, two actual host-queue checks and 24 outside-checkout installed-offline checks, plus formatting/Clippy. See [the exact source/build/archive evidence and limitations](CURSOR_INTEGRATION.md#focused-assembled-checkpoint--2026-11-10). This supersedes the historical primitive-only status below; it does not close outer transport/cancellation/WAL or final-candidate acceptance.
+
 ### Shared accounting and reservation foundation
 
 Evidence: [.artifacts/cursor-accounting/1794327224203454000/validation.json](../.artifacts/cursor-accounting/1794327224203454000/validation.json). All 82 Rust tests, formatting and locked all-target Clippy passed. Five new cases cover current/staged/shared-unit exclusions, UTF-8 source/hash deduplication, repeated pins, format-keyed cost-cache recomputation and foreign-key cleanup, deadline/owner/candidate rejection, one cross-workspace result/index pool, reservation failure/rollback and publication waiting for protected reads. Fault injection aborts a later summary write, proves a completed summary remains committed and verifies retry/cleanup; no timing-sensitive sleep assertion is needed for that case.
