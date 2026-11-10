@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import {readRequest, send} from '../shared/protocol.mjs';
 import {preparePackages, context, nodePreparationPolicy} from './preparation.mjs';
 import {analyze} from './analysis.mjs';
+import {classificationPolicy} from './test-classification.mjs';
 
 const ownRequire = createRequire(import.meta.url);
 
@@ -31,12 +32,13 @@ function compilerFor(directory) {
 
 try {
   const request = readRequest();
+  const testPolicy = classificationPolicy(request.testClassificationPolicy);
   if (typeof globalThis.gc !== 'function')
     throw new Error('Update required: the TypeScript worker needs node --expose-gc from its launcher; rebuild and restart the Know Code coordinator');
   const root = request.workspaceRoot;
   nodePreparationPolicy(request);
   send('provider', {language: 'typescript', compilerVersion: 'selected per compilation', runtimeVersion: process.version,
-    analysisPolicyVersion: 1});
+    analysisPolicyVersion: 1, testClassificationPolicy: testPolicy});
   const directories = [...request.configuredProjects.map(c => path.dirname(c)), ...request.looseSources.map(f => path.dirname(f))];
   const setupDiagnostics = await preparePackages(root, directories, request, send);
   const compilationSend = directory => (kind, value) => {
@@ -66,7 +68,7 @@ try {
     if (visited.has(config)) continue;
     visited.add(config);
     send('progress', {stage: 'analyzing', projectPath: config, message: 'Analyzing configured TypeScript project'});
-    const result = analyze(compilerFor(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint);
+    const result = analyze(compilerFor(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
     // analyze() has returned: no compiler/checker/source graph is retained here.
     globalThis.gc();
     queue.push(...result.references);
@@ -81,7 +83,7 @@ try {
   }
   for (const [directory, files] of groups) {
     send('progress', {stage: 'analyzing', projectPath: directory, message: 'Analyzing saved TypeScript files outside configured projects with inferred options'});
-    analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint);
+    analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);
     globalThis.gc();
   }
   send('complete', {success: true});

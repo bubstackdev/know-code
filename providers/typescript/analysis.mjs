@@ -3,6 +3,7 @@ import {createHash} from 'node:crypto';
 import {declarationSymbols, symbolIdentity, syntheticIdentity, dispatchTypeKeys} from './symbols.mjs';
 import {projectLinks} from './project-links.mjs';
 import {graphFacts} from './graph.mjs';
+import {classificationPolicy, compilationClassification, sourceClassification, TEST_CLASSIFICATION_POLICY} from './test-classification.mjs';
 const relative = (root, name) => path.relative(root, name).split(path.sep).join('/');
 
 // One linear conversion per source; never slice from byte zero for every token.
@@ -20,7 +21,8 @@ function byteOffsets(text) {
   return offsets;
 }
 
-export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], inferredDirectory = root, send, epoch = '') {
+export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], inferredDirectory = root, send, epoch = '', testPolicy = TEST_CLASSIFICATION_POLICY) {
+  classificationPolicy(testPolicy);
   const inferred = !config;
   let parsed;
   const projectPath = config ? relative(root, config) : '$inferred';
@@ -40,9 +42,10 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   const host=ts.createCompilerHost(parsed.options);
   host.useSourceOfProjectReferenceRedirect=()=>true;
   const program = ts.createProgram({rootNames: parsed.fileNames, options: parsed.options, projectReferences: parsed.projectReferences,host});
-  const links=projectLinks(ts,root,config,parsed,program,epoch);
+  const links=projectLinks(ts,root,config,parsed,program,epoch,testPolicy);
   send('compilation', {id, language: 'typescript', projectPath, target: '', configuration: '', inferred,
     references:links.references,inputFingerprint:links.fingerprint,
+    ...(testPolicy ? {testClassification: compilationClassification(testPolicy)} : {}),
     inputPaths: [...inputPaths], compilerVersion: ts.version, optionsJson: JSON.stringify({...parsed.options, knowCodeSourceReferenceRedirect: !parsed.options.disableSourceOfProjectReferenceRedirect, ...(inferred ? {inferredRoot: relative(root, inferredDirectory)} : {})}),
     dependencies: (parsed.projectReferences ?? []).map(r => relative(root, ts.resolveProjectReferencePath(r)))});
   const checker = program.getTypeChecker();
@@ -51,6 +54,17 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   const indexed = new Set(files.map(f => f.fileName));
   const emitted = new Set();
   let batch = {compilationId: id, symbols: [], occurrences: [], relationships: []};
+  let graphFile, graphArtifact, graphOffsets;
+  const anchored = new Set();
+  function anchor(symbolId, node) {
+    if (node.getSourceFile() !== graphFile || !indexed.has(graphFile.fileName)) return;
+    const startByte = graphOffsets[node.getStart(graphFile)], endByte = graphOffsets[node.getEnd()];
+    const key = JSON.stringify([symbolId, graphArtifact, startByte, endByte]);
+    if (anchored.has(key)) return;
+    anchored.add(key);
+    for (const role of ['declaration', 'definition'])
+      batch.occurrences.push({symbolId, artifactId: graphArtifact, startByte, endByte, role, enclosingSymbolId: ''});
+  }
   const flush = () => {
     if (batch.symbols.length || batch.occurrences.length || batch.relationships.length) send('facts', batch);
     batch = {compilationId: id, symbols: [], occurrences: [], relationships: []};
@@ -61,6 +75,11 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   function emit(symbol) {
     symbol = declarationSymbol(symbol);
     const key = symbolId(symbol);
+    // Module symbols have SourceFile declarations rather than an identifier.
+    // A prior import may have emitted the symbol before its owned file is read.
+    if (symbol.flags & ts.SymbolFlags.Module)
+      for (const declaration of symbol.declarations ?? [])
+        if (ts.isSourceFile(declaration)) anchor(key, declaration);
     if (emitted.has(key)) return key;
     emitted.add(key);
     const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
@@ -70,11 +89,11 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
       signature, ...links.definition(symbol), external: !symbol.declarations?.some(d => indexed.has(d.getSourceFile().fileName))});
     return key;
   }
-  let graphFile, graphArtifact, graphOffsets;
   const graph=graphFacts(ts,checker,{emit,dispatchKey:dispatchTypeKeys(ts,checker,root),
     synthetic(node,kind,name) {
       const key=syntheticIdentity(root,id,node,kind);
       if(!emitted.has(key)){emitted.add(key);batch.symbols.push({id:key,name,kind,signature:name,...links.synthetic(node,kind),external:!indexed.has(node.getSourceFile().fileName)});}
+      if (kind === 'module' || kind === 'initializer') anchor(key, node);
       return key;
     },
     occurrence(symbolId,node,role) {
@@ -88,7 +107,9 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
     const sha256 = createHash('sha256').update(utf8).digest('hex');
     const artifactId = `${relative(root, file.fileName)}@${sha256}`;
     flush();
-    send('source', {id: artifactId, path: relative(root, file.fileName), utf8, sha256, generated: false, compilationId: id});
+    const sourcePath = relative(root, file.fileName);
+    send('source', {id: artifactId, path: sourcePath, utf8, sha256, generated: false, compilationId: id,
+      ...(testPolicy ? {testClassification: sourceClassification(sourcePath, testPolicy)} : {})});
     const offsets = byteOffsets(file.text);
     graphFile=file;graphArtifact=artifactId;graphOffsets=offsets;
     graph.start(file,artifactId,offsets);
@@ -133,6 +154,7 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   if (inferred) items.push({code: 'inferred_configuration', severity: 'info', message: 'Compiler options were inferred; intended build configuration is unknown.', path: ''});
   if (diagnostics.length > 100) items.push({code: 'diagnostics_truncated', severity: 'info', message: `${diagnostics.length} diagnostics; first 100 included.`, path: ''});
   send('report', {compilationId: id, status: diagnostics.some(d => d.category === ts.DiagnosticCategory.Error) || setupDiagnostics.length ? 'partial' : 'complete', diagnostics: items,
-    capabilities:{calls:'partial',dependencies:'partial',dispatch:'partial',project_links:links.complete?'complete':'partial'}});
+    capabilities:{calls:'partial',dependencies:'partial',dispatch:'partial',project_links:links.complete?'complete':'partial',
+      ...(testPolicy ? {test_classification:'partial'} : {})}});
   return {references: (parsed.projectReferences ?? []).map(reference => ts.resolveProjectReferencePath(reference)), files: files.map(f => path.resolve(f.fileName))};
 }

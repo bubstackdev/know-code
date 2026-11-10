@@ -1,12 +1,14 @@
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {symbolIdentity,syntheticIdentity} from './symbols.mjs';
+import {classificationPolicy, compilationClassification, sourceClassification, TEST_CLASSIFICATION_POLICY} from './test-classification.mjs';
 const relative=(root,file)=>path.relative(root,file).split(path.sep).join('/');
 
 // The compiler supplies the resolved reference tree and source ownership.
 // Fingerprints witness saved project inputs/options plus the restoration epoch;
 // no declaration-name or output-path guessing is used to choose a definition.
-export function projectLinks(ts,root,config,parsed,program,epoch) {
+export function projectLinks(ts,root,config,parsed,program,epoch,testPolicy = TEST_CLASSIFICATION_POLICY) {
+  classificationPolicy(testPolicy);
   const contexts=new Map(), owners=new Map(), snapshots=new Map();
   let complete=true;
   const ownId=config?`ts:${relative(root,config)}`:null;
@@ -42,12 +44,14 @@ export function projectLinks(ts,root,config,parsed,program,epoch) {
     const hash=createHash('sha256');
     const add=value=>hash.update(JSON.stringify(value)).update('\0');
     add([ts.version,epoch,entry.id,entry.parsed.options]);
+    if (testPolicy) add(compilationClassification(testPolicy));
     for(const file of [...entry.parsed.fileNames].sort()) {
       // Prefer compiler-captured text, so a concurrent save cannot be mistaken
       // for the version that supplied the binding. Publication rechecks inputs.
       const text=program.getSourceFile(file)?.text??ts.sys.readFile(file);
       if(text===undefined){complete=false;return '';}
       add([path.resolve(file),text]);
+      if (testPolicy) add(sourceClassification(relative(root,file),testPolicy));
     }
     for(const ref of entry.refs) {
       const child=ref&&contexts.get(path.resolve(ref.sourceFile.fileName));
