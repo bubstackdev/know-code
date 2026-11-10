@@ -2,12 +2,14 @@
 from pathlib import Path
 import argparse,atexit,hashlib,json,os,selectors,shutil,socket,subprocess,tarfile,time,zipfile
 ROOT=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);args=parser.parse_args()
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');args=parser.parse_args()
 PACKAGES=args.packages.resolve();PREFIX=args.prefix.resolve();assert PREFIX!=ROOT and ROOT not in PREFIX.parents,'package test prefix must be outside checkout';PREFIX.mkdir(parents=True,exist_ok=False)
+CHECKOUTS=sorted({ROOT,*[p.resolve() for p in args.deny_checkout]})
+assert all(root!=PREFIX and root not in PREFIX.parents and (root/'LICENSE').is_file() for root in CHECKOUTS),'each denied checkout must exist and exclude the test prefix'
 DATA=PREFIX/'d';BIN=PREFIX/'bin';BIN.mkdir();FEED=PREFIX/'feed';FEED.mkdir();WORKSPACE=PREFIX/'w';WORKSPACE.mkdir();SCRATCH=PREFIX/'t';SCRATCH.mkdir();CLIENTS=[];checks=[];PHASE='dependency_setup';PHASES=[]
 ENV=dict(os.environ,PATH=str(BIN)+':'+os.environ['PATH'],KNOW_CODE_DATA_DIR=str(DATA),NUGET_PACKAGES=str(PREFIX/'nuget-cache'),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',TMPDIR=str(SCRATCH),npm_config_cache=str(PREFIX/'npm-cache'),npm_config_fetch_retries='0',npm_config_fetch_timeout='3000')
 for key in ['KNOW_CODE_RUNTIME_DIR','KNOW_CODE_COORDINATOR','NODE_PATH','NODE_OPTIONS']:ENV.pop(key,None)
-POLICY=f'(version 1) (allow default) (deny file-read* file-write* (subpath {json.dumps(str(ROOT))}))'
+POLICY='(version 1) (allow default) '+''.join('(deny file-read* file-write* (subpath '+json.dumps(str(root))+'))' for root in CHECKOUTS)
 (PREFIX/'deny-checkout.sb').write_text(POLICY+'\n')
 POLICY_FILE=PREFIX/'deny-checkout.sb'
 def command(*args,cwd=PREFIX,check=True,env=ENV,sandbox=True):
@@ -20,7 +22,7 @@ def command(*args,cwd=PREFIX,check=True,env=ENV,sandbox=True):
 def prove_network_policy():
  """Positive and negative socket controls; no public host is contacted."""
  probe=PREFIX/'network-probe.py'
- probe.write_text('''import errno,json,socket,sys
+ probe.write_text('''import errno,json,socket,sys,uuid
 from pathlib import Path
 endpoints=json.loads(sys.argv[1]);denied=sys.argv[2]=='denied';results=[]
 for endpoint in endpoints:
@@ -37,15 +39,22 @@ for endpoint in endpoints:
         results.append(dict(endpoint,outcome='denied',errno=error.errno))
     finally:
         if handle is not None:handle.close()
-path=Path(sys.argv[3])/'unix-probe.sock'
-with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
-    server.bind(str(path));server.listen(1)
-    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-        client.settimeout(2);client.connect(str(path));client.sendall(b'unix-control')
-        accepted,_=server.accept()
-        with accepted:assert accepted.recv(64)==b'unix-control'
-path.unlink()
-print(json.dumps({'network':results,'unix_bind_connect_accept':True}))
+for path in [Path(sys.argv[3])/'unix-probe.sock',Path('/private/tmp')/str(uuid.uuid4())]:
+    try:
+        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
+            server.bind(str(path));server.listen(1)
+            with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+                client.settimeout(2);client.connect(str(path));client.sendall(b'unix-control')
+                accepted,_=server.accept()
+                with accepted:assert accepted.recv(64)==b'unix-control'
+    finally:path.unlink(missing_ok=True)
+other=Path('/private/tmp')/('know-code-probe-'+str(uuid.uuid4()))
+try:
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as server:
+        try:server.bind(str(other));assert not denied
+        except OSError as error:assert denied and error.errno in (errno.EPERM,errno.EACCES)
+finally:other.unlink(missing_ok=True)
+print(json.dumps({'network':results,'unix_bind_connect_accept':True,'roslyn_guid_unix_bind_connect_accept':True,'other_temporary_unix_denied':denied}))
 ''')
  listeners=[];endpoints=[]
  try:
@@ -64,7 +73,9 @@ print(json.dumps({'network':results,'unix_bind_connect_accept':True}))
   POLICY_FILE=PREFIX/'deny-network-and-checkout.sb'
   # Roslyn 5.9 hardcodes /tmp/<GUID> for BuildHost pipes rather than TMPDIR.
   # This permits its transient local IPC, never Internet sockets or artifacts.
-  roslyn_pipe='(regex #"^(/private)?/tmp/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")'
+  # Seatbelt's matcher accepts explicit repetition, not {n} repetition.
+  guid='-'.join('[0-9a-f]'*n for n in [8,4,4,4,12])
+  roslyn_pipe='(regex #"^(/private)?/tmp/'+guid+'$")'
   POLICY_FILE.write_text(POLICY+' (deny network*) (allow network* (local unix-socket (subpath '+json.dumps(str(PREFIX))+'))) (allow network* (remote unix-socket (subpath '+json.dumps(str(PREFIX))+'))) (allow network* (local unix-socket '+roslyn_pipe+')) (allow network* (remote unix-socket '+roslyn_pipe+'))\n')
   denied=json.loads(command('python3',probe,json.dumps(endpoints),'denied',PREFIX).stdout)
   for listener in listeners:
@@ -97,7 +108,7 @@ with zipfile.ZipFile(next(FEED.glob('*.nupkg'))) as z:
  assert not any(n.endswith('.pdb') for n in names)
 checks.append('archive_hashes_and_native_package_contents')
 bundle=next((PREFIX/'first installation').glob('know-code-*'));HOST=BIN/'know-code';HOST.symlink_to(bundle/'bin/know-code')
-assert command('/bin/cat',ROOT/'LICENSE',check=False).returncode!=0,'checkout deny policy ineffective'
+for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0,('checkout deny policy ineffective',root)
 info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bundle' and info['sqlite']['fts5'] and str(PREFIX) in info['resource_directory']
 assert command(HOST,'--version').stdout.startswith('know-code 0.0.1')
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']
@@ -143,7 +154,7 @@ prove_network_policy()
 PHASE='network_denied_runtime';PHASES.append({'phase':PHASE,'started_ns':time.time_ns(),'policy':str(POLICY_FILE),'index_state_before_start':[]})
 (PREFIX/'phases.json').write_text(json.dumps(PHASES,indent=2)+'\n')
 assert not DATA.exists(),'an index/coordinator appeared before first offline registration'
-assert command('/bin/cat',ROOT/'LICENSE',check=False).returncode!=0
+for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0
 checks+=['project_dependencies_restored_before_registration','fresh_initial_index_starts_under_network_denial']
 
 def read_json_line(process,selector,buffer,context):
@@ -224,7 +235,7 @@ try:
   assert found['freshness']=='current' and found['symbols']==query({'op':'symbols','name':name})['symbols']
  final_generation=saved_cs['generation'];checks.append('offline_saved_TS_and_Csharp_semantic_and_source_updates')
 finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close()
-checks.append('installed_MCP_shared_initial_saved_queries_and_EOF')
+checks.append('installed_MCP_shared_queries_and_EOF')
 if args.experimental:
  before=ready(node)['generation']
  (WORKSPACE/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n')
@@ -241,7 +252,7 @@ if args.experimental:
  else:raise AssertionError((rust,swift))
  assert any(c['status']=='partial' for c in rust['coverage'])
  checks.append('experimental_packaged_Swift_reader_and_Rust_adapter')
-node.close();net.close();checks.append('packaged_saved_file_updates')
+final_generation=ready(node)['generation'];node.close();net.close();checks.append('packaged_saved_file_updates')
 command(HOST,'coordinator','stop');until=time.monotonic()+20
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 new_parent=PREFIX/'second installation';new_parent.mkdir();bundle=bundle.rename(new_parent/bundle.name);HOST.unlink();HOST.symlink_to(bundle/'bin/know-code')
@@ -272,5 +283,5 @@ finally:manifest_file.write_bytes(saved)
 invalid=PREFIX/'invalid-resources';invalid.mkdir();failure=command(HOST,'runtime-info',check=False,env=dict(ENV,KNOW_CODE_RUNTIME_DIR=str(invalid)));assert failure.returncode and 'manifest' in failure.stderr
 bare=PREFIX/'bare';bare.mkdir();shutil.copy2(bundle/'bin/know-code',bare/'know-code');failure=command(bare/'know-code','runtime-info',check=False);assert failure.returncode and 'not found' in failure.stderr
 checks+=['missing_resource_no_checkout_fallback','manifest_protocol_mismatch','invalid_override_no_silent_fallback','bare_executable_actionable_error']
-result={'passed':True,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json')}
+result={'passed':True,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json')}
 (PREFIX/'result.json').write_text(json.dumps(result,indent=2)+'\n');report=ROOT/'.artifacts/packaging/installed-test.json';report.parent.mkdir(parents=True,exist_ok=True);report.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
