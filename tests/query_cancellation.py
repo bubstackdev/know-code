@@ -57,6 +57,13 @@ def verify(response,text,generation):
 def mcp_eof(connection,generation):
  """Prove the query has a live SQLite snapshot before closing the client."""
  events=[];buffer=b''
+ # Same-value UPDATEs may not write a WAL frame. Use changed bytes in a
+ # disposable table so an empty WAL cannot falsely imply no active reader.
+ connection.execute('CREATE TABLE fixture_wal_probe(value INTEGER NOT NULL)')
+ connection.execute('INSERT INTO fixture_wal_probe VALUES(0)');connection.commit()
+ journal=connection.execute('PRAGMA journal_mode').fetchone()[0];assert journal=='wal',journal
+ assert connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]==0
+ events.append({'workspace':str(WORKSPACE),'database':database,'journal_mode':journal})
  with (RUN/'mcp-stderr.log').open('wb') as stderr:
   p=subprocess.Popen([str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=ROOT,env=ENV,
                      stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=stderr)
@@ -78,23 +85,42 @@ def mcp_eof(connection,generation):
    assert response(1)['result']['protocolVersion']=='2025-11-25'
    send({'jsonrpc':'2.0','method':'notifications/initialized','params':{}})
    send({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'search_symbols','arguments':{'name':'cancellationTarget','deadline_ms':120000}}})
+   send({'jsonrpc':'2.0','id':3,'method':'ping','params':{}})
    until=time.monotonic()+2;busy=None
    while time.monotonic()<until:
-    connection.execute('UPDATE state SET current_generation=current_generation');connection.commit()
+    # Let the query enter SQLite without our checkpoint writer monopolizing
+    # admission. Still require a proven reader before testing EOF cancellation.
+    time.sleep(.1)
+    if selector.select(0):
+     block=os.read(p.stdout.fileno(),65536);assert block,('MCP EOF before active reader',p.poll());buffer+=block
+     while b'\n' in buffer:
+      line,buffer=buffer.split(b'\n',1);message=json.loads(line);events.append({'received':message})
+      assert message.get('id')!=2,('MCP query completed before active-reader gate',message)
+    connection.execute('UPDATE fixture_wal_probe SET value=value+1');connection.commit()
+    wal=Path(database+'-wal');wal_bytes=wal.stat().st_size if wal.exists() else 0
     busy=connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+    events.append({'probe_value':connection.execute('SELECT value FROM fixture_wal_probe').fetchone()[0],
+                   'process_poll':p.poll(),'wal_bytes':wal_bytes,'checkpoint':busy})
     if busy[0]==1:break
     time.sleep(.01)
    assert busy and busy[0]==1,('MCP query never held its SQLite reader',busy)
+   bound=next(s for s in value('coordinator','status')['workspaces'] if s['workspace_root']==str(WORKSPACE))
+   assert bound['database']==database and bound['generation']==generation,bound
+   events.append({'bound_workspace_status':bound})
    started=time.monotonic();p.stdin.close();p.wait(timeout=3)
    assert p.returncode==0,p.returncode
-   remainder=buffer+p.stdout.read();events.append({'remaining_stdout':remainder.decode(errors='replace')})
+   remainder=buffer+p.stdout.read();buffer=b'';events.append({'remaining_stdout':remainder.decode(errors='replace')})
    after=connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone();assert after[0]==0,after
    assert connection.execute('SELECT current_generation FROM state').fetchone()[0]==generation
-   return {'reader_before':busy,'reader_after':after,'exit_ms':(time.monotonic()-started)*1000}
+   return {'workspace':str(WORKSPACE),'database':database,'journal_mode':journal,'wal_bytes_before':wal_bytes,
+           'reader_before':busy,'reader_after':after,'exit_ms':(time.monotonic()-started)*1000}
   finally:
    if p.poll() is None:p.kill();p.wait(timeout=3)
    if not p.stdin.closed:p.stdin.close()
+   remaining=buffer+p.stdout.read()
+   if remaining:events.append({'cleanup_stdout':remaining.decode(errors='replace')})
    p.stdout.close();selector.close()
+   connection.execute('DROP TABLE IF EXISTS fixture_wal_probe');connection.commit()
    (RUN/'mcp-wire.json').write_text(json.dumps(events,indent=2)+'\n')
 
 artifacts=[HOST,ADDON,ADDON.parent/'know_code.node',SMOKE,SMOKE.parent/'KnowCode.dll',FFI]
@@ -133,6 +159,7 @@ try:
    mcp=mcp_eof(connection,generation);CHECKS.append('MCP_EOF_cancels_proven_active_SQL_reader_before_five_second_drain')
   finally:
    connection.execute('DROP VIEW IF EXISTS reports');connection.execute('ALTER TABLE fixture_reports RENAME TO reports');connection.commit()
+   connection.execute('DROP TABLE IF EXISTS fixture_wal_probe');connection.commit()
   assert connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0]==0
  verify(query(request),OLD,generation)
  source=query({'op':'source','artifact_id':baseline['symbols'][0]['locations'][0]['artifact_id']})['result']['source']
