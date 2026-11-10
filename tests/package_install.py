@@ -199,10 +199,11 @@ def query(req):
 def exact_source(source,filename):
  raw=filename.read_bytes();path=Path(source['path']);path=path if path.is_absolute() else WORKSPACE/path;assert path.resolve()==filename.resolve(),source
  assert source['content_hash']==hashlib.sha256(raw).hexdigest() and source['total_bytes']==len(raw),source
+ assert 0<=source['start_byte']<=source['end_byte']<=source['total_bytes'] and source['text'],source
  assert raw[source['start_byte']:source['end_byte']].decode('utf-8')==source['text'],source
 for name in ['answer','Greet']:
  result=query({'op':'symbols','name':name});assert result['freshness']=='current' and result['symbols']
- assert all(c['status']=='complete' for c in result['coverage']),result
+ assert result['coverage'] and all(c['status']=='complete' for c in result['coverage']),result
  symbol=result['symbols'][0];context=query({'op':'symbol_context','symbol_id':symbol['id'],'max_bytes':1024});assert context['contexts'][0]['declarations'][0]['source']
  exact_source(context['contexts'][0]['declarations'][0]['source'],WORKSPACE/('value.ts' if name=='answer' else 'Code.cs'))
 leaf=query({'op':'symbols','name':'leaf'})['symbols'][0]
