@@ -11,7 +11,7 @@ using Compilation = Microsoft.CodeAnalysis.Compilation;
 // display signature, output filename, or a guessed target framework.
 sealed class ProjectLinks
 {
-    private sealed record Context(string Id, string Path);
+    private sealed record Context(string Id, string Path, TestClassification? Classification);
     private sealed record Definition(string Context, string Fingerprint);
     private readonly Dictionary<Compilation, Context> contexts = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<IAssemblySymbol, Definition> assemblies = new(SymbolEqualityComparer.Default);
@@ -30,7 +30,8 @@ sealed class ProjectLinks
 
     public static async Task<ProjectLinks> Create(Project project, Compilation compilation, ProjectCatalog catalog, AnalyzeRequest request, string sdk)
     {
-        var result=new ProjectLinks($"{request.PreparationFingerprint}:{sdk}:{typeof(CSharpCompilation).Assembly.GetName().Version}");
+        var result=new ProjectLinks($"{request.PreparationFingerprint}:{sdk}:{typeof(CSharpCompilation).Assembly.GetName().Version}"
+            + (request.TestClassificationPolicy == 0 ? "" : $":test-classification:{request.TestClassificationPolicy}"));
         // Open() retains only the active dependency closure. These compilations
         // are already needed by the root; no second compiler workspace is built.
         foreach(var candidate in project.Solution.Projects)
@@ -41,7 +42,8 @@ sealed class ProjectLinks
             var metadata=catalog.Metadata(candidate.Id);
             var id=ContextId(request.WorkspaceRoot,selected.Value.Path,selected.Value.Target,metadata["Configuration"],
                 catalog.BuildContexts.PolicyEnabled ? metadata["Platform"] : null);
-            result.contexts[compiled]=new Context(id,System.IO.Path.GetRelativePath(request.WorkspaceRoot,selected.Value.Path).Replace('\\','/'));
+            result.contexts[compiled]=new Context(id,System.IO.Path.GetRelativePath(request.WorkspaceRoot,selected.Value.Path).Replace('\\','/'),
+                TestClasses.ForContext(catalog.Classification(candidate.Id), request.TestClassificationPolicy, request.WorkspaceRoot, selected.Value.Path));
         }
         result.Fingerprint=result.Snapshot(compilation);
         if(result.Fingerprint.Length==0)result.Complete=false;
@@ -79,6 +81,9 @@ sealed class ProjectLinks
         using var hash=IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         void Add(object? value) { hash.AppendData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(value)));hash.AppendData([0]); }
         Add(tag);Add(compilation.Assembly.Identity.ToString());
+        if (context.Classification is { } classification)
+            Add(new { classification.PolicyVersion, classification.Kind,
+                evidence = classification.Evidence.Select(e => new { e.Basis, e.Value, e.Path, e.Inferred }).ToArray() });
         var options=(CSharpCompilationOptions)compilation.Options;
         Add(new {options.OutputKind,options.ModuleName,options.MainTypeName,options.ScriptClassName,options.Usings,
             options.OptimizationLevel,options.CheckOverflow,options.AllowUnsafe,options.Platform,options.NullableContextOptions,

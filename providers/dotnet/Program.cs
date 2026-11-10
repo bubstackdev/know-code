@@ -31,6 +31,7 @@ try
     else
     {
         if (args.Length != 0 || request.Analyze is null) throw new InvalidDataException("invalid analysis worker request");
+        TestClasses.Validate(request.Analyze.TestClassificationPolicy);
         BuildContexts.Validate(request.Analyze);
         var projects = request.Analyze.Projects;
         if (projects.Count == 0) throw new InvalidOperationException("no C# projects requested");
@@ -52,7 +53,8 @@ try
                 throw new InvalidOperationException("multiple SDK selections in one workspace require separate worker sessions; unsupported in this first slice");
         }
         MSBuildLocator.RegisterMSBuildPath(sdkPath);
-        Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected.Trim()}", RuntimeVersion = Environment.Version.ToString(), AnalysisPolicyVersion = request.Analyze.AnalysisPolicy is null ? 0u : 1u } });
+        Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected.Trim()}", RuntimeVersion = Environment.Version.ToString(), AnalysisPolicyVersion = request.Analyze.AnalysisPolicy is null ? 0u : 1u,
+            TestClassificationPolicy = request.Analyze.TestClassificationPolicy } });
         await Analysis.Run(request.Analyze, selected.Trim(), sdkPath);
     }
     Wire.Send(new Envelope { Complete = new Completion { Success = true } });
@@ -215,6 +217,8 @@ static partial class Analysis
         var compilerMetadata = catalog.Metadata(project.Id);
         var configuration = compilerMetadata["Configuration"];
         var platform = compilerMetadata["Platform"];
+        var classification = TestClasses.ForContext(catalog.Classification(project.Id), request.TestClassificationPolicy,
+            request.WorkspaceRoot, projectPath);
         var id = ProjectLinks.ContextId(request.WorkspaceRoot, projectPath, target, configuration,
             catalog.BuildContexts.PolicyEnabled ? platform : null);
         var diagnostics = new List<Diagnostic>();
@@ -224,6 +228,7 @@ static partial class Analysis
         var projectLinks = await ProjectLinks.Create(project, compilation, catalog, request, sdkVersion);
         Wire.Send(new Envelope { Compilation = new KnowCode.Protocol.Compilation {
             InputFingerprint = projectLinks.Fingerprint, References = {projectLinks.References},
+            TestClassification = classification,
             Id = id, Language = "csharp", ProjectPath = relative, Target = target, Configuration = configuration,
             CompilerVersion = $"Roslyn {typeof(CSharpCompilation).Assembly.GetName().Version}; SDK {sdkVersion}",
             Dependencies = { project.ProjectReferences.Select(r => project.Solution.GetProject(r.ProjectId)?.FilePath).Where(p => p is not null).Select(p => Path.GetRelativePath(request.WorkspaceRoot, p!).Replace('\\', '/')) },
@@ -302,6 +307,7 @@ static partial class Analysis
         report.Capabilities.Add("dependencies", "partial");
         report.Capabilities.Add("dispatch", "partial");
         report.Capabilities.Add("project_links", projectLinks.Complete ? "complete" : "partial");
+        report.Capabilities.Add("test_classification", TestClasses.Capability(classification));
         report.Diagnostics.AddRange(diagnostics);
         Wire.Send(new Envelope { Report = report });
     }

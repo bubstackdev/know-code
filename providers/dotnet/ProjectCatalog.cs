@@ -11,6 +11,7 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
     private readonly Dictionary<ProjectId, ProjectInfo> inputs = [];
     private readonly Dictionary<(string Path, string Target), ProjectId> contexts = [];
     private readonly Dictionary<ProjectId, ImmutableDictionary<string, string>> compilerMetadata = [];
+    private readonly Dictionary<ProjectId, KnowCode.Protocol.TestClassification> testClassifications = [];
     private readonly HashSet<string> loaded = new(StringComparer.Ordinal);
     private readonly List<(HashSet<ProjectId> Owners, WorkspaceDiagnostic Diagnostic)> diagnostics = [];
     private readonly Dictionary<string, string[]> projectInputs = new(StringComparer.Ordinal);
@@ -98,6 +99,8 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
                 {
                     contexts.Add((current, target), info.Id);
                     compilerMetadata.Add(info.Id, variants[target]);
+                    testClassifications.Add(info.Id, evaluated.Targets.Single(t => t.Target == target).TestClassification?.Clone()
+                        ?? new KnowCode.Protocol.TestClassification { PolicyVersion = TestClasses.Version, Kind = "unknown" });
                 }
                 var owners = selected.Values.Select(p => p.Id).ToHashSet();
                 foreach (var boundary in projects.Where(p => p.FilePath != current && !compilerMetadata.ContainsKey(p.Id))
@@ -172,6 +175,7 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
     }
 
     public IReadOnlyDictionary<string, string> Metadata(ProjectId id) => compilerMetadata[id];
+    public KnowCode.Protocol.TestClassification Classification(ProjectId id) => testClassifications[id];
 
     public (string Path, string Target)? Context(ProjectId id)
     {

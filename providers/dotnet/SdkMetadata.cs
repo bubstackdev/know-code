@@ -118,6 +118,8 @@ static class SdkMetadataServer
                 var properties = new Dictionary<string, string>(globals) { ["TargetFramework"] = target };
                 var project = new Microsoft.Build.Evaluation.Project(request.ProjectPath, properties, null, collection);
                 var state = project.CreateProjectInstance();
+                var classificationState = state;
+                var classificationStage = "evaluated_target";
                 var assets = state.GetPropertyValue("ProjectAssetsFile");
                 if (string.IsNullOrWhiteSpace(assets)) assets = Path.Combine(state.GetPropertyValue("MSBuildProjectExtensionsPath"), "project.assets.json");
                 var metadata = new SdkTargetMetadata { Target = target,
@@ -141,6 +143,15 @@ static class SdkMetadataServer
                         throw new InvalidOperationException($"GetAssemblyVersion failed for {request.ProjectPath} ({target}): {logger.Text}", built.Exception);
                     foreach (var name in new[] { "Version", "AssemblyVersion", "FileVersion", "InformationalVersion" })
                         metadata.Identity.Add(name, built.ProjectStateAfterBuild.GetPropertyValue(name));
+                    classificationState = built.ProjectStateAfterBuild;
+                    classificationStage = "post_GetAssemblyVersion";
+                }
+                if (request.IncludeIdentity)
+                {
+                    var signals = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach (var name in TestClasses.Properties)
+                        if (classificationState.GetProperty(name) is { } property) signals.Add(name, property.EvaluatedValue);
+                    metadata.TestClassification = TestClasses.From(signals, request.ProjectPath, target, classificationStage);
                 }
                 result.Targets.Add(metadata);
                 collection.UnloadAllProjects();

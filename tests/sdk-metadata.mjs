@@ -62,6 +62,34 @@ assert.equal(mapped.definition.Configuration, 'Release'); assert.equal(mapped.de
 assert.ok(mapped.targets.every(t => t.identity.Configuration === 'Release' && t.identity.Platform === 'x64'));
 assert.equal(evaluate(false, {configuration:'Debug', platform:'AnyCPU'}).definition.Platform, 'AnyCPU');
 assert.ok(JSON.parse(mapped.definition.KnowCodeInputPaths).includes(props));
-const summary = { result: 'passed', build_profile: profile, checks: ['planning_does_not_run_metadata_hooks', 'changed_imports_between_targets', 'fresh_project_session', 'no_compilation_target', 'mapped_configuration_platform', 'import_inputs_reported'] };
+const signalsProject=path.join(directory,'Signals.csproj');
+const xml=value=>value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+for(const [signals,kind] of [[{},'unknown'],[{IsTestProject:''},'unknown'],[{IsTestProject:'maybe'},'unknown'],
+  [{IsTestProject:'true'},'test'],[{IsTestProject:'false'},'non_test'],
+  [{IsTestingPlatformApplication:'true'},'test'],[{IsTestingPlatformApplication:'false'},'unknown'],
+  [{IsTestProject:'false',IsTestingPlatformApplication:'true'},'unknown'],
+  [{IsTestProject:'true',IsTestingPlatformApplication:'false'},'test'],
+  [{IsTestProject:'false',IsTestingPlatformApplication:'false'},'non_test'],
+  [{IsTestProject:'😀'.repeat(200)},'unknown']]) {
+  fs.writeFileSync(signalsProject,`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework>
+    ${Object.entries(signals).map(([key,value])=>`<${key}>${xml(value)}</${key}>`).join('')}</PropertyGroup>
+    <Target Name="NeverCompile" BeforeTargets="Build;CoreCompile"><Error Text="Classification invoked compilation"/></Target></Project>`);
+  const target=evaluate(true,{projectPath:signalsProject}).targets[0],classification=target.testClassification;
+  assert.equal(classification.policyVersion,1);assert.equal(classification.kind,kind,JSON.stringify(signals));
+  assert.equal(classification.evidence.length,Object.keys(signals).length);
+  assert(classification.evidence.every(e=>e.basis==='msbuild_property'&&!e.inferred&&Buffer.byteLength(e.value)<=512&&Buffer.byteLength(e.path)<=4096));
+  assert(Object.keys(target.identity).every(key=>!key.startsWith('IsTest')&&key!=='IsTestingPlatformApplication'),'classification leaked into identity globals');
+  if(signals.IsTestProject?.includes('😀')) assert(classification.evidence[0].value.endsWith('...'),'oversized UTF-8 evidence not explicitly abbreviated');
+}
+fs.writeFileSync(signalsProject,`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks><IsTestProject>false</IsTestProject></PropertyGroup>
+  <Target Name="LateSignal" BeforeTargets="GetAssemblyVersion"><PropertyGroup><IsTestProject Condition="'$(TargetFramework)'=='net10.0'">true</IsTestProject></PropertyGroup></Target>
+  <Target Name="NeverCompile" BeforeTargets="Build;CoreCompile"><Error Text="Classification invoked compilation"/></Target></Project>`);
+const signalPlan=evaluate(false,{projectPath:signalsProject});assert(signalPlan.targets.every(t=>!t.testClassification),'planning classified outer/pre-hook state');
+const finalSignals=evaluate(true,{projectPath:signalsProject});
+assert.deepEqual(finalSignals.targets.map(t=>t.testClassification.kind),['test','non_test']);
+assert.deepEqual(finalSignals.targets[0].identity,finalSignals.targets[1].identity,'classification changed identity/batching metadata');
+assert(finalSignals.targets.every(t=>t.testClassification.evidence.some(e=>e.value.includes('stage=post_GetAssemblyVersion')&&e.value.includes(`target=${t.target}`))));
+const summary = { result: 'passed', build_profile: profile, checks: ['planning_does_not_run_metadata_hooks', 'changed_imports_between_targets', 'fresh_project_session', 'no_compilation_target', 'mapped_configuration_platform', 'import_inputs_reported',
+  'classification_frozen_truth_table_missing_invalid_conflict', 'UTF8_bounded_oversized_property_evidence', 'classification_after_identity_hooks_per_target', 'classification_does_not_change_identity_globals_or_batching'] };
 fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify(summary, null, 2) + '\n');
 console.log(JSON.stringify(summary, null, 2));
