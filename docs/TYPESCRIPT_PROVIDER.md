@@ -2,6 +2,8 @@
 
 The adapter uses repository-selected TypeScript 5.9.x and the existing configured/inferred planning path. [Implementation scope](IMPLEMENTATION.md) still applies: a first explicitly partial call/impact slice is now implemented; see [supported forms and limits](CALL_GRAPH.md). The declaration/collection measurements below predate graph activation and do not include its added facts.
 
+Test-origin policy 1 adds inferred `.test`/`.spec`/`__tests__` evidence on owned source artifacts, with unknown compilation/default origins and exact worker acknowledgment. Owned module/initializer declaration anchors are additive; identities, calls and reference occurrences stay unchanged. See [adapter contract, snapshot behavior and focused checks](TYPESCRIPT_TEST_CLASSIFICATION.md); shared filters/backfill and final native/package validation remain common-core integration work.
+
 ## npm/pnpm preparation policy
 
 The additive Node analysis-policy version 1 enables shared npm/pnpm preparation in the TypeScript worker. The coordinator supplies an absolute user-scoped tool cache and the effective personal workspace script grant; the adapter does not read a private trust environment variable. Absent policy retains installed-npm/scripts-disabled behavior for direct legacy requests; managed consumers now use the shared settings path in [WORKSPACE_SETTINGS.md](WORKSPACE_SETTINGS.md). The worker acknowledges policy 1 before preparation and rejects unsupported policy shapes/versions.
