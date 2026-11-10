@@ -4,7 +4,22 @@ Updated 2026-11-09 after the user accepted best-effort activity notifications an
 
 A [draft acceptance contract and subagent execution plan](RELEASE_ACCEPTANCE.md) derives the current requirements into observable release outcomes, separating decisions, provisional targets and later-release work. It remains under Q&A review and does not start a goal or certify a candidate.
 
-## Release boundaries
+## Readiness checkpoint — 2026-11-10
+
+Assessed against implementation through `bcd5f6f`, not just the earlier ledger's gap descriptions. The project is usable for development dogfooding but is not a release candidate. No defensible calendar ETA or percentage follows from test counts or code volume. The work below remains substantial implementation and final acceptance, rather than packaging alone.
+
+Implemented since the initial ledger: repository/solution-aware C# context selection, npm/pnpm version acquisition/restoration, shared checked-in/personal workspace settings, the corrected indexing-cancellation baseline, cooperative overall query deadlines and complete core response caps. Shared cursor generation retention, lifetime/count/read-lease policy, logical accounting/result reservations and publication previews are implemented primitives. Portable cursor/control/page/file integration is still missing. Current evidence is 82 passing Rust cases plus focused historical native/provider/coordinator/package runs; those runs do not certify one final current candidate.
+
+| Remaining integration wave | Concrete completion boundary | Relevant criteria |
+| --- | --- | --- |
+| 1. Complete the bounded query workflow | Actual coordinator control/startup/settings integration; streamed result files and cleanup; portable replayable pages and pinned source/context across clients; publication pressure/WAL/reader cleanup; explicit request cancellation and outer transport/admission bounds | Q09–Q12, S02/S04 |
+| 2. Complete accepted query semantics | Graph body projection, evidence-bearing test classification/filters, equivalent cross-target presentation and a finite required TS/C# compiler/graph acceptance catalog; matching CLI/MCP/Node/.NET behavior | C04/C06–C09, Q02–Q08 |
+| 3. Complete operational recovery and enrollment | Automatic corruption rebuild, bounded replacement-index rebuild/cutover with compatible stale reads, parent-folder discovery through the existing registry, and required crash/recovery coverage | S05–S07, O01 |
+| 4. Certify and distribute one frozen candidate | Optimized/integration and installed offline/native matrix; actual encoding-performance gate; final compatibility/provenance/license/zero-telemetry review; release automation/destinations; signing/notarization and normal-security install; macOS 15 VM conditional on demonstrated free viability | O06/R04–R05/D01–D04 |
+
+These are work groupings, not permission to add features or waive requirements. The real-encoding gate needs an actual encoding run. Signing access is available, but credentials and final signed/notarized artifacts have not been verified. The free macOS 15 VM path has research evidence, not a booted validated guest. No repository remote or release workflow is configured at this checkpoint. Final package/optimized evidence must be refreshed after the remaining code lands. Swift/Rust experiments, 0.0.2 features and source-body search do not expand this release boundary.
+
+## Release boundaries (accepted scope)
 
 | Release | Accepted boundary | Current status |
 | --- | --- | --- |
