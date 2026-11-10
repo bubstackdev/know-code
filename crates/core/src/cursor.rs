@@ -14,6 +14,9 @@ use std::{
 pub const RETENTION_VERSION: u32 = 1;
 pub const DEFAULT_MAX_CURSORS: usize = 128;
 pub const DEFAULT_RETENTION_BYTES: u64 = 1024 * 1024 * 1024;
+/// Private saved-result safety guards, within the shared retention allowance.
+pub const MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_RESULT_CHUNK: usize = 64 * 1024;
 pub const IDLE_LIFETIME: Duration = Duration::from_secs(120);
 pub const ABSOLUTE_LIFETIME: Duration = Duration::from_secs(600);
 
