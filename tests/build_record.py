@@ -61,6 +61,10 @@ class Evidence(unittest.TestCase):
         with self.assertRaisesRegex(provenance.Invalid,'different profile'):self.verify()
         record['profile']='debug';record['status']='building';provenance.write(path,record)
         with self.assertRaisesRegex(provenance.Invalid,'incomplete'):self.verify()
+        record['status']='complete';record.pop('build_flags');provenance.write(path,record)
+        with self.assertRaisesRegex(provenance.Invalid,'producer metadata'):self.verify()
+        provenance.write(path,[])
+        with self.assertRaisesRegex(provenance.Invalid,'incomplete'):self.verify()
     def test_build_cannot_certify_changed_inputs_or_dependency_bytes(self):
         record=provenance.begin(self.root,'debug',self.env);provenance.prepare(self.root,'debug',self.env,record)
         put(self.root/'crates/core/src/lib.rs','changed during build')

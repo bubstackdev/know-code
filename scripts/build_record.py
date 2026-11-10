@@ -227,7 +227,9 @@ def verify(root,profile,env=None):
     try:
         if pending_path(root,profile).exists():fail('an unfinished build attempt is present',profile)
         record=json.loads(record_path(root,profile).read_text())
-        if record.get('schema_version')!=VERSION or record.get('status')!='complete' or record.get('profile')!=profile:fail('record is incomplete or belongs to a different profile/version',profile)
+        if not isinstance(record,dict) or record.get('schema_version')!=VERSION or record.get('status')!='complete' or record.get('profile')!=profile:fail('record is incomplete or belongs to a different profile/version',profile)
+        maps=('source_inputs','configuration_inputs','dependency_inputs','generated_inputs','outputs','toolchains','build_flags','build_options','build_host')
+        if any(not isinstance(record.get(name),dict) for name in maps) or any(name not in record for name in ('build_id','started_ns','completed_ns','source_revision')):fail('record is missing or has malformed producer metadata',profile)
         unchanged(record['source_inputs'],source_inputs(root),'build inputs',profile)
         unchanged(record['configuration_inputs'],configurations(root,env),'configuration inputs',profile)
         unchanged(record['dependency_inputs'],dependencies(root,env),'dependency inputs',profile)
