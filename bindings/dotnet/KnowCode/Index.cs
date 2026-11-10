@@ -57,7 +57,7 @@ internal sealed class QueryCancellationHandle : SafeHandle
     protected override bool ReleaseHandle() { Native.QueryCancelFree(handle); return true; }
 }
 
-[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.TestFilterJsonConverter))]
+[System.Text.Json.Serialization.JsonConverter(typeof(TestFilterJsonConverter))]
 public enum TestFilter { All, Exclude, Only }
 internal sealed class TestFilterJsonConverter() : System.Text.Json.Serialization.JsonStringEnumConverter<TestFilter>(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false);
 

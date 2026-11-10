@@ -105,6 +105,9 @@ try:
  for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context','coverage_details']:
   assert schemas[name]['properties']['page_size']['minimum']==1 and schemas[name]['properties']['page_size']['maximum']==1000
  for name in ['read_source','symbol_context']:assert 'cursor' in schemas[name]['properties']
+ for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context']:
+  assert schemas[name]['properties']['tests']['enum']==['all','exclude','only']
+ for name in ['read_source','coverage_details','next_page']:assert 'tests' not in schemas[name]['properties']
  checks+=['explicit_workspace_auto_registration','legacy_2025_lifecycle','stable_read_only_tools']
  tool,value=c.tool('workspace_status');assert not tool['isError'] and value['result']['workspaces'][0]['workspace_root']==str(WORKSPACE)
  tool,value=c.tool('search_symbols',{'name':'target'});assert not tool['isError'] and value==equivalent({'op':'symbols','name':'target'})
@@ -116,6 +119,11 @@ try:
  for name,args,op in [('find_references',{'symbol_id':target['id']},'references'),('callees',{'symbol_id':caller['id']},'callees'),('callers',{'symbol_id':target['id']},'callers'),('impact',{'symbol_id':target['id'],'max_depth':2},'impact')]:
   tool,value=c.tool(name,args);assert not tool['isError'] and value==equivalent({'op':op,**args}),(name,value)
  tool,value=c.tool('query_graph',{'op':'callees','symbol_id':caller['id']});assert not tool['isError'] and value==c.tool('callees',{'symbol_id':caller['id']})[1]
+ for mode in ['only','exclude']:
+  for name,op,args in [('search_symbols','symbols',{'name':'target'}),('find_references','references',{'symbol_id':target['id']}),('impact','impact',{'symbol_id':target['id']}),('query_graph','callees',{'op':'callees','symbol_id':caller['id']})]:
+   tool,filtered=c.tool(name,dict(args,tests=mode));assert not tool['isError'] and filtered==equivalent(dict(args,op=op,tests=mode)),filtered
+   if mode=='only':assert not filtered['result'].get('symbols') and not filtered['result'].get('occurrences') and not filtered['result'].get('graph',{}).get('findings'),filtered
+ checks.append('test_finding_filter_schemas_and_shared_operator_parity')
  checks+=['CLI_Node_dotnet_full_query_parity','focused_and_structured_graph_parity','Csharp_configuration_preserved']
  baseline=equivalent({'op':'symbols','limit':1000})['result']
  tool,paged=c.tool('search_symbols',{'limit':1000,'page_size':1});assert not tool['isError'],paged
