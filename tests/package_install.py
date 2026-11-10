@@ -193,7 +193,7 @@ node=Client('node');initial=ready(node);net=Client('net');assert net.opened['ope
 def query(req):
  n=node.send('query',request=req);d=net.send('query',request=req);c=json.loads(command(HOST,'query',DATABASE,json.dumps(req)).stdout);assert n==d==c,(req,n,d,c);return n['result']
 def exact_source(source,filename):
- raw=filename.read_bytes();assert Path(source['path']).resolve()==filename.resolve(),source
+ raw=filename.read_bytes();path=Path(source['path']);path=path if path.is_absolute() else WORKSPACE/path;assert path.resolve()==filename.resolve(),source
  assert source['content_hash']==hashlib.sha256(raw).hexdigest() and source['total_bytes']==len(raw),source
  assert raw[source['start_byte']:source['end_byte']].decode('utf-8')==source['text'],source
 for name in ['answer','Greet']:
