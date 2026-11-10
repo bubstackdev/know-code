@@ -21,6 +21,7 @@ python3 tests/e2e.py
 python3 tests/mcp.py
 python3 tests/workspace_api.py
 python3 tests/query_deadlines.py
+python3 tests/response_budget.py
 python3 tests/live.py
 python3 tests/coordinator.py
 python3 tests/resources.py

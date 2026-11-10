@@ -24,13 +24,19 @@ Node records time before request serialization/native dispatch and before libuv 
 
 MCP captures its clock before blocking dispatch and advertises the shared constants. Its two permits remain held until core work exits; expiry does not detach still-running work. CancellationToken/AbortSignal and prompt underlying cancellation on MCP cancellation remain unfinished.
 
-Enforcement is cooperative: OS scheduling, filesystem calls, allocation, a single compiler-report JSON parse or other noninterruptible work can delay observing expiry. Millisecond host elapsed-time transfer has sub-millisecond rounding/marshalling gaps. A saturated host thread pool may delay delivering the error until it runs the expired task; that task must not begin index reading. Core JSON encoding is covered; host JSON parsing, outer MCP framing/output backpressure and caller processing are outside this implemented stopping boundary. No hard wall-clock response-delivery promise or total-response memory/byte cap is claimed. These limits do not change the accepted overall-budget objective or close the remaining release gates.
+Enforcement is cooperative: OS scheduling, filesystem calls, allocation, a single compiler-report JSON parse or other noninterruptible work can delay observing expiry. Millisecond host elapsed-time transfer has sub-millisecond rounding/marshalling gaps. A saturated host thread pool may delay delivering the error until it runs the expired task; that task must not begin index reading. Core JSON encoding is covered; host JSON parsing, outer MCP framing/output backpressure and caller processing are outside this implemented stopping boundary. No hard wall-clock response-delivery promise, peak-query-memory cap or outer-transport byte cap is claimed. The complete core JSON response cap below is separate. These limits do not change the accepted overall-budget objective or close the remaining release gates.
 
 ## Accepted cursor portability
 
 The user accepted opaque, workspace-bound continuation tokens that work across local clients and separate CLI invocations. They are not tied to one .NET/Node object, MCP connection or process. Page queries still execute in the caller's process through the Rust core; portable tokens do not authorize moving graph execution into the coordinator. All pages preserve one generation and the original query scope/provenance. Expiration or invalidation requires an explicit restart, never a silent switch to current data.
 
 Portable tokens do not permit changing query scope on continuation. Pagination is not implemented by this documentation step.
+
+### Accepted replay behavior
+
+The user accepted replay-safe continuation tokens. Reusing a valid token returns the same page from the same generation, without advancing or skipping results. Freshness/coordination metadata can change as indexing progresses; indexed items, their order, source, provenance and the next logical position stay fixed. A new page token or a retry must not reset the cursor's original creation time. Ordinary request failures such as deadline expiry do not consume the continuation position. Token validity still depends on expiry, coordinator incarnation and accepted pressure invalidation.
+
+Successful concurrent retries must agree on the page/next position. The implementation may use deterministic continuation or bounded retained page outcomes, but re-running a time-limited graph traversal is not sufficient proof of stable replay. Page/frontier state needs explicit accounting and bounds; the accepted index-retention budget does not imply an unlimited page cache or a resident graph.
 
 ### Accepted lifetimes and restart behavior
 
@@ -62,15 +68,27 @@ The existing frozen store-v6 ts-pattern snapshot occupies 36.4 MiB on disk with 
 
 Cursor-only logical retention and physical database/WAL size need distinct accounting. Reclaiming facts makes pages reusable; it does not promise immediate file shrinkage. The accepted 1 GiB starting budget applies to extra cursor-retained data across workspaces; it is not inferred to be a measured hard physical file limit. Measure this proposed lease path before claiming a hard physical disk bound or that a pinned generation costs nothing.
 
+## Accepted complete-response byte budget
+
+The user accepted **256 KiB (262,144 bytes) by default**, configurable per request up to **2 MiB (2,097,152 bytes)** for each page's shared UTF-8 JSON response. Count the complete core result envelope, including required metadata, diagnostics, signatures and source; existing source/detail/graph sub-budgets do not grant additional envelope bytes. MCP's extra protocol framing/duplication requires a separate transport bound and is not counted as if it were free. This cap is an output budget, not a whole-query peak-memory guarantee.
+
+The common Rust encoder now enforces `response_max_bytes`: 1,024–2,097,152 bytes, default 262,144. Count actual UTF-8 JSON bytes after escaping, including the `{result: ...}` envelope and appended coordination metadata. An over-budget encoding returns small typed `response_limit_exceeded`, with no broken/partial successful JSON or silent removal of required evidence. Invalid budgets return `invalid_request`. Before a request's budget is validated, rejection errors are bounded at the 1 KiB minimum; this respects every valid requested budget without parsing the request twice. Oversized error details use an explicit small limit error.
+
+Native CLI/.NET/Node/MCP query responses use one bounded serializer. Public Rust ReadView queries measure the same encoded envelope with a sink instead of allocating another JSON buffer; deadline expiry during that check still releases/invalidates the reader. The encoder limits its output growth, not the already materialized result's entire memory footprint. Source/detail/graph sub-budgets still apply independently; requesting a large source/graph budget does not automatically increase the envelope budget.
+
+Current SDKs require additive native query contract version 1 (C `kc_query_contract_version`, Node `queryContractVersion`), covering overall deadlines and complete JSON caps. Older/mismatched native artifacts raise typed update_required. C ABI 1, worker/control protocol 7 and store 6 remain unchanged. Existing coordinator versions satisfying analysis/resource contracts can still coordinate these in-process queries; no new query RPC engine is added.
+
+Page packing and portable cursor implementation remain pending. Current oversized nonpaginated results fail explicitly; narrow the query or raise response_max_bytes within its maximum. A required metadata envelope or individual item that cannot fit must not be silently stripped to manufacture success. MCP outer framing/duplication is still separately unbounded by this core field.
+
 ## Decisions still open
 
-Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/admission and continuation-state bounds. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+Explicit request-cancellation outcomes and host API; outer transport limits and pagination packing; admission bounds; cursor retention mechanism, detailed renewal timing, pressure accounting/admission and continuation-state bounds. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
 
 ### Continuation implementation findings
 
 Symbol search already has a stable explicit ordering (`name`, opaque symbol ID, compilation ID). References order by source path/range/compilation; coverage orders by compilation ID. These can reuse the existing operators with generation-bound continuation keys, subject to tie-breaker tests. Do not implement continuation by repeatedly increasing an offset over a changing generation.
 
-Graph queries additionally hold traversal frontier, visited/context selections, evidence paths and global work limits. Their own time budget can stop a search at different points; reissuing a query against a fixed generation alone does not establish replay-identical pages. Retry/continuation semantics and bounded frontier/page retention must therefore be settled before claiming graph pagination. Paging cannot silently reset a logical traversal's node/edge/context limits or combine incompatible compilation paths. Keep extraction/provider logic out of pagination.
+Graph queries additionally hold traversal frontier, visited/context selections, evidence paths and global work limits. Their own time budget can stop a search at different points; reissuing a query against a fixed generation alone does not establish replay-identical pages. The accepted replay semantics require deterministic page outcomes or bounded retained results/frontiers; that implementation remains open. Paging cannot silently reset a logical traversal's node/edge/context limits or combine incompatible compilation paths. Keep extraction/provider logic out of pagination.
 
 ## Validation outline
 

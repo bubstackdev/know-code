@@ -9,6 +9,8 @@ export interface QueryRequest {
   freshness_wait_ms?: number;
   /** Overall budget, including native dispatch/freshness/execution/encoding. Default 5000; maximum 120000; zero expires immediately. */
   deadline_ms?: number;
+  /** Complete core JSON envelope: default 262144; range 1024–2097152 bytes. */
+  response_max_bytes?: number;
   kinds?: DependencyKind[];
   include_implicit?: boolean;
   exact_only?: boolean;

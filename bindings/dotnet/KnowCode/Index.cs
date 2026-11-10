@@ -16,8 +16,12 @@ public sealed class Index(string database)
     // Coarse native calls run off the caller's synchronization context.
     public Task<JsonDocument> QueryJsonAsync(string request) => QueryCoreAsync(request, Stopwatch.GetTimestamp());
     private Task<JsonDocument> QueryCoreAsync(string request, long started) => Task.Run(() =>
-        Native.Invoke(() => Native.QueryElapsed(database, request,
-            (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds)));
+        Native.Invoke(() => {
+            if (Native.QueryContractVersion() != 1)
+                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; bounded query support is incompatible.");
+            return Native.QueryElapsed(database, request,
+                (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+        }));
 }
 
 public sealed record QueryRequest(string Op, string? Name = null, string? Query = null,
@@ -33,6 +37,7 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
     public bool? IncludeSource { get; init; }
     public string? CoverageDetail { get; init; }
     public uint? DetailMaxBytes { get; init; }
+    public uint? ResponseMaxBytes { get; init; }
 }
 
 internal static partial class Native
@@ -65,6 +70,8 @@ internal static partial class Native
 
     [LibraryImport("know_code_ffi", EntryPoint = "kc_abi_version")]
     internal static partial uint AbiVersion();
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_contract_version")]
+    internal static partial uint QueryContractVersion();
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint Query(string database, string request);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_elapsed", StringMarshalling = StringMarshalling.Utf8)]

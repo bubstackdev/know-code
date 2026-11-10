@@ -154,6 +154,39 @@ fn query_deadline_interrupts_sql_and_releases_a_retained_view() {
 }
 
 #[test]
+fn response_budget_limits_the_whole_result_and_keeps_the_view_reusable() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter");
+    writer.publish().unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute("UPDATE symbols SET signature=?", ["\0😀".repeat(40_000)])
+        .unwrap();
+    let view = ReadView::open(&path).unwrap();
+    assert!(matches!(
+        view.query(request("symbols")),
+        Err(know_code_core::Error::ResponseLimitExceeded)
+    ));
+    let mut larger = request("symbols");
+    larger.response_max_bytes = Some(2_097_152);
+    assert!(!view.query(larger).unwrap().symbols.is_empty());
+    let response: serde_json::Value = serde_json::from_str(&know_code_core::query_json(
+        path.to_str().unwrap(),
+        r#"{"op":"symbols","name":"Greeter"}"#,
+    ))
+    .unwrap();
+    assert_eq!(response["error"]["code"], "response_limit_exceeded");
+    let json = know_code_core::query_json(
+        path.to_str().unwrap(),
+        r#"{"op":"symbols","name":"Greeter","response_max_bytes":2097152}"#,
+    );
+    assert!(json.len() <= 2_097_152);
+    let response: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(!response["result"]["symbols"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn incomplete_or_failed_analysis_preserves_published_generation() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();

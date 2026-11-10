@@ -7,6 +7,10 @@ use std::{
 pub extern "C" fn kc_abi_version() -> u32 {
     1
 }
+#[unsafe(no_mangle)]
+pub extern "C" fn kc_query_contract_version() -> u32 {
+    know_code_core::execution::QUERY_CONTRACT_VERSION
+}
 
 fn response(call: impl FnOnce() -> String + UnwindSafe) -> *mut c_char {
     let result = catch_unwind(call).unwrap_or_else(|_| {

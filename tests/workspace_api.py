@@ -80,6 +80,11 @@ for client in [node,dotnet]:
  error(client.send('query',request={'op':'symbols','deadline_ms':120001}),'invalid_request')
  assert client.send('query',request={'op':'symbols','name':'answer'})['result']['symbols']
 checks.append('typed_overall_deadlines_in_both_hosts_and_next_query_recovers')
+for client in [node,dotnet]:
+ error(client.send('query',request={'op':'symbols','name':'answer','response_max_bytes':1024}),'response_limit_exceeded')
+ error(client.send('query',request={'op':'symbols','response_max_bytes':2097153}),'invalid_request')
+ assert client.send('query',request={'op':'symbols','name':'answer','response_max_bytes':2097152})['result']['symbols']
+checks.append('typed_complete_response_limits_include_coordination_and_recover')
 
 def equivalent(request):
  n=node.send('query',request=request);d=dotnet.send('query',request=request);c=json.loads(cli('query',DATABASE,json.dumps(request)).stdout)

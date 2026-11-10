@@ -2,8 +2,8 @@ import { createRequire } from 'node:module';
 const native = createRequire(import.meta.url)('./know_code.node');
 function query(database, request) {
   const start = performance.now();
-  if (typeof native.queryJsonElapsed !== 'function')
-    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; query deadlines are missing.');
+  if (typeof native.queryJsonElapsed !== 'function' || typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 1)
+    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; bounded query support is missing or incompatible.');
   const encoded = JSON.stringify(request);
   const elapsed = Math.min(Math.floor(performance.now() - start), 0xffffffff);
   return native.queryJsonElapsed(database, encoded, elapsed);

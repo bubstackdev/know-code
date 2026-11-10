@@ -1,6 +1,11 @@
 use napi::{Env, Result, Task, bindgen_prelude::AsyncTask};
 use napi_derive::napi;
 
+#[napi]
+pub fn query_contract_version() -> u32 {
+    know_code_core::execution::QUERY_CONTRACT_VERSION
+}
+
 pub struct NativeTask {
     database: Option<String>,
     request: String,

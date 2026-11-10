@@ -16,6 +16,10 @@ pub enum Error {
     NotReady,
     #[error("query deadline exceeded; restart the request")]
     DeadlineExceeded,
+    #[error(
+        "query response exceeds response_max_bytes; narrow the query or increase the response budget (maximum 2097152 bytes)"
+    )]
+    ResponseLimitExceeded,
     #[error("indexing cancelled; previous generation preserved")]
     Cancelled,
     #[error("{0}")]
@@ -49,6 +53,7 @@ impl Error {
         match self {
             Self::NotReady => "not_ready",
             Self::DeadlineExceeded => "deadline_exceeded",
+            Self::ResponseLimitExceeded => "response_limit_exceeded",
             Self::Cancelled => "cancelled",
             Self::ResourceLimited(_) => "resource_limited",
             Self::InvalidRequest(_) | Self::Json(_) => "invalid_request",
@@ -72,11 +77,33 @@ pub fn query_json(database: &str, request: &str) -> String {
 pub fn query_json_started(database: &str, request: &str, start: execution::QueryStart) -> String {
     let request: query::QueryRequest = match serde_json::from_str(request) {
         Ok(request) => request,
-        Err(error) => return error_json("invalid_request", &error.to_string()),
+        Err(error) => {
+            return execution::error_json(
+                "invalid_request",
+                &error.to_string(),
+                execution::MIN_RESPONSE_BYTES as usize,
+            );
+        }
     };
     let execution = match execution::Execution::new(start, request.deadline_ms) {
         Ok(execution) => execution,
-        Err(error) => return error_json(error.code(), &error.to_string()),
+        Err(error) => {
+            return execution::error_json(
+                error.code(),
+                &error.to_string(),
+                execution::MIN_RESPONSE_BYTES as usize,
+            );
+        }
+    };
+    let maximum = match execution::response_budget(request.response_max_bytes) {
+        Ok(maximum) => maximum,
+        Err(error) => {
+            return execution::error_json(
+                error.code(),
+                &error.to_string(),
+                execution::MIN_RESPONSE_BYTES as usize,
+            );
+        }
     };
     let result = (|| {
         execution.check()?;
@@ -123,13 +150,13 @@ pub fn query_json_started(database: &str, request: &str, start: execution::Query
     let result = execution
         .check()
         .and(result)
-        .and_then(|value| execution::encode(&value, execution));
+        .and_then(|value| execution::encode(&value, execution, maximum));
     match result {
         Ok(json) => match execution.check() {
             Ok(()) => json,
-            Err(error) => error_json(error.code(), &error.to_string()),
+            Err(error) => execution::error_json(error.code(), &error.to_string(), maximum),
         },
-        Err(error) => error_json(error.code(), &error.to_string()),
+        Err(error) => execution::error_json(error.code(), &error.to_string(), maximum),
     }
 }
 

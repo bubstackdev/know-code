@@ -27,6 +27,7 @@ pub struct QueryRequest {
     #[serde(default = "default_freshness_wait")]
     pub freshness_wait_ms: u32,
     pub deadline_ms: Option<u32>,
+    pub response_max_bytes: Option<u32>,
     pub kinds: Option<Vec<crate::graph::DependencyKind>>,
     #[serde(default = "default_true")]
     pub include_implicit: bool,
@@ -264,7 +265,16 @@ impl ReadView {
 
     pub fn query(&self, request: QueryRequest) -> Result<QueryResult> {
         let execution = crate::execution::Execution::new(Default::default(), request.deadline_ms)?;
-        self.query_controlled(request, execution)
+        let maximum = crate::execution::response_budget(request.response_max_bytes)?;
+        let result = self.query_controlled(request, execution).and_then(|value| {
+            crate::execution::check_response(&value, execution, maximum)?;
+            Ok(value)
+        });
+        if execution.check().is_err() {
+            self.expire()?;
+            return Err(Error::DeadlineExceeded);
+        }
+        result
     }
     pub(crate) fn query_controlled(
         &self,
@@ -279,15 +289,18 @@ impl ReadView {
         let elapsed = execution.check();
         *self.execution.lock().unwrap() = None;
         if elapsed.is_err() {
-            self.expired.set(true);
-            // Statements/rows have unwound. Release the WAL read transaction
-            // even if a low-level Rust caller retains this expired view.
-            if !self.connection.is_autocommit() {
-                self.connection.execute_batch("ROLLBACK")?;
-            }
+            self.expire()?;
             return Err(Error::DeadlineExceeded);
         }
         result
+    }
+    fn expire(&self) -> Result<()> {
+        self.expired.set(true);
+        // Statements/rows have unwound; release even a retained caller view.
+        if !self.connection.is_autocommit() {
+            self.connection.execute_batch("ROLLBACK")?;
+        }
+        Ok(())
     }
     pub(crate) fn check(&self) -> Result<()> {
         if self.expired.get() {

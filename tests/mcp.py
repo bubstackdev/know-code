@@ -140,6 +140,12 @@ try:
   assert tool['isError'] and expired['error']['code']==expected,(tool,expired)
  assert c.tool('search_symbols',{'name':'target'})[1]['result']['symbols']
  checks.append('overall_deadline_errors_and_next_query_recovers')
+ tool,limited=c.tool('search_symbols',{'name':'target','response_max_bytes':1024})
+ assert tool['isError'] and limited['error']['code']=='response_limit_exceeded',(tool,limited)
+ tool,value=c.tool('search_symbols',{'name':'target','response_max_bytes':2097152})
+ assert not tool['isError'] and value['result']['symbols']
+ assert len(json.dumps(value,ensure_ascii=False,separators=(',',':')).encode())<=2097152
+ checks.append('complete_core_response_budget_includes_metadata_and_recovers')
  owner=(DATA/'live/owner').read_bytes();pid=json.loads(owner[76:76+int.from_bytes(owner[72:76],'little')])['pid']
  os.kill(pid,signal.SIGSTOP);paused=pid
  first=c.send('tools/call',{'name':'search_symbols','arguments':{'name':'target','freshness_wait_ms':2000,'deadline_ms':2000}})

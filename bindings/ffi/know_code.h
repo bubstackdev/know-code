@@ -1,5 +1,7 @@
 #include <stdint.h>
 uint32_t kc_abi_version(void);
+/* Query policy 1: overall deadlines and complete JSON response byte budgets. */
+uint32_t kc_query_contract_version(void);
 /* UTF-8 inputs. One owned UTF-8 JSON result; release using kc_string_free. */
 char *kc_query_json(const char *database, const char *request);
 /* Same ownership; elapsed_ms charges host preparation/async queue time. */

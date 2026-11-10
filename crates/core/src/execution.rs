@@ -13,6 +13,20 @@ use std::{
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
 pub const MAX_DEADLINE_MS: u32 = 120_000;
+pub const QUERY_CONTRACT_VERSION: u32 = 1;
+pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
+pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
+pub const MIN_RESPONSE_BYTES: u32 = 1024;
+
+pub(crate) fn response_budget(value: Option<u32>) -> Result<usize> {
+    let bytes = value.unwrap_or(DEFAULT_RESPONSE_BYTES);
+    if !(MIN_RESPONSE_BYTES..=MAX_RESPONSE_BYTES).contains(&bytes) {
+        return Err(Error::InvalidRequest(format!(
+            "response_max_bytes must be between {MIN_RESPONSE_BYTES} and {MAX_RESPONSE_BYTES}"
+        )));
+    }
+    Ok(bytes as usize)
+}
 
 /// Capture before dispatching asynchronous native work. Host wrappers may charge
 /// time already spent preparing/queuing the call without sharing clock epochs.
@@ -230,42 +244,178 @@ impl Write for TimedStream {
     }
 }
 
-pub(crate) fn encode(value: &impl Serialize, execution: Execution) -> Result<String> {
-    struct Encoder {
-        bytes: Vec<u8>,
-        execution: Execution,
+fn write_json<W: Write>(
+    value: &impl Serialize,
+    execution: Option<Execution>,
+    maximum: usize,
+    output: W,
+) -> Result<W> {
+    struct Encoder<W> {
+        output: W,
+        execution: Option<Execution>,
+        remaining: usize,
+        exceeded: bool,
     }
-    impl Write for Encoder {
+    impl<W: Write> Write for Encoder<W> {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            io_remaining(self.execution)?;
-            let count = bytes.len().min(16 * 1024);
-            self.bytes.extend_from_slice(&bytes[..count]);
+            if let Some(execution) = self.execution {
+                io_remaining(execution)?;
+            }
+            if bytes.is_empty() {
+                return Ok(0);
+            }
+            if self.remaining == 0 {
+                self.exceeded = true;
+                return Err(std::io::Error::other("response byte budget exceeded"));
+            }
+            let count = self
+                .output
+                .write(&bytes[..bytes.len().min(16 * 1024).min(self.remaining)])?;
+            self.remaining -= count;
             Ok(count)
         }
         fn flush(&mut self) -> std::io::Result<()> {
-            io_remaining(self.execution)?;
+            if let Some(execution) = self.execution {
+                io_remaining(execution)?;
+            }
             Ok(())
         }
     }
-    #[derive(Serialize)]
-    struct Response<'a, T> {
-        result: &'a T,
-    }
     let mut writer = Encoder {
-        bytes: vec![],
+        output,
         execution,
+        remaining: maximum,
+        exceeded: false,
     };
-    let result = serde_json::to_writer(&mut writer, &Response { result: value });
-    execution.check()?;
+    let result = serde_json::to_writer(&mut writer, value);
+    if let Some(execution) = execution {
+        execution.check()?;
+    }
+    if writer.exceeded {
+        return Err(Error::ResponseLimitExceeded);
+    }
     result?;
-    let result = String::from_utf8(writer.bytes).expect("JSON serializer emits UTF-8");
+    Ok(writer.output)
+}
+
+#[derive(Serialize)]
+struct Response<'a, T> {
+    result: &'a T,
+}
+
+pub(crate) fn check_response(
+    value: &impl Serialize,
+    execution: Execution,
+    maximum: usize,
+) -> Result<()> {
+    write_json(
+        &Response { result: value },
+        Some(execution),
+        maximum,
+        std::io::sink(),
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn encode(
+    value: &impl Serialize,
+    execution: Execution,
+    maximum: usize,
+) -> Result<String> {
+    let bytes = write_json(
+        &Response { result: value },
+        Some(execution),
+        maximum,
+        Vec::new(),
+    )?;
+    let result = String::from_utf8(bytes).expect("JSON serializer emits UTF-8");
     execution.check()?;
     Ok(result)
+}
+
+pub(crate) fn error_json(code: &str, message: &str, maximum: usize) -> String {
+    #[derive(Serialize)]
+    struct Failure<'a> {
+        error: Details<'a>,
+    }
+    #[derive(Serialize)]
+    struct Details<'a> {
+        code: &'a str,
+        message: &'a str,
+    }
+    let result = write_json(
+        &Failure {
+            error: Details { code, message },
+        },
+        None,
+        maximum,
+        Vec::new(),
+    );
+    match result {
+        Ok(bytes) => String::from_utf8(bytes).expect("JSON serializer emits UTF-8"),
+        Err(_) => r#"{"error":{"code":"response_limit_exceeded","message":"error details exceed response_max_bytes"}}"#.into(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn complete_response_budget_counts_framing_escaping_and_metadata() {
+        let value = serde_json::json!({"metadata":{"coverage":"x".repeat(512)},"source":"\0\n\\\"😀".repeat(512)});
+        let expected = serde_json::to_vec(&serde_json::json!({"result":value})).unwrap();
+        let execution = Execution::new(Default::default(), None).unwrap();
+        assert_eq!(
+            encode(&value, execution, expected.len())
+                .unwrap()
+                .as_bytes(),
+            expected
+        );
+        assert!(matches!(
+            encode(&value, execution, expected.len() - 1),
+            Err(Error::ResponseLimitExceeded)
+        ));
+        let emoji = std::str::from_utf8(&expected).unwrap().find('😀').unwrap();
+        for maximum in emoji + 1..emoji + 4 {
+            assert!(matches!(
+                encode(&value, execution, maximum),
+                Err(Error::ResponseLimitExceeded)
+            ));
+        }
+        assert!(check_response(&value, execution, expected.len()).is_ok());
+        assert!(matches!(
+            check_response(&value, execution, expected.len() - 1),
+            Err(Error::ResponseLimitExceeded)
+        ));
+        assert_eq!(response_budget(None).unwrap(), 262_144);
+        assert_eq!(response_budget(Some(2_097_152)).unwrap(), 2_097_152);
+        for invalid in [0, 1023, 2_097_153] {
+            assert!(response_budget(Some(invalid)).is_err());
+        }
+        let error = error_json("invalid_request", &"\0😀".repeat(2048), 1024);
+        assert!(error.len() <= 1024);
+        let error: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(error["error"]["code"], "response_limit_exceeded");
+        let request = serde_json::json!({"x".repeat(300_000):true}).to_string();
+        let rejected = crate::query_json("unused", &request);
+        assert!(rejected.len() <= DEFAULT_RESPONSE_BYTES as usize);
+        let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
+        assert_eq!(rejected["error"]["code"], "response_limit_exceeded");
+        let request =
+            serde_json::json!({"response_max_bytes":1024,"x".repeat(5000):true}).to_string();
+        let rejected = crate::query_json("unused", &request);
+        assert!(
+            rejected.len() <= 1024,
+            "pre-validation error ignored requested minimum"
+        );
+        let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
+        assert_eq!(rejected["error"]["code"], "response_limit_exceeded");
+        let expired = Execution::new(Default::default(), Some(0)).unwrap();
+        assert!(matches!(
+            encode(&value, expired, 1),
+            Err(Error::DeadlineExceeded)
+        ));
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn owned_socket_does_not_raise_sigpipe_in_an_embedding_host() {
@@ -371,13 +521,15 @@ mod tests {
         }
         let execution = Execution::new(Default::default(), Some(5)).unwrap();
         assert!(matches!(
-            encode(&Slow, execution),
+            encode(&Slow, execution, DEFAULT_RESPONSE_BYTES as usize),
             Err(Error::DeadlineExceeded)
         ));
         let execution = Execution::new(Default::default(), None).unwrap();
         let text = "😀\\\"".repeat(20_000);
-        let result: serde_json::Value =
-            serde_json::from_str(&encode(&text, execution).unwrap()).unwrap();
+        let result: serde_json::Value = serde_json::from_str(
+            &encode(&text, execution, DEFAULT_RESPONSE_BYTES as usize).unwrap(),
+        )
+        .unwrap();
         assert_eq!(result["result"], text);
     }
     #[test]
