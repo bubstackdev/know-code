@@ -342,7 +342,7 @@ fn contains(steps: &[Step], mut index: usize, node: i64) -> bool {
 }
 pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<SymbolResult> {
     let mut result=connection.query_row("SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation FROM symbols s JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE s.rowid=?",[key],|r|Ok(SymbolResult{
-        id:r.get(0)?,name:r.get(1)?,kind:r.get(2)?,signature:r.get(3)?,external:r.get(4)?,compilation_id:r.get(5)?,target:r.get(6)?,owner_generation:r.get(7)?,locations:vec![],locations_limited:false
+        id:r.get(0)?,name:r.get(1)?,kind:r.get(2)?,signature:r.get(3)?,external:r.get(4)?,compilation_id:r.get(5)?,target:r.get(6)?,owner_generation:r.get(7)?,locations:vec![],test_classification:Default::default(),locations_limited:false
     }))?;
     let mut locations=connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte LIMIT 17")?;
     result.locations = locations
@@ -351,6 +351,7 @@ pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<SymbolResult> 
             read_location,
         )?
         .collect::<std::result::Result<_, _>>()?;
+    result.test_classification = crate::testing::symbol(connection, key)?;
     result.locations_limited = result.locations.len() > 16;
     result.locations.truncate(16);
     Ok(result)
@@ -659,6 +660,10 @@ pub(crate) fn query(
             result.visited_nodes += 1;
         }
         if steps[index].parent.is_some()
+            && (request.tests == crate::testing::TestFilter::All
+                || request
+                    .tests
+                    .matches(crate::testing::symbol_mask(&view.connection, node)?))
             && findings
                 .get(&node)
                 .is_none_or(|p| result.findings[*p].paths.len() < paths as usize)

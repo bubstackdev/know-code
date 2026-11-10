@@ -35,6 +35,7 @@ fn populate(writer: &mut Writer, comp: &str, text: &str, extents: bool) {
         .unwrap();
     writer
         .stage(Payload::Source(SourceArtifact {
+            test_classification: None,
             id: artifact.clone(),
             path: "code.ts".into(),
             utf8: text.as_bytes().to_vec(),

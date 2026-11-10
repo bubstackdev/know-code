@@ -857,8 +857,16 @@ fn execute(
         });
     }
     let changes = workspace::differences(&job.inputs, &before);
-    let recovered = ReadView::open(database).map(|v| v.generation).unwrap_or(0);
-    if !job.force && changes.is_empty() && recovered != 0 && recovered == job.previous_generation {
+    let (recovered, classification_backfill) = match ReadView::open(database) {
+        Ok(view) => (view.generation, view.needs_test_classification()?),
+        Err(_) => (0, false),
+    };
+    if !job.force
+        && !classification_backfill
+        && changes.is_empty()
+        && recovered != 0
+        && recovered == job.previous_generation
+    {
         // Reconciliation proves only that saved inputs did not change. It
         // cannot repair an earlier analyzer/storage failure or certify facts
         // that the failed refresh never published.
@@ -878,6 +886,7 @@ fn execute(
         // actual analysis, while an unchanged failed snapshot must stay failed.
     }
     let scopes = if job.force
+        || classification_backfill
         || !job.previous_error.is_empty()
         || recovered == 0
         || recovered != job.previous_generation
@@ -1612,6 +1621,71 @@ mod live_lifetime_tests {
         assert!(verified && newer.is_empty() && !inputs.is_empty());
         assert!(!hash.is_empty());
         assert!(!Path::new(&database).exists());
+    }
+    #[test]
+    fn unchanged_cancelled_snapshot_stays_cancelled_during_classification_backfill() {
+        let job = cancellation_job();
+        let root = job.root.clone();
+        let database = job.database.clone();
+        let mut hash = String::new();
+        let captured = execute(
+            job,
+            Path::new("/no/compiler/installation"),
+            &mut hash,
+            &mut |_| {},
+            None,
+        )
+        .unwrap();
+        let JobOutput::CancellationBaseline(inputs, _, _) = captured else {
+            panic!("capture published");
+        };
+        let mut writer = know_code_core::store::Writer::open(Path::new(&database)).unwrap();
+        writer
+            .stage(Payload::Compilation(
+                know_code_core::protocol::Compilation {
+                    id: "legacy".into(),
+                    language: "typescript".into(),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        writer
+            .stage(Payload::Report(know_code_core::protocol::AnalysisReport {
+                compilation_id: "legacy".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        let generation = writer.publish().unwrap();
+        assert!(
+            ReadView::open(&database)
+                .unwrap()
+                .needs_test_classification()
+                .unwrap()
+        );
+        let mut retry = cancellation_job();
+        retry.root = root;
+        retry.database = database.clone();
+        retry.identity = workspace::identity(&retry.root).unwrap();
+        retry.inputs = inputs;
+        retry.cancel_baseline = false;
+        retry.previous_generation = generation;
+        retry.previous_failed_input_hash = hash.clone();
+        let mut retry_hash = String::new();
+        let error = execute(
+            retry,
+            Path::new("/no/compiler/installation"),
+            &mut retry_hash,
+            &mut |_| {},
+            None,
+        )
+        .err()
+        .expect("cancelled snapshot resumed");
+        assert_eq!(hash, retry_hash);
+        assert!(
+            matches!(error.downcast_ref::<know_code_core::Error>(),Some(know_code_core::Error::Remote{code,..}) if code=="cancelled")
+        );
+        assert_eq!(ReadView::open(&database).unwrap().generation, generation);
     }
     #[test]
     fn cancellation_capture_detects_undelivered_save_with_preserved_mtime() {

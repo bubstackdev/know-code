@@ -17,6 +17,8 @@ pub const MAX_SOURCE_BYTES: u32 = 256 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct QueryRequest {
     pub op: String,
+    #[serde(default)]
+    pub tests: crate::testing::TestFilter,
     pub name: Option<String>,
     pub query: Option<String>,
     pub symbol_id: Option<String>,
@@ -88,6 +90,7 @@ pub struct SymbolResult {
     pub compilation_id: String,
     pub target: String,
     pub locations: Vec<Location>,
+    pub test_classification: crate::testing::Classification,
     #[serde(skip)]
     pub(crate) owner_generation: u64,
     #[serde(skip)]
@@ -100,6 +103,7 @@ pub struct OccurrenceResult {
     pub compilation_id: String,
     pub target: String,
     pub location: Location,
+    pub test_classification: crate::testing::Classification,
 }
 #[derive(Debug, Serialize)]
 pub struct Coverage {
@@ -134,6 +138,7 @@ pub struct SourceResult {
 pub struct WorkspaceCoverage {
     pub compilations: usize,
     pub statuses: BTreeMap<String, usize>,
+    pub test_classification: BTreeMap<String, usize>,
     pub diagnostic_counts: BTreeMap<String, usize>,
 }
 #[derive(Debug, Serialize)]
@@ -283,7 +288,7 @@ impl ReadView {
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, true)?;
         connection.execute_batch("PRAGMA cache_size=-2048; BEGIN DEFERRED;")?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if ![2, 3, 4, 5, SCHEMA_VERSION].contains(&version) {
+        if ![2, 3, 4, 5, 6, SCHEMA_VERSION].contains(&version) {
             return Err(Error::UpdateRequired(format!(
                 "index format {version} is unsupported; update required (readable: 2 through {SCHEMA_VERSION})"
             )));
@@ -294,6 +299,7 @@ impl ReadView {
             "CREATE TEMP VIEW occurrence_locations AS SELECT s.generation,s.compilation_id,s.id AS symbol_id,o.role,a.id AS artifact_id,a.path,a.content_hash,a.generated,o.start_byte,o.end_byte FROM occurrences o JOIN symbols s ON s.rowid=o.symbol_key JOIN artifacts a ON a.rowid=o.artifact_key"
         };
         connection.execute_batch(locations)?;
+        crate::testing::create_views(&connection, version)?;
         if version >= 4 {
             crate::graph::create_view(&connection, version)?;
         }
@@ -416,12 +422,28 @@ impl ReadView {
         let coverage = self.coverage(
             request.op == "coverage" || request.coverage_detail == CoverageDetail::Full,
         )?;
+        if request.tests != crate::testing::TestFilter::All
+            && ["source", "coverage"].contains(&request.op.as_str())
+        {
+            return Err(Error::InvalidRequest(
+                "tests applies to findings, not source/coverage expansion".into(),
+            ));
+        }
         let mut workspace_coverage = WorkspaceCoverage {
             compilations: coverage.len(),
             ..Default::default()
         };
         for c in &coverage {
             self.check()?;
+            *workspace_coverage
+                .test_classification
+                .entry(
+                    c.capabilities
+                        .get("test_classification")
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                )
+                .or_default() += 1;
             *workspace_coverage
                 .statuses
                 .entry(c.status.clone())
@@ -498,6 +520,7 @@ impl ReadView {
                             compilation_id: r.get(5)?,
                             target: r.get(6)?,
                             locations: vec![],
+                            test_classification: Default::default(),
                             owner_generation: r.get(7)?,
                             locations_limited: false,
                         })
@@ -509,6 +532,8 @@ impl ReadView {
                 let mut locations = self.connection.prepare_cached("SELECT o.artifact_id,o.path,o.content_hash,o.start_byte,o.end_byte,o.generated FROM occurrence_locations o WHERE o.generation=? AND o.compilation_id=? AND o.symbol_id=? AND o.role='declaration' ORDER BY o.path,o.start_byte")?;
                 for symbol in &mut result.symbols {
                     self.check()?;
+                    let key = self.connection.query_row("SELECT rowid FROM symbols WHERE generation=? AND compilation_id=? AND id=?", params![symbol.owner_generation,symbol.compilation_id,symbol.id], |r|r.get(0))?;
+                    symbol.test_classification = crate::testing::symbol(&self.connection, key)?;
                     symbol.locations = locations
                         .query_map(
                             params![symbol.owner_generation, symbol.compilation_id, symbol.id],
@@ -522,7 +547,8 @@ impl ReadView {
                     .symbol_id
                     .as_ref()
                     .ok_or_else(|| Error::InvalidRequest("references requires symbol_id".into()))?;
-                let mut statement = self.connection.prepare("SELECT o.symbol_id,o.role,o.compilation_id,c.target,o.artifact_id,o.path,o.content_hash,o.start_byte,o.end_byte,o.generated FROM generation_units u JOIN occurrence_locations o ON o.generation=u.owner_generation AND o.compilation_id=u.compilation_id JOIN compilations c ON c.generation=o.generation AND c.id=o.compilation_id WHERE u.generation=? AND o.symbol_id=? AND o.role='reference' AND (? IS NULL OR c.target=?) ORDER BY o.path,o.start_byte,o.compilation_id LIMIT ?")?;
+                let predicate = request.tests.predicate("t.mask");
+                let mut statement = self.connection.prepare(&format!("SELECT o.symbol_id,o.role,o.compilation_id,c.target,o.artifact_id,o.path,o.content_hash,o.start_byte,o.end_byte,o.generated,o.generation FROM generation_units u JOIN occurrence_locations o ON o.generation=u.owner_generation AND o.compilation_id=u.compilation_id JOIN compilations c ON c.generation=o.generation AND c.id=o.compilation_id WHERE u.generation=? AND o.symbol_id=? AND o.role='reference' AND (? IS NULL OR c.target=?) AND EXISTS(SELECT 1 FROM test_origin_masks t WHERE t.owner_generation=o.generation AND t.compilation_id=o.compilation_id AND t.artifact_id=o.artifact_id AND {predicate}) ORDER BY o.path,o.start_byte,o.compilation_id LIMIT ?"))?;
                 result.occurrences = statement
                     .query_map(
                         params![
@@ -536,6 +562,7 @@ impl ReadView {
                             Ok(OccurrenceResult {
                                 symbol_id: r.get(0)?,
                                 role: r.get(1)?,
+                                test_classification: Default::default(),
                                 compilation_id: r.get(2)?,
                                 target: r.get(3)?,
                                 location: Location {
@@ -552,6 +579,16 @@ impl ReadView {
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 result.truncated = result.occurrences.len() > request.limit as usize;
                 result.occurrences.truncate(request.limit as usize);
+                for occurrence in &mut result.occurrences {
+                    let owner: u64 = self.connection.query_row("SELECT owner_generation FROM generation_units WHERE generation=? AND compilation_id=?",params![self.generation,occurrence.compilation_id],|r|r.get(0))?;
+                    occurrence.test_classification = crate::testing::origin(
+                        &self.connection,
+                        owner,
+                        &occurrence.compilation_id,
+                        &occurrence.location.artifact_id,
+                        &occurrence.location.path,
+                    )?;
+                }
             }
             "source" => {
                 let (source, truncated) = self.source_excerpt(&request, false)?;
@@ -651,7 +688,8 @@ impl ReadView {
             .symbol_id
             .as_ref()
             .ok_or_else(|| Error::InvalidRequest("symbol_context requires symbol_id".into()))?;
-        let mut q = self.connection.prepare("SELECT s.rowid FROM generation_units u JOIN symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE u.generation=? AND s.id=? AND (? IS NULL OR c.target=?) AND (? IS NULL OR s.compilation_id=?) ORDER BY s.compilation_id LIMIT ?")?;
+        let predicate = request.tests.predicate("s.test_mask");
+        let mut q = self.connection.prepare(&format!("SELECT s.rowid FROM generation_units u JOIN classified_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE u.generation=? AND s.id=? AND (? IS NULL OR c.target=?) AND (? IS NULL OR s.compilation_id=?) AND {predicate} ORDER BY s.compilation_id LIMIT ?"))?;
         let keys = q
             .query_map(
                 params![
@@ -667,6 +705,13 @@ impl ReadView {
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         if keys.is_empty() {
+            if request.tests != crate::testing::TestFilter::All {
+                let mut unfiltered = request.clone();
+                unfiltered.tests = crate::testing::TestFilter::All;
+                unfiltered.include_source = false;
+                self.symbol_context(&unfiltered)?;
+                return Ok((vec![], false));
+            }
             return Err(Error::InvalidRequest(
                 "symbol_id is not present in the served compilation/target scope".into(),
             ));
@@ -883,6 +928,16 @@ impl ReadView {
         ))
     }
 
+    /// Missing policy evidence requires ordinary bounded reanalysis, not restoration.
+    pub fn needs_test_classification(&self) -> Result<bool> {
+        let missing = if self.format_version >= 7 {
+            "coalesce(json_extract(nullif(c.test_classification_json,''),'$.policy_version'),0)<>1"
+        } else {
+            "1"
+        };
+        Ok(self.connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language IN ('typescript','csharp') AND {missing})"),[self.generation],|r|r.get(0))?)
+    }
+
     fn coverage(&self, details: bool) -> Result<Vec<Coverage>> {
         let caps = if self.format_version >= 4 {
             "r.capabilities_json"
@@ -939,13 +994,20 @@ impl ReadView {
                         Box::new(e),
                     )
                 })?,
-                capabilities: serde_json::from_str(&r.get::<_, String>(10)?).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        10,
-                        rusqlite::types::Type::Text,
-                        Box::new(e),
-                    )
-                })?,
+                capabilities: {
+                    let mut capabilities: BTreeMap<String, String> =
+                        serde_json::from_str(&r.get::<_, String>(10)?).map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                10,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
+                    capabilities
+                        .entry("test_classification".into())
+                        .or_insert_with(|| "unknown".into());
+                    capabilities
+                },
                 status: r.get(7)?,
                 diagnostic_counts,
                 details_omitted: !details,
@@ -972,14 +1034,14 @@ fn symbols_sql(request: &QueryRequest) -> String {
         "SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation "
             .to_owned();
     if request.name.is_some() {
-        sql.push_str("FROM generation_units u CROSS JOIN symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
+        sql.push_str("FROM generation_units u CROSS JOIN classified_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
         if request.query.is_some() {
             sql.push_str(" CROSS JOIN symbol_search ON symbol_search.rowid=s.rowid");
         }
     } else if request.query.is_some() {
-        sql.push_str("FROM symbol_search CROSS JOIN symbols s ON s.rowid=symbol_search.rowid CROSS JOIN generation_units u ON u.owner_generation=s.generation AND u.compilation_id=s.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
+        sql.push_str("FROM symbol_search CROSS JOIN classified_symbols s ON s.rowid=symbol_search.rowid CROSS JOIN generation_units u ON u.owner_generation=s.generation AND u.compilation_id=s.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
     } else {
-        sql.push_str("FROM generation_units u JOIN symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
+        sql.push_str("FROM generation_units u JOIN classified_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
     }
     sql.push_str(" WHERE u.generation=?1");
     if request.name.is_some() {
@@ -990,6 +1052,10 @@ fn symbols_sql(request: &QueryRequest) -> String {
     }
     if request.target.is_some() {
         sql.push_str(" AND c.target=?4");
+    }
+    if request.tests != crate::testing::TestFilter::All {
+        sql.push_str(" AND ");
+        sql.push_str(&request.tests.predicate("s.test_mask"));
     }
     sql.push_str(" ORDER BY s.name,s.id,s.compilation_id LIMIT ?5");
     sql

@@ -82,6 +82,12 @@ pub(crate) fn index_published(
         };
     for (number, mut worker) in workers.into_iter().enumerate() {
         let requested_policy = protocol::prepare_analysis_policy(&mut worker.request)?;
+        let classification_policy = worker.request.test_classification_policy;
+        if classification_policy != 0 && classification_policy != crate::testing::POLICY_VERSION {
+            return Err(Error::UpdateRequired(
+                "unsupported test classification policy".into(),
+            ));
+        }
         worker.request.preparations = preparations.values().cloned().collect();
         let job_id = format!("{}-{number}", writer.generation);
         control.check()?;
@@ -150,6 +156,12 @@ pub(crate) fn index_published(
                 match message.payload {
                     Some(Payload::Provider(info)) if !hello => {
                         protocol::check_analysis_policy(requested_policy, &info)?;
+                        if classification_policy != 0
+                            && (info.test_classification_policy != classification_policy
+                                || !["typescript", "csharp"].contains(&info.language.as_str()))
+                        {
+                            return Err(Error::UpdateRequired("worker must acknowledge test classification policy; update the runtime bundle".into()));
+                        }
                         eprintln!(
                             "analyzing {} with compiler {}",
                             info.language, info.compiler_version
@@ -179,7 +191,23 @@ pub(crate) fn index_published(
                         std::fs::write(&next, serde_json::to_vec(&preparations)?)?;
                         std::fs::rename(next, &preparation_path)?;
                     }
-                    Some(payload) if hello => writer.stage(payload)?,
+                    Some(payload) if hello => {
+                        if classification_policy != 0 {
+                            let classification = match &payload {
+                                Payload::Compilation(c) => Some(c.test_classification.as_ref()),
+                                Payload::Source(s) if s.test_classification.is_some() => {
+                                    Some(s.test_classification.as_ref())
+                                }
+                                _ => None,
+                            };
+                            if classification.is_some_and(|c| {
+                                c.is_none_or(|c| c.policy_version != classification_policy)
+                            }) {
+                                return Err(Error::Protocol("requested test classification metadata missing or incompatible".into()));
+                            }
+                        }
+                        writer.stage(payload)?;
+                    }
                     _ => {
                         return Err(Error::Protocol(
                             "missing provider handshake or invalid completion".into(),

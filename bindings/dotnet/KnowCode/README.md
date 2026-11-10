@@ -28,7 +28,7 @@ if (page.GetProperty("next_cursor").GetString() is { } cursor) {
 
 Every page provides its reusable `page.cursor`, nullable `next_cursor`, zero-based position, page count and section totals/start/count. Graph findings and boundaries occupy separate sections; later pages can contain boundaries after findings finish. Original `truncated`, graph limits and coverage persist through the final page. Replay preserves rows, order and next position; a smaller response budget may fail rather than repartition the result.
 
-Tokens are opaque and portable across clients using the same coordinator incarnation. Set `QueryRequest.Cursor` for separate `source` or `symbol_context` reads through the pinned generation; source hashes/ranges must match that indexed text. Expiry, coordinator restart or retention pressure returns `cursor_invalidated`, requiring an explicit new query. The SDK requires native query contract 3; assembled candidate acceptance remains in progress.
+Tokens are opaque and portable across clients using the same coordinator incarnation. Set `QueryRequest.Cursor` for separate `source` or `symbol_context` reads through the pinned generation; source hashes/ranges must match that indexed text. Expiry, coordinator restart or retention pressure returns `cursor_invalidated`, requiring an explicit new query. The SDK requires native query contract 4; assembled candidate acceptance remains in progress.
 
 `QueryAsync`, `QueryJsonAsync` and `NextPageAsync` on both `Index` and `Workspace` accept an optional final `CancellationToken` parameter:
 
@@ -41,3 +41,5 @@ catch (OperationCanceledException) { /* Only this query was cancelled. */ }
 ```
 
 A pre-cancelled token stops before dispatch. In-flight cancellation returns `OperationCanceledException` from the awaited task after native work exits; its token matches the supplied token. Cancellation registration and native handle remain alive until then. Core `cancelled` is translated to this host exception, while a completed core success may still succeed after a late cancellation. Tokens are not serialized into query JSON, and query cancellation does not cancel indexing or dispose the workspace. Calls without a cancellable token do not allocate a native cancellation handle.
+
+Filter finding searches with `tests: "only"` or `"exclude"` (default `"all"`); .NET uses `Tests = TestFilter.Only`/`Exclude`. Exclusion retains unknown code; mixed symbols match either view when a declaration matches. References classify use sites; graph traversal crosses nonmatching helpers. Classification/evidence and workspace classification coverage stay explicit. Source/coverage expansion rejects nondefault filters.

@@ -1,5 +1,6 @@
 export interface QueryRequest {
   op: 'symbols' | 'references' | 'source' | 'callers' | 'callees' | 'impact' | 'symbol_context' | 'coverage' | 'next_page';
+  tests?: 'all' | 'exclude' | 'only';
   name?: string;
   query?: string;
   symbol_id?: string;
@@ -62,7 +63,13 @@ export interface Location {
   artifact_id: string; path: string; content_hash: string;
   start_byte: number; end_byte: number; generated: boolean;
 }
+export interface TestClassification {
+  kind: 'unknown' | 'test' | 'non_test' | 'mixed';
+  evidence?: Array<{kind: string; artifact_id: string; source_path: string; evidence: Array<{basis: string; value: string; path: string; inferred: boolean}>}>;
+  evidence_limited?: boolean;
+}
 export interface SymbolResult {
+  test_classification: TestClassification;
   id: string; name: string; kind: string; signature: string; external: boolean;
   compilation_id: string; target: string; locations: Location[];
 }
@@ -84,7 +91,7 @@ export interface QueryResult {
   generation: number; freshness: 'current' | 'stale' | 'unverified'; truncated: boolean;
   coordination?: WorkspaceStatus;
   page?: QueryPage;
-  workspace_coverage: {compilations: number; statuses: Record<string, number>; diagnostic_counts: Record<string, number>};
+  workspace_coverage: { test_classification: Record<string, number>;compilations: number; statuses: Record<string, number>; diagnostic_counts: Record<string, number>};
   coverage_scope: 'workspace' | 'relevant' | 'compilation';
   contexts?: Array<{symbol: SymbolResult; boundary?: string; declarations: Array<{
     location: Location; line: number; extent?: Location; source?: SourceResult;
@@ -96,7 +103,7 @@ export interface QueryResult {
     details_omitted: boolean; diagnostic_counts: Record<string, number>;
     diagnostics?: Array<{code: string; severity: string; message: string; path: string}>}>;
   symbols?: SymbolResult[];
-  occurrences?: Array<{symbol_id: string; role: string; compilation_id: string; target: string; location: Location}>;
+  occurrences?: Array<{test_classification: TestClassification; symbol_id: string; role: string; compilation_id: string; target: string; location: Location}>;
   source?: SourceResult;
   graph?: GraphResult;
 }

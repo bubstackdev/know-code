@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS generations(id INTEGER PRIMARY KEY);
@@ -57,7 +57,7 @@ CREATE TRIGGER IF NOT EXISTS symbols_insert AFTER INSERT ON symbols BEGIN
  INSERT INTO symbol_search(rowid,name,signature) VALUES(new.rowid,new.name,new.signature); END;
 CREATE TRIGGER IF NOT EXISTS symbols_delete AFTER DELETE ON symbols BEGIN
  INSERT INTO symbol_search(symbol_search,rowid,name,signature) VALUES('delete',old.rowid,old.name,old.signature); END;
-PRAGMA user_version=6;
+
 "#;
 
 fn migrate_keys(connection: &Connection) -> Result<()> {
@@ -190,7 +190,7 @@ impl Writer {
         control.interruptible(interrupt, || {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if ![0, 1, 2, 3, 4, 5, SCHEMA_VERSION].contains(&version) {
+        if ![0, 1, 2, 3, 4, 5, 6, SCHEMA_VERSION].contains(&version) {
             return Err(Error::UpdateRequired(format!(
                 "index format {version} is unsupported; expected {SCHEMA_VERSION}"
             )));
@@ -217,6 +217,10 @@ impl Writer {
         if version < 6 {
             migrate_dispatch_keys(&tx)?;
         }
+        if version < 7 {
+            tx.execute_batch("ALTER TABLE compilations ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE unit_artifacts ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN test_mask INTEGER NOT NULL DEFAULT 1; CREATE INDEX symbol_test_mask ON symbols(test_mask); PRAGMA user_version=7;")?;
+        }
+        crate::testing::create_views(&tx, SCHEMA_VERSION)?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS occurrence_artifact ON occurrences(artifact_key);
           CREATE INDEX IF NOT EXISTS relationship_source ON relationships(source_key,resolution,kind);
           CREATE INDEX IF NOT EXISTS relationship_target ON relationships(target_key,resolution,kind);
@@ -283,7 +287,7 @@ impl Writer {
                     ));
                 }
                 tx.execute(
-                    "INSERT INTO compilations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO compilations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     params![
                         gen_id,
                         c.id,
@@ -297,7 +301,8 @@ impl Writer {
                         serde_json::to_string(&c.dependencies)?,
                         serde_json::to_string(&c.input_paths)?,
                         serde_json::to_string(&c.references)?,
-                        c.input_fingerprint
+                        c.input_fingerprint,
+                        crate::testing::encode(c.test_classification.as_ref())?
                     ],
                 )?;
                 tx.execute("INSERT INTO generation_units VALUES(?,?,?) ON CONFLICT(generation,compilation_id) DO UPDATE SET owner_generation=excluded.owner_generation",params![gen_id,c.id,gen_id])?;
@@ -325,10 +330,17 @@ impl Writer {
                         return Err(Error::Protocol("conflicting artifact identity".into()));
                     }
                 }
+                let classification = crate::testing::encode(s.test_classification.as_ref())?;
                 tx.execute(
-                    "INSERT OR IGNORE INTO unit_artifacts VALUES(?,?,?)",
-                    params![gen_id, s.compilation_id, s.id],
+                    "INSERT INTO unit_artifacts(owner_generation,compilation_id,artifact_id,test_classification_json) VALUES(?,?,?,?) ON CONFLICT(owner_generation,compilation_id,artifact_id) DO NOTHING",
+                    params![gen_id, s.compilation_id, s.id, classification],
                 )?;
+                let existing: String=tx.query_row("SELECT test_classification_json FROM unit_artifacts WHERE owner_generation=? AND compilation_id=? AND artifact_id=?",params![gen_id,s.compilation_id,s.id],|r|r.get(0))?;
+                if existing != classification {
+                    return Err(Error::Protocol(
+                        "conflicting source test classification".into(),
+                    ));
+                }
             }
             envelope::Payload::Facts(batch) => {
                 let selected = if batch
@@ -487,8 +499,16 @@ impl Writer {
                     return Err(Error::Protocol("invalid analysis status".into()));
                 }
                 if r.capabilities.iter().any(|(name, status)| {
-                    !["calls", "dependencies", "dispatch", "project_links"].contains(&name.as_str())
-                        || !["complete", "partial", "unavailable"].contains(&status.as_str())
+                    ![
+                        "calls",
+                        "dependencies",
+                        "dispatch",
+                        "project_links",
+                        "test_classification",
+                    ]
+                    .contains(&name.as_str())
+                        || !["complete", "partial", "unavailable", "unknown"]
+                            .contains(&status.as_str())
                 }) {
                     return Err(Error::Protocol("invalid analysis capability".into()));
                 }
@@ -527,6 +547,14 @@ impl Writer {
             return Err(Error::Protocol(
                 "analysis has no compilations or lacks completion reports".into(),
             ));
+        }
+        {
+            let mut q = tx.prepare("SELECT id FROM compilations WHERE generation=?")?;
+            let ids = q.query_map([self.generation], |r| r.get::<_, String>(0))?;
+            for id in ids {
+                control.check()?;
+                crate::testing::finalize(&tx, self.generation, &id?)?;
+            }
         }
         tx.execute(
             "UPDATE state SET current_generation=? WHERE singleton=1",

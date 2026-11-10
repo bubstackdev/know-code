@@ -57,11 +57,16 @@ internal sealed class QueryCancellationHandle : SafeHandle
     protected override bool ReleaseHandle() { Native.QueryCancelFree(handle); return true; }
 }
 
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.TestFilterJsonConverter))]
+public enum TestFilter { All, Exclude, Only }
+internal sealed class TestFilterJsonConverter() : System.Text.Json.Serialization.JsonStringEnumConverter<TestFilter>(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false);
+
 public sealed record QueryRequest(string Op, string? Name = null, string? Query = null,
     string? SymbolId = null, string? ArtifactId = null, string? Target = null, uint Limit = 100, uint FreshnessWaitMs = 500, uint? DeadlineMs = null,
     string[]? Kinds = null, bool IncludeImplicit = true, bool ExactOnly = false, uint? MaxDepth = null,
     uint? MaxEdges = null, uint? MaxNodes = null, uint? PathsPerSymbol = null, uint? MaxBytes = null, uint? TimeBudgetMs = null)
 {
+    public TestFilter? Tests { get; init; }
     public ulong? StartByte { get; init; }
     public ulong? EndByte { get; init; }
     public string? ContentHash { get; init; }
@@ -86,8 +91,8 @@ internal static partial class Native
     };
     internal static void CheckQueryContract()
     {
-        if (QueryContractVersion() != 3)
-            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; cancellable query support is incompatible.");
+        if (QueryContractVersion() != 4)
+            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; query classification/filter support is incompatible.");
     }
     internal static QueryCancellationHandle CreateQueryCancellation()
     {

@@ -197,6 +197,7 @@ impl ServerHandler for Mcp {
 
 fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
     let common = json!({
+        "tests":{"type":"string","enum":["all","exclude","only"],"default":"all","description":"Filter findings by declaration/use evidence. Unknown is retained by exclude; traversal remains unfiltered."},
         "name":{"type":"string","description":"Exact, case-sensitive symbol name."},
         "query":{"type":"string","description":"Lexical search text, not semantic graph evidence."},
         "symbol_id":{"type":"string","description":"Opaque symbol ID returned by a prior lookup."},
@@ -239,9 +240,9 @@ fn tools() -> Vec<Tool> {
         "coverage_detail",
         "detail_max_bytes",
     ];
-    let mut search = vec!["name", "query"];
+    let mut search = vec!["name", "query", "tests"];
     search.extend(waits);
-    let mut references = vec!["symbol_id"];
+    let mut references = vec!["symbol_id", "tests"];
     references.extend(waits);
     let mut graph = references.clone();
     graph.extend([

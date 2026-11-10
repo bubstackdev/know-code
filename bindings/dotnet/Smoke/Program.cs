@@ -1,5 +1,12 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--typed-test-filter")
+{
+    var filter = Enum.Parse<KnowCode.TestFilter>(args[2], ignoreCase: true);
+    using var result = await new KnowCode.Index(args[1]).QueryAsync(new KnowCode.QueryRequest("symbols", Limit:1000) { Tests = filter });
+    Console.WriteLine(result.RootElement.GetRawText());
+    return;
+}
 if (args[0] == "--cancel-query")
 {
     using var cancellation = new CancellationTokenSource();

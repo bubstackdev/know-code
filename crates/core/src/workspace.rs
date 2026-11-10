@@ -570,6 +570,7 @@ pub fn refresh_controlled(
                     .into_owned(),
             ],
             request: AnalyzeRequest {
+                test_classification_policy: crate::testing::POLICY_VERSION,
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: ts,
                 configuration: configuration.into(),
@@ -603,6 +604,7 @@ pub fn refresh_controlled(
                     .into_owned(),
             ],
             request: AnalyzeRequest {
+                test_classification_policy: crate::testing::POLICY_VERSION,
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: cs,
                 configuration: configuration.into(),

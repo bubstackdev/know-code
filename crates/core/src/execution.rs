@@ -17,7 +17,7 @@ use std::{
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
 pub const MAX_DEADLINE_MS: u32 = 120_000;
-pub const QUERY_CONTRACT_VERSION: u32 = 3;
+pub const QUERY_CONTRACT_VERSION: u32 = 4;
 pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
 pub const MIN_RESPONSE_BYTES: u32 = 1024;

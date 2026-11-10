@@ -8,6 +8,7 @@ pub mod query;
 pub mod resource;
 pub mod settings;
 pub mod store;
+pub mod testing;
 pub mod update;
 pub mod workspace;
 

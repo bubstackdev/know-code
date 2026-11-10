@@ -27,7 +27,7 @@ for (;;) {
 
 A `next_page` request accepts only `op`, `cursor`, `deadline_ms` and `response_max_bytes`. Each page exposes a reusable `page.cursor`, nullable `next_cursor`, zero-based position, page count and section totals/start/count. Graph findings and boundaries occupy separate sections; later pages may contain boundaries after findings finish. Original `truncated`, graph limits and coverage still apply on the final page.
 
-Tokens are opaque and portable across clients connected to the same coordinator incarnation. Pages stay on their original generation and replay the same rows, order and next position. A smaller response budget may fail rather than repack a page. Pass a page's `cursor` to `source` or `symbol_context` for bounded reads from that generation; source hashes/ranges must refer to that indexed text. Expiry, coordinator restart or retention pressure can return `cursor_invalidated`; restart the query explicitly. These SDK declarations require native query contract 3; assembled candidate acceptance remains in progress.
+Tokens are opaque and portable across clients connected to the same coordinator incarnation. Pages stay on their original generation and replay the same rows, order and next position. A smaller response budget may fail rather than repack a page. Pass a page's `cursor` to `source` or `symbol_context` for bounded reads from that generation; source hashes/ranges must refer to that indexed text. Expiry, coordinator restart or retention pressure can return `cursor_invalidated`; restart the query explicitly. These SDK declarations require native query contract 4; assembled candidate acceptance remains in progress.
 
 Both `Index.query` and `Workspace.query` accept an optional second argument `{signal}`:
 
@@ -40,3 +40,5 @@ catch (error) { if (error.name !== 'AbortError') throw error; }
 ```
 
 A pre-aborted signal rejects before dispatch. In-flight cancellation waits for the native query to exit before rejecting with an `Error` named `AbortError`, code `ABORT_ERR` and the signal's reason as `cause` when available. A query already completed successfully may still return success after a late abort. Options never enter query JSON, and aborting a query does not cancel shared background indexing or close the workspace. Calls without a signal do not allocate a native cancellation handle.
+
+Filter finding searches with `tests: "only"` or `"exclude"` (default `"all"`); .NET uses `Tests = TestFilter.Only`/`Exclude`. Exclusion retains unknown code; mixed symbols match either view when a declaration matches. References classify use sites; graph traversal crosses nonmatching helpers. Classification/evidence and workspace classification coverage stay explicit. Source/coverage expansion rejects nondefault filters.
