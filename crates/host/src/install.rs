@@ -383,6 +383,9 @@ fn same_contract(a: &Path, b: &Path) -> Result<()> {
     if b["analysis_settings_version"] != know_code_core::settings::VERSION {
         return Err("target runtime lacks the required workspace analysis-settings contract; use a compatible runtime rather than rolling back to legacy settings".into());
     }
+    if b["resource_control_version"] != know_code_core::resource::CONTROL_VERSION {
+        return Err("target runtime lacks the required recorded cancellation boundary; use a compatible runtime".into());
+    }
     if a["worker_protocol"] != b["worker_protocol"] || a["store_format"] != b["store_format"] {
         return Err("this installer only switches compatible protocol/store contracts; a migration-capable update is required".into());
     }

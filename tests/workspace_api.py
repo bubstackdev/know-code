@@ -202,26 +202,29 @@ replacement_ready=ready(replacement)
 assert not replacement_ready['requested_settings']['node']['allow_install_scripts'];replacement.close()
 checks+=['malformed_first_settings_remain_watchable','personal_settings_creation_failure_and_repair_preserve_stale_generation']
 checks.append('explicit_removal_prevents_replacement_workspace_inheriting_script_grant')
-# Existing handles must reject a peer with the right framing but no settings
-# capability after a coordinator rollback, before sending any refresh mutation.
+# Existing handles reject a peer with matching framing/analysis-settings but the
+# old cancellation contract, before sending refresh/cancel mutations.
 node=Client('node',configuration=None);dotnet=Client('dotnet',configuration=None)
 cli('coordinator','stop');until=time.monotonic()+15
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 old=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);old.bind(str(DATA/'c.sock'));old.listen(4)
 requests=[]
 def old_settings_peer():
- for _ in range(6):
+ for _ in range(12):
   conn,_=old.accept()
   with conn:
    requests.append(conn.recv(65536))
-   # Envelope(protocol_version=7, control_response=empty) has capability zero.
-   conn.sendall(b'\x05\x00\x00\x00\x08\x07\xfa\x01\x00')
+   # Envelope v7, response {resource_control_version:1,analysis_settings_version:1}.
+   conn.sendall(b'\x09\x00\x00\x00\x08\x07\xfa\x01\x04\x38\x01\x40\x01')
 thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
 for client in [node,dotnet]:
  error(client.send('refresh',configuration='Release'),'update_required')
- error(client.send('query',request={'op':'symbols','name':'Value'}),'update_required');client.close()
+ error(client.send('query',request={'op':'symbols','name':'Value'}),'update_required')
+ error(client.send('status'),'update_required')
+ error(client.send('cancel'),'update_required');client.close()
 thread.join(timeout=5);old.close();(DATA/'c.sock').unlink()
-assert len(requests)==6 and not thread.is_alive()
+assert len(requests)==12 and not thread.is_alive()
+assert not any(b'\x0a\x07refresh' in request or b'\x0a\x06cancel' in request for request in requests)
 checks.append('existing_handles_reject_settings_incompatible_coordinator')
 # A client must not spawn a replacement when a connected peer is incompatible.
 mock=RUN/'m';mock.mkdir();listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);listener.bind(str(mock/'c.sock'));listener.listen(2)

@@ -30,6 +30,8 @@ pub struct Stamp {
     pub size: u64,
     pub modified: u64,
     pub hash: String,
+    #[serde(default)]
+    pub changed: u64,
 }
 pub type Snapshot = BTreeMap<String, Stamp>;
 
@@ -204,6 +206,7 @@ pub fn snapshot_controlled(
                             size: 0,
                             modified: 0,
                             hash: "missing".into(),
+                            changed: 0,
                         },
                     );
                 }
@@ -217,9 +220,11 @@ pub fn snapshot_controlled(
             .unwrap_or_default()
             .as_nanos() as u64;
         let old = previous.get(&key);
+        let changed = changed_time(&metadata);
         let hash = if !force.iter().any(|p| path == *p || path.starts_with(p))
-            && old.is_some_and(|s| s.size == metadata.len() && s.modified == modified)
-        {
+            && old.is_some_and(|s| {
+                s.size == metadata.len() && s.modified == modified && s.changed == changed
+            }) {
             old.unwrap().hash.clone()
         } else {
             let mut file = std::fs::File::open(&path)?;
@@ -241,10 +246,59 @@ pub fn snapshot_controlled(
                 size: metadata.len(),
                 modified,
                 hash,
+                changed,
             },
         );
     }
     Ok(result)
+}
+fn changed_time(metadata: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    (metadata.ctime().max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(metadata.ctime_nsec().max(0) as u64)
+}
+
+/// Final lightweight filesystem check before acknowledging a captured baseline.
+/// The capture has already hashed bytes twice; this catches writes/renames whose
+/// watcher callbacks have not arrived, including preserved modification times.
+pub fn snapshot_metadata_matches(
+    root: &Path,
+    snapshot: &Snapshot,
+    control: &crate::resource::Control,
+) -> Result<bool> {
+    for path in files_controlled(root, control)? {
+        if !snapshot.contains_key(&path.to_string_lossy().into_owned()) {
+            return Ok(false);
+        }
+    }
+    for (path, stamp) in snapshot {
+        control.check()?;
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if stamp.hash == "missing" {
+                    continue;
+                }
+                return Ok(false);
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let modified = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        if !metadata.is_file()
+            || stamp.hash == "missing"
+            || metadata.len() != stamp.size
+            || modified != stamp.modified
+            || changed_time(&metadata) != stamp.changed
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 pub fn differences(before: &Snapshot, after: &Snapshot) -> Vec<PathBuf> {
     before

@@ -20,7 +20,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, SyncSender},
     },
     thread,
@@ -28,7 +28,9 @@ use std::{
 };
 
 type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
+static REGISTRATION: AtomicU64 = AtomicU64::new(1);
 struct Entry {
+    registration: u64,
     analysis_error: String,
     failed_input_hash: String,
     status: LiveStatus,
@@ -42,6 +44,8 @@ struct Entry {
     queued: Instant,
     active: Instant,
     watch_pending: bool,
+    pending: bool,
+    cancel_pending: bool,
 }
 struct LiveStatus {
     value: WorkspaceStatus,
@@ -96,6 +100,7 @@ enum Event {
     Finished(JobResult),
 }
 struct Job {
+    registration: u64,
     database: String,
     root: PathBuf,
     configuration: String,
@@ -111,12 +116,19 @@ struct Job {
     previous_error_code: String,
     session: Session,
     previous_failed_input_hash: String,
+    cancel_baseline: bool,
+}
+enum JobOutput {
+    Indexed(u64, Snapshot, Vec<PathBuf>),
+    CancellationBaseline(Snapshot, Vec<PathBuf>, bool),
 }
 struct JobResult {
+    registration: u64,
     input_hash: String,
     database: String,
     epoch: u64,
-    result: Result<(u64, Snapshot, Vec<PathBuf>), Failure>,
+    result: Result<JobOutput, Failure>,
+    cancel_baseline: bool,
 }
 
 struct Failure {
@@ -185,10 +197,16 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             "ALTER TABLE workspaces ADD COLUMN outcome_code TEXT NOT NULL DEFAULT ''",
         )?;
     }
+    if !columns.contains("cancel_pending") {
+        registry.execute_batch("BEGIN IMMEDIATE;
+          ALTER TABLE workspaces ADD COLUMN cancel_pending INTEGER NOT NULL DEFAULT 0;
+          UPDATE workspaces SET cancel_pending=1,failed_input_hash='' WHERE outcome_code='cancelled';
+          COMMIT;")?;
+    }
     let mut entries = BTreeMap::new();
     {
         let mut query = registry.prepare(
-            "SELECT w.database,w.root,w.configuration,w.generation,'{}',w.error,COALESCE(i.identity,''),w.failed_input_hash,w.outcome_code FROM workspaces w LEFT JOIN identities i ON i.database=w.database",
+            "SELECT w.database,w.root,w.configuration,w.generation,'{}',w.error,COALESCE(i.identity,''),w.failed_input_hash,w.outcome_code,w.cancel_pending FROM workspaces w LEFT JOIN identities i ON i.database=w.database",
         )?;
         for row in query.query_map([], |r| {
             Ok((
@@ -201,6 +219,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 r.get::<_, String>(6)?,
                 r.get::<_, String>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, bool>(9)?,
             ))
         })? {
             let (
@@ -213,7 +232,10 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 identity,
                 failed_input_hash,
                 outcome_code,
+                pending_cancel,
             ) = row?;
+            let cancel_pending =
+                pending_cancel || (outcome_code == "cancelled" && failed_input_hash.is_empty());
             let identity = if identity.is_empty() {
                 workspace::identity(Path::new(&root)).unwrap_or_default()
             } else {
@@ -230,13 +252,21 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             entries.insert(
                 database.clone(),
                 Entry {
+                    registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
                     analysis_error: error.clone(),
                     failed_input_hash,
                     status: LiveStatus::new(
                         WorkspaceStatus {
                             workspace_root: root,
                             database,
-                            phase: "queued".into(),
+                            phase: if cancel_pending {
+                                "cancelling"
+                            } else if outcome_code == "cancelled" {
+                                "cancelled"
+                            } else {
+                                "queued"
+                            }
+                            .into(),
                             observed_epoch: 1,
                             published_epoch: 0,
                             generation,
@@ -256,6 +286,8 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     rehash: true,
                     retry_preparation: false,
                     watch_pending: true,
+                    pending: true,
+                    cancel_pending,
                     queued: Instant::now(),
                     active: Instant::now() - Duration::from_secs(60),
                 },
@@ -354,7 +386,8 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     entry.watch_pending = true;
                     // A returning workspace can repair an interrupted analysis,
                     // but only an actual publication may clear that failure.
-                    let retry_analysis = !entry.analysis_error.is_empty();
+                    let retry_analysis = !entry.analysis_error.is_empty()
+                        && entry.status.outcome_code != "cancelled";
                     queue(entry, None, retry_analysis);
                 }
             }
@@ -422,7 +455,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         .iter()
                         .filter(|(_, e)| {
                             e.status.available
-                                && e.status.phase == "queued"
+                                && e.pending
                                 && e.queued.elapsed() >= Duration::from_millis(100)
                         })
                         .min_by_key(|(_, e)| priority(e, Instant::now()))
@@ -434,7 +467,15 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         Some((database.clone(), session.control()));
                     shared.analysis_running.store(true, Ordering::Release);
                     let entry = entries.get_mut(&database).unwrap();
-                    entry.status.phase = "analyzing".into();
+                    entry.pending = false;
+                    entry.status.phase = if entry.cancel_pending {
+                        "cancelling"
+                    } else if entry.status.outcome_code == "cancelled" && !entry.force {
+                        "cancelled"
+                    } else {
+                        "analyzing"
+                    }
+                    .into();
                     entry.status.requested_settings = settings::resolve(
                         Path::new(&entry.status.workspace_root),
                         data,
@@ -442,6 +483,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     )
                     .ok();
                     let job = Job {
+                        registration: entry.registration,
                         database: database.clone(),
                         root: PathBuf::from(&entry.status.workspace_root),
                         configuration: entry.configuration.clone(),
@@ -461,6 +503,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         previous_error_code: entry.status.outcome_code.clone(),
                         session,
                         previous_failed_input_hash: entry.failed_input_hash.clone(),
+                        cancel_baseline: entry.cancel_pending,
                     };
                     Ok(job)
                 })
@@ -474,10 +517,21 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 thread::spawn(move || {
                     let database = job.database.clone();
                     let epoch = job.epoch;
+                    let registration = job.registration;
+                    let cancel_baseline = job.cancel_baseline;
                     let mut input_hash = String::new();
                     let result = execute(job, &installation, &mut input_hash, &mut |progress| {
                         let mut entries = progress_shared.entries.lock().unwrap();
-                        if let Some(entry) = entries.get_mut(&database) {
+                        if let Some(entry) = entries.get_mut(&database)
+                            && entry.registration == registration
+                            && entry.status.observed_epoch == epoch
+                        {
+                            if entry.cancel_pending && !cancel_baseline {
+                                return;
+                            }
+                            if progress.stage == "analyzing" {
+                                entry.status.phase = "analyzing".into();
+                            }
                             entry.status.progress = Some(progress);
                         }
                         progress_shared.changed.notify_all();
@@ -491,10 +545,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         message: e.to_string(),
                     });
                     let _ = sender.send(Event::Finished(JobResult {
+                        registration,
                         database,
                         epoch,
                         result,
                         input_hash,
+                        cancel_baseline,
                     }));
                 });
             }
@@ -512,60 +568,136 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     let Some(entry) = entries.get_mut(&done.database) else {
                         continue;
                     };
+                    if entry.registration != done.registration {
+                        continue;
+                    }
                     entry.status.progress = None;
-                    let manifest = match done.result {
-                        Ok((generation, inputs, newer)) => {
-                            entry.status.generation = generation;
-                            entry.status.published_epoch = done.epoch;
-                            entry.special_inputs =
-                                special_inputs(&entry.status.workspace_root, &inputs);
-                            entry.watch_pending = true;
-                            entry.status.error.clear();
-                            entry.analysis_error.clear();
-                            entry.status.outcome_code.clear();
-                            entry.failed_input_hash.clear();
-                            if !newer.is_empty() {
-                                queue(entry, Some(newer), false);
-                            }
-                            entry.status.phase = if !entry.status.available {
-                                "unavailable"
-                            } else if entry.status.observed_epoch > done.epoch {
-                                "queued"
-                            } else {
-                                "idle"
-                            }
-                            .into();
-                            Some(inputs)
-                        }
-                        Err(error) => {
-                            entry.analysis_error = error.message.clone();
-                            entry.status.outcome_code = error.code.clone();
-                            entry.failed_input_hash = done.input_hash.clone();
-                            entry.status.error = error.message;
-                            entry.status.phase = if !entry.status.available {
-                                "unavailable"
-                            } else if entry.status.observed_epoch > done.epoch {
-                                "queued"
-                            } else {
-                                match error.code.as_str() {
-                                    "cancelled" => "cancelled",
-                                    "resource_limited" => "resource_limited",
-                                    _ => "failed",
+                    let manifest = if entry.cancel_pending && !done.cancel_baseline {
+                        // The old compiler job has stopped. A fresh managed session
+                        // now records the cancellation boundary without a worker.
+                        entry.pending = true;
+                        entry.rehash = true;
+                        entry.status.phase = "cancelling".into();
+                        None
+                    } else if done.cancel_baseline && !entry.cancel_pending {
+                        // Explicit refresh superseded this capture.
+                        None
+                    } else {
+                        match done.result {
+                            Ok(JobOutput::CancellationBaseline(inputs, newer, verified)) => {
+                                entry
+                                    .special_inputs
+                                    .extend(special_inputs(&entry.status.workspace_root, &inputs));
+                                entry.watch_pending = true;
+                                if !workspace::identity(Path::new(&entry.status.workspace_root))
+                                    .is_ok_and(|identity| identity == entry.identity)
+                                {
+                                    entry.status.available = false;
+                                    entry.status.phase = "unavailable".into();
+                                    entry.status.error = "workspace identity changed before cancellation acknowledgement".into();
+                                    entry.pending = false;
+                                } else if entry.pending
+                                    || entry.status.observed_epoch != done.epoch
+                                    || !newer.is_empty()
+                                    || !verified
+                                    || !shared.publisher.inputs_clear()
+                                    || shared.overflow.load(Ordering::Acquire)
+                                {
+                                    entry.pending = true;
+                                    entry.rehash = true;
+                                    entry.status.phase = "cancelling".into();
+                                } else {
+                                    entry.failed_input_hash = done.input_hash.clone();
+                                    entry.cancel_pending = false;
+                                    entry.analysis_error =
+                                        know_code_core::Error::Cancelled.to_string();
+                                    entry.status.error = entry.analysis_error.clone();
+                                    entry.status.outcome_code = "cancelled".into();
+                                    entry.status.phase = if entry.status.available {
+                                        "cancelled"
+                                    } else {
+                                        "unavailable"
+                                    }
+                                    .into();
                                 }
+                                None
                             }
-                            .into();
-                            None
+                            Ok(JobOutput::Indexed(generation, inputs, newer)) => {
+                                entry.status.generation = generation;
+                                entry.status.published_epoch = done.epoch;
+                                entry.special_inputs =
+                                    special_inputs(&entry.status.workspace_root, &inputs);
+                                entry.watch_pending = true;
+                                entry.status.error.clear();
+                                entry.analysis_error.clear();
+                                entry.status.outcome_code.clear();
+                                entry.failed_input_hash.clear();
+                                if !newer.is_empty() {
+                                    queue(entry, Some(newer), false);
+                                }
+                                entry.status.phase = if !entry.status.available {
+                                    "unavailable"
+                                } else if entry.pending {
+                                    "queued"
+                                } else {
+                                    "idle"
+                                }
+                                .into();
+                                Some(inputs)
+                            }
+                            Err(error) => {
+                                entry.analysis_error = if entry.cancel_pending {
+                                    format!(
+                                        "cancellation is pending; saved-input baseline failed: {}",
+                                        error.message
+                                    )
+                                } else {
+                                    error.message.clone()
+                                };
+                                entry.status.outcome_code = error.code.clone();
+                                entry.failed_input_hash = done.input_hash.clone();
+                                entry.status.error = entry.analysis_error.clone();
+                                entry.status.phase = if !entry.status.available {
+                                    "unavailable"
+                                } else if entry.cancel_pending {
+                                    if error.code == "cancelled" {
+                                        entry.pending = true;
+                                    }
+                                    if entry.pending {
+                                        "cancelling"
+                                    } else if error.code == "resource_limited" {
+                                        "resource_limited"
+                                    } else {
+                                        "failed"
+                                    }
+                                } else if error.code == "cancelled" && entry.pending && entry.force
+                                {
+                                    "queued"
+                                } else if error.code == "cancelled" {
+                                    "cancelled"
+                                } else if entry.pending {
+                                    "queued"
+                                } else {
+                                    match error.code.as_str() {
+                                        "cancelled" => "cancelled",
+                                        "resource_limited" => "resource_limited",
+                                        _ => "failed",
+                                    }
+                                }
+                                .into();
+                                None
+                            }
                         }
                     };
-                    persist(
-                        &shared,
-                        &entry.status,
-                        &entry.configuration,
-                        manifest.as_ref(),
-                        &entry.identity,
-                        &entry.analysis_error,
-                        &entry.failed_input_hash,
-                    )?;
+                    if let Err(error) = persist(&shared, entry, manifest.as_ref()) {
+                        if done.cancel_baseline {
+                            entry.cancel_pending = true;
+                            entry.status.phase = "failed".into();
+                            entry.status.error =
+                                format!("cancellation baseline could not be recorded: {error}");
+                        }
+                        return Err(error);
+                    }
                 };
                 {
                     let entries = shared.entries.lock().unwrap();
@@ -607,9 +739,12 @@ fn execute(
     installation: &Path,
     attempt_hash: &mut String,
     progress: &mut impl FnMut(Progress),
-) -> AnyResult<(u64, Snapshot, Vec<PathBuf>)> {
+) -> AnyResult<JobOutput> {
     let control = job.session.control();
     control.check()?;
+    if workspace::identity(&job.root)? != job.identity {
+        return Err("workspace identity changed before saved-input reconciliation".into());
+    }
     let database = Path::new(&job.database);
     let data = control::root_for_database(database)
         .ok_or("workspace database has no central data root")?;
@@ -624,23 +759,34 @@ fn execute(
     let before =
         workspace::snapshot_controlled(&job.root, &job.inputs, &forced_paths, &extras, &control)?;
     let mut hash = Sha256::new();
+    hash.update(b"know-code-saved-input-v2\0");
+    hash.update(job.configuration.as_bytes());
+    hash.update([0]);
     for (path, stamp) in &before {
         hash.update(path.as_bytes());
         hash.update([0]);
         hash.update(stamp.hash.as_bytes());
         hash.update([0]);
     }
-    // Even malformed settings get a saved-input identity and remain watchable.
-    *attempt_hash = format!("{:x}", hash.clone().finalize());
-    let effective_settings = settings::resolve(&job.root, data, &job.configuration)?;
-    hash.update(serde_json::to_vec(&effective_settings)?);
+    // Settings bytes and legacy selection are already part of this identity.
+    // Cancellation must also work when those bytes are malformed.
     *attempt_hash = format!("{:x}", hash.finalize());
     control.check()?;
-    if !job.force
-        && job.previous_error_code == "cancelled"
-        && job.previous_failed_input_hash.is_empty()
-    {
-        return Err(know_code_core::Error::Cancelled.into());
+    if job.cancel_baseline {
+        progress(Progress {
+            stage: "cancelling".into(),
+            project_path: String::new(),
+            message: "Verifying saved-input cancellation baseline".into(),
+        });
+        let mut verify = vec![job.root.clone()];
+        verify.extend(extras.clone());
+        let after = workspace::snapshot_controlled(&job.root, &before, &verify, &extras, &control)?;
+        if workspace::identity(&job.root)? != job.identity {
+            return Err("workspace identity changed during cancellation capture".into());
+        }
+        let newer = workspace::differences(&before, &after);
+        let verified = workspace::snapshot_metadata_matches(&job.root, &after, &control)?;
+        return Ok(JobOutput::CancellationBaseline(after, newer, verified));
     }
     if !job.force
         && !job.previous_failed_input_hash.is_empty()
@@ -653,6 +799,14 @@ fn execute(
         }
         .into());
     }
+    let effective_settings = settings::resolve(&job.root, data, &job.configuration)?;
+    if job.previous_error_code == "cancelled" {
+        progress(Progress {
+            stage: "analyzing".into(),
+            project_path: String::new(),
+            message: "Saved inputs changed after cancellation; resuming analysis".into(),
+        });
+    }
     let changes = workspace::differences(&job.inputs, &before);
     let recovered = ReadView::open(database).map(|v| v.generation).unwrap_or(0);
     if !job.force && changes.is_empty() && recovered != 0 && recovered == job.previous_generation {
@@ -660,7 +814,7 @@ fn execute(
         // cannot repair an earlier analyzer/storage failure or certify facts
         // that the failed refresh never published.
         if job.previous_error.is_empty() {
-            return Ok((recovered, before, vec![]));
+            return Ok(JobOutput::Indexed(recovered, before, vec![]));
         }
         if !job.previous_failed_input_hash.is_empty()
             && job.previous_failed_input_hash == *attempt_hash
@@ -706,7 +860,7 @@ fn execute(
     let newer = workspace::differences(&before, &after);
     // Newly discovered immutable inputs can safely enter the acknowledged manifest only
     // after a follow-up reconciliation; saves during analysis cannot disappear.
-    Ok((generation, before, newer))
+    Ok(JobOutput::Indexed(generation, before, newer))
 }
 
 fn priority(entry: &Entry, now: Instant) -> (u8, Instant) {
@@ -721,12 +875,26 @@ fn priority(entry: &Entry, now: Instant) -> (u8, Instant) {
         entry.queued,
     )
 }
+fn begin_cancellation(entry: &mut Entry) {
+    entry.cancel_pending = true;
+    entry.force = false;
+    entry.retry_preparation = false;
+    entry.dirty.clear();
+    entry.failed_input_hash.clear();
+    entry.analysis_error = know_code_core::Error::Cancelled.to_string();
+    entry.status.error = entry.analysis_error.clone();
+    entry.status.outcome_code = "cancelled".into();
+    queue(entry, None, false);
+    entry.status.phase = "cancelling".into();
+    entry.status.progress = None;
+}
 fn queue(entry: &mut Entry, paths: Option<Vec<PathBuf>>, force: bool) {
-    if entry.status.phase != "queued" && entry.status.phase != "analyzing" {
+    if !entry.pending {
         entry.queued = Instant::now();
     }
+    entry.pending = true;
     entry.status.observed_epoch += 1;
-    entry.force |= force || (entry.status.outcome_code == "cancelled" && paths.is_some());
+    entry.force |= force;
     if let Some(paths) = paths {
         entry.dirty.extend(paths);
         if entry.dirty.len() > 4096 {
@@ -737,7 +905,14 @@ fn queue(entry: &mut Entry, paths: Option<Vec<PathBuf>>, force: bool) {
         entry.rehash = true;
     }
     if entry.status.phase != "analyzing" && entry.status.available {
-        entry.status.phase = "queued".into();
+        entry.status.phase = if entry.cancel_pending {
+            "cancelling"
+        } else if entry.status.outcome_code == "cancelled" && !force {
+            "cancelled"
+        } else {
+            "queued"
+        }
+        .into();
     }
 }
 fn tracks(entry: &Entry, path: &Path) -> bool {
@@ -778,19 +953,17 @@ fn special_inputs(root: &str, inputs: &Snapshot) -> BTreeSet<PathBuf> {
         })
         .collect()
 }
-fn persist(
-    shared: &Shared,
-    status: &WorkspaceStatus,
-    configuration: &str,
-    inputs: Option<&Snapshot>,
-    identity: &str,
-    analysis_error: &str,
-    failed_input_hash: &str,
-) -> AnyResult<()> {
+fn persist(shared: &Shared, entry: &Entry, inputs: Option<&Snapshot>) -> AnyResult<()> {
+    let status = &entry.status;
+    let configuration = &entry.configuration;
+    let identity = &entry.identity;
+    let analysis_error = &entry.analysis_error;
+    let failed_input_hash = &entry.failed_input_hash;
+    let cancel_pending = entry.cancel_pending;
     let mut registry = shared.registry.lock().unwrap();
     let tx = registry.transaction()?;
     let encoded = inputs.map(serde_json::to_string).transpose()?;
-    tx.execute("INSERT INTO workspaces(database,root,configuration,generation,inputs,error,failed_input_hash,outcome_code) VALUES(?,?,?,?,'{}',?,?,?) ON CONFLICT(database) DO UPDATE SET root=excluded.root,configuration=excluded.configuration,generation=excluded.generation,error=excluded.error,failed_input_hash=excluded.failed_input_hash,outcome_code=excluded.outcome_code",params![status.database,status.workspace_root,configuration,status.generation,analysis_error,failed_input_hash,status.outcome_code])?;
+    tx.execute("INSERT INTO workspaces(database,root,configuration,generation,inputs,error,failed_input_hash,outcome_code,cancel_pending) VALUES(?,?,?,?,'{}',?,?,?,?) ON CONFLICT(database) DO UPDATE SET root=excluded.root,configuration=excluded.configuration,generation=excluded.generation,error=excluded.error,failed_input_hash=excluded.failed_input_hash,outcome_code=excluded.outcome_code,cancel_pending=excluded.cancel_pending",params![status.database,status.workspace_root,configuration,status.generation,analysis_error,failed_input_hash,status.outcome_code,cancel_pending])?;
     tx.execute("INSERT INTO manifests VALUES(?,COALESCE(?,'{}')) ON CONFLICT(database) DO UPDATE SET inputs=COALESCE(?,manifests.inputs)",params![status.database,encoded,encoded])?;
     if let Some(inputs) = inputs {
         tx.execute(
@@ -918,30 +1091,21 @@ fn serve(
                 .get_mut(&request.database)
                 .ok_or("workspace is not registered")?;
             let active = shared.active_job.lock().unwrap();
-            if let Some((db, control)) = active.as_ref().filter(|(db, _)| db == &request.database) {
-                let _ = db;
-                if control.cancel() {
-                    entry.status.phase = "cancelling".into();
-                    entry.status.outcome_code = "cancelled".into();
-                }
-            } else if entry.status.phase == "queued" {
-                entry.analysis_error = "indexing cancelled; previous generation preserved".into();
-                entry.failed_input_hash.clear();
-                entry.status.error = entry.analysis_error.clone();
-                entry.status.phase = "cancelled".into();
-                entry.status.outcome_code = "cancelled".into();
-                entry.force = false;
-                entry.retry_preparation = false;
-                persist(
-                    shared,
-                    &entry.status,
-                    &entry.configuration,
-                    None,
-                    &entry.identity,
-                    &entry.analysis_error,
-                    &entry.failed_input_hash,
-                )?;
+            let accepted = if entry.cancel_pending {
+                false
+            } else if let Some((_, control)) =
+                active.as_ref().filter(|(db, _)| db == &request.database)
+            {
+                control.cancel() || !control.committed()
+            } else {
+                entry.pending && entry.status.available
+            };
+            if accepted {
+                begin_cancellation(entry);
+                persist(shared, entry, None)?;
             }
+            drop(active);
+            wake(sender, shared, Event::Wake);
             shared.changed.notify_all();
             return Ok(ControlResponse {
                 workspaces: vec![entry.status.snapshot()],
@@ -1052,6 +1216,7 @@ fn serve(
                 }
                 let requested_settings = settings::resolve(&root, data, &legacy).ok();
                 let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
+                    registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
                     analysis_error: String::new(),
                     failed_input_hash: String::new(),
                     status: LiveStatus::new(
@@ -1074,6 +1239,8 @@ fn serve(
                     rehash: true,
                     retry_preparation: false,
                     watch_pending: true,
+                    pending: true,
+                    cancel_pending: false,
                     queued: Instant::now(),
                     active: Instant::now(),
                 });
@@ -1089,18 +1256,22 @@ fn serve(
                 entry.status.requested_settings =
                     settings::resolve(&root, data, &entry.configuration).ok();
                 if request.operation == "refresh" {
+                    if entry.cancel_pending {
+                        entry.cancel_pending = false;
+                        if let Some((_, control)) = shared
+                            .active_job
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .filter(|(db, _)| db == &entry.status.database)
+                        {
+                            control.cancel();
+                        }
+                    }
                     entry.retry_preparation = true;
                     queue(entry, None, true);
                 }
-                persist(
-                    shared,
-                    &entry.status,
-                    &entry.configuration,
-                    None,
-                    &entry.identity,
-                    &entry.analysis_error,
-                    &entry.failed_input_hash,
-                )?;
+                persist(shared, entry, None)?;
                 entry.status.snapshot()
             };
             wake(sender, shared, Event::Wake);
@@ -1123,12 +1294,21 @@ fn serve(
             let until =
                 Instant::now() + Duration::from_millis(u64::from(request.wait_ms.min(120000)));
             loop {
-                let status = &entries[&request.database].status;
+                let entry = &entries[&request.database];
+                let status = &entry.status;
+                let reconciling = entry.pending
+                    || shared
+                        .active_job
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|(db, _)| db == &request.database);
                 if status.published_epoch >= target
                     || matches!(
                         status.phase.as_str(),
-                        "failed" | "unavailable" | "cancelled" | "resource_limited"
+                        "failed" | "unavailable" | "resource_limited"
                     )
+                    || (status.phase == "cancelled" && !reconciling)
                     || shared.stop.load(Ordering::Acquire)
                 {
                     break;
@@ -1237,6 +1417,89 @@ pub fn managed_login_plist(executable: &Path, data: &Path, label: &str, path: &s
 #[cfg(test)]
 mod live_lifetime_tests {
     use super::*;
+    fn cancellation_job() -> Job {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/cancel-unit")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                REGISTRATION.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("w");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("value.ts"), "export const value = 1;\n").unwrap();
+        let data = root.parent().unwrap().join("d");
+        Job {
+            registration: 1,
+            database: workspace::database_path(&root, &data)
+                .to_string_lossy()
+                .into_owned(),
+            identity: workspace::identity(&root).unwrap(),
+            root,
+            configuration: String::new(),
+            inputs: Snapshot::new(),
+            paths: vec![],
+            force: false,
+            rehash: true,
+            retry_preparation: false,
+            epoch: 1,
+            previous_generation: 0,
+            previous_error: know_code_core::Error::Cancelled.to_string(),
+            previous_error_code: "cancelled".into(),
+            previous_failed_input_hash: String::new(),
+            session: Governor::new(Limits::default()).unwrap().start().unwrap(),
+            cancel_baseline: true,
+        }
+    }
+    #[test]
+    fn cancellation_capture_handles_invalid_settings_without_compiler_or_publication() {
+        let job = cancellation_job();
+        std::fs::write(job.root.join(settings::PROJECT_FILE), "broken settings").unwrap();
+        let database = job.database.clone();
+        let mut hash = String::new();
+        let result = execute(
+            job,
+            Path::new("/no/compiler/installation"),
+            &mut hash,
+            &mut |_| {},
+        )
+        .unwrap();
+        let JobOutput::CancellationBaseline(inputs, newer, verified) = result else {
+            panic!("capture indexed facts")
+        };
+        assert!(verified && newer.is_empty() && !inputs.is_empty());
+        assert!(!hash.is_empty());
+        assert!(!Path::new(&database).exists());
+    }
+    #[test]
+    fn cancellation_capture_detects_undelivered_save_with_preserved_mtime() {
+        let job = cancellation_job();
+        let source = job.root.join("value.ts");
+        let saved_time = std::fs::metadata(&source).unwrap().modified().unwrap();
+        let mut hash = String::new();
+        let result = execute(
+            job,
+            Path::new("/no/compiler/installation"),
+            &mut hash,
+            &mut |_| {
+                std::fs::write(&source, "export const value = 2;\n").unwrap();
+                std::fs::File::options()
+                    .write(true)
+                    .open(&source)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(saved_time))
+                    .unwrap();
+            },
+        )
+        .unwrap();
+        let JobOutput::CancellationBaseline(_, newer, verified) = result else {
+            panic!("capture indexed facts")
+        };
+        assert!(
+            verified && newer.contains(&source),
+            "capture must retry the changed saved inputs"
+        );
+    }
     #[test]
     fn maintenance_is_owned_expiring_and_reports_running_jobs_without_visible_rows() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1331,6 +1594,7 @@ mod live_lifetime_tests {
         let entries = BTreeMap::from([(
             database.clone(),
             Entry {
+                registration: 1,
                 analysis_error: String::new(),
                 failed_input_hash: String::new(),
                 status: LiveStatus::new(status.clone(), &publisher),
@@ -1344,6 +1608,8 @@ mod live_lifetime_tests {
                 queued: now - Duration::from_secs(6),
                 active: now - Duration::from_secs(60),
                 watch_pending: false,
+                pending: false,
+                cancel_pending: false,
             },
         )]);
         let shared = Arc::new(Shared {

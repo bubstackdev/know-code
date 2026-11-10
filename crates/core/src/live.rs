@@ -13,7 +13,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 const MAGIC: &[u8; 8] = b"KCLIVE01";
@@ -31,6 +31,8 @@ struct Owner {
     activity_hints: bool,
     #[serde(default)]
     analysis_settings_version: u32,
+    #[serde(default)]
+    resource_control_version: u32,
 }
 fn process(pid: u32) -> Option<(u64, u64)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
@@ -198,6 +200,7 @@ impl Drop for Input {
         {
             self.publisher.disable();
         }
+        self.publisher.pending_inputs.fetch_sub(1, Ordering::AcqRel);
     }
 }
 pub struct Publisher {
@@ -207,6 +210,7 @@ pub struct Publisher {
     lease: Mutex<Option<File>>,
     published: Mutex<BTreeSet<String>>,
     serial: AtomicU64,
+    pending_inputs: AtomicUsize,
 }
 impl Publisher {
     /// Called while the coordinator holds its root writer fence. Acceleration
@@ -219,6 +223,7 @@ impl Publisher {
             lease: Mutex::new(None),
             published: Mutex::new(BTreeSet::new()),
             serial: AtomicU64::new(0),
+            pending_inputs: AtomicUsize::new(0),
         })
     }
     fn try_new(root: &Path) -> Result<Self> {
@@ -241,6 +246,7 @@ impl Publisher {
             token,
             activity_hints: true,
             analysis_settings_version: crate::settings::VERSION,
+            resource_control_version: crate::resource::CONTROL_VERSION,
         };
         let name = format!(".owner-{}-{}", owner.pid, u128::from_le_bytes(token));
         let staging = dir.join(name);
@@ -272,6 +278,7 @@ impl Publisher {
                 lease: Mutex::new(Some(file)),
                 published: Mutex::new(BTreeSet::new()),
                 serial: AtomicU64::new(0),
+                pending_inputs: AtomicUsize::new(0),
             })
         })();
         if initialized.is_err() {
@@ -280,6 +287,7 @@ impl Publisher {
         initialized
     }
     pub fn input(self: &std::sync::Arc<Self>) -> Input {
+        self.pending_inputs.fetch_add(1, Ordering::AcqRel);
         let counted = self.gate.as_ref().is_some_and(|gate| gate.adjust(0, true));
         if self.gate.is_some() && !counted {
             self.disable();
@@ -288,6 +296,9 @@ impl Publisher {
             counted,
             publisher: std::sync::Arc::clone(self),
         }
+    }
+    pub fn inputs_clear(&self) -> bool {
+        self.pending_inputs.load(Ordering::Acquire) == 0
     }
     pub fn overflow(&self) {
         if self.gate.as_ref().is_some_and(|gate| !gate.adjust(1, true)) {
@@ -433,6 +444,7 @@ fn read_certified(
     if owner.version != 3
         || owner.protocol != protocol::VERSION
         || owner.analysis_settings_version != crate::settings::VERSION
+        || owner.resource_control_version != crate::resource::CONTROL_VERSION
         || process(owner.pid) != Some((owner.start_sec, owner.start_usec))
     {
         return Ok(None);
@@ -766,7 +778,7 @@ mod tests {
         p.publish(&s);
         let owner_path = r.join("live/owner");
         let original = std::fs::read(&owner_path).unwrap();
-        for change in [0, 1, 2, 3, 4] {
+        for change in [0, 1, 2, 3, 4, 5, 6] {
             let mut owner: Owner = serde_json::from_slice(
                 &original
                     [76..76 + u32::from_le_bytes(original[72..76].try_into().unwrap()) as usize],
@@ -778,6 +790,8 @@ mod tests {
                 2 => owner.protocol += 1,
                 3 => owner.analysis_settings_version += 1,
                 4 => owner.analysis_settings_version = 0,
+                5 => owner.resource_control_version += 1,
+                6 => owner.resource_control_version = 1,
                 _ => unreachable!(),
             };
             let body = serde_json::to_vec(&owner).unwrap();

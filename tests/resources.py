@@ -1,6 +1,6 @@
 """Shared CPU/memory ceilings and explicit indexing cancellation through real clients."""
 from pathlib import Path
-import atexit,json,os,shutil,subprocess,time
+import atexit,json,os,shutil,sqlite3,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
 RUN=ROOT/'.artifacts/rb'/format(time.time_ns(),'x')[-10:]
 DATA=RUN/'d';RUNTIME=RUN/'runtime';A=RUN/'a';B=RUN/'b'
@@ -68,6 +68,36 @@ def save(root,n): (root/'value.ts').write_text(f'export function answer() {{ ret
 def start_count(root):
  p=RUN/(root.name+'-starts');return len(p.read_text().splitlines()) if p.exists() else 0
 
+# Use the existing versioned codec for a bounded owned maintenance lease, making
+# restart/refresh tests deterministic without adding product test hooks.
+CONTROL=RUN/'control.mjs'
+CONTROL.write_text("""import fs from 'node:fs';import net from 'node:net';import protobuf from 'protobufjs';
+const schema=await protobuf.load(process.argv[2]),Envelope=schema.lookupType('knowcode.Envelope');
+const request={operation:process.argv[4],maintenanceToken:'cancel-fixture',maintenanceLeaseMs:30000};
+const bytes=Envelope.encode(Envelope.create({protocolVersion:7,controlRequest:request})).finish();
+const head=Buffer.alloc(4);head.writeUInt32LE(bytes.length);const socket=net.createConnection(process.argv[3]);
+socket.setTimeout(5000,()=>socket.destroy(Error('control timeout')));let result=Buffer.alloc(0);
+socket.on('connect',()=>socket.write(Buffer.concat([head,bytes])));
+socket.on('data',chunk=>{result=Buffer.concat([result,chunk]);if(result.length>=4&&result.length>=4+result.readUInt32LE()){
+ const response=Envelope.decode(result.subarray(4)).controlResponse;if(response.errorCode)throw Error(response.errorMessage);
+ console.log(JSON.stringify(response));socket.end();}});
+""")
+def lease(operation):
+ p=subprocess.run(['node',str(CONTROL),str(ROOT/'proto/analysis.proto'),str(DATA/'c.sock'),operation],cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=10)
+ assert p.returncode==0,(p.stdout,p.stderr)
+ return json.loads(p.stdout)
+def stop_coordinator():
+ cli('coordinator','stop')
+ until=time.monotonic()+5
+ while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.02)
+ assert not (DATA/'c.sock').exists()
+def sdk_refresh(root):
+ script=RUN/'refresh.mjs'
+ script.write_text('import {Workspace} from '+json.dumps((ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs').as_uri())+';const w=await Workspace.open(process.argv[2],JSON.parse(process.argv[3]));console.log(JSON.stringify(await w.refresh()));w.close();\n')
+ p=subprocess.run(['node',str(script),str(root),json.dumps({'dataDirectory':str(DATA),'coordinatorExecutable':str(HOST)})],cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=10)
+ assert p.returncode==0,(p.stdout,p.stderr)
+ return json.loads(p.stdout)
+
 def sdk_cancel(language,root):
  options=json.dumps({'dataDirectory':str(DATA),'coordinatorExecutable':str(HOST)})
  if language=='node':
@@ -118,25 +148,75 @@ for language,number in [('node',43),('dotnet',44)]:
  record(language+'_cancellation_preserves_stale_graph_and_next_save_resumes')
  (RUN/'a-child').unlink(missing_ok=True)
 
-# Queue B behind A; cancel B without launching its worker, then a save resumes it.
+# Queue B behind a confirmed held A. Saves during cancelling enter the baseline;
+# only a save after the durable cancelled acknowledgement may resume B.
 (A/'.mode').write_text('hold');save(A,45);wait(A,lambda s:s['phase']=='analyzing','queue blocker')
+until=time.monotonic()+5
+while not (RUN/'a-child').exists() and time.monotonic()<until:time.sleep(.02)
+assert (RUN/'a-child').exists()
 cli('watch',B);cancelled_queued=json.loads(cli('cancel',B).stdout)
 queued_status=status(B)
-assert queued_status['phase']=='cancelled' and start_count(B)==0,(cancelled_queued,queued_status,start_count(B))
+assert cancelled_queued['phase']=='cancelling' and queued_status['phase']=='cancelling' and start_count(B)==0,(cancelled_queued,queued_status,start_count(B))
 not_ready=json.loads(cli('query',status(B)['database'],'{"op":"symbols","name":"answer","freshness_wait_ms":0}').stdout)
 assert not_ready['error']['code']=='not_ready',not_ready
 save(B,99);cli('cancel',A)
-wait(B,lambda s:s['phase']=='idle','saved queued workspace resumes')
+wait(B,lambda s:s['phase']=='cancelled','pending cancellation records current saved baseline')
 wait(A,lambda s:s['phase']=='cancelled','CLI cancellation')
+time.sleep(.4)
+assert status(B)['phase']=='cancelled' and start_count(B)==0,'delayed event resumed cancelled work'
+save(B,100)
+wait(B,lambda s:s['phase']=='idle','save after cancellation acknowledgement resumes')
 (A/'.mode').unlink();record('queued_cancellation_and_shared_scheduler_progress')
+# A pending cancellation survives shutdown. Offline edits made before its
+# baseline is acknowledged remain cancelled and must not launch a compiler.
+lease('maintenance');save(B,101)
+wait(B,lambda s:s['phase']=='queued','paused save')
+pending=json.loads(cli('cancel',B).stdout);assert pending['phase']=='cancelling'
+with sqlite3.connect(DATA/'registry.db') as connection:
+ assert connection.execute('SELECT cancel_pending FROM workspaces WHERE root=?',(str(B),)).fetchone()==(1,)
+before_pending=start_count(B);stop_coordinator();save(B,102);cli('resources')
+wait(B,lambda s:s['phase']=='cancelled','restart finishes pending cancellation baseline')
+assert start_count(B)==before_pending and status(B)['generation']==pending['generation']
+record('pending_cancellation_and_during_cancel_saves_survive_restart_without_worker')
 # Restart must not turn cancelled, unchanged data into current results.
-cli('coordinator','stop');time.sleep(.15)
+stop_coordinator()
 cli('resources')
 wait(A,lambda s:s['phase']=='cancelled','cancelled restart reconciliation')
 assert query()['freshness']=='stale'
 record('cancelled_state_survives_restart_without_compiler_retry')
+# A completed cancellation must notice a real offline save after its ACK.
+stop_coordinator();save(B,103);cli('resources')
+wait(B,lambda s:s['phase']=='idle' and s['generation']>pending['generation'],'offline save after acknowledged baseline resumes')
+assert start_count(B)>before_pending
+record('offline_save_after_cancelled_resumes_without_explicit_refresh')
 cli('index',A);generation=status(A)['generation'];assert query()['freshness']=='current'
 record('explicit_refresh_resumes_cancelled_analysis')
+# Explicit refresh is the supported way to supersede a pending boundary.
+lease('maintenance');save(B,104);wait(B,lambda s:s['phase']=='queued','second paused save')
+cli('cancel',B)
+refresh=cli('watch',B) # Reopening is not a refresh and must preserve cancellation.
+assert json.loads(refresh.stdout)['phase']=='cancelling'
+before_refresh=start_count(B);resuming=sdk_refresh(B);assert resuming['phase']=='queued',resuming
+with sqlite3.connect(DATA/'registry.db') as connection:
+ assert connection.execute('SELECT cancel_pending FROM workspaces WHERE root=?',(str(B),)).fetchone()==(0,)
+lease('resume')
+wait(B,lambda s:s['phase']=='idle','explicit refresh supersedes pending boundary')
+assert start_count(B)>before_refresh
+record('reopen_keeps_cancellation_and_explicit_refresh_resumes')
+# A legacy acknowledged cancellation uses a different hash domain. Migration
+# must recapture it without treating that hash mismatch as permission to index.
+lease('maintenance');save(A,145);wait(A,lambda s:s['phase']=='queued','legacy migration setup')
+cli('cancel',A);before_legacy=start_count(A);stop_coordinator()
+with sqlite3.connect(DATA/'registry.db') as connection:
+ connection.execute("UPDATE workspaces SET outcome_code='cancelled',error='indexing cancelled',failed_input_hash='legacy-effective-settings-hash' WHERE root=?",(str(A),))
+ connection.execute('ALTER TABLE workspaces DROP COLUMN cancel_pending')
+cli('resources');wait(A,lambda s:s['phase']=='cancelled','legacy cancellation is recaptured')
+assert start_count(A)==before_legacy
+with sqlite3.connect(DATA/'registry.db') as connection:
+ pending_flag,fingerprint=connection.execute('SELECT cancel_pending,failed_input_hash FROM workspaces WHERE root=?',(str(A),)).fetchone()
+ assert pending_flag==0 and len(fingerprint)==64 and fingerprint!='legacy-effective-settings-hash'
+record('legacy_cancellation_hash_migration_recaptures_without_compiler')
+cli('index',A);generation=status(A)['generation']
 
 # Memory belongs to a helper, proving that worker-parent-only accounting is insufficient.
 cli('resources','--memory-mib',256)

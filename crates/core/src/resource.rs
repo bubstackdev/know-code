@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub const CONTROL_VERSION: u32 = 1;
+pub const CONTROL_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -97,6 +97,11 @@ struct Inner {
 #[derive(Clone, Default)]
 pub struct Control(Option<Arc<Inner>>);
 impl Control {
+    pub fn committed(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|inner| inner.state.lock().unwrap().committed)
+    }
     pub fn resource_limited(&self) -> bool {
         self.0.as_ref().is_some_and(|inner| {
             matches!(inner.state.lock().unwrap().reason, Some(Stop::Limited(_)))
@@ -566,6 +571,7 @@ mod tests {
         );
         let control = session.control();
         assert!(control.cancel());
+        assert!(!control.committed());
         assert!(matches!(
             control.publish::<()>(|| panic!("cancelled publication ran")),
             Err(Error::Cancelled)
@@ -574,6 +580,7 @@ mod tests {
         let session = governor.start().unwrap();
         let control = session.control();
         assert_eq!(control.publish(|| Ok(123)).unwrap(), 123);
+        assert!(control.committed());
         assert!(!control.cancel());
     }
     #[test]
