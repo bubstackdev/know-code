@@ -1,6 +1,6 @@
 # Query deadlines, cancellation and pagination
 
-Status: the overall deadline slice has passed focused Debug validation; cancellation/admission/response-byte/cursor contracts remain under focused Q&A. Accepted decisions are requirements, not real-time guarantees. See [release criteria Q11/Q12 and S04](RELEASE_ACCEPTANCE.md).
+Status: overall deadline and complete core response-cap slices have passed focused Debug validation; cancellation/admission/response-byte/cursor contracts remain under focused Q&A. Accepted decisions are requirements, not real-time guarantees. See [release criteria Q11/Q12 and S04](RELEASE_ACCEPTANCE.md).
 
 ## Accepted outcome at the overall deadline
 
@@ -101,3 +101,11 @@ Implementation freeze `16448cf` passed 64 Rust workspace cases, 30 Workspace API
 A durable direct probe confirmed the macOS EINVAL/buffered-response condition; the initially failing SDK/MCP freshness runs and fixture compilation failures remain recorded. The final polling path and matching native artifacts pass the affected checks. Exact source/build/log hashes, test identities and read-only review are in `.artifacts/query-deadline/1794277314956542000/validation.json`; `.artifacts/query-deadline/current` points there.
 
 This is focused Debug evidence, not a new full Debug, optimized-profile or packaged-candidate certification. Existing archives predate this deadline implementation. No live coordinator/login job changed and nothing was published. Remaining cancellation/admission/byte/cursor and outer-transport work is not waived.
+
+## Complete-response validation checkpoint
+
+Freeze `1994770` passed 66 Rust workspace tests, 31 Workspace SDK checks, 24 MCP checks, five cross-API response-budget checks (18 generated-fixture requests through CLI/Node/.NET) and both real host-queue tests. Formatting and all-target Clippy pass. Tests cover exact encoding boundaries, mid-Unicode cutoffs, escaping/envelope/metadata bytes, bounded errors before request validation, direct Rust reader reuse and deadline cleanup, typed SDK recovery, and explicit larger budgets without dropping evidence.
+
+Read-only review caught the pre-validation error edge; the final 1 KiB conservative policy and regression close it without a second parse. Exact source/build hashes, final test identities/log hashes and review are in `.artifacts/response-budget/1794282495361761000/validation.json`; `.artifacts/response-budget/current` points there. Earlier diagnostic logs remain retained.
+
+This is focused Debug evidence. Full Debug, optimized-profile, refreshed archives/installed acceptance, outer MCP limits, query peak-memory/admission policy and portable cursor/replay implementation remain open. No live installation/login job changed and nothing was published.
