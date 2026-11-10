@@ -42,7 +42,7 @@ const flagsText=value=>`<Project><PropertyGroup><IsTestProject Condition="'$(Tar
 write(flags,flagsText('true'));
 const shared='// π😀 linked source\npublic static class SharedApi { public static int Read(int scopedArg) { var scopedLocal=scopedArg; return scopedLocal+scopedArg; } }\n';
 write(path.join(workspace,'Shared.cs'),shared);
-for(const name of ['Tests','Production'])write(project(name),`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks><LangVersion>latest</LangVersion><Nullable>enable</Nullable>${name==='Production'?'<IsTestProject>false</IsTestProject>':''}</PropertyGroup>
+for(const name of ['Tests','Production'])write(project(name),`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks><LangVersion>latest</LangVersion><Nullable>enable</Nullable>${name==='Production'?`<IsTestProject Condition="'$(TargetFramework)'!='net10.0'">false</IsTestProject><IsTestProject Condition="'$(TargetFramework)'=='net10.0'"></IsTestProject>`:''}</PropertyGroup>
   ${name==='Tests'?'<Import Project="Flags.props"/>':''}<ItemGroup><Compile Include="../Shared.cs" Link="Linked.cs"/></ItemGroup>
   <Target Name="NeverBuild" BeforeTargets="Build"><Error Text="Classification requested compilation"/></Target></Project>`);
 write(path.join(workspace,'Tests/Generated.cs'),`#if NET10_0
@@ -51,18 +51,21 @@ public class Payload { public int Value { get; set; } }
 [JsonSerializable(typeof(Payload))] internal partial class PayloadContext : JsonSerializerContext { }
 #endif
 `);
-write(project('Consumer'),'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><IsTestProject>false</IsTestProject></PropertyGroup><ItemGroup><ProjectReference Include="../Tests/Tests.csproj"/></ItemGroup><Target Name="NeverBuild" BeforeTargets="Build"><Error Text="Classification requested compilation"/></Target></Project>');
+write(project('Consumer'),'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include="../Tests/Tests.csproj"/></ItemGroup><Target Name="NeverBuild" BeforeTargets="Build"><Error Text="Classification requested compilation"/></Target></Project>');
 write(path.join(workspace,'Consumer/Code.cs'),'public static class Consumer { public static int Call() => SharedApi.Read(3); }\n');
 const projects=['Tests','Production','Consumer'].map(project);
 const first=invoke(projects);success(first);assert.equal(first.compilations.length,5);
 for(const compilation of first.compilations){
-  const expected=compilation.projectPath==='Tests/Tests.csproj'&&compilation.target==='net10.0'?'test':'non_test';
+  const unmarked=compilation.projectPath==='Consumer/Consumer.csproj';
+  const inconclusive=compilation.projectPath==='Production/Production.csproj'&&compilation.target==='net10.0';
+  const expected=unmarked||inconclusive?'unknown':compilation.projectPath==='Tests/Tests.csproj'&&compilation.target==='net10.0'?'test':'non_test';
   assert.equal(compilation.testClassification.kind,expected);assert.equal(compilation.testClassification.policyVersion,1);
   assert(compilation.testClassification.evidence.every(e=>e.path===compilation.projectPath&&e.value.includes(`target=${compilation.target}`)&&e.value.includes('stage=post_GetAssemblyVersion')&&!e.inferred));
-  assert.equal(first.reports.find(r=>r.compilationId===compilation.id).capabilities.test_classification,'complete');
+  assert.equal(first.reports.find(r=>r.compilationId===compilation.id).capabilities.test_classification,unmarked?'unknown':inconclusive?'partial':'complete');
   assert(!Object.keys(JSON.parse(compilation.optionsJson).compiler_metadata).some(k=>k==='IsTestProject'||k==='IsTestingPlatformApplication'));
 }
 checks.push('exact_policy_ack_all_targets_and_separate_context_metadata');
+checks.push('policy1_unmarked_and_inconclusive_signals_report_unknown_and_partial');
 const linked=first.sources.filter(s=>s.path==='Shared.cs');assert.equal(linked.length,4);assert.equal(new Set(linked.map(s=>s.id)).size,1);
 for(const source of first.sources){
   const bytes=Buffer.from(source.utf8,'base64');assert.equal(createHash('sha256').update(bytes).digest('hex'),source.sha256);
