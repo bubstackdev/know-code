@@ -223,3 +223,7 @@ Cancellation first reports `cancelling` while the shared scheduler records a dur
 ## Accepted query deadline outcome (2026-11-09)
 
 An expired overall query deadline returns typed `deadline_exceeded` and releases its reader. It does not return a partly assembled successful page or cancel background indexing. A graph traversal's separate work limits may still produce explicitly partial findings before the overall deadline. The accepted 500 ms freshness wait remains a phase budget within the overall deadline. The overall default is 5 seconds, configurable per request up to 120 seconds, including waiting inside Know Code, freshness checks, execution and response encoding. Cursor details remain under discussion; see [query lifecycle](QUERY_LIFECYCLE.md).
+
+## Accepted pagination portability (2026-11-09)
+
+Continuation tokens are opaque and bound to the workspace, usable across local clients and separate CLI invocations. Queries remain in-process through the common Rust core. Every page retains the original generation, scope and provenance; expiration/invalidation requires an explicit restart. Lifetimes, retained-state budgets and recovery details remain under discussion. See [query lifecycle and the retention finding](QUERY_LIFECYCLE.md#accepted-cursor-portability).

@@ -85,7 +85,7 @@ Read/source evidence uses the same served generation. A request's cancellation m
 
 Accepted pagination policy: all pages stay on the same served generation while updates publish. Cursors expire to bound retained views/state. Continuations preserve the initial query scope/evidence/budgets and do not silently advance generations; report known staleness when applicable. Expiration or lost state requires an explicit restart response.
 
-The retained-view mechanism, cursor transport/portability, concurrency limits, idle/absolute lifetimes, and safe cleanup are still open. SQLite snapshot behavior alone does not make cursors portable between processes or recoverable after restart. Expiry must release resources safely and stop abandoned readers from blocking checkpoint/source reclamation indefinitely.
+The user accepted opaque workspace-bound cursor tokens usable across local clients and separate CLI invocations, with page queries remaining in-process. The retained-generation mechanism, concurrency limits, idle/absolute lifetimes, restart behavior and safe cleanup remain open; see [query lifecycle](QUERY_LIFECYCLE.md#accepted-cursor-portability). SQLite snapshot behavior alone does not make cursors portable between processes or recoverable after restart. Expiry must release resources safely and stop abandoned readers from blocking checkpoint/source reclamation indefinitely.
 
 ## Scope and resource implications
 

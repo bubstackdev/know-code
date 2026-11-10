@@ -26,9 +26,23 @@ MCP captures its clock before blocking dispatch and advertises the shared consta
 
 Enforcement is cooperative: OS scheduling, filesystem calls, allocation, a single compiler-report JSON parse or other noninterruptible work can delay observing expiry. Millisecond host elapsed-time transfer has sub-millisecond rounding/marshalling gaps. A saturated host thread pool may delay delivering the error until it runs the expired task; that task must not begin index reading. Core JSON encoding is covered; host JSON parsing, outer MCP framing/output backpressure and caller processing are outside this implemented stopping boundary. No hard wall-clock response-delivery promise or total-response memory/byte cap is claimed. These limits do not change the accepted overall-budget objective or close the remaining release gates.
 
+## Accepted cursor portability
+
+The user accepted opaque, workspace-bound continuation tokens that work across local clients and separate CLI invocations. They are not tied to one .NET/Node object, MCP connection or process. Page queries still execute in the caller's process through the Rust core; portable tokens do not authorize moving graph execution into the coordinator. All pages preserve one generation and the original query scope/provenance. Expiration or invalidation requires an explicit restart, never a silent switch to current data.
+
+Portability does not yet promise recovery after coordinator restart, token lifetime/renewal, persistent cursor state or changes to query scope on continuation. Those remain separate decisions. Pagination is not implemented by this documentation step.
+
+### Retention finding and proposed mechanism
+
+Current `Writer::open_controlled` staging recovery and `Writer::finish_publication` delete noncurrent generation manifests, then reclaim unreferenced facts/source. A token containing only a generation number cannot recover those deleted rows in a new process. Current long-lived ReadViews preserve an SQLite transaction in one process; they cannot supply the accepted portable token by themselves.
+
+Proposed mechanism: let the sole coordinator/writer maintain bounded leases over logical generation manifests. Publication/cleanup retains compilation ownership and exact source while a lease is valid; individual page requests open short SQLite transactions against that retained generation through the same operators. No SQLite transaction stays open between pages, and no complete result set/index is copied just to enable pagination. Lease changes must serialize with staging recovery, publication and reclamation; accepting a pin after its generation was reclaimed must fail explicitly. Temporary pins remain reader retention, not searchable history.
+
+Bind token validation to workspace identity, index incarnation/compatibility, immutable query scope and continuation position. Reuse existing control framing for lease coordination and shared query operators for execution. Exact storage/encoding, renewal/admission limits, graph continuation state and cleanup remain under design. This is an implementation proposal derived from the inspected code, not a claim that the lease path exists or that portable tokens have passed tests.
+
 ## Decisions still open
 
-Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor storage/ownership, expiration and retained-reader limits. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
+Explicit request-cancellation outcomes and host API; whole-response byte limits; admission bounds; cursor retention mechanism, expiration/renewal, restart behavior and retained-reader limits. These must use one Rust execution path across CLI/MCP/.NET/Node. Keep SQL/storage private and avoid a separate pagination engine or per-language implementation.
 
 ## Validation outline
 
