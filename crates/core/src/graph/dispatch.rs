@@ -187,6 +187,7 @@ pub(super) fn neighbors(
     ))?;
     let mut rows = stmt.query(params![view.generation, node, budget.remaining(result) + 1])?;
     while let Some(row) = rows.next()? {
+        view.check()?;
         if !budget.take(result) {
             break;
         }
@@ -210,6 +211,7 @@ pub(super) fn neighbors(
         let mut rows =
             implementations.query(params![view.generation, node, budget.remaining(result) + 1])?;
         while let Some(row) = rows.next()? {
+            view.check()?;
             if !budget.take(result) {
                 break;
             }
@@ -223,6 +225,7 @@ pub(super) fn neighbors(
                 budget.remaining(result) + 1
             ])?;
             while let Some(row) = call_rows.next()? {
+                view.check()?;
                 if !budget.take(result) {
                     break;
                 }
@@ -238,6 +241,7 @@ pub(super) fn neighbors(
     } else {
         let mut candidates = vec![];
         for call in &output {
+            view.check()?;
             if call.edge.kind != DependencyKind::Call
                 || call.edge.resolution != "compiler_bound"
                 || !matches!(call.edge.dispatch.as_str(), "virtual" | "interface")
@@ -255,6 +259,7 @@ pub(super) fn neighbors(
                 budget.remaining(result) + 1
             ])?;
             while let Some(row) = rows.next()? {
+                view.check()?;
                 if !budget.take(result) {
                     break;
                 }

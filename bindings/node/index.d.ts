@@ -7,6 +7,7 @@ export interface QueryRequest {
   target?: string;
   limit?: number;
   freshness_wait_ms?: number;
+  /** Overall budget, including native dispatch/freshness/execution/encoding. Default 5000; maximum 120000; zero expires immediately. */
   deadline_ms?: number;
   kinds?: DependencyKind[];
   include_implicit?: boolean;

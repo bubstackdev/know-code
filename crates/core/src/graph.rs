@@ -214,6 +214,7 @@ impl Contexts {
                 ))
             })?;
             for row in rows {
+                view.check()?;
                 let (id, project, refs, status, fingerprint) = row?;
                 units.insert(
                     id,
@@ -228,6 +229,7 @@ impl Contexts {
         }
         let mut consumers = BTreeMap::<String, BTreeSet<String>>::new();
         for (id, unit) in &units {
+            view.check()?;
             if !unit.complete
                 || unit.references.iter().any(|r| {
                     r.input_fingerprint.is_empty()
@@ -519,6 +521,7 @@ pub(crate) fn query(
         visited_nodes: 0,
     };
     for c in coverage {
+        view.check()?;
         result.capability_coverage.insert(
             c.compilation_id.clone(),
             c.capabilities
@@ -553,6 +556,7 @@ pub(crate) fn query(
     let mut steps = vec![];
     let mut pending = BinaryHeap::new();
     for mut root in roots {
+        view.check()?;
         let original_root = root;
         let s = symbol(&view.connection, root)?;
         let mut context = match contexts.merge(0, &s.compilation_id) {
@@ -631,6 +635,7 @@ pub(crate) fn query(
     let started = Instant::now();
     let mut expand = true;
     while let Some(Reverse((possible, distance, index))) = pending.pop() {
+        view.check()?;
         if expand && started.elapsed() >= duration {
             result.limits.push("time_budget".into());
             expand = false;

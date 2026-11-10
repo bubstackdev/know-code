@@ -1,17 +1,23 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Diagnostics;
 
 namespace KnowCode;
 
 public sealed class Index(string database)
 {
-    public Task<JsonDocument> QueryAsync(QueryRequest request) =>
-        QueryJsonAsync(JsonSerializer.Serialize(request, Native.JsonOptions));
+    public Task<JsonDocument> QueryAsync(QueryRequest request)
+    {
+        var started = Stopwatch.GetTimestamp();
+        return QueryCoreAsync(JsonSerializer.Serialize(request, Native.JsonOptions), started);
+    }
 
     // Coarse native calls run off the caller's synchronization context.
-    public Task<JsonDocument> QueryJsonAsync(string request) => Task.Run(() =>
-        Native.Invoke(() => Native.Query(database, request)));
+    public Task<JsonDocument> QueryJsonAsync(string request) => QueryCoreAsync(request, Stopwatch.GetTimestamp());
+    private Task<JsonDocument> QueryCoreAsync(string request, long started) => Task.Run(() =>
+        Native.Invoke(() => Native.QueryElapsed(database, request,
+            (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds)));
 }
 
 public sealed record QueryRequest(string Op, string? Name = null, string? Query = null,
@@ -61,6 +67,8 @@ internal static partial class Native
     internal static partial uint AbiVersion();
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint Query(string database, string request);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_elapsed", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint QueryElapsed(string database, string request, ulong elapsedMs);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_string_free")]
     internal static partial void Free(nint value);
 }

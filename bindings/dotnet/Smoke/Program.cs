@@ -1,5 +1,35 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--deadline-queue")
+{
+    ThreadPool.GetMinThreads(out var minimum, out var minimumIo);
+    ThreadPool.GetMaxThreads(out var maximum, out var maximumIo);
+    if (!ThreadPool.SetMinThreads(1, minimumIo) || !ThreadPool.SetMaxThreads(1, maximumIo))
+        throw new Exception("Could not isolate fixture worker pool");
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    var blocker = Task.Run(() => { entered.Set(); release.Wait(); });
+    try {
+        entered.Wait();
+        var queuedIndex = new KnowCode.Index(args[1]);
+        var pending = queuedIndex.QueryAsync(new KnowCode.QueryRequest("symbols", DeadlineMs:25));
+        Thread.Sleep(100);
+        release.Set();
+        using var result = await pending;
+        if (result.RootElement.GetProperty("error").GetProperty("code").GetString() != "deadline_exceeded")
+            throw new Exception(result.RootElement.GetRawText());
+        using var next = await queuedIndex.QueryAsync(new KnowCode.QueryRequest("symbols"));
+        if (next.RootElement.GetProperty("error").GetProperty("code").GetString() != "not_ready")
+            throw new Exception(next.RootElement.GetRawText());
+        Console.WriteLine("{\"passed\":true,\"check\":\"DotNet_worker_queue_consumes_overall_deadline\"}");
+    } finally {
+        release.Set();
+        ThreadPool.SetMaxThreads(maximum, maximumIo);
+        ThreadPool.SetMinThreads(minimum, minimumIo);
+        await blocker;
+    }
+    return;
+}
 if (args[0] == "--workspace")
 {
     using var optionsJson = JsonDocument.Parse(args[2]);

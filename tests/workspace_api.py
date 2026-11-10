@@ -75,6 +75,11 @@ dotnet=Client('dotnet',root=link,configuration=None);assert dotnet.initial['root
 assert node.initial['opened']['database']==dotnet.initial['opened']['database']
 assert len(json.loads(cli('coordinator','status').stdout)['workspaces'])==1
 checks+=['auto_start_from_Node','canonical_workspace_shared_across_hosts','immutable_initial_snapshot','shared_registration_not_per_consumer']
+for client in [node,dotnet]:
+ error(client.send('query',request={'op':'symbols','deadline_ms':0}),'deadline_exceeded')
+ error(client.send('query',request={'op':'symbols','deadline_ms':120001}),'invalid_request')
+ assert client.send('query',request={'op':'symbols','name':'answer'})['result']['symbols']
+checks.append('typed_overall_deadlines_in_both_hosts_and_next_query_recovers')
 
 def equivalent(request):
  n=node.send('query',request=request);d=dotnet.send('query',request=request);c=json.loads(cli('query',DATABASE,json.dumps(request)).stdout)

@@ -2,9 +2,11 @@ use crate::{Error, Result, protocol::Diagnostic, store::SCHEMA_VERSION};
 use rusqlite::{Connection, OpenFlags, config::DbConfig, params};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     io::Read,
     path::Path,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -175,17 +177,57 @@ pub struct ReadView {
     pub(crate) connection: Connection,
     pub(crate) format_version: i32,
     pub generation: u64,
+    execution: Arc<Mutex<Option<crate::execution::Execution>>>,
+    expired: Cell<bool>,
 }
 impl ReadView {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        if !path.as_ref().is_file() {
+        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        let view = Self::open_controlled(path, execution)?;
+        *view.execution.lock().unwrap() = None;
+        Ok(view)
+    }
+    pub(crate) fn open_controlled(
+        path: impl AsRef<Path>,
+        execution: crate::execution::Execution,
+    ) -> Result<Self> {
+        execution.check()?;
+        let result = Self::open_inner(path.as_ref(), execution);
+        execution.check()?;
+        result
+    }
+    fn open_inner(path: &Path, execution: crate::execution::Execution) -> Result<Self> {
+        if !path.is_file() {
             return Err(Error::NotReady);
         }
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        connection.busy_timeout(Duration::from_secs(2))?;
+        let execution = Arc::new(Mutex::new(Some(execution)));
+        let progress = Arc::clone(&execution);
+        connection.progress_handler(
+            1_000,
+            Some(move || progress.lock().unwrap().is_some_and(|e| e.check().is_err())),
+        )?;
+        let busy = Arc::clone(&execution);
+        connection.busy_handler(Some(move |count| {
+            if count >= 2_000 {
+                return false;
+            }
+            let remaining = busy.lock().unwrap().map(|e| e.remaining()).transpose();
+            match remaining {
+                Err(_) => false,
+                Ok(remaining) => {
+                    std::thread::sleep(
+                        remaining
+                            .unwrap_or(Duration::from_millis(1))
+                            .min(Duration::from_millis(1)),
+                    );
+                    true
+                }
+            }
+        }))?;
         // Avoid parameter-triggered reprepare of the nested graph views on each
         // step. Reader plans stay stable; writer planning/durability is unchanged.
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, true)?;
@@ -215,10 +257,45 @@ impl ReadView {
             connection,
             format_version: version,
             generation: generation.ok_or(Error::NotReady)?,
+            execution,
+            expired: Cell::new(false),
         })
     }
 
     pub fn query(&self, request: QueryRequest) -> Result<QueryResult> {
+        let execution = crate::execution::Execution::new(Default::default(), request.deadline_ms)?;
+        self.query_controlled(request, execution)
+    }
+    pub(crate) fn query_controlled(
+        &self,
+        request: QueryRequest,
+        execution: crate::execution::Execution,
+    ) -> Result<QueryResult> {
+        if self.expired.get() {
+            return Err(Error::DeadlineExceeded);
+        }
+        *self.execution.lock().unwrap() = Some(execution);
+        let result = self.check().and_then(|_| self.query_inner(request));
+        let elapsed = execution.check();
+        *self.execution.lock().unwrap() = None;
+        if elapsed.is_err() {
+            self.expired.set(true);
+            // Statements/rows have unwound. Release the WAL read transaction
+            // even if a low-level Rust caller retains this expired view.
+            if !self.connection.is_autocommit() {
+                self.connection.execute_batch("ROLLBACK")?;
+            }
+            return Err(Error::DeadlineExceeded);
+        }
+        result
+    }
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.expired.get() {
+            return Err(Error::DeadlineExceeded);
+        }
+        self.execution.lock().unwrap().map_or(Ok(()), |e| e.check())
+    }
+    fn query_inner(&self, request: QueryRequest) -> Result<QueryResult> {
         if !(1..=1000).contains(&request.limit) {
             return Err(Error::InvalidRequest(
                 "limit must be between 1 and 1000".into(),
@@ -242,6 +319,7 @@ impl ReadView {
             ..Default::default()
         };
         for c in &coverage {
+            self.check()?;
             *workspace_coverage
                 .statuses
                 .entry(c.status.clone())
@@ -328,6 +406,7 @@ impl ReadView {
                 result.symbols.truncate(request.limit as usize);
                 let mut locations = self.connection.prepare_cached("SELECT o.artifact_id,o.path,o.content_hash,o.start_byte,o.end_byte,o.generated FROM occurrence_locations o WHERE o.generation=? AND o.compilation_id=? AND o.symbol_id=? AND o.role='declaration' ORDER BY o.path,o.start_byte")?;
                 for symbol in &mut result.symbols {
+                    self.check()?;
                     symbol.locations = locations
                         .query_map(
                             params![symbol.owner_generation, symbol.compilation_id, symbol.id],
@@ -432,6 +511,7 @@ impl ReadView {
             0
         };
         for c in &mut result.coverage {
+            self.check()?;
             if !full {
                 c.analysis_options = serde_json::Value::Null;
                 c.diagnostics.clear();
@@ -448,6 +528,7 @@ impl ReadView {
                 }
                 let mut diagnostics = vec![];
                 for d in c.diagnostics.drain(..) {
+                    self.check()?;
                     let size = serde_json::to_vec(&d)?.len();
                     if size <= detail_budget {
                         detail_budget -= size;
@@ -493,6 +574,7 @@ impl ReadView {
         let mut count = 0;
         let mut contexts = vec![];
         for key in keys.into_iter().take(request.limit as usize) {
+            self.check()?;
             if count >= request.limit {
                 truncated = true;
                 break;
@@ -502,6 +584,7 @@ impl ReadView {
             truncated |= symbol.locations_limited;
             let mut declarations = vec![];
             for location in std::mem::take(&mut symbol.locations) {
+                self.check()?;
                 if count >= request.limit {
                     truncated = true;
                     break;
@@ -598,6 +681,7 @@ impl ReadView {
         let mut previous_cr = false;
         let mut chunk = [0u8; 8192];
         while remaining > 0 {
+            self.check()?;
             let count = remaining.min(chunk.len() as u64) as usize;
             blob.read_exact(&mut chunk[..count])?;
             for &byte in &chunk[..count] {
@@ -706,6 +790,16 @@ impl ReadView {
         let options = if details { "c.options_json" } else { "'null'" };
         let mut statement=self.connection.prepare(&format!("SELECT c.id,c.language,c.project_path,c.target,c.configuration,c.inferred,c.compiler_version,r.status,r.diagnostics,{options},{caps} FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id JOIN reports r ON c.generation=r.generation AND c.id=r.compilation_id WHERE u.generation=? ORDER BY c.id"))?;
         let rows = statement.query_map([self.generation], |r| {
+            let check = || {
+                self.check().map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        8,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })
+            };
+            check()?;
             let diagnostics: Vec<Diagnostic> = serde_json::from_str(&r.get::<_, String>(8)?)
                 .map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -715,9 +809,13 @@ impl ReadView {
                     )
                 })?;
             let mut diagnostic_counts = BTreeMap::new();
-            for d in &diagnostics {
+            for (index, d) in diagnostics.iter().enumerate() {
+                if index % 256 == 0 {
+                    check()?;
+                }
                 *diagnostic_counts.entry(d.severity.clone()).or_default() += 1;
             }
+            check()?;
             let options: String = r.get(9)?;
             Ok(Coverage {
                 compilation_id: r.get(0)?,

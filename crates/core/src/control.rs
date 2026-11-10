@@ -43,15 +43,21 @@ fn request_with_timeout(
     let mut socket = UnixStream::connect(socket_path(root))?;
     socket.set_write_timeout(Some(Duration::from_millis(u64::from(timeout.max(1)))))?;
     socket.set_read_timeout(Some(Duration::from_millis(u64::from(timeout.max(1)))))?;
+    exchange(&mut socket, request)
+}
+fn exchange(
+    socket: &mut (impl std::io::Read + std::io::Write),
+    request: ControlRequest,
+) -> Result<ControlResponse> {
     protocol::write_frame(
-        &mut socket,
+        &mut *socket,
         &Envelope {
             protocol_version: VERSION,
             job_id: String::new(),
             payload: Some(envelope::Payload::ControlRequest(request)),
         },
     )?;
-    let response = protocol::read_frame(&mut socket)?
+    let response = protocol::read_frame(socket)?
         .ok_or_else(|| Error::Protocol("coordinator closed the control channel".into()))?;
     match response.payload {
         Some(envelope::Payload::ControlResponse(response)) if response.error_code.is_empty() => {
@@ -412,6 +418,22 @@ pub fn wait_for_database(
     wait_ms: u32,
     deadline_ms: Option<u32>,
 ) -> Result<Option<WorkspaceStatus>> {
+    wait_for_database_inner(database, wait_ms, deadline_ms, None)
+}
+pub(crate) fn wait_for_database_controlled(
+    database: &Path,
+    wait_ms: u32,
+    execution: crate::execution::Execution,
+) -> Result<Option<WorkspaceStatus>> {
+    execution.check()?;
+    wait_for_database_inner(database, wait_ms, None, Some(execution))
+}
+fn wait_for_database_inner(
+    database: &Path,
+    wait_ms: u32,
+    deadline_ms: Option<u32>,
+    execution: Option<crate::execution::Execution>,
+) -> Result<Option<WorkspaceStatus>> {
     let Some(root) = root_for_database(database) else {
         return Ok(None);
     };
@@ -421,16 +443,31 @@ pub fn wait_for_database(
     {
         return Ok(Some(certification.status));
     }
-    let response = request_with_timeout(
-        root,
-        ControlRequest {
-            operation: "wait".into(),
-            database: database.to_string_lossy().into_owned(),
-            wait_ms,
-            ..Default::default()
-        },
-        deadline_ms.unwrap_or(wait_ms.saturating_add(50).max(100)),
-    )?;
+    let mut request = ControlRequest {
+        operation: "wait".into(),
+        database: database.to_string_lossy().into_owned(),
+        wait_ms,
+        ..Default::default()
+    };
+    let response = if let Some(execution) = execution {
+        let execution = execution.phase(Duration::from_millis(u64::from(
+            wait_ms.saturating_add(50).max(100),
+        )));
+        let stream = crate::execution::connect(&socket_path(root), execution)?;
+        request.wait_ms = request
+            .wait_ms
+            .min(execution.remaining()?.as_millis().min(u128::from(u32::MAX)) as u32);
+        exchange(
+            &mut crate::execution::TimedStream::new(stream, execution)?,
+            request,
+        )?
+    } else {
+        request_with_timeout(
+            root,
+            request,
+            deadline_ms.unwrap_or(wait_ms.saturating_add(50).max(100)),
+        )?
+    };
     if response.analysis_settings_version != crate::settings::VERSION
         || response.resource_control_version != crate::resource::CONTROL_VERSION
     {
@@ -637,6 +674,45 @@ mod activity_tests {
             ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+    #[test]
+    fn controlled_wait_reads_capable_peer_and_caps_server_wait() {
+        let root = root();
+        let database = root.join("workspaces/test/index.db");
+        let listener = UnixListener::bind(socket_path(&root)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = protocol::read_frame(&mut stream).unwrap().unwrap();
+            let Some(envelope::Payload::ControlRequest(request)) = request.payload else {
+                panic!("expected request")
+            };
+            assert!(
+                request.wait_ms <= 100,
+                "uncapped server wait: {}",
+                request.wait_ms
+            );
+            protocol::write_frame(
+                &mut stream,
+                &Envelope {
+                    protocol_version: VERSION,
+                    payload: Some(envelope::Payload::ControlResponse(ControlResponse {
+                        resource_control_version: crate::resource::CONTROL_VERSION,
+                        analysis_settings_version: crate::settings::VERSION,
+                        workspaces: vec![WorkspaceStatus {
+                            generation: 42,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        });
+        let execution = crate::execution::Execution::new(Default::default(), Some(100)).unwrap();
+        let response = wait_for_database_controlled(&database, 120_000, execution);
+        assert_eq!(response.unwrap().unwrap().generation, 42);
+        server.join().unwrap();
     }
     #[test]
     fn old_coordinator_cannot_silently_accept_resource_controls() {

@@ -1,10 +1,18 @@
 import { createRequire } from 'node:module';
 const native = createRequire(import.meta.url)('./know_code.node');
+function query(database, request) {
+  const start = performance.now();
+  if (typeof native.queryJsonElapsed !== 'function')
+    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; query deadlines are missing.');
+  const encoded = JSON.stringify(request);
+  const elapsed = Math.min(Math.floor(performance.now() - start), 0xffffffff);
+  return native.queryJsonElapsed(database, encoded, elapsed);
+}
 
 export class Index {
   constructor(database) { this.database = database; }
   async query(request) {
-    return JSON.parse(await native.queryJson(this.database, JSON.stringify(request)));
+    return JSON.parse(await query(this.database, request));
   }
 }
 
@@ -60,7 +68,7 @@ export class Workspace {
   waitForIndex(options = {}) { return this.#operation('wait',{wait_ms:options.waitMs}); }
   async query(request) {
     this.#checkOpen();
-    return checked(JSON.parse(await native.queryJson(this.#descriptor.status.database,JSON.stringify(request))));
+    return checked(JSON.parse(await query(this.#descriptor.status.database, request)));
   }
   close() { this.#closed = true; }
 }

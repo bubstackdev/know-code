@@ -135,6 +135,11 @@ try:
  tool,missing=c.tool('coverage_details');assert tool['isError']
  checks+=['compiler_context_and_source_parity','overloads_partial_types_and_unicode','aggregate_context_budgets','compact_relevant_coverage_with_workspace_summary','generation_bound_bounded_coverage_details']
  checks+=['bounded_source_default','hash_guarded_byte_ranges','no_SQL_surface','visible_argument_errors']
+ for deadline,expected in [(0,'deadline_exceeded'),(120001,'invalid_request')]:
+  tool,expired=c.tool('search_symbols',{'name':'target','deadline_ms':deadline})
+  assert tool['isError'] and expired['error']['code']==expected,(tool,expired)
+ assert c.tool('search_symbols',{'name':'target'})[1]['result']['symbols']
+ checks.append('overall_deadline_errors_and_next_query_recovers')
  owner=(DATA/'live/owner').read_bytes();pid=json.loads(owner[76:76+int.from_bytes(owner[72:76],'little')])['pid']
  os.kill(pid,signal.SIGSTOP);paused=pid
  first=c.send('tools/call',{'name':'search_symbols','arguments':{'name':'target','freshness_wait_ms':2000,'deadline_ms':2000}})

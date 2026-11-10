@@ -107,6 +107,53 @@ fn published_readers_keep_matching_source_across_replacement() {
 }
 
 #[test]
+fn query_deadline_interrupts_sql_and_releases_a_retained_view() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter");
+    writer.publish().unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    // An owned fixture amplifies coverage SQL without allocating a huge index.
+    connection
+        .execute_batch(
+            "ALTER TABLE reports RENAME TO fixture_reports;
+        CREATE VIEW reports AS WITH RECURSIVE n(i) AS
+        (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<100000000)
+        SELECT r.* FROM fixture_reports r CROSS JOIN n;",
+        )
+        .unwrap();
+    let view = ReadView::open(&path).unwrap();
+    connection
+        .execute("UPDATE state SET current_generation=current_generation", [])
+        .unwrap();
+    let mut timed = request("symbols");
+    timed.deadline_ms = Some(30);
+    let start = std::time::Instant::now();
+    assert!(matches!(
+        view.query(timed),
+        Err(know_code_core::Error::DeadlineExceeded)
+    ));
+    assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    let busy: i32 = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(busy, 0, "expired retained view still pinned WAL");
+    assert!(matches!(
+        view.query(request("symbols")),
+        Err(know_code_core::Error::DeadlineExceeded)
+    ));
+    connection
+        .execute_batch("DROP VIEW reports; ALTER TABLE fixture_reports RENAME TO reports;")
+        .unwrap();
+    let result: serde_json::Value = serde_json::from_str(&know_code_core::query_json(
+        path.to_str().unwrap(),
+        r#"{"op":"symbols","name":"Greeter"}"#,
+    ))
+    .unwrap();
+    assert_eq!(result["result"]["symbols"][0]["name"], "Greeter");
+}
+
+#[test]
 fn incomplete_or_failed_analysis_preserves_published_generation() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();

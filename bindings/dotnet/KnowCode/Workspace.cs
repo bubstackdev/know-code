@@ -61,11 +61,18 @@ public sealed class Workspace : IDisposable
             CoordinatorExecutable = executable, Configuration = configuration, WaitMs = waitMs, PersonalSettings = personalSettings }).ConfigureAwait(false);
         return result.Status;
     }
-    public Task<JsonDocument> QueryAsync(QueryRequest request) => QueryJsonAsync(JsonSerializer.Serialize(request,Native.JsonOptions));
+    public async Task<JsonDocument> QueryAsync(QueryRequest request)
+    {
+        CheckOpen();
+        return Checked(await index.QueryAsync(request).ConfigureAwait(false));
+    }
     public async Task<JsonDocument> QueryJsonAsync(string request)
     {
         CheckOpen();
-        var result = await index.QueryJsonAsync(request).ConfigureAwait(false);
+        return Checked(await index.QueryJsonAsync(request).ConfigureAwait(false));
+    }
+    private static JsonDocument Checked(JsonDocument result)
+    {
         try { Native.Check(result); return result; }
         catch { result.Dispose(); throw; }
     }

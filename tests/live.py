@@ -1,6 +1,6 @@
 """Stateful native consumers exercise live certification without diagnostic APIs."""
 from pathlib import Path
-import json, os, selectors, shutil, socket, subprocess, time
+import json, os, selectors, shutil, signal, socket, subprocess, time
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
@@ -13,7 +13,7 @@ WORKSPACE.mkdir(parents=True)
 SOURCE = WORKSPACE / 'value.ts'
 SOURCE.write_text('export class LiveValue { value = 1; }\n')
 REQUEST = json.dumps({'op': 'symbols', 'name': 'LiveValue', 'limit': 100,
-                      'freshness_wait_ms': 0, 'deadline_ms': 100})
+                      'freshness_wait_ms': 0, 'deadline_ms': 1000})
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(DATA), DOTNET_CLI_TELEMETRY_OPTOUT='1')
 process = None
 checks = []
@@ -170,6 +170,20 @@ try:
         finally:
             consumer.close()
         checks.append(host+'_restart_reconciles_saved_inputs')
+
+    # A stopped owned coordinator cannot complete the freshness RPC. Deadline
+    # expiry stops that query; it must not cancel later saved-file indexing.
+    before = ready()['workspaces'][0]['generation']
+    os.kill(process.pid, signal.SIGSTOP)
+    try:
+        expired = json.loads(command('query', DATABASE, json.dumps({
+            'op':'symbols','name':'LiveValue','freshness_wait_ms':120000,'deadline_ms':50})))
+        assert expired['error']['code']=='deadline_exceeded',expired
+    finally:
+        os.kill(process.pid, signal.SIGCONT)
+    SOURCE.write_text(SOURCE.read_text()+'\n// saved after query deadline\n')
+    ready(before+1)
+    checks.append('deadline_during_freshness_does_not_cancel_saved_indexing')
 
     # A failed optional live directory must leave baseline coordination usable.
     stop()

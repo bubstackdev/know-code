@@ -103,7 +103,7 @@ assert all('string, int' in s['signature'] for s in query({'op': 'symbols', 'nam
 source.write_text(original.replace('Hello', 'First'))
 wait(lambda s: s['phase'] == 'analyzing', 'active update')
 started = time.monotonic()
-fallback = query({'op': 'symbols', 'name': 'greet', 'freshness_wait_ms': 10, 'deadline_ms': 10})
+fallback = query({'op': 'symbols', 'name': 'greet', 'freshness_wait_ms': 10, 'deadline_ms': 1000})
 assert time.monotonic() - started < .75
 assert fallback['result']['freshness'] == 'stale', fallback
 source.write_text(original.replace('Hello', 'Final'))

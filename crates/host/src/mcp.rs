@@ -1,5 +1,5 @@
 use know_code_core::{
-    control,
+    control, execution,
     protocol::{ControlRequest, WorkspaceStatus},
     query,
 };
@@ -80,6 +80,7 @@ impl ServerHandler for Mcp {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let start = know_code_core::execution::QueryStart::default();
         let name = request.name.as_ref();
         if self.get_tool(name).is_none() {
             return Err(ErrorData::invalid_params("unknown Know Code tool", None));
@@ -150,9 +151,10 @@ impl ServerHandler for Mcp {
                     Err(error) => failure(error.code(), &error),
                 }
             } else {
-                let result: Value = serde_json::from_str(&know_code_core::query_json(
+                let result: Value = serde_json::from_str(&know_code_core::query_json_started(
                     &database,
                     &Value::Object(arguments).to_string(),
+                    start,
                 ))
                 .expect("core query emits JSON");
                 if result.get("error").is_some() {
@@ -184,7 +186,7 @@ fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
         "start_byte":{"type":"integer","minimum":0},"end_byte":{"type":"integer","minimum":0},
         "target":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":1000,"default":100},
         "freshness_wait_ms":{"type":"integer","minimum":0,"maximum":120000,"default":500},
-        "deadline_ms":{"type":"integer","minimum":0,"description":"Caps freshness waiting; not a total SQL deadline."},
+        "deadline_ms":{"type":"integer","minimum":0,"maximum":execution::MAX_DEADLINE_MS,"default":execution::DEFAULT_DEADLINE_MS,"description":"Overall query budget, including freshness, execution and core response encoding; expiry returns deadline_exceeded."},
         "include_implicit":{"type":"boolean","default":true},"exact_only":{"type":"boolean","default":false},
         "kinds":{"type":"array","items":{"type":"string","enum":["call","reference","type_reference","inherits","imports","implements","overrides","contains","initializes"]}},
         "max_depth":{"type":"integer","minimum":1},"max_edges":{"type":"integer","minimum":1},

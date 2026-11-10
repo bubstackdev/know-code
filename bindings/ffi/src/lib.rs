@@ -39,6 +39,21 @@ pub unsafe extern "C" fn kc_query_json(
     })
 }
 /// # Safety
+/// Same pointer/ownership contract as kc_query_json. elapsed_ms charges time
+/// already spent in the host's asynchronous queue; it is not a clock epoch.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_json_elapsed(
+    database: *const c_char,
+    request: *const c_char,
+    elapsed_ms: u64,
+) -> *mut c_char {
+    let start = know_code_core::execution::QueryStart::with_elapsed_ms(elapsed_ms);
+    response(|| match unsafe { (input(database), input(request)) } {
+        (Ok(database), Ok(request)) => know_code_core::query_json_started(database, request, start),
+        (Err(error), _) | (_, Err(error)) => error,
+    })
+}
+/// # Safety
 /// Request must be a valid NUL-terminated UTF-8 string for this call.
 /// Free the returned owned string exactly once using kc_string_free.
 #[unsafe(no_mangle)]
@@ -49,7 +64,7 @@ pub unsafe extern "C" fn kc_workspace_json(request: *const c_char) -> *mut c_cha
     })
 }
 /// # Safety
-/// The pointer must be null or an unfreed result of kc_query_json/kc_workspace_json.
+/// The pointer must be null or an unfreed result of a kc_*_json query/control call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kc_string_free(value: *mut c_char) {
     if !value.is_null() {
