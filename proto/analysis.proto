@@ -44,6 +44,8 @@ message SdkTargetMetadata {
   string target = 1;
   string assets_file = 2;
   map<string, string> identity = 3;
+  // Analysis metadata, never MSBuild identity/global properties.
+  TestClassification test_classification = 4;
 }
 message AnalyzeRequest {
   string workspace_root = 1;
@@ -57,6 +59,9 @@ message AnalyzeRequest {
   // Absent retains the legacy configuration/preparation contract.
   // A present policy requires matching ProviderInfo acknowledgment before facts.
   AnalysisPolicy analysis_policy = 9;
+  // Zero is legacy/unspecified. A nonzero value requires the provider's exact
+  // acknowledgement before facts; preparation policy/fingerprints are separate.
+  uint32 test_classification_policy = 10;
 }
 message AnalysisPolicy {
   uint32 version = 1;
@@ -96,6 +101,21 @@ message ProviderInfo {
   string runtime_version = 3;
   // Zero means the legacy contract only. Advertise after implementing the policy.
   uint32 analysis_policy_version = 4;
+  uint32 test_classification_policy = 5;
+}
+// Classification describes saved compilation/source context, not execution
+// coverage. Absence on a source inherits its compilation's classification.
+// Unrecognized data remains unknown; only the core derives mixed symbols.
+message TestClassification {
+  uint32 policy_version = 1;
+  string kind = 2; // unknown, test, non_test
+  repeated TestEvidence evidence = 3;
+}
+message TestEvidence {
+  string basis = 1; // msbuild_property, path_convention
+  string value = 2; // property=value or the matched convention
+  string path = 3; // normalized source/project path in the owning context
+  bool inferred = 4;
 }
 message Compilation {
   string id = 1;
@@ -110,6 +130,7 @@ message Compilation {
   repeated string input_paths = 10;
   repeated ProjectReferenceContext references = 11;
   string input_fingerprint = 12;
+  TestClassification test_classification = 13;
 }
 // Exact compiler-selected contexts, not every target of a referenced project.
 message ProjectReferenceContext {
@@ -124,6 +145,7 @@ message SourceArtifact {
   string sha256 = 4;
   bool generated = 5;
   string compilation_id = 6;
+  TestClassification test_classification = 7;
 }
 message Symbol {
   string id = 1;

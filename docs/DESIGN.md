@@ -239,3 +239,7 @@ Automatic parent-folder discovery stops descending when it finds a repository. N
 ## Accepted query cancellation and MCP transport (2026-11-10)
 
 SDK query cancellation uses .NET OperationCanceledException and Node AbortError, while the shared Rust/JSON boundary reports cancelled. Cancellation stops the query and releases its resources without cancelling shared indexing. MCP output has an 8 MiB full serialized frame ceiling and a 5-second output deadline; stalled/partially written connections close while indexing continues. See QUERY_CANCELLATION.md for ownership, scope and focused validation.
+
+## Accepted test-filter semantics (2026-11-10)
+
+Unknown classifications remain included when excluding tests. Filters control returned findings while traversal may cross other code. Mixed semantic symbols remain in a filtered view when a declaration matches, with evidence preserved. Start with evaluated C# test-project metadata and inferred TypeScript .test/.spec/__tests__ paths; unrecognized code stays unknown. See TEST_CLASSIFICATION.md for the shared contract and implementation boundaries.
