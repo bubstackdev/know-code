@@ -109,7 +109,7 @@ def sdk_cancel(language,root):
  assert p.returncode==0,(p.stdout,p.stderr)
  value=json.loads(p.stdout.strip().splitlines()[-1]);assert value['phase'] in ['cancelling','cancelled'],value
 
-limits=json.loads(cli('resources').stdout);assert limits=={'cpu_cores':2.0,'memory_mib':2048},limits
+limits=json.loads(cli('resources').stdout);assert limits=={'cpu_cores':2.0,'memory_mib':2048,'rebuild_disk_mib':2048,'min_free_disk_mib':512},limits
 registered=json.loads(cli('watch',A).stdout);database=registered['database']
 initial=wait(A,lambda s:s['phase']=='idle','initial compiler graph');generation=initial['generation']
 def query():return json.loads(cli('query',database,'{"op":"symbols","name":"answer","freshness_wait_ms":0}').stdout)['result']
@@ -238,7 +238,7 @@ cpu=json.loads((RUN/'cpu.json').read_text());measurements['cpu']=cpu
 assert cpu['cpu_seconds']>1.35 and cpu['cpu_seconds']/cpu['wall_seconds']<.7,cpu
 (A/'.mode').unlink();record('aggregate_cpu_budget_covers_multiple_helpers')
 cli('coordinator','stop');time.sleep(.15)
-assert json.loads(cli('resources').stdout)=={'cpu_cores':.5,'memory_mib':1024}
+assert json.loads(cli('resources').stdout)=={'cpu_cores':.5,'memory_mib':1024,'rebuild_disk_mib':2048,'min_free_disk_mib':512}
 record('personal_limits_survive_coordinator_restart')
 cli('resources','--cpu',2,'--memory-mib',2048)
 print(json.dumps({'passed':len(checks),'run':str(RUN),'measurements':measurements}),flush=True)

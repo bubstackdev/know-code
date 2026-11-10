@@ -62,18 +62,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("resources") => {
             let mut cpu = None;
             let mut memory = None;
+            let mut rebuild_disk = None;
+            let mut min_free_disk = None;
             for pair in args[2..].chunks(2) {
-                if pair.len() != 2 { return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB]".into()); }
+                if pair.len() != 2 { return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] [--rebuild-disk-mib MIB] [--min-free-disk-mib MIB]".into()); }
                 match pair[0].as_str() {
                     "--cpu" => cpu = Some(pair[1].parse::<f64>()?),
                     "--memory-mib" => memory = Some(pair[1].parse::<u64>()?),
-                    _ => return Err("expected --cpu or --memory-mib".into()),
+                    "--rebuild-disk-mib" => rebuild_disk = Some(pair[1].parse::<u64>()?),
+                    "--min-free-disk-mib" => min_free_disk = Some(pair[1].parse::<u64>()?),
+                    _ => return Err("expected --cpu, --memory-mib, --rebuild-disk-mib or --min-free-disk-mib".into()),
                 }
             }
             let mut limits = control::resources(&data, None, Some(&std::env::current_exe()?))?;
-            if cpu.is_some() || memory.is_some() {
+            if cpu.is_some() || memory.is_some() || rebuild_disk.is_some() || min_free_disk.is_some() {
                 limits.cpu_cores = cpu.unwrap_or(limits.cpu_cores);
                 limits.memory_mib = memory.unwrap_or(limits.memory_mib);
+                limits.rebuild_disk_mib = rebuild_disk.unwrap_or(limits.rebuild_disk_mib);
+                limits.min_free_disk_mib = min_free_disk.unwrap_or(limits.min_free_disk_mib);
                 limits = control::resources(&data, Some(limits), None)?;
             }
             println!("{}", serde_json::to_string(&limits)?);
@@ -138,7 +144,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some("login-plist") => print!("{}", coordinator::login_plist(&std::env::current_exe()?, &absolute(&data)?)),
             _ => return Err("usage: know-code coordinator run|status|stop|login-plist".into()),
         },
-        _ => return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] | cancel WORKSPACE | settings WORKSPACE [JSON] | index|watch WORKSPACE [--configuration NAME] | query DATABASE JSON | mcp --workspace PATH [--configuration NAME] | coordinator run|status|stop|login-plist | install|update [--from BUNDLE] [--prefix DIR] | rollback|uninstall|install-info [--prefix DIR] | service enable|disable|status [--prefix DIR]".into()),
+        _ => return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] [--rebuild-disk-mib MIB] [--min-free-disk-mib MIB] | cancel WORKSPACE | settings WORKSPACE [JSON] | index|watch WORKSPACE [--configuration NAME] | query DATABASE JSON | mcp --workspace PATH [--configuration NAME] | coordinator run|status|stop|login-plist | install|update [--from BUNDLE] [--prefix DIR] | rollback|uninstall|install-info [--prefix DIR] | service enable|disable|status [--prefix DIR]".into()),
     }
     Ok(())
 }

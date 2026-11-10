@@ -17,7 +17,7 @@ use std::{
     },
 };
 const MAGIC: &[u8; 8] = b"KCLIVE01";
-const OWNER_MAGIC: &[u8; 8] = b"KCOWNER3";
+const OWNER_MAGIC: &[u8; 8] = b"KCOWNER4";
 const MAX_PAGE: u64 = 64 * 1024;
 #[derive(Serialize, Deserialize)]
 struct Owner {
@@ -33,6 +33,8 @@ struct Owner {
     analysis_settings_version: u32,
     #[serde(default)]
     resource_control_version: u32,
+    #[serde(default)]
+    index_lifecycle_version: u32,
 }
 fn process(pid: u32) -> Option<(u64, u64)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
@@ -238,7 +240,7 @@ impl Publisher {
         let mut token = [0; 16];
         File::open("/dev/urandom")?.read_exact(&mut token)?;
         let owner = Owner {
-            version: 3,
+            version: 4,
             protocol: protocol::VERSION,
             pid: std::process::id(),
             start_sec,
@@ -247,6 +249,7 @@ impl Publisher {
             activity_hints: true,
             analysis_settings_version: crate::settings::VERSION,
             resource_control_version: crate::resource::CONTROL_VERSION,
+            index_lifecycle_version: protocol::INDEX_LIFECYCLE_VERSION,
         };
         let name = format!(".owner-{}-{}", owner.pid, u128::from_le_bytes(token));
         let staging = dir.join(name);
@@ -441,10 +444,11 @@ fn read_certified(
         return Ok(None);
     }
     let owner: Owner = serde_json::from_slice(body)?;
-    if owner.version != 3
+    if owner.version != 4
         || owner.protocol != protocol::VERSION
         || owner.analysis_settings_version != crate::settings::VERSION
         || owner.resource_control_version != crate::resource::CONTROL_VERSION
+        || owner.index_lifecycle_version != protocol::INDEX_LIFECYCLE_VERSION
         || process(owner.pid) != Some((owner.start_sec, owner.start_usec))
     {
         return Ok(None);

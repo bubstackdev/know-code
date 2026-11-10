@@ -225,6 +225,7 @@ pub fn query_json_cancellable(
             Err(error) => execution::error_json(error.code(), &error.to_string(), maximum),
         },
         Err(error) => {
+            control::report_index_corruption(&error, &execution);
             let error = execution.check().err().unwrap_or(error);
             execution::error_json(error.code(), &error.to_string(), maximum)
         }

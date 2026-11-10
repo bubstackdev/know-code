@@ -80,8 +80,11 @@ fn exchange(
 }
 pub(crate) fn exchange_raw(
     socket: &mut (impl std::io::Read + std::io::Write),
-    request: ControlRequest,
+    mut request: ControlRequest,
 ) -> Result<ControlResponse> {
+    if request.index_lifecycle_version == 0 {
+        request.index_lifecycle_version = protocol::INDEX_LIFECYCLE_VERSION;
+    }
     protocol::write_frame(
         &mut *socket,
         &Envelope {
@@ -98,6 +101,9 @@ pub(crate) fn exchange_raw(
     }
 }
 pub(crate) fn checked_response(response: ControlResponse) -> Result<ControlResponse> {
+    if response.index_lifecycle_version != protocol::INDEX_LIFECYCLE_VERSION {
+        return Err(Error::UpdateRequired("update the running coordinator and native libraries together; index lifecycle safety is unavailable or incompatible".into()));
+    }
     if response.error_code.is_empty() {
         Ok(response)
     } else if response.error_code == "update_required" {
@@ -108,6 +114,49 @@ pub(crate) fn checked_response(response: ControlResponse) -> Result<ControlRespo
             message: response.error_message,
         })
     }
+}
+
+// A durable BAD latch is the proof; this bounded RPC is only a prompt for
+// the coordinator to observe it. Never turn a reporting error into stale data.
+pub(crate) fn report_index_corruption(error: &Error, execution: &crate::execution::Execution) {
+    let Error::IndexCorrupt {
+        database,
+        incarnation,
+        message,
+    } = error
+    else {
+        return;
+    };
+    if incarnation.is_empty() {
+        return;
+    }
+    let Some(root) = root_for_database(database) else {
+        return;
+    };
+    let _ = (|| -> Result<()> {
+        let now = crate::execution::continuous_time()?;
+        let reporting = execution
+            .clone()
+            .cap_at(now.saturating_add(Duration::from_millis(100)))?;
+        let stream = crate::execution::connect(&socket_path(root), reporting.clone())?;
+        let mut end = message.len().min(8192);
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        exchange(
+            &mut crate::execution::TimedStream::new(stream, reporting)?,
+            ControlRequest {
+                operation: "index-corrupt".into(),
+                database: path_string(database)?,
+                corruption: Some(IndexCorruptionReport {
+                    incarnation: incarnation.clone(),
+                    detail: message[..end].into(),
+                }),
+                ..Default::default()
+            },
+        )?;
+        Ok(())
+    })();
 }
 
 /// Workspace control is shared by native libraries and the CLI/MCP host.
@@ -559,6 +608,7 @@ fn notify_activity(root: &Path, database: &str) -> Result<()> {
             job_id: String::new(),
             payload: Some(envelope::Payload::ControlRequest(ControlRequest {
                 operation: "activity".into(),
+                index_lifecycle_version: protocol::INDEX_LIFECYCLE_VERSION,
                 database: database.into(),
                 ..Default::default()
             })),
@@ -665,7 +715,8 @@ pub fn resources(
             resources: limits.map(|l| ResourceLimits {
                 cpu_cores: l.cpu_cores,
                 memory_mib: l.memory_mib,
-                ..Default::default()
+                rebuild_disk_mib: l.rebuild_disk_mib,
+                min_free_disk_mib: l.min_free_disk_mib,
             }),
             ..Default::default()
         },
@@ -676,6 +727,8 @@ pub fn resources(
     Ok(crate::resource::Limits {
         cpu_cores: limits.cpu_cores,
         memory_mib: limits.memory_mib,
+        rebuild_disk_mib: limits.rebuild_disk_mib,
+        min_free_disk_mib: limits.min_free_disk_mib,
     })
 }
 
@@ -732,6 +785,7 @@ mod activity_tests {
                     protocol_version: VERSION,
                     payload: Some(envelope::Payload::ControlResponse(ControlResponse {
                         resource_control_version: crate::resource::CONTROL_VERSION,
+                        index_lifecycle_version: protocol::INDEX_LIFECYCLE_VERSION,
                         analysis_settings_version: crate::settings::VERSION,
                         workspaces: vec![WorkspaceStatus {
                             generation: 42,
@@ -748,6 +802,25 @@ mod activity_tests {
         let response = wait_for_database_controlled(&database, 120_000, execution);
         assert_eq!(response.unwrap().unwrap().generation, 42);
         server.join().unwrap();
+    }
+    #[test]
+    fn lifecycle_safety_is_required_before_accepting_any_managed_response() {
+        let mut response = ControlResponse {
+            resource_control_version: crate::resource::CONTROL_VERSION,
+            analysis_settings_version: crate::settings::VERSION,
+            ..Default::default()
+        };
+        assert!(matches!(
+            checked_response(response.clone()),
+            Err(Error::UpdateRequired(_))
+        ));
+        response.index_lifecycle_version = protocol::INDEX_LIFECYCLE_VERSION;
+        assert!(checked_response(response.clone()).is_ok());
+        response.error_code = "index_recovering".into();
+        response.error_message = "replacement pending".into();
+        assert!(
+            matches!(checked_response(response),Err(Error::Remote{code,..}) if code=="index_recovering")
+        );
     }
     #[test]
     fn old_coordinator_cannot_silently_accept_resource_controls() {
