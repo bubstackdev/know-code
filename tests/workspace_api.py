@@ -53,6 +53,16 @@ def ready(client,after=0,previous_failed_epoch=None):
 
 def error(value,code):assert value.get('error',{}).get('code')==code,value
 
+# A stream recv may return only the length prefix. Drain each complete request
+# before replying/closing, so the mock cannot break a client's remaining write.
+def request_frame(conn):
+ conn.settimeout(5)
+ with conn.makefile('rb') as stream:
+  header=stream.read(4);assert len(header)==4,header
+  size=int.from_bytes(header,'little');assert 0<size<=65536,size
+  body=stream.read(size);assert len(body)==size,(len(body),size)
+ return header+body
+
 # A missing installed executable is actionable; no embedding process is launched.
 for language in ['node','dotnet']:
  failed=Client(language,coordinatorExecutable=str(RUN/'missing'));error(failed.initial,'coordinator_unavailable');failed.close()
@@ -213,7 +223,7 @@ def old_settings_peer():
  for _ in range(12):
   conn,_=old.accept()
   with conn:
-   requests.append(conn.recv(65536))
+   requests.append(request_frame(conn))
    # Envelope v7, response {resource_control_version:1,analysis_settings_version:1}.
    conn.sendall(b'\x09\x00\x00\x00\x08\x07\xfa\x01\x04\x38\x01\x40\x01')
 thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
@@ -233,7 +243,7 @@ def reply():
  for _ in range(2):
   conn,_=listener.accept()
   with conn:
-   conn.recv(65536);conn.sendall(b'\x02\x00\x00\x00\x08\x01')
+   request_frame(conn);conn.sendall(b'\x02\x00\x00\x00\x08\x01')
 thread=threading.Thread(target=reply,daemon=True);thread.start()
 for language in ['node','dotnet']:
  bad=Client(language,dataDirectory=str(mock),coordinatorExecutable=str(fake));error(bad.initial,'update_required');bad.close()
