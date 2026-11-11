@@ -96,7 +96,9 @@ def one(name):
  found=symbols(name);assert len(found)==1,(name,found);return found[0]
 def calls(name,op='callees',host='cli'):
  return query({'op':op,'symbol_id':one(name)['id'],'exact_only':True,'max_depth':1,'limit':100},host)['graph']
-def coverage():return query({'op':'coverage','max_bytes':262144,'response_max_bytes':2097152})['coverage']
+def coverage():
+ anchor=query({'op':'symbols','name':'TsRecursive'})
+ return query({'op':'coverage','snapshot':anchor['snapshot'],'coverage_detail':'full','detail_max_bytes':262144,'response_max_bytes':2097152})['coverage']
 def controls():
  if (DATA/'c.sock').exists():
   cli('cancel',WORK,check=False,timeout=20);cli('coordinator','stop',check=False,timeout=30)
