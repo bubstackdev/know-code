@@ -1,8 +1,10 @@
-# npm scripts-off boundary: pending release decision
+# npm scripts-off boundary and accepted compatibility policy
 
-Status: executed npm 10.0.0 Git-dependency failure; npm 10 behavior remains a
-release blocker pending the user's compatibility decision. No policy narrowing
-or package-manager wrapper was implemented by this review.
+The user accepted blocking npm 10 Git fetching and rejecting effective
+`install-links=true` while scripts are disabled, preserving registry, tarball
+and ordinary linked-directory restoration. The adapter implements those
+boundaries; complete pin-matrix and installed-archive execution remain required.
+The initial unsafe execution and source audit below are retained evidence.
 
 The owned [setup-01 log](../../.artifacts/pretag-wave/diagnostic/setup-01/output.log)
 shows `dependency-prepare-ran` created despite the outer `--ignore-scripts` flag.
@@ -50,3 +52,52 @@ not source-certified here. Every named supported pin still needs the actual
 owned marker gate. The fixture retains per-pin preparation results, marker
 observations and matrix progress on failure; a failed/unsafe pin must not be
 silently omitted from the matrix or relabeled successful.
+
+## Accepted boundary implementation
+
+The npm 10 invocation adds only an adapter-owned Node 24 `--import` preload.
+Before npm/Pacote modules load, a bounded scan of the selected npm distribution
+installs process-local throwing GitFetcher exports for its primary and nested
+Pacote copies. No npm file or shared cache content is patched. A trusted
+`git=/usr/bin/false` override remains defense in depth; it is insufficient alone
+because hosted full-SHA Git specs can download archives without invoking Git.
+Registry, remote/file tarball and directory-link fetchers are not replaced.
+
+The adapter asks that same selected npm CLI for effective `install-links`, with
+the original repository/user/environment precedence intact. Observed true is
+rejected without installation or configuration rewriting. Only after observing
+false does installation pin false in CLI/environment to close a saved-config
+race. Reported package-manager options identify the checked/pinned policy.
+Adapter fingerprint salt v3 invalidates older preparation checkpoints. An old
+legacy PATH invocation that cannot establish the guarded CLI fails actionably;
+current managed analysis uses the selected verified package-tool cache.
+
+The finite fixture keeps the ten named default pins. npm 10 Git refusal is an
+expected negative policy test; npm 11/pnpm Git restoration remains positive.
+Each selected npm 10 pin also exercises hosted Git with a local denying proxy,
+direct/factory guards including nested copies, effective packing refusals,
+registry/tarball/link positives, and unchanged config bytes. Subset runs record
+their exact selected pins and cannot claim full-catalog coverage. The final
+installed archive must exercise npm 10 restoration through the relocated
+preload; a checkout-only pass cannot establish that the guard was shipped.
+
+## pnpm config-query evidence
+
+The full setup-03 run reached pnpm 11.0 after its Git restoration and script
+markers passed, then failed the fixture's `config get proxy` assertion. This
+does not prove the adapter discarded proxy settings. In the exact cached
+pnpm 11.0 `dist/pnpm.mjs`, `localConfig.js` accepts network INI keys including
+`proxy`; `getConfig` copies them into its effective settings and derives
+`httpsProxy`/`httpProxy`. However, `configGet.js::lookupConfig` exposes typed
+keys only when explicitly marked or present in its auth-only INI view. The
+network INI merge does not mark them, so that query can return `undefined`.
+
+The fixture now sets pnpm 11+ `httpProxy` and `httpsProxy` explicitly in its
+owned `pnpm-workspace.yaml`, and checks both actual CLI values. pnpm 11's
+`addSettingsFromWorkspaceManifestToConfig` marks these YAML settings explicit.
+Earlier managers retain the `.npmrc` proxy check. Both repository config files
+are hashed before preparation and checked after preparation and config reads;
+unchanged bytes alone are not treated as effective-config evidence. These are
+fixture changes only; no user configuration or adapter policy is rewritten.
+The ten-pin execution remains a separate root-owned gate, including pnpm 12's
+native implementation, whose behavior is not certified by this source review.

@@ -101,6 +101,7 @@ async function npm10Case(pin,label,dependency,config,environment) {
 }
 try {
   for(const pin of pins) {
+    const selected=selection(pin),yamlProxy=selected.name==='pnpm'&&selected.major>=11;
     const directory=path.join(run,pin.replaceAll('@','-'));
     const gitMarker=path.join(directory,'git-selector-ran'),shellMarker=path.join(directory,'shell-selector-ran');
     write(path.join(directory,'selector-git'),`#!/bin/sh\nprintf bad > ${quote(gitMarker)}\nexit 37\n`);
@@ -111,16 +112,19 @@ try {
       scripts:{install:`node -e ${quote(`require('fs').writeFileSync(${JSON.stringify(path.join(run,'root-install-ran'))},'bad')`)}`}}));
     const config=`git=./selector-git\nscript-shell=./selector-shell\nnode-gyp=./selector-shell\nignore-scripts=false\ninstall-links=false\nallow-git=true\nregistry=${registry}\nproxy=${proxy}\n//registry.example.invalid/:_authToken=owned-fake-token\n`;
     write(path.join(directory,'.npmrc'),config);
-    if(pin.startsWith('pnpm'))write(path.join(directory,'pnpm-workspace.yaml'),`packages:\n  - .\nscriptShell: ./selector-shell\n`);
-    const configHash=hash(path.join(directory,'.npmrc'));const messages=[];
-    const attempt={pin,directory,status:'running',messages,config_sha256:configHash};matrix.push(attempt);progress();
+    if(pin.startsWith('pnpm'))write(path.join(directory,'pnpm-workspace.yaml'),`packages:\n  - .\nscriptShell: ./selector-shell\n${yamlProxy?`httpProxy: ${JSON.stringify(proxy)}\nhttpsProxy: ${JSON.stringify(proxy)}\n`:''}`);
+    const configFiles=['.npmrc',...(pin.startsWith('pnpm')?['pnpm-workspace.yaml']:[])];
+    const configHashes=Object.fromEntries(configFiles.map(name=>[name,hash(path.join(directory,name))]));
+    const configHash=configHashes['.npmrc'];const messages=[];
+    const attempt={pin,directory,status:'running',messages,config_sha256:configHash,config_files_sha256:configHashes,
+      proxy_config_source:yamlProxy?'pnpm-workspace.yaml:httpProxy,httpsProxy':'.npmrc:proxy'};matrix.push(attempt);progress();
     const diagnostics=await withEnvironment(installLinksEnvironment('false'),()=>preparePackages(directory,[directory],request,(kind,value)=>{messages.push({kind,value});progress();}));
     const preparation=messages.filter(message=>message.kind==='preparation').map(message=>message.value);
     Object.assign(attempt,{preparation,diagnostics:diagnostics(directory),setup_failure:diagnostics.failure(directory)?.message,
       markers:Object.fromEntries([gitMarker,shellMarker,path.join(run,'dependency-prepare-ran'),path.join(run,'root-install-ran')].map(filename=>[filename,fs.existsSync(filename)]))});progress();
     assert.equal(diagnostics.failure(directory),undefined);
     assert.equal(preparation.length,1);
-    const selected=selection(pin),denied=selected.name==='npm'&&selected.major===10;
+    const denied=selected.name==='npm'&&selected.major===10;
     if(denied) {
       assert.equal(preparation[0].succeeded,false);assert(preparation[0].error.includes('EKNOWCODE_NPM10_GIT_DISABLED'),preparation[0].error);
       assert.equal(diagnostics(directory)[0]?.code,'dependency_restore_failed');attempt.outcome='npm10_git_fetch_refused';
@@ -129,7 +133,7 @@ try {
       assert(fs.existsSync(path.join(directory,'node_modules/know-code-safe-git-dependency/package.json')),'real Git dependency was not installed');attempt.outcome='git_dependency_restored';
     }
     for(const filename of [gitMarker,shellMarker,path.join(run,'dependency-prepare-ran'),path.join(run,'root-install-ran')])assert(!fs.existsSync(filename),`ungranted executable ran: ${filename}`);
-    assert.equal(hash(path.join(directory,'.npmrc')),configHash,'setup rewrote repository authentication/config');
+    for(const [name,expected] of Object.entries(configHashes))assert.equal(hash(path.join(directory,name)),expected,`setup rewrote repository ${name}`);
     const tool=await packageTool(selection(pin),cache,()=>{}),safety=restorationSafety(tool,false);
     if(denied) {
       const probe=`const assert=require('node:assert/strict'),path=require('node:path');
@@ -143,10 +147,14 @@ console.log(JSON.stringify(result));`;
       attempt.guarded_factories=factories;progress();
     }
     const configured={};
-    for(const key of ['registry','proxy']) {
-      const output=await runCommand(safety.program,[...safety.prefix,'config','get',key,...safety.configArgs],directory,undefined,safety.env);
-      assert(output.includes(key==='registry'?registry:proxy),`${pin} lost ${key} configuration: ${output}`);configured[key]=output;
+    for(const key of ['registry','proxy',...(yamlProxy?['httpsProxy']:[])]) {
+      // pnpm 11+ config get filters non-explicit network INI keys even though
+      // its reader consumes them. YAML marks the real network fields explicit.
+      const queryKey=key==='proxy'&&yamlProxy?'httpProxy':key;
+      const output=await runCommand(safety.program,[...safety.prefix,'config','get',queryKey,...safety.configArgs],directory,undefined,safety.env);
+      assert(output.includes(key==='registry'?registry:proxy),`${pin} lost ${queryKey} configuration: ${output}`);configured[key]={query_key:queryKey,output};
     }
+    for(const [name,expected] of Object.entries(configHashes))assert.equal(hash(path.join(directory,name)),expected,`config query rewrote repository ${name}`);
     Object.assign(attempt,{status:'passed',configured,tool:{program:safety.program,prefix:safety.prefix,source:tool.source}});progress();
   }
   checks.push(fullCatalog?'full_catalog_npm10_git_refusal_and_npm11_pnpm_git_restores_preserve_selectors_registry_proxy':'selected_pins_only_git_policy_preserves_selectors_registry_proxy');
