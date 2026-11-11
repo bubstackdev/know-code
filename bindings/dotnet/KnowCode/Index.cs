@@ -73,7 +73,10 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
     public ulong? Generation { get; init; }
     public string? Snapshot { get; init; }
     public string? CompilationId { get; init; }
+    /// <summary>Declaration source: symbol_context defaults true; callers/callees/impact default false.</summary>
     public bool? IncludeSource { get; init; }
+    /// <summary>Graph-only aggregate UTF-8 source bytes across all findings, targets and returned copies. Default 16384; maximum 262144. Separate from MaxBytes and not renewed per page.</summary>
+    public uint? SourceMaxBytes { get; init; }
     public string? CoverageDetail { get; init; }
     public uint? DetailMaxBytes { get; init; }
     public uint? ResponseMaxBytes { get; init; }
@@ -92,8 +95,8 @@ internal static partial class Native
     };
     internal static void CheckQueryContract()
     {
-        if (QueryContractVersion() != 5)
-            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; query grouping/snapshot support is incompatible.");
+        if (QueryContractVersion() != 6)
+            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; graph source projection is missing or incompatible.");
     }
     internal static QueryCancellationHandle CreateQueryCancellation()
     {

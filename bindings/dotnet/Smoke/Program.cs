@@ -1,5 +1,16 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--typed-graph-source")
+{
+    if (args.Length != 6) throw new ArgumentException("Expected DATABASE OP SYMBOL_ID default|true|false SOURCE_MAX_BYTES|-");
+    using var result = await new KnowCode.Index(args[1]).QueryAsync(new KnowCode.QueryRequest(args[2], SymbolId:args[3]) {
+        IncludeSource = args[4] switch { "default" => null, "true" => true, "false" => false,
+            _ => throw new ArgumentException("IncludeSource must be default, true or false") },
+        SourceMaxBytes = args[5] == "-" ? null : uint.Parse(args[5])
+    });
+    Console.WriteLine(result.RootElement.GetRawText());
+    return;
+}
 if (args[0] == "--typed-test-filter")
 {
     var filter = Enum.Parse<KnowCode.TestFilter>(args[2], ignoreCase: true);

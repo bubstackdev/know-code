@@ -205,7 +205,8 @@ fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
         "generation":{"type":"integer","minimum":1,"description":"Expected served generation; pass its snapshot token on managed reads."},
         "snapshot":{"type":"string","description":"Opaque snapshot token from the result whose generation is being expanded."},
         "compilation_id":{"type":"string","description":"Narrow findings or a symbol follow-up to one concrete compilation."},
-        "include_source":{"type":"boolean","default":true},
+        "include_source":{"type":"boolean","default":false,"description":"Include compiler declaration context on returned graph findings and their exact supporting targets; roots and path edges remain compact."},
+        "source_max_bytes":{"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES,"description":"Graph-only aggregate indexed UTF-8 source bytes across the full result, all targets and every returned copy. Separate from max_bytes (graph JSON); pagination does not refill it."},
         "coverage_detail":{"type":"string","enum":["summary","full"],"default":"summary"},
         "detail_max_bytes":{"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES},
         "content_hash":{"type":"string","description":"Indexed location's content hash; required for byte ranges."},
@@ -256,6 +257,8 @@ fn tools() -> Vec<Tool> {
         "max_edges",
         "max_nodes",
         "paths_per_symbol",
+        "include_source",
+        "source_max_bytes",
         "max_bytes",
         "time_budget_ms",
     ]);
@@ -287,6 +290,7 @@ fn tools() -> Vec<Tool> {
     context.extend(["include_source", "max_bytes", "cursor"]);
     let mut context_schema = schema(&context, &["symbol_id"]);
     context_schema["properties"]["max_bytes"] = source["properties"]["max_bytes"].clone();
+    context_schema["properties"]["include_source"] = json!({"type":"boolean","default":true,"description":"Include bounded indexed source for compiler declaration contexts."});
     let mut coverage_schema = schema(
         &[
             "generation",

@@ -31,7 +31,10 @@ export interface QueryRequest {
   generation?: number;
   snapshot?: string;
   compilation_id?: string;
+  /** Declaration source: symbol_context defaults true; callers/callees/impact default false. */
   include_source?: boolean;
+  /** Graph-only aggregate UTF-8 source cap across all findings/targets/copies: default 16384, maximum 262144. Separate from graph max_bytes; paging does not refill it. */
+  source_max_bytes?: number;
   coverage_detail?: 'summary' | 'full';
   detail_max_bytes?: number;
 }
@@ -55,7 +58,8 @@ export interface GraphEdge {
 }
 export interface GraphResult {
   root_definitions?: DefinitionLink[];
-  findings: Array<{symbol: SymbolResult; paths: GraphEdge[][]; supporting_targets?: Array<SymbolSupport & {paths: GraphEdge[][]}>}>;
+  findings: Array<{symbol: SymbolResult; paths: GraphEdge[][]; context?: DeclarationProjection;
+    supporting_targets?: Array<SymbolSupport & {paths: GraphEdge[][]; context?: DeclarationProjection}>}>;
   boundaries: Array<{reason: string; symbol_id: string; compilation_id: string; evidence?: GraphEdge; context_conflict?: {project_path: string; selected_compilation_id: string; required_compilation_id: string}} >;
   capability_coverage: Record<string, 'complete' | 'partial' | 'unavailable' | 'unknown'>;
   limits: string[]; examined_edges: number; visited_nodes: number;
@@ -82,6 +86,11 @@ export interface SymbolSupport {
 export interface OccurrenceSupport {
   symbol_id: string; compilation_id: string; target: string;
   location: Location; test_classification: TestClassification;
+}
+/** Compiler declaration context requested for a returned finding or exact supporting target. */
+export interface DeclarationProjection {
+  declarations: DeclarationContext[];
+  boundary?: string;
 }
 export interface DeclarationContext {
   location: Location; line: number; extent?: Location; source?: SourceResult;

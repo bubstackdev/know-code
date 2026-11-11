@@ -1,6 +1,6 @@
 """Real stdio sessions, shared native operators and persistent saved-file indexing."""
 from pathlib import Path
-import json,os,selectors,signal,struct,subprocess,time
+import hashlib,json,os,selectors,signal,struct,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
 RUN=ROOT/'.artifacts/mc'/format(time.time_ns(),'x');WORKSPACE=RUN/'workspace';DATA=RUN/'d';WORKSPACE.mkdir(parents=True)
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');HOST=ROOT/f'target/{PROFILE}/know-code';CONFIG='Debug' if PROFILE=='debug' else 'Release'
@@ -8,7 +8,7 @@ ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1'
 SOURCE=WORKSPACE/'value.ts';SOURCE.write_text('// '+('a'*20000)+'\nexport function target(value: string) { return value; }\nexport function caller() { return target("hello😀"); }\n')
 (WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
 (WORKSPACE/'Greeter.cs').write_text('public static class Greeter { public static string Greet() => "hello"; }\n')
-(WORKSPACE/'Greeter.cs').write_text('public static partial class Greeter { public static string Greet() => "hello😀"; }\n')
+(WORKSPACE/'Greeter.cs').write_text('public static partial class Greeter { public static string Greet() => "hello😀"; public static string CsharpCaller() => Greet(); }\n')
 (WORKSPACE/'Part.cs').write_text('public static partial class Greeter { public static int Number() => 1; }\n')
 (WORKSPACE/'over.ts').write_text('export function choose(x: string): string;\nexport function choose(x: number): number;\nexport function choose(x: string | number) { return x; }\n')
 checks=[];clients=[];paused=None
@@ -80,6 +80,18 @@ def equivalent(request):
  assert node==dotnet==baseline
  return baseline
 
+def graph_evidence(graph):
+ return [(f['symbol'],f['paths'],[{k:v for k,v in support.items() if k!='context'}
+          for support in f.get('supporting_targets',[])]) for f in graph['findings']]
+
+def graph_projections(graph):
+ return [member['context'] for finding in graph['findings']
+         for member in [finding,*finding.get('supporting_targets',[])] if 'context' in member]
+
+def source_bytes(graph):
+ return sum(len(declaration.get('source',{}).get('text','').encode())
+            for projection in graph_projections(graph) for declaration in projection['declarations'])
+
 def frozen_page(envelope):
  """Only live freshness/coordination may differ when a saved page is replayed."""
  assert 'error' not in envelope and isinstance(envelope.get('result'),dict),envelope
@@ -109,6 +121,16 @@ try:
  for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context']:
   assert schemas[name]['properties']['tests']['enum']==['all','exclude','only']
  for name in ['read_source','coverage_details','next_page']:assert 'tests' not in schemas[name]['properties']
+ for name in ['callers','callees','impact','query_graph']:
+  assert schemas[name]['properties']['include_source']['default'] is False,schemas[name]
+  cap=schemas[name]['properties']['source_max_bytes']
+  assert cap['minimum']==1 and cap['default']==16384 and cap['maximum']==262144,cap
+ assert schemas['symbol_context']['properties']['include_source']['default'] is True
+ assert schemas['symbol_context']['properties']['max_bytes']['default']==16384
+ assert schemas['symbol_context']['properties']['max_bytes']['maximum']==262144
+ for name in set(schemas)-{'callers','callees','impact','query_graph'}:
+  assert 'source_max_bytes' not in schemas[name]['properties'],schemas[name]
+ checks.append('graph_source_schema_opt_in_and_separate_aggregate_cap')
  checks+=['explicit_workspace_auto_registration','legacy_2025_lifecycle','stable_read_only_tools']
  tool,value=c.tool('workspace_status');assert not tool['isError'] and value['result']['workspaces'][0]['workspace_root']==str(WORKSPACE)
  tool,value=c.tool('search_symbols',{'name':'target'});assert not tool['isError'] and value==equivalent({'op':'symbols','name':'target'})
@@ -126,6 +148,53 @@ try:
  for name,args,op in [('find_references',{'symbol_id':target['id']},'references'),('callees',{'symbol_id':caller['id']},'callees'),('callers',{'symbol_id':target['id']},'callers'),('impact',{'symbol_id':target['id'],'max_depth':2},'impact')]:
   tool,value=c.tool(name,args);assert not tool['isError'] and value==equivalent({'op':op,**args}),(name,value)
  tool,value=c.tool('query_graph',{'op':'callees','symbol_id':caller['id']});assert not tool['isError'] and value==c.tool('callees',{'symbol_id':caller['id']})[1]
+ csharp_caller=c.tool('search_symbols',{'name':'CsharpCaller'})[1]['result']['symbols'][0]
+ for name,args,op in [('callees',{'symbol_id':caller['id']},'callees'),
+                      ('callers',{'symbol_id':target['id']},'callers'),
+                      ('impact',{'symbol_id':target['id'],'max_depth':2},'impact'),
+                      ('callees',{'symbol_id':csharp_caller['id']},'callees')]:
+  tool,compact=c.tool(name,args);assert not tool['isError'] and compact==equivalent(dict(args,op=op)),compact
+  assert compact['result']['graph']['findings'],compact
+  assert not graph_projections(compact['result']['graph']),compact
+  assert c.tool('query_graph',dict(args,op=op))[1]==compact
+  for include in [False,True]:
+   options=dict(args,include_source=include)
+   tool,projected=c.tool(name,options);assert not tool['isError'] and projected==equivalent(dict(options,op=op)),projected
+   assert c.tool('query_graph',dict(options,op=op))[1]==projected
+   graph=projected['result']['graph']
+   assert graph_evidence(graph)==graph_evidence(compact['result']['graph']),graph
+   assert all('context' not in edge for finding in graph['findings']
+              for member in [finding,*finding.get('supporting_targets',[])] for path in member['paths'] for edge in path),graph
+   assert all('context' not in pointer for pointer in graph.get('root_definitions',[])),graph
+   if include:
+    assert len(graph_projections(graph))==sum(1+len(f.get('supporting_targets',[])) for f in graph['findings']),graph
+    assert 0<source_bytes(graph)<=16384,graph
+    for projection in graph_projections(graph):
+     for declaration in projection['declarations']:
+      body=declaration.get('source')
+      if body:
+       saved=(WORKSPACE/body['path']).read_bytes()
+       assert body['content_hash']==hashlib.sha256(saved).hexdigest(),body
+       assert saved[body['start_byte']:body['end_byte']].decode()==body['text'],body
+   else:assert projected==compact,projected
+  options=dict(args,include_source=True,source_max_bytes=1)
+  tool,tiny=c.tool(name,options);assert not tool['isError'] and tiny==equivalent(dict(options,op=op)),tiny
+  assert c.tool('query_graph',dict(options,op=op))[1]==tiny
+  assert tiny['result']['truncated'] and 'source_budget' in tiny['result']['graph']['limits'],tiny
+  assert source_bytes(tiny['result']['graph'])<=1,tiny
+  assert graph_evidence(tiny['result']['graph'])==graph_evidence(compact['result']['graph']),tiny
+ for cap in [0,262145]:
+  options={'symbol_id':caller['id'],'source_max_bytes':cap,'include_source':False}
+  tool,rejected=c.tool('callees',options)
+  assert tool['isError'] and rejected['error']['code']=='invalid_request' and rejected==equivalent(dict(options,op='callees')),rejected
+ for name,op,args in [('search_symbols','symbols',{'name':'target'}),('find_references','references',{'symbol_id':target['id']}),
+                      ('symbol_context','symbol_context',{'symbol_id':target['id']}),('read_source','source',{'artifact_id':location['artifact_id']}),
+                      ('coverage_details','coverage',guard)]:
+  options=dict(args,source_max_bytes=1);tool,rejected=c.tool(name,options)
+  assert tool['isError'] and rejected['error']['code']=='invalid_request' and rejected==equivalent(dict(options,op=op)),rejected
+ checks+=['graph_source_focused_structured_native_parity_default_off_and_contexts_on_findings_only',
+          'tiny_graph_source_cap_preserves_findings_and_saved_UTF8_source_identity',
+          'graph_only_source_budget_validation_is_shared']
  for mode in ['only','exclude']:
   for name,op,args in [('search_symbols','symbols',{'name':'target'}),('find_references','references',{'symbol_id':target['id']}),('impact','impact',{'symbol_id':target['id']}),('query_graph','callees',{'op':'callees','symbol_id':caller['id']})]:
    tool,filtered=c.tool(name,dict(args,tests=mode));assert not tool['isError'] and filtered==equivalent(dict(args,op=op,tests=mode)),filtered
@@ -146,7 +215,7 @@ try:
   tool,paged=c.tool('next_page',{'cursor':result['page']['next_cursor']});assert not tool['isError'],paged
  assert len(seen)>1 and collected==baseline['symbols']
  assert frozen_page(equivalent({'op':'next_page','cursor':token}))==frozen_page(paged)
- for extra in [{'target':'other'},{'page_size':2},{'limit':1},{'freshness_wait_ms':0},{'include_source':False}]:
+ for extra in [{'target':'other'},{'page_size':2},{'limit':1},{'freshness_wait_ms':0},{'include_source':False},{'source_max_bytes':1}]:
   tool,rejected=c.tool('next_page',dict(extra,cursor=symbol_cursor));assert tool['isError'] and rejected['error']['code']=='invalid_request',rejected
  tool,rejected=c.tool('next_page',{'cursor':symbol_cursor,'deadline_ms':0});assert tool['isError'] and rejected['error']['code']=='deadline_exceeded',rejected
  tool,replayed=c.tool('next_page',{'cursor':symbol_cursor});assert not tool['isError'] and frozen_page(replayed)==frozen_page(first_page)
