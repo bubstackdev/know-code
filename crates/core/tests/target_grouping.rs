@@ -1,3 +1,4 @@
+mod common;
 use know_code_core::{
     protocol::{envelope::Payload, *},
     query::{QueryRequest, ReadView},
@@ -193,7 +194,7 @@ fn query(view: &ReadView, json: serde_json::Value) -> know_code_core::query::Que
 #[test]
 fn logical_search_limits_preserve_all_exact_support_and_conditional_variants() {
     let path = fixture();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let result = query(
         &view,
         serde_json::json!({"op":"symbols","name":"Root","limit":1}),
@@ -245,7 +246,7 @@ fn logical_search_limits_preserve_all_exact_support_and_conditional_variants() {
 #[test]
 fn followup_references_group_use_sites_before_limit_and_honor_scope_and_tests() {
     let path = fixture();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let all = query(
         &view,
         serde_json::json!({"op":"references","symbol_id":"a:Root","limit":1}),
@@ -298,7 +299,7 @@ fn followup_references_group_use_sites_before_limit_and_honor_scope_and_tests() 
 #[test]
 fn context_support_keeps_each_exact_declaration_and_source() {
     let path = fixture();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let result = query(
         &view,
         serde_json::json!({"op":"symbol_context","symbol_id":"a:Root","limit":1}),
@@ -351,7 +352,7 @@ fn context_limit_bounds_declaration_slots_and_preserves_equivalent_support() {
                 .unwrap();
         }
         writer.publish().unwrap();
-        let view = ReadView::open(&path).unwrap();
+        let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
         for limit in 1..=3 {
             let result = query(
                 &view,
@@ -459,7 +460,7 @@ fn grouped_context_source_budget_counts_every_wire_copy_at_unicode_boundaries() 
             .unwrap();
     }
     writer.publish().unwrap();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     for budget in 1..=22 {
         let result = query(
             &view,
@@ -536,7 +537,7 @@ fn context_declaration_projection_cap_retains_all_exact_support() {
     }
     writer.publish().unwrap();
     let result = query(
-        &ReadView::open(&path).unwrap(),
+        &ReadView::open_in_scope(&path, &common::scope(&path)).unwrap(),
         serde_json::json!({
             "op":"symbol_context", "symbol_id":"a:Root", "limit":1000, "include_source":false
         }),
@@ -563,7 +564,7 @@ fn context_declaration_projection_cap_retains_all_exact_support() {
 #[test]
 fn graph_groups_only_projection_and_keeps_full_concrete_paths_and_shared_budgets() {
     let path = fixture();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let graph = query(
         &view,
         serde_json::json!({"op":"impact","symbol_id":"a:Root"}),
@@ -613,7 +614,7 @@ fn graph_groups_only_projection_and_keeps_full_concrete_paths_and_shared_budgets
 #[test]
 fn unproven_external_and_generated_symbols_remain_singletons() {
     let path = fixture();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     for name in ["Unproven", "External", "Generated"] {
         let result = query(&view, serde_json::json!({"op":"symbols","name":name}));
         assert_eq!(result.symbols.len(), 3, "{name}");
@@ -638,11 +639,14 @@ fn legacy_format7_migration_preserves_pinned_singletons_without_invented_keys() 
     let path = fixture();
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection.execute_batch("DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; UPDATE reports SET capabilities_json=json_remove(capabilities_json,'$.target_equivalence'); PRAGMA user_version=7;").unwrap();
-    let old = ReadView::open(&path).unwrap();
+    let old = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     assert!(old.needs_target_equivalence().unwrap());
     let writer = Writer::open_incremental(&path, &[]).unwrap();
     writer.publish().unwrap();
-    for view in [old, ReadView::open(&path).unwrap()] {
+    for view in [
+        old,
+        ReadView::open_in_scope(&path, &common::scope(&path)).unwrap(),
+    ] {
         let result = query(&view, serde_json::json!({"op":"symbols","name":"Root"}));
         assert_eq!(result.symbols.len(), 3);
         assert!(
@@ -658,7 +662,7 @@ fn legacy_format7_migration_preserves_pinned_singletons_without_invented_keys() 
 #[test]
 fn expanded_graph_seeds_consume_the_same_node_budget() {
     let path = fixture();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let result = query(
         &view,
         serde_json::json!({"op":"impact","symbol_id":"a:Root","max_nodes":1}),

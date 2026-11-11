@@ -1,3 +1,4 @@
+mod common;
 use know_code_core::{
     cursor::GenerationRetention,
     protocol::{envelope::Payload, *},
@@ -85,7 +86,7 @@ fn published_readers_keep_matching_source_across_replacement() {
     let mut writer = Writer::open(&path).unwrap();
     populate(&mut writer, "Greeter old");
     let first = writer.publish().unwrap();
-    let pinned = ReadView::open(&path).unwrap();
+    let pinned = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let mut replacement = Writer::open(&path).unwrap();
     populate(&mut replacement, "Greeter new");
     let second = replacement.publish().unwrap();
@@ -97,7 +98,7 @@ fn published_readers_keep_matching_source_across_replacement() {
         pinned.query(source).unwrap().source.unwrap().text,
         "Greeter old"
     );
-    let new = ReadView::open(&path).unwrap();
+    let new = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     assert_eq!(
         new.query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
             .unwrap()
@@ -124,7 +125,7 @@ fn query_deadline_interrupts_sql_and_releases_a_retained_view() {
         SELECT r.* FROM fixture_reports r CROSS JOIN n;",
         )
         .unwrap();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     connection
         .execute("UPDATE state SET current_generation=current_generation", [])
         .unwrap();
@@ -147,9 +148,12 @@ fn query_deadline_interrupts_sql_and_releases_a_retained_view() {
     connection
         .execute_batch("DROP VIEW reports; ALTER TABLE fixture_reports RENAME TO reports;")
         .unwrap();
-    let result: serde_json::Value = serde_json::from_str(&know_code_core::query_json(
+    let result: serde_json::Value = serde_json::from_str(&know_code_core::query_json_in_scope(
         path.to_str().unwrap(),
         r#"{"op":"symbols","name":"Greeter"}"#,
+        Default::default(),
+        None,
+        Some(&common::scope(&path)),
     ))
     .unwrap();
     assert_eq!(result["result"]["symbols"][0]["name"], "Greeter");
@@ -165,7 +169,7 @@ fn response_budget_limits_the_whole_result_and_keeps_the_view_reusable() {
     connection
         .execute("UPDATE symbols SET signature=?", ["\0😀".repeat(40_000)])
         .unwrap();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     assert!(matches!(
         view.query(request("symbols")),
         Err(know_code_core::Error::ResponseLimitExceeded)
@@ -173,15 +177,21 @@ fn response_budget_limits_the_whole_result_and_keeps_the_view_reusable() {
     let mut larger = request("symbols");
     larger.response_max_bytes = Some(2_097_152);
     assert!(!view.query(larger).unwrap().symbols.is_empty());
-    let response: serde_json::Value = serde_json::from_str(&know_code_core::query_json(
+    let response: serde_json::Value = serde_json::from_str(&know_code_core::query_json_in_scope(
         path.to_str().unwrap(),
         r#"{"op":"symbols","name":"Greeter"}"#,
+        Default::default(),
+        None,
+        Some(&common::scope(&path)),
     ))
     .unwrap();
     assert_eq!(response["error"]["code"], "response_limit_exceeded");
-    let json = know_code_core::query_json(
+    let json = know_code_core::query_json_in_scope(
         path.to_str().unwrap(),
         r#"{"op":"symbols","name":"Greeter","response_max_bytes":2097152}"#,
+        Default::default(),
+        None,
+        Some(&common::scope(&path)),
     );
     assert!(json.len() <= 2_097_152);
     let response: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -203,7 +213,7 @@ fn cancellation_interrupts_active_sql_releases_wal_and_preserves_published_data(
       SELECT r.* FROM fixture_reports r CROSS JOIN n;",
         )
         .unwrap();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     connection
         .execute("UPDATE state SET current_generation=current_generation", [])
         .unwrap();
@@ -230,7 +240,7 @@ fn cancellation_interrupts_active_sql_releases_wal_and_preserves_published_data(
         .execute_batch("DROP VIEW reports; ALTER TABLE fixture_reports RENAME TO reports;")
         .unwrap();
     assert_eq!(
-        ReadView::open(&path)
+        ReadView::open_in_scope(&path, &common::scope(&path))
             .unwrap()
             .query(request("symbols"))
             .unwrap()
@@ -254,7 +264,7 @@ fn retained_generations_reopen_after_publication_without_holding_wal_readers() {
         let mut writer = Writer::open(&path).unwrap();
         populate(&mut writer, text);
         assert!(writer.publish().unwrap() > first);
-        let view = pin.open_view().unwrap();
+        let view = pin.open_view_in_scope(&common::scope(&path)).unwrap();
         let source = view
             .query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
             .unwrap();
@@ -263,14 +273,14 @@ fn retained_generations_reopen_after_publication_without_holding_wal_readers() {
     }
     retention.release(&pin).unwrap();
     assert!(matches!(
-        pin.open_view(),
+        pin.open_view_in_scope(&common::scope(&path)),
         Err(know_code_core::Error::CursorInvalidated)
     ));
-    let active = sibling.open_view().unwrap();
+    let active = sibling.open_view_in_scope(&common::scope(&path)).unwrap();
     retention.release(&pin).unwrap();
     retention.release(&sibling).unwrap();
     assert!(matches!(
-        sibling.open_view(),
+        sibling.open_view_in_scope(&common::scope(&path)),
         Err(know_code_core::Error::CursorInvalidated)
     ));
     assert_eq!(
@@ -331,7 +341,7 @@ fn new_retention_owner_invalidates_old_pins_and_keeps_current_index() {
     let pin = old.pin_current().unwrap();
     GenerationRetention::activate(&path, [1; 16]).unwrap();
     assert!(
-        pin.open_view().is_ok(),
+        pin.open_view_in_scope(&common::scope(&path)).is_ok(),
         "same owner activation invalidated a pin"
     );
     let mut writer = Writer::open(&path).unwrap();
@@ -339,7 +349,7 @@ fn new_retention_owner_invalidates_old_pins_and_keeps_current_index() {
     let current = writer.publish().unwrap();
     let next = GenerationRetention::activate(&path, [2; 16]).unwrap();
     assert!(matches!(
-        pin.open_view(),
+        pin.open_view_in_scope(&common::scope(&path)),
         Err(know_code_core::Error::CursorInvalidated)
     ));
     assert!(matches!(
@@ -347,7 +357,12 @@ fn new_retention_owner_invalidates_old_pins_and_keeps_current_index() {
         Err(know_code_core::Error::CursorInvalidated)
     ));
     assert_eq!(next.pin_current().unwrap().generation(), current);
-    assert_eq!(ReadView::open(&path).unwrap().generation, current);
+    assert_eq!(
+        ReadView::open_in_scope(&path, &common::scope(&path))
+            .unwrap()
+            .generation,
+        current
+    );
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute("UPDATE cursor_retention_state SET version=99", [])
@@ -356,7 +371,12 @@ fn new_retention_owner_invalidates_old_pins_and_keeps_current_index() {
         Writer::open(&path),
         Err(know_code_core::Error::UpdateRequired(_))
     ));
-    assert_eq!(ReadView::open(&path).unwrap().generation, current);
+    assert_eq!(
+        ReadView::open_in_scope(&path, &common::scope(&path))
+            .unwrap()
+            .generation,
+        current
+    );
 }
 
 #[test]
@@ -384,7 +404,7 @@ fn incomplete_or_failed_analysis_preserves_published_generation() {
         );
         // Simulate worker failure: drop staging without a completion/publication.
     }
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     assert_eq!(view.generation, generation);
     assert_eq!(view.query(request("symbols")).unwrap().symbols.len(), 1);
 }
@@ -401,7 +421,7 @@ fn missing_reports_and_truncated_protocol_never_count_as_ready() {
         .unwrap();
     assert!(writer.publish().is_err());
     assert!(matches!(
-        ReadView::open(&path),
+        ReadView::open_in_scope(&path, &common::scope(&path)),
         Err(know_code_core::Error::NotReady)
     ));
     let mut truncated = std::io::Cursor::new(vec![10, 0, 0, 0, 1, 2]);
@@ -443,7 +463,7 @@ fn incremental_publication_reuses_unchanged_units_and_reclaims_replaced_facts() 
         }))
         .unwrap();
     let first = writer.publish().unwrap();
-    let pinned = ReadView::open(&path).unwrap();
+    let pinned = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let mut writer = Writer::open_incremental(&path, &["tsconfig.json".into()]).unwrap();
     populate(&mut writer, "Greeter new");
     writer
@@ -479,7 +499,7 @@ fn incremental_publication_reuses_unchanged_units_and_reclaims_replaced_facts() 
         "Greeter old"
     );
     assert_eq!(
-        ReadView::open(&path)
+        ReadView::open_in_scope(&path, &common::scope(&path))
             .unwrap()
             .query(request("symbols"))
             .unwrap()
@@ -487,7 +507,7 @@ fn incremental_publication_reuses_unchanged_units_and_reclaims_replaced_facts() 
             .len(),
         1
     );
-    let current = ReadView::open(&path).unwrap();
+    let current = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let search =
         |view: &ReadView, json: &str| view.query(serde_json::from_str(json).unwrap()).unwrap();
     assert_eq!(
@@ -560,7 +580,8 @@ fn legacy_database(version: i32) -> PathBuf {
 fn legacy_schemas_migrate_without_reanalyzing_or_changing_public_ids() {
     for version in [1, 2] {
         let path = legacy_database(version);
-        let compatible = (version == 2).then(|| ReadView::open(&path).unwrap());
+        let compatible =
+            (version == 2).then(|| ReadView::open_in_scope(&path, &common::scope(&path)).unwrap());
         if let Some(view) = &compatible {
             assert_eq!(
                 view.query(request("symbols")).unwrap().symbols[0].id,
@@ -573,7 +594,7 @@ fn legacy_schemas_migrate_without_reanalyzing_or_changing_public_ids() {
             .unwrap();
         let writer = Writer::open_incremental(&path, &[]).unwrap();
         writer.publish().unwrap();
-        let view = ReadView::open(&path).unwrap();
+        let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
         let symbols = view.query(request("symbols")).unwrap().symbols;
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].id, "symbol");
@@ -618,7 +639,7 @@ fn source_excerpts_are_bounded_unicode_safe_and_hash_guarded() {
     let text = "abc😀éxyz";
     populate(&mut writer, text);
     writer.publish().unwrap();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let hash = format!("{:x}", Sha256::digest(text));
     let query = |v: serde_json::Value| view.query(serde_json::from_value(v).unwrap());
     let prefix =
@@ -654,7 +675,7 @@ fn source_excerpts_are_bounded_unicode_safe_and_hash_guarded() {
     populate(&mut writer, "changed source");
     writer.publish().unwrap();
     assert_eq!(query(serde_json::json!({"op":"source","artifact_id":"source","content_hash":hash,"start_byte":3,"end_byte":7})).unwrap().source.unwrap().text,"😀");
-    let current = ReadView::open(&path).unwrap();
+    let current = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     assert!(current.query(serde_json::from_value(serde_json::json!({"op":"source","artifact_id":"source","content_hash":hash,"start_byte":3,"end_byte":7})).unwrap()).is_err());
 }
 
@@ -665,7 +686,7 @@ fn source_default_budget_does_not_materialize_an_unbounded_rust_result() {
     let text = "a".repeat(know_code_core::query::DEFAULT_SOURCE_BYTES as usize + 100);
     populate(&mut writer, &text);
     writer.publish().unwrap();
-    let view = ReadView::open(&path).unwrap();
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
     let result = view
         .query(
             serde_json::from_value(serde_json::json!({"op":"source","artifact_id":"source"}))
@@ -729,7 +750,7 @@ fn legacy_worker_cannot_publish_when_new_policy_is_required() {
         matches!(result, Err(know_code_core::Error::UpdateRequired(_))),
         "{result:?}"
     );
-    let current = ReadView::open(&path)
+    let current = ReadView::open_in_scope(&path, &common::scope(&path))
         .unwrap()
         .query(request("symbols"))
         .unwrap();

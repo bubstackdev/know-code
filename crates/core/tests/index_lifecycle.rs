@@ -1,3 +1,4 @@
+mod common;
 use know_code_core::{
     Error,
     protocol::{envelope::Payload, *},
@@ -100,7 +101,7 @@ fn snapshots_bind_physical_incarnation_even_when_legacy_generations_repeat() {
     let generation = first.publish().unwrap();
     // Legacy publication was never recorded by the registry/lifecycle counter.
     recovery::adopt(&logical, 0).unwrap();
-    let held = ReadView::open(&logical).unwrap();
+    let held = ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap();
     let original = lookup(&held);
     let token = original.snapshot.unwrap();
     let canonical_handle = logical
@@ -110,9 +111,11 @@ fn snapshots_bind_physical_incarnation_even_when_legacy_generations_repeat() {
         .unwrap()
         .join("index.db");
     assert_eq!(
-        lookup(&ReadView::open(canonical_handle).unwrap())
-            .snapshot
-            .as_ref(),
+        lookup(
+            &ReadView::open_in_scope(&canonical_handle, &common::scope(&canonical_handle)).unwrap()
+        )
+        .snapshot
+        .as_ref(),
         Some(&token)
     );
     assert_eq!(generation, original.generation);
@@ -144,9 +147,12 @@ fn snapshots_bind_physical_incarnation_even_when_legacy_generations_repeat() {
         held.query(request(serde_json::json!({"op":"symbols"}))),
         Err(Error::IndexCorrupt { .. })
     ));
-    let envelope: serde_json::Value = serde_json::from_str(&know_code_core::query_json(
+    let envelope: serde_json::Value = serde_json::from_str(&know_code_core::query_json_in_scope(
         logical.to_str().unwrap(),
         r#"{"op":"symbols","freshness_wait_ms":0}"#,
+        Default::default(),
+        None,
+        Some(&common::scope(&logical)),
     ))
     .unwrap();
     assert_eq!(envelope["error"]["code"], "index_corrupt");
@@ -166,7 +172,7 @@ fn snapshots_bind_physical_incarnation_even_when_legacy_generations_repeat() {
         "fixture must exercise numeric reuse"
     );
     recovery::finish_rebuild(&candidate, &Control::default(), || Ok(())).unwrap();
-    let current = ReadView::open(&logical).unwrap();
+    let current = ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap();
     let refreshed = lookup(&current);
     assert_eq!(refreshed.generation, generation);
     assert_ne!(refreshed.snapshot.as_ref(), Some(&token));
@@ -196,14 +202,14 @@ fn ordinary_publication_rejects_old_tokens_but_held_coherent_views_still_work() 
         !logical.exists(),
         "new managed indexes should use physical incarnations"
     );
-    let held = ReadView::open(&logical).unwrap();
+    let held = ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap();
     let previous = lookup(&held);
     let token = previous.snapshot.unwrap();
     let mut writer = Writer::open(&logical).unwrap();
     populate(&mut writer, "needle after");
     let next = writer.publish().unwrap();
     assert!(next > previous.generation);
-    let current = ReadView::open(&logical).unwrap();
+    let current = ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap();
     assert!(matches!(
         current.query(request(
             serde_json::json!({"op":"symbols","snapshot":token})
@@ -226,12 +232,14 @@ fn a_bad_latch_interrupts_active_sql_without_waiting_for_the_query_deadline() {
     let mut writer = Writer::open(&logical).unwrap();
     populate(&mut writer, "needle current");
     writer.publish().unwrap();
-    let token = lookup(&ReadView::open(&logical).unwrap()).snapshot.unwrap();
+    let token = lookup(&ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap())
+        .snapshot
+        .unwrap();
     let guard = IndexReadGuard::open_unbudgeted(&logical).unwrap();
     let db = rusqlite::Connection::open(guard.physical_path()).unwrap();
     db.execute_batch("ALTER TABLE reports RENAME TO fixture_reports; CREATE VIEW reports AS WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<100000000) SELECT r.* FROM fixture_reports r CROSS JOIN n;").unwrap();
     drop(db);
-    let view = ReadView::open(&logical).unwrap();
+    let view = ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap();
     let thread = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(20));
         assert!(matches!(
@@ -261,7 +269,7 @@ fn expired_low_level_view_releases_sql_but_keeps_physical_lease_until_drop() {
     populate(&mut writer, "needle current");
     writer.publish().unwrap();
     let physical = recovery::selected_path(&logical).unwrap();
-    let view = ReadView::open(&logical).unwrap();
+    let view = ReadView::open_in_scope(&logical, &common::scope(&logical)).unwrap();
     assert!(matches!(
         view.query(request(serde_json::json!({"op":"symbols","deadline_ms":0}))),
         Err(Error::DeadlineExceeded)

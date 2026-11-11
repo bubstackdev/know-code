@@ -1,3 +1,4 @@
+mod common;
 use know_code_core::{
     protocol::{envelope::Payload, *},
     query::{QueryRequest, QueryResult, ReadView},
@@ -113,7 +114,7 @@ fn context_preserves_compilations_and_budgets_exact_indexed_unicode_source() {
     populate(&mut writer, "one", text, true);
     populate(&mut writer, "two", text, true);
     writer.publish().unwrap();
-    let old = ReadView::open(&db).unwrap();
+    let old = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let result = query(
         &old,
         json!({"op":"symbol_context","symbol_id":"f","max_bytes":45}),
@@ -193,7 +194,7 @@ fn context_preserves_compilations_and_budgets_exact_indexed_unicode_source() {
             .text
             .contains('😀')
     );
-    let new = ReadView::open(&db).unwrap();
+    let new = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let stale: QueryRequest = serde_json::from_value(
         json!({"op":"symbol_context","symbol_id":"f","generation":old.generation}),
     )
@@ -229,7 +230,7 @@ fn missing_and_ambiguous_extents_and_external_symbols_are_honest() {
     let text = "function work() { return '😀'; }";
     populate(&mut writer, "one", text, false);
     writer.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let result = query(&view, json!({"op":"symbol_context","symbol_id":"f"}));
     let d = &result.contexts[0].declarations[0];
     assert_eq!(d.source_status, "extent_unavailable");
@@ -257,7 +258,7 @@ fn missing_and_ambiguous_extents_and_external_symbols_are_honest() {
         }))
         .unwrap();
     writer.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let result = query(&view, json!({"op":"symbol_context","symbol_id":"f"}));
     assert_eq!(
         result.contexts[0].declarations[0].source_status,
@@ -272,7 +273,7 @@ fn details_require_generation_and_clip_payloads_without_hiding_counts() {
     let mut writer = Writer::open(&db).unwrap();
     populate(&mut writer, "one", "function work() {}", true);
     writer.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let missing: QueryRequest = serde_json::from_value(json!({"op":"coverage"})).unwrap();
     assert!(
         view.query(missing)

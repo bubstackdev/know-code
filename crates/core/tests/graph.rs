@@ -1,3 +1,4 @@
+mod common;
 use know_code_core::{
     protocol::{envelope::Payload, *},
     query::{QueryRequest, ReadView},
@@ -112,7 +113,7 @@ fn strong_paths_win_over_shorter_possible_paths_and_cycles_are_bounded() {
         vec![edge("unrelated", "middle", 4, "compiler_bound")],
     );
     writer.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let r = query(
         &view,
         serde_json::json!({"op":"impact","symbol_id":"changed"}),
@@ -177,7 +178,7 @@ fn preferred_path_does_not_hide_shorter_possible_reachability_at_depth_limit() {
         ],
     );
     writer.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let graph = query(
         &view,
         serde_json::json!({"op":"impact","symbol_id":"changed","max_depth":5}),
@@ -243,7 +244,7 @@ fn callsites_unresolved_targets_implicit_filters_and_dispatch_proofs_survive() {
         }))
         .unwrap();
     writer.publish().unwrap();
-    let pinned = ReadView::open(&db).unwrap();
+    let pinned = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let graph = query(
         &pinned,
         serde_json::json!({"op":"callees","symbol_id":"caller","paths_per_symbol":2}),
@@ -320,7 +321,7 @@ fn callsites_unresolved_targets_implicit_filters_and_dispatch_proofs_survive() {
             .start_byte,
         0
     );
-    let now = ReadView::open(&db).unwrap();
+    let now = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     assert_eq!(
         query(
             &now,
@@ -363,7 +364,12 @@ fn invalid_evidence_aborts_without_replacing_a_published_graph() {
                 }))
                 .is_err()
         );
-        assert_eq!(ReadView::open(&db).unwrap().generation, generation);
+        assert_eq!(
+            ReadView::open_in_scope(&db, &common::scope(&db))
+                .unwrap()
+                .generation,
+            generation
+        );
     }
     for bad in [
         edge("a", "b", 100, "compiler_bound"),
@@ -381,12 +387,22 @@ fn invalid_evidence_aborts_without_replacing_a_published_graph() {
             }))
             .is_err()
         );
-        assert_eq!(ReadView::open(&db).unwrap().generation, generation);
+        assert_eq!(
+            ReadView::open_in_scope(&db, &common::scope(&db))
+                .unwrap()
+                .generation,
+            generation
+        );
     }
     let invalid: QueryRequest =
         serde_json::from_value(serde_json::json!({"op":"impact","symbol_id":"a","max_edges":0}))
             .unwrap();
-    assert!(ReadView::open(&db).unwrap().query(invalid).is_err());
+    assert!(
+        ReadView::open_in_scope(&db, &common::scope(&db))
+            .unwrap()
+            .query(invalid)
+            .is_err()
+    );
 }
 
 #[test]
@@ -411,7 +427,7 @@ fn v3_migration_preserves_pinned_readers_and_does_not_invent_call_evidence() {
       ALTER TABLE symbols DROP COLUMN definition_symbol_id;
       ALTER TABLE symbols DROP COLUMN definition_fingerprint; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=3;").unwrap();
     drop(c);
-    let old = ReadView::open(&db).unwrap();
+    let old = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let graph = query(&old, serde_json::json!({"op":"callees","symbol_id":"a"}))
         .graph
         .unwrap();
@@ -427,7 +443,7 @@ fn v3_migration_preserves_pinned_readers_and_does_not_invent_call_evidence() {
             .len()
             == 1
     );
-    let new = ReadView::open(&db).unwrap();
+    let new = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let graph = query(&new, serde_json::json!({"op":"callees","symbol_id":"a"}))
         .graph
         .unwrap();
@@ -558,7 +574,7 @@ fn project_links_are_exact_snapshot_bound_and_keep_pinned_readers() {
         vec![edge("caller", "reference", 1, "compiler_bound")],
     );
     w.publish().unwrap();
-    let pinned = ReadView::open(&db).unwrap();
+    let pinned = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let request =
         serde_json::json!({"op":"callees","symbol_id":"caller","target":"app","max_depth":3});
     let graph = query(&pinned, request.clone()).graph.unwrap();
@@ -609,7 +625,7 @@ fn project_links_are_exact_snapshot_bound_and_keep_pinned_readers() {
             .len(),
         2
     );
-    let current = ReadView::open(&db).unwrap();
+    let current = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let g = query(&current, request).graph.unwrap();
     assert_eq!(g.findings.len(), 1);
     assert_eq!(g.findings[0].symbol.id, "reference");
@@ -648,7 +664,7 @@ fn project_paths_cannot_select_conflicting_compilations_along_a_path() {
         vec![edge("caller", "midref", 1, "compiler_bound")],
     );
     w.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let g = query(
         &view,
         serde_json::json!({"op":"callees","symbol_id":"caller","max_depth":5}),
@@ -715,7 +731,7 @@ fn converging_paths_keep_distinct_compilation_selections() {
         ],
     );
     w.publish().unwrap();
-    let view = ReadView::open(&db).unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let g = query(
         &view,
         serde_json::json!({"op":"callees","symbol_id":"root","max_depth":5}),
@@ -744,12 +760,15 @@ fn v4_migration_keeps_local_graphs_without_inventing_project_links() {
     let c = rusqlite::Connection::open(&db).unwrap();
     c.execute_batch("DROP INDEX symbol_definition; ALTER TABLE compilations DROP COLUMN references_json; ALTER TABLE compilations DROP COLUMN input_fingerprint; ALTER TABLE symbols DROP COLUMN definition_compilation_id; ALTER TABLE symbols DROP COLUMN definition_symbol_id; ALTER TABLE symbols DROP COLUMN definition_fingerprint; DROP INDEX relationship_evidence; ALTER TABLE relationships DROP COLUMN dispatch_key; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=4;").unwrap();
     drop(c);
-    let old = ReadView::open(&db).unwrap();
+    let old = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     Writer::open_incremental(&db, &[])
         .unwrap()
         .publish()
         .unwrap();
-    for view in [old, ReadView::open(&db).unwrap()] {
+    for view in [
+        old,
+        ReadView::open_in_scope(&db, &common::scope(&db)).unwrap(),
+    ] {
         let g = query(&view, serde_json::json!({"op":"callees","symbol_id":"a"}))
             .graph
             .unwrap();
@@ -830,7 +849,7 @@ fn dispatch_uses_specializations_and_snapshot_bound_composition_witnesses() {
         vec![],
     );
     w.publish().unwrap();
-    let pinned = ReadView::open(&db).unwrap();
+    let pinned = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let request = serde_json::json!({"op":"callees","symbol_id":"caller"});
     let graph = query(&pinned, request.clone()).graph.unwrap();
     assert_eq!(graph.findings.len(), 2);
@@ -887,7 +906,7 @@ fn dispatch_uses_specializations_and_snapshot_bound_composition_witnesses() {
             .len(),
         2
     );
-    let current = ReadView::open(&db).unwrap();
+    let current = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let g = query(&current, request).graph.unwrap();
     assert_eq!(g.findings.len(), 1);
     assert!(
@@ -910,12 +929,15 @@ fn v5_dispatch_key_migration_preserves_pinned_body_queries() {
     let c = rusqlite::Connection::open(&db).unwrap();
     c.execute_batch("DROP INDEX relationship_evidence; ALTER TABLE relationships DROP COLUMN dispatch_key; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=5;").unwrap();
     drop(c);
-    let old = ReadView::open(&db).unwrap();
+    let old = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     Writer::open_incremental(&db, &[])
         .unwrap()
         .publish()
         .unwrap();
-    for view in [old, ReadView::open(&db).unwrap()] {
+    for view in [
+        old,
+        ReadView::open_in_scope(&db, &common::scope(&db)).unwrap(),
+    ] {
         let g = query(&view, serde_json::json!({"op":"callees","symbol_id":"a"}))
             .graph
             .unwrap();
