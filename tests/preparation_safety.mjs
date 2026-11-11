@@ -6,6 +6,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
+import {createServer} from 'node:http';
 import {preparePackages} from '../providers/typescript/preparation.mjs';
 import {packageTool,runCommand,selection,restorationSafety,readSetupInput,MAX_SETUP_INPUT_BYTES,typescriptInstallation} from '../providers/typescript/package-tools.mjs';
 import {ProjectSetupError} from '../providers/typescript/project-errors.mjs';
@@ -58,6 +59,46 @@ function progress(status='running',error) {
   if(current)fs.writeFileSync(path.join(current.directory,'result.json'),JSON.stringify(current,null,2)+'\n');
 }
 const request={analysisPolicy:{version:1,node:{cacheDirectory:cache,allowInstallScripts:false}},preparations:[],retryPreparation:true};
+function installLinksEnvironment(value) {
+  return Object.fromEntries(['npm_config_install_links','NPM_CONFIG_INSTALL_LINKS','pnpm_config_install_links','PNPM_CONFIG_INSTALL_LINKS'].map(key=>[key,value]));
+}
+async function withEnvironment(values,action) {
+  const previous=Object.fromEntries(Object.keys(values).map(key=>[key,process.env[key]]));
+  for(const [key,value] of Object.entries(values)) {if(value===undefined)delete process.env[key];else process.env[key]=value;}
+  try {return await action();} finally {for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+}
+const tarStage=path.join(run,'tar-stage/package'),tarball=path.join(run,'dependency.tgz');
+fs.mkdirSync(tarStage,{recursive:true});
+for(const name of ['package.json','index.d.ts'])fs.copyFileSync(path.join(git,name),path.join(tarStage,name));
+command('/usr/bin/tar',['-czf',tarball,'-C',path.dirname(tarStage),'package']);
+const tarBytes=fs.readFileSync(tarball),httpRequests=[];
+const server=createServer((req,res)=>{
+  httpRequests.push({method:req.method,url:req.url});
+  if(req.url==='/dependency.tgz') {res.writeHead(200,{'content-type':'application/octet-stream','content-length':tarBytes.length});res.end(tarBytes);return;}
+  if(req.url==='/npm/know-code-safe-git-dependency') {
+    const pkg={name:'know-code-safe-git-dependency',version:'1.0.0',dist:{tarball:`${local}/dependency.tgz`,integrity:`sha512-${createHash('sha512').update(tarBytes).digest('base64')}`}};
+    res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({name:pkg.name,'dist-tags':{latest:pkg.version},versions:{[pkg.version]:pkg}}));return;
+  }
+  res.writeHead(403);res.end('owned fixture denies outward proxy requests');
+});
+server.on('connect',(req,socket)=>{httpRequests.push({method:'CONNECT',url:req.url});socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const local=`http://127.0.0.1:${server.address().port}`;
+async function npm10Case(pin,label,dependency,config,environment) {
+  const directory=path.join(run,pin.replaceAll('@','-'),label),messages=[];
+  write(path.join(directory,'package.json'),JSON.stringify({name:'know-code-safe-app',private:true,version:'1.0.0',packageManager:pin,
+    dependencies:{'know-code-safe-git-dependency':dependency},scripts:{install:`node -e ${quote(`require('fs').writeFileSync(${JSON.stringify(path.join(run,'root-install-ran'))},'bad')`)}`}}));
+  write(path.join(directory,'.npmrc'),`ignore-scripts=false\n${config}\n`);
+  const configHash=hash(path.join(directory,'.npmrc')),attempt={pin,case:label,directory,status:'running',messages,config_sha256:configHash};
+  matrix.push(attempt);progress();
+  const diagnostics=await withEnvironment(environment,()=>preparePackages(directory,[directory],request,(kind,value)=>{messages.push({kind,value});progress();}));
+  const preparation=messages.filter(message=>message.kind==='preparation').map(message=>message.value);
+  Object.assign(attempt,{preparation,diagnostics:diagnostics(directory),metadata:diagnostics.metadata(directory),setup_failure:diagnostics.failure(directory)?.message});progress();
+  assert.equal(diagnostics.failure(directory),undefined);assert.equal(preparation.length,1);
+  for(const marker of ['dependency-prepare-ran','root-install-ran'])assert(!fs.existsSync(path.join(run,marker)),`ungranted script ran in ${label}`);
+  assert.equal(hash(path.join(directory,'.npmrc')),configHash,'policy rewrote repository config');
+  return {directory,preparation:preparation[0],attempt,done:()=>{attempt.status='passed';progress();}};
+}
 try {
   for(const pin of pins) {
     const directory=path.join(run,pin.replaceAll('@','-'));
@@ -68,30 +109,74 @@ try {
     write(path.join(directory,'package.json'),JSON.stringify({name:'know-code-safe-app',version:'1.0.0',private:true,packageManager:pin,
       dependencies:{'know-code-safe-git-dependency':`git+file://${git}#${revision}`},
       scripts:{install:`node -e ${quote(`require('fs').writeFileSync(${JSON.stringify(path.join(run,'root-install-ran'))},'bad')`)}`}}));
-    const config=`git=./selector-git\nscript-shell=./selector-shell\nnode-gyp=./selector-shell\nignore-scripts=false\nallow-git=true\nregistry=${registry}\nproxy=${proxy}\n//registry.example.invalid/:_authToken=owned-fake-token\n`;
+    const config=`git=./selector-git\nscript-shell=./selector-shell\nnode-gyp=./selector-shell\nignore-scripts=false\ninstall-links=false\nallow-git=true\nregistry=${registry}\nproxy=${proxy}\n//registry.example.invalid/:_authToken=owned-fake-token\n`;
     write(path.join(directory,'.npmrc'),config);
     if(pin.startsWith('pnpm'))write(path.join(directory,'pnpm-workspace.yaml'),`packages:\n  - .\nscriptShell: ./selector-shell\n`);
     const configHash=hash(path.join(directory,'.npmrc'));const messages=[];
     const attempt={pin,directory,status:'running',messages,config_sha256:configHash};matrix.push(attempt);progress();
-    const diagnostics=await preparePackages(directory,[directory],request,(kind,value)=>{messages.push({kind,value});progress();});
+    const diagnostics=await withEnvironment(installLinksEnvironment('false'),()=>preparePackages(directory,[directory],request,(kind,value)=>{messages.push({kind,value});progress();}));
     const preparation=messages.filter(message=>message.kind==='preparation').map(message=>message.value);
     Object.assign(attempt,{preparation,diagnostics:diagnostics(directory),setup_failure:diagnostics.failure(directory)?.message,
       markers:Object.fromEntries([gitMarker,shellMarker,path.join(run,'dependency-prepare-ran'),path.join(run,'root-install-ran')].map(filename=>[filename,fs.existsSync(filename)]))});progress();
     assert.equal(diagnostics.failure(directory),undefined);
-    assert.deepEqual(diagnostics(directory),[]);
-    assert.equal(preparation.length,1);assert(preparation[0].succeeded,JSON.stringify(preparation));
-    assert(fs.existsSync(path.join(directory,'node_modules/know-code-safe-git-dependency/package.json')),'real Git dependency was not installed');
+    assert.equal(preparation.length,1);
+    const selected=selection(pin),denied=selected.name==='npm'&&selected.major===10;
+    if(denied) {
+      assert.equal(preparation[0].succeeded,false);assert(preparation[0].error.includes('EKNOWCODE_NPM10_GIT_DISABLED'),preparation[0].error);
+      assert.equal(diagnostics(directory)[0]?.code,'dependency_restore_failed');attempt.outcome='npm10_git_fetch_refused';
+    } else {
+      assert.deepEqual(diagnostics(directory),[]);assert(preparation[0].succeeded,JSON.stringify(preparation));
+      assert(fs.existsSync(path.join(directory,'node_modules/know-code-safe-git-dependency/package.json')),'real Git dependency was not installed');attempt.outcome='git_dependency_restored';
+    }
     for(const filename of [gitMarker,shellMarker,path.join(run,'dependency-prepare-ran'),path.join(run,'root-install-ran')])assert(!fs.existsSync(filename),`ungranted executable ran: ${filename}`);
     assert.equal(hash(path.join(directory,'.npmrc')),configHash,'setup rewrote repository authentication/config');
     const tool=await packageTool(selection(pin),cache,()=>{}),safety=restorationSafety(tool,false);
+    if(denied) {
+      const probe=`const assert=require('node:assert/strict'),path=require('node:path');
+const files=Object.entries(require.cache).filter(([,value])=>value.exports?.name==='DisabledGitFetcher').map(([filename])=>filename);
+assert(files.length>0);const result=[];
+for(const filename of files){const pacote=require(path.join(path.dirname(filename),'index.js'));const codes=[];
+for(const invoke of [()=>pacote.manifest('github:know-code-fixture/never-fetch#${revision}',{cache:${JSON.stringify(path.join(run,'probe-cache'))}}),()=>new pacote.GitFetcher('github:know-code-fixture/never-fetch#${revision}',{})]){let code;try{invoke();}catch(error){code=error.code;}assert.equal(code,'EKNOWCODE_NPM10_GIT_DISABLED');codes.push(code);}result.push({filename,codes});}
+console.log(JSON.stringify(result));`;
+      const factories=JSON.parse(command(safety.program,[...safety.prefix.slice(0,-1),'--input-type=commonjs','--eval',probe,tool.prefix[0]],directory));
+      if(pin==='npm@10.9.10')assert(factories.length>=2,'nested Pacote copy escaped its process-local guard');
+      attempt.guarded_factories=factories;progress();
+    }
     const configured={};
     for(const key of ['registry','proxy']) {
-      const output=await runCommand(tool.program,[...tool.prefix,'config','get',key,...safety.args],directory,undefined,safety.env);
+      const output=await runCommand(safety.program,[...safety.prefix,'config','get',key,...safety.configArgs],directory,undefined,safety.env);
       assert(output.includes(key==='registry'?registry:proxy),`${pin} lost ${key} configuration: ${output}`);configured[key]=output;
     }
-    Object.assign(attempt,{status:'passed',configured,tool:{program:tool.program,prefix:tool.prefix,source:tool.source}});progress();
+    Object.assign(attempt,{status:'passed',configured,tool:{program:safety.program,prefix:safety.prefix,source:tool.source}});progress();
   }
-  checks.push(fullCatalog?'full_catalog_git_restore_ignores_executable_selectors_without_losing_registry_proxy_or_config':'selected_pins_only_git_restore_ignores_executable_selectors_without_losing_registry_proxy_or_config');
+  checks.push(fullCatalog?'full_catalog_npm10_git_refusal_and_npm11_pnpm_git_restores_preserve_selectors_registry_proxy':'selected_pins_only_git_policy_preserves_selectors_registry_proxy');
+  for(const pin of pins.filter(pin=>{const selected=selection(pin);return selected.name==='npm'&&selected.major===10;})) {
+    const probeCount=httpRequests.length;
+    const hosted=await npm10Case(pin,'hosted-full-sha',`github:know-code-fixture/never-fetch#${revision}`,
+      `install-links=false\nproxy=${local}\nhttps-proxy=${local}\nfetch-retries=0`,
+      {...installLinksEnvironment('false'),HTTP_PROXY:local,HTTPS_PROXY:local,NO_PROXY:'127.0.0.1,localhost',npm_config_noproxy:'127.0.0.1,localhost'});
+    assert.equal(hosted.preparation.succeeded,false);assert(hosted.preparation.error.includes('EKNOWCODE_NPM10_GIT_DISABLED'),hosted.preparation.error);
+    assert.equal(httpRequests.length,probeCount,'hosted Git reached the denying proxy before policy rejection');hosted.done();
+    for(const [label,setting,environment] of [
+      ['packing-repository-true','true',installLinksEnvironment(undefined)],
+      ['packing-personal-env-true','false',installLinksEnvironment('true')]
+    ]) {
+      const packed=await npm10Case(pin,label,`file:${git}`,`install-links=${setting}`,environment);
+      assert.equal(packed.preparation.succeeded,false);assert(packed.preparation.error.includes('effective install-links=true'),packed.preparation.error);
+      assert.equal(packed.attempt.metadata.packageManager.restorationSafety.installLinks,true);
+      assert(!fs.existsSync(path.join(packed.directory,'node_modules')),'unsafe packing began installation');packed.done();
+    }
+    const linked=await npm10Case(pin,'safe-linked-directory',`file:${git}`,'install-links=true',installLinksEnvironment('false'));
+    assert(linked.preparation.succeeded,linked.preparation.error);
+    assert(fs.lstatSync(path.join(linked.directory,'node_modules/know-code-safe-git-dependency')).isSymbolicLink());
+    assert.equal(linked.attempt.metadata.packageManager.restorationSafety.installLinks,false);linked.done();
+    const file=await npm10Case(pin,'safe-file-tarball',`file:${tarball}`,'install-links=false',installLinksEnvironment('false'));
+    assert(file.preparation.succeeded,file.preparation.error);assert(fs.existsSync(path.join(file.directory,'node_modules/know-code-safe-git-dependency/package.json')));file.done();
+    const registry=await npm10Case(pin,'safe-registry-package','1.0.0',`install-links=false\nregistry=${local}/npm/\nproxy=\nhttps-proxy=`,
+      {...installLinksEnvironment('false'),HTTP_PROXY:'',HTTPS_PROXY:'',NO_PROXY:'127.0.0.1,localhost'});
+    assert(registry.preparation.succeeded,registry.preparation.error);assert(fs.existsSync(path.join(registry.directory,'node_modules/know-code-safe-git-dependency/package.json')));registry.done();
+  }
+  if(pins.some(pin=>pin.startsWith('npm@10.')))checks.push('selected_npm10_hosted_git_denied_before_proxy_packing_true_rejected_and_registry_tarball_linked_directories_restore');
   const inputs=path.join(run,'inputs');fs.mkdirSync(inputs);
   write(path.join(inputs,'regular'),'abcd');fs.symlinkSync(path.join(inputs,'regular'),path.join(inputs,'regular-link'));
   assert.equal(readSetupInput(path.join(inputs,'regular-link'),4).toString(),'abcd');
@@ -108,7 +193,7 @@ try {
   write(path.join(bad,'package.json'),'{');
   for(const directory of [device,good])write(path.join(directory,'package.json'),JSON.stringify({private:true,name:path.basename(directory),version:'1.0.0'}));
   write(path.join(device,'.npmrc'),'pnpmfile=/dev/zero\n');
-  const diagnostics=await preparePackages(path.join(run,'scoped'),[bad,device,good],request,()=>{});
+  const diagnostics=await preparePackages(path.join(run,'scoped'),[bad,device,good],{...request,retryPreparation:false},()=>{});
   assert(diagnostics.failure(bad) instanceof ProjectSetupError);
   assert(diagnostics.failure(device) instanceof ProjectSetupError);
   assert.equal(diagnostics.failure(good),undefined);assert.deepEqual(diagnostics(good),[]);
@@ -123,13 +208,13 @@ try {
   write(path.join(child,'node_modules/typescript/package.json'),JSON.stringify({name:'typescript',version:'5.9.3'}));
   write(path.join(child,'node_modules/typescript/index.js'),'module.exports = {version:"5.9.3"};\n');
   fs.mkdirSync(source,{recursive:true});
-  const declared=await preparePackages(ancestor,[source],request,()=>{});
+  const declared=await preparePackages(ancestor,[source],{...request,retryPreparation:false},()=>{});
   assert.equal(declared.typescriptDeclared(source),true);assert.equal(declared.typescriptDeclared(child),true);
   assert.equal(declared.typescriptDeclared(ancestor),false,'child declaration leaked into workspace-root alias');
   write(path.join(ancestor,'package.json'),JSON.stringify({private:true,name:'workspace',version:'1.0.0',workspaces:['child'],devDependencies:{typescript:'5.9.3'}}));
   write(path.join(ancestor,'node_modules/typescript/package.json'),JSON.stringify({name:'typescript',version:'5.9.3'}));
   write(path.join(ancestor,'node_modules/typescript/index.js'),'module.exports = {version:"5.9.3"};\n');
-  const hoisted=await preparePackages(ancestor,[source],request,()=>{});
+  const hoisted=await preparePackages(ancestor,[source],{...request,retryPreparation:false},()=>{});
   assert.equal(hoisted.typescriptDeclared(ancestor),true);assert.equal(hoisted.typescriptDeclared(source),true);
   write(path.join(child,'package.json'),'{');
   assert.equal(hoisted.typescriptDeclared(source),true,'declaration lookup reparsed changed metadata');
@@ -149,10 +234,14 @@ try {
   checks.push('one_lexical_compiler_origin_resolver_rejects_ambient_ancestors_accepts_external_store_links_and_reports_broken_origins');
   assert.equal(process.env.HOME,actualHome,'fixture changed the account HOME');
   const result={status:'passed',canonical_full_pins:canonicalFullPins,selected_pins:pins,full_catalog:fullCatalog,checks,matrix,commands,run,cache,home_unchanged:true,test_sha256:hash(fileURLToPath(import.meta.url)),
-    source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs'].map(name=>[name,hash(path.join(root,name))])),
-    limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested',fullCatalog?'canonical full floor/latest catalog executed; not every intermediate patch':'only the named selected pins executed; full catalog certification remains pending']};
+    source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs','providers/typescript/npm10-guard.mjs'].map(name=>[name,hash(path.join(root,name))])),
+    limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested','npm10 Git refusal is an expected negative policy test, not successful Git restoration',fullCatalog?'canonical full floor/latest catalog executed; not every intermediate patch':'only the named selected pins executed; full catalog certification remains pending']};
   fs.writeFileSync(path.join(run,'validation.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
 } catch(error) {
   const attempt=matrix.at(-1);if(attempt&&attempt.status==='running')attempt.status='failed';
   progress('failed',String(error.stack??error));throw error;
-} finally {fs.writeFileSync(path.join(run,'commands.json'),JSON.stringify(commands,null,2)+'\n');}
+} finally {
+  await new Promise(resolve=>server.close(resolve));
+  fs.writeFileSync(path.join(run,'commands.json'),JSON.stringify(commands,null,2)+'\n');
+  fs.writeFileSync(path.join(run,'http-requests.json'),JSON.stringify(httpRequests,null,2)+'\n');
+}
