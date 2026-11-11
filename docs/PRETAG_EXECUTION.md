@@ -27,7 +27,7 @@ Lifecycle capability 4 and native query contract 8 cover this new boundary, incl
 
 Development diagnostics are under `.artifacts/pretag-wave/diagnostic/`. The first assembled pre-trust compile passed; its Rust run exposed four fixture expectations that needed correction (cleanup warning policy, actual main/WAL corruption, and DiskPressure type). Those failures stay retained. The first combined C# source chunk builds with zero compiler warnings/errors. None of those prefixes certifies the final trust/native/transport assembly.
 
-The focused checkpoint below now covers actual trust, provider failures and managed WAL behavior on named development prefixes. Remaining gates include the npm 10 policy and scripts-safe package-manager pin matrix, final signing pipeline, graph/cleanup and native/compatibility evidence, then the settled candidate's full Debug/optimized, installed offline/toolchain, real-encoding/resource, conditional free-VM minimum-OS, license/zero-telemetry and signed/notarized installation checks.
+The focused checkpoints below cover actual trust, provider failures, managed WAL behavior, the accepted npm 10 policy and the scripts-safe package-manager pin matrix on named development prefixes. Remaining gates include the settled candidate's full Debug/optimized, current/prior compatibility, final signed installed/offline/toolchain, real-encoding/resource, conditional free-VM minimum-OS and notarized normal-security installation checks. The signing pipeline has a diagnostic artifact-bound pass; final assets still require their own evidence.
 
 ## Audited focused checkpoint — 2026-11-11
 
@@ -64,6 +64,14 @@ The signed diagnostic manifest SHA-256 is `7cbd139f319b3591f7ec410def8acae60a18f
 All three signed archives contain the three newly pinned NuGet license texts with matching upstream commit/hash provenance; the artifact-bound check is `diagnostic/signed-notices-01.json`. The source audit is [PUBLICATION_AUDIT.md](reviews/PUBLICATION_AUDIT.md). Local unsigned copies and replay directories are operator evidence, not release assets.
 
 This is a diagnostic Debug checkpoint, not final release certification. It does not cover the subsequent npm 10 safety-policy changes, the final full/optimized or real-encoding gates, minimum-OS testing, notarization, quarantine/default-security installation or remote publication. No artifact was submitted to Apple notarization and no live runtime was replaced.
+
+## Complete package-manager policy checkpoint
+
+At source `9558e77`, all ten named floor/latest npm/pnpm pins passed the complete six-group gate, including **22 real restoration/policy cases**. Evidence: `.artifacts/preparation-safety/1a1cce11e3c/validation.json` (SHA-256 `59e772ce8ddeb6328f02bf72192adf388339531bab8cf3a2512f60fe4a436fbf`), with a compact binding in `diagnostic/setup-06-full/summary.json`. This includes npm 10 hosted/direct/nested Git refusal; effective packing-policy precedence; registry, tarball, directory and executable-link positives; no ungranted script markers; bounded setup inputs; and current TypeScript compiler-store retarget/dangling-origin checks. The accepted policy and retained failed attempts are described in [NPM_SCRIPTS_OFF.md](reviews/NPM_SCRIPTS_OFF.md).
+
+The user accepted blocking npm 10 Git fetching and rejecting effective `install-links=true` while scripts are disabled, preserving ordinary linked-directory, registry and tarball restoration. The isolated npm 10 preload covers both Git fetchers and its upstream linked-package script bypass; it does not modify cached package files. The shared compiler-origin helper checks the current physical target before Node resolution, avoiding a stale symlink lookup. Both changes feed the existing preparation/update path.
+
+The extended installed harness must still prove the preload works from the relocated signed runtime under checkout/network denial. The complete source pin gate does not certify final packages, every intermediate patch, normal-security installation or the final release. The user will start normal video encoders only after the integrator signals that the final optimized candidate and owned indexes are ready.
 
 ## Authorized GitHub replacement
 

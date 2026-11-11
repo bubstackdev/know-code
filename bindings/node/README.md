@@ -14,7 +14,7 @@ try {
 
 Opening registers saved-file indexing and auto-starts an installed coordinator when absent. It does not authorize repository-selected compiler code or MSBuild evaluation: call `workspace.trust(true)` explicitly for a trusted repository, or grant with `know-code trust /absolute/repository`. Revoke with `workspace.trust(false)`. Package installation scripts require a separate personal `allow_install_scripts` grant and remain disabled by default.
 
-Optional `coordinatorExecutable` overrides PATH. Status/coverage/freshness remain explicit; waiting can time out before an index is ready. API failures throw `KnowCodeError` with a `code`; compiler errors remain status/coverage. Closing preserves background indexing and permits accepted work to finish. Queries execute in-process. This candidate is an unsigned development artifact; full 0.0.1 acceptance is still in progress. Public code has no usage telemetry.
+Optional `coordinatorExecutable` overrides PATH. Status/coverage/freshness remain explicit; waiting can time out before an index is ready. API failures throw `KnowCodeError` with a `code`; compiler errors remain status/coverage. Closing preserves background indexing and permits accepted work to finish. Queries execute in-process. Distribution signing and acceptance are recorded against the exact release archives. Public code has no usage telemetry.
 
 For paged results, `limit` caps the whole logical result and `page_size` selects 1–1000 items per page:
 

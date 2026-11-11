@@ -173,7 +173,7 @@ assets=json.loads((WORKSPACE/'obj/project.assets.json').read_text());assert 'Kno
 # Acquire only a tool distribution, through the shipped helper, before Internet
 # denial. This cache lives outside DATA and cannot pre-seed a serving index.
 TOOL_CACHE=PREFIX/'tool-cache';npm10_prime=PREFIX/'prime-npm10.mjs'
-npm10_prime.write_text("import {pathToFileURL} from 'node:url';const {packageTool,selection}=await import(pathToFileURL(process.argv[2]));console.log(JSON.stringify(await packageTool(selection('npm@10.0.0'),process.argv[3])));\n")
+npm10_prime.write_text("import {pathToFileURL} from 'node:url';const {packageTool,selection}=await import(pathToFileURL(process.argv[2]));console.log(JSON.stringify(await packageTool(selection('npm@10.0.0'),process.argv[3],()=>{})));\n")
 npm10_tool=json.loads(command('node',npm10_prime,resources/'providers/typescript/package-tools.mjs',TOOL_CACHE).stdout)
 assert npm10_tool['name']=='npm' and npm10_tool['version']=='10.0.0' and npm10_tool['source']=='user-cache',npm10_tool
 assert Path(npm10_tool['cacheDirectory']).is_relative_to(TOOL_CACHE),npm10_tool
@@ -194,6 +194,7 @@ for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).retu
 checks+=['project_dependencies_restored_before_registration','fresh_initial_index_starts_under_network_denial']
 # Only after both original no-state assertions and actual network denial proof:
 # copy the tool cache, never registry/settings/workspace/index state.
+DATA.mkdir(mode=0o700)
 shutil.copytree(TOOL_CACHE,DATA/'package-tools')
 assert sorted(p.name for p in DATA.iterdir())==['package-tools']
 assert cache_inventory(DATA/'package-tools')==npm10_cache_inventory

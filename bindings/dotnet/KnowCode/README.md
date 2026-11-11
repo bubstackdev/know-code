@@ -4,6 +4,7 @@ macOS 15+ / Apple Silicon, .NET 10. Install the separate Know Code runtime bundl
 
 ```csharp
 using var workspace = await KnowCode.Workspace.OpenAsync("/absolute/repository");
+await workspace.SetProjectTrustAsync(true); // Explicit personal permission for this repository.
 var status = await workspace.WaitForIndexAsync(30_000);
 if (status.Generation > 0) {
     using var response = await workspace.QueryAsync(new KnowCode.QueryRequest("symbols", Name: "Greeter"));
@@ -11,7 +12,7 @@ if (status.Generation > 0) {
 }
 ```
 
-Opening registers saved-file indexing and auto-starts an installed coordinator when absent. `WorkspaceOptions.CoordinatorExecutable` overrides PATH. Status/coverage/freshness remain explicit; waiting can time out. API failures throw `KnowCodeException` with `Code`; compiler errors remain status/coverage. Disposal preserves background indexing and permits accepted work to finish. Queries execute in-process. The package includes its macOS ARM64 native library. This candidate is unsigned; full 0.0.1 acceptance remains in progress. Public code has no usage telemetry.
+Opening registers saved-file indexing and auto-starts an installed coordinator when absent. Compiler and dependency execution requires a separate personal `SetProjectTrustAsync(true)` grant; package-script permission remains separate. Use `SetProjectTrustAsync(false)` to revoke future execution. `WorkspaceOptions.CoordinatorExecutable` overrides PATH. Status/coverage/freshness remain explicit; waiting can time out. API failures throw `KnowCodeException` with `Code`; compiler errors remain status/coverage. Disposal preserves background indexing and permits accepted work to finish. Queries execute in-process. The package includes its macOS ARM64 native library. Distribution signing and acceptance are recorded against the exact release archives. Public code has no usage telemetry.
 
 Set `PageSize` to 1–1000 to page a supported query. `Limit` still caps the whole logical result; the positional `QueryRequest` constructor is unchanged:
 
@@ -28,7 +29,7 @@ if (page.GetProperty("next_cursor").GetString() is { } cursor) {
 
 Every page provides its reusable `page.cursor`, nullable `next_cursor`, zero-based position, page count and section totals/start/count. Graph findings and boundaries occupy separate sections; later pages can contain boundaries after findings finish. Original `truncated`, graph limits and coverage persist through the final page. Replay preserves rows, order and next position; a smaller response budget may fail rather than repartition the result.
 
-Tokens are opaque and portable across clients using the same coordinator incarnation. Set `QueryRequest.Cursor` for separate `source` or `symbol_context` reads through the pinned generation; source hashes/ranges must match that indexed text. Expiry, coordinator restart or retention pressure returns `cursor_invalidated`, requiring an explicit new query. The SDK requires native query contract 6; assembled candidate acceptance remains in progress.
+Tokens are opaque and portable across clients using the same coordinator incarnation. Set `QueryRequest.Cursor` for separate `source` or `symbol_context` reads through the pinned generation; source hashes/ranges must match that indexed text. Expiry, coordinator restart or retention pressure returns `cursor_invalidated`, requiring an explicit new query. The SDK requires native query contract 8 and coordinator lifecycle capability 4.
 
 Graph queries (`callers`, `callees`, `impact`) omit declaration bodies by default. Set `IncludeSource = true` to attach `context.declarations` to each finding and exact target support. `SourceMaxBytes` bounds all returned source text together (16 KiB default, 256 KiB maximum), counting repeated representative/support copies and spanning all pages. Bodies come from the pinned indexed source. Exhaustion clips or omits bodies with explicit statuses and a `source_budget` limit while preserving findings under the other graph/response caps. Graph `MaxBytes` still bounds graph JSON. Path edges and root pointers retain locations. `symbol_context` continues to include source by default and uses its existing `MaxBytes` source budget. Null `IncludeSource` preserves these operation-specific defaults.
 
