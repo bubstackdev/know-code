@@ -61,15 +61,44 @@ fn trust_required(root: &Path) -> Error {
         root.display()
     ))
 }
+/// Canonical address for personal execution state, including lexical missing-root revocation.
+pub fn project_execution_root(root: &Path) -> Result<PathBuf> {
+    match fs::canonicalize(root) {
+        Ok(root) => Ok(root),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Revocation must still address the original receipt after the
+            // workspace disappears. Normalize lexical aliases without creating
+            // or following a replacement source directory.
+            let absolute = if root.is_absolute() {
+                root.to_owned()
+            } else {
+                std::env::current_dir()?.join(root)
+            };
+            let mut normalized = PathBuf::new();
+            for component in absolute.components() {
+                match component {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        normalized.pop();
+                    }
+                    other => normalized.push(other.as_os_str()),
+                }
+            }
+            Ok(normalized)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 pub fn project_execution_allowed(root: &Path, data: &Path) -> Result<bool> {
+    let root = project_execution_root(root)?;
     let trust: ProjectTrust =
-        read(&workspace::database_path(root, data).with_file_name("trust.json"))?;
+        read(&workspace::database_path(&root, data).with_file_name("trust.json"))?;
     if trust.version != 1 {
         return Err(Error::UpdateRequired(
             "unsupported personal project-trust format; update Know Code".into(),
         ));
     }
-    Ok(trust.allowed && trust.workspace_identity == workspace::identity(root)?)
+    Ok(trust.allowed && trust.workspace_identity == workspace::identity(&root)?)
 }
 pub fn project_execution_grant(root: &Path, data: &Path) -> Result<ProjectExecutionGrant> {
     let root = fs::canonicalize(root)?;
@@ -79,7 +108,7 @@ pub fn project_execution_grant(root: &Path, data: &Path) -> Result<ProjectExecut
     Ok(ProjectExecutionGrant {
         identity: workspace::identity(&root)?,
         root,
-        data: data.into(),
+        data: fs::canonicalize(data)?,
     })
 }
 /// Called only by an explicit personal control action after workspace identity
@@ -94,7 +123,12 @@ pub fn set_project_execution(root: &Path, data: &Path, allowed: bool) -> Result<
     write_private(&root, data, "trust.json", &value)
 }
 pub fn revoke_project_execution(root: &Path, data: &Path) -> Result<()> {
-    write_private(root, data, "trust.json", &ProjectTrust::default())
+    write_private(
+        &project_execution_root(root)?,
+        data,
+        "trust.json",
+        &ProjectTrust::default(),
+    )
 }
 
 /// Missing inherits; null explicitly selects repository/compiler defaults.
@@ -383,6 +417,39 @@ mod tests {
         ));
         revoke_project_execution(&root, &data).unwrap();
         assert!(!project_execution_allowed(&root, &data).unwrap());
+    }
+    #[test]
+    fn execution_revocation_uses_the_same_receipt_for_aliases_and_missing_roots() {
+        let (root, data) = fixture();
+        let canonical = fs::canonicalize(&root).unwrap();
+        let alias = root.join("child/..");
+        fs::create_dir(root.join("child")).unwrap();
+        set_project_execution(&canonical, &data, true).unwrap();
+        assert!(project_execution_allowed(&alias, &data).unwrap());
+        revoke_project_execution(&alias, &data).unwrap();
+        assert!(!project_execution_allowed(&canonical, &data).unwrap());
+        set_project_execution(&canonical, &data, true).unwrap();
+        let moved = canonical.with_extension("absent");
+        fs::rename(&canonical, &moved).unwrap();
+        let missing_alias = canonical
+            .parent()
+            .unwrap()
+            .join("./")
+            .join(canonical.file_name().unwrap());
+        revoke_project_execution(&missing_alias, &data).unwrap();
+        fs::rename(&moved, &canonical).unwrap();
+        assert!(!project_execution_allowed(&canonical, &data).unwrap());
+    }
+    #[test]
+    fn repository_identity_checks_bound_git_file_reads_before_execution() {
+        let (root, _) = fixture();
+        fs::write(root.join(".git"), "gitdir: /owned/fixture\n").unwrap();
+        assert!(workspace::identity(&root).is_ok());
+        fs::write(root.join(".git"), vec![b'x'; 65_537]).unwrap();
+        assert!(matches!(
+            workspace::identity(&root),
+            Err(Error::InvalidRequest(_))
+        ));
     }
     #[test]
     fn defaults_precedence_and_persistent_explicit_clearing() {

@@ -939,7 +939,7 @@ mod contract_tests {
     fn runtime_switch_requires_explicit_lifecycle_safety() {
         let supported = supported();
         assert!(compatible_info(&supported, &supported).is_ok());
-        for value in [Value::Null, json!(0), json!(4), json!(2)] {
+        for value in [Value::Null, json!(0), json!(5), json!(2), json!(3)] {
             let mut target = supported.clone();
             target["index_lifecycle_version"] = value;
             assert!(
@@ -954,6 +954,8 @@ mod contract_tests {
         assert!(compatible_info(&old, &supported).is_ok());
         let mut previous = supported.clone();
         previous["index_lifecycle_version"] = json!(2);
+        assert!(compatible_info(&previous, &supported).is_ok());
+        previous["index_lifecycle_version"] = json!(3);
         assert!(compatible_info(&previous, &supported).is_ok());
         assert!(compatible_info(&supported, &old).is_err());
         let mut missing_catalog = supported.clone();

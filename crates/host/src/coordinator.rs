@@ -2170,10 +2170,10 @@ fn set_workspace_execution(
             )
             .into());
         }
-        match std::fs::canonicalize(&root) {
-            Ok(root) => root,
-            Err(_) if !allowed && root.is_absolute() => root,
-            Err(error) => return Err(error.into()),
+        if allowed {
+            std::fs::canonicalize(&root)?
+        } else {
+            settings::project_execution_root(&root)?
         }
     };
     let database = workspace::database_path(&root, data)

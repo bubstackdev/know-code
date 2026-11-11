@@ -59,13 +59,32 @@ fn source_language(path: &Path) -> Option<&'static str> {
 }
 
 pub fn identity(root: &Path) -> Result<String> {
-    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let metadata = std::fs::metadata(root)?;
     let mut identity = format!("{}:{}", metadata.dev(), metadata.ino());
     if let Ok(git) = std::fs::symlink_metadata(root.join(".git")) {
         identity.push_str(&format!(":{}:{}", git.dev(), git.ino()));
         if git.is_file() {
-            identity.push_str(&std::fs::read_to_string(root.join(".git"))?);
+            // Discovery/registration precedes execution trust. A repository
+            // must not turn this metadata read into an unbounded file/device
+            // read, including when it replaces the path after the first stat.
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+                .open(root.join(".git"))?;
+            if !file.metadata()?.is_file() || file.metadata()?.len() > 65_536 {
+                return Err(Error::InvalidRequest(
+                    "workspace .git file must be a regular file of at most 64 KiB".into(),
+                ));
+            }
+            let mut contents = String::new();
+            file.take(65_537).read_to_string(&mut contents)?;
+            if contents.len() > 65_536 {
+                return Err(Error::InvalidRequest(
+                    "workspace .git file exceeds 64 KiB".into(),
+                ));
+            }
+            identity.push_str(&contents);
         }
     }
     Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
