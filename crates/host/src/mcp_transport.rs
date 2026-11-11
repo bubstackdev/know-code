@@ -92,6 +92,9 @@ impl Connection {
     fn take_response(&self, id: &RequestId) -> Option<KeepAlive> {
         self.responses.lock().unwrap().remove(id)?.reservation
     }
+    fn has_response(&self, id: &RequestId) -> bool {
+        self.responses.lock().unwrap().contains_key(id)
+    }
     fn begin_frame(self: &Arc<Self>) -> io::Result<FrameOwnership> {
         self.check()?;
         if self
@@ -360,6 +363,14 @@ impl<T: Transport<RoleServer, Error = io::Error>> Transport<RoleServer> for Boun
             biased;
             _=self.connection.changed.notified()=>None,
             value=self.inner.receive()=>{
+                if let Some(JsonRpcMessage::Request(request)) = &value
+                    && self.connection.has_response(&request.id)
+                {
+                    // Other methods (ping/list/unknown) must not reuse a query
+                    // id and take its response reservation through rmcp.
+                    self.connection.fail();
+                    return None;
+                }
                 if value.is_none() { self.connection.fail(); }
                 value
             },
@@ -453,6 +464,34 @@ mod tests {
         );
         assert!(connection.check().is_err());
         assert!(alive.upgrade().is_none());
+    }
+    #[test]
+    fn duplicate_non_tool_request_cannot_take_a_pending_query_handoff() {
+        use tokio::io::AsyncWriteExt;
+        runtime().block_on(async {
+            let (mut input, read) = tokio::io::duplex(256);
+            let (write, _output) = tokio::io::duplex(128);
+            let connection = Arc::new(Connection::default());
+            let handoff = connection
+                .begin_response(RequestId::Number(7), || false)
+                .unwrap();
+            let reservation = Arc::new(());
+            let alive = Arc::downgrade(&reservation);
+            handoff.retain(reservation);
+            handoff.complete();
+            let inner = AsyncRwTransport::<RoleServer, _, _>::new(
+                read,
+                Output::new(write, connection.clone()),
+            );
+            let mut transport = Bounded::new(inner, connection.clone());
+            input
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n")
+                .await
+                .unwrap();
+            assert!(transport.receive().await.is_none());
+            assert!(connection.check().is_err());
+            assert!(alive.upgrade().is_none());
+        });
     }
     #[test]
     fn unpolled_send_owns_reservation_and_all_frame_kinds_have_a_shared_bound() {
