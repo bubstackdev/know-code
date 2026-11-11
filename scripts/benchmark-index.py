@@ -14,9 +14,12 @@ from pathlib import Path
 import signal
 import sqlite3
 import subprocess
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'tests'))
+from index_paths import physical_database
 
 
 class Usage(ctypes.Structure):
@@ -166,13 +169,15 @@ def main():
         result = probe
         assert result['freshness'] == 'current' and result.get('symbols'), (result['freshness'], result['generation'])
         if changed_file:
-            with sqlite3.connect(database) as connection:
+            with sqlite3.connect(physical_database(database)) as connection:
                 artifact = connection.execute('SELECT a.id FROM generation_units u JOIN unit_artifacts ua ON ua.owner_generation=u.owner_generation AND ua.compilation_id=u.compilation_id JOIN artifacts a ON a.generation=ua.owner_generation AND a.id=ua.artifact_id WHERE u.generation=(SELECT current_generation FROM state) AND a.path=? LIMIT 1', [str(changed_file.relative_to(workspace))]).fetchone()
             assert artifact, changed_file
             source = command('query', database, json.dumps({'op': 'source', 'artifact_id': artifact[0]}))['result']['source']
             assert source['text'] == changed_file.read_bytes().decode('utf-8-sig'), 'published source differs from normalized saved probe'
-        with sqlite3.connect(database) as connection:
+        with sqlite3.connect(physical_database(database)) as connection:
             recompiled_units = connection.execute('SELECT count(*) FROM generation_units WHERE generation=(SELECT current_generation FROM state) AND owner_generation=generation').fetchone()[0]
+        selected_database = physical_database(database)
+        database_files = {p.name: p.stat().st_size for p in selected_database.parent.glob(selected_database.name + '*')}
         final_usage = usage(daemon.pid)
         measured = {'name': name, 'wall_seconds': round(elapsed, 4),
                     'coordinator_cpu_seconds': round((final_usage.user+final_usage.system-initial_usage.user-initial_usage.system)*CPU_SECONDS,4),
@@ -183,8 +188,8 @@ def main():
                     'coverage': dict(collections.Counter(c['status'] for c in result['coverage'])),
                     'analysis_configurations': sorted({c['configuration'] for c in result['coverage'] if c['language'] == 'csharp'}),
                     'recompiled_units': recompiled_units,
-                    'database_bytes': sum(p.stat().st_size for p in Path(database).parent.glob('index.db*')),
-                    'database_files': {p.name: p.stat().st_size for p in Path(database).parent.glob('index.db*')}}
+                    'database_bytes': sum(database_files.values()),
+                    'database_files': database_files}
         measurements.append(measured)
         checkpoint()
         print(json.dumps(measured), flush=True)

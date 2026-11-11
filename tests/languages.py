@@ -7,6 +7,8 @@ import shutil
 import sqlite3
 import subprocess
 import time
+
+from index_paths import physical_database
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,7 +84,7 @@ def query(request, equivalent=False):
 
 
 def owners():
-    with sqlite3.connect(DATABASE) as connection:
+    with sqlite3.connect(physical_database(DATABASE)) as connection:
         return dict(connection.execute('SELECT compilation_id,owner_generation FROM generation_units '
                                        'WHERE generation=(SELECT current_generation FROM state)'))
 

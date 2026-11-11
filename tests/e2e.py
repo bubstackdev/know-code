@@ -12,6 +12,8 @@ import sqlite3
 import subprocess
 import time
 
+from index_paths import physical_database
+
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / '.artifacts' / 'e2e' / str(time.time_ns())
 WORKSPACE = RUN / 'workspace'
@@ -81,48 +83,79 @@ assert all_symbols['freshness'] == 'current', 'coordinator did not acknowledge o
 coverage = all_symbols['coverage']
 assert {c['target'] for c in coverage if c['language'] == 'csharp'} == {'net10.0', 'netstandard2.1'}, coverage
 assert all(c['status'] == 'complete' for c in coverage), coverage
+CS_TARGETS = {'net10.0', 'netstandard2.1'}
+
+
+def assert_csharp_support(symbol):
+    supports = symbol['supporting_targets']
+    assert len(supports) == 2 and {s['target'] for s in supports} == CS_TARGETS, symbol
+    assert len({s['symbol_id'] for s in supports}) == 2, symbol
+    assert all(s['locations'] and s['signature'] == symbol['signature'] for s in supports), symbol
+
+
 checked_ranges = 0
 for name in ('greet', 'Greet'):
-    symbols = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
-    assert len(symbols) == (1 if name == 'greet' else 2), symbols
-    for symbol in symbols:
-        assert symbol['locations'], symbol
-        references = equivalent({'op': 'references', 'symbol_id': symbol['id']})['result']['occurrences']
-        assert references, symbol
-        for item in references:
-            location = item['location']
-            source = equivalent({'op': 'source', 'artifact_id': location['artifact_id']})['result']['source']
-            token = source['text'].encode('utf8')[location['start_byte']:location['end_byte']].decode('utf8')
-            assert token == name, (token, item)
-            assert source['content_hash'] == location['content_hash']
-            checked_ranges += 1
+    grouped = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
+    assert len(grouped) == 1, grouped
+    if name == 'Greet':
+        assert_csharp_support(grouped[0])
+    for target in (sorted(CS_TARGETS) if name == 'Greet' else [None]):
+        scope = {'target': target} if target else {}
+        symbols = equivalent({'op': 'symbols', 'name': name, **scope})['result']['symbols']
+        assert len(symbols) == 1 and not symbols[0].get('supporting_targets'), symbols
+        for symbol in symbols:
+            assert symbol['locations'], symbol
+            references = equivalent({'op': 'references', 'symbol_id': symbol['id'], **scope})['result']['occurrences']
+            assert references, symbol
+            for item in references:
+                location = item['location']
+                source = equivalent({'op': 'source', 'artifact_id': location['artifact_id']})['result']['source']
+                token = source['text'].encode('utf8')[location['start_byte']:location['end_byte']].decode('utf8')
+                assert token == name, (token, item)
+                assert source['content_hash'] == location['content_hash']
+                checked_ranges += 1
 
-# Repeated bindings must retain distinct file/target-local symbol identities.
+# File-local identities stay distinct while equivalent target bindings group.
 for name in ('cachedArg', 'cachedLocal'):
-    symbols = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
-    assert len(symbols) == 4 and len({s['id'] for s in symbols}) == 4, symbols
-    for symbol in symbols:
-        occurrences = equivalent({'op': 'references', 'symbol_id': symbol['id']})['result']['occurrences']
-        assert len([o for o in occurrences if o['role'] == 'reference']) == 2, (symbol, occurrences)
-        assert len({o['location']['path'] for o in occurrences}) == 1, occurrences
+    grouped = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
+    assert len(grouped) == 2 and len({s['id'] for s in grouped}) == 2, grouped
+    for symbol in grouped:
+        assert_csharp_support(symbol)
+    for target in sorted(CS_TARGETS):
+        symbols = equivalent({'op': 'symbols', 'name': name, 'target': target})['result']['symbols']
+        assert len(symbols) == 2 and len({s['id'] for s in symbols}) == 2, symbols
+        for symbol in symbols:
+            assert symbol['target'] == target and not symbol.get('supporting_targets'), symbol
+            occurrences = equivalent({'op': 'references', 'symbol_id': symbol['id'], 'target': target})['result']['occurrences']
+            assert len([o for o in occurrences if o['role'] == 'reference']) == 2, (symbol, occurrences)
+            assert len({o['location']['path'] for o in occurrences}) == 1, occurrences
 
-# Invocations must preserve method identities and callable variable/member references.
+# Invocations preserve exact method/callable identities in each target and
+# expose equivalent cross-target findings with both supporting identities.
 for name, kind, reference_count in (
         ('InvocationGeneric', 'method', 1), ('InvocationExtension', 'method', 2),
         ('InvocationLocal', 'method', 1), ('InvocationMember', 'method', 1),
         ('invocationDelegate', 'local', 1), ('InvocationCallback', 'property', 1),
         ('InvocationField', 'field', 1)):
-    symbols = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
-    assert len(symbols) == 2 and all(s['kind'] == kind for s in symbols), (name, symbols)
-    for symbol in symbols:
-        occurrences = equivalent({'op': 'references', 'symbol_id': symbol['id']})['result']['occurrences']
-        assert len([o for o in occurrences if o['role'] == 'reference']) == reference_count, (name, occurrences)
-overloads = equivalent({'op': 'symbols', 'name': 'InvocationTarget'})['result']['symbols']
-assert len(overloads) == 4, overloads
-for symbol in overloads:
-    occurrences = equivalent({'op': 'references', 'symbol_id': symbol['id']})['result']['occurrences']
-    expected = 2 if symbol['signature'].endswith('(int)') else 1
-    assert len([o for o in occurrences if o['role'] == 'reference']) == expected, (symbol, occurrences)
+    grouped = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
+    assert len(grouped) == 1 and grouped[0]['kind'] == kind, (name, grouped)
+    assert_csharp_support(grouped[0])
+    for target in sorted(CS_TARGETS):
+        symbols = equivalent({'op': 'symbols', 'name': name, 'target': target})['result']['symbols']
+        assert len(symbols) == 1 and symbols[0]['kind'] == kind and not symbols[0].get('supporting_targets'), (name, symbols)
+        occurrences = equivalent({'op': 'references', 'symbol_id': symbols[0]['id'], 'target': target})['result']['occurrences']
+        assert len([o for o in occurrences if o['role'] == 'reference']) == reference_count, (name, target, occurrences)
+grouped_overloads = equivalent({'op': 'symbols', 'name': 'InvocationTarget'})['result']['symbols']
+assert len(grouped_overloads) == 2, grouped_overloads
+for symbol in grouped_overloads:
+    assert_csharp_support(symbol)
+for target in sorted(CS_TARGETS):
+    overloads = equivalent({'op': 'symbols', 'name': 'InvocationTarget', 'target': target})['result']['symbols']
+    assert len(overloads) == 2, (target, overloads)
+    for symbol in overloads:
+        occurrences = equivalent({'op': 'references', 'symbol_id': symbol['id'], 'target': target})['result']['occurrences']
+        expected = 2 if symbol['signature'].endswith('(int)') else 1
+        assert len([o for o in occurrences if o['role'] == 'reference']) == expected, (symbol, occurrences)
 
 platform = equivalent({'op': 'symbols', 'name': 'PlatformSpecific'})['result']['symbols']
 assert len(platform) == 1 and platform[0]['target'] == 'net10.0', platform
@@ -136,7 +169,7 @@ assert equivalent({'op': 'symbols', 'query': 'Greeter'})['result'].get('symbols'
 assert equivalent({'op': 'references'})['error']['code'] == 'invalid_request'
 assert equivalent({'op': 'symbols', 'limit': 0})['error']['code'] == 'invalid_request'
 
-with sqlite3.connect(DATABASE) as connection:
+with sqlite3.connect(physical_database(DATABASE)) as connection:
     source_copies = connection.execute('SELECT count(*) FROM artifacts').fetchone()[0]
     source_payloads = connection.execute('SELECT count(*) FROM contents').fetchone()[0]
     assert source_payloads < source_copies, (source_payloads, source_copies)
@@ -169,11 +202,16 @@ assert any(c['language'] == 'typescript' and c['status'] == 'partial' and c['dia
 assert partial_result['symbols'], partial_result
 assert all(c['status'] == 'partial' for c in partial_result['coverage'] if c['language'] == 'csharp'), partial_result
 ambiguous = equivalent({'op': 'symbols', 'name': 'AmbiguousInvocationTarget'})['result']['symbols']
-assert len(ambiguous) == 4, ambiguous
+assert len(ambiguous) == 2, ambiguous
 for symbol in ambiguous:
-    assert symbol['locations'], symbol
-    references = equivalent({'op': 'references', 'symbol_id': symbol['id']})['result']
-    assert not references.get('occurrences'), references
+    assert_csharp_support(symbol)
+for target in sorted(CS_TARGETS):
+    ambiguous = equivalent({'op': 'symbols', 'name': 'AmbiguousInvocationTarget', 'target': target})['result']['symbols']
+    assert len(ambiguous) == 2, (target, ambiguous)
+    for symbol in ambiguous:
+        assert symbol['locations'], symbol
+        references = equivalent({'op': 'references', 'symbol_id': symbol['id'], 'target': target})['result']
+        assert not references.get('occurrences'), references
 
 # Inference is compiler-backed and never writes a synthetic tsconfig.
 broken.unlink()

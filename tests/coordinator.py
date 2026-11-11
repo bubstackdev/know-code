@@ -10,6 +10,8 @@ import sqlite3
 import subprocess
 import time
 
+from index_paths import physical_database
+
 ROOT = Path(__file__).resolve().parents[1]
 RUN = ROOT / '.artifacts/cd' / hex(time.time_ns())[-10:]
 WORKSPACE = RUN / 'workspace'
@@ -75,7 +77,7 @@ print('coordinator: initial registration ready', flush=True)
 def query(request):
     return json.loads(run([HOST, 'query', DATABASE, json.dumps(request)]).stdout)
 def owners():
-    with sqlite3.connect(DATABASE) as connection:
+    with sqlite3.connect(physical_database(DATABASE)) as connection:
         return dict(connection.execute('SELECT compilation_id,owner_generation FROM generation_units WHERE generation=(SELECT current_generation FROM state)'))
 def source_text(name):
     result = query({'op': 'symbols', 'name': name})['result']
