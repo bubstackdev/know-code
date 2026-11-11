@@ -5,6 +5,7 @@ unsupported TS version in this owned fixture. No SDK installation or builds run
 here; the coordinator performs its normal trusted compiler analysis.
 """
 from pathlib import Path
+from fixture_trust import grant_fixture
 import atexit,hashlib,json,os,shutil,subprocess,time,traceback
 ROOT=Path(__file__).resolve().parents[1];RUN=ROOT/'.artifacts/pf'/format(time.time_ns(),'x')[-9:]
 WORK=RUN/'w';DATA=RUN/'d';SCOPE=RUN/'s';WORK.mkdir(parents=True)
@@ -118,8 +119,9 @@ try:
   'package_lock_sha256':sha(OLD_TS/'package-lock.json'),'version':json.loads((OLD_TS/'node_modules/typescript/package.json').read_text())['version']}
  assert DETAILS['unsupported_compiler']['version']=='5.8.3'
  PHASE='managed_analysis'
+ grant_fixture(HOST,WORK,ENV,RUN,RUN/'fixture-trust.jsonl',runner=run)
  registration=value('watch',WORK);database=registration['database']
- value('trust',WORK);initial=ready()
+ initial=ready()
  assert symbols('TsRecoverableOld') and symbols('CsRecoverableOld')
  first=coverage();DETAILS['initial_coverage']=first
  assert any(c['project_path']=='ts/old-version/tsconfig.json' and c['status']=='unavailable' and any(d['code']=='unsupported_compiler' for d in c.get('diagnostics',[])) for c in first),first
