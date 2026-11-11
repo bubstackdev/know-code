@@ -3390,6 +3390,12 @@ mod live_lifetime_tests {
         retry.identity = workspace::identity(&retry.root).unwrap();
         retry.inputs = inputs;
         retry.cancel_baseline = false;
+        settings::set_project_execution(
+            &retry.root,
+            control::root_for_database(Path::new(&retry.database)).unwrap(),
+            true,
+        )
+        .unwrap();
         retry.previous_failed_input_hash = hash.clone();
         let mut next_hash = String::new();
         let error = execute(
@@ -3728,6 +3734,12 @@ mod live_lifetime_tests {
         retry.identity = workspace::identity(&retry.root).unwrap();
         retry.inputs = inputs;
         retry.cancel_baseline = false;
+        settings::set_project_execution(
+            &retry.root,
+            control::root_for_database(Path::new(&retry.database)).unwrap(),
+            true,
+        )
+        .unwrap();
         retry.previous_generation = generation;
         retry.previous_failed_input_hash = hash.clone();
         let mut retry_hash = String::new();
@@ -4030,6 +4042,12 @@ mod live_lifetime_tests {
             job.recovery_explicit = previous_failure;
             job.previous_error.clear();
             job.previous_error_code.clear();
+            settings::set_project_execution(
+                &job.root,
+                control::root_for_database(Path::new(&job.database)).unwrap(),
+                true,
+            )
+            .unwrap();
             let database = PathBuf::from(&job.database);
             std::fs::create_dir_all(database.parent().unwrap()).unwrap();
             let connection = Connection::open(&database).unwrap();
