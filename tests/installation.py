@@ -2,9 +2,12 @@
 from pathlib import Path
 import argparse, atexit, hashlib, json, os, plistlib, shutil, sqlite3, subprocess, tarfile, time
 
+from index_paths import physical_database
+
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('packages', type=Path)
+parser.add_argument('--prior-packages', type=Path, help='certified real lifecycle1 runtime archives for isolated no-login upgrade/rollback checks')
 parser.add_argument('--prefix', type=Path, required=True, help='new durable test directory outside checkout')
 args = parser.parse_args()
 RUN = args.prefix.resolve()
@@ -22,22 +25,55 @@ ENV = dict(os.environ, HOME=str(HOME), KNOW_CODE_DATA_DIR=str(DATA), DOTNET_CLI_
 for key in ['KNOW_CODE_RUNTIME_DIR', 'KNOW_CODE_COORDINATOR', 'NODE_PATH', 'NODE_OPTIONS']:
     ENV.pop(key, None)
 checks = []
+PRIOR_CONTEXT = None
+EVIDENCE = {
+    'harness_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    'index_paths_sha256': hashlib.sha256((ROOT/'tests/index_paths.py').read_bytes()).hexdigest(),
+    'commands': str(RUN/'commands.jsonl'),
+}
 
-def command(*argv, check=True, timeout=65):
-    result = subprocess.run(list(map(str, argv)), cwd=RUN, env=ENV, text=True, capture_output=True, timeout=timeout)
+def command(*argv, check=True, timeout=65, env=ENV):
+    argv = list(map(str, argv))
+    started = time.time_ns()
+    try:
+        result = subprocess.run(argv, cwd=RUN, env=env, text=True, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        output = {key: value.decode(errors='replace') if isinstance(value, bytes) else value
+                  for key, value in [('stdout', error.stdout), ('stderr', error.stderr)]}
+        with (RUN/'commands.jsonl').open('a') as log:
+            log.write(json.dumps(dict(argv=argv, started_ns=started, finished_ns=time.time_ns(), timed_out=True, **output))+'\n')
+        raise
+    with (RUN/'commands.jsonl').open('a') as log:
+        log.write(json.dumps({'argv': argv, 'started_ns': started, 'finished_ns': time.time_ns(),
+                             'home': env['HOME'], 'data': env['KNOW_CODE_DATA_DIR'],
+                             'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})+'\n')
     assert not check or result.returncode == 0, (argv, result.returncode, result.stdout, result.stderr)
     return result
 
 def record(name):
     checks.append(name)
-    (RUN/'validation.json').write_text(json.dumps({'checks': checks, 'label': LABEL, 'prefix': str(PREFIX)}, indent=2)+'\n')
+    (RUN/'validation.json').write_text(json.dumps({'checks': checks, 'label': LABEL, 'prefix': str(PREFIX),
+                                                 'evidence': EVIDENCE}, indent=2)+'\n')
     print('installation:', name, flush=True)
 
-archive = next(args.packages.resolve().glob('know-code-runtime-*.tar.gz'))
-with tarfile.open(archive) as tar:
-    assert all(not Path(m.name).is_absolute() and '..' not in Path(m.name).parts and not m.issym() for m in tar.getmembers())
-    tar.extractall(RUN/'source', filter='data')
-A = next((RUN/'source').glob('know-code-*'))
+def extract_runtime(packages, destination):
+    packages = packages.resolve()
+    manifest_file = packages/'manifest.json'
+    manifest = json.loads(manifest_file.read_text())
+    archive = next(packages.glob('know-code-runtime-*.tar.gz'))
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    artifact = next(item for item in manifest['artifacts'] if item['file'] == archive.name)
+    assert digest == artifact['sha256'] and archive.stat().st_size == artifact['bytes'], artifact
+    with tarfile.open(archive) as tar:
+        assert all(not Path(m.name).is_absolute() and '..' not in Path(m.name).parts and not m.issym() for m in tar.getmembers())
+        tar.extractall(destination, filter='data')
+    return next(destination.glob('know-code-*')), {
+        'packages': str(packages), 'runtime_archive': str(archive), 'runtime_sha256': digest,
+        'manifest_sha256': hashlib.sha256(manifest_file.read_bytes()).hexdigest(),
+        'source_revision': manifest['source_revision'], 'build_provenance': manifest['build_provenance'],
+    }
+
+A, EVIDENCE['candidate'] = extract_runtime(args.packages, RUN/'source')
 HOST = A/'bin/know-code'
 LAUNCHER = PREFIX/'bin/know-code'
 PLIST = HOME/'Library/LaunchAgents'/f'{LABEL}.plist'
@@ -50,13 +86,13 @@ def lifecycle(*args, check=True):
 def info():
     return json.loads(lifecycle('install-info').stdout)
 
-def status():
-    return json.loads(command(LAUNCHER, 'coordinator', 'status').stdout)['workspaces']
+def status(launcher=LAUNCHER, env=ENV):
+    return json.loads(command(launcher, 'coordinator', 'status', env=env).stdout)['workspaces']
 
-def wait(predicate, description, seconds=30):
+def wait(predicate, description, seconds=30, launcher=LAUNCHER, env=ENV):
     until = time.monotonic()+seconds
     while time.monotonic() < until:
-        value = status()
+        value = status(launcher, env)
         if predicate(value):
             return value
         time.sleep(.05)
@@ -67,6 +103,12 @@ def cleanup():
     # Only this test's randomly named login job and separate data directory.
     subprocess.run(['/bin/launchctl', 'bootout', SERVICE], capture_output=True)
     command(HOST, 'coordinator', 'stop', check=False)
+    if PRIOR_CONTEXT:
+        prior_host, prior_env = PRIOR_CONTEXT
+        # Exactly one normal client matches whichever isolated coordinator is
+        # selected after a failed assertion. Neither can address live state.
+        for binary in [HOST, prior_host]:
+            command(binary, 'coordinator', 'stop', check=False, env=prior_env)
 atexit.register(cleanup)
 
 # Observe real development service without ever modifying it.
@@ -75,6 +117,134 @@ def development_pid():
     p = subprocess.run(['/bin/launchctl', 'print', DEV], text=True, capture_output=True)
     return next((l.strip() for l in p.stdout.splitlines() if l.strip().startswith('pid = ')), None)
 before_dev = development_pid()
+EVIDENCE['candidate']['runtime_info'] = json.loads(command(HOST, 'runtime-info').stdout)
+assert EVIDENCE['candidate']['runtime_info']['index_lifecycle_version'] == 2
+EVIDENCE['candidate']['host_sha256'] = hashlib.sha256(HOST.read_bytes()).hexdigest()
+
+# Simulate a matching-contract runtime that cannot start its coordinator.
+BAD = RUN/'candidate-fails-start'
+shutil.copytree(A, BAD)
+binary = BAD/'bin/know-code'
+binary.rename(binary.with_name('know-code-real'))
+binary.write_text('#!/bin/sh\nif [ "$1" = coordinator ]; then exit 23; fi\nexec "$(dirname "$0")/know-code-real" "$@"\n')
+binary.chmod(0o755)
+EVIDENCE['failed_start_candidate'] = {'path': str(BAD), 'wrapper_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                                       'runtime_binary_sha256': hashlib.sha256(binary.with_name('know-code-real').read_bytes()).hexdigest()}
+
+def prior_lifecycle_upgrade():
+    global PRIOR_CONTEXT
+    prior = RUN/'prior'
+    prior_home = prior/'home'
+    prior_home.mkdir(parents=True)
+    prior_prefix = prior_home/'.local'
+    prior_data = prior/'d'
+    prior_work = prior/'w'
+    prior_work.mkdir()
+    prior_env = dict(ENV, HOME=str(prior_home), KNOW_CODE_DATA_DIR=str(prior_data))
+    prior_bundle, evidence = extract_runtime(args.prior_packages, prior/'source')
+    EVIDENCE['prior'] = evidence
+    prior_host = prior_bundle/'bin/know-code'
+    prior_launcher = prior_prefix/'bin/know-code'
+    prior_label = LABEL+'.prior'
+    prior_plist = prior_home/'Library/LaunchAgents'/f'{prior_label}.plist'
+    PRIOR_CONTEXT = (prior_host, prior_env)
+    evidence.update(prefix=str(prior_prefix), data=str(prior_data), workspace=str(prior_work), label=prior_label,
+                    runtime_info=json.loads(command(prior_host, 'runtime-info', env=prior_env).stdout),
+                    host_sha256=hashlib.sha256(prior_host.read_bytes()).hexdigest())
+    assert evidence['runtime_info']['index_lifecycle_version'] == 1, evidence
+    command(prior_host, 'install', '--from', prior_bundle, '--prefix', prior_prefix,
+            '--label', prior_label, '--no-login', env=prior_env)
+
+    def prior_info(binary=HOST):
+        return json.loads(command(binary, 'install-info', '--prefix', prior_prefix, env=prior_env).stdout)
+
+    def prior_wait(after=1):
+        return wait(lambda rows: len(rows)==1 and rows[0]['phase']=='idle'
+                    and rows[0]['observed_epoch']==rows[0]['published_epoch'] and rows[0]['generation']>=after,
+                    'prior-runtime saved publication', launcher=prior_launcher, env=prior_env)[0]
+
+    (prior_work/'value.ts').write_text('export function priorAnswer() { return 42; }\n')
+    (prior_work/'tsconfig.json').write_text('{"compilerOptions":{"strict":true,"noEmit":true},"files":["value.ts"]}')
+    registered = json.loads(command(prior_launcher, 'watch', prior_work, env=prior_env).stdout)
+    database = registered['database']
+    selector = Path(database).with_suffix('.lifecycle.json')
+    initial = prior_wait()
+    request = '{"op":"symbols","name":"priorAnswer","freshness_wait_ms":0}'
+
+    def prior_query(binary=prior_launcher):
+        envelope = json.loads(command(binary, 'query', database, request, env=prior_env).stdout)
+        assert envelope.get('result', {}).get('symbols') and envelope['result']['freshness']=='current', envelope
+        return envelope['result']
+
+    prior_query(prior_host)
+    old_info = prior_info(prior_host)
+    old = old_info['selected']
+    assert old_info['previous'] is None and not old_info['login_enabled'] and not old_info['login_loaded']
+    assert not prior_plist.exists() and json.loads(selector.read_text())['version']==1
+    evidence.update(database=database, initial_generation=initial['generation'], selected_prior=old)
+    record('prior_lifecycle1_real_runtime_and_compiler_graph_without_login')
+
+    # This real new runtime reports lifecycle2, then its owned wrapper fails
+    # before coordinator startup can write a lifecycle2 receipt.
+    receipt = selector.read_bytes()
+    failed = command(HOST, 'update', '--from', BAD, '--prefix', prior_prefix, env=prior_env, check=False)
+    assert failed.returncode and 'previous selection restored' in failed.stderr, failed.stderr
+    restored = prior_info()
+    assert restored['selected']==old and restored['previous'] is None
+    assert not restored['login_enabled'] and not restored['login_loaded'] and not prior_plist.exists()
+    assert selector.read_bytes()==receipt and json.loads(selector.read_text())['version']==1
+    assert prior_wait()['generation']==initial['generation']
+    prior_query(prior_host)
+    evidence['failed_start'] = {'returncode': failed.returncode, 'stderr': failed.stderr,
+                                'unchanged_selector_sha256': hashlib.sha256(receipt).hexdigest()}
+    record('prior_lifecycle1_failed_start_restores_before_new_state_writes')
+
+    command(HOST, 'update', '--from', A, '--prefix', prior_prefix, env=prior_env)
+    selected = prior_info()
+    assert selected['selected']!=old and selected['previous']==old
+    assert not selected['login_enabled'] and not selected['login_loaded'] and not prior_plist.exists()
+    prior_wait()
+    prior_query()
+    assert json.loads(command(prior_launcher, 'runtime-info', env=prior_env).stdout)['index_lifecycle_version']==2
+    rejected = json.loads(command(prior_host, 'query', database, request, env=prior_env).stdout)
+    assert rejected.get('error', {}).get('code')=='update_required', rejected
+    previous_generation = prior_wait()['generation']
+    saved = 'export function priorAnswer() { return 43; }\n'
+    (prior_work/'value.ts').write_text(saved)
+    current = prior_wait(previous_generation+1)
+    found = prior_query()
+    assert found['generation']==current['generation'] and json.loads(selector.read_text())['version']==2
+    location = found['symbols'][0]['locations'][0]
+    source = json.loads(command(prior_launcher, 'query', database,
+                        json.dumps({'op':'source','artifact_id':location['artifact_id']}), env=prior_env).stdout)['result']['source']
+    assert source['text']==saved and source['content_hash']==hashlib.sha256(saved.encode()).hexdigest(), source
+    evidence.update(selected_current=selected['selected'], old_client_rejection=rejected,
+                    saved_generation=current['generation'], saved_source_sha256=source['content_hash'])
+    record('prior_lifecycle1_bridge_quiesces_then_lifecycle2_rejects_old_client_and_saves')
+
+    receipt = selector.read_bytes()
+    failed = command(HOST, 'rollback', '--prefix', prior_prefix, env=prior_env, check=False)
+    assert failed.returncode and 'index-lifecycle' in failed.stderr, failed.stderr
+    unchanged = prior_info()
+    assert unchanged['selected']==selected['selected'] and unchanged['previous']==old
+    assert not unchanged['login_enabled'] and not unchanged['login_loaded'] and not prior_plist.exists()
+    after_rollback = prior_query()
+    assert selector.read_bytes()==receipt and after_rollback['generation']==current['generation']
+    assert after_rollback['snapshot']==found['snapshot']
+    source_after = json.loads(command(prior_launcher, 'query', database,
+                            json.dumps({'op':'source','artifact_id':location['artifact_id']}), env=prior_env).stdout)['result']['source']
+    assert source_after==source, (source_after, source)
+    with sqlite3.connect(physical_database(database)) as connection:
+        assert connection.execute('SELECT current_generation FROM state').fetchone()[0]==current['generation']
+    evidence['refused_rollback'] = {'returncode': failed.returncode, 'stderr': failed.stderr,
+                                   'unchanged_selector_sha256': hashlib.sha256(receipt).hexdigest()}
+    command(HOST, 'uninstall', '--prefix', prior_prefix, env=prior_env)
+    assert not prior_launcher.is_symlink() and not prior_plist.exists() and not (prior_data/'c.sock').exists()
+    assert physical_database(database).is_file() and (prior_data/'registry.db').is_file()
+    record('prior_lifecycle1_rollback_refused_without_runtime_or_index_selection_change')
+
+if args.prior_packages:
+    prior_lifecycle_upgrade()
 
 lifecycle('install', '--from', A, '--label', LABEL)
 a = info()['selected']
@@ -147,13 +317,6 @@ lifecycle('rollback')
 assert info()['selected'] == b and info()['previous'] == a
 record('rollback_is_reversible')
 
-# Simulate a matching-contract runtime that cannot start its coordinator.
-BAD = RUN/'candidate-fails-start'
-shutil.copytree(A, BAD)
-binary = BAD/'bin/know-code'
-binary.rename(binary.with_name('know-code-real'))
-binary.write_text('#!/bin/sh\nif [ "$1" = coordinator ]; then exit 23; fi\nexec "$(dirname "$0")/know-code-real" "$@"\n')
-binary.chmod(0o755)
 failed = lifecycle('update', '--from', BAD, check=False)
 assert failed.returncode and 'previous selection restored' in failed.stderr, failed.stderr
 assert info()['selected'] == b and info()['previous'] == a and info()['login_loaded']
@@ -205,10 +368,10 @@ assert info()['login_enabled'] and info()['login_loaded']
 record('login_disable_and_enable')
 
 before = status()[0]['generation']
-assert DATA.exists() and Path(DATABASE).exists()
+assert DATA.exists() and physical_database(DATABASE).is_file()
 lifecycle('uninstall')
 assert not LAUNCHER.is_symlink() and not PLIST.exists() and not (PREFIX/'share/know-code/versions').exists()
-assert DATA.exists() and Path(DATABASE).exists() and (DATA/'registry.db').exists()
+assert DATA.exists() and physical_database(DATABASE).is_file() and (DATA/'registry.db').exists()
 assert not info()['installed']
 record('uninstall_retains_index_registry_and_settings')
 lifecycle('install', '--from', A, '--label', LABEL)
@@ -219,4 +382,9 @@ record('reinstall_reuses_retained_registration_and_index')
 lifecycle('uninstall')
 assert development_pid()==before_dev, 'development service was changed'
 record('development_service_left_unchanged')
+assert len(checks)==15+(4 if args.prior_packages else 0), checks
+result = {'passed': True, 'checks': checks, 'current_lifecycle_checks': 15,
+          'prior_lifecycle_checks': 4 if args.prior_packages else 0, 'artifacts': str(RUN),
+          'label': LABEL, 'prefix': str(PREFIX), 'evidence': EVIDENCE}
+(RUN/'validation.json').write_text(json.dumps(result, indent=2)+'\n')
 print(json.dumps({'passed': len(checks), 'artifacts': str(RUN)}), flush=True)
