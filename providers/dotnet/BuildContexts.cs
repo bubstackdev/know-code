@@ -69,19 +69,23 @@ sealed class BuildContexts
         var policy = request.AnalysisPolicy.Csharp;
         var candidates = policy.HasSolutionPath ? [policy.SolutionPath] : Discover(request.WorkspaceRoot).Take(2).ToArray();
         if (candidates.Length > 1)
-            throw new InvalidOperationException("multiple solution files require one workspace solution_path selection; no solution contexts were expanded");
+            throw new ProjectSetupException(request.WorkspaceRoot,"solution_selection_required","multiple solution files require one workspace solution_path selection; no solution contexts were expanded");
         if (candidates.Length == 0) return new(request, null, null);
         var selected = Path.GetFullPath(candidates[0]);
-        if (!File.Exists(selected)) throw new InvalidOperationException($"selected solution is unavailable: {selected}");
+        if (!File.Exists(selected)) throw new ProjectSetupException(selected,"solution_unavailable",$"selected solution is unavailable: {selected}");
         var source = selected;
         if (Path.GetExtension(selected).Equals(".slnf", StringComparison.OrdinalIgnoreCase))
         {
-            using var filter = JsonDocument.Parse(File.ReadAllText(selected));
-            source = Path.GetFullPath(filter.RootElement.GetProperty("solution").GetProperty("path").GetString()!
-                .Replace('\\', Path.DirectorySeparatorChar), Path.GetDirectoryName(selected)!);
+            try {
+                using var filter = JsonDocument.Parse(File.ReadAllText(selected));
+                source = Path.GetFullPath(filter.RootElement.GetProperty("solution").GetProperty("path").GetString()!
+                    .Replace('\\', Path.DirectorySeparatorChar), Path.GetDirectoryName(selected)!);
+            } catch(Exception error) when(error is JsonException or KeyNotFoundException or InvalidOperationException or IOException or UnauthorizedAccessException) {
+                throw new ProjectSetupException(selected,"invalid_solution_filter",error.Message,error);
+            }
         }
         if (Path.GetExtension(source) is not (".sln" or ".slnx"))
-            throw new InvalidOperationException($"selected file is not a supported .sln, .slnx or .slnf solution: {selected}");
+            throw new ProjectSetupException(selected,"unsupported_solution",$"selected file is not a supported .sln, .slnx or .slnf solution: {selected}");
         var configuration = policy.HasConfiguration ? policy.Configuration : null;
         var evaluated = await SdkMetadataClient.ReadSolution(source, configuration, sdkPath);
         var result = new BuildContexts(request, source, evaluated);

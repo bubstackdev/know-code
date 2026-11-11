@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.MSBuild;
 
 // Lazy inputs span one job. Only the active dependency closure stays in the
 // compiler workspace; shared contexts survive transitions until job disposal.
-sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metadataClient) : IDisposable
+sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metadataClient, IReadOnlySet<string>? unavailable = null) : IDisposable
 {
     private readonly AdhocWorkspace catalog = new();
     private readonly AdhocWorkspace active = new();
@@ -24,6 +24,8 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         async Task LoadKnownDependencies(string current)
         {
+            if (unavailable?.Contains(current) == true)
+                throw new ProjectSetupException(current,"dependency_context_unavailable",$"Compiler-selected project context is unavailable: {current}");
             if (loaded.Contains(current) || !visiting.Add(current)) return;
 
             var evaluated = await metadataClient.Read(current);
@@ -57,7 +59,10 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
                         }
                         known.Add(dependency);
                     }
-                    return await new MSBuildProjectLoader(loaderWorkspace, selectedProperties).LoadProjectInfoAsync(current, known);
+                    try { return await new MSBuildProjectLoader(loaderWorkspace, selectedProperties).LoadProjectInfoAsync(current, known); }
+                    catch(Exception error) when(error is Microsoft.Build.Exceptions.InvalidProjectFileException or IOException or UnauthorizedAccessException or InvalidOperationException) {
+                        throw new ProjectSetupException(current,"project_loading_failed",error.Message,error);
+                    }
                 }
                 var projects = await ReadInputs();
                 // Discover through Roslyn's actual compiler inputs. Reload only when
@@ -74,7 +79,7 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
                 var selected = new Dictionary<string, ProjectInfo>(StringComparer.Ordinal);
                 if (selectedTarget is not null)
                 {
-                    if (roots.Length != 1) throw new InvalidOperationException($"cannot select compiler project context for {current} ({selectedTarget})");
+                    if (roots.Length != 1) throw new ProjectSetupException(current,"project_context_unavailable",$"cannot select compiler project context for {current} ({selectedTarget})");
                     selected.Add(selectedTarget, roots[0]);
                 }
                 else
@@ -119,7 +124,24 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
                 foreach (var target in variants.Keys) await LoadVariants(target);
             loaded.Add(current);
         }
-        await LoadKnownDependencies(path);
+        var originalInputs=inputs.Keys.ToHashSet();var originalContexts=contexts.Keys.ToHashSet();
+        var originalMetadata=compilerMetadata.Keys.ToHashSet();var originalClasses=testClassifications.Keys.ToHashSet();
+        var originalLoaded=loaded.ToHashSet(StringComparer.Ordinal);var originalProjectInputs=projectInputs.Keys.ToHashSet(StringComparer.Ordinal);
+        var originalDiagnostics=diagnostics.Count;
+        try {await LoadKnownDependencies(path);}
+        catch(ProjectSetupException) {
+            // No facts have been emitted. Roll back only this failed lazy-load
+            // attempt; previously loaded healthy compiler contexts stay intact.
+            var solution=catalog.CurrentSolution;
+            foreach(var key in inputs.Keys.Where(key=>!originalInputs.Contains(key)).ToArray()) {inputs.Remove(key);solution=solution.RemoveProject(key);}
+            if(!catalog.TryApplyChanges(solution))throw new InvalidOperationException("cannot roll back failed compiler context load");
+            foreach(var key in contexts.Keys.Where(key=>!originalContexts.Contains(key)).ToArray())contexts.Remove(key);
+            foreach(var key in compilerMetadata.Keys.Where(key=>!originalMetadata.Contains(key)).ToArray())compilerMetadata.Remove(key);
+            foreach(var key in testClassifications.Keys.Where(key=>!originalClasses.Contains(key)).ToArray())testClassifications.Remove(key);
+            foreach(var key in projectInputs.Keys.Where(key=>!originalProjectInputs.Contains(key)).ToArray())projectInputs.Remove(key);
+            loaded.IntersectWith(originalLoaded);diagnostics.RemoveRange(originalDiagnostics,diagnostics.Count-originalDiagnostics);
+            throw;
+        }
     }
 
     private HashSet<ProjectId> Closure(string path, string target)

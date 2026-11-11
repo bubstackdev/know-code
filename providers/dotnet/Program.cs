@@ -36,27 +36,45 @@ try
         BuildContexts.Validate(request.Analyze);
         var projects = request.Analyze.Projects;
         if (projects.Count == 0) throw new InvalidOperationException("no C# projects requested");
-        var selected = await Tools.Dotnet(Path.GetDirectoryName(projects[0])!, "--version");
-        var sdkList = await Tools.Dotnet(request.Analyze.WorkspaceRoot, "--list-sdks");
-        var sdkLine = sdkList.Split('\n').FirstOrDefault(line => line.StartsWith(selected.Trim() + " [", StringComparison.Ordinal))
-            ?? throw new InvalidOperationException($"selected SDK {selected.Trim()} is not installed");
-        var sdkPath = Path.Combine(sdkLine[(sdkLine.IndexOf('[') + 1)..sdkLine.LastIndexOf(']')], selected.Trim());
-        var sdkCompiler = AssemblyName.GetAssemblyName(Path.Combine(sdkPath, "Roslyn/bincore/Microsoft.CodeAnalysis.CSharp.dll")).Version;
         var providerCompiler = typeof(CSharpCompilation).Assembly.GetName().Version;
-        if (sdkCompiler != providerCompiler)
-            throw new InvalidOperationException($"unsupported SDK compiler {sdkCompiler}; this provider uses Roslyn {providerCompiler}. Update the Know Code provider; no SDK fallback was used.");
-        var sdkSelections = new HashSet<string>(StringComparer.Ordinal) { Tools.SdkSelectionKey(projects[0]) };
-        foreach (var project in projects.Skip(1))
+        var sdkList = await Tools.Dotnet(request.Analyze.WorkspaceRoot, "--list-sdks");
+        var sdkSelections = new Dictionary<string,string>(StringComparer.Ordinal);
+        var setupFailures = new List<ProjectSetupException>();
+        var supported = new List<string>();
+        string? selected = null, sdkPath = null;
+        foreach (var project in projects)
         {
-            if (!sdkSelections.Add(Tools.SdkSelectionKey(project))) continue;
-            var version = await Tools.Dotnet(Path.GetDirectoryName(project)!, "--version");
-            if (version.Trim() != selected.Trim())
-                throw new InvalidOperationException("multiple SDK selections in one workspace require separate worker sessions; unsupported in this first slice");
+            try {
+                var key = Tools.SdkSelectionKey(project);
+                if (!sdkSelections.TryGetValue(key,out var version)) {
+                    try { version = (await Tools.Dotnet(Path.GetDirectoryName(project)!,"--version")).Trim(); }
+                    catch (InvalidOperationException error) { throw new ProjectSetupException(project,"sdk_unavailable",error.Message,error); }
+                    sdkSelections.Add(key,version);
+                }
+                var sdkLine = sdkList.Split('\n').FirstOrDefault(line => line.StartsWith(version + " [",StringComparison.Ordinal))
+                    ?? throw new ProjectSetupException(project,"sdk_unavailable",$"selected SDK {version} is not installed; no fallback was used");
+                var candidate = Path.Combine(sdkLine[(sdkLine.IndexOf('[')+1)..sdkLine.LastIndexOf(']')],version);
+                Version? compiler;
+                try { compiler = AssemblyName.GetAssemblyName(Path.Combine(candidate,"Roslyn/bincore/Microsoft.CodeAnalysis.CSharp.dll")).Version; }
+                catch (Exception error) when(error is IOException or BadImageFormatException) {
+                    throw new ProjectSetupException(project,"sdk_compiler_unavailable",error.Message,error);
+                }
+                if (compiler != providerCompiler) throw new ProjectSetupException(project,"unsupported_compiler",
+                    $"unsupported SDK compiler {compiler}; this provider uses Roslyn {providerCompiler}; no SDK substitution was made");
+                if (selected is not null && version != selected) throw new ProjectSetupException(project,"sdk_context_unavailable",
+                    $"SDK {version} requires a separate worker session from {selected}; this context is unavailable, not substituted");
+                selected ??= version;sdkPath ??= candidate;supported.Add(project);
+            } catch(ProjectSetupException error) { setupFailures.Add(error); }
         }
-        MSBuildLocator.RegisterMSBuildPath(sdkPath);
-        Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected.Trim()}", RuntimeVersion = Environment.Version.ToString(), AnalysisPolicyVersion = request.Analyze.AnalysisPolicy is null ? 0u : 1u,
+        Wire.Send(new Envelope { Provider = new ProviderInfo { Language = "csharp", CompilerVersion = $"Roslyn {providerCompiler}; SDK {selected ?? "unavailable"}", RuntimeVersion = Environment.Version.ToString(), AnalysisPolicyVersion = request.Analyze.AnalysisPolicy is null ? 0u : 1u,
             TestClassificationPolicy = request.Analyze.TestClassificationPolicy, TargetEquivalencePolicy = request.Analyze.TargetEquivalencePolicy } });
-        await Analysis.Run(request.Analyze, selected.Trim(), sdkPath);
+        foreach(var error in setupFailures) ProjectFailures.Emit(request.Analyze,error);
+        if (supported.Count != 0) {
+            MSBuildLocator.RegisterMSBuildPath(sdkPath!);
+            var selectedRequest = request.Analyze.Clone();selectedRequest.Projects.Clear();selectedRequest.Projects.AddRange(supported);
+            await Analysis.Run(selectedRequest,selected!,sdkPath!,setupFailures.Select(error=>error.ProjectPath).ToHashSet(StringComparer.Ordinal));
+        }
+
     }
     Wire.Send(new Envelope { Complete = new Completion { Success = true } });
 }
@@ -95,6 +113,11 @@ static class Wire
         envelope.ProtocolVersion = ProtocolVersion;
         envelope.JobId = JobId;
         lock (Gate) Write(Output, envelope);
+    }
+    public static bool CanSend(Envelope envelope)
+    {
+        envelope.ProtocolVersion=ProtocolVersion;envelope.JobId=JobId;
+        return envelope.CalculateSize() is > 0 and <= MaxFrame;
     }
     public static void Write(Stream output, Envelope envelope)
     {
@@ -160,53 +183,53 @@ static class Tools
 
 static partial class Analysis
 {
-    public static async Task Run(AnalyzeRequest request, string sdkVersion, string sdkPath)
+    public static async Task Run(AnalyzeRequest request, string sdkVersion, string sdkPath, IReadOnlySet<string>? unavailable = null)
     {
-        var contexts = await BuildContexts.Create(request, sdkPath);
-        var metadata = new SdkMetadataClient(contexts, sdkPath);
-        var preparationErrors = new Dictionary<string, string>(StringComparer.Ordinal);
-        // Finish restoration before caching any compiler inputs or identity metadata.
-        foreach (var projectPath in request.Projects)
-        {
-            var key = $"nuget:{projectPath}";
-            var globals = contexts.Properties(projectPath);
-            var plan = await metadata.Read(projectPath, includeIdentity: false);
-            var fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
-                JsonSerializer.Serialize(new { request.PreparationFingerprint, sdkVersion,
-                    configuration = plan.Definition["Configuration"], platform = plan.Definition["Platform"],
-                    assets = plan.Targets.Select(t => t.AssetsFile).ToArray(), globals = globals.OrderBy(p => p.Key).ToArray() }))));
-            var previous = request.Preparations.FirstOrDefault(p => p.Key == key && p.Fingerprint == fingerprint);
-            var preparationError = "";
-            if (previous is not null && !request.RetryPreparation && (!previous.Succeeded || previous.Outputs.Count > 0 && previous.Outputs.All(File.Exists)))
-                preparationError = previous.Error;
-            else
-            {
-                var assets = plan.Targets.Select(t => t.AssetsFile).ToHashSet(StringComparer.Ordinal);
-                if (previous?.Succeeded != true || request.RetryPreparation || assets.Any(p => !File.Exists(p)))
-                {
-                    Wire.Send(new Envelope { Progress = new Progress { Stage = "restoring", ProjectPath = projectPath, Message = "Restoring NuGet dependencies for all declared targets" } });
-                    try { await Tools.Restore(request.WorkspaceRoot, ["restore", projectPath, "--nologo",
-                        .. globals.Select(p => $"-property:{p.Key}={Microsoft.Build.Evaluation.ProjectCollection.Escape(p.Value)}")]); }
-                    catch (InvalidOperationException error) { preparationError = error.Message; }
+        BuildContexts contexts;
+        try { contexts = await BuildContexts.Create(request,sdkPath); }
+        catch(ProjectSetupException error) {
+            foreach(var project in request.Projects) ProjectFailures.Emit(request,new ProjectSetupException(project,error.Code,error.Message,error));
+            return;
+        }
+        var metadata = new SdkMetadataClient(contexts,sdkPath);
+        var preparationErrors = new Dictionary<string,string>(StringComparer.Ordinal);
+        var blocked = unavailable is null ? new HashSet<string>(StringComparer.Ordinal) : new HashSet<string>(unavailable,StringComparer.Ordinal);
+        foreach(var projectPath in request.Projects) {
+            try {
+                var key=$"nuget:{projectPath}";var globals=contexts.Properties(projectPath);
+                var plan=await metadata.Read(projectPath,includeIdentity:false);
+                var fingerprint=Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+                    JsonSerializer.Serialize(new { request.PreparationFingerprint, sdkVersion,
+                        configuration = plan.Definition["Configuration"], platform = plan.Definition["Platform"],
+                        assets = plan.Targets.Select(t => t.AssetsFile).ToArray(), globals = globals.OrderBy(p => p.Key).ToArray() }))));
+                var previous=request.Preparations.FirstOrDefault(p=>p.Key==key);var preparationError="";
+                if(previous?.Fingerprint==fingerprint&&!request.RetryPreparation&&(!previous.Succeeded||previous.Outputs.Count>0&&previous.Outputs.All(File.Exists)))
+                    preparationError=previous.Error;
+                else {
+                    var assets=plan.Targets.Select(t=>t.AssetsFile).ToHashSet(StringComparer.Ordinal);
+                    if(previous?.Succeeded!=true||request.RetryPreparation||assets.Any(p=>!File.Exists(p))) {
+                        Wire.Send(new Envelope {Progress=new Progress {Stage="restoring",ProjectPath=projectPath,Message="Restoring NuGet dependencies for all declared targets"}});
+                        try {await Tools.Restore(request.WorkspaceRoot,["restore",projectPath,"--nologo",
+                            ..globals.Select(p=>$"-property:{p.Key}={Microsoft.Build.Evaluation.ProjectCollection.Escape(p.Value)}")]);}
+                        catch(InvalidOperationException error) {preparationError=ProjectFailures.Bounded(error.Message);}
+                    }
+                    Wire.Send(new Envelope {Preparation=new PreparationResult {Key=key,Fingerprint=fingerprint,Succeeded=preparationError.Length==0,Error=preparationError,Outputs={assets}}});
                 }
-                if (preparationError.Length > 4096) preparationError = preparationError[^4096..];
-                Wire.Send(new Envelope { Preparation = new PreparationResult { Key = key, Fingerprint = fingerprint,
-                    Succeeded = preparationError.Length == 0, Error = preparationError, Outputs = { assets } } });
-            }
-            preparationErrors.Add(projectPath, preparationError);
+                preparationErrors.Add(projectPath,preparationError);
+            } catch(ProjectSetupException error) {blocked.Add(projectPath);ProjectFailures.Emit(request,error);}
         }
-        using var catalog = new ProjectCatalog(contexts, metadata);
-        var requested = new List<(string Path, string Target)>();
-        foreach (var projectPath in request.Projects)
-        {
-            var evaluated = await metadata.Read(projectPath);
-            await catalog.Load(projectPath);
-            requested.AddRange(evaluated.Targets.Select(t => (projectPath, t.Target)));
+        using var catalog=new ProjectCatalog(contexts,metadata,blocked);
+        var requested=new List<(string Path,string Target)>();
+        foreach(var projectPath in request.Projects.Where(project=>!blocked.Contains(project))) {
+            try {
+                var evaluated=await metadata.Read(projectPath);await catalog.Load(projectPath);
+                requested.AddRange(evaluated.Targets.Select(t=>(projectPath,t.Target)));
+            } catch(ProjectSetupException error) {blocked.Add(projectPath);ProjectFailures.Emit(request,new ProjectSetupException(projectPath,error.Code,error.Message,error));}
         }
-        foreach (var (projectPath, target) in catalog.Schedule(requested))
-        {
-            Wire.Send(new Envelope { Progress = new Progress { Stage = "analyzing", ProjectPath = projectPath, Message = $"Analyzing {target} ({contexts.Origin(projectPath)})" } });
-            await Project(request, projectPath, target, sdkVersion, preparationErrors[projectPath], catalog);
+        foreach(var(projectPath,target) in catalog.Schedule(requested)) {
+            Wire.Send(new Envelope {Progress=new Progress {Stage="analyzing",ProjectPath=projectPath,Message=$"Analyzing {target} ({contexts.Origin(projectPath)})"}});
+            try {await Project(request,projectPath,target,sdkVersion,preparationErrors[projectPath],catalog);}
+            catch(ProjectSetupException error) {ProjectFailures.Emit(request,new ProjectSetupException(projectPath,error.Code,error.Message,error),target);}
         }
     }
 
@@ -225,7 +248,7 @@ static partial class Analysis
         var diagnostics = new List<Diagnostic>();
         if (preparationError.Length > 0) diagnostics.Add(new Diagnostic { Code = "dependency_restore_failed", Severity = "error", Message = preparationError, Path = projectPath });
         diagnostics.AddRange(opened.Diagnostics.Select(d => new Diagnostic { Code = "project_loading", Severity = d.Kind == WorkspaceDiagnosticKind.Failure ? "error" : "warning", Message = d.Message }));
-        var compilation = await project.GetCompilationAsync() ?? throw new InvalidOperationException($"compilation unavailable for {projectPath} ({target})");
+        var compilation = await project.GetCompilationAsync() ?? throw new ProjectSetupException(projectPath,"compilation_unavailable",$"compilation unavailable for {projectPath} ({target})");
         var projectLinks = await ProjectLinks.Create(project, compilation, catalog, request, sdkVersion);
         Wire.Send(new Envelope { Compilation = new KnowCode.Protocol.Compilation {
             InputFingerprint = projectLinks.Fingerprint, References = {projectLinks.References},
@@ -247,6 +270,7 @@ static partial class Analysis
         documents.AddRange(project.Documents.Select(d => (d, GeneratedFile(d.FilePath))));
         documents.AddRange((await project.GetSourceGeneratedDocumentsAsync()).Select(d => ((Document)d, true)));
         var sources = new Dictionary<SyntaxTree, string>();
+        var omittedSourceCount=0;
         foreach (var (document, generated) in documents)
         {
             var tree = await document.GetSyntaxTreeAsync();
@@ -259,9 +283,17 @@ static partial class Analysis
                 : Path.GetRelativePath(request.WorkspaceRoot, document.FilePath ?? document.Name);
             name = name.Replace('\\', '/');
             var artifact = $"{name}@{hash}";
-            sources.Add(tree, artifact);
-            Wire.Send(new Envelope { Source = new SourceArtifact { Id = artifact, Path = name, Utf8 = ByteString.CopyFrom(utf8), Sha256 = hash, Generated = generated, CompilationId = id } });
+            var payload=new Envelope {Source=new SourceArtifact {Id=artifact,Path=name,Utf8=ByteString.CopyFrom(utf8),Sha256=hash,Generated=generated,CompilationId=id}};
+            if(!Wire.CanSend(payload)) {
+                omittedSourceCount++;
+                if(omittedSourceCount<=100)diagnostics.Add(new Diagnostic {Code="artifact_too_large",Severity="warning",Path=ProjectFailures.Bounded(name),
+                    Message=$"Saved source has {utf8.Length} UTF-8 bytes and its encoded artifact exceeds the {Wire.MaxFrame}-byte worker frame; body and facts omitted."});
+                continue;
+            }
+            sources.Add(tree,artifact);Wire.Send(payload);
         }
+        if(omittedSourceCount>100)diagnostics.Add(new Diagnostic {Code="artifacts_omitted",Severity="warning",
+            Message=$"{omittedSourceCount} source artifacts exceed the worker frame; first 100 paths reported."});
         var emitter = new Emitter(id, sources, projectLinks, request.TargetEquivalencePolicy, compilation.Assembly);
         foreach (var (tree, artifactId) in sources)
         {
@@ -305,7 +337,7 @@ static partial class Analysis
             .Select(d => new Diagnostic { Code = d.Id, Severity = d.Severity == DiagnosticSeverity.Error ? "error" : "warning", Message = d.GetMessage(), Path = d.Location.SourceTree?.FilePath ?? "" }));
         if (compilerDiagnostics.Length > 100) diagnostics.Add(new Diagnostic { Code = "diagnostics_truncated", Severity = "info", Message = $"{compilerDiagnostics.Length} diagnostics; at most 100 included." });
         var report = new AnalysisReport { CompilationId = id,
-            Status = compilerDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) || diagnostics.Any(d => d.Code == "project_loading" || d.Severity == "error") ? "partial" : "complete" };
+            Status = compilerDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) || diagnostics.Any(d => (d.Code is "project_loading" or "artifact_too_large") || d.Severity == "error") ? "partial" : "complete" };
         report.Capabilities.Add("calls", "partial");
         report.Capabilities.Add("dependencies", "partial");
         report.Capabilities.Add("dispatch", "partial");

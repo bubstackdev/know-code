@@ -37,6 +37,7 @@ sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
         using var process = Process.Start(info) ?? throw new InvalidOperationException("cannot start SDK metadata helper; install the required .NET runtime");
         var errors = Tools.Capture(process.StandardError, false, info.WorkingDirectory, 4096);
         SdkMetadataResult? result = null;
+        ProjectSetupException? setupError = null;
         var completed = false;
         try
         {
@@ -55,7 +56,11 @@ sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
                         throw new InvalidDataException("update required: incompatible SDK metadata helper");
                     if (completed) throw new InvalidDataException("SDK metadata arrived after completion");
                     if (message.Progress is not null) Wire.Send(message);
-                    else if (message.SdkMetadataResult is not null && result is null) result = message.SdkMetadataResult;
+                    else if (message.SdkMetadataResult is not null && result is null && setupError is null) result = message.SdkMetadataResult;
+                    else if (message.Report is { Status:"failed" } report && result is null && setupError is null
+                        && report.CompilationId == path && report.Capabilities.TryGetValue("project_setup",out var availability) && availability == "unavailable"
+                        && report.Diagnostics.Count == 1)
+                        setupError = new ProjectSetupException(path,report.Diagnostics[0].Code,report.Diagnostics[0].Message);
                     else if (message.Complete?.Success == true) completed = true;
                     else throw new InvalidDataException("unexpected SDK metadata helper message");
                 }
@@ -64,6 +69,7 @@ sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
             var details = await errors;
             if (process.ExitCode != 0)
                 throw new InvalidOperationException($"SDK metadata failed for {path} ({process.ExitCode}): {details}");
+            if (completed && setupError is not null) throw setupError;
             if (!completed || result is null) throw new InvalidDataException($"SDK metadata incomplete for {path}: {details}");
             return result;
         }
@@ -110,7 +116,7 @@ static class SdkMetadataServer
             var frameworks = result.Definition["TargetFrameworks"];
             if (string.IsNullOrWhiteSpace(frameworks)) frameworks = result.Definition["TargetFramework"];
             var targets = frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
-            if (targets.Length == 0) throw new InvalidOperationException($"cannot determine target frameworks for {request.ProjectPath}");
+            if (targets.Length == 0) throw new ProjectSetupException(request.ProjectPath,"target_context_unavailable",$"cannot determine target frameworks for {request.ProjectPath}");
             foreach (var target in targets)
             {
                 // Fresh evaluation/built state for every inner context. Metadata
@@ -140,7 +146,7 @@ static class SdkMetadataServer
                         DiscardBuildResults = true, Loggers = [logger]
                     }, new BuildRequestData(state, ["GetAssemblyVersion"], null, BuildRequestDataFlags.ProvideProjectStateAfterBuild));
                     if (built.OverallResult != BuildResultCode.Success || built.ProjectStateAfterBuild is null)
-                        throw new InvalidOperationException($"GetAssemblyVersion failed for {request.ProjectPath} ({target}): {logger.Text}", built.Exception);
+                        throw new ProjectSetupException(request.ProjectPath,"project_evaluation_failed",$"GetAssemblyVersion failed for {request.ProjectPath} ({target}): {logger.Text}",built.Exception);
                     foreach (var name in new[] { "Version", "AssemblyVersion", "FileVersion", "InformationalVersion" })
                         metadata.Identity.Add(name, built.ProjectStateAfterBuild.GetPropertyValue(name));
                     classificationState = built.ProjectStateAfterBuild;
@@ -159,6 +165,12 @@ static class SdkMetadataServer
             result.Definition.Add("KnowCodeInputPaths", System.Text.Json.JsonSerializer.Serialize(inputPaths.Order(StringComparer.Ordinal)));
             Wire.Send(new Envelope { SdkMetadataResult = result });
         }
+        catch(ProjectSetupException error) {
+            Wire.Send(new Envelope {Report=ProjectFailures.SetupReport(error,request.ProjectPath)});
+        }
+        catch(Exception error) when(error is Microsoft.Build.Exceptions.InvalidProjectFileException or IOException or UnauthorizedAccessException) {
+            Wire.Send(new Envelope {Report=ProjectFailures.SetupReport(new ProjectSetupException(request.ProjectPath,"project_evaluation_failed",error.Message,error),request.ProjectPath)});
+        }
         finally { collection.UnloadAllProjects(); }
     }
 
@@ -175,7 +187,7 @@ static class SdkMetadataServer
         }, new BuildRequestData(path, globals.ToDictionary(p => p.Key, p => (string?)p.Value), null, ["ValidateSolutionConfiguration"], null,
             BuildRequestDataFlags.ProvideProjectStateAfterBuild));
         if (evaluated.OverallResult != BuildResultCode.Success || evaluated.ProjectStateAfterBuild is not { } state)
-            throw new InvalidOperationException($"solution evaluation failed for {path}: {logger.Text}", evaluated.Exception);
+            throw new ProjectSetupException(path,"solution_evaluation_failed",$"solution evaluation failed for {path}: {logger.Text}",evaluated.Exception);
         var result = new SdkMetadataResult();
         foreach (var name in BuildContexts.SolutionPropertyNames.Concat(["Configuration", "Platform"]))
             result.Definition.Add(name, name == "BuildingSolutionFile" ? "true" : state.GetPropertyValue(name));
