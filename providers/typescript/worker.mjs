@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import {readRequest, send} from '../shared/protocol.mjs';
-import {preparePackages, context, nodePreparationPolicy} from './preparation.mjs';
+import {preparePackages, nodePreparationPolicy} from './preparation.mjs';
 import {analyze} from './analysis.mjs';
 import {classificationPolicy,compilationClassification} from './test-classification.mjs';
 import {ProjectSetupError,boundedText} from './project-errors.mjs';
@@ -59,7 +59,7 @@ try {
     config=path.resolve(config);if(failed.has(config))return;
     failed.add(config);blocked.add(path.dirname(config));
     const projectPath=path.relative(root,config).split(path.sep).join('/'),id=`ts:${projectPath}`;
-    send('compilation',{id,language:'typescript',projectPath,compilerVersion:error.compilerVersion,
+    compilationSend(path.dirname(config))('compilation',{id,language:'typescript',projectPath,compilerVersion:error.compilerVersion,
       inputPaths:[config],optionsJson:JSON.stringify({knowCodeSetupFailure:error.code}),
       ...(testPolicy?{testClassification:compilationClassification(testPolicy)}:{})});
     send('report',{compilationId:id,status:'unavailable',diagnostics:[{code:error.code,severity:'error',path:boundedText(projectPath),
@@ -73,6 +73,8 @@ try {
     if (planned.has(config)) continue;
     planned.add(config);
     try {
+      const setupFailure=setupDiagnostics.failure(path.dirname(config));
+      if(setupFailure)throw setupFailure;
       const ts = compilerFor(path.dirname(config));
       const read = ts.readConfigFile(config, ts.sys.readFile);
       if (read.error) throw new ProjectSetupError('invalid_project_configuration',ts.flattenDiagnosticMessageText(read.error.messageText,'\n'),ts.version);
@@ -89,6 +91,8 @@ try {
     visited.add(config);
     send('progress', {stage: 'analyzing', projectPath: config, message: 'Analyzing configured TypeScript project'});
     try {
+      const setupFailure=setupDiagnostics.failure(path.dirname(config));
+      if(setupFailure)throw setupFailure;
       const result = analyze(compilerFor(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
       queue.push(...result.references);
       for (const file of result.files) owned.add(file);
@@ -100,18 +104,23 @@ try {
   for (const filename of request.looseSources) {
     const saved=path.resolve(filename);
     if (owned.has(saved)||[...blocked].some(directory=>saved===directory||saved.startsWith(directory+path.sep))) continue;
-    const directory = context(root, path.dirname(filename))?.directory ?? root;
+    const savedDirectory=path.dirname(saved);
+    const directory=setupDiagnostics.failure(savedDirectory)?savedDirectory:setupDiagnostics.directory(savedDirectory);
     if (!groups.has(directory)) groups.set(directory, []);
     groups.get(directory).push(filename);
   }
   for (const [directory, files] of groups) {
     send('progress', {stage: 'analyzing', projectPath: directory, message: 'Analyzing saved TypeScript files outside configured projects with inferred options'});
-    try {analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);}
+    try {
+      const setupFailure=setupDiagnostics.failure(directory);
+      if(setupFailure)throw setupFailure;
+      analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);
+    }
     catch(error) {
       if(!(error instanceof ProjectSetupError))throw error;
       // Preserve the inferred identity rather than creating an explicit config.
       const projectPath='$inferred',id=`ts:${projectPath}${directory!==root?':'+path.relative(root,directory).split(path.sep).join('/'):''}`;
-      send('compilation',{id,language:'typescript',projectPath,inferred:true,compilerVersion:error.compilerVersion,
+      compilationSend(directory)('compilation',{id,language:'typescript',projectPath,inferred:true,compilerVersion:error.compilerVersion,
         optionsJson:JSON.stringify({inferredRoot:path.relative(root,directory),knowCodeSetupFailure:error.code}),
         ...(testPolicy?{testClassification:compilationClassification(testPolicy)}:{})});
       send('report',{compilationId:id,status:'unavailable',diagnostics:[{code:error.code,severity:'error',message:boundedText(error.message),path:''}],
