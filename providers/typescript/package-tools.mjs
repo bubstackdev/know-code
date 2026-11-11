@@ -26,7 +26,12 @@ export function typescriptInstallation(directory, root) {
         throw new ProjectSetupError('typescript_load_failed', `Cannot inspect selected TypeScript installation ${entry}: ${error.message}`);
     }
     if (present) {
-      try { return {entry, filename: ownRequire.resolve(entry)}; }
+      try {
+        // Resolve the current filesystem origin before Node's module resolver:
+        // its path cache can retain a previous target of this lexical symlink.
+        const target = fs.realpathSync(entry);
+        return {entry, filename: fs.realpathSync(ownRequire.resolve(target))};
+      }
       catch (error) {
         return {entry, error: new ProjectSetupError('compiler_unavailable', `Cannot resolve repository TypeScript installation ${entry}: ${error.message}`)};
       }

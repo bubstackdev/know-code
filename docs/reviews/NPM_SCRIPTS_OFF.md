@@ -130,3 +130,16 @@ and requires ordinary linked dependency and executable `.bin` links to exist.
 The fingerprint changes to v4 so earlier preparation checkpoints cannot hide
 this policy correction. This section records source inspection and static
 checks; the new matching full matrix and installed-runtime gate remain required.
+
+## Compiler-origin retargeting
+
+Setup-05 passed all 22 real restoration/policy rows with script markers absent,
+then exposed stale Node resolution in the final compiler-origin helper case.
+After a valid `node_modules/typescript` link was replaced with a dangling link,
+`require.resolve` returned its previously cached target. The shared preparation
+and worker helper now resolves the current filesystem origin first, resolves
+the module from that canonical target, and verifies its final physical filename.
+Broken origins remain typed unavailable errors without ambient fallback. The
+fixture additionally retargets a valid link to another store with a different
+package main before testing the dangling link. Matching root-owned execution
+is required; this correction does not add a second module-resolution engine.

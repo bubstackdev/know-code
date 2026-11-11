@@ -242,10 +242,16 @@ for(const [filename,value] of entries){assert.equal(typeof value.exports.isServe
   fs.symlinkSync(outside,path.join(boundary,'node_modules/typescript'));
   const linked=typescriptInstallation(boundary,boundary);
   assert.equal(linked.entry,path.join(boundary,'node_modules/typescript'));assert.equal(linked.filename,path.join(outside,'index.js'));
+  const replacement=path.join(run,'origins/other-store/typescript');
+  write(path.join(replacement,'package.json'),JSON.stringify({name:'typescript',version:'5.8.3',main:'compiler-main.cjs'}));
+  write(path.join(replacement,'compiler-main.cjs'),'module.exports = {version:"5.8.3"};\n');
+  fs.unlinkSync(linked.entry);fs.symlinkSync(replacement,linked.entry);
+  const retargeted=typescriptInstallation(boundary,boundary);
+  assert.equal(retargeted.entry,linked.entry);assert.equal(retargeted.filename,path.join(replacement,'compiler-main.cjs'));
   fs.unlinkSync(linked.entry);fs.symlinkSync(path.join(run,'missing-compiler-store'),linked.entry);
   const broken=typescriptInstallation(boundary,boundary);
   assert.equal(broken.entry,linked.entry);assert(broken.error instanceof ProjectSetupError);assert.equal(broken.filename,undefined);
-  checks.push('one_lexical_compiler_origin_resolver_rejects_ambient_ancestors_accepts_external_store_links_and_reports_broken_origins');
+  checks.push('shared_compiler_origin_rejects_ambient_ancestors_follows_current_store_retargets_and_reports_broken_origins');
   assert.equal(process.env.HOME,actualHome,'fixture changed the account HOME');
   const result={status:'passed',canonical_full_pins:canonicalFullPins,selected_pins:pins,full_catalog:fullCatalog,checks,matrix,commands,run,cache,home_unchanged:true,test_sha256:hash(fileURLToPath(import.meta.url)),
     source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs','providers/typescript/npm10-guard.mjs'].map(name=>[name,hash(path.join(root,name))])),
