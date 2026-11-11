@@ -7,8 +7,13 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+test-hooks = []
+
 [dependencies]
 know-code-core.workspace = true
+serde_json.workspace = true
 napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"
 
