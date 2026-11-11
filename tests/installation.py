@@ -281,8 +281,9 @@ b = info()['selected']
 assert b != a and info()['previous'] == a
 unchanged = wait(lambda rows: rows and rows[0]['phase']=='idle', 'updated unchanged inputs')[0]
 assert unchanged['generation'] == generation and unchanged['database'] == DATABASE
-with sqlite3.connect(DATA/'registry.db') as connection:
-    assert connection.execute('select configuration from workspaces').fetchone()[0] == 'Release'
+personal_settings = json.loads((Path(DATABASE).parent/'settings.json').read_text())
+assert personal_settings['csharp']['configuration'] == 'Release', personal_settings
+assert unchanged['requested_settings']['csharp']['configuration'] == 'Release', unchanged
 record('update_preserves_index_registration_and_configuration')
 lifecycle('update', '--from', B)
 assert info()['previous'] == a
