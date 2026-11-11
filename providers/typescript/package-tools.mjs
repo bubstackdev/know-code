@@ -85,9 +85,13 @@ export function hashSetupInput(filename, hash) {
 }
 
 export function restorationSafety(tool, allowScripts) {
-  if (allowScripts) return {args: [], env: {}};
-  const config = {'git': '/usr/bin/git', 'script-shell': '/bin/sh'};
-  const args = Object.entries(config).map(([key, value]) => `${tool.name === 'npm' ? '--' : '--config.'}${key}=${value}`);
+  if (allowScripts) return {args: [], configArgs: [], env: {}, program: tool.program, prefix: tool.prefix};
+  const npm10 = tool.name === 'npm' && tool.major === 10;
+  if (npm10 && (tool.program !== process.execPath || tool.prefix.length !== 1 || !path.isAbsolute(tool.prefix[0])))
+    throw new Error('Safe npm 10 restoration requires the current Know Code package-tool cache; update the coordinator or restore dependencies separately. No package manager was substituted.');
+  const config = {'git': npm10 ? '/usr/bin/false' : '/usr/bin/git', 'script-shell': '/bin/sh'};
+  const configArgs = Object.entries(config).map(([key, value]) => `${tool.name === 'npm' ? '--' : '--config.'}${key}=${value}`);
+  const args = [...configArgs];
   args.push('--ignore-scripts');
   if (tool.name === 'pnpm') args.push('--ignore-pnpmfile');
   const env = {};
@@ -98,7 +102,8 @@ export function restorationSafety(tool, allowScripts) {
     env[`${manager}_config_${key.replaceAll('-', '_')}`] = value;
     env[`${manager.toUpperCase()}_CONFIG_${key.replaceAll('-', '_').toUpperCase()}`] = value;
   }
-  return {args, env};
+  return {args, configArgs, env, program: tool.program,
+    prefix: npm10 ? ['--import', new URL('./npm10-guard.mjs', import.meta.url).href, ...tool.prefix] : tool.prefix};
 }
 
 function fileHash(filename) {

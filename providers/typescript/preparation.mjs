@@ -205,7 +205,8 @@ export async function preparePackages(root, directories, request, send) {
       const key = `node:${directory}`;
       const fingerprint = createHash('sha256').update(JSON.stringify({inputs: inputHash.digest('hex'),
         policy: policy ?? 'legacy-npm-scripts-disabled', manager: selected?.pin ?? group.manager, runtime: process.version,
-        implementation: 'npm-pnpm-v2-safe-inputs'})).digest('hex');
+        npmInstallLinksEnvironment: {lower: process.env.npm_config_install_links, upper: process.env.NPM_CONFIG_INSTALL_LINKS},
+        implementation: 'npm-pnpm-v3-npm10-scripts-boundary'})).digest('hex');
       const previous = request.preparations.find(p => p.key === key);
       let missingOptional = false;
       function missingDependencies() {
@@ -243,6 +244,20 @@ export async function preparePackages(root, directories, request, send) {
             const args = pnpm ? ['install', locked ? '--frozen-lockfile' : '--config.lockfile=false', '--config.production=false', '--reporter=append-only'] :
               [...(locked ? ['ci'] : ['install', '--package-lock=false']), '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0', '--include=dev'];
             const safety = restorationSafety(tool, allowScripts);
+            if (!allowScripts && tool.name === 'npm' && tool.major === 10) {
+              const effective = await runCommand(safety.program, [...safety.prefix, 'config', 'get', 'install-links', ...safety.configArgs], directory, send, safety.env);
+              group.restoreSafety = {gitFetching: 'disabled', installLinks: effective === 'true' ? true : effective === 'false' ? false : 'unknown', installLinksOrigin: 'npm-effective-query'};
+              if (effective === 'true')
+                throw new Error('Know Code refuses npm 10 restoration with effective install-links=true while package scripts are disabled: local-directory packing can execute prepare. Select npm 11, set install-links=false, restore dependencies separately, or explicitly grant package scripts. No dependency installation was started and configuration was not rewritten.');
+              if (effective !== 'false')
+                throw new Error('Know Code could not establish effective npm 10 install-links=false; dependency restoration was not started.');
+              // Pin only AFTER observing the real effective value, preserving
+              // repo/user/env precedence and closing a saved-config race.
+              safety.args.push('--install-links=false');
+              safety.env.npm_config_install_links = safety.env.NPM_CONFIG_INSTALL_LINKS = 'false';
+              safety.env.pnpm_config_install_links = safety.env.PNPM_CONFIG_INSTALL_LINKS = 'false';
+              group.restoreSafety = {gitFetching: 'disabled', installLinks: false, installLinksOrigin: 'npm-effective-query-pinned'};
+            }
             args.push(...safety.args);
             if (pnpm) {
               if (tool.major === 10) args.push('--config.manage-package-manager-versions=false');
@@ -252,7 +267,7 @@ export async function preparePackages(root, directories, request, send) {
             }
             send('progress', {stage: 'restoring', projectPath: directory,
               message: `Restoring with ${tool.name}@${tool.version} (${tool.source}); repository scripts/hooks ${allowScripts ? 'personally authorized' : 'disabled'}`});
-            await runCommand(tool.program, [...tool.prefix, ...args], directory, send,
+            await runCommand(safety.program, [...safety.prefix, ...args], directory, send,
               {COREPACK_ENABLE_PROJECT_SPEC: '0', npm_config_update_notifier: 'false', ...safety.env});
             const absent = missingDependencies();
             if (absent.length) throw new Error(`Dependency restoration finished but direct dependencies remain unavailable: ${absent.join(', ')}`);
@@ -263,7 +278,8 @@ export async function preparePackages(root, directories, request, send) {
       }
       metadata.set(directory, {packageManager: {name: selected?.name, version: selected?.version, origin: selected?.origin,
         source: tool?.source ?? 'selected-not-invoked', installRoot: path.relative(root, directory) || '.',
-        scriptsAuthorization: allowScripts ? 'personal' : 'disabled', repositoryHooksForcedOff: !allowScripts}, inputPaths: [...inputs]});
+        scriptsAuthorization: allowScripts ? 'personal' : 'disabled', repositoryHooksForcedOff: !allowScripts,
+        ...(group.restoreSafety ? {restorationSafety: group.restoreSafety} : {})}, inputPaths: [...inputs]});
       if (error) errors.set(directory, {code: 'dependency_restore_failed', severity: 'error', message: error, path: directory});
     } catch (error) {
       if (!(error instanceof ProjectSetupError)) throw error;
