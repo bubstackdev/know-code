@@ -29,7 +29,7 @@ Every tool is scoped to the selected workspace and marked read-only. Tools do no
 | `workspace_status` | Coordinator status | No arguments |
 | `search_symbols` | `symbols` | Optional exact `name`, lexical `query`, target/result/freshness limits |
 | `symbol_context` | `symbol_context` | Symbol ID to signature, compiler declaration extents and aggregate bounded source |
-| `coverage_details` | `coverage` | Exact generation, optional compilation selector and bounded diagnostic/option payloads |
+| `coverage_details` | `coverage` | Snapshot-guarded reports, optional compilation selector and bounded diagnostic/option payloads |
 | `find_references` | `references` | Opaque `symbol_id`, optional target/result/freshness limits |
 | `callers` | `callers` | Symbol and shared graph filters/budgets |
 | `callees` | `callees` | Symbol and shared graph filters/budgets |
@@ -104,6 +104,6 @@ Initial client connection is verified. Continue dogfooding real code questions t
 
 ## Compact context and coverage
 
-Ordinary reads now return compact relevant reports and an explicit whole-workspace coverage summary. Full diagnostic/option payloads are available through generation-required `coverage_details`; the shared native request also accepts `coverage_detail:"full"`. `symbol_context` supplies a signature, distinct compiler declarations, indexed line numbers and optional bounded source in one lookup. Unsupported/ambiguous extents remain explicit. See [budgets, fields, compiler evidence and compatibility](SYMBOL_CONTEXT.md).
+Ordinary reads now return compact relevant reports and an explicit whole-workspace coverage summary. Full diagnostic/option payloads are available through snapshot-guarded `coverage_details`; the shared native request also accepts `coverage_detail:"full"`. `symbol_context` supplies a signature, distinct compiler declarations, indexed line numbers and optional bounded source in one lookup. Unsupported/ambiguous extents remain explicit. See [budgets, fields, compiler evidence and compatibility](SYMBOL_CONTEXT.md).
 
 The context follow-on discovers ten tools in this active conversation. Reloading an unchanged configuration initially reused the old process; briefly disabling/re-enabling this project server and calling the same reload API replaced it. The project configuration was restored byte-for-byte and global settings were untouched. Actual current-generation `symbol_context` and `coverage_details` calls are retained with the [payload and native verification](SYMBOL_CONTEXT.md#verification-and-measurements).
