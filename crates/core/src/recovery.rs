@@ -380,6 +380,20 @@ impl IndexReadGuard {
         };
         guard.check()?;
         validate_identity(&guard.physical, index)?;
+        if index.file_identity.is_some() {
+            let missing_or_empty = match fs::symlink_metadata(&guard.physical) {
+                Ok(metadata) => metadata.len() == 0,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(error) => return Err(error.into()),
+            };
+            if missing_or_empty {
+                return guard
+                    .note_corruption(
+                        "owned index file is missing or empty; replacement is required",
+                    )
+                    .and(Ok(guard));
+            }
+        }
         Ok(guard)
     }
     pub fn logical_path(&self) -> &Path {
@@ -982,6 +996,39 @@ mod tests {
         cleanup(&logical, 6).unwrap();
         assert!(!old.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn removed_and_zeroed_owned_selected_files_are_fenced_without_reusing_identity() {
+        for remove in [false, true] {
+            let (root, logical) = fixture();
+            adopt(&logical, 0).unwrap();
+            let guard = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+            let physical = guard.physical_path().to_owned();
+            indexed(&physical, 7);
+            reserve_generation(&logical, 7).unwrap();
+            let id = guard.incarnation().to_owned();
+            if remove {
+                fs::remove_file(&physical).unwrap();
+            } else {
+                OpenOptions::new()
+                    .write(true)
+                    .open(&physical)
+                    .unwrap()
+                    .set_len(0)
+                    .unwrap();
+            }
+            assert!(matches!(
+                IndexReadGuard::open_unbudgeted(&logical),
+                Err(Error::IndexCorrupt { .. })
+            ));
+            assert!(matches!(guard.check(), Err(Error::IndexCorrupt { .. })));
+            assert!(report_corruption(&logical, &id).unwrap());
+            let next = begin_rebuild(&logical, false, 7).unwrap();
+            assert_ne!(next.incarnation, id);
+            assert!(next.minimum_generation > 7);
+            drop(guard);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
     #[test]
     fn interrupted_build_and_verified_but_unselected_candidate_require_explicit_refresh() {
