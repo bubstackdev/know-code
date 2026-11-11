@@ -313,7 +313,7 @@ static partial class Analysis
         if (request.TestClassificationPolicy != 0)
             report.Capabilities.Add("test_classification", TestClasses.Capability(classification));
         if (request.TargetEquivalencePolicy != 0)
-            report.Capabilities.Add("target_equivalence", documents.Any(d => d.Generated) ? "partial" : "complete");
+            report.Capabilities.Add("target_equivalence", documents.Any(d => d.Generated) || !emitter.TargetEquivalenceComplete ? "partial" : "complete");
         report.Diagnostics.AddRange(diagnostics);
         Wire.Send(new Envelope { Report = report });
     }
@@ -369,6 +369,7 @@ static partial class Analysis
         private readonly Dictionary<ISymbol, string> fileIds = new(ReferenceEqualityComparer.Instance);
         public void EndFile() => fileIds.Clear();
         private FactBatch batch = new() { CompilationId = compilationId };
+        public bool TargetEquivalenceComplete { get; private set; } = true;
         private static string DeclarationIdentity(ISymbol symbol)
         {
             var key = symbol.GetDocumentationCommentId();
@@ -393,11 +394,13 @@ static partial class Analysis
             {
                 var definition=projectLinks.DefinitionOf(symbol,Identity);
                 var external = !symbol.Locations.Any(l => l.SourceTree is not null && sources.ContainsKey(l.SourceTree));
+                var declarationKey = external ? "" : TargetPeers.SymbolDeclaration(peerPolicy, symbol, sources.ContainsKey);
+                if (peerPolicy != 0 && !external && declarationKey.Length == 0) TargetEquivalenceComplete = false;
                 batch.Symbols.Add(new KnowCode.Protocol.Symbol { Id = id, Name = symbol is IMethodSymbol {MethodKind: MethodKind.AnonymousFunction} ? "<lambda>" : symbol.Name,
                     Kind = symbol is IMethodSymbol {MethodKind: MethodKind.AnonymousFunction} ? "lambda" : symbol is INamedTypeSymbol type ? type.TypeKind.ToString().ToLowerInvariant() : symbol.Kind.ToString().ToLowerInvariant(),
                     Signature = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
                     External = external,
-                    DeclarationKey = external ? "" : TargetPeers.Declaration(peerPolicy, symbol.ContainingAssembly, DeclarationIdentity(symbol)),
+                    DeclarationKey = declarationKey,
                     DefinitionCompilationId=definition?.Compilation ?? "", DefinitionSymbolId=definition?.Symbol ?? "", DefinitionFingerprint=definition?.Fingerprint ?? "" });
             }
             return id;
@@ -411,13 +414,14 @@ static partial class Analysis
                     StartByte = (ulong)source.Offsets[full.Start], EndByte = (ulong)source.Offsets[full.End], Role = "definition" });
             if (batch.Occurrences.Count >= 128) Flush();
         }
-        public string Synthetic(Source source, SyntaxNode node, string kind, string name)
+        public string Synthetic(Source source, SyntaxNode node, string kind, string name, ISymbol? owner = null)
         {
             var id=$"{compilationId}:${kind}:{node.SyntaxTree.FilePath}:{node.SpanStart}";
             if(emitted.Add(id))
             {
-                batch.Symbols.Add(new KnowCode.Protocol.Symbol { Id=id,Name=name,Kind=kind,Signature=name,
-                    DeclarationKey=TargetPeers.Declaration(peerPolicy, assembly, $"synthetic:{kind}:{node.SyntaxTree.FilePath}:{node.SpanStart}") });
+                var declarationKey = TargetPeers.SyntheticDeclaration(peerPolicy, assembly, owner, node, kind, sources.ContainsKey);
+                if (peerPolicy != 0 && declarationKey.Length == 0) TargetEquivalenceComplete = false;
+                batch.Symbols.Add(new KnowCode.Protocol.Symbol { Id=id,Name=name,Kind=kind,Signature=name, DeclarationKey=declarationKey });
                 Occurrence(id,source,node.Span,"declaration",node.Span);
             }
             return id;

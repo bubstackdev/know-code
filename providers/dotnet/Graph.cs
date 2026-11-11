@@ -23,9 +23,9 @@ static partial class Analysis
                 {
                     if (!initializers.TryGetValue(init, out var id))
                     {
-                        id = output.Synthetic(source, init, "initializer", "<field/property initialization>");
-                        initializers.Add(init, id);
                         var declared = init.Parent is VariableDeclaratorSyntax variable ? model.GetDeclaredSymbol(variable) : model.GetDeclaredSymbol(init.Parent!);
+                        id = output.Synthetic(source, init, "initializer", "<field/property initialization>", declared is null ? null : Normalize(declared));
+                        initializers.Add(init, id);
                         if (declared is not null) Edge(output.Symbol(Normalize(declared)), id, "initializes", init);
                     }
                     return id;

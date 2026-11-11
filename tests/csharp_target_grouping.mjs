@@ -21,8 +21,11 @@ const csproj=extra=>`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFram
 write(projects[0],csproj(''));
 write(projects[1],csproj('<PropertyGroup><PlatformTarget Condition="\'$(TargetFramework)\'==\'net10.0\'">x64</PlatformTarget></PropertyGroup><ItemGroup><ProjectReference Include="../Api/Api.csproj"/></ItemGroup>'));
 write(projects[2],csproj('<PropertyGroup><AssemblyName Condition="\'$(TargetFramework)\'==\'net10.0\'">VariantModern</AssemblyName></PropertyGroup>'));
-const code='// π😀\npublic static class SharedApi { public static int Read(int arg) { var local = arg; return local; } }\n';
+const code='// π😀\npublic static class SharedApi { public static int Seed = Read(1); public static int Read(int arg) { var local = arg; System.Func<int,int> apply = stableArg => { var stableLocal = stableArg; return stableLocal; }; int Stable(int stableParam) { var stableInner = stableParam; return stableInner; } return Stable(apply(local)); } }\n';
 write(path.join(workspace,'Api','Api.cs'),code);
+const owners='#if NET10_0\npublic class A\n#else\npublic class B\n#endif\n{\n public int Marker = SharedApi.Read(1);\n public int OwnerMethod(int ownerArg) { int ownerLocal = ownerArg; System.Func<int,int> nested = nestedArg => { int nestedLocal = nestedArg; return nestedLocal; }; int Local(int localArg) { int localInner = localArg; return localInner; } return ownerLocal + Local(nested(1)); }\n}\n';
+write(path.join(workspace,'Api','Owners.cs'),owners);
+
 write(path.join(workspace,'Variant','Api.cs'),code);
 write(path.join(workspace,'Client','Use.cs'),'public static class Client { public static int Use() => SharedApi.Read(1); }');
 function invoke(policy,preparations=[]){
@@ -60,10 +63,35 @@ for(const name of ['Api','Client','Variant']){
 assert.equal(new Set(family.values()).size,3,'unrelated projects share a target family');
 const symbols=(run,context)=>run.facts.filter(b=>b.compilationId===context.id).flatMap(b=>b.symbols);
 const get=(run,context,name)=>symbols(run,context).find(s=>s.name===name&&!s.external);
-for(const name of ['Read','arg','local']){
+for(const name of ['Read','arg','local','stableArg','stableLocal','stableParam','stableInner']){
   const [a,b]=byProject(modern,'Api').map(c=>get(modern,c,name));
   assert(a&&b);assert.notEqual(a.id,b.id);assert.equal(a.signature,b.signature);assert.match(a.declarationKey,/^[a-f0-9]{64}$/);assert.equal(a.declarationKey,b.declarationKey);
 }
+const declarationOf=(context,symbol)=>modern.facts.filter(batch=>batch.compilationId===context.id).flatMap(batch=>batch.occurrences).find(o=>o.symbolId===symbol.id&&o.role==='declaration');
+const anchorOf=(context,symbol)=>{const o=declarationOf(context,symbol);assert(o);return [o.artifactId,o.startByte,o.endByte];};
+for(const context of byProject(modern,'Api')) {
+  assert(get(modern,context,context.target==='net10.0'?'A':'B'),'conditional owner was not compiler-selected');
+  assert(!get(modern,context,context.target==='net10.0'?'B':'A'),'inactive owner was emitted');
+}
+// Identical source/ranges with different active compiler owners are not peers.
+for(const name of ['ownerArg','ownerLocal','nestedArg','nestedLocal','localArg','localInner']) {
+  const contexts=byProject(modern,'Api');const [a,b]=contexts.map(c=>get(modern,c,name));assert(a&&b,name);
+  assert.equal(a.signature,b.signature,name);assert.match(a.declarationKey,/^[a-f0-9]{64}$/);assert.match(b.declarationKey,/^[a-f0-9]{64}$/);
+  assert.notEqual(a.declarationKey,b.declarationKey,`conditional owner lost for ${name}`);
+  assert.deepEqual(anchorOf(contexts[0],a),anchorOf(contexts[1],b),name);
+}
+const initializer=(context,artifactPath)=>{
+  const artifact=modern.sources.find(source=>source.compilationId===context.id&&source.path===artifactPath);assert(artifact);
+  const facts=modern.facts.filter(batch=>batch.compilationId===context.id);
+  return facts.flatMap(batch=>batch.symbols).find(symbol=>symbol.kind==='initializer'&&symbol.name==='<field/property initialization>'&&facts.flatMap(batch=>batch.occurrences).some(o=>o.symbolId===symbol.id&&o.role==='declaration'&&o.artifactId===artifact.id));
+};
+const apiContexts=byProject(modern,'Api');
+assert(modern.facts.flatMap(batch=>batch.symbols).filter(symbol=>symbol.kind==='initializer'&&symbol.name==='<file initialization>').every(symbol=>symbol.declarationKey===''),'unproven file owners must remain ungrouped');
+const sameInitializers=apiContexts.map(context=>initializer(context,'Api/Api.cs'));assert(sameInitializers.every(Boolean));
+assert.match(sameInitializers[0].declarationKey,/^[a-f0-9]{64}$/);assert.equal(sameInitializers[0].declarationKey,sameInitializers[1].declarationKey);
+const differentInitializers=apiContexts.map(context=>initializer(context,'Api/Owners.cs'));assert(differentInitializers.every(Boolean));
+assert.match(differentInitializers[0].declarationKey,/^[a-f0-9]{64}$/);assert.notEqual(differentInitializers[0].declarationKey,differentInitializers[1].declarationKey);
+assert.deepEqual(anchorOf(apiContexts[0],differentInitializers[0]),anchorOf(apiContexts[1],differentInitializers[1]),'conditional initializer spans differ');
 const [variant1,variant2]=byProject(modern,'Variant').map(c=>get(modern,c,'Read'));
 assert(variant1&&variant2);assert.notEqual(variant1.declarationKey,variant2.declarationKey,'assembly identity was dropped');
 const apiSources=modern.sources.filter(s=>s.path==='Api/Api.cs');
@@ -92,9 +120,9 @@ const unsupported=invoke(2);
 assert.notEqual(unsupported.result.status,0);assert.equal(unsupported.messages.length,0);
 assert.match(unsupported.result.stderr.toString(),/unsupported target equivalence policy 2/);
 assert(!fs.readdirSync(workspace,{recursive:true}).some(p=>p.endsWith('.dll')),'worker built a project assembly');
-const files=['proto/analysis.proto','providers/dotnet/Program.cs','providers/dotnet/ProjectLinks.cs','providers/dotnet/TargetPeers.cs','tests/csharp_target_grouping.mjs'];
+const files=['proto/analysis.proto','providers/dotnet/Program.cs','providers/dotnet/ProjectLinks.cs','providers/dotnet/TargetPeers.cs','providers/dotnet/Graph.cs','tests/csharp_target_grouping.mjs'];
 const summary={passed:true,run,profile,worker,workerSha256:hash(worker),sourceRevision:spawnSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).stdout.trim(),
   sourceSha256:Object.fromEntries(files.map(p=>[p,hash(path.join(root,p))])),
-  checks:['families follow evaluated project contexts','exact symbols with equivalent declaration keys','assembly differences remain distinct','external definition pointers and recursive witnesses','unproven generated origins are partial','legacy omission and unchanged preparation','unsupported policy rejected before facts'],
+  checks:['families follow evaluated project contexts','exact symbols with equivalent declaration keys','conditional containing owners and nested scoped peers','compiler-owned initializer identity','assembly differences remain distinct','external definition pointers and recursive witnesses','unproven generated origins are partial','legacy omission and unchanged preparation','unsupported policy rejected before facts'],
   limits:['Direct worker only; no assembled query/native/installed or performance certification.']};
 write(path.join(run,'summary.json'),JSON.stringify(summary,null,2));console.log(JSON.stringify(summary,null,2));
