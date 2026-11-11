@@ -14,11 +14,16 @@ cargo test --workspace --locked --profile "$task_cargo_profile"
 node tests/protocol.mjs
 node tests/jsonrpc.mjs
 node tests/typescript.mjs
+node tests/typescript_test_classification.mjs
 node tests/node_preparation.mjs
+node tests/preparation_safety.mjs
 node tests/swift_toolchain.mjs
 node tests/sdk-metadata.mjs
 node tests/csharp_context.mjs
 node tests/csharp_target_grouping.mjs
+node tests/csharp_classification.mjs
+python3 tests/project_trust.py
+python3 tests/provider_failures.py
 python3 tests/e2e.py
 python3 tests/query_admission.py
 python3 tests/wal_pressure.py
