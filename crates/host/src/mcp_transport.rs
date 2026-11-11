@@ -598,6 +598,11 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(2), async {
                 while connection.frames.load(Ordering::Acquire) != 1
                     || alive.lock().unwrap().is_none()
+                    || !cancelled
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|probe| probe())
                 {
                     tokio::task::yield_now().await;
                 }
