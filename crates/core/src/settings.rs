@@ -63,32 +63,66 @@ fn trust_required(root: &Path) -> Error {
 }
 /// Canonical address for personal execution state, including lexical missing-root revocation.
 pub fn project_execution_root(root: &Path) -> Result<PathBuf> {
-    match fs::canonicalize(root) {
-        Ok(root) => Ok(root),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // Revocation must still address the original receipt after the
-            // workspace disappears. Normalize lexical aliases without creating
-            // or following a replacement source directory.
-            let absolute = if root.is_absolute() {
-                root.to_owned()
-            } else {
-                std::env::current_dir()?.join(root)
-            };
-            let mut normalized = PathBuf::new();
-            for component in absolute.components() {
-                match component {
-                    std::path::Component::CurDir => {}
-                    std::path::Component::ParentDir => {
-                        normalized.pop();
+    let mut ancestor = if root.is_absolute() {
+        root.to_owned()
+    } else {
+        std::env::current_dir()?.join(root)
+    };
+    let mut missing = Vec::new();
+    let mut links = 0;
+    loop {
+        match fs::canonicalize(&ancestor) {
+            Ok(mut canonical) => {
+                // Resolve existing symlinks before applying missing suffix
+                // parents: alias/../missing follows the alias target's parent.
+                for component in missing.iter().rev() {
+                    if component == std::ffi::OsStr::new("..") {
+                        canonical.pop();
+                    } else if component != std::ffi::OsStr::new(".") {
+                        canonical.push(component);
                     }
-                    other => normalized.push(other.as_os_str()),
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A direct alias can itself dangle after the registered root
+                // disappears. Follow its declared target without creating it.
+                match fs::symlink_metadata(&ancestor) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        links += 1;
+                        if links > 40 {
+                            return Err(Error::InvalidRequest(
+                                "too many symbolic links in workspace execution address".into(),
+                            ));
+                        }
+                        let target = fs::read_link(&ancestor)?;
+                        ancestor = if target.is_absolute() {
+                            target
+                        } else {
+                            ancestor.parent().unwrap_or(Path::new("/")).join(target)
+                        };
+                        continue;
+                    }
+                    Err(metadata_error)
+                        if metadata_error.kind() != std::io::ErrorKind::NotFound =>
+                    {
+                        return Err(metadata_error.into());
+                    }
+                    _ => {}
+                }
+                let component = ancestor.components().next_back().ok_or(error)?;
+                missing.push(component.as_os_str().to_owned());
+                if !ancestor.pop() {
+                    return Err(Error::InvalidRequest(
+                        "cannot resolve workspace execution address".into(),
+                    ));
                 }
             }
-            Ok(normalized)
+            Err(error) => return Err(error.into()),
         }
-        Err(error) => Err(error.into()),
     }
 }
+
 pub fn project_execution_allowed(root: &Path, data: &Path) -> Result<bool> {
     let root = project_execution_root(root)?;
     let trust: ProjectTrust =
@@ -404,7 +438,8 @@ mod tests {
         assert!(resolve(&root, &data, "").is_err());
         assert!(!project_execution_allowed(&root, &data).unwrap());
         set_project_execution(&root, &data, true).unwrap();
-        let path = workspace::database_path(&root, &data).with_file_name("trust.json");
+        let path = workspace::database_path(&project_execution_root(&root).unwrap(), &data)
+            .with_file_name("trust.json");
         fs::write(&path, r#"{"version":99,"allowed":true}"#).unwrap();
         assert!(matches!(
             project_execution_grant(&root, &data),
@@ -439,6 +474,35 @@ mod tests {
         revoke_project_execution(&missing_alias, &data).unwrap();
         fs::rename(&moved, &canonical).unwrap();
         assert!(!project_execution_allowed(&canonical, &data).unwrap());
+    }
+    #[test]
+    fn missing_workspace_revocation_resolves_symlink_ancestors_and_direct_aliases() {
+        use std::os::unix::fs::symlink;
+        let (root, data) = fixture();
+        let canonical = fs::canonicalize(&root).unwrap();
+        let parent = canonical.parent().unwrap();
+        let parent_alias = parent.join("parent-alias");
+        symlink(parent, &parent_alias).unwrap();
+        let direct_alias = parent.join("direct-alias");
+        symlink(&canonical, &direct_alias).unwrap();
+        let nested = parent.join("nested/a");
+        fs::create_dir_all(&nested).unwrap();
+        let nested_alias = parent.join("nested-alias");
+        symlink(&nested, &nested_alias).unwrap();
+        let moved = parent.join("retained-repo");
+        for alias in [
+            parent_alias.join("repo"),
+            direct_alias,
+            nested_alias.join("../../repo"),
+        ] {
+            set_project_execution(&canonical, &data, true).unwrap();
+            assert!(project_execution_allowed(&alias, &data).unwrap());
+            fs::rename(&canonical, &moved).unwrap();
+            assert_eq!(project_execution_root(&alias).unwrap(), canonical);
+            revoke_project_execution(&alias, &data).unwrap();
+            fs::rename(&moved, &canonical).unwrap();
+            assert!(!project_execution_allowed(&canonical, &data).unwrap());
+        }
     }
     #[test]
     fn repository_identity_checks_bound_git_file_reads_before_execution() {
