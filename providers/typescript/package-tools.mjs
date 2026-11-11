@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {createRequire} from 'node:module';
 import {createHash, randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -7,6 +8,32 @@ import {ProjectSetupError} from './project-errors.mjs';
 
 export const DEFAULT_TOOLS = {npm: '11.21.2', pnpm: '12.18.0'};
 export const MAX_SETUP_INPUT_BYTES = 64 * 1024 * 1024;
+const ownRequire = createRequire(import.meta.url);
+
+// Resolve the logical repository installation, allowing a pnpm entry symlink
+// to point into an outside store. Never silently climb above the workspace.
+// A broken origin is returned so setup can repair it while compiler selection
+// can report its precise unavailable boundary without selecting a substitute.
+export function typescriptInstallation(directory, root) {
+  directory = path.resolve(directory); root = path.resolve(root);
+  const inside = directory === root || directory.startsWith(root + path.sep);
+  for (let current = directory;; current = path.dirname(current)) {
+    const entry = path.join(current, 'node_modules', 'typescript');
+    let present = false;
+    try { fs.lstatSync(entry); present = true; }
+    catch (error) {
+      if (error.code !== 'ENOENT')
+        throw new ProjectSetupError('typescript_load_failed', `Cannot inspect selected TypeScript installation ${entry}: ${error.message}`);
+    }
+    if (present) {
+      try { return {entry, filename: ownRequire.resolve(entry)}; }
+      catch (error) {
+        return {entry, error: new ProjectSetupError('compiler_unavailable', `Cannot resolve repository TypeScript installation ${entry}: ${error.message}`)};
+      }
+    }
+    if (current === root || !inside) return undefined;
+  }
+}
 
 function inputFailure(filename, message) {
   const error = new ProjectSetupError('invalid_package_input', `${filename}: ${message}`);

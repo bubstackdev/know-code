@@ -4,7 +4,7 @@ import {createRequire} from 'node:module';
 import {createHash} from 'node:crypto';
 import YAML from 'yaml';
 import ini from 'ini';
-import {packageTool, runCommand, selection, readSetupInput, hashSetupInput, restorationSafety} from './package-tools.mjs';
+import {packageTool, runCommand, selection, readSetupInput, hashSetupInput, restorationSafety, typescriptInstallation} from './package-tools.mjs';
 import {ProjectSetupError} from './project-errors.mjs';
 
 function invalidInput(filename, message) {
@@ -215,7 +215,9 @@ export async function preparePackages(root, directories, request, send) {
         for (const [member, pkg] of members) {
           const require = createRequire(path.join(member, '__know_code__.cjs'));
           for (const name of Object.keys({...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies})) {
-            const found = require.resolve.paths(name)?.map(p => path.join(p, name)).find(p => p.startsWith(root + path.sep) && fs.existsSync(p));
+            const compiler = name === 'typescript' ? typescriptInstallation(member, root) : undefined;
+            const found = name === 'typescript' ? compiler?.filename && compiler.entry :
+              require.resolve.paths(name)?.map(p => path.join(p, name)).find(p => p.startsWith(root + path.sep) && fs.existsSync(p));
             if (found) outputs.push(found);
             else if (Object.hasOwn(pkg.optionalDependencies ?? {}, name)) missingOptional = true;
             else missing.push(`${path.relative(directory, member) || '.'}:${name}`);
