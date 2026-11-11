@@ -1,10 +1,10 @@
-"""Real native host queues consume a query's budget before Rust execution."""
+"""Public Node serialization and .NET host queue time consume query deadlines."""
 from pathlib import Path
 import json,os,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');CONFIG=PROFILE.capitalize()
 RUN=ROOT/'.artifacts/query-deadlines'/str(time.time_ns());RUN.mkdir(parents=True)
-ENV=dict(os.environ,UV_THREADPOOL_SIZE='1',DOTNET_CLI_TELEMETRY_OPTOUT='1')
+ENV=dict(os.environ,DOTNET_CLI_TELEMETRY_OPTOUT='1')
 ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 commands=[['node',str(ROOT/'tests/query_deadlines.mjs'),str(ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs'),str(RUN/'missing.db')],
           ['dotnet',str(ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll'),'--deadline-queue',str(RUN/'missing.db')]]
