@@ -1,6 +1,6 @@
 """Install archives, restore dependencies, then test with checkout/network access denied."""
 from pathlib import Path
-import argparse,atexit,hashlib,json,os,selectors,shutil,socket,subprocess,sys,tarfile,time,zipfile
+import argparse,atexit,hashlib,json,os,selectors,shlex,shutil,socket,subprocess,sys,tarfile,time,zipfile
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256');args=parser.parse_args()
 assert bool(args.signed_team_id)==bool(args.signed_signer_sha256),'signed mode requires both Team ID and pinned signer SHA-256'
@@ -11,6 +11,12 @@ DATA=PREFIX/'d';BIN=PREFIX/'bin';BIN.mkdir();FEED=PREFIX/'feed';FEED.mkdir();WOR
 ENV=dict(os.environ,PATH=str(BIN)+':'+os.environ['PATH'],KNOW_CODE_DATA_DIR=str(DATA),NUGET_PACKAGES=str(PREFIX/'nuget-cache'),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',TMPDIR=str(SCRATCH),npm_config_cache=str(PREFIX/'npm-cache'),npm_config_fetch_retries='0',npm_config_fetch_timeout='3000')
 ENV['KNOW_CODE_QUERY_SCOPE']=str(PREFIX/'query-admission')
 for key in ['KNOW_CODE_RUNTIME_DIR','KNOW_CODE_COORDINATOR','NODE_PATH','NODE_OPTIONS']:ENV.pop(key,None)
+# Keep the account HOME and default profile paths; only this fixture's npm
+# configuration is selected. Ambient install-links overrides must not mask it.
+for key in ['npm_config_install_links','NPM_CONFIG_INSTALL_LINKS','pnpm_config_install_links','PNPM_CONFIG_INSTALL_LINKS']:ENV.pop(key,None)
+for name in ['user','global']:
+ config=PREFIX/('npm-'+name+'config');config.write_text('')
+ for key in ['npm_config_'+name+'config','NPM_CONFIG_'+name.upper()+'CONFIG']:ENV[key]=str(config)
 POLICY='(version 1) (allow default) '+''.join('(deny file-read* file-write* (subpath '+json.dumps(str(root))+'))' for root in CHECKOUTS)
 (PREFIX/'deny-checkout.sb').write_text(POLICY+'\n')
 POLICY_FILE=PREFIX/'deny-checkout.sb'
@@ -164,14 +170,36 @@ command('dotnet','restore',WORKSPACE/'App.csproj','--configfile',PREFIX/'NuGet.C
 assert (WORKSPACE/'node_modules/typescript/lib/typescript.js').is_file()
 assert (WORKSPACE/'node_modules/@know-code/offline-dependency/index.d.ts').is_file()
 assets=json.loads((WORKSPACE/'obj/project.assets.json').read_text());assert 'KnowCode/0.0.1' in assets['libraries']
+# Acquire only a tool distribution, through the shipped helper, before Internet
+# denial. This cache lives outside DATA and cannot pre-seed a serving index.
+TOOL_CACHE=PREFIX/'tool-cache';npm10_prime=PREFIX/'prime-npm10.mjs'
+npm10_prime.write_text("import {pathToFileURL} from 'node:url';const {packageTool,selection}=await import(pathToFileURL(process.argv[2]));console.log(JSON.stringify(await packageTool(selection('npm@10.0.0'),process.argv[3])));\n")
+npm10_tool=json.loads(command('node',npm10_prime,resources/'providers/typescript/package-tools.mjs',TOOL_CACHE).stdout)
+assert npm10_tool['name']=='npm' and npm10_tool['version']=='10.0.0' and npm10_tool['source']=='user-cache',npm10_tool
+assert Path(npm10_tool['cacheDirectory']).is_relative_to(TOOL_CACHE),npm10_tool
+def cache_inventory(directory):
+ return {str(p.relative_to(directory)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.rglob('*')) if p.is_file()}
+npm10_cache_inventory=cache_inventory(TOOL_CACHE)
+assert npm10_cache_inventory and len(list(TOOL_CACHE.glob('*/tool.json')))==1
+guard_relative=Path('providers/typescript/npm10-guard.mjs');guard_sha256=hashlib.sha256((resources/guard_relative).read_bytes()).hexdigest()
+npm10_evidence={'pin':'npm@10.0.0','primed_tool':npm10_tool,'cache_inventory':npm10_cache_inventory,'primed_guard':str(resources/guard_relative),'guard_sha256':guard_sha256,'steps':[]}
+(PREFIX/'npm10-installed.json').write_text(json.dumps(npm10_evidence,indent=2)+'\n')
 assert not DATA.exists(),'dependency setup created coordinator state before the denial boundary'
-PHASES.append({'phase':PHASE,'finished_ns':time.time_ns(),'typescript_version':json.loads((WORKSPACE/'node_modules/typescript/package.json').read_text())['version'],'npm_version':npm_version,'nuget_libraries':sorted(assets['libraries']),'serving_indexes':[],'coordinator_registry_exists':False})
+PHASES.append({'phase':PHASE,'finished_ns':time.time_ns(),'typescript_version':json.loads((WORKSPACE/'node_modules/typescript/package.json').read_text())['version'],'npm_version':npm_version,'npm10_tool_cache':str(TOOL_CACHE),'nuget_libraries':sorted(assets['libraries']),'serving_indexes':[],'coordinator_registry_exists':False})
 prove_network_policy()
 PHASE='network_denied_runtime';PHASES.append({'phase':PHASE,'started_ns':time.time_ns(),'policy':str(POLICY_FILE),'index_state_before_start':[]})
 (PREFIX/'phases.json').write_text(json.dumps(PHASES,indent=2)+'\n')
 assert not DATA.exists(),'an index/coordinator appeared before first offline registration'
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0
 checks+=['project_dependencies_restored_before_registration','fresh_initial_index_starts_under_network_denial']
+# Only after both original no-state assertions and actual network denial proof:
+# copy the tool cache, never registry/settings/workspace/index state.
+shutil.copytree(TOOL_CACHE,DATA/'package-tools')
+assert sorted(p.name for p in DATA.iterdir())==['package-tools']
+assert cache_inventory(DATA/'package-tools')==npm10_cache_inventory
+npm10_evidence['installed_cache_directory']=str(DATA/'package-tools')
+(PREFIX/'npm10-installed.json').write_text(json.dumps(npm10_evidence,indent=2)+'\n')
+checks.append('installed_npm10_tool_primed_without_coordinator_or_index_before_denial')
 
 def read_json_line(process,selector,buffer,context):
  until=time.monotonic()+30
@@ -312,6 +340,70 @@ new_parent=PREFIX/'second installation';new_parent.mkdir();bundle=bundle.rename(
 info=json.loads(command(HOST,'runtime-info').stdout);assert str(new_parent) in info['resource_directory']
 assert all(info[key]==version for key,version in contracts.items()),info
 node=Client('node');ready(node);assert node.send('query',request={'op':'symbols','name':'savedAnswer'})['result']['freshness']=='current';node.close();checks.append('runtime_relocation_and_SDK_reconnect_without_reinstall')
+# Exercise the shipped preload through real coordinator preparation AFTER the
+# runtime move, with both network and every supplied checkout still denied.
+PHASE='relocated_npm10_policy'
+resources=bundle/'lib/know-code';relocated_guard=resources/guard_relative
+assert not Path(npm10_evidence['primed_guard']).exists()
+assert hashlib.sha256(relocated_guard.read_bytes()).hexdigest()==guard_sha256
+npm10_evidence.update({'relocated_guard':str(relocated_guard),'policy':str(POLICY_FILE),'checkout_denied':True,'network_denied':True})
+linked=PREFIX/'npm10-linked';linked.mkdir();prepare_marker=PREFIX/'npm10-prepare-ran'
+prepare_script='node -e '+shlex.quote("require('fs').writeFileSync("+json.dumps(str(prepare_marker))+",'unexpected prepare')")
+(linked/'package.json').write_text(json.dumps({'name':'@know-code/npm10-linked','version':'1.0.0','types':'index.d.ts','bin':{'know-code-owned-tool':'cli.cjs'},'scripts':{'prepare':prepare_script}})+'\n')
+(linked/'index.d.ts').write_text('export declare const linkedValue: number;\n')
+(linked/'cli.cjs').write_text('#!/usr/bin/env node\nconsole.log("owned installed npm10 bin");\n');(linked/'cli.cjs').chmod(0o755)
+package=json.loads((WORKSPACE/'package.json').read_text());package['packageManager']='npm@10.0.0';package['dependencies']['@know-code/npm10-linked']='file:../npm10-linked'
+(WORKSPACE/'package.json').write_text(json.dumps(package)+'\n')
+# This positive case uses unlocked restoration. Initial npm installation's lock
+# remains covered above; remove it only in this owned workspace for this case.
+(WORKSPACE/'package-lock.json').unlink(missing_ok=True)
+(WORKSPACE/'.npmrc').write_text('install-links=false\nignore-scripts=false\n')
+owned_configs=[WORKSPACE/'.npmrc',PREFIX/'npm-userconfig',PREFIX/'npm-globalconfig']
+config_hashes={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in owned_configs}
+def npm10_step(label):
+ global MIN_GENERATION,final_generation
+ step={'label':label,'requested_package':json.loads((WORKSPACE/'package.json').read_text()),'generation_before':final_generation,'started_ns':time.time_ns()}
+ npm10_evidence['steps'].append(step)
+ # Retain the exact requested inputs even when the following gate fails.
+ (PREFIX/'npm10-installed.json').write_text(json.dumps(npm10_evidence,indent=2)+'\n')
+ refresh=json.loads(command(HOST,'index',WORKSPACE,'--configuration','Release').stdout)
+ assert refresh['database']==DATABASE and refresh['generation']>step['generation_before'],refresh
+ MIN_GENERATION=final_generation=refresh['generation'];step['refresh']=refresh
+ request={'op':'symbols','name':'SavedGreet','coverage_detail':'full','detail_max_bytes':65536}
+ envelope=json.loads(command(HOST,'query',DATABASE,json.dumps(request)).stdout);result=checked_result(envelope);assert result['symbols'],result
+ step.update({'request':request,'result':envelope,'prepare_marker_exists':prepare_marker.exists(),'finished_ns':time.time_ns()})
+ (PREFIX/'npm10-installed.json').write_text(json.dumps(npm10_evidence,indent=2)+'\n')
+ assert not prepare_marker.exists(),'installed npm10 linked dependency executed prepare'
+ assert not (WORKSPACE/'package-lock.json').exists(),'unlocked preparation wrote a source lockfile'
+ assert {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in owned_configs}==config_hashes,'preparation rewrote selected config'
+ assert cache_inventory(DATA/'package-tools')==npm10_cache_inventory,'preparation modified the primed tool distribution'
+ typescript=[c for c in result['coverage'] if c['language']=='typescript'];assert typescript,result
+ assert all(not c['details_omitted'] for c in typescript),typescript
+ for compilation in typescript:
+  manager=compilation['analysis_options']['knowCodePackageManager']
+  assert manager['name']=='npm' and manager['version']=='10.0.0' and manager['source']=='user-cache' and manager['scriptsAuthorization']=='disabled',manager
+  assert manager['restorationSafety']=={'gitFetching':'disabled','installLinks':False,'installLinksOrigin':'npm-effective-query-pinned'},manager
+ assert all(c['status']=='complete' for c in result['coverage'] if c['language']=='csharp'),result
+ return typescript
+linked_coverage=npm10_step('linked_directory_prepare_suppressed_with_bin_preserved')
+assert all(c['status']=='complete' for c in linked_coverage),linked_coverage
+installed_link=WORKSPACE/'node_modules/@know-code/npm10-linked';installed_bin=WORKSPACE/'node_modules/.bin/know-code-owned-tool'
+assert installed_link.is_symlink() and installed_link.resolve()==linked.resolve(),installed_link
+assert installed_bin.is_symlink() and installed_bin.resolve()==(linked/'cli.cjs').resolve(),installed_bin
+assert command('node',installed_bin).stdout.strip()=='owned installed npm10 bin'
+npm10_evidence['linked_outputs']={'dependency':str(installed_link),'dependency_target':str(installed_link.resolve()),'bin':str(installed_bin),'bin_target':str(installed_bin.resolve())}
+checks.append('relocated_installed_npm10_linked_prepare_suppressed_bin_and_effective_policy_preserved')
+# A hosted full SHA can bypass the git executable through archive fetching;
+# only the shipped process-local Pacote guard yields this exact policy error.
+package['dependencies']['know-code-blocked-git']='github:know-code-fixture/never-fetch#'+'1'*40
+(WORKSPACE/'package.json').write_text(json.dumps(package)+'\n')
+git_coverage=npm10_step('hosted_full_SHA_Git_refused_by_shipped_guard')
+assert any(c['status']=='partial' and any(d['code']=='dependency_restore_failed' and 'EKNOWCODE_NPM10_GIT_DISABLED' in d['message'] for d in c.get('diagnostics',[])) for c in git_coverage),git_coverage
+saved_ts=json.loads(command(HOST,'query',DATABASE,json.dumps({'op':'symbols','name':'savedAnswer'})).stdout);assert checked_result(saved_ts)['symbols'],saved_ts
+npm10_evidence.update({'healthy_TS_result_after_Git_refusal':saved_ts,'config_sha256':config_hashes,'final_generation':final_generation,'passed':True})
+(PREFIX/'npm10-installed.json').write_text(json.dumps(npm10_evidence,indent=2)+'\n')
+checks.append('relocated_installed_npm10_full_SHA_Git_policy_refusal_with_fresh_partial_TS_and_healthy_Csharp')
+PHASE='network_denied_runtime'
 missing=PREFIX/'missing';missing.mkdir();missing_package='KnowCodeOfflineMissingDependency'
 (missing/'Missing.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="'+missing_package+'" Version="1.0.0" /></ItemGroup></Project>')
 (missing/'Missing.cs').write_text('public class MissingConsumer { MissingDependency.Type value; }\n')
@@ -329,6 +421,7 @@ if failure.returncode==0:
 assert missing_package.lower() in json.dumps(negative).lower(),negative
 (PREFIX/'missing-restoration.json').write_text(json.dumps(negative,indent=2)+'\n')
 healthy=json.loads(command(HOST,'query',DATABASE,json.dumps({'op':'symbols','name':'SavedGreet'})).stdout)['result'];assert healthy['freshness']=='current' and healthy['symbols'],healthy
+final_generation=healthy['generation']
 checks.append('offline_missing_restoration_is_actionable_and_other_workspace_stays_healthy')
 command(HOST,'coordinator','stop');until=time.monotonic()+20
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
@@ -341,5 +434,5 @@ finally:manifest_file.write_bytes(saved)
 invalid=PREFIX/'invalid-resources';invalid.mkdir();failure=command(HOST,'runtime-info',check=False,env=dict(ENV,KNOW_CODE_RUNTIME_DIR=str(invalid)));assert failure.returncode and 'manifest' in failure.stderr
 bare=PREFIX/'bare';bare.mkdir();shutil.copy2(bundle/'bin/know-code',bare/'know-code');failure=command(bare/'know-code','runtime-info',check=False);assert failure.returncode and 'not found' in failure.stderr
 checks+=['missing_resource_no_checkout_fallback','manifest_protocol_mismatch','invalid_override_no_silent_fallback','bare_executable_actionable_error']
-result={'passed':True,'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json')}
+result={'passed':True,'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json'),'installed_npm10_evidence':str(PREFIX/'npm10-installed.json')}
 (PREFIX/'result.json').write_text(json.dumps(result,indent=2)+'\n');report=ROOT/'.artifacts/packaging/installed-test.json';report.parent.mkdir(parents=True,exist_ok=True);report.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))

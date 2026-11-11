@@ -32,6 +32,8 @@ Explicit workspace removal (`unwatch`) revokes its install-script grant before r
 
 The shared package-tool cache is `package-tools` beneath the central per-user data directory. Node 24 and the .NET SDK remain separately installed prerequisites. The accepted automatic restoration families are stable npm 10–11 and pnpm 10–12; exact repository pins remain authoritative. Unsupported families fail actionably for restoration, without substituting another manager. See [first-wave adapter contract](FIRST_WAVE_CONTRACT.md) for acquisition, offline reuse and evidence obligations.
 
+With `allow_install_scripts` absent or false, npm 10 cannot fetch Git dependencies or restore with effective `install-links=true`. Ordinary linked directories remain supported with `install-links=false`, including executable links. Select npm 11, restore affected dependencies separately, or grant scripts explicitly in personal settings; see [npm/pnpm preparation policy](TYPESCRIPT_PROVIDER.md#npmpnpm-preparation-policy).
+
 ## SDKs, freshness and compatibility
 
 Node `Workspace.settings()` reads effective settings; `Workspace.configure(object)` replaces personal settings. .NET `Workspace.SettingsAsync()` reads them; `Workspace.ConfigureJsonAsync(json)` replaces them using the same JSON shape, preserving explicit nulls. Configuration arguments on open/refresh remain supported and become personal configuration overrides.
