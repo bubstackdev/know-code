@@ -88,7 +88,7 @@ try:
  for support in method['supporting_targets']:
   scoped=parity({'op':'references','symbol_id':method['id'],'compilation_id':support['compilation_id']})['occurrences']
   assert scoped and all(item['compilation_id']==support['compilation_id'] and not item.get('supporting_targets') for item in scoped),scoped
- helper=parity({'op':'symbols','name':'Helper'})['symbols'][0]
+ helper=next(item for item in parity({'op':'symbols','name':'Helper'})['symbols'] if not item['external'])
  callees=parity({'op':'callees','symbol_id':helper['id']})['graph']['findings']
  target_finding=next(item for item in callees if item['symbol']['name']=='Target')
  assert len(target_finding['supporting_targets'])==2,target_finding
