@@ -1,5 +1,6 @@
 """The adapters' parsers, on answers each tool gave to the made-up fixture (fixture/README.md)."""
 import json
+from pathlib import Path
 import unittest
 
 from compare import adapters
@@ -50,6 +51,22 @@ class KnowCodeTest(unittest.TestCase):
         self.assertEqual(adapters.kc_impact_decls(page), ([('decl', 'src/hooks/useFetchItems.ts', 54)], 'kc~2'))
         last = json.dumps({'items': [{'file': 'a.ts', 'line': 3, 'hop': 2}]})
         self.assertEqual(adapters.kc_impact_decls(last), ([('decl', 'a.ts', 3)], None))
+
+    def test_impact_continuation_pages_as_text(self):
+        # KnowCode at integration/0.8 (kc_more continues a text answer as text), on the made-up fixture with limit 1.
+        pages = json.loads((Path(__file__).parent/'testdata'/'kc_pages.json').read_text())['impact_text_pages']
+        parsed = [adapters.kc_impact_decls(p) for p in pages]
+        self.assertEqual([c for _, c in parsed], ['kc~1', 'kc~2', 'kc~3', None])
+        self.assertEqual([i for items, _ in parsed for i in items],
+                         [('decl', 'src/harvest.ts', 4), ('decl', 'src/picker.ts', 4), ('decl', 'src/picker.ts', 8),
+                          ('decl', 'src/harvest.ts', 10)])
+
+    def test_refs_continuation_pages_as_json(self):
+        pages = json.loads((Path(__file__).parent/'testdata'/'kc_pages.json').read_text())['refs_json_pages']
+        parsed = [adapters.kc_refs_sites(p) for p in pages]
+        self.assertEqual([c for _, c in parsed], ['kc~4', 'kc~5', None])
+        self.assertEqual([i for items, _ in parsed for i in items],
+                         [('site', 'src/harvest.ts', 5), ('site', 'src/picker.ts', 4), ('site', 'src/picker.ts', 8)])
 
     def test_impact_rows_in_paths_with_spaces(self):
         text = ('method ParsableCommand.run  Sources/ArgumentParser/Parsable Types/ParsableCommand.swift:32\n'

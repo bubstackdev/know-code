@@ -40,7 +40,7 @@ def table(rows, kind):
     """Markdown rows for one score (answered or all_questions) per type, tool and language."""
     by = {(r['type'], r['tool'], r['language']): r for r in rows}
     out = []
-    for qtype in ('refs', 'impact'):
+    for qtype in [t for t in ('refs', 'callers', 'impact', 'find') if any(r['type'] == t for r in rows)]:
         out += [f'**{qtype}**', '', '| Tool | Language | Questions | Precision | Recall | Unjudged items |'
                 + (' not_found | error | no_counterpart |' if kind == 'answered' else ''),
                 '| --- | --- | ---: | ---: | ---: | ---: |' + (' ---: | ---: | ---: |' if kind == 'answered' else '')]

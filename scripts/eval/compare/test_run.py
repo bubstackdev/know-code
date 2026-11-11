@@ -62,5 +62,23 @@ class ScoreTest(unittest.TestCase):
                              [[['site', 'b.cs', 6]]])
 
 
+class PathsTest(unittest.TestCase):
+    def test_locate_recall_within_budgets_and_no_counterpart(self):
+        q = {'id': 't1:locate', 'repo': 't1', 'lang': 'csharp', 'type': 'locate', 'text': 'x',
+             'files': ['src/a.cs', 'src/b.cs'], 'tests': ['test/a_test.cs']}
+        far = 'x' * 3000
+        answers = [{'id': 't1:locate', 'tool': 'knowcode', 'type': 'locate', 'outcome': 'judged', 'items': [],
+                    'raw': ['src/a.cs ' + far, 'src/b.cs']},
+                   {'id': 't1:locate', 'tool': 'serena', 'type': 'locate', 'outcome': 'no_counterpart', 'items': [], 'raw': []}]
+        misses = []
+        rows = {(r['tool'], r['language']): r for r in run.summarise_paths([q], answers, misses=misses)}
+        kc = rows[('knowcode', 'csharp')]
+        self.assertEqual((kc['files']['all']['k'], kc['files']['2000']['k'], kc['files']['all']['n']), (2, 1, 2))
+        self.assertEqual(kc['tests']['all']['k'], 0)
+        self.assertEqual(rows[('serena', 'all')]['outcomes']['no_counterpart'], 1)
+        self.assertEqual(misses, [{'id': 't1:locate', 'tool': 'knowcode', 'missed': [['test/a_test.cs', '', 'tests']],
+                                   'wrong': [], 'unjudged': 0}])
+
+
 if __name__ == '__main__':
     unittest.main()
