@@ -59,9 +59,13 @@ pub fn index_controlled(
         progress,
         before_publish,
         control,
-        None,
-        None,
+        Publication::Serving(None),
     )
+}
+#[derive(Clone, Copy)]
+pub(crate) enum Publication<'a> {
+    Serving(Option<&'a crate::cursor::CursorService>),
+    Replacement(&'a crate::recovery::Candidate),
 }
 pub(crate) fn index_published(
     database: &Path,
@@ -70,19 +74,18 @@ pub(crate) fn index_published(
     progress: &mut impl FnMut(Progress),
     before_publish: impl FnOnce() -> Result<()>,
     control: &Control,
-    cursors: Option<&crate::cursor::CursorService>,
-    destination: Option<&crate::recovery::Candidate>,
+    publication: Publication<'_>,
 ) -> Result<u64> {
     control.check()?;
-    let mut writer = match destination {
-        Some(candidate) => Writer::open_destination(
+    let mut writer = match publication {
+        Publication::Replacement(candidate) => Writer::open_destination(
             database,
             &candidate.database,
             None,
             candidate.minimum_generation,
             control,
         )?,
-        None => Writer::open_controlled(database, replacements, control)?,
+        Publication::Serving(_) => Writer::open_controlled(database, replacements, control)?,
     };
     let preparation_path = database.with_extension("preparation.json");
     let mut preparations: BTreeMap<String, PreparationResult> =
@@ -280,11 +283,9 @@ pub(crate) fn index_published(
     }
     control.check()?;
     before_publish()?;
-    if destination.is_some() {
-        writer.publish_controlled(&control.staging())
-    } else if let Some(cursors) = cursors {
-        cursors.publish(database, writer, control)
-    } else {
-        writer.publish_controlled(control)
+    match publication {
+        Publication::Replacement(_) => writer.publish_controlled(&control.staging()),
+        Publication::Serving(Some(cursors)) => cursors.publish(database, writer, control),
+        Publication::Serving(None) => writer.publish_controlled(control),
     }
 }

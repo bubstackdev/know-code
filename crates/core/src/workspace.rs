@@ -707,7 +707,9 @@ pub fn refresh_controlled(
             Ok(())
         },
         control,
-        cursors,
-        destination,
+        match destination {
+            Some(candidate) => update::Publication::Replacement(candidate),
+            None => update::Publication::Serving(cursors),
+        },
     )
 }

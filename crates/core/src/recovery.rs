@@ -32,6 +32,11 @@ const PAGE: usize = 4096;
 const MAGIC: &[u8; 8] = b"KCIDX001";
 const MAX_STATE: u64 = 256 * 1024;
 const MAX_INCARNATIONS: usize = 256;
+#[cfg(test)]
+thread_local! {
+    static FAIL_NEXT_DIRECTORY_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Incarnation {
@@ -216,6 +221,12 @@ fn save(logical: &Path, state: &State) -> Result<()> {
     file.write_all(&bytes)?;
     file.sync_all()?;
     fs::rename(next, path)?;
+    #[cfg(test)]
+    if FAIL_NEXT_DIRECTORY_SYNC.with(|flag| flag.replace(false)) {
+        return Err(
+            std::io::Error::other("injected directory sync failure after selector rename").into(),
+        );
+    }
     File::open(parent(logical)?)?.sync_all()?;
     Ok(())
 }
@@ -1122,6 +1133,38 @@ mod tests {
             drop(guard);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+    #[test]
+    fn selected_ready_candidate_is_not_abandoned_when_directory_sync_ack_fails() {
+        let (root, logical) = fixture();
+        adopt(&logical, 0).unwrap();
+        let old = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        indexed(old.physical_path(), 3);
+        reserve_generation(&logical, 3).unwrap();
+        assert!(old.note_corruption("fixture corruption proof").is_err());
+        let candidate = begin_rebuild(&logical, false, 3).unwrap();
+        indexed(&candidate.database, 4);
+        reserve_generation(&logical, 4).unwrap();
+        let error = finish_rebuild(&candidate, &Control::default(), || {
+            FAIL_NEXT_DIRECTORY_SYNC.with(|flag| flag.set(true));
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("directory sync failure"));
+        assert_eq!(
+            selected_incarnation(&logical).unwrap().as_deref(),
+            Some(candidate.incarnation.as_str())
+        );
+        assert_eq!(selected_replacement_generation(&logical).unwrap(), Some(4));
+        assert!(!blocked(&logical).unwrap());
+        reconcile(&logical).unwrap();
+        let selected = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        assert_eq!(selected.incarnation(), candidate.incarnation);
+        assert!(selected.check().is_ok());
+        assert!(old.check().is_err());
+        assert!(load(&logical).unwrap().unwrap().pending.is_none());
+        drop((old, selected));
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn interrupted_build_and_verified_but_unselected_candidate_require_explicit_refresh() {

@@ -78,12 +78,17 @@ impl Limits {
 enum Stop {
     Cancelled,
     Limited(String),
+    Failed { code: String, message: String },
 }
 impl Stop {
     fn error(&self) -> Error {
         match self {
             Self::Cancelled => Error::Cancelled,
             Self::Limited(s) => Error::ResourceLimited(s.clone()),
+            Self::Failed { code, message } => Error::Remote {
+                code: code.clone(),
+                message: message.clone(),
+            },
         }
     }
 }
@@ -557,7 +562,14 @@ fn monitor_loop(
             if let Some(check) = check {
                 let current = settings.lock().unwrap();
                 if let Err(error) = check(&current) {
-                    control.stop(Stop::Limited(format!("replacement disk guard: {error}")));
+                    let reason = match error {
+                        Error::ResourceLimited(message) => Stop::Limited(message),
+                        error => Stop::Failed {
+                            code: error.code().into(),
+                            message: format!("replacement disk guard failed: {error}"),
+                        },
+                    };
+                    control.stop(reason);
                 }
             }
         }
@@ -598,6 +610,35 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
+    #[test]
+    fn staging_commit_keeps_cancel_live_and_disk_io_failure_is_not_a_limit() {
+        let governor = Governor::new(Limits::default()).unwrap();
+        let session = governor.start().unwrap();
+        let control = session.control();
+        control.staging().publish(|| Ok(())).unwrap();
+        assert!(!control.committed());
+        assert!(control.cancel());
+        drop(session);
+        let session = governor.start().unwrap();
+        let control = session.control();
+        control.guard_disk(|_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "owned fixture IO failure",
+            )
+            .into())
+        });
+        let until = Instant::now() + Duration::from_secs(3);
+        loop {
+            match control.check() {
+                Err(Error::Remote { code, .. }) if code == "io_error" => break,
+                Err(error) => panic!("disk IO failure misclassified: {error}"),
+                Ok(()) if Instant::now() < until => thread::sleep(Duration::from_millis(10)),
+                Ok(()) => panic!("disk guard was not sampled"),
+            }
+        }
+        assert!(!control.resource_limited());
+    }
     #[test]
     fn disk_limits_default_for_existing_settings_and_reject_overflow() {
         let existing: Limits =
