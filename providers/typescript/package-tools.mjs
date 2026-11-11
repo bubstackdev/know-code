@@ -88,8 +88,13 @@ export function restorationSafety(tool, allowScripts) {
   if (allowScripts) return {args: [], env: {}};
   const config = {'git': '/usr/bin/git', 'script-shell': '/bin/sh'};
   const args = Object.entries(config).map(([key, value]) => `${tool.name === 'npm' ? '--' : '--config.'}${key}=${value}`);
+  args.push('--ignore-scripts');
+  if (tool.name === 'pnpm') args.push('--ignore-pnpmfile');
   const env = {};
-  for (const [key, value] of Object.entries(config)) for (const manager of ['npm', 'pnpm']) {
+  // A manager may spawn another installer while fetching a Git dependency.
+  // Parent CLI options are not automatically inherited by that child. Keep
+  // scripts/hooks disabled in both supported managers' environment spellings.
+  for (const [key, value] of Object.entries({...config, 'ignore-scripts': 'true', 'ignore-pnpmfile': 'true'})) for (const manager of ['npm', 'pnpm']) {
     env[`${manager}_config_${key.replaceAll('-', '_')}`] = value;
     env[`${manager.toUpperCase()}_CONFIG_${key.replaceAll('-', '_').toUpperCase()}`] = value;
   }

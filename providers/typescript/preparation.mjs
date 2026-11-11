@@ -244,9 +244,7 @@ export async function preparePackages(root, directories, request, send) {
               [...(locked ? ['ci'] : ['install', '--package-lock=false']), '--no-audit', '--no-fund', '--no-update-notifier', '--logs-max=0', '--include=dev'];
             const safety = restorationSafety(tool, allowScripts);
             args.push(...safety.args);
-            if (!allowScripts) args.push('--ignore-scripts');
             if (pnpm) {
-              if (!allowScripts) args.push('--ignore-pnpmfile');
               if (tool.major === 10) args.push('--config.manage-package-manager-versions=false');
               args.push('--config.runtime=false', '--config.updateNotifier=false');
               if (tool.major === 12) args.push('--no-runtime');

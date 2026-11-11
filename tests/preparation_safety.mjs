@@ -50,6 +50,11 @@ command('/usr/bin/git',['-c','user.name=Know Code fixture','-c','user.email=fixt
 const revision=command('/usr/bin/git',['rev-parse','HEAD'],git);assert(/^[0-9a-f]{40,64}$/.test(revision));
 const registry='https://registry.example.invalid/';const proxy='http://127.0.0.1:9';
 const checks=[],matrix=[];
+function progress(status='running',error) {
+  fs.writeFileSync(path.join(run,'matrix-progress.json'),JSON.stringify({status,checks,matrix,commands,error},null,2)+'\n');
+  const current=matrix.at(-1);
+  if(current)fs.writeFileSync(path.join(current.directory,'result.json'),JSON.stringify(current,null,2)+'\n');
+}
 const request={analysisPolicy:{version:1,node:{cacheDirectory:cache,allowInstallScripts:false}},preparations:[],retryPreparation:true};
 try {
   for(const pin of pins) {
@@ -65,10 +70,13 @@ try {
     write(path.join(directory,'.npmrc'),config);
     if(pin.startsWith('pnpm'))write(path.join(directory,'pnpm-workspace.yaml'),`packages:\n  - .\nscriptShell: ./selector-shell\n`);
     const configHash=hash(path.join(directory,'.npmrc'));const messages=[];
-    const diagnostics=await preparePackages(directory,[directory],request,(kind,value)=>messages.push({kind,value}));
+    const attempt={pin,directory,status:'running',messages,config_sha256:configHash};matrix.push(attempt);progress();
+    const diagnostics=await preparePackages(directory,[directory],request,(kind,value)=>{messages.push({kind,value});progress();});
+    const preparation=messages.filter(message=>message.kind==='preparation').map(message=>message.value);
+    Object.assign(attempt,{preparation,diagnostics:diagnostics(directory),setup_failure:diagnostics.failure(directory)?.message,
+      markers:Object.fromEntries([gitMarker,shellMarker,path.join(run,'dependency-prepare-ran'),path.join(run,'root-install-ran')].map(filename=>[filename,fs.existsSync(filename)]))});progress();
     assert.equal(diagnostics.failure(directory),undefined);
     assert.deepEqual(diagnostics(directory),[]);
-    const preparation=messages.filter(message=>message.kind==='preparation').map(message=>message.value);
     assert.equal(preparation.length,1);assert(preparation[0].succeeded,JSON.stringify(preparation));
     assert(fs.existsSync(path.join(directory,'node_modules/know-code-safe-git-dependency/package.json')),'real Git dependency was not installed');
     for(const filename of [gitMarker,shellMarker,path.join(run,'dependency-prepare-ran'),path.join(run,'root-install-ran')])assert(!fs.existsSync(filename),`ungranted executable ran: ${filename}`);
@@ -79,8 +87,7 @@ try {
       const output=await runCommand(tool.program,[...tool.prefix,'config','get',key,...safety.args],directory,undefined,safety.env);
       assert(output.includes(key==='registry'?registry:proxy),`${pin} lost ${key} configuration: ${output}`);configured[key]=output;
     }
-    matrix.push({pin,preparation,config_sha256:configHash,configured,tool:{program:tool.program,prefix:tool.prefix,source:tool.source}});
-    fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify({messages,matrix:matrix.at(-1)},null,2)+'\n');
+    Object.assign(attempt,{status:'passed',configured,tool:{program:tool.program,prefix:tool.prefix,source:tool.source}});progress();
   }
   checks.push('npm10_11_pnpm10_11_12_floor_and_latest_git_restore_ignores_executable_selectors_without_losing_registry_proxy_or_config');
   const inputs=path.join(run,'inputs');fs.mkdirSync(inputs);
@@ -143,4 +150,7 @@ try {
     source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs'].map(name=>[name,hash(path.join(root,name))])),
     limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested','all accepted majors covered by named floor/latest pins, not every intermediate patch']};
   fs.writeFileSync(path.join(run,'validation.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
+} catch(error) {
+  const attempt=matrix.at(-1);if(attempt&&attempt.status==='running')attempt.status='failed';
+  progress('failed',String(error.stack??error));throw error;
 } finally {fs.writeFileSync(path.join(run,'commands.json'),JSON.stringify(commands,null,2)+'\n');}
