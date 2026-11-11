@@ -233,8 +233,7 @@ fn load(logical: &Path) -> Result<Option<State>> {
                 .or_insert(serde_json::to_value(RebuildReason::Corruption)?);
         }
     }
-    let mut state: State = serde_json::from_value(payload)?;
-    state.version = VERSION;
+    let state: State = serde_json::from_value(payload)?;
     if state.failed.is_some() != state.failed_reason.is_some() {
         return Err(invalid("index failure receipt is missing its cause"));
     }
@@ -272,7 +271,13 @@ fn lock(logical: &Path) -> Result<File> {
     Ok(file)
 }
 fn save(logical: &Path, state: &State) -> Result<()> {
-    let bytes = serde_json::to_vec(state)?;
+    // Reading legacy state must not pretend it was rewritten. Every actual
+    // durable mutation deliberately advances the lifecycle contract.
+    let state = State {
+        version: VERSION,
+        ..state.clone()
+    };
+    let bytes = serde_json::to_vec(&state)?;
     if bytes.len() as u64 > MAX_STATE {
         return Err(invalid("index lifecycle state exceeds bound"));
     }
@@ -618,6 +623,9 @@ pub fn reserve_generation(logical: &Path, generation: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+pub fn lifecycle_version(logical: &Path) -> Result<Option<u32>> {
+    Ok(load(logical)?.map(|s| s.version))
 }
 pub fn selected_path(logical: &Path) -> Result<PathBuf> {
     Ok(match load(logical)? {
@@ -979,40 +987,47 @@ fn family_bytes(path: &Path) -> Result<u64> {
     }
     Ok(total)
 }
-pub fn extra_bytes(logical: &Path, cutover: bool) -> Result<u64> {
+fn extra_families(logical: &Path, cutover: bool) -> Result<Vec<PathBuf>> {
     let Some(state) = load(logical)? else {
-        return Ok(0);
+        return Ok(vec![]);
     };
-    let mut total = 0u64;
-    for index in state
+    state
         .retired
         .iter()
         .chain(state.pending.iter().filter(|_| !cutover).map(|p| &p.index))
         .chain(cutover.then_some(&state.selected))
-    {
-        total = total
-            .checked_add(family_bytes(&physical(logical, index)?)?)
-            .ok_or_else(|| invalid("disk accounting overflow"))?;
-        // Include the fixed health page and lease rather than count them as free.
-        total = total
-            .checked_add(PAGE as u64)
-            .ok_or_else(|| invalid("disk accounting overflow"))?;
-    }
-    Ok(total)
+        .map(|index| physical(logical, index))
+        .collect()
 }
-/// Other workspaces cannot grow candidate/retired data while this job holds
-/// the coordinator's only analysis slot. Cache their charge once per attempt.
+fn charged_family(path: &Path) -> Result<u64> {
+    // The health page and lease remain conservatively charged even when
+    // cleanup removes a captured family during a running replacement.
+    family_bytes(path)?
+        .checked_add(PAGE as u64)
+        .ok_or_else(|| invalid("disk accounting overflow"))
+}
+pub fn extra_bytes(logical: &Path, cutover: bool) -> Result<u64> {
+    extra_families(logical, cutover)?
+        .iter()
+        .try_fold(0u64, |sum, path| {
+            sum.checked_add(charged_family(path)?)
+                .ok_or_else(|| invalid("disk accounting overflow"))
+        })
+}
+/// The sole analysis slot prevents other workspaces from adding charged
+/// incarnations. Capture their paths once, then sample their file sizes: healthy
+/// retired cursor bookkeeping can still grow a DB/WAL while analysis runs.
 #[derive(Clone)]
 pub struct DiskBudget {
     logical: PathBuf,
     volume: PathBuf,
-    other_bytes: u64,
+    other_families: Vec<PathBuf>,
 }
 impl DiskBudget {
     pub fn new(logical: &Path, data: &Path) -> Result<Self> {
         let workspaces = data.join("workspaces");
         directory(&workspaces, false)?;
-        let mut other_bytes = 0u64;
+        let mut other_families = vec![];
         for entry in fs::read_dir(&workspaces)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -1027,20 +1042,21 @@ impl DiskBudget {
             directory(&entry.path(), false)?;
             let database = entry.path().join("index.db");
             if database != logical {
-                other_bytes = other_bytes
-                    .checked_add(extra_bytes(&database, false)?)
-                    .ok_or_else(|| invalid("disk accounting overflow"))?;
+                other_families.extend(extra_families(&database, false)?);
             }
         }
         Ok(Self {
             logical: logical.into(),
             volume: data.into(),
-            other_bytes,
+            other_families,
         })
     }
     pub fn check(&self, limits: &Limits, cutover: bool) -> Result<()> {
-        let used = self
-            .other_bytes
+        let other_bytes = self.other_families.iter().try_fold(0u64, |sum, path| {
+            sum.checked_add(charged_family(path)?)
+                .ok_or_else(|| invalid("disk accounting overflow"))
+        })?;
+        let used = other_bytes
             .checked_add(extra_bytes(&self.logical, cutover)?)
             .ok_or_else(|| invalid("disk accounting overflow"))?;
         if used > limits.rebuild_disk_mib * 1024 * 1024 {

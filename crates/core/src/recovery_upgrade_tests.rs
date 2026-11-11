@@ -95,6 +95,7 @@ fn future_receipts_are_rejected_before_strict_decode_and_v1_causes_are_deliberat
         replacement_reason(&logical).unwrap(),
         Some(RebuildReason::Corruption)
     );
+    assert_eq!(lifecycle_version(&logical).unwrap(), Some(1));
     assert_eq!(
         fs::read(&path).unwrap(),
         legacy_bytes,
@@ -107,7 +108,59 @@ fn future_receipts_are_rejected_before_strict_decode_and_v1_causes_are_deliberat
     );
     let converted: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(converted["version"], 2);
+    assert_eq!(lifecycle_version(&logical).unwrap(), Some(2));
     assert_eq!(converted["failed_reason"], "corruption");
     drop(guard);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn disk_sampling_observes_other_healthy_retired_wal_growth_and_cleanup() {
+    let (root, logical) = fixture(2, Some(12));
+    let old = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+    let upgrade = begin_upgrade(&logical, false, 2, 2).unwrap();
+    let replacement = Connection::open(&upgrade.database).unwrap();
+    replacement.execute_batch("PRAGMA user_version=8; PRAGMA journal_mode=WAL; CREATE TABLE state(current_generation INTEGER); INSERT INTO state VALUES(13);").unwrap();
+    drop(replacement);
+    reserve_generation(&logical, 13).unwrap();
+    finish_rebuild(&upgrade, &Control::default(), || Ok(())).unwrap();
+    let sibling = root
+        .join("workspaces")
+        .join("b".repeat(24))
+        .join("index.db");
+    fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+    adopt(&sibling, 0).unwrap();
+    let budget = DiskBudget::new(&sibling, &root).unwrap();
+    let limits = Limits {
+        rebuild_disk_mib: 1,
+        min_free_disk_mib: 0,
+        ..Default::default()
+    };
+    budget.check(&limits, false).unwrap();
+    let bookkeeping = Connection::open(old.physical_path()).unwrap();
+    bookkeeping.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE cursor_growth(payload BLOB); INSERT INTO cursor_growth VALUES(zeroblob(2097152));").unwrap();
+    assert!(
+        family_path(old.physical_path(), "-wal")
+            .metadata()
+            .unwrap()
+            .len()
+            > 1024 * 1024
+    );
+    assert!(
+        matches!(budget.check(&limits, false), Err(Error::ResourceLimited(_))),
+        "retired family growth after budget construction must be observed"
+    );
+    assert!(
+        old.check().is_ok(),
+        "upgrade never poisons the old healthy reader"
+    );
+    drop(bookkeeping);
+    let retired = old.physical_path().to_owned();
+    cleanup(&logical, 13).unwrap();
+    assert!(retired.exists());
+    drop(old);
+    cleanup(&logical, 13).unwrap();
+    assert!(!retired.exists());
+    budget.check(&limits, false).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
