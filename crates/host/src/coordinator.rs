@@ -3,6 +3,7 @@ use know_code_core::{
     control,
     protocol::{self, envelope::Payload, *},
     query::ReadView,
+    recovery,
     resource::{Control, Governor, Limits, Session},
     settings,
     workspace::{self, Snapshot},
@@ -46,6 +47,9 @@ struct Entry {
     watch_pending: bool,
     pending: bool,
     cancel_pending: bool,
+    recovery_blocked: bool,
+    recovery_explicit: bool,
+    recovering: bool,
 }
 struct LiveStatus {
     value: WorkspaceStatus,
@@ -119,6 +123,8 @@ struct Job {
     session: Session,
     previous_failed_input_hash: String,
     cancel_baseline: bool,
+    recovering: bool,
+    recovery_explicit: bool,
 }
 enum JobOutput {
     Indexed(u64, Snapshot, Vec<PathBuf>),
@@ -131,11 +137,136 @@ struct JobResult {
     epoch: u64,
     result: Result<JobOutput, Failure>,
     cancel_baseline: bool,
+    recovering: bool,
 }
 
 struct Failure {
     code: String,
     message: String,
+    index_fault: Option<(PathBuf, String)>,
+}
+
+fn selected_readiness(database: &Path) -> know_code_core::Result<(u64, bool)> {
+    let guard = recovery::IndexReadGuard::open_unbudgeted(database)?;
+    let result = (|| {
+        let view = ReadView::open(guard.physical_path())?;
+        let result = (view.generation, view.needs_test_classification()?);
+        guard.check()?;
+        Ok(result)
+    })();
+    match result {
+        Err(know_code_core::Error::NotReady) => Ok((0, false)),
+        Err(know_code_core::Error::Sqlite(error)) => Err(guard.map_sqlite(error)),
+        other => other,
+    }
+}
+
+fn restore_recovery(entry: &mut Entry) -> AnyResult<()> {
+    let database = PathBuf::from(&entry.status.database);
+    recovery::adopt(&database, entry.status.generation)?;
+    recovery::reconcile(&database)?;
+    if let Some(generation) = recovery::selected_replacement_generation(&database)? {
+        entry.status.generation = entry.status.generation.max(generation);
+    }
+    if let Some(error) = recovery::failure(&database)? {
+        entry.recovery_blocked = true;
+        entry.pending = false;
+        entry.cancel_pending = false;
+        entry.analysis_error = error.clone();
+        entry.status.error = error;
+        if !matches!(
+            entry.status.outcome_code.as_str(),
+            "resource_limited" | "cancelled"
+        ) {
+            entry.status.outcome_code = "index_recovering".into();
+        }
+        entry.status.phase = if entry.status.outcome_code == "resource_limited" {
+            "resource_limited"
+        } else {
+            "recovery_failed"
+        }
+        .into();
+    } else {
+        // This probes only owned file identity/loss. SQL corruption is detected
+        // by the normal guarded readiness/read/write boundary.
+        match recovery::IndexReadGuard::open_unbudgeted(&database) {
+            Ok(_) => {}
+            Err(know_code_core::Error::IndexCorrupt { .. }) => {
+                if entry.status.outcome_code != "cancelled" && !entry.cancel_pending {
+                    entry.pending = true;
+                    entry.force = true;
+                    entry.status.phase = "queued".into();
+                    entry.status.outcome_code = "index_corrupt".into();
+                    entry.status.error = "derived index recovery is queued".into();
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn observe_bad(shared: &Shared, entry: &mut Entry, incarnation: &str) -> AnyResult<bool> {
+    let database = PathBuf::from(&entry.status.database);
+    if !recovery::report_corruption(&database, incarnation)? {
+        return Ok(false);
+    }
+    shared.cursors.invalidate_corrupt(&database, incarnation)?;
+    if let Some(error) = recovery::failure(&database)? {
+        entry.recovery_blocked = true;
+        entry.pending = false;
+        entry.status.error = error.clone();
+        entry.analysis_error = error;
+        if !matches!(
+            entry.status.outcome_code.as_str(),
+            "resource_limited" | "cancelled"
+        ) {
+            entry.status.outcome_code = "index_recovering".into();
+        }
+        entry.status.phase = if entry.status.outcome_code == "resource_limited" {
+            "resource_limited"
+        } else {
+            "recovery_failed"
+        }
+        .into();
+    } else if !entry.recovering
+        && !entry.cancel_pending
+        && !(entry.status.outcome_code == "cancelled" && !entry.force)
+    {
+        if let Some((_, control)) = shared
+            .active_job
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(db, _)| db == &entry.status.database)
+        {
+            control.cancel();
+        }
+        entry.status.error = "derived index is fenced; recovery is queued".into();
+        entry.status.outcome_code = "index_corrupt".into();
+        queue(entry, None, true);
+    }
+    Ok(true)
+}
+
+fn maintain_retired_indexes(entry: &mut Entry) {
+    if entry.recovering {
+        return;
+    }
+    let database = PathBuf::from(&entry.status.database);
+    let result = (|| -> know_code_core::Result<bool> {
+        if !recovery::has_retired(&database)? {
+            return Ok(false);
+        }
+        recovery::cleanup(&database, entry.status.generation)?;
+        recovery::has_retired(&database)
+    })();
+    match result {
+        Ok(false) if entry.status.progress.as_ref().is_some_and(|p|p.stage=="cleanup_pending")=>entry.status.progress=None,
+        Ok(false)=>{},
+        Ok(true)=>entry.status.progress=Some(Progress{stage:"cleanup_pending".into(),project_path:String::new(),message:"retired index files await reader release or legacy-reader verification and remain charged".into()}),
+        Err(error)=>entry.status.progress=Some(Progress{stage:"cleanup_pending".into(),project_path:String::new(),message:format!("retired index cleanup is pending and remains charged: {error}")}),
+    }
 }
 
 fn maintenance_active(shared: &Shared) -> bool {
@@ -292,10 +423,27 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     watch_pending: true,
                     pending: true,
                     cancel_pending,
+                    recovery_blocked: false,
+                    recovery_explicit: false,
+                    recovering: false,
                     queued: Instant::now(),
                     active: Instant::now() - Duration::from_secs(60),
                 },
             );
+        }
+    }
+    for entry in entries.values_mut() {
+        if let Err(error) = restore_recovery(entry) {
+            entry.pending = false;
+            entry.recovery_blocked = true;
+            entry.status.phase = "failed".into();
+            entry.status.outcome_code = error
+                .downcast_ref::<know_code_core::Error>()
+                .map(|e| e.code())
+                .unwrap_or("recovery_state_error")
+                .into();
+            entry.status.error = error.to_string();
+            entry.analysis_error = entry.status.error.clone();
         }
     }
     let cursors = Arc::new(know_code_core::cursor::CursorService::new(
@@ -409,6 +557,13 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
         if last_presence.elapsed() >= Duration::from_secs(2) {
             let mut entries = shared.entries.lock().unwrap();
             for entry in entries.values_mut() {
+                maintain_retired_indexes(entry);
+                let database = PathBuf::from(&entry.status.database);
+                if let Some(incarnation) = recovery::selected_incarnation(&database)?
+                    && recovery::is_bad(&database)?
+                {
+                    observe_bad(&shared, entry, &incarnation)?;
+                }
                 let root = PathBuf::from(&entry.status.workspace_root);
                 let exists = root.is_dir();
                 let matches =
@@ -510,7 +665,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     shared.analysis_running.store(true, Ordering::Release);
                     let entry = entries.get_mut(&database).unwrap();
                     entry.pending = false;
-                    entry.status.phase = if entry.cancel_pending {
+                    entry.recovering = recovery::is_bad(Path::new(&database))?
+                        && !entry.cancel_pending
+                        && !(entry.status.outcome_code == "cancelled" && !entry.force);
+                    entry.status.phase = if entry.recovering {
+                        "recovering"
+                    } else if entry.cancel_pending {
                         "cancelling"
                     } else if entry.status.outcome_code == "cancelled" && !entry.force {
                         "cancelled"
@@ -546,6 +706,8 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         session,
                         previous_failed_input_hash: entry.failed_input_hash.clone(),
                         cancel_baseline: entry.cancel_pending,
+                        recovering: entry.recovering,
+                        recovery_explicit: std::mem::take(&mut entry.recovery_explicit),
                     };
                     Ok(job)
                 })
@@ -561,6 +723,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     let epoch = job.epoch;
                     let registration = job.registration;
                     let cancel_baseline = job.cancel_baseline;
+                    let recovering = job.recovering;
                     let mut input_hash = String::new();
                     let result = execute(
                         job,
@@ -576,7 +739,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                     return;
                                 }
                                 if progress.stage == "analyzing" {
-                                    entry.status.phase = "analyzing".into();
+                                    entry.status.phase = if recovering {
+                                        "recovering"
+                                    } else {
+                                        "analyzing"
+                                    }
+                                    .into();
                                 }
                                 entry.status.progress = Some(progress);
                             }
@@ -590,6 +758,16 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                             .map(|e| e.code())
                             .unwrap_or("analysis_error")
                             .into(),
+                        index_fault: e.downcast_ref::<know_code_core::Error>().and_then(|error| {
+                            match error {
+                                know_code_core::Error::IndexCorrupt {
+                                    database,
+                                    incarnation,
+                                    ..
+                                } => Some((database.clone(), incarnation.clone())),
+                                _ => None,
+                            }
+                        }),
                         message: e.to_string(),
                     });
                     let _ = sender.send(Event::Finished(JobResult {
@@ -599,6 +777,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         result,
                         input_hash,
                         cancel_baseline,
+                        recovering,
                     }));
                 });
             }
@@ -619,6 +798,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     if entry.registration != done.registration {
                         continue;
                     }
+                    entry.recovering = false;
                     entry.status.progress = None;
                     let manifest = if entry.cancel_pending && !done.cancel_baseline {
                         // The old compiler job has stopped. A fresh managed session
@@ -671,6 +851,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 None
                             }
                             Ok(JobOutput::Indexed(generation, inputs, newer)) => {
+                                entry.recovery_blocked = false;
                                 entry.status.generation = generation;
                                 entry.status.published_epoch = done.epoch;
                                 entry.special_inputs =
@@ -694,6 +875,14 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 Some(inputs)
                             }
                             Err(error) => {
+                                let recovery_failed = done.recovering
+                                    && recovery::failure(Path::new(&done.database))?.is_some();
+                                if recovery_failed {
+                                    entry.recovery_blocked = !entry.recovery_explicit;
+                                    entry.pending = entry.recovery_explicit;
+                                    entry.force = entry.recovery_explicit;
+                                    entry.cancel_pending = false;
+                                }
                                 entry.analysis_error = if entry.cancel_pending {
                                     format!(
                                         "cancellation is pending; saved-input baseline failed: {}",
@@ -733,6 +922,22 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                     }
                                 }
                                 .into();
+                                if recovery_failed {
+                                    entry.status.phase = if entry.recovery_explicit {
+                                        "queued"
+                                    } else if error.code == "resource_limited" {
+                                        "resource_limited"
+                                    } else if error.code == "cancelled" {
+                                        "cancelled"
+                                    } else {
+                                        "recovery_failed"
+                                    }
+                                    .into();
+                                } else if let Some((database, incarnation)) = &error.index_fault
+                                    && database == Path::new(&done.database)
+                                {
+                                    observe_bad(&shared, entry, incarnation)?;
+                                }
                                 None
                             }
                         }
@@ -746,6 +951,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         }
                         return Err(error);
                     }
+                    maintain_retired_indexes(entry);
                 };
                 {
                     let entries = shared.entries.lock().unwrap();
@@ -790,91 +996,89 @@ fn execute(
     cursors: Option<&know_code_core::cursor::CursorService>,
 ) -> AnyResult<JobOutput> {
     let control = job.session.control();
-    control.check()?;
-    if workspace::identity(&job.root)? != job.identity {
-        return Err("workspace identity changed before saved-input reconciliation".into());
-    }
-    let database = Path::new(&job.database);
-    let data = control::root_for_database(database)
-        .ok_or("workspace database has no central data root")?;
-    let settings_paths = settings::paths(&job.root, data);
-    let mut extras = workspace::extra_inputs(database, &job.root).unwrap_or_default();
-    extras.extend(settings_paths.clone());
-    let mut forced_paths = job.paths.clone();
-    if job.rehash {
-        forced_paths.push(job.root.clone());
-        forced_paths.extend(extras.clone());
-    }
-    let before =
-        workspace::snapshot_controlled(&job.root, &job.inputs, &forced_paths, &extras, &control)?;
-    let mut hash = Sha256::new();
-    hash.update(b"know-code-saved-input-v2\0");
-    hash.update(job.configuration.as_bytes());
-    hash.update([0]);
-    for (path, stamp) in &before {
-        hash.update(path.as_bytes());
-        hash.update([0]);
-        hash.update(stamp.hash.as_bytes());
-        hash.update([0]);
-    }
-    // Settings bytes and legacy selection are already part of this identity.
-    // Cancellation must also work when those bytes are malformed.
-    *attempt_hash = format!("{:x}", hash.finalize());
-    control.check()?;
-    if job.cancel_baseline {
-        progress(Progress {
-            stage: "cancelling".into(),
-            project_path: String::new(),
-            message: "Verifying saved-input cancellation baseline".into(),
-        });
-        let mut verify = vec![job.root.clone()];
-        verify.extend(extras.clone());
-        let after = workspace::snapshot_controlled(&job.root, &before, &verify, &extras, &control)?;
+    let mut candidate: Option<recovery::Candidate> = None;
+    let mut disk: Option<Arc<recovery::DiskBudget>> = None;
+    let result = (|| -> AnyResult<JobOutput> {
+        control.check()?;
         if workspace::identity(&job.root)? != job.identity {
-            return Err("workspace identity changed during cancellation capture".into());
+            return Err("workspace identity changed before saved-input reconciliation".into());
         }
-        let newer = workspace::differences(&before, &after);
-        let verified = workspace::snapshot_metadata_matches(&job.root, &after, &control)?;
-        return Ok(JobOutput::CancellationBaseline(after, newer, verified));
-    }
-    if !job.force
-        && !job.previous_failed_input_hash.is_empty()
-        && job.previous_failed_input_hash == *attempt_hash
-        && !job.previous_error.is_empty()
-    {
-        return Err(know_code_core::Error::Remote {
-            code: job.previous_error_code.clone(),
-            message: job.previous_error.clone(),
+        let database = Path::new(&job.database);
+        let data = control::root_for_database(database)
+            .ok_or("workspace database has no central data root")?;
+        let settings_paths = settings::paths(&job.root, data);
+        if job.recovering {
+            candidate = Some(recovery::begin_rebuild(
+                database,
+                job.recovery_explicit,
+                job.previous_generation,
+            )?);
+            let guard = Arc::new(recovery::DiskBudget::new(database, data)?);
+            guard.check(&job.session.limits(), false)?;
+            let sampled = Arc::clone(&guard);
+            control.guard_disk(move |limits| sampled.check(limits, false));
+            disk = Some(guard);
+            progress(Progress {
+                stage: "recovering".into(),
+                project_path: String::new(),
+                message: "Rebuilding a fenced derived index from saved inputs".into(),
+            });
         }
-        .into());
-    }
-    let effective_settings = settings::resolve(&job.root, data, &job.configuration)?;
-    if job.previous_error_code == "cancelled" {
-        progress(Progress {
-            stage: "analyzing".into(),
-            project_path: String::new(),
-            message: "Saved inputs changed after cancellation; resuming analysis".into(),
-        });
-    }
-    let changes = workspace::differences(&job.inputs, &before);
-    let (recovered, classification_backfill) = match ReadView::open(database) {
-        Ok(view) => (view.generation, view.needs_test_classification()?),
-        Err(_) => (0, false),
-    };
-    if !job.force
-        && !classification_backfill
-        && changes.is_empty()
-        && recovered != 0
-        && recovered == job.previous_generation
-    {
-        // Reconciliation proves only that saved inputs did not change. It
-        // cannot repair an earlier analyzer/storage failure or certify facts
-        // that the failed refresh never published.
-        if job.previous_error.is_empty() {
-            return Ok(JobOutput::Indexed(recovered, before, vec![]));
+        let mut extras =
+            if job.recovering || job.cancel_baseline || job.previous_error_code == "cancelled" {
+                workspace::extra_inputs_at(None, &job.root)?
+            } else {
+                workspace::extra_inputs(database, &job.root)?
+            };
+        extras.extend(settings_paths.clone());
+        let mut forced_paths = job.paths.clone();
+        if job.rehash {
+            forced_paths.push(job.root.clone());
+            forced_paths.extend(extras.clone());
         }
-        if !job.previous_failed_input_hash.is_empty()
+        let before = workspace::snapshot_controlled(
+            &job.root,
+            &job.inputs,
+            &forced_paths,
+            &extras,
+            &control,
+        )?;
+        let mut hash = Sha256::new();
+        hash.update(b"know-code-saved-input-v2\0");
+        hash.update(job.configuration.as_bytes());
+        hash.update([0]);
+        for (path, stamp) in &before {
+            hash.update(path.as_bytes());
+            hash.update([0]);
+            hash.update(stamp.hash.as_bytes());
+            hash.update([0]);
+        }
+        // Settings bytes and legacy selection are already part of this identity.
+        // Cancellation must also work when those bytes are malformed.
+        *attempt_hash = format!("{:x}", hash.finalize());
+        control.check()?;
+        if job.cancel_baseline {
+            progress(Progress {
+                stage: "cancelling".into(),
+                project_path: String::new(),
+                message: "Verifying saved-input cancellation baseline".into(),
+            });
+            let mut verify = vec![job.root.clone()];
+            verify.extend(extras.clone());
+            let after =
+                workspace::snapshot_controlled(&job.root, &before, &verify, &extras, &control)?;
+            if workspace::identity(&job.root)? != job.identity {
+                return Err("workspace identity changed during cancellation capture".into());
+            }
+            let newer = workspace::differences(&before, &after);
+            let verified = workspace::snapshot_metadata_matches(&job.root, &after, &control)?;
+            return Ok(JobOutput::CancellationBaseline(after, newer, verified));
+        }
+        if !job.force
+            && !job.recovering
+            && !job.previous_failed_input_hash.is_empty()
             && job.previous_failed_input_hash == *attempt_hash
+            && !job.previous_error.is_empty()
         {
             return Err(know_code_core::Error::Remote {
                 code: job.previous_error_code.clone(),
@@ -882,46 +1086,122 @@ fn execute(
             }
             .into());
         }
-        // A repair may restore the exact last-good bytes. It still needs an
-        // actual analysis, while an unchanged failed snapshot must stay failed.
-    }
-    let scopes = if job.force
-        || classification_backfill
-        || !job.previous_error.is_empty()
-        || recovered == 0
-        || recovered != job.previous_generation
+        let effective_settings = settings::resolve(&job.root, data, &job.configuration)?;
+        if job.previous_error_code == "cancelled" {
+            progress(Progress {
+                stage: "analyzing".into(),
+                project_path: String::new(),
+                message: "Saved inputs changed after cancellation; resuming analysis".into(),
+            });
+        }
+        let changes = workspace::differences(&job.inputs, &before);
+        let (recovered, classification_backfill) = if candidate.is_some() {
+            (0, false)
+        } else {
+            selected_readiness(database)?
+        };
+        if !job.force
+            && !classification_backfill
+            && changes.is_empty()
+            && recovered != 0
+            && recovered == job.previous_generation
+        {
+            // Reconciliation proves only that saved inputs did not change. It
+            // cannot repair an earlier analyzer/storage failure or certify facts
+            // that the failed refresh never published.
+            if job.previous_error.is_empty() {
+                return Ok(JobOutput::Indexed(recovered, before, vec![]));
+            }
+            if !job.previous_failed_input_hash.is_empty()
+                && job.previous_failed_input_hash == *attempt_hash
+            {
+                return Err(know_code_core::Error::Remote {
+                    code: job.previous_error_code.clone(),
+                    message: job.previous_error.clone(),
+                }
+                .into());
+            }
+            // A repair may restore the exact last-good bytes. It still needs an
+            // actual analysis, while an unchanged failed snapshot must stay failed.
+        }
+        let scopes = if job.force
+            || classification_backfill
+            || !job.previous_error.is_empty()
+            || recovered == 0
+            || recovered != job.previous_generation
+        {
+            None
+        } else {
+            workspace::affected_projects(database, &job.root, &changes)?
+        };
+        let preparation_fingerprint = workspace::preparation_fingerprint(&before, &settings_paths);
+        let generation = workspace::refresh_controlled(
+            &job.root,
+            database,
+            workspace::RefreshOptions {
+                configuration: &job.configuration,
+                installation,
+                replacements: scopes.as_deref(),
+                preparation_fingerprint: &preparation_fingerprint,
+                retry_preparation: job.retry_preparation,
+                expected_identity: &job.identity,
+                settings: &effective_settings,
+                cursors,
+                destination: candidate.as_ref(),
+            },
+            progress,
+            &control,
+        )?;
+        let mut extras = if let Some(candidate) = &candidate {
+            workspace::extra_inputs_at(Some(&candidate.database), &job.root)?
+        } else {
+            workspace::extra_inputs(database, &job.root)?
+        };
+        extras.extend(settings_paths);
+        let after =
+            workspace::snapshot_controlled(&job.root, &before, &forced_paths, &extras, &control)?;
+        let newer = workspace::differences(&before, &after);
+        // Newly discovered immutable inputs can safely enter the acknowledged manifest only
+        // after a follow-up reconciliation; saves during analysis cannot disappear.
+        let generation = if let Some(candidate) = &candidate {
+            recovery::finish_rebuild(candidate, &control, || {
+                control.check()?;
+                if workspace::identity(&job.root)? != job.identity {
+                    return Err(know_code_core::Error::Provider(
+                        "workspace identity changed before replacement cutover".into(),
+                    ));
+                }
+                disk.as_ref()
+                    .expect("candidate disk guard")
+                    .check(&job.session.limits(), true)
+            })?
+        } else {
+            generation
+        };
+        Ok(JobOutput::Indexed(generation, before, newer))
+    })();
+    if let Err(error) = &result
+        && job.recovering
     {
-        None
-    } else {
-        workspace::affected_projects(database, &job.root, &changes)?
-    };
-    let preparation_fingerprint = workspace::preparation_fingerprint(&before, &settings_paths);
-    let generation = workspace::refresh_controlled(
-        &job.root,
-        database,
-        workspace::RefreshOptions {
-            configuration: &job.configuration,
-            installation,
-            replacements: scopes.as_deref(),
-            preparation_fingerprint: &preparation_fingerprint,
-            retry_preparation: job.retry_preparation,
-            expected_identity: &job.identity,
-            settings: &effective_settings,
-            cursors,
-        },
-        progress,
-        &control,
-    )?;
-    let mut extras = workspace::extra_inputs(database, &job.root)?;
-    extras.extend(settings_paths);
-    let after =
-        workspace::snapshot_controlled(&job.root, &before, &forced_paths, &extras, &control)?;
-    let newer = workspace::differences(&before, &after);
-    // Newly discovered immutable inputs can safely enter the acknowledged manifest only
-    // after a follow-up reconciliation; saves during analysis cannot disappear.
-    Ok(JobOutput::Indexed(generation, before, newer))
+        // A rename can become visible before its directory fsync reports an
+        // error. Re-observe selection: never reclassify a verified selected
+        // incarnation as an abandoned pre-cutover candidate.
+        let selected = candidate.as_ref().is_some_and(|c| {
+            recovery::selected_incarnation(Path::new(&job.database))
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some(c.incarnation.as_str())
+        });
+        if !selected
+            && let Err(recording) =
+                recovery::fail_rebuild(Path::new(&job.database), &error.to_string())
+        {
+            return Err(know_code_core::Error::IndexRecovering(format!("recovery failed: {error}; failure receipt could not be recorded: {recording}; explicit refresh is required")).into());
+        }
+    }
+    result
 }
-
 fn priority(entry: &Entry, now: Instant) -> (u8, Instant) {
     (
         if now.duration_since(entry.queued) >= Duration::from_secs(5) {
@@ -948,6 +1228,11 @@ fn begin_cancellation(entry: &mut Entry) {
     entry.status.progress = None;
 }
 fn queue(entry: &mut Entry, paths: Option<Vec<PathBuf>>, force: bool) {
+    if entry.recovery_blocked && !entry.recovery_explicit {
+        entry.rehash = true;
+        entry.status.observed_epoch += 1;
+        return;
+    }
     if !entry.pending {
         entry.queued = Instant::now();
     }
@@ -963,7 +1248,8 @@ fn queue(entry: &mut Entry, paths: Option<Vec<PathBuf>>, force: bool) {
     } else {
         entry.rehash = true;
     }
-    if entry.status.phase != "analyzing" && entry.status.available {
+    if !matches!(entry.status.phase.as_str(), "analyzing" | "recovering") && entry.status.available
+    {
         entry.status.phase = if entry.cancel_pending {
             "cancelling"
         } else if entry.status.outcome_code == "cancelled" && !force {
@@ -1105,6 +1391,14 @@ fn register_workspace(
             }
         }
         let requested_settings = settings::resolve(&root, data, &legacy).ok();
+        let existing_entry = entries.contains_key(&database);
+        recovery::adopt(
+            Path::new(&database),
+            entries
+                .get(&database)
+                .map(|e| e.status.generation)
+                .unwrap_or(0),
+        )?;
         let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
             registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
             analysis_error: String::new(),
@@ -1131,6 +1425,9 @@ fn register_workspace(
             watch_pending: true,
             pending: true,
             cancel_pending: false,
+            recovery_blocked: false,
+            recovery_explicit: false,
+            recovering: false,
             queued: Instant::now(),
             active: Instant::now(),
         });
@@ -1139,11 +1436,16 @@ fn register_workspace(
                 "workspace identity changed; unwatch before registering the replacement".into(),
             );
         }
+        if !existing_entry {
+            restore_recovery(entry)?;
+        }
         if settings_changed {
             queue(entry, None, true);
         }
         entry.status.requested_settings = settings::resolve(&root, data, &entry.configuration).ok();
         if request.operation == "refresh" {
+            entry.recovery_explicit = true;
+            entry.recovery_blocked = false;
             if entry.cancel_pending {
                 entry.cancel_pending = false;
                 if let Some((_, control)) = shared
@@ -1193,6 +1495,31 @@ fn serve(
         let Some(Payload::ControlRequest(request)) = message.payload else {
             return Err("expected coordinator control request".into());
         };
+        if request.index_lifecycle_version != 1 {
+            return Err(know_code_core::Error::UpdateRequired("update the coordinator and native libraries together; index lifecycle safety is incompatible".into()).into());
+        }
+        if request.operation == "index-corrupt" {
+            let report = request
+                .corruption
+                .ok_or("missing index corruption report")?;
+            if report.detail.len() > 8192 {
+                return Err("oversized corruption detail".into());
+            }
+            let mut entries = shared.entries.lock().unwrap();
+            let entry = entries
+                .get_mut(&request.database)
+                .ok_or("workspace is not registered")?;
+            observe_bad(shared, entry, &report.incarnation)?;
+            let status = entry.status.snapshot();
+            persist(shared, entry, None)?;
+            drop(entries);
+            wake(sender, shared, Event::Wake);
+            shared.changed.notify_all();
+            return Ok(ControlResponse {
+                workspaces: vec![status],
+                ..Default::default()
+            });
+        }
         if request.operation == "parents" {
             let request = request
                 .parent_discovery
@@ -1236,8 +1563,16 @@ fn serve(
         }
         if request.operation == "activity" {
             one_way = true;
-            if let Some(entry) = shared.entries.lock().unwrap().get_mut(&request.database) {
+            let mut entries = shared.entries.lock().unwrap();
+            if let Some(entry) = entries.get_mut(&request.database) {
                 entry.active = Instant::now();
+                let database = Path::new(&entry.status.database);
+                if let Some(incarnation) = recovery::selected_incarnation(database)?
+                    && recovery::is_bad(database)?
+                {
+                    observe_bad(shared, entry, &incarnation)?;
+                    wake(sender, shared, Event::Wake);
+                }
             }
             return Ok(ControlResponse::default());
         }
@@ -1276,7 +1611,12 @@ fn serve(
                     .lock()
                     .unwrap()
                     .values()
-                    .filter(|e| e.status.phase == "analyzing")
+                    .filter(|e| {
+                        matches!(
+                            e.status.phase.as_str(),
+                            "analyzing" | "recovering" | "cancelling"
+                        )
+                    })
                     .map(|e| e.status.snapshot())
                     .collect(),
                 analysis_running: shared.analysis_running.load(Ordering::Acquire),
@@ -1288,17 +1628,19 @@ fn serve(
                 let limits = Limits {
                     cpu_cores: limits.cpu_cores,
                     memory_mib: limits.memory_mib,
-                    ..Default::default()
+                    rebuild_disk_mib: limits.rebuild_disk_mib,
+                    min_free_disk_mib: limits.min_free_disk_mib,
                 };
                 limits.validate()?;
                 if shared.resources.configure(data, limits)? {
                     let mut entries = shared.entries.lock().unwrap();
                     let active = shared.active_job.lock().unwrap();
                     for (db, entry) in entries.iter_mut() {
-                        if entry.status.outcome_code == "resource_limited"
-                            || active.as_ref().is_some_and(|(running, control)| {
-                                running == db && control.resource_limited()
-                            })
+                        if !entry.recovery_blocked
+                            && (entry.status.outcome_code == "resource_limited"
+                                || active.as_ref().is_some_and(|(running, control)| {
+                                    running == db && control.resource_limited()
+                                }))
                         {
                             queue(entry, None, true);
                         }
@@ -1311,7 +1653,8 @@ fn serve(
                 resources: Some(ResourceLimits {
                     cpu_cores: limits.cpu_cores,
                     memory_mib: limits.memory_mib,
-                    ..Default::default()
+                    rebuild_disk_mib: limits.rebuild_disk_mib,
+                    min_free_disk_mib: limits.min_free_disk_mib,
                 }),
                 ..Default::default()
             });
@@ -1332,7 +1675,15 @@ fn serve(
                 entry.pending && entry.status.available
             };
             if accepted {
-                begin_cancellation(entry);
+                if entry.recovering {
+                    entry.pending = false;
+                    entry.recovery_blocked = true;
+                    entry.status.phase = "cancelling".into();
+                    entry.status.error =
+                        "recovery cancellation requested; explicit refresh will be required".into();
+                } else {
+                    begin_cancellation(entry);
+                }
                 persist(shared, entry, None)?;
             }
             drop(active);
@@ -1382,7 +1733,7 @@ fn serve(
                 .find(|(_, e)| e.status.workspace_root == request.workspace_root)
                 .map(|(db, _)| db.clone())
                 .ok_or("workspace is not registered")?;
-            if entries[&database].status.phase == "analyzing" {
+            if entries[&database].status.phase == "analyzing" || entries[&database].recovering {
                 return Err("wait for the active update before unregistering".into());
             }
             shared.cursors.unregister(Path::new(&database))?;
@@ -1445,7 +1796,7 @@ fn serve(
                 if status.published_epoch >= target
                     || matches!(
                         status.phase.as_str(),
-                        "failed" | "unavailable" | "resource_limited"
+                        "failed" | "unavailable" | "resource_limited" | "recovery_failed"
                     )
                     || (status.phase == "cancelled" && !reconciling)
                     || shared.stop.load(Ordering::Acquire)
@@ -1491,6 +1842,7 @@ fn serve(
         error_message: error.to_string(),
         ..Default::default()
     });
+    response.index_lifecycle_version = 1;
     response.resource_control_version = know_code_core::resource::CONTROL_VERSION;
     response.analysis_settings_version = settings::VERSION;
     response.cursor_control_version = know_code_core::cursor::CONTROL_VERSION;
@@ -1601,7 +1953,224 @@ mod live_lifetime_tests {
             previous_failed_input_hash: String::new(),
             session: Governor::new(Limits::default()).unwrap().start().unwrap(),
             cancel_baseline: true,
+            recovering: false,
+            recovery_explicit: false,
         }
+    }
+    fn recovery_job() -> Job {
+        let mut job = cancellation_job();
+        job.cancel_baseline = false;
+        job.recovering = true;
+        job.previous_error.clear();
+        job.previous_error_code.clear();
+        let parent = Path::new(&job.database).parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        recovery::adopt(Path::new(&job.database), 0).unwrap();
+        let mut writer = know_code_core::store::Writer::open(Path::new(&job.database)).unwrap();
+        writer
+            .stage(Payload::Compilation(
+                know_code_core::protocol::Compilation {
+                    id: "fixture".into(),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        writer
+            .stage(Payload::Report(know_code_core::protocol::AnalysisReport {
+                compilation_id: "fixture".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        job.previous_generation = writer.publish().unwrap();
+        let guard = recovery::IndexReadGuard::open_unbudgeted(Path::new(&job.database)).unwrap();
+        assert!(matches!(
+            guard.note_corruption("fixture corruption proof"),
+            Err(know_code_core::Error::IndexCorrupt { .. })
+        ));
+        job.session = Governor::new(Limits {
+            min_free_disk_mib: 0,
+            ..Default::default()
+        })
+        .unwrap()
+        .start()
+        .unwrap();
+        job
+    }
+    #[test]
+    fn fenced_index_cannot_bypass_an_unchanged_saved_cancellation_baseline() {
+        let job = cancellation_job();
+        let root = job.root.clone();
+        let database = job.database.clone();
+        let mut hash = String::new();
+        let JobOutput::CancellationBaseline(inputs, _, _) = execute(
+            job,
+            Path::new("/no/compiler/installation"),
+            &mut hash,
+            &mut |_| {},
+            None,
+        )
+        .unwrap() else {
+            panic!("baseline indexed");
+        };
+        std::fs::create_dir_all(Path::new(&database).parent().unwrap()).unwrap();
+        recovery::adopt(Path::new(&database), 0).unwrap();
+        let guard = recovery::IndexReadGuard::open_unbudgeted(Path::new(&database)).unwrap();
+        assert!(guard.note_corruption("fixture corruption proof").is_err());
+        let mut retry = cancellation_job();
+        retry.root = root;
+        retry.database = database.clone();
+        retry.identity = workspace::identity(&retry.root).unwrap();
+        retry.inputs = inputs;
+        retry.cancel_baseline = false;
+        retry.previous_failed_input_hash = hash.clone();
+        let mut next_hash = String::new();
+        let error = execute(
+            retry,
+            Path::new("/no/compiler/installation"),
+            &mut next_hash,
+            &mut |_| {},
+            None,
+        )
+        .err()
+        .expect("cancelled data was reanalyzed");
+        assert!(
+            matches!(error.downcast_ref::<know_code_core::Error>(),Some(know_code_core::Error::Remote{code,..}) if code=="cancelled")
+        );
+        assert_eq!(next_hash, hash);
+        assert!(
+            !recovery::blocked(Path::new(&database)).unwrap(),
+            "no recovery attempt was authorized or consumed"
+        );
+    }
+    #[test]
+    fn recovery_setup_failure_consumes_one_attempt_and_only_explicit_refresh_retries() {
+        let job = recovery_job();
+        let database = job.database.clone();
+        let root = job.root.clone();
+        std::fs::write(root.join(settings::PROJECT_FILE), "broken settings").unwrap();
+        let mut hash = String::new();
+        assert!(
+            execute(
+                job,
+                Path::new("/no/compiler/installation"),
+                &mut hash,
+                &mut |_| {},
+                None
+            )
+            .is_err()
+        );
+        assert!(recovery::blocked(Path::new(&database)).unwrap());
+        let directories = || {
+            std::fs::read_dir(Path::new(&database).parent().unwrap().join("indexes"))
+                .unwrap()
+                .count()
+        };
+        let first = directories();
+        let retry = |explicit| {
+            let mut job = cancellation_job();
+            job.root = root.clone();
+            job.database = database.clone();
+            job.identity = workspace::identity(&root).unwrap();
+            job.cancel_baseline = false;
+            job.recovering = true;
+            job.recovery_explicit = explicit;
+            job.session = Governor::new(Limits {
+                min_free_disk_mib: 0,
+                ..Default::default()
+            })
+            .unwrap()
+            .start()
+            .unwrap();
+            job
+        };
+        assert!(
+            execute(
+                retry(false),
+                Path::new("/no/compiler/installation"),
+                &mut hash,
+                &mut |_| {},
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(
+            directories(),
+            first,
+            "ordinary retry allocated a new candidate"
+        );
+        assert!(
+            execute(
+                retry(true),
+                Path::new("/no/compiler/installation"),
+                &mut hash,
+                &mut |_| {},
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(
+            directories(),
+            first + 1,
+            "explicit refresh did not authorize exactly one new attempt"
+        );
+    }
+    #[test]
+    fn selected_readiness_preserves_version_errors_but_fences_actual_index_header_corruption() {
+        use std::os::unix::fs::FileExt;
+        let job = recovery_job();
+        let database = job.database.clone();
+        drop(job);
+        // A separate owned healthy workspace starts without a BAD latch.
+        let mut other = cancellation_job();
+        other.cancel_baseline = false;
+        std::fs::create_dir_all(Path::new(&other.database).parent().unwrap()).unwrap();
+        recovery::adopt(Path::new(&other.database), 0).unwrap();
+        let mut writer = know_code_core::store::Writer::open(Path::new(&other.database)).unwrap();
+        writer
+            .stage(Payload::Compilation(
+                know_code_core::protocol::Compilation {
+                    id: "healthy".into(),
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+        writer
+            .stage(Payload::Report(know_code_core::protocol::AnalysisReport {
+                compilation_id: "healthy".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer.publish().unwrap();
+        let physical = recovery::selected_path(Path::new(&other.database)).unwrap();
+        let connection = Connection::open(&physical).unwrap();
+        connection.execute_batch("PRAGMA user_version=999").unwrap();
+        drop(connection);
+        assert!(matches!(
+            selected_readiness(Path::new(&other.database)),
+            Err(know_code_core::Error::UpdateRequired(_))
+        ));
+        assert!(!recovery::is_bad(Path::new(&other.database)).unwrap());
+        let connection = Connection::open(&physical).unwrap();
+        connection
+            .execute_batch(&format!(
+                "PRAGMA user_version={}; PRAGMA wal_checkpoint(TRUNCATE)",
+                know_code_core::store::SCHEMA_VERSION
+            ))
+            .unwrap();
+        drop(connection);
+        OpenOptions::new()
+            .write(true)
+            .open(&physical)
+            .unwrap()
+            .write_all_at(b"broken-db-header", 0)
+            .unwrap();
+        assert!(
+            matches!(selected_readiness(Path::new(&other.database)),Err(know_code_core::Error::IndexCorrupt{database:logical,..}) if logical==Path::new(&other.database))
+        );
+        assert!(recovery::is_bad(Path::new(&other.database)).unwrap());
+        assert!(recovery::is_bad(Path::new(&database)).unwrap());
     }
     #[test]
     fn cancellation_capture_handles_invalid_settings_without_compiler_or_publication() {
@@ -1835,6 +2404,9 @@ mod live_lifetime_tests {
                 watch_pending: false,
                 pending: false,
                 cancel_pending: false,
+                recovery_blocked: false,
+                recovery_explicit: false,
+                recovering: false,
             },
         )]);
         let shared = Arc::new(Shared {
