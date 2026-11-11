@@ -675,6 +675,11 @@ mod tests {
                 .unwrap();
             crate::recovery::adopt(&db, 1).unwrap();
             let service = CursorService::new(&root, [db.clone(), healthy.clone()]).unwrap();
+            // Startup's20ms probes may defer under concurrent Rust tests;
+            // exercise the ordinary maintenance path before this fault case.
+            service.sweep().unwrap();
+            service.sweep().unwrap();
+            assert!(service.lock().unwrap().cleanup_pending.is_empty());
             let bad_result = ready(&service, &db);
             let healthy_result = ready(&service, &healthy);
             let guard = crate::recovery::IndexReadGuard::open_unbudgeted(&db).unwrap();

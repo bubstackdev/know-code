@@ -150,7 +150,10 @@ fn selected_readiness(database: &Path) -> know_code_core::Result<(u64, bool)> {
     let guard = recovery::IndexReadGuard::open_unbudgeted(database)?;
     let result = (|| {
         let view = ReadView::open(guard.physical_path())?;
-        let result = (view.generation, view.needs_test_classification()?);
+        let result = (
+            view.generation,
+            (view.needs_test_classification()? || view.needs_target_equivalence()?),
+        );
         guard.check()?;
         Ok(result)
     })();
@@ -1495,7 +1498,7 @@ fn serve(
         let Some(Payload::ControlRequest(request)) = message.payload else {
             return Err("expected coordinator control request".into());
         };
-        if request.index_lifecycle_version != 1 {
+        if request.index_lifecycle_version != protocol::INDEX_LIFECYCLE_VERSION {
             return Err(know_code_core::Error::UpdateRequired("update the coordinator and native libraries together; index lifecycle safety is incompatible".into()).into());
         }
         if request.operation == "index-corrupt" {
@@ -1842,7 +1845,7 @@ fn serve(
         error_message: error.to_string(),
         ..Default::default()
     });
-    response.index_lifecycle_version = 1;
+    response.index_lifecycle_version = protocol::INDEX_LIFECYCLE_VERSION;
     response.resource_control_version = know_code_core::resource::CONTROL_VERSION;
     response.analysis_settings_version = settings::VERSION;
     response.cursor_control_version = know_code_core::cursor::CONTROL_VERSION;
