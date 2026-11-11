@@ -89,11 +89,21 @@ for name, project, target, expected, units in [
     assert [f['symbol']['name'] for f in graph['findings']] == expected, graph
     assert [f['symbol']['compilation_id'] for f in graph['findings']] == units, graph
     assert all(not f['symbol']['external'] and f['symbol']['locations'] for f in graph['findings']), graph
+    enriched = query({'op': 'callees', 'symbol_id': root, 'max_depth': 5, 'include_source': True,
+                      **({'target': target} if target else {})}, True)['graph']
+    assert [f['symbol'] for f in enriched['findings']] == [f['symbol'] for f in graph['findings']], enriched
+    for finding in enriched['findings']:
+        assert finding['context']['declarations'], finding
+        assert all(d['source_status'] == 'included' and d['source']['text']
+                   for d in finding['context']['declarations']), finding
+        assert not finding.get('supporting_targets'), 'source projection expanded untraversed peer frameworks'
+    (RUN / f'{name}-source.json').write_text(json.dumps(enriched, indent=2))
     path = graph['findings'][-1]['paths'][0]
     assert len(path) == 2 and path[0].get('definition_link') and (path[1].get('definition_link') or name == 'CompatibleStart'), graph
     impact = query({'op': 'impact', 'symbol_id': graph['findings'][-1]['symbol']['id']}, True)['graph']
     assert any(f['symbol']['id'] == root and len(f['paths'][0]) == 2 for f in impact['findings']), impact
     checks.append(f'{name}: compiler-selected two-project body traversal and reverse impact')
+    checks.append(f'{name}: exact selected body source without root-target re-filtering or peer expansion')
 
 for name, expected in [('construct', '<constructor>'), ('read', 'get value')]:
     g = query({'op': 'callees', 'symbol_id': symbol(name, 'ts:ts/app/'), 'max_depth': 3}, True)['graph']
@@ -109,6 +119,9 @@ assert access['findings'][0]['paths'][0][0]['implicit'], access
 external = query({'op': 'callees', 'symbol_id': symbol('ExternalStart', 'cs:cs/App/', 'net10.0')}, True)['graph']
 assert external['findings'][0]['symbol']['external'] and external['boundaries'], external
 assert not external['findings'][0]['paths'][0][0].get('definition_link'), external
+external_source = query({'op': 'callees', 'symbol_id': symbol('ExternalStart', 'cs:cs/App/', 'net10.0'),
+                         'include_source': True}, True)['graph']['findings'][0]['context']
+assert external_source == {'declarations': [], 'boundary': 'external_or_other_compilation_body'}, external_source
 checks += ['generic declaration identity', 'cross-project implicit accessor calls', 'binary/package bodies remain boundaries']
 
 # Project-source redirects must not generate build output into the source tree.

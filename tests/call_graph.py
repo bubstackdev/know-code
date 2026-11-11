@@ -1,5 +1,7 @@
 """Real TS/Roslyn -> atomic store -> Rust/.NET/Node call/impact parity."""
 import atexit
+import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,7 +18,7 @@ HOST = ROOT / f'target/{PROFILE}/know-code'
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
 (WORKSPACE / 'ts/tsconfig.json').write_text(json.dumps({'compilerOptions': {'strict': True, 'noEmit': True, 'skipLibCheck': True, 'target': 'ES2022', 'module': 'NodeNext', 'moduleResolution': 'NodeNext'}, 'include': ['*.ts']}))
 ts_source = '''// π😀 source coordinates
-export function leaf() { return 1; }
+export function leaf() { /* π😀 retained declaration */ return 1; }
 export function direct() { return leaf() + leaf(); }
 export function onlyReference() { return leaf; }
 export function indirect(fn: () => number) { return fn(); }
@@ -49,7 +51,7 @@ using System;
 public interface IWork { int Work(); }
 public class Parent { public virtual int Work() => 0; }
 public class Worker : Parent, IWork {
-  public static int Leaf() => 1;
+  public static int Leaf() { /* π😀 retained declaration */ return 1; }
   public override int Work() => Leaf();
   public int Value { get => Leaf(); set { Leaf(); } }
   public int this[int index] => Leaf();
@@ -233,6 +235,95 @@ for finding in use['findings']:
             assert e['compilation_id'] == finding['symbol']['compilation_id'], 'mixed compilation path'
             locations += 1
 checks += ['exact retained UTF8 callsite source and compilation provenance']
+
+# Exercise source projection through the real compiler/store/native path. Keep
+# the existing fixture and walks so clipping cannot conceal lost findings.
+def compact_findings(value):
+    rows = copy.deepcopy(value['findings'])
+    for finding in rows:
+        finding.pop('context', None)
+        for support in finding.get('supporting_targets', []):
+            support.pop('context', None)
+    return rows
+
+
+def projected_bodies(value):
+    bodies = []
+    for finding in value['findings']:
+        assert 'context' in finding, finding
+        for member in [finding, *finding.get('supporting_targets', [])]:
+            context = member['context']
+            for declaration in context['declarations']:
+                location = declaration['location']
+                assert location in member.get('symbol', member)['locations'], member
+                body = declaration.get('source')
+                if body is None:
+                    continue
+                path = Path(body['path'])
+                raw = (path if path.is_absolute() else WORKSPACE / path).read_bytes()
+                extent = declaration['extent']
+                assert body['content_hash'] == location['content_hash'] == hashlib.sha256(raw).hexdigest(), declaration
+                assert extent['start_byte'] == body['start_byte'] <= body['end_byte'] <= extent['end_byte'], declaration
+                assert body['text'].encode() == raw[body['start_byte']:body['end_byte']], declaration
+                bodies.append(body)
+        assert all('context' not in edge for path in finding['paths'] for edge in path)
+    assert all('context' not in root for root in value.get('root_definitions', []))
+    return bodies
+
+
+for op, identifier in [('callers', ts_leaf), ('callees', symbol('direct', 'ts')),
+                       ('impact', symbol('answer', 'ts')), ('callers', cs_leaf),
+                       ('callees', symbol('Use', 'cs'))]:
+    compact = graph(op, identifier)
+    assert graph(op, identifier, include_source=False) == compact
+    assert all('context' not in f and all('context' not in s for s in f.get('supporting_targets', []))
+               for f in compact['findings']), compact
+    included = graph(op, identifier, include_source=True, source_max_bytes=262144)
+    assert compact_findings(included) == compact['findings'], (compact, included)
+    bodies = projected_bodies(included)
+    assert bodies and sum(len(b['text'].encode()) for b in bodies) <= 262144
+    limited = query(dict(op=op, symbol_id=identifier, include_source=True, source_max_bytes=1), parity=True)
+    assert compact_findings(limited['graph']) == compact['findings'], limited
+    assert limited['truncated'] and 'source_budget' in limited['graph']['limits'], limited
+    small_bodies = projected_bodies(limited['graph'])
+    assert sum(len(b['text'].encode()) for b in small_bodies) <= 1
+    statuses = [d['source_status'] for f in limited['graph']['findings']
+                for m in [f, *f.get('supporting_targets', [])] for d in m['context']['declarations']]
+    assert any(s in {'truncated', 'budget_exhausted'} for s in statuses), statuses
+    if identifier == cs_leaf:
+        grouped = [f for f in included['findings'] if f.get('supporting_targets')]
+        assert grouped and all({s['target'] for s in f['supporting_targets']} == {'net10.0', 'netstandard2.1'}
+                               for f in grouped), included
+checks += ['opt_in_graph_source_preserves_TS_Csharp_walks_and_compact_defaults',
+           'source_exhaustion_retains_findings_and_labeled_limits',
+           'exact_hash_extent_UTF8_target_source_and_all_wire_copy_budget',
+           'source_is_nested_on_findings_not_roots_or_paths']
+
+# The typed managed request must preserve omission and explicit false rather
+# than inject symbol_context's default into graph calls.
+for mode, cap in [('default', None), ('false', None), ('true', None), ('true', 1)]:
+    request = dict(op='callers', symbol_id=ts_leaf)
+    if mode != 'default': request['include_source'] = mode == 'true'
+    if cap is not None: request['source_max_bytes'] = cap
+    expected = json.loads(run([HOST, 'query', DATABASE, json.dumps(request)]).stdout)
+    actual = json.loads(run(['dotnet', ROOT / f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll',
+                             '--typed-graph-source', DATABASE, 'callers', ts_leaf, mode,
+                             cap if cap is not None else '-']).stdout)
+    assert actual == expected, (mode, cap, actual, expected)
+checks.append('typed_DotNet_optional_source_and_budget_match_native_requests')
+
+for request, code in [
+    ({'op': 'callers', 'symbol_id': ts_leaf, 'include_source': True, 'source_max_bytes': 0}, 'invalid_request'),
+    ({'op': 'callers', 'symbol_id': ts_leaf, 'source_max_bytes': 262145}, 'invalid_request'),
+    ({'op': 'symbols', 'source_max_bytes': 1024}, 'invalid_request'),
+    ({'op': 'symbol_context', 'symbol_id': ts_leaf, 'source_max_bytes': 1024}, 'invalid_request'),
+    ({'op': 'callers', 'symbol_id': ts_leaf, 'include_source': True, 'response_max_bytes': 1024}, 'response_limit_exceeded'),
+    ({'op': 'callers', 'symbol_id': ts_leaf, 'include_source': True, 'deadline_ms': 0}, 'deadline_exceeded')]:
+    responses = [json.loads(run([*prefix, json.dumps(request)]).stdout) for prefix in [
+        [HOST, 'query', DATABASE], ['node', ROOT / f'.artifacts/build/{PROFILE}/node/smoke.mjs', DATABASE],
+        ['dotnet', ROOT / f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll', DATABASE]]]
+    assert responses[0] == responses[1] == responses[2] and responses[0]['error']['code'] == code, (request, responses)
+checks.append('graph_source_shared_validation_complete_response_and_deadline_errors')
 
 (WORKSPACE / 'ts/code.ts').write_text(ts_source + '\nexport function added() { return leaf(); }\n')
 generation = ready(generation)

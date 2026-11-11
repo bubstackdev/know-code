@@ -23,6 +23,9 @@ OLD=('// saved old 😀\n'+''.join(
  f'export function {name}(value: string) {{ return value; }}\n'
  for name in [TARGET,'bravo','charlie','delta','echo','foxtrot']))
 SOURCE=WORKSPACE/'value.ts';SOURCE.write_text(OLD)
+GRAPH_OLD=('export function graphRoot() { return "old 😀"; }\n'+''.join(
+ f'export function graph{name}() {{ return graphRoot(); }}\n' for name in ['Alpha','Bravo','Charlie']))
+GRAPH_SOURCE=WORKSPACE/'graph.ts';GRAPH_SOURCE.write_text(GRAPH_OLD)
 (OTHER/'value.ts').write_text('export const otherWorkspace = 1;\n')
 CHECKS=[];EVENTS=RUN/'commands.jsonl'
 
@@ -116,9 +119,34 @@ try:
  error(query('cli',{'op':'next_page','cursor':token,'limit':3}),'invalid_request')
  CHECKS.append('continuation_rejects_scope_mutation')
 
+ graph_root=query('cli',{'op':'symbols','name':'graphRoot'})['result']['symbols'][0]
+ graph_pages=[frozen(query('cli',{'op':'callers','symbol_id':graph_root['id'],'limit':3,'page_size':1,
+                                 'include_source':True,'source_max_bytes':80}))]
+ while graph_pages[-1]['page']['next_cursor'] is not None:
+  graph_pages.append(frozen(query('node',{'op':'next_page','cursor':graph_pages[-1]['page']['next_cursor']})))
+ assert len(graph_pages)==3 and all(len(p['graph']['findings'])==1 for p in graph_pages),graph_pages
+ graph_bodies=[]
+ for page in graph_pages:
+  assert page['truncated'] and 'source_budget' in page['graph']['limits'],page
+  for finding in page['graph']['findings']:
+   assert finding['context']['declarations'] and not finding.get('supporting_targets'),finding
+   for declaration in finding['context']['declarations']:
+    body=declaration.get('source')
+    if body:
+     assert body['content_hash']==hashlib.sha256(GRAPH_OLD.encode()).hexdigest(),body
+     assert body['text'].encode()==GRAPH_OLD.encode()[body['start_byte']:body['end_byte']],body
+     graph_bodies.append(body)
+ assert len(graph_bodies)==2 and sum(len(b['text'].encode()) for b in graph_bodies)==80,graph_bodies
+ for page in graph_pages:replay(page['page']['cursor'],page)
+ for extra in [{'include_source':True},{'source_max_bytes':80}]:
+  error(query('cli',{'op':'next_page','cursor':graph_pages[0]['page']['cursor'],**extra}),'invalid_request')
+ CHECKS+=['graph_finding_context_is_atomic_across_pages','graph_source_budget_spans_pages_and_replays']
+
+ GRAPH_SOURCE.write_text(GRAPH_OLD.replace('return graphRoot();','return graphRoot() + "saved";'))
  SOURCE.write_text(OLD.replace('saved old','saved new').replace('return value;', 'return "changed";'))
  current=ready(minimum=generation+1)
  for page in pages:replay(page['page']['cursor'],page)
+ for page in graph_pages:replay(page['page']['cursor'],page)
  replay(token,retained)
  source_request={'op':'source','cursor':token,'artifact_id':location['artifact_id'],
                  'content_hash':location['content_hash'],'start_byte':0,'max_bytes':len(OLD.encode())+1}
@@ -141,6 +169,7 @@ try:
    assert body['text'].encode()==OLD.encode()[extent['start_byte']:extent['end_byte']],declaration
    assert body['content_hash']==location['content_hash'] and 'return value;' in body['text'],declaration
  CHECKS+=['frozen_pages_after_saved_publication','pinned_source_and_context_exact_old_hash_bytes_ranges']
+ CHECKS.append('graph_pages_retain_exact_old_source_and_omission_status_after_save')
 
  value('watch',OTHER);other=ready(OTHER)
  for language in ['cli','node','dotnet']:
