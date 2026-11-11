@@ -91,7 +91,7 @@ pub fn maintain_index(logical: &Path) -> Result<CheckpointProgress> {
     }
     let result = (|| {
         health.check()?;
-        let connection = Connection::open_with_flags(
+        let mut connection = Connection::open_with_flags(
             health.physical_path(),
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
@@ -1036,7 +1036,16 @@ mod checkpoint_tests {
         assert!(!foreign.with_extension("lifecycle.json").exists());
         let bad = managed();
         let guard = crate::recovery::IndexReadGuard::open_unbudgeted(&bad).unwrap();
-        crate::recovery::report_corruption(&bad, guard.incarnation()).unwrap();
+        std::fs::write(&bad, b"actual owned NOTADB fixture").unwrap();
+        let connection = Connection::open(&bad).unwrap();
+        let error = connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+            .unwrap_err();
+        assert!(matches!(
+            guard.map_sqlite(error),
+            Error::IndexCorrupt { .. }
+        ));
+        drop(connection);
         let bytes = std::fs::read(&bad).unwrap();
         assert!(matches!(
             maintain_index(&bad),
