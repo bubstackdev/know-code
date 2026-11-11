@@ -77,9 +77,13 @@ function managerFor(pkg, filename = 'package.json') {
 }
 export function context(root, directory) {
   let nearest;
+  const typescriptDeclarations = [];
   for (let current = directory;; current = path.dirname(current)) {
     const filename = path.join(current, 'package.json');
     const pkg = packageInput(filename);
+    if ([pkg?.dependencies, pkg?.devDependencies, pkg?.optionalDependencies]
+      .some(dependencies => dependencies && typeof dependencies === 'object' && Object.hasOwn(dependencies, 'typescript')))
+      typescriptDeclarations.push(current);
     if (!nearest && pkg) nearest = {directory: current, pkg};
     if (nearest) {
       const config = workspace(current, pkg);
@@ -92,6 +96,7 @@ export function context(root, directory) {
     }
     if (current === root || path.dirname(current) === current || !current.startsWith(root + path.sep)) break;
   }
+  if (nearest) nearest.typescriptDeclarations = typescriptDeclarations;
   return nearest;
 }
 
@@ -123,12 +128,14 @@ function packageMembers(directory, group) {
 // Shared core owns checkpoint lifetime/publication. This adapter owns package semantics.
 export async function preparePackages(root, directories, request, send) {
   const policy = nodePreparationPolicy(request);
-  const groups = new Map(), contexts = new Map(), packageDirectories = new Map(), failures = new Map(), metadata = new Map(), errors = new Map();
+  const groups = new Map(), contexts = new Map(), packageDirectories = new Map(), typescriptDeclarations = new Map(), failures = new Map(), metadata = new Map(), errors = new Map();
   for (const directory of new Set(directories)) {
     try {
       const item = context(root, directory);
       packageDirectories.set(directory, item?.directory ?? root);
       if (!item) continue;
+      for (const alias of [directory, item.directory, item.install])
+        typescriptDeclarations.set(alias, item.typescriptDeclarations.some(owner => alias === owner || alias.startsWith(owner + path.sep)));
       contexts.set(directory, item.install);
       contexts.set(item.directory, item.install);
       contexts.set(item.install, item.install);
@@ -273,5 +280,6 @@ export async function preparePackages(root, directories, request, send) {
   diagnostics.metadata = directory => metadata.get(directory) ?? metadata.get(installFor(directory));
   diagnostics.failure = directory => failures.get(directory) ?? failures.get(installFor(directory));
   diagnostics.directory = directory => packageDirectories.get(directory) ?? root;
+  diagnostics.typescriptDeclared = directory => typescriptDeclarations.get(directory) ?? false;
   return diagnostics;
 }
