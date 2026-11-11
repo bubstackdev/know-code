@@ -49,7 +49,9 @@ public sealed class Index(string database, QueryLimitScope? queryLimitScope = nu
         // before its registration, reservation and safe handles can be released.
         var result = await Task.Run(() => Native.Invoke(() => {
             var elapsed = (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            return Native.QueryReserved(database, request, elapsed, cancellation, reservation!);
+            return cancellation is null
+                ? Native.QueryReserved(database, request, elapsed, nint.Zero, reservation!)
+                : Native.QueryReservedCancellable(database, request, elapsed, cancellation, reservation!);
         })).ConfigureAwait(false);
         // Native.Invoke copies, parses and frees the native result while this
         // method still owns the reservation. Delivered documents are caller-owned.
@@ -187,7 +189,10 @@ internal static partial class Native
     internal static partial void QueryReservationFree(nint reservation);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_reserved", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint QueryReserved(string database, string request, ulong elapsedMs,
-        QueryCancellationHandle? cancellation, QueryReservationHandle reservation);
+        nint cancellation, QueryReservationHandle reservation);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_reserved", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint QueryReservedCancellable(string database, string request, ulong elapsedMs,
+        QueryCancellationHandle cancellation, QueryReservationHandle reservation);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_cancel_new")]
     internal static partial nint QueryCancelNew();
     // SafeHandle parameters retain ownership across the native call and a
