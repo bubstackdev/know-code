@@ -924,9 +924,10 @@ mod tests {
             .unwrap();
         let initial = service.lock().unwrap().registry.retained_bytes().unwrap();
         let candidate = indexed_replacement(&db, false);
+        let prepared = crate::recovery::prepare_rebuild(&candidate, &Control::default()).unwrap();
         let generation = service
             .publish_replacement(&db, &Control::default(), || {
-                crate::recovery::finish_rebuild(&candidate, &Control::default(), || Ok(()))
+                crate::recovery::finish_prepared_rebuild(&prepared, &Control::default(), || Ok(()))
             })
             .unwrap();
         assert!(generation > stored.generation);
@@ -947,9 +948,6 @@ mod tests {
                 .text,
             "needle legacy π😀"
         );
-        let fresh = ready_symbols(&service, &db);
-        assert_eq!(fresh.index_incarnation, candidate.incarnation);
-        assert!(read_page(&fresh)["symbols"].as_array().unwrap().is_empty());
         let current = ReadView::open(&db).unwrap();
         assert_eq!(saved_source(&current), "replacement saved 😀");
         let request = serde_json::from_value(serde_json::json!({"op":"source","artifact_id":"source","snapshot":old_lookup.snapshot})).unwrap();
@@ -965,6 +963,17 @@ mod tests {
             saved_source(&ReadView::open(&db).unwrap()),
             "next publication"
         );
+        // No replacement cursor has been admitted yet: publication itself must
+        // initialize retention on the newly selected physical incarnation.
+        let connection =
+            rusqlite::Connection::open(crate::recovery::selected_path(&db).unwrap()).unwrap();
+        let owner: Vec<u8> = connection
+            .query_row("SELECT owner FROM cursor_retention_state", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(owner, service.lock().unwrap().registry.owner);
+        let fresh = ready_symbols(&service, &db);
+        assert_eq!(fresh.index_incarnation, candidate.incarnation);
+        assert!(read_page(&fresh)["symbols"].as_array().unwrap().is_empty());
         let again = call(&service, &db, action("borrow", Some(&stored))).unwrap();
         assert_eq!(read_page(&again), before);
         call(&service, &db, action("finish", Some(&again))).unwrap();
@@ -980,12 +989,15 @@ mod tests {
         let baseline = service.lock().unwrap().registry.retained_bytes().unwrap();
         service.lock().unwrap().registry.maximum_bytes = baseline;
         let candidate = indexed_replacement(&db, false);
+        let prepared = crate::recovery::prepare_rebuild(&candidate, &Control::default()).unwrap();
         let called = AtomicBool::new(false);
         std::thread::scope(|scope| {
             let publisher = scope.spawn(|| {
                 service.publish_replacement(&db, &Control::default(), || {
                     called.store(true, Ordering::Release);
-                    crate::recovery::finish_rebuild(&candidate, &Control::default(), || Ok(()))
+                    crate::recovery::finish_prepared_rebuild(&prepared, &Control::default(), || {
+                        Ok(())
+                    })
                 })
             });
             wait_for_publication(&service);
