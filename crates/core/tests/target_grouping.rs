@@ -401,15 +401,16 @@ fn context_limit_bounds_declaration_slots_and_preserves_equivalent_support() {
         );
         assert!(bounded.truncated);
         let context = &bounded.contexts[0];
-        let declarations: Vec<_> = if members == 1 {
-            context.declarations.iter().collect()
-        } else {
-            context
-                .supporting_targets
-                .iter()
-                .flat_map(|s| &s.declarations)
-                .collect()
-        };
+        let declarations: Vec<_> = context
+            .declarations
+            .iter()
+            .chain(
+                context
+                    .supporting_targets
+                    .iter()
+                    .flat_map(|s| &s.declarations),
+            )
+            .collect();
         assert_eq!(
             declarations
                 .iter()
@@ -418,6 +419,102 @@ fn context_limit_bounds_declaration_slots_and_preserves_equivalent_support() {
                 .sum::<usize>(),
             5
         );
+    }
+}
+
+#[test]
+fn grouped_context_source_budget_counts_every_wire_copy_at_unicode_boundaries() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    let text = "f😀π";
+    for (comp, target) in [("a", "net10.0"), ("b", "netstandard2.1")] {
+        unit(&mut writer, comp, target, true, false);
+        writer
+            .stage(Payload::Source(SourceArtifact {
+                id: "unicode".into(),
+                path: "unicode.cs".into(),
+                utf8: text.as_bytes().to_vec(),
+                sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                compilation_id: comp.into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        let id = format!("{comp}:Unicode");
+        let mut definition = occurrence(&id, "unicode", 0, "definition");
+        definition.end_byte = text.len() as u64;
+        writer
+            .stage(Payload::Facts(FactBatch {
+                compilation_id: comp.into(),
+                symbols: vec![Symbol {
+                    id: id.clone(),
+                    name: "f".into(),
+                    kind: "method".into(),
+                    signature: "void f()".into(),
+                    declaration_key: "compiler:Unicode".into(),
+                    ..Default::default()
+                }],
+                occurrences: vec![occurrence(&id, "unicode", 0, "declaration"), definition],
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    writer.publish().unwrap();
+    let view = ReadView::open(&path).unwrap();
+    for budget in 1..=22 {
+        let result = query(
+            &view,
+            serde_json::json!({"op":"symbol_context", "symbol_id":"a:Unicode", "max_bytes":budget}),
+        );
+        assert_eq!(result.contexts.len(), 1);
+        let context = &result.contexts[0];
+        assert_eq!(context.supporting_targets.len(), 2);
+        assert_eq!(context.declarations.len(), 1);
+        assert!(
+            context
+                .supporting_targets
+                .iter()
+                .all(|s| s.declarations.len() == 1)
+        );
+        let declarations: Vec<_> = context
+            .declarations
+            .iter()
+            .chain(
+                context
+                    .supporting_targets
+                    .iter()
+                    .flat_map(|s| &s.declarations),
+            )
+            .collect();
+        let wire_bytes: usize = declarations
+            .iter()
+            .filter_map(|d| d.source.as_ref())
+            .map(|s| s.text.len())
+            .sum();
+        assert!(
+            wire_bytes <= budget,
+            "budget={budget}, wire_bytes={wire_bytes}"
+        );
+        for declaration in &declarations {
+            if let Some(source) = &declaration.source {
+                assert_eq!(
+                    source.text.as_bytes(),
+                    &text.as_bytes()[source.start_byte as usize..source.end_byte as usize]
+                );
+                assert!(
+                    text.is_char_boundary(source.start_byte as usize)
+                        && text.is_char_boundary(source.end_byte as usize)
+                );
+            }
+        }
+        assert_eq!(result.truncated, budget < text.len() * 3);
+        if budget == 1 {
+            assert!(context.declarations[0].source.is_none());
+            assert_eq!(context.declarations[0].source_status, "budget_exhausted");
+        }
+        if budget >= text.len() * 3 {
+            assert_eq!(wire_bytes, text.len() * 3);
+            assert!(declarations.iter().all(|d| d.source_status == "included"));
+        }
     }
 }
 

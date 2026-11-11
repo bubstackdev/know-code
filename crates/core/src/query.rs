@@ -964,6 +964,11 @@ impl ReadView {
                 // Equivalent targets share declaration slots, but each retains
                 // its own exact evidence and consumes the shared source budget.
                 used_slots = used_slots.max(symbol.locations.len().min(declaration_slots));
+                let source_copies = if multiple && representative.is_none() {
+                    2
+                } else {
+                    1
+                };
                 let mut declarations = vec![];
                 for location in std::mem::take(&mut symbol.locations)
                     .into_iter()
@@ -996,7 +1001,10 @@ impl ReadView {
                     if request.include_source
                         && let Some(extent) = &extent
                     {
-                        if budget == 0 {
+                        // The representative is repeated as exact support[0].
+                        // Charge both wire copies without dropping provenance.
+                        let available = budget / source_copies;
+                        if available == 0 {
                             status = "budget_exhausted";
                             truncated = true;
                         } else {
@@ -1005,9 +1013,9 @@ impl ReadView {
                             read.content_hash = Some(extent.content_hash.clone());
                             read.start_byte = Some(extent.start_byte);
                             read.end_byte = Some(extent.end_byte);
-                            read.max_bytes = Some(budget);
+                            read.max_bytes = Some(available);
                             let (body, clipped) = self.source_excerpt(&read, true)?;
-                            budget -= (body.end_byte - body.start_byte) as u32;
+                            budget -= (body.end_byte - body.start_byte) as u32 * source_copies;
                             status = if body.text.is_empty() && clipped {
                                 "budget_exhausted"
                             } else if clipped {
