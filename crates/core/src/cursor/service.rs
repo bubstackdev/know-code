@@ -560,11 +560,20 @@ impl CursorService {
             if !state.cleanup_pending.contains_key(&database) {
                 continue;
             }
-            if let Err(error) = Self::initialize(&mut state, &database, execution) {
-                state
-                    .cleanup_pending
-                    .insert(database.clone(), error.to_string());
-                state.cleanup_queue.push_back(database);
+            match Self::initialize(&mut state, &database, execution) {
+                Ok(()) => {}
+                Err(Error::UpdateRequired(_)) => {
+                    // Startup may exhaust its cooperative budget before it can
+                    // diagnose this store. Once known, its version boundary is
+                    // workspace-local, not shared cleanup that blocks siblings.
+                    state.cleanup_pending.remove(&database);
+                }
+                Err(error) => {
+                    state
+                        .cleanup_pending
+                        .insert(database.clone(), error.to_string());
+                    state.cleanup_queue.push_back(database);
+                }
             }
         }
         state.maintenance_error = result.as_ref().err().map(ToString::to_string);
@@ -844,6 +853,17 @@ mod tests {
             .unwrap()
             .text
     }
+    fn drain_startup_cleanup(service: &CursorService) {
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.lock().unwrap().cleanup_pending.is_empty() {
+            assert!(
+                std::time::Instant::now() < until,
+                "startup cleanup did not settle"
+            );
+            service.sweep().unwrap();
+        }
+        assert!(service.lock().unwrap().cleanup_pending.is_empty());
+    }
     #[test]
     fn unreadable_format1_startup_does_not_block_healthy_sibling_paging() {
         let legacy = crate::cursor::lifecycle_tests::legacy_database()
@@ -860,6 +880,7 @@ mod tests {
         let root = legacy.parent().unwrap().join("coordinator");
         std::fs::create_dir_all(&root).unwrap();
         let service = CursorService::new(&root, [legacy.clone(), healthy.clone()]).unwrap();
+        drain_startup_cleanup(&service);
         assert!(service.lock().unwrap().cleanup_pending.is_empty());
         let page = ready_symbols(&service, &healthy);
         assert!(read_page(&page)["symbols"].as_array().unwrap().is_empty());
@@ -886,6 +907,64 @@ mod tests {
         let again = call(&service, &healthy, action("borrow", Some(&page))).unwrap();
         assert_eq!(read_page(&again), read_page(&page));
         call(&service, &healthy, action("finish", Some(&again))).unwrap();
+    }
+
+    #[test]
+    fn deferred_startup_probe_later_localizes_unreadable_store_and_unblocks_sibling() {
+        let legacy = crate::cursor::lifecycle_tests::legacy_database()
+            .canonicalize()
+            .unwrap();
+        let connection = rusqlite::Connection::open(&legacy).unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE generation_units; DROP TABLE unit_artifacts; ALTER TABLE compilations DROP COLUMN dependencies_json; ALTER TABLE compilations DROP COLUMN input_paths_json; PRAGMA user_version=1;").unwrap();
+        crate::recovery::adopt(&legacy, 1).unwrap();
+        // In rollback-journal mode EXCLUSIVE blocks even user_version reads,
+        // so startup really defers before discovering the unsupported format.
+        connection
+            .execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;")
+            .unwrap();
+        let healthy = crate::cursor::lifecycle_tests::database()
+            .canonicalize()
+            .unwrap();
+        let root = legacy.parent().unwrap().join("coordinator");
+        std::fs::create_dir_all(&root).unwrap();
+        let service = CursorService::new(&root, [legacy.clone(), healthy.clone()]).unwrap();
+        assert!(
+            service
+                .lock()
+                .unwrap()
+                .cleanup_pending
+                .contains_key(&legacy)
+        );
+        connection.execute_batch("ROLLBACK;").unwrap();
+        drain_startup_cleanup(&service);
+        assert!(!service.lock().unwrap().cleanup_queue.contains(&legacy));
+        assert!(matches!(
+            call(&service, &legacy, action("admit", None)),
+            Err(Error::UpdateRequired(_))
+        ));
+        assert!(service.lock().unwrap().cleanup_pending.is_empty());
+        let page = ready_symbols(&service, &healthy);
+        assert!(read_page(&page)["symbols"].as_array().unwrap().is_empty());
+        let again = call(&service, &healthy, action("borrow", Some(&page))).unwrap();
+        assert_eq!(read_page(&again), read_page(&page));
+        call(&service, &healthy, action("finish", Some(&again))).unwrap();
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='cursor_generation_pins'",
+                    [],
+                    |r| r.get::<_, i32>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(!crate::recovery::is_bad(&legacy).unwrap());
     }
 
     #[test]
