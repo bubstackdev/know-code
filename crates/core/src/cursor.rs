@@ -433,7 +433,7 @@ impl CursorRegistry {
     }
     fn budget_usage(
         &self,
-        proposed: Option<(&Path, u64)>,
+        proposed: Option<(&Path, &str, Option<u64>)>,
         execution: crate::execution::Execution,
     ) -> Result<u64> {
         let mut total = 0u64;
@@ -449,17 +449,26 @@ impl CursorRegistry {
                     .or_insert_with(|| entry.pin.health.clone());
             }
         }
-        for ((database, _incarnation), health) in databases {
+        let mut selected = BTreeMap::new();
+        for ((database, incarnation), health) in databases {
             execution.check()?;
             let retention = GenerationRetention {
                 database: database.clone(),
                 owner: self.owner,
                 health,
             };
-            let candidate = proposed
-                .filter(|(path, _)| *path == database.as_path())
-                .map(|(_, generation)| generation);
-            let usage = match retention.usage_controlled(candidate, execution.clone()) {
+            let selected_incarnation = match selected.entry(database.clone()) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => entry
+                    .insert(crate::recovery::selected_incarnation(&database)?.unwrap_or_default()),
+            };
+            let candidate =
+                proposed.filter(|(path, id, _)| *path == database.as_path() && *id == incarnation);
+            let retired = *selected_incarnation != incarnation
+                || candidate.is_some_and(|(_, _, generation)| generation.is_none());
+            let generation = candidate.and_then(|(_, _, generation)| generation);
+            let usage = match retention.usage_with_baseline(generation, retired, execution.clone())
+            {
                 Ok(usage) => usage,
                 Err(Error::IndexCorrupt { .. }) if retention.health.check().is_err() => continue,
                 Err(error) => return Err(error),
@@ -471,7 +480,7 @@ impl CursorRegistry {
     }
     fn make_space(
         &mut self,
-        proposed: Option<(&Path, u64)>,
+        proposed: Option<(&Path, &str, Option<u64>)>,
         protected: Option<[u8; 16]>,
         execution: crate::execution::Execution,
     ) -> Result<()> {
@@ -501,9 +510,19 @@ impl CursorRegistry {
         generation: u64,
         execution: Execution,
     ) -> Result<bool> {
+        let incarnation = crate::recovery::selected_incarnation(database)?.unwrap_or_default();
+        self.prepare_selected(database, &incarnation, Some(generation), execution)
+    }
+    fn prepare_selected(
+        &mut self,
+        database: &Path,
+        incarnation: &str,
+        generation: Option<u64>,
+        execution: Execution,
+    ) -> Result<bool> {
         self.sweep_inner(crate::execution::continuous_time()?, execution.clone())?;
         loop {
-            if self.budget_usage(Some((database, generation)), execution.clone())?
+            if self.budget_usage(Some((database, incarnation, generation)), execution.clone())?
                 <= self.maximum_bytes
             {
                 return Ok(true);
@@ -928,6 +947,148 @@ mod lifecycle_tests {
             .text
     }
 
+    pub(super) fn legacy_database() -> PathBuf {
+        let path = database().with_file_name("legacy.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(include_str!("../../../tests/fixtures/schema-v2.sql"))
+            .unwrap();
+        connection
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .unwrap();
+        legacy_publication(&connection, 1, "needle legacy π😀");
+        path
+    }
+    fn legacy_publication(connection: &Connection, generation: u64, text: &str) {
+        let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+        connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+        connection
+            .execute("INSERT INTO generations VALUES(?)", [generation])
+            .unwrap();
+        connection
+            .execute("UPDATE state SET current_generation=?", [generation])
+            .unwrap();
+        connection.execute("INSERT INTO compilations VALUES(?,'comp','typescript','tsconfig.json','','',0,'fixture','{}','[]','[]')", [generation]).unwrap();
+        connection
+            .execute(
+                "INSERT INTO generation_units VALUES(?,'comp',?)",
+                params![generation, generation],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO contents VALUES(?,?)",
+                params![hash, text.as_bytes()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO artifacts VALUES(?,'source','a.ts',?,0)",
+                params![generation, hash],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO unit_artifacts VALUES(?,'comp','source')",
+                [generation],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO symbols(generation,compilation_id,id,name,kind,signature,external) VALUES(?,'comp','symbol','needle','function',?,0)", params![generation,text]).unwrap();
+        connection
+            .execute(
+                "INSERT INTO occurrences VALUES(?,'comp','symbol','source',0,6,'declaration','')",
+                [generation],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO occurrences VALUES(?,'comp','symbol','source',0,?,'definition','')",
+                params![generation, text.len()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO relationships VALUES(?,'comp','symbol','symbol','test')",
+                [generation],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO reports VALUES(?,'comp','partial','[]')",
+                [generation],
+            )
+            .unwrap();
+        connection.execute_batch("COMMIT").unwrap();
+    }
+    #[test]
+    fn actual_format2_retention_accounts_facts_and_reclaims_without_migration() {
+        let path = legacy_database();
+        let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+        let pin = retention.pin_current().unwrap();
+        let current = retention.retained_usage(None, None).unwrap();
+        assert_eq!((current.units, current.source_bytes), (0, 0));
+        let execution = Execution::new(Default::default(), None).unwrap();
+        let retired = retention
+            .usage_with_baseline(None, true, execution)
+            .unwrap();
+        assert_eq!(retired.units, 1);
+        assert!(retired.unit_bytes > 0 && retired.artifact_bytes > 0 && retired.manifest_bytes > 0);
+        assert_eq!(retired.source_bytes, 128 + "needle legacy π😀".len() as u64);
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT store_format FROM cursor_unit_costs_v1", [], |r| r
+                    .get::<_, i32>(
+                    0
+                ))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            2
+        );
+        legacy_publication(&connection, 2, "needle new saved");
+        assert_eq!(source(&pin), "needle legacy π😀");
+        let view = pin.open_view().unwrap();
+        let context = view
+            .query(serde_json::from_str(r#"{"op":"symbol_context","symbol_id":"symbol"}"#).unwrap())
+            .unwrap();
+        assert_eq!(
+            context.contexts[0].declarations[0]
+                .source
+                .as_ref()
+                .unwrap()
+                .text,
+            "needle legacy π😀"
+        );
+        drop(view);
+        assert_eq!(retention.retained_usage(None, None).unwrap().units, 1);
+        retention.release(&pin).unwrap();
+        assert!(matches!(pin.open_view(), Err(Error::CursorInvalidated)));
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM contents", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM cursor_unit_costs_v1", [], |r| r
+                    .get::<_, i32>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            2
+        );
+    }
+
     #[test]
     fn count_and_lru_are_shared_across_workspaces_and_active_reads_are_protected() {
         let a = database();
@@ -1348,7 +1509,7 @@ mod lifecycle_tests {
         let generation = staged_generation(&path);
         let execution = crate::execution::Execution::new(Default::default(), None).unwrap();
         let projected = cursors
-            .budget_usage(Some((&path, generation)), execution)
+            .budget_usage(Some((&path, "", Some(generation))), execution)
             .unwrap();
         assert!(projected > initial);
         cursors.maximum_bytes = initial;

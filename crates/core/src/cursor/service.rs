@@ -72,7 +72,7 @@ impl CursorLimits {
 
 struct State {
     registry: CursorRegistry,
-    initialized: BTreeSet<PathBuf>,
+    initialized: BTreeSet<(PathBuf, String)>,
     file_error: Option<String>,
     pending_publications: usize,
     disabled: BTreeSet<PathBuf>,
@@ -104,8 +104,8 @@ impl CursorService {
                         GenerationRetention::activate_controlled(&database, owner, Some(execution))
                     });
                 match activated {
-                    Ok(_) => {
-                        initialized.insert(database);
+                    Ok(retention) => {
+                        initialized.insert((database, retention.health.incarnation().to_owned()));
                     }
                     Err(Error::IndexCorrupt { .. } | Error::IndexRecovering(_)) => {}
                     Err(error) => {
@@ -175,13 +175,17 @@ impl CursorService {
         }
     }
     fn initialize(state: &mut State, database: &Path, execution: Execution) -> Result<()> {
-        if !state.initialized.contains(database) {
+        let incarnation = crate::recovery::selected_incarnation(database)?.unwrap_or_default();
+        if !state
+            .initialized
+            .contains(&(database.to_owned(), incarnation.clone()))
+        {
             GenerationRetention::activate_controlled(
                 database,
                 state.registry.owner,
                 Some(execution),
             )?;
-            state.initialized.insert(database.into());
+            state.initialized.insert((database.into(), incarnation));
             state.cleanup_pending.remove(database);
         }
         Ok(())
@@ -191,7 +195,7 @@ impl CursorService {
     pub fn unregister(&self, database: &Path) -> Result<()> {
         let mut state = self.lock()?;
         state.disabled.insert(database.into());
-        state.initialized.remove(database);
+        state.initialized.retain(|(path, _)| path != database);
         for entry in state.registry.entries.values_mut() {
             if entry.pin.database == database {
                 entry.retiring = true;
@@ -204,7 +208,7 @@ impl CursorService {
     /// still retire through normal file cleanup, retaining failed charges.
     pub fn invalidate_corrupt(&self, database: &Path, incarnation: &str) -> Result<()> {
         let mut state = self.lock()?;
-        state.initialized.remove(database);
+        state.initialized.retain(|(path, _)| path != database);
         state.cleanup_pending.remove(database);
         state.cleanup_queue.retain(|path| path != database);
         for entry in state.registry.entries.values_mut() {
@@ -563,6 +567,29 @@ impl CursorService {
     /// Analysis has completed before entry. Keep admission serialized through
     /// actual commit, but release the mutex while bounded active reads finish.
     pub fn publish(&self, database: &Path, writer: Writer, control: &Control) -> Result<u64> {
+        let generation = writer.generation;
+        self.publish_with(database, Some(generation), control, || {
+            writer.publish_controlled(control)
+        })
+    }
+    /// Serialize a selector cutover with cursor admission and shared retention
+    /// pressure. Healthy old pins remain valid on their original incarnation.
+    /// The callback must acquire lifecycle metadata locks only after admission.
+    pub fn publish_replacement<T>(
+        &self,
+        database: &Path,
+        control: &Control,
+        publish: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.publish_with(database, None, control, publish)
+    }
+    fn publish_with<T>(
+        &self,
+        database: &Path,
+        generation: Option<u64>,
+        control: &Control,
+        publish: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
         let execution =
             Execution::new(Default::default(), Some(crate::execution::MAX_DEADLINE_MS))?;
         {
@@ -573,7 +600,10 @@ impl CursorService {
         }
         let result = (|| {
             let mut state = self.lock()?;
-            Self::initialize(&mut state, database, execution.clone())?;
+            if generation.is_some() {
+                Self::initialize(&mut state, database, execution.clone())?;
+            }
+            let incarnation = crate::recovery::selected_incarnation(database)?.unwrap_or_default();
             loop {
                 self.running()?;
                 if state.disabled.contains(database) {
@@ -581,12 +611,19 @@ impl CursorService {
                 }
                 control.check()?;
                 execution.check()?;
-                if state.registry.prepare_controlled(
+                if state.registry.prepare_selected(
                     database,
-                    writer.generation,
+                    &incarnation,
+                    generation,
                     execution.clone(),
                 )? {
-                    return writer.publish_controlled(control);
+                    let result = publish();
+                    if generation.is_none() {
+                        // Selection may become visible even if its fsync acknowledgement failed.
+                        // A new incarnation initializes independently; never reactivate old pins.
+                        state.initialized.retain(|(path, _)| path != database);
+                    }
+                    return result;
                 }
                 let (next, _) = self
                     .changed
@@ -664,6 +701,269 @@ mod tests {
         .unwrap();
         call(service, db, action("finish", Some(&lease))).unwrap();
         result
+    }
+    fn legacy_fixture() -> (PathBuf, CursorService) {
+        let db = crate::cursor::lifecycle_tests::legacy_database()
+            .canonicalize()
+            .unwrap();
+        crate::recovery::adopt(&db, 1).unwrap();
+        let root = db.parent().unwrap().join("coordinator");
+        std::fs::create_dir_all(&root).unwrap();
+        let service = CursorService::new(&root, [db.clone()]).unwrap();
+        (db, service)
+    }
+    fn ready_symbols(service: &CursorService, db: &Path) -> CursorReply {
+        let lease = call(service, db, action("admit", None)).unwrap();
+        let handle = CursorHandle::parse_prefix(&lease.cursor).unwrap();
+        let pin = service.lock().unwrap().registry.entries[&handle.id]
+            .pin
+            .clone();
+        let result = pin
+            .open_view()
+            .unwrap()
+            .query(serde_json::from_str(r#"{"op":"symbols"}"#).unwrap())
+            .unwrap();
+        let encoded = super::super::pages::encode(
+            serde_json::to_value(result).unwrap(),
+            super::super::pages::EncodeOptions {
+                op: "symbols",
+                total_limit: 1000,
+                page_size: 1,
+                cursor_prefix: &lease.cursor,
+                response_max_bytes: 256 * 1024,
+            },
+            Execution::new(Default::default(), None).unwrap(),
+        )
+        .unwrap();
+        call(
+            service,
+            db,
+            CursorRequest {
+                bytes: encoded.len() as u64,
+                ..action("reserve", Some(&lease))
+            },
+        )
+        .unwrap();
+        for (i, chunk) in encoded.chunks(MAX_RESULT_CHUNK).enumerate() {
+            call(
+                service,
+                db,
+                CursorRequest {
+                    offset: (i * MAX_RESULT_CHUNK) as u64,
+                    chunk: chunk.to_vec(),
+                    ..action("chunk", Some(&lease))
+                },
+            )
+            .unwrap();
+        }
+        let result = call(
+            service,
+            db,
+            CursorRequest {
+                sha256: format!("{:x}", Sha256::digest(&encoded)),
+                ..action("complete", Some(&lease))
+            },
+        )
+        .unwrap();
+        call(service, db, action("finish", Some(&lease))).unwrap();
+        result
+    }
+    fn read_page(reply: &CursorReply) -> serde_json::Value {
+        super::super::pages::read(
+            &mut std::fs::File::open(&reply.result_path).unwrap(),
+            super::super::pages::ReadOptions {
+                position: 0,
+                cursor_prefix: &reply.cursor,
+                expected_generation: reply.generation,
+                response_max_bytes: 256 * 1024,
+                freshness: "stale",
+                coordination: None,
+            },
+            Execution::new(Default::default(), None).unwrap(),
+        )
+        .unwrap()
+    }
+    fn pin_for(service: &CursorService, reply: &CursorReply) -> GenerationPin {
+        let handle = CursorHandle::parse_prefix(&reply.cursor).unwrap();
+        service.lock().unwrap().registry.entries[&handle.id]
+            .pin
+            .clone()
+    }
+    fn indexed_replacement(db: &Path, explicit: bool) -> crate::recovery::Candidate {
+        use crate::protocol::{AnalysisReport, Compilation, SourceArtifact, envelope::Payload};
+        let candidate = crate::recovery::begin_upgrade(db, explicit, 1, 2).unwrap();
+        let mut writer = Writer::open_destination(
+            db,
+            &candidate.database,
+            None,
+            candidate.minimum_generation,
+            &Control::default(),
+        )
+        .unwrap();
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: "comp".into(),
+                language: "typescript".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        let text = "replacement saved 😀";
+        writer
+            .stage(Payload::Source(SourceArtifact {
+                id: "source".into(),
+                path: "a.ts".into(),
+                compilation_id: "comp".into(),
+                sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                utf8: text.as_bytes().into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: "comp".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer.publish().unwrap();
+        candidate
+    }
+    fn saved_source(view: &ReadView) -> String {
+        view.query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
+            .unwrap()
+            .source
+            .unwrap()
+            .text
+    }
+    #[test]
+    fn format2_pages_remain_available_during_failed_upgrade_without_migration() {
+        let (db, service) = legacy_fixture();
+        let initial = ready_symbols(&service, &db);
+        let before = read_page(&initial);
+        assert_eq!(before["symbols"][0]["signature"], "needle legacy π😀");
+        let candidate = crate::recovery::begin_upgrade(&db, false, 1, 2).unwrap();
+        let during = ready_symbols(&service, &db);
+        assert_eq!(read_page(&during)["symbols"], before["symbols"]);
+        crate::recovery::fail_rebuild(&db, "owned fixture provider failure").unwrap();
+        let failed = ready_symbols(&service, &db);
+        assert_eq!(read_page(&failed)["symbols"], before["symbols"]);
+        assert!(crate::recovery::begin_upgrade(&db, false, 1, 2).is_err());
+        let pin = pin_for(&service, &initial);
+        assert_eq!(saved_source(&pin.open_view().unwrap()), "needle legacy π😀");
+        assert_eq!(
+            rusqlite::Connection::open(crate::recovery::selected_path(&db).unwrap())
+                .unwrap()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            2
+        );
+        assert_ne!(candidate.incarnation, initial.index_incarnation);
+    }
+    #[test]
+    fn healthy_cutover_retains_old_pages_context_and_baseline_through_next_publication() {
+        let (db, service) = legacy_fixture();
+        let stored = ready_symbols(&service, &db);
+        let before = read_page(&stored);
+        let pin = pin_for(&service, &stored);
+        let original_view = pin.open_view().unwrap();
+        let old_lookup = original_view
+            .query(serde_json::from_str(r#"{"op":"symbols"}"#).unwrap())
+            .unwrap();
+        let initial = service.lock().unwrap().registry.retained_bytes().unwrap();
+        let candidate = indexed_replacement(&db, false);
+        let generation = service
+            .publish_replacement(&db, &Control::default(), || {
+                crate::recovery::finish_rebuild(&candidate, &Control::default(), || Ok(()))
+            })
+            .unwrap();
+        assert!(generation > stored.generation);
+        assert!(service.lock().unwrap().registry.retained_bytes().unwrap() > initial);
+        let borrowed = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+        assert_eq!(read_page(&borrowed), before);
+        call(&service, &db, action("finish", Some(&borrowed))).unwrap();
+        let old = pin.open_view().unwrap();
+        assert_eq!(saved_source(&old), "needle legacy π😀");
+        let context = old
+            .query(serde_json::from_str(r#"{"op":"symbol_context","symbol_id":"symbol"}"#).unwrap())
+            .unwrap();
+        assert_eq!(
+            context.contexts[0].declarations[0]
+                .source
+                .as_ref()
+                .unwrap()
+                .text,
+            "needle legacy π😀"
+        );
+        let fresh = ready_symbols(&service, &db);
+        assert_eq!(fresh.index_incarnation, candidate.incarnation);
+        assert!(read_page(&fresh)["symbols"].as_array().unwrap().is_empty());
+        let current = ReadView::open(&db).unwrap();
+        assert_eq!(saved_source(&current), "replacement saved 😀");
+        let request = serde_json::from_value(serde_json::json!({"op":"source","artifact_id":"source","snapshot":old_lookup.snapshot})).unwrap();
+        assert!(matches!(
+            current.query(request),
+            Err(Error::SnapshotInvalidated)
+        ));
+        drop(current);
+        let writer = crate::cursor::lifecycle_tests::staged(&db, "next publication");
+        let next = service.publish(&db, writer, &Control::default()).unwrap();
+        assert!(next > generation);
+        assert_eq!(
+            saved_source(&ReadView::open(&db).unwrap()),
+            "next publication"
+        );
+        let again = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+        assert_eq!(read_page(&again), before);
+        call(&service, &db, action("finish", Some(&again))).unwrap();
+        assert_eq!(saved_source(&pin.open_view().unwrap()), "needle legacy π😀");
+    }
+    #[test]
+    fn healthy_cutover_pressure_waits_for_active_read_then_evicts_idle_cursor() {
+        let (db, service) = legacy_fixture();
+        let stored = ready_symbols(&service, &db);
+        let read = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+        let held = pin_for(&service, &stored).open_view().unwrap();
+        assert_eq!(saved_source(&held), "needle legacy π😀");
+        let baseline = service.lock().unwrap().registry.retained_bytes().unwrap();
+        service.lock().unwrap().registry.maximum_bytes = baseline;
+        let candidate = indexed_replacement(&db, false);
+        let called = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let publisher = scope.spawn(|| {
+                service.publish_replacement(&db, &Control::default(), || {
+                    called.store(true, Ordering::Release);
+                    crate::recovery::finish_rebuild(&candidate, &Control::default(), || Ok(()))
+                })
+            });
+            wait_for_publication(&service);
+            assert!(!called.load(Ordering::Acquire));
+            assert_eq!(
+                crate::recovery::selected_incarnation(&db)
+                    .unwrap()
+                    .as_deref(),
+                Some(stored.index_incarnation.as_str())
+            );
+            assert!(matches!(
+                call(&service, &db, action("borrow", Some(&stored))),
+                Err(Error::ResourceLimited(_))
+            ));
+            let connection =
+                rusqlite::Connection::open(crate::recovery::selected_path(&db).unwrap()).unwrap();
+            connection.busy_timeout(Duration::from_millis(100)).unwrap();
+            connection
+                .execute_batch("BEGIN IMMEDIATE; ROLLBACK")
+                .unwrap();
+            assert_eq!(saved_source(&held), "needle legacy π😀");
+            call(&service, &db, action("finish", Some(&read))).unwrap();
+            assert!(publisher.join().unwrap().is_ok());
+        });
+        assert!(called.load(Ordering::Acquire));
+        assert!(matches!(
+            call(&service, &db, action("borrow", Some(&stored))),
+            Err(Error::CursorInvalidated)
+        ));
+        assert_eq!(saved_source(&held), "needle legacy π😀");
+        assert!(!Path::new(&stored.result_path).exists());
     }
     #[test]
     fn bad_pin_retirement_preserves_other_workspaces_and_failed_file_charges() {
