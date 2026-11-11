@@ -216,6 +216,18 @@ fn observe_bad(shared: &Shared, entry: &mut Entry, incarnation: &str) -> AnyResu
     }
     shared.cursors.invalidate_corrupt(&database, incarnation)?;
     if let Some(error) = recovery::failure(&database)? {
+        // A late report/presence check must not revoke an explicit refresh
+        // already queued behind another workspace. Dispatch consumes that
+        // authorization once; notifications cannot create a new one.
+        if entry.recovery_explicit {
+            entry.recovery_blocked = false;
+            entry.pending = true;
+            entry.force = true;
+            if !entry.recovering {
+                entry.status.phase = "queued".into();
+            }
+            return Ok(true);
+        }
         entry.recovery_blocked = true;
         entry.pending = false;
         entry.status.error = error.clone();
@@ -2117,6 +2129,100 @@ mod live_lifetime_tests {
             first + 1,
             "explicit refresh did not authorize exactly one new attempt"
         );
+    }
+    #[test]
+    fn explicit_recovery_retry_survives_duplicate_bad_observations_behind_busy_sibling() {
+        let job = recovery_job();
+        let database = PathBuf::from(&job.database);
+        let data = job.root.parent().unwrap().join("d");
+        let incarnation = recovery::selected_incarnation(&database).unwrap().unwrap();
+        recovery::begin_rebuild(&database, false, job.previous_generation).unwrap();
+        recovery::fail_rebuild(&database, "first attempt failed").unwrap();
+        let publisher = Arc::new(Publisher::new(&data));
+        let mut entry = Entry {
+            registration: 1,
+            analysis_error: String::new(),
+            failed_input_hash: String::new(),
+            status: LiveStatus::new(
+                WorkspaceStatus {
+                    database: job.database.clone(),
+                    workspace_root: job.root.to_string_lossy().into_owned(),
+                    available: true,
+                    generation: job.previous_generation,
+                    ..Default::default()
+                },
+                &publisher,
+            ),
+            configuration: String::new(),
+            identity: job.identity.clone(),
+            special_inputs: BTreeSet::new(),
+            dirty: BTreeSet::new(),
+            force: false,
+            rehash: false,
+            retry_preparation: false,
+            queued: Instant::now(),
+            active: Instant::now(),
+            watch_pending: false,
+            pending: false,
+            cancel_pending: false,
+            recovery_blocked: true,
+            recovery_explicit: false,
+            recovering: false,
+        };
+        let shared = Shared {
+            entries: Mutex::new(BTreeMap::new()),
+            publisher,
+            changed: Condvar::new(),
+            registry: Mutex::new(Connection::open_in_memory().unwrap()),
+            discovery: Mutex::new(
+                crate::discovery::Discovery::open(&Connection::open_in_memory().unwrap()).unwrap(),
+            ),
+            stop: AtomicBool::new(false),
+            maintenance: Mutex::new(None),
+            analysis_running: AtomicBool::new(true),
+            resources: Governor::new(Limits::default()).unwrap(),
+            active_job: Mutex::new(Some(("healthy-sibling".into(), job.session.control()))),
+            overflow: AtomicBool::new(false),
+            clients: AtomicUsize::new(0),
+            cursors: Arc::new(
+                know_code_core::cursor::CursorService::new(&data, Vec::new()).unwrap(),
+            ),
+        };
+        // Ordinary presence/report/activity observations cannot authorize a retry.
+        for _ in 0..3 {
+            assert!(observe_bad(&shared, &mut entry, &incarnation).unwrap());
+            queue(&mut entry, None, false);
+            assert!(entry.recovery_blocked && !entry.pending && !entry.recovery_explicit);
+        }
+        // The refresh path queues exactly one authorization while the sibling
+        // still owns the shared analysis slot.
+        entry.recovery_explicit = true;
+        entry.recovery_blocked = false;
+        queue(&mut entry, None, true);
+        let queued = entry.queued;
+        for _ in 0..3 {
+            assert!(observe_bad(&shared, &mut entry, &incarnation).unwrap());
+            queue(&mut entry, None, false);
+            assert!(
+                !entry.recovery_blocked && entry.pending && entry.force && entry.recovery_explicit
+            );
+            assert_eq!(entry.status.phase, "queued");
+            assert_eq!(entry.queued, queued);
+            job.session.control().check().unwrap();
+            assert!(recovery::failure(&database).unwrap().is_some());
+        }
+        // Dispatch consumes the authorization; duplicate wakes cannot allocate
+        // a second candidate or revive this attempt after another failure.
+        shared.active_job.lock().unwrap().take();
+        let explicit = std::mem::take(&mut entry.recovery_explicit);
+        entry.pending = false;
+        recovery::begin_rebuild(&database, explicit, job.previous_generation).unwrap();
+        assert!(recovery::begin_rebuild(&database, false, job.previous_generation).is_err());
+        recovery::fail_rebuild(&database, "explicit attempt failed").unwrap();
+        for _ in 0..3 {
+            assert!(observe_bad(&shared, &mut entry, &incarnation).unwrap());
+            assert!(entry.recovery_blocked && !entry.pending && !entry.recovery_explicit);
+        }
     }
     #[test]
     fn selected_readiness_preserves_version_errors_but_fences_actual_index_header_corruption() {
