@@ -1,6 +1,6 @@
 # Graph declaration source projection
 
-Status: accepted contract; implementation and validation pending. This is the Q06 slice, not whole-release acceptance.
+Status: implemented development slice; combined validation pending. This is the Q06 slice, not whole-release acceptance. Core implementation and thin SDK/MCP support share native query contract 6.
 
 ## Behavior
 
