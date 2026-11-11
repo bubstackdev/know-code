@@ -1554,21 +1554,22 @@ mod lifecycle_tests {
             "original source"
         );
     }
-}
-#[test]
-fn metadata_connections_defer_commit_and_close_checkpoints() {
-    let path = database();
-    let health = crate::recovery::IndexReadGuard::open_unbudgeted(&path).unwrap();
-    let connection = open_writer_controlled(&health, None).unwrap();
-    assert!(
-        connection
-            .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
-            .unwrap()
-    );
-    assert_eq!(
-        connection
-            .query_row("PRAGMA wal_autocheckpoint", [], |r| r.get::<_, u32>(0))
-            .unwrap(),
-        0
-    );
+
+    #[test]
+    fn metadata_connections_defer_commit_and_close_checkpoints() {
+        let path = database();
+        let health = crate::recovery::IndexReadGuard::open_unbudgeted(&path).unwrap();
+        let connection = open_writer_controlled(&health, None).unwrap();
+        assert!(
+            connection
+                .db_config(rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE)
+                .unwrap()
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA wal_autocheckpoint", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+    }
 }
