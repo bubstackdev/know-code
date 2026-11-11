@@ -96,6 +96,38 @@ try:
  checks.append('explicit_refresh_rebuilds_current_saved_state_and_advances_generation')
  stop();value('watch',A);assert ready(A)['generation']==final['generation'],'healthy restart published unnecessarily'
  checks.append('healthy_replacement_restart_is_noop')
+ # Malformed/incompatible lifecycle and invalid health metadata belong only to
+ # A. Presence and dispatch must keep B's shared coordinator alive and writable;
+ # fixing metadata alone does not authorize another analysis of A.
+ selector=Path(databases[A]).with_suffix('.lifecycle.json')
+ healthy_selector=selector.read_bytes()
+ health=physical(A).parent/'health';healthy_health=health.read_bytes()
+ for fault,code in [('malformed','invalid_request'),('version','update_required'),('health','invalid_request')]:
+  if fault=='malformed':selector.write_text('{broken lifecycle')
+  elif fault=='version':
+   wrong=json.loads(healthy_selector);wrong['version']=999;selector.write_text(json.dumps(wrong))
+   stop();value('watch',B)
+  else:
+   # Keep the page size stable while readers may have mappings. Invalid magic
+   # is an ownership/metadata failure, never SQLite corruption evidence.
+   with health.open('r+b') as file:file.write(b'BADHEALT');file.flush();os.fsync(file.fileno())
+  last_b=ready(B)['generation']
+  (A/'value.ts').write_text(f'export const alpha = "metadata {fault}";\n')
+  (B/'value.ts').write_text(f'export const beta = "healthy during {fault}";\n')
+  failure=wait(A,lambda s:s['phase']=='failed','isolated lifecycle fault '+fault)
+  assert failure['outcome_code']==code,failure
+  ready(B,last_b+1)
+  assert state(B)['failed'] is None,'healthy sibling was incorrectly rebuilt'
+  if fault=='health':
+   with health.open('r+b') as file:file.write(healthy_health);file.flush();os.fsync(file.fileno())
+  else:selector.write_bytes(healthy_selector)
+  old_generation=failure['generation']
+  time.sleep(2.2)
+  still_blocked=status(A)
+  assert still_blocked['phase']=='failed' and still_blocked['generation']==old_generation,still_blocked
+  cli('index',A);ready(A,old_generation+1)
+  healthy_selector=selector.read_bytes();healthy_health=health.read_bytes()
+ checks.append('workspace_lifecycle_and_health_faults_preserve_healthy_sibling_updates_and_require_refresh')
  passed=True
 finally:
  stop()

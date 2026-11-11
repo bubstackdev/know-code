@@ -264,6 +264,43 @@ fn observe_bad(shared: &Shared, entry: &mut Entry, incarnation: &str) -> AnyResu
     Ok(true)
 }
 
+// Workspace-owned lifecycle/health faults fence only that workspace. They
+// are not evidence that its derived SQLite data is corrupt and never authorize
+// replacement or an automatic retry.
+fn block_lifecycle_error(entry: &mut Entry, error: &(dyn std::error::Error + 'static)) {
+    entry.pending = false;
+    entry.force = false;
+    entry.recovery_blocked = true;
+    entry.recovery_explicit = false;
+    entry.status.phase = "failed".into();
+    entry.status.outcome_code = error
+        .downcast_ref::<know_code_core::Error>()
+        .map(|e| e.code())
+        .unwrap_or("recovery_state_error")
+        .into();
+    entry.status.error = error.to_string();
+    entry.analysis_error = entry.status.error.clone();
+}
+
+fn observe_selected_health(shared: &Shared, entry: &mut Entry) -> bool {
+    let result = (|| -> AnyResult<bool> {
+        let database = Path::new(&entry.status.database);
+        if let Some(incarnation) = recovery::selected_incarnation(database)?
+            && recovery::is_bad(database)?
+        {
+            return observe_bad(shared, entry, &incarnation);
+        }
+        Ok(false)
+    })();
+    match result {
+        Ok(observed) => observed,
+        Err(error) => {
+            block_lifecycle_error(entry, error.as_ref());
+            false
+        }
+    }
+}
+
 fn maintain_retired_indexes(entry: &mut Entry) {
     if entry.recovering {
         return;
@@ -449,16 +486,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     }
     for entry in entries.values_mut() {
         if let Err(error) = restore_recovery(entry) {
-            entry.pending = false;
-            entry.recovery_blocked = true;
-            entry.status.phase = "failed".into();
-            entry.status.outcome_code = error
-                .downcast_ref::<know_code_core::Error>()
-                .map(|e| e.code())
-                .unwrap_or("recovery_state_error")
-                .into();
-            entry.status.error = error.to_string();
-            entry.analysis_error = entry.status.error.clone();
+            block_lifecycle_error(entry, error.as_ref());
         }
     }
     let cursors = Arc::new(know_code_core::cursor::CursorService::new(
@@ -573,12 +601,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             let mut entries = shared.entries.lock().unwrap();
             for entry in entries.values_mut() {
                 maintain_retired_indexes(entry);
-                let database = PathBuf::from(&entry.status.database);
-                if let Some(incarnation) = recovery::selected_incarnation(&database)?
-                    && recovery::is_bad(&database)?
-                {
-                    observe_bad(&shared, entry, &incarnation)?;
-                }
+                observe_selected_health(&shared, entry);
                 let root = PathBuf::from(&entry.status.workspace_root);
                 let exists = root.is_dir();
                 let matches =
@@ -673,14 +696,23 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         .min_by_key(|(_, e)| priority(e, Instant::now()))
                         .map(|(db, _)| db.clone())
                 };
-                next.map(|database| -> AnyResult<Job> {
+                next.map(|database| -> AnyResult<Option<Job>> {
+                    let entry = entries.get_mut(&database).unwrap();
+                    let bad = match recovery::is_bad(Path::new(&database)) {
+                        Ok(bad) => bad,
+                        Err(error) => {
+                            block_lifecycle_error(entry, &error);
+                            persist(&shared, entry, None)?;
+                            return Ok(None);
+                        }
+                    };
                     let session = shared.resources.start()?;
                     *shared.active_job.lock().unwrap() =
                         Some((database.clone(), session.control()));
                     shared.analysis_running.store(true, Ordering::Release);
                     let entry = entries.get_mut(&database).unwrap();
                     entry.pending = false;
-                    entry.recovering = recovery::is_bad(Path::new(&database))?
+                    entry.recovering = bad
                         && !entry.cancel_pending
                         && !(entry.status.outcome_code == "cancelled" && !entry.force);
                     entry.status.phase = if entry.recovering {
@@ -724,9 +756,10 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         recovering: entry.recovering,
                         recovery_explicit: std::mem::take(&mut entry.recovery_explicit),
                     };
-                    Ok(job)
+                    Ok(Some(job))
                 })
                 .transpose()?
+                .flatten()
             };
             if let Some(job) = job {
                 running = true;
@@ -890,8 +923,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 Some(inputs)
                             }
                             Err(error) => {
-                                let recovery_failed = done.recovering
-                                    && recovery::failure(Path::new(&done.database))?.is_some();
+                                let recovery_state = if done.recovering {
+                                    recovery::failure(Path::new(&done.database))
+                                } else {
+                                    Ok(None)
+                                };
+                                let recovery_failed = matches!(recovery_state, Ok(Some(_)));
                                 if recovery_failed {
                                     entry.recovery_blocked = !entry.recovery_explicit;
                                     entry.pending = entry.recovery_explicit;
@@ -950,8 +987,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                     .into();
                                 } else if let Some((database, incarnation)) = &error.index_fault
                                     && database == Path::new(&done.database)
+                                    && let Err(error) = observe_bad(&shared, entry, incarnation)
                                 {
-                                    observe_bad(&shared, entry, incarnation)?;
+                                    block_lifecycle_error(entry, error.as_ref());
+                                }
+                                if let Err(error) = recovery_state {
+                                    block_lifecycle_error(entry, &error);
                                 }
                                 None
                             }
@@ -1581,11 +1622,7 @@ fn serve(
             let mut entries = shared.entries.lock().unwrap();
             if let Some(entry) = entries.get_mut(&request.database) {
                 entry.active = Instant::now();
-                let database = Path::new(&entry.status.database);
-                if let Some(incarnation) = recovery::selected_incarnation(database)?
-                    && recovery::is_bad(database)?
-                {
-                    observe_bad(shared, entry, &incarnation)?;
+                if observe_selected_health(shared, entry) {
                     wake(sender, shared, Event::Wake);
                 }
             }
