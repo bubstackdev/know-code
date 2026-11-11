@@ -1,5 +1,14 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--admission-typed")
+{
+    try {
+        using var result = await new KnowCode.Index(args[1], new KnowCode.QueryLimitScope(args[2])).QueryAsync(
+            new KnowCode.QueryRequest("symbols") { Tests = (KnowCode.TestFilter)999 });
+        Console.WriteLine(result.RootElement.GetRawText());
+    } catch (JsonException) { Console.WriteLine("{\"serialization_failed\":true}"); }
+    return;
+}
 if (args[0] == "--scoped-query")
 {
     using var result = await new KnowCode.Index(args[1], new KnowCode.QueryLimitScope(args[2])).QueryJsonAsync(args[3]);
