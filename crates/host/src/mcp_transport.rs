@@ -20,14 +20,15 @@ use tokio::{io::AsyncWrite, sync::Notify};
 
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const OUTPUT_DEADLINE: Duration = Duration::from_secs(5);
-const MAX_PENDING_RESPONSES: usize = 2;
+const MAX_PENDING_RESPONSES: usize = 4;
 const MAX_OWNED_FRAMES: usize = 2;
 
 type KeepAlive = Arc<dyn Send + Sync>;
 struct PendingResponse {
     serial: usize,
+    started: bool,
     reservation: Option<KeepAlive>,
-    cancelled: Box<dyn Fn() -> bool + Send + Sync>,
+    cancelled: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }
 
 #[derive(Default)]
@@ -46,6 +47,30 @@ impl Connection {
         self.responses.lock().unwrap().clear();
         self.changed.notify_one();
     }
+    fn register_request(&self, id: RequestId) -> io::Result<()> {
+        self.check()?;
+        let mut responses = self.responses.lock().unwrap();
+        self.check()?;
+        if responses.contains_key(&id) {
+            return Err(io::Error::other("duplicate pending MCP request id"));
+        }
+        if responses.len() == MAX_PENDING_RESPONSES {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "MCP pending request capacity exhausted",
+            ));
+        }
+        responses.insert(
+            id,
+            PendingResponse {
+                serial: self.next_response.fetch_add(1, Ordering::Relaxed),
+                started: false,
+                reservation: None,
+                cancelled: None,
+            },
+        );
+        Ok(())
+    }
     /// A bounded bridge across the SDK's owned response model. The handler
     /// removes unfinished work on Drop; successful handoff is taken by send.
     pub fn begin_response(
@@ -56,26 +81,28 @@ impl Connection {
         self.check()?;
         let mut responses = self.responses.lock().unwrap();
         self.check()?;
-        if responses.contains_key(&id) {
+        if responses.get(&id).is_some_and(|entry| entry.started) {
             drop(responses);
             self.fail();
             return Err(io::Error::other("duplicate pending MCP request id"));
         }
-        if responses.len() == MAX_PENDING_RESPONSES {
+        if !responses.contains_key(&id) && responses.len() == MAX_PENDING_RESPONSES {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "MCP responses are awaiting delivery; retry later",
             ));
         }
-        let serial = self.next_response.fetch_add(1, Ordering::Relaxed);
-        responses.insert(
-            id.clone(),
-            PendingResponse {
-                serial,
+        let entry = responses
+            .entry(id.clone())
+            .or_insert_with(|| PendingResponse {
+                serial: self.next_response.fetch_add(1, Ordering::Relaxed),
+                started: false,
                 reservation: None,
-                cancelled: Box::new(cancelled),
-            },
-        );
+                cancelled: None,
+            });
+        entry.started = true;
+        entry.cancelled = Some(Box::new(cancelled));
+        let serial = entry.serial;
         Ok(ResponseHandoff {
             connection: self.clone(),
             id,
@@ -84,16 +111,15 @@ impl Connection {
         })
     }
     fn prune_cancelled(&self) {
-        self.responses
-            .lock()
-            .unwrap()
-            .retain(|_, entry| !(entry.cancelled)());
+        self.responses.lock().unwrap().retain(|_, entry| {
+            !entry
+                .cancelled
+                .as_ref()
+                .is_some_and(|cancelled| cancelled())
+        });
     }
     fn take_response(&self, id: &RequestId) -> Option<KeepAlive> {
         self.responses.lock().unwrap().remove(id)?.reservation
-    }
-    fn has_response(&self, id: &RequestId) -> bool {
-        self.responses.lock().unwrap().contains_key(id)
     }
     fn begin_frame(self: &Arc<Self>) -> io::Result<FrameOwnership> {
         self.check()?;
@@ -363,13 +389,14 @@ impl<T: Transport<RoleServer, Error = io::Error>> Transport<RoleServer> for Boun
             biased;
             _=self.connection.changed.notified()=>None,
             value=self.inner.receive()=>{
-                if let Some(JsonRpcMessage::Request(request)) = &value
-                    && self.connection.has_response(&request.id)
-                {
-                    // Other methods (ping/list/unknown) must not reuse a query
-                    // id and take its response reservation through rmcp.
-                    self.connection.fail();
-                    return None;
+                if let Some(JsonRpcMessage::Request(request)) = &value {
+                    // Register before rmcp dispatches a handler. Both query→ping
+                    // and ping→query ID collisions must fail even when neither
+                    // handler has been polled yet. No unbounded ID registry.
+                    if self.connection.register_request(request.id.clone()).is_err() {
+                        self.connection.fail();
+                        return None;
+                    }
                 }
                 if value.is_none() { self.connection.fail(); }
                 value
@@ -427,8 +454,14 @@ mod tests {
         let second = connection
             .begin_response(RequestId::Number(2), || false)
             .unwrap();
+        let third = connection
+            .begin_response(RequestId::Number(3), || false)
+            .unwrap();
+        let fourth = connection
+            .begin_response(RequestId::Number(4), || false)
+            .unwrap();
         assert!(matches!(
-            connection.begin_response(RequestId::Number(3), || false),
+            connection.begin_response(RequestId::Number(5), || false),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock
         ));
         cancelled.store(true, Ordering::Release);
@@ -437,6 +470,8 @@ mod tests {
         drop(worker);
         assert!(alive.upgrade().is_none());
         drop(second);
+        drop(third);
+        drop(fourth);
         assert!(connection.responses.lock().unwrap().is_empty());
         let abandoned = connection
             .begin_response(RequestId::Number(3), || false)
@@ -491,6 +526,93 @@ mod tests {
             assert!(transport.receive().await.is_none());
             assert!(connection.check().is_err());
             assert!(alive.upgrade().is_none());
+        });
+    }
+    #[test]
+    fn actual_sdk_duplicate_id_during_delayed_handler_never_admits_query() {
+        use rmcp::{ServerHandler, ServiceExt, model::*, service::RequestContext};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        struct Delayed {
+            connection: Arc<Connection>,
+            entered: Arc<Notify>,
+            resume: Arc<Notify>,
+            admitted: Arc<AtomicBool>,
+        }
+        impl ServerHandler for Delayed {
+            fn get_info(&self) -> ServerConfig {
+                ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            }
+            async fn call_tool(
+                &self,
+                _: CallToolRequestParams,
+                context: RequestContext<RoleServer>,
+            ) -> Result<CallToolResponse, ErrorData> {
+                self.entered.notify_one();
+                self.resume.notified().await;
+                let token = context.ct.clone();
+                if let Ok(handoff) = self
+                    .connection
+                    .begin_response(context.id, move || token.is_cancelled())
+                {
+                    self.admitted.store(true, Ordering::Release);
+                    handoff.complete();
+                }
+                Ok(CallToolResult::structured(serde_json::json!({"done":true})).into())
+            }
+        }
+        runtime().block_on(async {
+            let (mut input, read) = tokio::io::duplex(4096);
+            let (write, output) = tokio::io::duplex(4096);
+            let mut output = BufReader::new(output);
+            let connection = Arc::new(Connection::default());
+            let entered = Arc::new(Notify::new());
+            let resume = Arc::new(Notify::new());
+            let admitted = Arc::new(AtomicBool::new(false));
+            let service = Delayed {
+                connection: connection.clone(),
+                entered: entered.clone(),
+                resume: resume.clone(),
+                admitted: admitted.clone(),
+            };
+            let inner = AsyncRwTransport::<RoleServer, _, _>::new(
+                read,
+                Output::new(write, connection.clone()),
+            );
+            let transport = Bounded::new(inner, connection.clone());
+            let server = tokio::spawn(async move {
+                service.serve(transport).await.unwrap().waiting().await
+            });
+            input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"admission-test\",\"version\":\"1\"}}}\n").await.unwrap();
+            let mut line = String::new();
+            tokio::time::timeout(Duration::from_secs(2), output.read_line(&mut line))
+                .await
+                .unwrap()
+                .unwrap();
+            input.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"delayed\",\"arguments\":{}}}\n").await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), entered.notified())
+                .await
+                .unwrap();
+            assert!(!connection.responses.lock().unwrap()[&RequestId::Number(7)].started);
+            input
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n")
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while connection.check().is_ok() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            resume.notify_one();
+            drop(input);
+            tokio::time::timeout(Duration::from_secs(2), server)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(!admitted.load(Ordering::Acquire));
+            assert!(connection.responses.lock().unwrap().is_empty());
         });
     }
     #[test]
