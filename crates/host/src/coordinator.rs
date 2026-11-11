@@ -1271,8 +1271,19 @@ fn priority(entry: &Entry, now: Instant) -> (u8, Instant) {
     )
 }
 fn begin_cancellation(entry: &mut Entry) {
-    entry.cancel_pending = true;
+    // Cancel revokes earlier queued refresh authorization. A later refresh
+    // sets it again under the same entries lock and remains valid.
+    entry.recovery_explicit = false;
     entry.force = false;
+    if entry.recovering {
+        entry.pending = false;
+        entry.recovery_blocked = true;
+        entry.status.phase = "cancelling".into();
+        entry.status.error =
+            "recovery cancellation requested; explicit refresh will be required".into();
+        return;
+    }
+    entry.cancel_pending = true;
     entry.retry_preparation = false;
     entry.dirty.clear();
     entry.failed_input_hash.clear();
@@ -1727,15 +1738,7 @@ fn serve(
                 entry.pending && entry.status.available
             };
             if accepted {
-                if entry.recovering {
-                    entry.pending = false;
-                    entry.recovery_blocked = true;
-                    entry.status.phase = "cancelling".into();
-                    entry.status.error =
-                        "recovery cancellation requested; explicit refresh will be required".into();
-                } else {
-                    begin_cancellation(entry);
-                }
+                begin_cancellation(entry);
                 persist(shared, entry, None)?;
             }
             drop(active);
@@ -2255,11 +2258,25 @@ mod live_lifetime_tests {
         entry.pending = false;
         recovery::begin_rebuild(&database, explicit, job.previous_generation).unwrap();
         assert!(recovery::begin_rebuild(&database, false, job.previous_generation).is_err());
+        // Refresh during this active recovery can authorize a later retry, but
+        // a subsequent accepted cancel must revoke that older authorization.
+        entry.recovering = true;
+        entry.recovery_explicit = true;
+        queue(&mut entry, None, true);
+        begin_cancellation(&mut entry);
+        assert!(!entry.pending && !entry.force && !entry.recovery_explicit);
         recovery::fail_rebuild(&database, "explicit attempt failed").unwrap();
         for _ in 0..3 {
             assert!(observe_bad(&shared, &mut entry, &incarnation).unwrap());
             assert!(entry.recovery_blocked && !entry.pending && !entry.recovery_explicit);
         }
+        // The opposite ordering is valid: a refresh received after cancellation
+        // is new authorization and late notifications must preserve it.
+        entry.recovery_explicit = true;
+        entry.recovery_blocked = false;
+        queue(&mut entry, None, true);
+        assert!(observe_bad(&shared, &mut entry, &incarnation).unwrap());
+        assert!(entry.pending && entry.force && entry.recovery_explicit);
     }
     #[test]
     fn selected_readiness_preserves_version_errors_but_fences_actual_index_header_corruption() {
