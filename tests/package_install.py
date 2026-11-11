@@ -110,6 +110,9 @@ checks.append('archive_hashes_and_native_package_contents')
 bundle=next((PREFIX/'first installation').glob('know-code-*'));HOST=BIN/'know-code';HOST.symlink_to(bundle/'bin/know-code')
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0,('checkout deny policy ineffective',root)
 info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bundle' and info['sqlite']['fts5'] and str(PREFIX) in info['resource_directory']
+runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
+contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':1,'analysis_settings_version':1,'resource_control_version':3}
+assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
 assert command(HOST,'--version').stdout.startswith('know-code 0.0.1')
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']
 for native in [bundle/'bin/know-code',PREFIX/'unused']:
@@ -276,6 +279,7 @@ command(HOST,'coordinator','stop');until=time.monotonic()+20
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 new_parent=PREFIX/'second installation';new_parent.mkdir();bundle=bundle.rename(new_parent/bundle.name);HOST.unlink();HOST.symlink_to(bundle/'bin/know-code')
 info=json.loads(command(HOST,'runtime-info').stdout);assert str(new_parent) in info['resource_directory']
+assert all(info[key]==version for key,version in contracts.items()),info
 node=Client('node');ready(node);assert node.send('query',request={'op':'symbols','name':'savedAnswer'})['result']['freshness']=='current';node.close();checks.append('runtime_relocation_and_SDK_reconnect_without_reinstall')
 missing=PREFIX/'missing';missing.mkdir();missing_package='KnowCodeOfflineMissingDependency'
 (missing/'Missing.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="'+missing_package+'" Version="1.0.0" /></ItemGroup></Project>')
@@ -284,7 +288,9 @@ assert not (missing/'obj/project.assets.json').exists()
 failure=command(HOST,'index',missing,'--configuration','Release',check=False)
 negative={'returncode':failure.returncode,'stdout':failure.stdout,'stderr':failure.stderr}
 if failure.returncode==0:
- indexed=json.loads(failure.stdout);coverage=json.loads(command(HOST,'query',indexed['database'],json.dumps({'op':'coverage','generation':indexed['generation']})).stdout)
+ indexed=json.loads(failure.stdout)
+ lookup=json.loads(command(HOST,'query',indexed['database'],json.dumps({'op':'symbols','limit':1})).stdout);assert lookup.get('result',{}).get('snapshot'),lookup
+ coverage=json.loads(command(HOST,'query',indexed['database'],json.dumps({'op':'coverage','generation':indexed['generation'],'snapshot':lookup['result']['snapshot']})).stdout)
  assert 'result' in coverage and coverage['result']['coverage'] and any(c['status']!='complete' for c in coverage['result']['coverage']),coverage
  negative['coverage']=coverage
 assert missing_package.lower() in json.dumps(negative).lower(),negative

@@ -105,15 +105,22 @@ try:
  for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context','coverage_details']:
   assert schemas[name]['properties']['page_size']['minimum']==1 and schemas[name]['properties']['page_size']['maximum']==1000
  for name in ['read_source','symbol_context']:assert 'cursor' in schemas[name]['properties']
+ for name in ['read_source','symbol_context','coverage_details']:assert 'snapshot' in schemas[name]['properties']
  for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context']:
   assert schemas[name]['properties']['tests']['enum']==['all','exclude','only']
  for name in ['read_source','coverage_details','next_page']:assert 'tests' not in schemas[name]['properties']
  checks+=['explicit_workspace_auto_registration','legacy_2025_lifecycle','stable_read_only_tools']
  tool,value=c.tool('workspace_status');assert not tool['isError'] and value['result']['workspaces'][0]['workspace_root']==str(WORKSPACE)
  tool,value=c.tool('search_symbols',{'name':'target'});assert not tool['isError'] and value==equivalent({'op':'symbols','name':'target'})
- target=value['result']['symbols'][0];location=target['locations'][0]
- tool,detail=c.tool('coverage_details',{'generation':generation})
- assert not tool['isError'] and detail==equivalent({'op':'coverage','generation':generation})
+ target=value['result']['symbols'][0];location=target['locations'][0];snapshot=value['result']['snapshot'];assert snapshot
+ guard={'generation':generation,'snapshot':snapshot}
+ tool,detail=c.tool('coverage_details',guard)
+ assert not tool['isError'] and detail==equivalent({'op':'coverage',**guard})
+ tool,snapshot_detail=c.tool('coverage_details',{'snapshot':snapshot})
+ assert not tool['isError'] and snapshot_detail==detail==equivalent({'op':'coverage','snapshot':snapshot})
+ for name,op,args in [('coverage_details','coverage',{}),('symbol_context','symbol_context',{'symbol_id':target['id']})]:
+  tool,rejected=c.tool(name,dict(args,generation=generation))
+  assert tool['isError'] and rejected['error']['code']=='invalid_request' and rejected==equivalent(dict(args,op=op,generation=generation)),rejected
  assert any(r['language']=='csharp' and r['configuration']=='Release' for r in detail['result']['coverage'])
  caller=c.tool('search_symbols',{'name':'caller'})[1]['result']['symbols'][0]
  for name,args,op in [('find_references',{'symbol_id':target['id']},'references'),('callees',{'symbol_id':caller['id']},'callees'),('callers',{'symbol_id':target['id']},'callers'),('impact',{'symbol_id':target['id'],'max_depth':2},'impact')]:
@@ -153,7 +160,7 @@ try:
  tool,value=c.tool('read_source',source_args);assert not tool['isError'] and value==equivalent({'op':'source',**source_args});assert value['result']['source']['text']=='target'
  for name,args in [('read_source',{'artifact_id':location['artifact_id'],'start_byte':1}),('query_graph',{'op':'sql','symbol_id':target['id']}),('search_symbols',{'sql':'DROP TABLE symbols'}),('find_references',{})]:
   reply=c.request('tools/call',{'name':name,'arguments':args});assert 'error' in reply or reply['result']['isError'],reply
- context_args={'symbol_id':target['id'],'max_bytes':1024}
+ context_args={'symbol_id':target['id'],'max_bytes':1024,**guard}
  tool,value=c.tool('symbol_context',context_args);assert not tool['isError'] and value==equivalent({'op':'symbol_context',**context_args})
  context=value['result']['contexts'][0];decl=context['declarations'][0]
  assert decl['line']==2 and decl['source']['start_line']==2
@@ -173,10 +180,10 @@ try:
    assert sum(len(d.get('source',{}).get('text','').encode()) for d in small['result']['contexts'][0]['declarations'])<=10
    tool,limited=c.tool('symbol_context',dict(args,limit=1,include_source=False));assert limited['result']['truncated']
    assert len(limited['result']['contexts'][0]['declarations'])==1
- tool,clipped=c.tool('coverage_details',{'generation':generation,'max_bytes':1});assert clipped['result']['truncated']
+ tool,clipped=c.tool('coverage_details',dict(guard,max_bytes=1));assert clipped['result']['truncated']
  assert clipped['result']['workspace_coverage']['compilations']>=2 and all(cov['details_omitted'] for cov in clipped['result']['coverage'])
  tool,missing=c.tool('coverage_details');assert tool['isError']
- checks+=['compiler_context_and_source_parity','overloads_partial_types_and_unicode','aggregate_context_budgets','compact_relevant_coverage_with_workspace_summary','generation_bound_bounded_coverage_details']
+ checks+=['compiler_context_and_source_parity','overloads_partial_types_and_unicode','aggregate_context_budgets','compact_relevant_coverage_with_workspace_summary','snapshot_bound_bounded_coverage_details','snapshot_only_coverage_and_generation_only_rejected']
  checks+=['bounded_source_default','hash_guarded_byte_ranges','no_SQL_surface','visible_argument_errors']
  for deadline,expected in [(0,'deadline_exceeded'),(120001,'invalid_request')]:
   tool,expired=c.tool('search_symbols',{'name':'target','deadline_ms':deadline})
@@ -214,9 +221,9 @@ try:
  assert 'hello😀' in retained_context['result']['contexts'][0]['declarations'][0]['source']['text']
  checks.append('saved_update_preserves_cursor_page_source_and_context_generation')
  tool,value=c.tool('read_source',source_args);assert tool['isError'] and value['error']['code']=='invalid_request'
- tool,old_detail=c.tool('coverage_details',{'generation':generation});assert tool['isError'] and 'restart lookup' in old_detail['error']['message']
- tool,old_context=c.tool('symbol_context',dict(context_args,generation=generation));assert tool['isError'] and 'restart lookup' in old_context['error']['message']
- checks.append('changed_source_rejects_old_range_and_detail_generation')
+ tool,old_detail=c.tool('coverage_details',guard);assert tool['isError'] and old_detail['error']['code']=='snapshot_invalidated',old_detail
+ tool,old_context=c.tool('symbol_context',context_args);assert tool['isError'] and old_context['error']['code']=='snapshot_invalidated',old_context
+ checks.append('changed_source_rejects_old_range_and_snapshot')
  generation=ready()['generation'];c.close()
  SOURCE.write_text(SOURCE.read_text()+'\n// saved after MCP disconnect\n');after=ready(generation+1);generation=after['generation']
  checks.append('EOF_leaves_coordinator_indexing')

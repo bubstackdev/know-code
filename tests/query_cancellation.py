@@ -1,6 +1,7 @@
 """Actual host queues/SQLite cancellation, reader release and saved-index recovery."""
 from pathlib import Path
 import ctypes,hashlib,json,os,selectors,sqlite3,subprocess,time
+from index_paths import physical_database
 
 ROOT=Path(__file__).resolve().parents[1]
 RUN=ROOT/'.artifacts/qc'/format(time.time_ns(),'x')[-10:];WORKSPACE=RUN/'w';DATA=RUN/'d'
@@ -31,7 +32,7 @@ def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
 def value(*args):return json.loads(cli(*args).stdout)
 def node(mode,db,request=None,delay=50):
  result=json.loads(run(['node',ROOT/'tests/query_cancellation.mjs',ADDON,db,mode,json.dumps(request),delay]).stdout)
- assert result['passed'] and result['contract']==3,result
+ assert result['passed'] and result['contract']==5,result
  return result
 def query(request):return value('query',database,json.dumps(request))
 def ready(minimum=1):
@@ -97,7 +98,7 @@ def mcp_eof(connection,generation):
       line,buffer=buffer.split(b'\n',1);message=json.loads(line);events.append({'received':message})
       assert message.get('id')!=2,('MCP query completed before active-reader gate',message)
     connection.execute('UPDATE fixture_wal_probe SET value=value+1');connection.commit()
-    wal=Path(database+'-wal');wal_bytes=wal.stat().st_size if wal.exists() else 0
+    wal=Path(str(physical_database(database))+'-wal');wal_bytes=wal.stat().st_size if wal.exists() else 0
     busy=connection.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
     events.append({'probe_value':connection.execute('SELECT value FROM fixture_wal_probe').fetchone()[0],
                    'process_poll':p.poll(),'wal_bytes':wal_bytes,'checkpoint':busy})
@@ -134,7 +135,7 @@ try:
  identity={'source_revision':record['source_revision'],'build_id':record['build_id'],'record_sha256':digest(record_path),
            'artifacts_sha256':hashes,'test_source_sha256':{p:digest(ROOT/p) for p in ['tests/query_cancellation.py','tests/query_cancellation.mjs']}}
  ffi=ctypes.CDLL(str(FFI));ffi.kc_query_contract_version.argtypes=[];ffi.kc_query_contract_version.restype=ctypes.c_uint32
- assert ffi.kc_query_contract_version()==4,'matching FFI cancellation contract required'
+ assert ffi.kc_query_contract_version()==5,'matching FFI cancellation contract required'
  node('preabort',RUN/'preabort.db');CHECKS.append('Node_preabort_before_serialization_and_index_open')
  node('queue',RUN/'node-queue.db');CHECKS.append('Node_actual_libuv_queue_cancel_waits_for_native_exit_and_recovers')
  queued=json.loads(run(['dotnet',SMOKE,'--cancel-queue',RUN/'dotnet-queue.db']).stdout)
@@ -143,7 +144,7 @@ try:
  value('watch',WORKSPACE);status=ready();database=status['database'];generation=status['generation']
  request={'op':'symbols','name':'cancellationTarget','deadline_ms':5000}
  baseline=verify(query(request),OLD,generation)
- with sqlite3.connect(database,timeout=.01) as connection:
+ with sqlite3.connect(physical_database(database),timeout=.01) as connection:
   connection.execute('PRAGMA busy_timeout=10')
   assert connection.execute('SELECT count(*) FROM reports').fetchone()[0]>0
   connection.execute('ALTER TABLE reports RENAME TO fixture_reports')
