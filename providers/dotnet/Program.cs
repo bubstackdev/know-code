@@ -231,7 +231,7 @@ static partial class Analysis
             InputFingerprint = projectLinks.Fingerprint, References = {projectLinks.References},
             TestClassification = classification,
             TargetEquivalencePolicy = request.TargetEquivalencePolicy,
-            TargetFamily = TargetPeers.Family(request.TargetEquivalencePolicy, projectPath, configuration, platform, sdkVersion),
+            TargetFamily = TargetPeers.Family(request.TargetEquivalencePolicy, projectPath, configuration, platform, sdkVersion, compilation.Options.Platform),
             Id = id, Language = "csharp", ProjectPath = relative, Target = target, Configuration = configuration,
             CompilerVersion = $"Roslyn {typeof(CSharpCompilation).Assembly.GetName().Version}; SDK {sdkVersion}",
             Dependencies = { project.ProjectReferences.Select(r => project.Solution.GetProject(r.ProjectId)?.FilePath).Where(p => p is not null).Select(p => Path.GetRelativePath(request.WorkspaceRoot, p!).Replace('\\', '/')) },

@@ -12,9 +12,9 @@ static class TargetPeers
     {
         if (policy > Policy) throw new InvalidDataException($"update required: unsupported target equivalence policy {policy}");
     }
-    public static string Family(uint policy, string project, string configuration, string platform, string sdk)
+    public static string Family(uint policy, string project, string configuration, string platform, string sdk, Platform compilerPlatform)
         => policy == 0 ? "" : Hash(new { domain = "know-code-csharp-target-family-v1",
-            project = Path.GetFullPath(project), configuration, platform, sdk,
+            project = Path.GetFullPath(project), configuration, platform, sdk, compilerPlatform,
             compiler = typeof(CSharpCompilation).Assembly.GetName().Version });
     public static string Declaration(uint policy, IAssemblySymbol? assembly, string identity)
         => policy == 0 || assembly is null ? "" : Hash(new { domain = "know-code-csharp-declaration-v1",

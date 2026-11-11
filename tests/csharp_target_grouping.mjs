@@ -19,7 +19,7 @@ const projects=['Api','Client','Variant'].map(name=>path.join(workspace,name,`${
 write(path.join(workspace,'NuGet.Config'),'<configuration><packageSources><clear/></packageSources></configuration>');
 const csproj=extra=>`<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks></PropertyGroup>${extra}<Target Name="NeverBuild" BeforeTargets="Build"><Error Text="Grouping invoked a full build"/></Target></Project>`;
 write(projects[0],csproj(''));
-write(projects[1],csproj('<ItemGroup><ProjectReference Include="../Api/Api.csproj"/></ItemGroup>'));
+write(projects[1],csproj('<PropertyGroup><PlatformTarget Condition="\'$(TargetFramework)\'==\'net10.0\'">x64</PlatformTarget></PropertyGroup><ItemGroup><ProjectReference Include="../Api/Api.csproj"/></ItemGroup>'));
 write(projects[2],csproj('<PropertyGroup><AssemblyName Condition="\'$(TargetFramework)\'==\'net10.0\'">VariantModern</AssemblyName></PropertyGroup>'));
 const code='// π😀\npublic static class SharedApi { public static int Read(int arg) { var local = arg; return local; } }\n';
 write(path.join(workspace,'Api','Api.cs'),code);
@@ -53,7 +53,8 @@ for(const name of ['Api','Client','Variant']){
   const contexts=byProject(modern,name);
   assert.deepEqual(contexts.map(c=>c.target).sort(),['net10.0','netstandard2.1']);
   assert(contexts.every(c=>c.targetEquivalencePolicy===1&&/^[a-f0-9]{64}$/.test(c.targetFamily)));
-  assert.equal(contexts[0].targetFamily,contexts[1].targetFamily);
+  if(name==='Client') assert.notEqual(contexts[0].targetFamily,contexts[1].targetFamily,'effective compiler platform was ignored');
+  else assert.equal(contexts[0].targetFamily,contexts[1].targetFamily);
   family.set(name,contexts[0].targetFamily);
 }
 assert.equal(new Set(family.values()).size,3,'unrelated projects share a target family');

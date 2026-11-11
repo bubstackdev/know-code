@@ -45,7 +45,7 @@ sealed class ProjectLinks
                 catalog.BuildContexts.PolicyEnabled ? metadata["Platform"] : null);
             result.contexts[compiled]=new Context(id,System.IO.Path.GetRelativePath(request.WorkspaceRoot,selected.Value.Path).Replace('\\','/'),
                 TestClasses.ForContext(catalog.Classification(candidate.Id), request.TestClassificationPolicy, request.WorkspaceRoot, selected.Value.Path),
-                TargetPeers.Family(request.TargetEquivalencePolicy, selected.Value.Path, metadata["Configuration"], metadata["Platform"], sdk));
+                TargetPeers.Family(request.TargetEquivalencePolicy, selected.Value.Path, metadata["Configuration"], metadata["Platform"], sdk, compiled.Options.Platform));
         }
         result.Fingerprint=result.Snapshot(compilation);
         if(result.Fingerprint.Length==0)result.Complete=false;
