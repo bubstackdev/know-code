@@ -989,74 +989,76 @@ mod installer_bridge_tests {
     use super::*;
     #[test]
     fn prior_peer_bridge_preserves_strict_consumers_and_rejects_other_operations() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .unwrap()
-            .join(".artifacts/ib")
-            .join(format!(
-                "{:x}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-        std::fs::create_dir_all(&root).unwrap();
-        let listener = std::os::unix::net::UnixListener::bind(socket_path(&root)).unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
-            let Some(envelope::Payload::ControlRequest(request)) = frame.payload else {
-                panic!("control request")
-            };
-            assert_eq!(request.index_lifecycle_version, 1);
-            assert_eq!(request.operation, "status");
-            protocol::write_frame(
-                &mut stream,
-                &Envelope {
-                    protocol_version: VERSION,
-                    payload: Some(envelope::Payload::ControlResponse(ControlResponse {
-                        index_lifecycle_version: 1,
-                        resource_control_version: crate::resource::CONTROL_VERSION,
-                        analysis_settings_version: crate::settings::VERSION,
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        });
-        let response = request_installer(
-            &root,
-            ControlRequest {
-                operation: "status".into(),
-                ..Default::default()
-            },
-            1,
-        )
-        .unwrap();
-        server.join().unwrap();
-        assert!(matches!(
-            checked_response(response),
-            Err(Error::UpdateRequired(_))
-        ));
-        for (operation, version) in [
-            ("refresh", 1),
-            ("index-corrupt", 1),
-            ("status", 0),
-            ("status", 3),
-        ] {
-            assert!(matches!(
-                request_installer(
-                    &root,
-                    ControlRequest {
-                        operation: operation.into(),
+        for peer_version in [1, 2] {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .canonicalize()
+                .unwrap()
+                .join(".artifacts/ib")
+                .join(format!(
+                    "{:x}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+            std::fs::create_dir_all(&root).unwrap();
+            let listener = std::os::unix::net::UnixListener::bind(socket_path(&root)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
+                let Some(envelope::Payload::ControlRequest(request)) = frame.payload else {
+                    panic!("control request")
+                };
+                assert_eq!(request.index_lifecycle_version, peer_version);
+                assert_eq!(request.operation, "status");
+                protocol::write_frame(
+                    &mut stream,
+                    &Envelope {
+                        protocol_version: VERSION,
+                        payload: Some(envelope::Payload::ControlResponse(ControlResponse {
+                            index_lifecycle_version: peer_version,
+                            resource_control_version: crate::resource::CONTROL_VERSION,
+                            analysis_settings_version: crate::settings::VERSION,
+                            ..Default::default()
+                        })),
                         ..Default::default()
                     },
-                    version
-                ),
+                )
+                .unwrap();
+            });
+            let response = request_installer(
+                &root,
+                ControlRequest {
+                    operation: "status".into(),
+                    ..Default::default()
+                },
+                peer_version,
+            )
+            .unwrap();
+            server.join().unwrap();
+            assert!(matches!(
+                checked_response(response),
                 Err(Error::UpdateRequired(_))
             ));
+            for (operation, version) in [
+                ("refresh", 1),
+                ("index-corrupt", 1),
+                ("status", 0),
+                ("status", 4),
+            ] {
+                assert!(matches!(
+                    request_installer(
+                        &root,
+                        ControlRequest {
+                            operation: operation.into(),
+                            ..Default::default()
+                        },
+                        version
+                    ),
+                    Err(Error::UpdateRequired(_))
+                ));
+            }
         }
     }
 }
