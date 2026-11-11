@@ -2,6 +2,7 @@
 
 All retained test work lives in .artifacts, never a temporary system directory.
 """
+from fixture_trust import grant_fixture
 import atexit
 import concurrent.futures
 import json
@@ -63,6 +64,7 @@ def index():
     return output, time.perf_counter() - start
 
 
+grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN/'fixture-trust.jsonl')
 initial, elapsed = index()
 DATABASE = initial['database']
 

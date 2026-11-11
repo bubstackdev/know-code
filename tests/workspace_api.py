@@ -69,10 +69,10 @@ for language in ['node','dotnet']:
  failed=Client(language,coordinatorExecutable=str(RUN/'missing'));error(failed.initial,'coordinator_unavailable');failed.close()
  invalid=Client(language,root=RUN/'missing-root');error(invalid.initial,'invalid_request');invalid.close()
 checks+=['missing_coordinator_actionable_in_both_hosts','invalid_root_before_startup']
-node=Client('node');assert 'opened' in node.initial and node.initial['frozen'];initial=ready(node)
+node=Client('node');assert 'opened' in node.initial and node.initial['frozen'];trusted=node.send('trust',grant=True);assert not isinstance(trusted.get('error'),dict),trusted;initial=ready(node)
 DATABASE=initial['database'];assert node.send('mutate_snapshot')['blocked'];assert node.send('query',request={'op':'symbols','name':'answer'})['result']['freshness']=='current'
 link=RUN/'alias';link.symlink_to(WORKSPACE,target_is_directory=True)
-dotnet=Client('dotnet',root=link,configuration=None);assert dotnet.initial['root']==str(WORKSPACE)
+dotnet=Client('dotnet',root=link,configuration=None);assert dotnet.initial['root']==str(WORKSPACE);trusted=dotnet.send('trust',grant=True);assert not isinstance(trusted.get('error'),dict),trusted
 assert node.initial['opened']['database']==dotnet.initial['opened']['database']
 assert len(json.loads(cli('coordinator','status').stdout)['workspaces'])==1
 checks+=['auto_start_from_Node','canonical_workspace_shared_across_hosts','immutable_initial_snapshot','shared_registration_not_per_consumer']
@@ -194,6 +194,7 @@ checks+=['auto_start_from_dotnet','restart_registry_and_saved_source_reconciliat
 broken=RUN/'bad-settings';broken.mkdir();(broken/'value.ts').write_text('export const repairedSettings = 1;\n')
 broken_file=broken/'.know-code.json';broken_file.write_text('{"allow_install_scripts":true}')
 bad=Client('node',root=broken,configuration=None)
+trusted=bad.send('trust',grant=True);assert not isinstance(trusted.get('error'),dict),trusted
 until=time.monotonic()+15
 while time.monotonic()<until:
  failed=bad.send('status')
@@ -219,6 +220,7 @@ replacement=Client('node',root=broken,configuration=None)
 early=replacement.send('query',request={'op':'symbols','name':'repairedSettings','freshness_wait_ms':0})
 if 'error' in early:error(early,'not_ready')
 else:assert not early['result']['symbols'],'replacement workspace received retained facts from the removed workspace'
+trusted=replacement.send('trust',grant=True);assert not isinstance(trusted.get('error'),dict),trusted
 replacement_ready=ready(replacement)
 assert not replacement_ready['requested_settings']['node']['allow_install_scripts'];replacement.close()
 checks+=['malformed_first_settings_remain_watchable','personal_settings_creation_failure_and_repair_preserve_stale_generation']
@@ -235,9 +237,9 @@ def old_settings_peer():
   conn,_=old.accept()
   with conn:
    requests.append(request_frame(conn))
-   # Envelope v7: current lifecycle3, old resource1 and settings1.
+   # Envelope v7: current lifecycle4, old resource1 and settings1.
    # Reach the cancellation-contract check instead of failing lifecycle first.
-   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x01\x68\x03')
+   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x01\x68\x04')
 thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
 for client in [node,dotnet]:
  error(client.send('refresh',configuration='Release'),'update_required')

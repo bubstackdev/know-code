@@ -1,4 +1,5 @@
 """Owned historical-store upgrade acceptance through CLI and both native SDKs."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 from contextlib import closing
 import hashlib,json,os,sqlite3,subprocess,sys,time,traceback
@@ -193,9 +194,10 @@ try:
  hashes={str(path.relative_to(ROOT)):sha(path) for path in artifacts}
  assert all(record['outputs'][path]==digest for path,digest in hashes.items()),'test artifacts differ from producer record'
  BUILD={'build_id':record['build_id'],'source_revision':record['source_revision'],'record_sha256':sha(record_path),'outputs':hashes}
- info=value('runtime-info');assert info['store_format']==8 and info['index_lifecycle_version']==3,info
+ info=value('runtime-info');assert info['store_format']==8 and info['index_lifecycle_version']==4,info
  value('resources','--min-free-disk-mib',0)
  for root in [A,B,C,F]:
+  grant_fixture(HOST,root,ENV,RUN,RUN/'fixture-trust.jsonl')
   value('watch',root);initial=ready(root);DATABASES[root]=initial['database'];assert initial['generation']<42 and version(root)==8,initial
  value('settings',A,json.dumps({'csharp':{'configuration':'Release'},'allow_install_scripts':False}));ready(A)
  current=parity(A,{'op':'symbols','limit':100},'current')

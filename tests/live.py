@@ -1,4 +1,5 @@
 """Stateful native consumers exercise live certification without diagnostic APIs."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 import json, os, selectors, shutil, signal, socket, subprocess, time
 
@@ -101,6 +102,7 @@ class Consumer:
 
 try:
     start()
+    grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
     registered = json.loads(command('watch', WORKSPACE))
     DATABASE = registered['database']
     initial = ready(1)['workspaces'][0]['generation']

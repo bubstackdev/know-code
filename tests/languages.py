@@ -1,4 +1,5 @@
 """Four providers share publication, native queries, and saved-input invalidation."""
+from fixture_trust import grant_fixture
 import atexit
 import json
 import os
@@ -56,6 +57,7 @@ def stop():
 
 
 atexit.register(stop)
+grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN/'fixture-trust.jsonl')
 registered = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)
 DATABASE = registered['database']
 

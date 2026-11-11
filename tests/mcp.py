@@ -1,4 +1,5 @@
 """Real stdio sessions, shared native operators and persistent saved-file indexing."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,selectors,signal,struct,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
@@ -102,6 +103,7 @@ def frozen_page(envelope):
 
 try:
  missing=cli('mcp',check=False);assert missing.returncode and not missing.stdout and '--workspace' in missing.stderr
+ grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
  early=subprocess.Popen([str(HOST),'mcp','--workspace',str(WORKSPACE),'--configuration','Release'],cwd=ROOT,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(RUN/'early-stderr.log').open('ab'))
  early.stdin.close();early.wait(timeout=8);assert early.returncode==0 and early.stdout.read()==b''
  checks.append('explicit_selection_and_EOF_before_initialization')

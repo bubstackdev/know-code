@@ -1,4 +1,5 @@
 """Assembled finding filters, target grouping, snapshots, cursors and recovery."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,sqlite3,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
@@ -60,6 +61,7 @@ def stop():
  while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
  assert not (DATA/'c.sock').exists(),'isolated coordinator did not stop'
 try:
+ grant_fixture(HOST,W,ENV,RUN,RUN/'fixture-trust.jsonl')
  value('watch',W);initial=ready();DATABASE=initial['database']
  baseline=parity({'op':'symbols','limit':1000})
  assert set(c['language'] for c in baseline['coverage'])=={'typescript','csharp'},baseline

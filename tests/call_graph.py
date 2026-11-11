@@ -1,4 +1,5 @@
 """Real TS/Roslyn -> atomic store -> Rust/.NET/Node call/impact parity."""
+from fixture_trust import grant_fixture
 import atexit
 import copy
 import hashlib
@@ -86,6 +87,7 @@ def run(args, check=True):
 
 
 atexit.register(lambda: run([HOST, 'coordinator', 'stop'], check=False))
+grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN/'fixture-trust.jsonl')
 registered = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)
 DATABASE = registered['database']
 

@@ -3,6 +3,7 @@
 Run after a matching build; this harness never builds, mutates live state or uses
 external corpora. Every subprocess response is retained in the isolated run.
 """
+from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,subprocess,time
 
@@ -87,6 +88,7 @@ def workspace_next(cursor,**budgets):
 
 passed=False
 try:
+ grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
  value('watch',WORKSPACE);initial=ready();DATABASE=initial['database']
  baseline=query('cli',{'op':'symbols','limit':1000})['result']
  assert len(baseline['symbols'])>4 and not baseline['truncated'],baseline
@@ -174,6 +176,7 @@ try:
  CHECKS+=['frozen_pages_after_saved_publication','pinned_source_and_context_exact_old_hash_bytes_ranges']
  CHECKS.append('graph_pages_retain_exact_old_source_and_omission_status_after_save')
 
+ grant_fixture(HOST,OTHER,ENV,RUN,RUN/'fixture-trust.jsonl')
  value('watch',OTHER);other=ready(OTHER)
  for language in ['cli','node','dotnet']:
   error(query(language,{'op':'next_page','cursor':token},other['database']),'cursor_invalidated')
@@ -195,6 +198,7 @@ try:
  CHECKS+=['central_cursor_settings_get_set','lower_count_evicts_idle_LRU_and_preserves_latest']
 
  removed=newer['page']['cursor'];cli('unwatch',WORKSPACE)
+ grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
  value('watch',WORKSPACE);ready()
  for language in ['cli','node','dotnet']:
   error(query(language,{'op':'next_page','cursor':removed}),'cursor_invalidated')

@@ -131,7 +131,7 @@ def development_pid():
     return next((l.strip() for l in p.stdout.splitlines() if l.strip().startswith('pid = ')), None)
 before_dev = development_pid()
 EVIDENCE['candidate']['runtime_info'] = json.loads(command(HOST, 'runtime-info').stdout)
-assert EVIDENCE['candidate']['runtime_info']['index_lifecycle_version'] == 3
+assert EVIDENCE['candidate']['runtime_info']['index_lifecycle_version'] == 4
 EVIDENCE['candidate']['host_sha256'] = hashlib.sha256(HOST.read_bytes()).hexdigest()
 
 # Simulate a matching-contract runtime that cannot start its coordinator.
@@ -197,7 +197,7 @@ def prior_lifecycle_upgrade():
     evidence.update(database=database, initial_generation=initial['generation'], selected_prior=old)
     record('prior_lifecycle1_real_runtime_and_compiler_graph_without_login')
 
-    # This real new runtime reports lifecycle3, then its owned wrapper fails
+    # This real new runtime reports lifecycle4, then its owned wrapper fails
     # before coordinator startup can write a format2 receipt.
     receipt = selector.read_bytes()
     failed = command(HOST, 'update', '--from', BAD, '--prefix', prior_prefix, env=prior_env, check=False)
@@ -214,11 +214,13 @@ def prior_lifecycle_upgrade():
 
     command(HOST, 'update', '--from', A, '--prefix', prior_prefix, env=prior_env)
     selected = prior_info()
+    assert prior_work.resolve().is_relative_to(RUN) and Path(prior_env['KNOW_CODE_DATA_DIR']).resolve().is_relative_to(RUN)
+    command(prior_launcher,'trust',prior_work,env=prior_env)
     assert selected['selected']!=old and selected['previous']==old
     assert not selected['login_enabled'] and not selected['login_loaded'] and not prior_plist.exists()
     prior_wait()
     prior_query()
-    assert json.loads(command(prior_launcher, 'runtime-info', env=prior_env).stdout)['index_lifecycle_version']==3
+    assert json.loads(command(prior_launcher, 'runtime-info', env=prior_env).stdout)['index_lifecycle_version']==4
     rejected = json.loads(command(prior_host, 'query', database, request, env=prior_env).stdout)
     assert rejected.get('error', {}).get('code')=='update_required', rejected
     previous_generation = prior_wait()['generation']
@@ -233,7 +235,7 @@ def prior_lifecycle_upgrade():
     assert source['text']==saved and source['content_hash']==hashlib.sha256(saved.encode()).hexdigest(), source
     evidence.update(selected_current=selected['selected'], old_client_rejection=rejected,
                     saved_generation=current['generation'], saved_source_sha256=source['content_hash'])
-    record('prior_lifecycle1_bridge_quiesces_then_lifecycle3_rejects_old_client_and_saves')
+    record('prior_lifecycle1_bridge_quiesces_then_lifecycle4_rejects_old_client_and_saves')
 
     receipt = selector.read_bytes()
     failed = command(HOST, 'rollback', '--prefix', prior_prefix, env=prior_env, check=False)
@@ -273,6 +275,8 @@ record('identical_update_preserves_selection')
 
 (WORK/'value.ts').write_text('export function answer() { return 42; }\n')
 (WORK/'tsconfig.json').write_text('{"compilerOptions":{"strict":true,"noEmit":true},"files":["value.ts"]}')
+assert WORK.resolve().is_relative_to(RUN) and DATA.resolve().is_relative_to(RUN)
+command(LAUNCHER,'trust',WORK)
 registered = json.loads(command(LAUNCHER, 'watch', WORK, '--configuration', 'Release').stdout)
 DATABASE = registered['database']
 ready = wait(lambda rows: rows and rows[0]['phase']=='idle', 'initial index')[0]

@@ -1,4 +1,5 @@
 """Compiler-selected project bodies, target compatibility and native API parity."""
+from fixture_trust import grant_fixture
 import atexit
 import hashlib
 import json
@@ -44,6 +45,7 @@ def run(args, check=True):
     return p
 
 atexit.register(lambda: run([HOST, 'coordinator', 'stop'], False))
+grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
 registered = json.loads(run([HOST, 'index', WORKSPACE]).stdout)
 DATABASE = registered['database']
 

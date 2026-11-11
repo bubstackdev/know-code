@@ -112,7 +112,7 @@ bundle=next((PREFIX/'first installation').glob('know-code-*'));HOST=BIN/'know-co
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0,('checkout deny policy ineffective',root)
 info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bundle' and info['sqlite']['fts5'] and str(PREFIX) in info['resource_directory']
 runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
-contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':3,'analysis_settings_version':1,'resource_control_version':3}
+contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':1,'resource_control_version':3}
 assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
 assert command(HOST,'--version').stdout.startswith('know-code 0.0.1')
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']
@@ -160,6 +160,9 @@ PHASE='network_denied_runtime';PHASES.append({'phase':PHASE,'started_ns':time.ti
 assert not DATA.exists(),'an index/coordinator appeared before first offline registration'
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0
 checks+=['project_dependencies_restored_before_registration','fresh_initial_index_starts_under_network_denial']
+assert WORKSPACE.resolve().is_relative_to(PREFIX) and DATA.resolve().is_relative_to(PREFIX)
+command(HOST,'trust',WORKSPACE) # Real CLI under the existing denied-network/checkout policy.
+checks.append('explicit_project_trust_granted_offline_before_registration')
 
 def read_json_line(process,selector,buffer,context):
  until=time.monotonic()+30
@@ -301,6 +304,8 @@ missing=PREFIX/'missing';missing.mkdir();missing_package='KnowCodeOfflineMissing
 (missing/'Missing.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="'+missing_package+'" Version="1.0.0" /></ItemGroup></Project>')
 (missing/'Missing.cs').write_text('public class MissingConsumer { MissingDependency.Type value; }\n')
 assert not (missing/'obj/project.assets.json').exists()
+assert missing.resolve().is_relative_to(PREFIX)
+command(HOST,'trust',missing)
 failure=command(HOST,'index',missing,'--configuration','Release',check=False)
 negative={'returncode':failure.returncode,'stdout':failure.stdout,'stderr':failure.stderr}
 if failure.returncode==0:

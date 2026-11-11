@@ -1,4 +1,5 @@
 """Real Roslyn/MSBuild target negotiation without building dependency assemblies."""
+from fixture_trust import grant_fixture
 import atexit
 import json
 import os
@@ -82,6 +83,7 @@ public class BConsumer {
 #endif
 }
 ''')
+grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
 registration = json.loads(run([HOST, 'watch', WORKSPACE, '--configuration', 'Release']).stdout)
 DATABASE = registration['database']
 def wait(predicate):

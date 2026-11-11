@@ -1,4 +1,5 @@
 """Shared CPU/memory ceilings and explicit indexing cancellation through real clients."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 import atexit,json,os,shutil,sqlite3,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
@@ -111,6 +112,7 @@ def sdk_cancel(language,root):
  value=json.loads(p.stdout.strip().splitlines()[-1]);assert value['phase'] in ['cancelling','cancelled'],value
 
 limits=json.loads(cli('resources').stdout);assert limits=={'cpu_cores':2.0,'memory_mib':2048,'rebuild_disk_mib':2048,'min_free_disk_mib':512},limits
+for root in [A,B]:grant_fixture(HOST,root,ENV,RUN,RUN/'fixture-trust.jsonl')
 registered=json.loads(cli('watch',A).stdout);database=registered['database']
 initial=wait(A,lambda s:s['phase']=='idle','initial compiler graph');generation=initial['generation']
 def query():return json.loads(cli('query',database,'{"op":"symbols","name":"answer","freshness_wait_ms":0}').stdout)['result']

@@ -1,4 +1,5 @@
 """Cross-project dispatch with compiler-selected composition and exact proof sites."""
+from fixture_trust import grant_fixture
 import atexit
 import json
 import os
@@ -61,6 +62,7 @@ def run(args,check=True):
     assert not check or p.returncode==0,(p.stdout,p.stderr)
     return p
 atexit.register(lambda:run([HOST,'coordinator','stop'],False))
+grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
 registered=json.loads(run([HOST,'index',WORKSPACE]).stdout);DATABASE=registered['database']
 def settled(after=0):
     end=time.monotonic()+120

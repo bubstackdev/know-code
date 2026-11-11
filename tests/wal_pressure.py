@@ -3,6 +3,7 @@
 No builds, live runtime, account admission state, original corpora or HOME edits.
 The ignored Rust holder is the same core test binary built with this checkout.
 """
+from fixture_trust import grant_fixture
 from pathlib import Path
 from index_paths import physical_database
 import atexit,hashlib,json,os,selectors,shlex,shutil,sqlite3,subprocess,time,traceback
@@ -132,7 +133,9 @@ try:
   'host_sha256':sha(HOST),'harness_sha256':sha(__file__),'holder_source_sha256':sha(ROOT/'crates/core/tests/wal_pressure.rs'),
   'node_wrapper_sha256':sha(WRAPPER),'real_node':str(REAL_NODE),'real_node_sha256':sha(REAL_NODE)}
  value('resources','--min-free-disk-mib',0)
- for root in [A,B]:DB[root]=value('watch',root)['database'];ready(root)
+ for root in [A,B]:
+  grant_fixture(HOST,root,ENV,RUN,RUN/'fixture-trust.jsonl')
+  DB[root]=value('watch',root)['database'];ready(root)
  sibling=ready(B);held,old,before,cap=fill_wal(A,1)
  (A/'value.ts').write_text(text(3));paused=pressure(A)
  stale=query(A);assert stale['freshness']=='stale' and stale['generation']==before,stale

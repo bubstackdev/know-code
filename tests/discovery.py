@@ -1,4 +1,5 @@
 """Owned TS repositories: durable parent enrollment through the real coordinator."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,shutil,subprocess,time
 
@@ -35,11 +36,12 @@ def workspace(root):return next((w for w in status()['workspaces'] if w['workspa
 def current(root,minimum=1):
     s=workspace(root)
     return s if s and s['phase']=='idle' and not s['error'] and s['generation']>=minimum and s['published_epoch']==s['observed_epoch'] else None
-def repo(path,name,gitfile=False):
+def repo(path,name,gitfile=False,trust=True):
     path.mkdir(parents=True)
     if gitfile:(path/'.git').write_text('gitdir: owned-fixture-metadata\n')
     else:(path/'.git').mkdir()
     (path/'value.ts').write_text(f'export function {name}() {{ return 1; }}\n')
+    if trust:grant_fixture(HOST,path,ENV,Path(os.path.commonpath([RUN,DATA])),RUN/'fixture-trust.jsonl')
     return path.resolve()
 def query(root,name):
     s=wait(lambda:current(root));result=value('query',s['database'],json.dumps({'op':'symbols','name':name}))
@@ -71,6 +73,7 @@ try:
     assert workspace(a) is None and Path(db).exists()
     command('coordinator','stop');wait(lambda:not (DATA/'c.sock').exists())
     assert len(parents())==2;wait(settled);assert workspace(a) is None
+    grant_fixture(HOST,a,ENV,Path(os.path.commonpath([RUN,DATA])),RUN/'fixture-trust.jsonl')
     command('watch',a);assert query(a,'discoveredA')['symbols']
     checks+=['parent_removal_retains_children','explicit_unwatch_suppression_survives_overlap_and_restart','explicit_watch_clears_suppression']
     command('watch',outside);assert query(outside,'linkedExplicit')['symbols']
@@ -82,7 +85,7 @@ try:
     wait(lambda:current(a,before+1));assert query(a,'savedDiscovery')['symbols'];assert not query(a,'discoveredA').get('symbols')
     checks.append('discovered_workspace_uses_saved_update_path')
     held=RUN/'held-repository';a.rename(held);wait(lambda:workspace(a) and not workspace(a)['available'])
-    repo(a,'replacementMustNotInherit');value('parents','scan',GROUP);wait(settled)
+    repo(a,'replacementMustNotInherit',trust=False);value('parents','scan',GROUP);wait(settled)
     assert not workspace(a)['available'] and workspace(a)['database']==db
     assert any(p['errors'] and 'identity changed' in p['error'] for p in parents())
     shutil.rmtree(a);held.rename(a);wait(lambda:current(a));assert query(a,'savedDiscovery')['symbols']

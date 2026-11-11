@@ -1,4 +1,5 @@
 """Xcode discovery and saved settings stay honest until a reliable planner exists."""
+from fixture_trust import grant_fixture
 import atexit
 import hashlib
 import json
@@ -80,6 +81,7 @@ def command(*args, check=True):
 
 
 atexit.register(lambda: command('coordinator', 'stop', check=False))
+grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
 registration = command('watch', WORKSPACE)
 
 

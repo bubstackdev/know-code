@@ -1,4 +1,5 @@
 """Native saved events -> persistent coordinator -> scoped publication."""
+from fixture_trust import grant_fixture
 import atexit
 import json
 import os
@@ -62,6 +63,7 @@ def wait(predicate, description, seconds=45):
         time.sleep(.05)
     raise AssertionError((description, last))
 
+grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN/'fixture-trust.jsonl')
 registered = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)
 DATABASE = registered['database']
 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as old_client:

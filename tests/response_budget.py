@@ -1,4 +1,5 @@
 """Complete response caps agree across CLI and both real in-process SDKs."""
+from fixture_trust import grant_fixture
 from pathlib import Path
 import atexit,ctypes,json,os,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
@@ -13,9 +14,10 @@ def command(argv):
  assert p.returncode==0,(argv,p.stdout,p.stderr)
  return p.stdout
 atexit.register(lambda:subprocess.run([str(HOST),'coordinator','stop'],env=ENV,capture_output=True,timeout=20))
+grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
 indexed=json.loads(command([HOST,'index',WORKSPACE]));DATABASE=indexed['database']
 ffi=ctypes.CDLL(str(ROOT/f'target/{PROFILE}/libknow_code_ffi.dylib'));ffi.kc_query_contract_version.restype=ctypes.c_uint32
-assert ffi.kc_query_contract_version()==7
+assert ffi.kc_query_contract_version()==8
 prefixes={'cli':[HOST,'query',DATABASE],
           'node':['node',ROOT/f'.artifacts/build/{PROFILE}/node/smoke.mjs',DATABASE],
           'dotnet':['dotnet',ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll',DATABASE]}

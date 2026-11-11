@@ -4,6 +4,7 @@ This finite lane fixture checks real publication/rebuild/restart/retry behavior.
 It reads private SQLite facts only to verify saved-source bytes, not to implement
 another user query path. Every service/data/process is isolated from live state.
 """
+from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,sqlite3,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
@@ -57,7 +58,9 @@ def invariant(root):
 try:
  defaults=value('resources');assert defaults['rebuild_disk_mib']==2048 and defaults['min_free_disk_mib']==512,defaults
  value('resources','--min-free-disk-mib',0)
- for root in [A,B]:value('watch',root);initial=ready(root);databases[root]=initial['database']
+ for root in [A,B]:
+  grant_fixture(HOST,root,ENV,RUN,RUN/'fixture-trust.jsonl')
+  value('watch',root);initial=ready(root);databases[root]=initial['database']
  first=ready(A);initial_b=ready(B)
  assert saved(A)[0]==first['generation'] and (A/'value.ts').read_text() in saved(A)[1]
  assert not Path(databases[A]).is_file(),'new registration used unleased legacy database'

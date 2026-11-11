@@ -1,4 +1,5 @@
 """Real package/MSBuild preparation, partial coverage, and save deduplication."""
+from fixture_trust import grant_fixture
 import atexit
 import json
 import os
@@ -53,6 +54,7 @@ derived = cs / 'obj/Derived.cs'
 derived.write_text('public class Derived { public const int DerivedBefore = 1; }\n')
 cs_source = cs / 'Value.cs'
 cs_source.write_text('public class CSharpValue { public int Value => 1; }\n')
+grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
 registration = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)
 DATABASE = Path(registration['database'])
 seen_stages = set()
